@@ -3,7 +3,9 @@ name = "mini-anchor"
 version = "0.1.0"
 description = "Mini-Anchor real estate acquisition analysis proof of concept"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "openpyxl>=3.1",
+]
 
 [project.optional-dependencies]
 dev = [
