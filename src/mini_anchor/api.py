@@ -12,11 +12,25 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 
 from .engine import AcquisitionResults, analyze_acquisition
 from .validation import InputValidationError, validate_acquisition_inputs
 
 app = FastAPI(title="Mini-Anchor API")
+
+# Allows the local Vite dev server (Phase 6 web UI) to call this API from the
+# browser. Pure API plumbing -- does not touch request/response semantics or
+# any financial calculation.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
