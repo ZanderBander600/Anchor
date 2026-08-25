@@ -14,10 +14,13 @@ export default function App() {
 
   function handleFieldChange(key: keyof AcquisitionFormValues, value: string) {
     setValues((previous) => ({ ...previous, [key]: value }));
+    setResults(null);
+    setError(null);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setResults(null);
     setError(null);
 
     let request;

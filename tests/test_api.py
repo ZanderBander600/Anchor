@@ -186,3 +186,48 @@ def test_analyze_calls_analyze_acquisition_exactly_once(client: TestClient) -> N
 
     assert response.status_code == 200
     mock_analyze.assert_called_once_with(GOLDEN_INPUTS)
+
+
+def test_analyze_engine_failure_returns_500(client: TestClient) -> None:
+    """An unexpected exception from the engine must surface as an HTTP 500,
+    not a fabricated 200 response or a swallowed error."""
+
+    no_raise_client = TestClient(app, raise_server_exceptions=False)
+    with patch(
+        "mini_anchor.api.analyze_acquisition", side_effect=RuntimeError("engine boom")
+    ):
+        response = no_raise_client.post("/analyze", json=GOLDEN_PAYLOAD)
+
+    assert response.status_code == 500
+
+
+# =============================================================================
+# CORS
+# =============================================================================
+
+
+def test_cors_allows_localhost_5173(client: TestClient) -> None:
+    origin = "http://localhost:5173"
+
+    response = client.get("/health", headers={"Origin": origin})
+
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == origin
+
+
+def test_cors_allows_127_0_0_1_5173(client: TestClient) -> None:
+    origin = "http://127.0.0.1:5173"
+
+    response = client.get("/health", headers={"Origin": origin})
+
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == origin
+
+
+def test_cors_does_not_allow_unrelated_origin(client: TestClient) -> None:
+    origin = "http://evil.example.com"
+
+    response = client.get("/health", headers={"Origin": origin})
+
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") is None

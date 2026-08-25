@@ -48,6 +48,7 @@ export function AssumptionsForm({
                 inputMode="decimal"
                 step="any"
                 value={values[field.key]}
+                disabled={isSubmitting}
                 onChange={(event: ChangeEvent<HTMLInputElement>) =>
                   onFieldChange(field.key, event.target.value)
                 }

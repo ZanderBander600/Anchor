@@ -399,10 +399,11 @@ def test_irr_exact_root_at_x_equals_1e12() -> None:
 
 def test_irr_non_finite_horner_intermediate_is_none() -> None:
     # An extreme cash-flow magnitude drives a Horner intermediate to
-    # overflow during ordinary evaluation.
+    # overflow during ordinary evaluation. The frozen behavior requires the
+    # non-finite intermediate to be treated as invalid, i.e. result is None.
     irr = calculate_irr((-1e308, 1e308, 1e308))
 
-    assert irr is None or math.isfinite(irr)
+    assert irr is None
 
 
 def test_irr_deterministic_repeated_calls() -> None:
