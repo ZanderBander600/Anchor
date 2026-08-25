@@ -13,6 +13,7 @@ are imported directly by tests and other in-progress engine code:
 - ``mini_anchor.engine.contracts``
 - ``mini_anchor.engine.noi``
 - ``mini_anchor.engine.debt``
+- ``mini_anchor.engine.acquisition``
 """
 
 from __future__ import annotations

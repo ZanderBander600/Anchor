@@ -56,3 +56,11 @@ class DebtSchedule:
     monthly_debt_service: float
     annual_debt_service: tuple[float, ...]
     remaining_loan_balance: float
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AcquisitionCashFlows:
+    exit_value: float
+    net_sale_proceeds: float
+    unlevered_cash_flows: tuple[float, ...]
+    levered_cash_flows: tuple[float, ...]

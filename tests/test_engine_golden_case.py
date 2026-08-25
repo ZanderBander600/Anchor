@@ -1,13 +1,16 @@
-"""Golden-case coverage for the Phase 2A/2B subset of AcquisitionResults fields.
+"""Golden-case coverage for the Phase 2A/2B/2C subset of AcquisitionResults
+fields.
 
 Values are taken from the "Golden Case" section of
-``docs/phase_2_deterministic_engine.md``, restricted to the fields Phase 2A
-and Phase 2B actually produce (NOI forecast, exit NOI, going-in cap rate,
-loan amount, initial equity, monthly debt service, annual debt service,
-remaining loan balance).
+``docs/phase_2_deterministic_engine.md``, restricted to the fields Phase 2A,
+Phase 2B, and Phase 2C actually produce (NOI forecast, exit NOI, going-in cap
+rate, loan amount, initial equity, monthly debt service, annual debt service,
+remaining loan balance, exit value, net sale proceeds, unlevered cash flows,
+levered cash flows).
 """
 
 from mini_anchor.contracts import AcquisitionInputs
+from mini_anchor.engine.acquisition import calculate_acquisition_cash_flows
 from mini_anchor.engine.debt import calculate_capital_stack, calculate_debt_schedule
 from mini_anchor.engine.noi import forecast_noi
 
@@ -84,3 +87,41 @@ def test_golden_case_remaining_loan_balance() -> None:
     result = calculate_debt_schedule(make_golden_inputs())
 
     assert result.remaining_loan_balance == 29948583.641211268
+
+
+def test_golden_case_exit_value() -> None:
+    result = calculate_acquisition_cash_flows(make_golden_inputs())
+
+    assert result.exit_value == 52694276.10454546
+
+
+def test_golden_case_net_sale_proceeds() -> None:
+    result = calculate_acquisition_cash_flows(make_golden_inputs())
+
+    assert result.net_sale_proceeds == 22745692.46333419
+
+
+def test_golden_case_unlevered_cash_flows() -> None:
+    result = calculate_acquisition_cash_flows(make_golden_inputs())
+
+    assert result.unlevered_cash_flows == (
+        -50000000.0,
+        2500000.0,
+        2575000.0,
+        2652250.0,
+        2731817.5,
+        55508048.12954546,
+    )
+
+
+def test_golden_case_levered_cash_flows() -> None:
+    result = calculate_acquisition_cash_flows(make_golden_inputs())
+
+    assert result.levered_cash_flows == (
+        -17500000.0,
+        346405.56164659606,
+        421405.56164659606,
+        498655.56164659606,
+        578223.0616465961,
+        23405870.04998079,
+    )
