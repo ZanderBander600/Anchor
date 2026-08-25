@@ -139,7 +139,7 @@ This is a deterministic, engine-calculated informational metric. It does not dri
 
 This rule does not change any financial economics; it only prevents an `AcquisitionResults` instance from silently carrying an `inf` or `NaN` value in a field where Phase 0 defines no `None`/"N/A" fallback (e.g., `going_in_cap_rate`, `loan_amount`, `noi_by_year`, `exit_value`, `unlevered_cash_flows`). It does not apply to `unlevered_irr`, `levered_irr`, DSCR entries, or `equity_multiple`, because Phase 0 already specifies exactly how non-finite intermediate values are handled for those four output categories (they resolve to `None`, per their own frozen rules, not to an engine-level failure). No clamping, rounding, or substitution is introduced by this rule; it only converts an otherwise-silent non-finite value into an explicit failure.
 
-Recommended implementation: a dedicated exception, e.g. `NonFiniteResultError(ValueError)` defined in `engine/contracts.py`, raised at the point a non-finite value is first detected, analogous in spirit to Phase 1's `InputValidationError` but reporting a single deterministic-computation failure rather than a collected list of input issues (there is nothing to collect against, since Phase 2 does not re-validate `AcquisitionInputs`).
+Required implementation: the approved `NonFiniteResultError(ValueError)` defined in `engine/contracts.py` is raised at the point a non-finite value is first detected, analogous in spirit to Phase 1's `InputValidationError` but reporting a single deterministic-computation failure rather than a collected list of input issues (there is nothing to collect against, since Phase 2 does not re-validate `AcquisitionInputs`).
 
 ## Phase 2B — Acquisition / Debt
 
@@ -161,17 +161,117 @@ r = interest_rate / 12
 N = amortization * 12
 ```
 
-For nonzero `r`:
+`amortization` is a positive whole number of years under the frozen Phase 0 input domain. Therefore, `N` is always a positive multiple of `12`, payment `N` always falls at the end of amortization year `A`, and contractual maturity always occurs at a year boundary. POC V1 has no reachable partial amortization-ending hold year.
+
+`monthly_debt_service` (`PMT`) is calculated by evaluating the following three branches **in this fixed order**. The first branch whose condition holds determines `PMT`; later branches must not be evaluated once an earlier branch applies.
+
+#### Branch 1 — zero loan amount (frozen)
+
+If `loan_amount == 0.0`:
+
+```text
+PMT = 0.0
+```
+
+This branch is checked, and `PMT = 0.0` is returned, **before** any positive-interest payment denominator is evaluated — regardless of `interest_rate`. A zero loan has zero debt service by financial identity (Phase 0: `L = P * LTV`, so `LTV = 0` implies `L = 0`), and it must never be possible for a zero loan to reach a numerical `0 / 0` payment path. This is not a new financial convention: it makes the Phase 0 zero-loan identity an explicit, ordered implementation branch rather than an incidental consequence of substituting `loan_amount = 0` into the general formulas.
+
+#### Branch 2 — zero interest rate (frozen)
+
+Else, if `interest_rate == 0.0`:
+
+```text
+monthly_rate = 0.0
+PMT = loan_amount / N
+```
+
+This is the frozen Phase 0 zero-interest formula, preserved unchanged.
+
+#### Branch 3 — positive interest rate (frozen, numerically stable evaluation)
+
+Else — `loan_amount != 0.0` and `interest_rate > 0.0`:
+
+```text
+monthly_rate = interest_rate / 12          # r
+```
+
+`interest_rate` is economically positive on entry to this branch. Branch selection itself is based on the original annual `interest_rate`, not on the derived `monthly_rate`; Branch 3 is taken whenever `interest_rate > 0.0`, even in the numerical edge case described immediately below where the derived `monthly_rate` is not representable as a nonzero `float`.
+
+##### Branch 3a — monthly-rate underflow (frozen POC V1 numerical-boundary rule)
+
+A positive annual `interest_rate` divided by `12` is, in ordinary cases, itself a representable positive `float`. However, for an extremely small but still strictly positive `interest_rate` (below the representable monthly-rate range — i.e. so small that IEEE-754 division by `12` underflows to exactly `0.0`), the derived quantity can fail to be positive even though the input was:
+
+```text
+interest_rate > 0.0
+monthly_rate = interest_rate / 12
+monthly_rate == 0.0      # underflow, not a zero-interest input
+```
+
+If this occurs, freeze the following POC V1 numerical-boundary behavior:
+
+```text
+PMT = loan_amount / N
+```
+
+This is the analytical limit of the positive-rate amortizing payment formula as `monthly_rate` approaches `0` from above, so it is the same numerical value Branch 2 would produce — but it is reached for a different, explicitly documented reason. This is **not** a financial reclassification of the loan as zero-interest, and it is **not** silent coercion: the original annual `interest_rate` remains positive and is never mutated or treated as `0.0`; only the derived, IEEE-754-underflowed `monthly_rate` is `0.0`. No raw `ZeroDivisionError` (or any other arithmetic exception) may occur along this path. It is a documented floating-point numerical-boundary rule, not a new financial convention, and it does not change Phase 0 economics.
+
+For subsequent monthly recurrence in this exact numerical-support case, `monthly_rate` remains the representable Python `float` `0.0`, so:
+
+```text
+Interest_t = Beginning Balance_t * 0.0 = 0.0
+```
+
+for every month `t`, and the recurrence otherwise follows the existing frozen operation order (Interest, then Principal, then Ending Balance) unchanged — it is not special-cased beyond `monthly_rate` itself already being `0.0`.
+
+##### Branch 3b — representable positive monthly rate (frozen, numerically stable evaluation)
+
+Otherwise, `monthly_rate > 0.0` is representable. The financial formula remains, per Phase 0:
 
 ```text
 PMT = loan_amount * r / (1 - (1 + r)^(-N))
 ```
 
-For `r = 0`:
+However, the denominator must **not** be evaluated using the naive floating-point expression:
 
 ```text
-PMT = loan_amount / N
+1 - (1 + r) ** (-N)
 ```
+
+because a valid, extremely small positive rate can satisfy `r > 0` while also satisfying `1.0 + r == 1.0` under IEEE-754 double-precision arithmetic — `r` can be too small for double precision to distinguish `1.0 + r` from `1.0` even though `r` itself is a distinct, genuinely positive `float`. The naive expression would then evaluate to `1 - 1 = 0`, producing a zero denominator despite `r` being positive.
+
+The frozen, numerically stable evaluation of the denominator is:
+
+```text
+log_growth           = log1p(r)
+discount_exponent     = -N * log_growth
+payment_denominator   = -expm1(discount_exponent)
+```
+
+using Python standard-library `math.log1p` and `math.expm1`. This is an algebraically equivalent numerical evaluation of the frozen Phase 0 positive-rate denominator: `log1p(r) = ln(1 + r)`, so `discount_exponent = -N * ln(1 + r) = ln((1 + r)^(-N))`, and `expm1(discount_exponent) = (1 + r)^(-N) - 1`, so `payment_denominator = -expm1(discount_exponent) = 1 - (1 + r)^(-N)` — the same denominator, evaluated so that a genuinely positive `r` cannot silently collapse to zero.
+
+**The numerator/division must also be evaluated in a specific, frozen, underflow-safe order.** The financial formula's numerator, `loan_amount * r`, can itself underflow to `0.0` under ordinary IEEE-754 double-precision multiplication for a small-but-finite `loan_amount` and a small-but-representable `r`, even though the true, final `PMT` value is finite and well away from `0`. Evaluating:
+
+```text
+(loan_amount * r) / payment_denominator
+```
+
+is therefore **not permitted**, because `loan_amount * r` can round to exactly `0.0` before division ever occurs, silently producing `PMT = 0.0` even though the mathematically correct `PMT` is a small but definitely nonzero finite number. The frozen evaluation order divides first and multiplies second:
+
+```text
+rate_fraction = r / payment_denominator
+
+PMT = loan_amount * rate_fraction
+```
+
+This is algebraically equivalent to the frozen Phase 0 `PMT` formula (`loan_amount * r / payment_denominator = loan_amount * (r / payment_denominator)` in exact real-number arithmetic) and preserves the same zero-rate limiting behavior numerically, but avoids the specific underflow path in which `loan_amount * r` is computed and rounded to `0.0` before it is ever divided. `rate_fraction` and `PMT` must each pass an immediate finiteness check after being computed (see the non-finite detection granularity rules below).
+
+No minimum positive interest rate is imposed. A positive `r` is never converted to `0`. No `Decimal` or arbitrary-precision arithmetic is introduced; the stable evaluation remains ordinary Python `float` (IEEE-754 binary64) arithmetic, consistent with this document's other floating-point conventions.
+
+**`discount_exponent` boundary case.** Under the Phase 0 domains applicable to this branch (`N > 0`, `r > 0`, so `log_growth = log1p(r) > 0`), `discount_exponent = -N * log_growth` is always `<= 0` and, for every ordinary input, a finite negative number. `discount_exponent` can become `-inf` in exactly two related ways, both arising only from an extreme but permitted `amortization`/`interest_rate` combination, and both are resolved identically and deterministically — neither is treated as a numerical failure:
+
+1. **Ordinary IEEE-754 float overflow.** `N * log_growth` itself overflows double precision to `+inf` under ordinary float multiplication (no exception is raised — `N`, already representable as a `float`, multiplies with `log_growth` and the product exceeds the maximum finite `double`), producing `discount_exponent = -inf` directly.
+2. **`OverflowError` while constructing/multiplying an extremely large `N`.** `N = amortization * 12` is an arbitrary-precision Python `int`. For an extreme but permitted `amortization`, `N` itself can exceed the magnitude any `float` can represent, so evaluating `N * log_growth` raises a raw `OverflowError` when Python attempts to convert `N` to `float` — before any product is ever formed. This case must be caught, and, provided `N > 0`, `log_growth > 0`, and both source quantities are otherwise valid (finite, correctly signed), the engine must deterministically treat the mathematical result the same as case 1: `discount_exponent = -inf`. The raw `OverflowError` must never leak out of the engine.
+
+In both cases, `math.expm1(-inf)` is defined and returns exactly `-1.0`, so `payment_denominator = -expm1(-inf) = 1.0` exactly (finite), and `rate_fraction = r / 1.0 = r`, so `PMT = loan_amount * r`. This matches the mathematical limit of the closed-form denominator as `(1 + r)^(-N) -> 0`. `discount_exponent = -inf` arising either way is therefore explicitly permitted and must not raise `NonFiniteResultError`, and an `OverflowError` encountered while computing it under condition 2 must not be allowed to propagate. `discount_exponent = +inf` and `discount_exponent = NaN` are not reachable under the Phase 0 domains in this branch; if either is nonetheless observed, it is treated as a finiteness failure like any other required quantity (see the non-finite detection granularity rules below). Likewise, any `OverflowError` encountered anywhere else in Branch 3, or any `OverflowError` that does not satisfy the `N > 0` / `log_growth > 0` / otherwise-valid preconditions above, is not covered by this documented exception and remains an explicit numerical failure.
 
 `monthly_debt_service` holds `PMT`. It is a single scalar because POC V1 has one fixed-rate, fully amortizing debt tranche with one constant scheduled payment amount for every month `1 <= t <= N` (Phase 0: "Debt is fixed-rate and fully amortizing"). Payment timing:
 
@@ -188,7 +288,9 @@ Per Phase 0, `LTV` may be exactly `0`. When `ltv = 0`:
 loan_amount = 0.0
 ```
 
-Substituting `loan_amount = 0` into the `PMT` formula (whether `r = 0` or `r != 0`) always yields `PMT = 0.0`, because the numerator `loan_amount * r` (or `loan_amount / N`) is `0`. Consequently every `annual_debt_service[y-1] = 0.0`, every remaining balance is `0.0` at every month (starting from a beginning balance of `0.0`, `Interest_t = 0 * r = 0`, `Principal_t = 0 - 0 = 0`, `Ending Balance_t = 0`), and `remaining_loan_balance = 0.0`. `initial_equity = purchase_price - 0 = purchase_price`. No special-cased branch is required in the implementation beyond what the formulas already produce; this table documents the resulting behavior so an implementer can write a golden-value test without deriving it independently.
+Substituting `loan_amount = 0` into either the zero-rate or positive-rate `PMT` formula (whether `r = 0` or `r != 0`) always yields `PMT = 0.0`, because the numerator `loan_amount * r` (or `loan_amount / N`) is `0`. Consequently every `annual_debt_service[y-1] = 0.0`, every remaining balance is `0.0` at every month (starting from a beginning balance of `0.0`, `Interest_t = 0 * r = 0`, `Principal_t = 0 - 0 = 0`, `Ending Balance_t = 0`), and `remaining_loan_balance = 0.0`. `initial_equity = purchase_price - 0 = purchase_price`.
+
+**A special-cased branch is required in the implementation.** Per the "Loan structure" section above, `PMT` is calculated via Branch 1 (zero loan amount) whenever `loan_amount = 0.0`: `PMT = 0.0` is returned immediately, without evaluating Branch 3's positive-rate denominator, regardless of `interest_rate`. This produces the same result as the substitution described above, but the explicit, first-checked branch guarantees no numerical `0 / 0` or otherwise undefined path is ever reachable for a zero loan — including under an arbitrary, valid positive `interest_rate` — even though algebraic substitution alone would also happen to reach `PMT = 0.0`. This table documents the resulting behavior so an implementer can write a golden-value test without deriving it independently.
 
 ### Annual debt service
 
@@ -196,18 +298,34 @@ Substituting `loan_amount = 0` into the `PMT` formula (whether `r = 0` or `r != 
 ADS_y = sum of Monthly Payment_t for t = 12(y - 1) + 1 through 12y,   1 <= y <= H
 ```
 
-`annual_debt_service[y - 1]` holds `ADS_y`. Because `N = 12 * A` is always a whole number of months (Phase 0 domain: `A >= 1` integer):
+`annual_debt_service[y - 1]` holds `ADS_y`.
 
-- for `1 <= y <= min(H, A)`: every one of the 12 month-positions in year `y` satisfies `t <= N`, so `ADS_y = 12 * PMT` exactly;
-- for `y > A` (only reachable when `H > A`): every month-position in year `y` satisfies `t > N`, so `ADS_y = 0.0` exactly.
+**Frozen operation order.** `ADS_y` must be computed by chronological monthly summation, exactly as Phase 0 defines it:
 
-There is no partial-year case in POC V1 because `A` and `H` are both whole numbers of years, so a hold year is either entirely within the amortization period or entirely after it; the "partial debt service in the amortization-ending year" case referenced by the task's phrasing does not arise from a partial *year*, but is fully captured by the boundary at `y = A` versus `y = A + 1` above (year `A` itself is still fully serviced; year `A + 1` is the first fully zero year). This is not a new assumption — it follows directly from `A`, `H`, and every hold-year boundary being whole numbers under the frozen Phase 0 domains.
+```text
+ADS_y = 0.0
+for each month t from 12(y - 1) + 1 through 12y, in chronological order:
+    ADS_y = ADS_y + Monthly Payment_t
+```
 
-The three orderings `A < H`, `A = H`, and `A > H` are all supported by the same formula with no branching beyond the `min(H, A)` comparison above:
+Implementations must accumulate `ADS_y` by adding each of the 12 `Monthly Payment_t` values for hold year `y` in chronological month order. `ADS_y` must **not** be implemented as `12 * PMT`, even for a hold year in which every month is contractually active and the two expressions are mathematically equal in exact real-number arithmetic. Repeated IEEE-754 addition of 12 individual `Monthly Payment_t` values and a single floating-point multiplication `12 * PMT` can differ in the last bits, because IEEE-754 addition and multiplication do not always associate or distribute identically. The chronological monthly summation is authoritative because it follows the frozen Phase 0 definition of `ADS_y` directly, rather than an algebraically equivalent shortcut.
 
-- `A < H`: `annual_debt_service` is nonzero for years `1..A` and `0.0` for years `A+1..H`; `remaining_loan_balance = 0.0` (the loan is fully amortized before sale).
-- `A = H`: `annual_debt_service` is nonzero for every modeled year; `remaining_loan_balance = 0.0` (sale occurs exactly at contractual maturity).
-- `A > H`: `annual_debt_service` is nonzero for every modeled year; `remaining_loan_balance` is strictly positive (the loan is not yet fully amortized at sale).
+Because `N = 12 * A` is always a whole number of months (Phase 0 domain: `A >= 1` integer):
+
+- for `1 <= y <= min(H, A)`: every one of the 12 month-positions in year `y` satisfies `t <= N`, so every `Monthly Payment_t = PMT` for that year, and the chronological summation of those 12 identical `PMT` values produces `ADS_y` (this sum is mathematically equal to `12 * PMT`, but is not computed as that separate expression);
+- for `y > A` (only reachable when `H > A`): every month-position in year `y` satisfies `t > N`, so every `Monthly Payment_t = 0.0`, and the chronological summation of those 12 zero values yields `ADS_y = 0.0` exactly.
+
+For zero leverage (`ltv = 0`, so `loan_amount = 0.0` and `PMT = 0.0` via Branch 1 above), every `Monthly Payment_t = 0.0` for every year, so the same chronological summation path yields `ADS_y = 0.0` for every hold year — this is not a separate special case, it is the same summation applied to an all-zero monthly schedule.
+
+Equivalently, if the contractual payment schedule remains active for a hold year, that year contains exactly 12 scheduled payments summed chronologically. If contractual maturity occurred before a hold year begins, ADS for that year is exactly `0.0`. The general month-based payment rules remain authoritative, but a partial final amortization year is not reachable under the current POC V1 input domain: year `A` contains all 12 scheduled payments for that year, payment `N` occurs in its final month, and year `A + 1` is the first fully zero-ADS year. This is not a new assumption — it follows directly from `A`, `H`, and every hold-year boundary being whole numbers under the frozen Phase 0 domains.
+
+The three orderings `A < H`, `A = H`, and `A > H` are all supported by the same chronological-summation procedure with no branching beyond the `min(H, A)` comparison above:
+
+- `A < H`: chronological summation yields `ADS_y` equal to the sum of 12 active `PMT` payments for years `1..A` and `ADS_y = 0.0` for years `A+1..H`; `remaining_loan_balance = 0.0` (the loan is fully amortized before sale).
+- `A = H`: chronological summation yields `ADS_y` equal to the sum of 12 active `PMT` payments for every modeled year; `remaining_loan_balance = 0.0` (sale occurs exactly at contractual maturity).
+- `A > H`: chronological summation yields `ADS_y` equal to the sum of 12 active `PMT` payments for every modeled year; `remaining_loan_balance` is the actual pre-maturity recurrence balance.
+
+For `LTV = 0`, the already-defined zero-loan behavior applies under all three orderings: every `annual_debt_service` entry and `remaining_loan_balance` are `0.0`.
 
 ## Remaining Loan Balance
 
@@ -222,13 +340,25 @@ For Phase 2 implementation, the specified computation path is the mathematically
 
 ```text
 Beginning Balance_1 = loan_amount
+monthly_rate = r
 
 for each scheduled payment month t = 1 .. min(H * 12, N):
-    Interest_t         = Beginning Balance_t * r
-    Principal_t         = Payment_t - Interest_t
-    Ending Balance_t   = Beginning Balance_t - Principal_t
+    Interest_t = Beginning Balance_t * monthly_rate
+    Principal_t = Payment_t - Interest_t
+    Ending Balance_t = Beginning Balance_t - Principal_t
+
+    then:
+
     Beginning Balance_(t+1) = Ending Balance_t
 ```
+
+Implementations must execute this per-month sequence exactly as written: calculate `Interest_t`, then calculate `Principal_t` from that stored interest value, then calculate `Ending Balance_t` from that stored principal value, and only then carry the ending balance forward as the next month's beginning balance. This operation order is the frozen Phase 2B implementation path. It must not be algebraically simplified to:
+
+```text
+Beginning Balance_t * (1 + monthly_rate) - Payment_t
+```
+
+or to any other mathematically equivalent expression. Python IEEE-754 floating-point operation order can change the last bits of the result.
 
 For `r = 0`, `Interest_t = 0` for every `t`, so `Principal_t = Payment_t = PMT` and the recurrence reduces to `Ending Balance_t = Beginning Balance_t - PMT`, consistent with the closed form `B_m = L - m * PMT`.
 
@@ -238,20 +368,50 @@ For `r = 0`, `Interest_t = 0` for every `t`, so `Principal_t = Payment_t = PMT` 
 B_exit = B_min(12H, N)
 ```
 
-**Why the recurrence, not the closed form, is the specified implementation path.** Both formulas are mathematically identical for exact real-number arithmetic, and either is an acceptable *definition*. But `(1 + r)^m` evaluated via `pow()` versus an iterative accumulation of 360 (or more) individual `Beginning - Principal` subtractions can differ in the last few bits of IEEE-754 double precision, depending on implementation choices (e.g., library `pow` vs. repeated multiplication, or evaluation order of the closed-form fraction). Two independent implementations that both correctly follow "the closed form" are not guaranteed to be bit-identical. Two independent implementations that both follow the recurrence exactly as written above — same operation order, same per-month state update — are guaranteed to be bit-identical for the same inputs, because IEEE-754 arithmetic is deterministic given a fixed sequence of operations. The recurrence is therefore adopted as the single authoritative Phase 2 computation path for `remaining_loan_balance` and for `annual_debt_service`'s underlying per-month payments, in order to satisfy the "deterministic" and "two implementations do not diverge" requirements. The closed form remains a useful independent check in tests (e.g., asserting the recurrence result is within an explicit numerical tolerance of the closed-form result) but is not itself the implementation.
+**Why the recurrence, not the closed form, is the specified implementation path.** Both formulas are mathematically identical in exact real-number arithmetic. But `(1 + r)^m` evaluated via `pow()` versus an iterative accumulation of individual `Beginning Balance_t - Principal_t` subtractions can differ in the last few bits of IEEE-754 double precision, depending on implementation choices such as library exponentiation and expression evaluation order. Two independent implementations that both follow the recurrence and operation order exactly as written above use the same frozen floating-point path. The recurrence is therefore the authoritative Phase 2 computation for loan balances. The closed form must never replace it.
 
-### Tiny residual balance at contractual maturity
+### Extreme interest-rate numerical boundary
 
-Ordinary floating-point evaluation of the recurrence above at `m = N` (full contractual maturity) does not always land on exactly `0.0`; it can be a tiny positive or tiny negative value purely from floating-point rounding (observed magnitude in the golden case below: approximately `3.4e-7` against a `~32.5 million` starting balance, roughly 1 part in `10^14`). Phase 0 states "the fully amortized balance after payment `N` is zero" as an exact mathematical fact of how `PMT` is derived (an infinite-precision evaluation of the recurrence always reaches exactly `0` at `m = N`, by construction of the annuity formula). The following deterministic treatment reconciles the mathematical fact with floating-point reality, without inventing cent rounding or a general clamping policy:
+Phase 0 permits any finite annual `interest_rate >= 0` and imposes no upper bound. At extremely large but valid interest rates, IEEE-754 precision can make the calculated monthly principal difference (`Payment_t - Interest_t`) smaller than representable precision relative to a very large outstanding balance. Consequently, before contractual maturity, repeated recurrence balances may appear unchanged or nearly unchanged even though the mathematical fully amortizing loan is amortizing.
 
-> `B_N` (the balance after exactly `N` scheduled payments, i.e. full contractual maturity) is defined as exactly `0.0`, by the mathematical identity that `PMT` is derived to fully retire `loan_amount` over `N` payments. This is a single boundary-point definition, not a rounding or clamping rule applied to balances in general. For every `m < N`, the recurrence's floating-point result is used exactly as computed, with no adjustment, regardless of sign or magnitude.
+This is floating-point behavior, not a different debt convention. Phase 2B must not impose a new upper bound on Interest Rate, silently substitute higher-precision arithmetic, or replace the recurrence. The required IEEE-754 recurrence remains authoritative. At contractual maturity, the frozen `B_N := 0.0` rule below still applies.
+
+### Closed-form balance cross-check boundary
+
+The closed-form remaining-balance formula may be used only as a test/reference oracle for ordinary numerical ranges in which its exponentiation remains finite and its large terms do not suffer destabilizing cancellation. It is not a required oracle for extreme interest rates, where exponentiation may overflow or cancellation between large terms may make the closed form numerically unstable. A closed-form overflow or unstable comparison in such an extreme case does not authorize changing the recurrence and does not make the closed form authoritative. The implementation itself must always use the monthly recurrence; the closed form must never replace it.
+
+### Exact balance at contractual maturity
+
+Ordinary floating-point evaluation of the recurrence above at `m = N` (full contractual maturity) does not always land on exactly `0.0`; it can be a tiny positive or tiny negative value purely from floating-point rounding (observed magnitude in the golden case below: `1.1059455573558807e-07` against a `~32.5 million` starting balance, roughly 1 part in `10^14`). Phase 0 states "the fully amortized balance after payment `N` is zero" as an exact mathematical fact of how `PMT` is derived (an infinite-precision evaluation of the recurrence always reaches exactly `0` at `m = N`, by construction of the annuity formula). The following deterministic treatment reconciles the mathematical fact with floating-point reality, without inventing cent rounding or a general clamping policy:
+
+> At contractual maturity, after payment `N`, `B_N := 0.0`. This is the mathematical identity of a fully amortizing loan and applies only at that single contractual-maturity point.
 
 Consequently:
 
-- Whenever `min(H * 12, N) = N` (i.e. `A <= H`, meaning the loan reaches or passes full maturity by the sale date), `remaining_loan_balance = 0.0` exactly, by definition, independent of the floating-point recurrence's raw last-step output.
-- Whenever `min(H * 12, N) < N` (i.e. `A > H`, sale occurs before maturity), `remaining_loan_balance` is the recurrence's ordinary floating-point result at month `H * 12`, used as-is. This value is always strictly positive for a genuine (nonzero) loan under the Phase 0 domains, so a "materially negative" residue cannot arise in this branch; the only place a sign-flip residue could ever appear is exactly at `m = N`, which is the single point already special-cased above.
+- The month-`N` recurrence is executed through `Interest_N`, `Principal_N`, and raw `Ending Balance_N`, with the immediate finiteness checks specified below. Only after those required month-`N` quantities are finite is the contractual identity `B_N := 0.0` applied.
+- This identity is not a general balance clamp. It must not be applied to any month `m < N`, whether by sign, magnitude, cents, or tolerance. Every pre-maturity balance uses the actual recurrence result exactly as computed.
+- The maturity identity must not be used to hide or suppress earlier material numerical drift, and it never excuses a non-finite intermediate. All pre-maturity recurrence values remain unadjusted and subject to their required immediate finiteness checks; no additional tolerance-based drift rule is introduced.
+- Whenever `min(H * 12, N) = N` (i.e. `A <= H`, meaning the loan reaches maturity by the sale date), `remaining_loan_balance = 0.0` exactly by the contractual-maturity identity. For month `N + 1` and every later month, `Monthly Payment_t = 0`, no additional amortization recurrence is performed, and the exit balance selected by `B_min(12H, N)` remains `B_N = 0.0`.
+- Whenever `min(H * 12, N) < N` (i.e. `A > H`, so exit occurs before maturity), `remaining_loan_balance` is the actual recurrence result at month `H * 12`, used as-is with no maturity adjustment.
 
-No other rounding, clamping, or cent-level adjustment is applied anywhere in the amortization schedule. This preserves "no invented cent rounding" and "full available floating-point precision" while giving two independent implementations one unambiguous, bit-reproducible value at the maturity boundary.
+No cent rounding, tolerance-based monthly balance clamping, or other balance adjustment is applied anywhere in the amortization schedule.
+
+### Phase 2B non-finite detection granularity
+
+Phase 2B must check finiteness immediately after each required calculated debt quantity at which a non-finite value could arise, including, as applicable:
+
+- `monthly_rate`, immediately after it is calculated (Branch 2's `0.0`, or Branch 3's `interest_rate / 12`). `monthly_rate == 0.0` in Branch 3 (Branch 3a, the monthly-rate-underflow case) is finite by construction and is not a failure; it routes to `PMT = loan_amount / N` as documented above, not to `NonFiniteResultError`;
+- for Branch 3b (positive, representable monthly rate) specifically: `log_growth` immediately after `log1p(r)`; `discount_exponent` immediately after `-N * log_growth` (or after the required `OverflowError` catch described below), subject to the documented `-inf` exception below; `payment_denominator` immediately after `-expm1(discount_exponent)`; and `rate_fraction` immediately after `r / payment_denominator`;
+- `monthly_debt_service` (`PMT`), immediately after the applicable branch's payment formula (Branch 1's `0.0` is finite by construction and requires no check; Branch 2, Branch 3a, and Branch 3b are each checked);
+- every `Interest_t`, immediately after it is calculated;
+- every `Principal_t`, immediately after it is calculated;
+- every raw `Ending Balance_t`, immediately after it is calculated and before it is carried forward or the contractual-maturity identity is applied;
+- every annual debt-service total (`ADS_y`), immediately after its chronological monthly summation completes; and
+- `remaining_loan_balance` at exit, immediately after the applicable recurrence balance or contractual-maturity value is selected.
+
+**Documented exception:** `discount_exponent = -inf` is not a finiteness failure when it arises from either of the two deterministically defined cases described in the "Loan structure" section above: (1) `N * log_growth` overflowing to `+inf` under ordinary IEEE-754 float multiplication, or (2) a raw `OverflowError` raised while converting/multiplying an extremely large `N` — provided `N > 0`, `log_growth > 0`, and both source quantities are otherwise valid — which must be caught and deterministically mapped to `discount_exponent = -inf` rather than allowed to propagate. In either case `expm1(-inf) = -1.0`, so `payment_denominator = 1.0` (finite) and `rate_fraction = r` (finite). Every other non-finite value at any of the checkpoints above — including `discount_exponent = +inf` or `discount_exponent = NaN`, and including any `OverflowError` that does not satisfy the case-2 preconditions above — is a finiteness failure.
+
+If evaluating one of these required quantities overflows or produces `NaN`, positive infinity, or negative infinity (other than the single documented `discount_exponent = -inf` exception, in either of its two forms), the engine must raise the approved `NonFiniteResultError` immediately, rather than allowing a raw `ZeroDivisionError`, `OverflowError`, `NaN`, or infinity to leak out as an undocumented result. It must not continue the schedule or wait until `AcquisitionResults` assembly. No required quantity is silently clamped or rounded to avoid the check. This requirement does not reclassify valid `None` values from later return-metric phases as numerical failures: the frozen `None`/"N/A" conventions for IRR, DSCR, and Equity Multiple remain unchanged.
 
 ## Phase 2C — Exit Value
 
@@ -420,6 +580,8 @@ Preserving the Phase 0 convention exactly:
 
 Financial outputs that become non-finite fail explicitly, per the Phase 2A non-finite rule, rather than flowing silently into a returned `AcquisitionResults`.
 
+For debt calculations specifically, the exact recurrence operation order, extreme-rate numerical behavior, contractual-maturity identity, chronological ADS summation order, and immediate finiteness checks in Phase 2B govern. Implementations must not introduce cent rounding, tolerance-based balance clamping, or a silent higher-precision substitute. For the positive-rate `PMT` denominator specifically, the frozen `log1p`/`expm1` stable evaluation in Phase 2B governs over the naive `1 - (1 + r) ** (-N)` expression, for the numerical-stability reasons stated there; this is not a precision upgrade (no `Decimal` or arbitrary-precision arithmetic is introduced), only a different IEEE-754 evaluation order of the same frozen formula. For the positive-rate `PMT` numerator specifically, the frozen divide-first order (`rate_fraction = r / payment_denominator`, then `PMT = loan_amount * rate_fraction`) governs over the multiply-first order (`(loan_amount * r) / payment_denominator`), because multiplying first can underflow to `0.0` for a small-but-finite `loan_amount` even when the true `PMT` is finite and nonzero; this is likewise a different IEEE-754 evaluation order of the same frozen formula, not a precision upgrade. A positive annual `interest_rate` whose derived `monthly_rate` itself underflows to `0.0` is treated as the documented Branch 3a numerical-boundary case (`PMT = loan_amount / N`), not as a zero-interest input and not as a finiteness failure.
+
 ## Architecture
 
 Recommended minimal structure (files are not created by this specification task):
@@ -490,11 +652,29 @@ UI/API ─────────────┘
 
 The future Phase 2 implementation is not complete without automated tests covering at least the following, organized to mirror the module boundaries above:
 
+All existing Phase 2A tests and rules remain required and unchanged by this Phase 2B specification patch.
+
 **NOI** (`noi.py`): `H = 1`; zero NOI Growth; positive NOI Growth; negative NOI Growth `> -1`; `Current NOI = 0`; Occupancy has no effect on any `NOI_y` regardless of its value.
 
 **Going-in cap** (`noi.py`): ordinary case; `Current NOI = 0` (result is `0.0`, not an error, not `None`).
 
-**Debt** (`debt.py`): `LTV = 0`; `LTV = 1`; zero interest; positive interest; `A < H`; `A = H`; `A > H`; exact maturity (`B_N` treated as exactly `0.0`); remaining balance at several known months (validated against both the recurrence and the closed form within an explicit tolerance); annual debt-service aggregation for each of `A < H`, `A = H`, `A > H`; no debt service after maturity (`ADS_y = 0` for `y > A`).
+**Debt** (`debt.py`) must include all of the following Phase 2B coverage:
+
+- leverage boundaries: `LTV = 0` and `LTV = 1`;
+- a **required zero-loan payment regression test**: `ltv = 0` (so `loan_amount = 0.0`) combined with an ordinary nonzero `interest_rate`, proving `PMT = 0.0` is produced by Branch 1 without evaluating any positive-interest denominator, with no `0 / 0` path reachable, and with `PMT = 0.0` regardless of the (nonzero) interest rate supplied;
+- rate cases: zero interest; ordinary positive interest; very large but finite permitted interest (without imposing a new Interest Rate input bound or substituting higher-precision arithmetic); and a **required very-small positive interest rate regression test**, where the annual `interest_rate` is small enough that `monthly_rate > 0.0` but a naive `1.0 + monthly_rate` evaluates to exactly `1.0` under IEEE-754 double precision. This test must prove: the rate is still treated as strictly positive (Branch 3b is taken, not Branch 2); no `ZeroDivisionError` occurs; the stable `log1p`/`expm1` positive-rate formula is used rather than the naive `1 - (1 + r) ** (-N)` expression; the resulting `PMT` is finite; `PMT` approaches the zero-rate payment `loan_amount / N` as the rate approaches zero; and the rate is never silently converted to `0.0` internally;
+- a **required positive-annual-rate, monthly-rate-underflow regression test** (Branch 3a): a positive finite annual `interest_rate` small enough that IEEE-754 division by `12` underflows to exactly `monthly_rate == 0.0` — for example, `interest_rate = 5e-324` (the smallest positive representable `float`), which satisfies `interest_rate > 0.0` while `interest_rate / 12 == 0.0`. With `loan_amount = 32_500_000.0` and `N = 360`, this test must prove: `interest_rate > 0.0` on entry; `monthly_rate == 0.0` arises solely from underflow, not from a zero-rate input; `PMT == loan_amount / N == 90277.77777777778`; no arithmetic exception (in particular no `ZeroDivisionError`) occurs; and the branch taken is documented as the positive-rate numerical-limit case (Branch 3a), not Branch 2;
+- a **required underflow-safe PMT numerator regression test** (Branch 3b): a fixture where `loan_amount` is finite and small, `monthly_rate` is positive and representable, `loan_amount * monthly_rate` would itself underflow to `0.0` under naive multiply-then-divide evaluation, but `monthly_rate / payment_denominator` remains representable — for example, `loan_amount = 1e-300`, `interest_rate = 1.2e-24` (so `monthly_rate = interest_rate / 12 == 9.999999999999999e-26`), `amortization = 30` (`N = 360`). Under this fixture, `loan_amount * monthly_rate` rounds to exactly `0.0` (a naive multiply-first implementation would therefore return `PMT = 0.0`), while the frozen divide-first order yields `rate_fraction = 0.002777777777777778` and `PMT = 2.777777777777778e-303` — finite and close to `loan_amount / N = 2.7777777777777778e-303`. The test must assert this exact finite, nonzero `PMT` and must fail if the implementation reverts to computing `(loan_amount * monthly_rate) / payment_denominator`;
+- amortization/hold orderings: `A < H`, `A = H`, and `A > H`;
+- month boundaries: month `1`, month `12`, month `13`, month `N`, and month `N + 1`, with month `N + 1` verifying `Monthly Payment_(N+1) = 0` and that no post-maturity recurrence is performed;
+- exact contractual maturity after payment `N`, including `B_N = 0.0` exactly;
+- actual recurrence balances before maturity, with no cent rounding or tolerance-based balance clamping for any `m < N`;
+- annual debt-service aggregation with exactly 12 scheduled payments per active amortization year, zero ADS after maturity, and no partial amortization-ending year under the POC V1 input domain;
+- a **required regression test proving `ADS_y` is computed by chronological summation of the 12 monthly `Monthly Payment_t` values**, not by an independently computed `12 * PMT` expression. This test must use an actual fixture in which chronological addition of a `Monthly Payment_t` value 12 times and `12 * Monthly Payment_t` produce different IEEE-754 results — for example, `Monthly Payment_t = 268729.3538605583`: summing it 12 times chronologically yields `3224752.2463267003`, while `12 * 268729.3538605583` yields `3224752.2463267` — a real difference of `4.656612873077393e-10` in the last bits. The test must assert the chronological-summation result (`3224752.2463267003`), not the `12 *` shortcut, and must continue to cover zero leverage, active years, years after maturity, and all three `A < H` / `A = H` / `A > H` orderings;
+- recurrence-versus-closed-form comparison within an explicit tolerance only for ordinary numerical ranges where the closed form is finite and stable, with no required closed-form oracle comparison for extreme rates;
+- a non-finite monthly or other required debt intermediate raising `NonFiniteResultError` immediately, including for `log_growth`, `discount_exponent` (other than the documented `-inf` exception, in either of its two forms), `payment_denominator`, and `rate_fraction` in the positive-rate branch;
+- a **required affirmative regression test for the permitted `discount_exponent == -inf` path** covering both documented forms: (1) ordinary float-multiplication overflow — e.g. `interest_rate = 1e300` (so `monthly_rate = 8.333333333333334e+298`, `log_growth = 688.2906212484257`) with `amortization = 3 * 10**305` (so `N = amortization * 12 = 3.6e306` as an integer, still convertible to `float` without error since it is below the ~`1.8e308` `float` maximum) makes `N * log_growth` overflow to `+inf` under ordinary float multiplication, producing `discount_exponent == -inf` with no exception raised; and (2) a raw `OverflowError` raised while converting an extremely large `N` to `float` (e.g. `amortization = 10**400`, so `N = amortization * 12` is itself far beyond the `float` maximum), which the implementation must catch and deterministically map to `discount_exponent = -inf` rather than let propagate. Both fixtures must assert `payment_denominator == 1.0` and a finite resulting `PMT`, and must assert that no raw `OverflowError` escapes the engine in either case; and
+- repeated identical calls producing identical results.
 
 **Exit** (`acquisition.py` / `noi.py`): forward-NOI convention (`exit_noi != NOI_H` whenever `g != 0`); `H = 1`; zero growth; positive growth; negative growth; no sale costs deducted.
 
@@ -548,47 +728,53 @@ initial_equity = 17500000.0
 
 ### Debt
 
+**Regenerated using the final frozen numerical operation order**: `monthly_rate = interest_rate / 12`; `payment_denominator = -expm1(-N * log1p(monthly_rate))`; `rate_fraction = monthly_rate / payment_denominator`; `PMT = loan_amount * rate_fraction`. This example's `interest_rate = 0.0525` is well within the ordinary representable range, so it exercises Branch 3b (not Branch 3a) — the underflow-safe numerator order still changes the golden `PMT` value in its last bits relative to a prior, superseded multiply-first golden calculation for this same example.
+
 ```text
-r (monthly)                    = 0.0043749999999999995   # 0.0525 / 12
-N (scheduled monthly payments) = 360                       # 30 * 12
-monthly_debt_service (PMT)     = 179466.20319611664
+monthly_rate (r)                = 0.0043749999999999995   # 0.0525 / 12
+N (scheduled monthly payments)  = 360                       # 30 * 12
+log_growth                      = 0.00436545750963998
+discount_exponent               = -1.5715647034703928
+payment_denominator             = 0.7922800921163993
+rate_fraction                   = 0.005522037021418984
+monthly_debt_service (PMT)      = 179466.20319611699
 
 annual_debt_service = (
-    2153594.4383533997,   # ADS_1
-    2153594.4383533997,   # ADS_2
-    2153594.4383533997,   # ADS_3
-    2153594.4383533997,   # ADS_4
-    2153594.4383533997,   # ADS_5
+    2153594.438353404,   # ADS_1
+    2153594.438353404,   # ADS_2
+    2153594.438353404,   # ADS_3
+    2153594.438353404,   # ADS_4
+    2153594.438353404,   # ADS_5
 )
 ```
 
-All five years are identical because `A = 30 > H = 5`, so every modeled year is fully within the amortization period (`ADS_y = 12 * PMT` for all `y in 1..5`).
+All five years are identical because `A = 30 > H = 5`, so every modeled year is fully within the amortization period (each `ADS_y` is the chronological sum of 12 active `PMT` payments, mathematically equal to `12 * PMT` for all `y in 1..5` but not computed as that expression).
 
 Illustrative intermediate amortization points, for validating an independent recurrence implementation (not part of `AcquisitionResults`):
 
 ```text
 Beginning Balance_1 (= loan_amount) = 32500000.0
 Interest_1                          = 142187.49999999997
-Principal_1                         = 37278.703196116665
+Principal_1                         = 37278.703196117014
 Ending Balance_1 (balance after month 1)   = 32462721.296803884
 Ending Balance after month 12               = 32041732.801682245
 Ending Balance after month 24               = 31558819.12881365
-Ending Balance after month 60 (= B_exit)    = 29948583.641211294
-Ending Balance after month 120              = 26633190.900727887
-Ending Balance after month 359              = 178684.45868969124
+Ending Balance after month 60 (= B_exit)    = 29948583.641211268
+Ending Balance after month 120              = 26633190.900727846
+Ending Balance after month 359              = 178684.4586894612
 Ending Balance after month 360 (raw recurrence, before the
-  contractual-maturity B_N := 0.0 identity is applied) = 3.4199911169707775e-07
+  contractual-maturity B_N := 0.0 identity is applied) = 1.1059455573558807e-07
 ```
 
 ```text
-remaining_loan_balance = 29948583.641211294       # B_exit = B_60 (min(12*5, 360) = 60)
+remaining_loan_balance = 29948583.641211268       # B_exit = B_60 (min(12*5, 360) = 60)
 ```
 
 ### Exit and sale proceeds
 
 ```text
-exit_value        = 52694276.10454546      # 2898185.18575 / 0.055
-net_sale_proceeds = 22745692.463334166     # exit_value - remaining_loan_balance
+exit_value        = 52694276.10454546      # 2898185.18575 / 0.055 (unchanged: no debt dependency)
+net_sale_proceeds = 22745692.46333419      # exit_value - remaining_loan_balance
 ```
 
 ### Cash flows
@@ -600,16 +786,16 @@ unlevered_cash_flows = (
     2575000.0,
     2652250.0,
     2731817.5,
-    55508048.12954546,     # NOI_5 + exit_value
+    55508048.12954546,     # NOI_5 + exit_value (unchanged: no debt dependency)
 )
 
 levered_cash_flows = (
     -17500000.0,
-    346405.5616465998,
-    421405.5616465998,
-    498655.5616465998,
-    578223.0616465998,
-    23405870.049980767,    # NOI_5 - ADS_5 + net_sale_proceeds
+    346405.56164659606,
+    421405.56164659606,
+    498655.56164659606,
+    578223.0616465961,
+    23405870.04998079,    # NOI_5 - ADS_5 + net_sale_proceeds
 )
 ```
 
@@ -617,31 +803,33 @@ levered_cash_flows = (
 
 ```text
 dscr_by_year = (
-    1.160849951818902,
-    1.195675450373469,
-    1.2315457138846733,
-    1.2684920853012134,
-    1.30654684786025,
+    1.1608499518189,
+    1.195675450373467,
+    1.231545713884671,
+    1.2684920853012112,
+    1.3065468478602478,
 )
-headline_dscr = 1.160849951818902
+headline_dscr = 1.1608499518189
 ```
 
 ### Equity Multiple
 
 ```text
-sum of positive levered cash flows = 25250559.796567164
+sum of positive levered cash flows = 25250559.79656717
 sum of negative levered cash flows = -17500000.0
-equity_multiple = 1.4428891312324095
+equity_multiple = 1.44288913123241
 ```
 
 ### IRR
 
 ```text
-unlevered_irr = 0.062414943980353854
-levered_irr   = 0.07913030056780745
+unlevered_irr = 0.062414943980353854      # unchanged: no debt dependency
+levered_irr   = 0.07913030056780745       # unchanged at full float precision: the debt-driven
+                                            # perturbation to levered_cash_flows is too small to move
+                                            # the deterministic bisection procedure's converged x_star
 ```
 
-Both IRR values were produced by the exact transformation, Horner-evaluated reduced polynomial, bracket-expansion, and 256-iteration bisection procedure specified above and in `docs/financial_conventions.md` — no external solver was used. An independent implementation following the same procedure with the same tolerances is expected to reproduce these values to full `float` precision, since the bisection procedure is itself deterministic and bit-reproducible given identical inputs and IEEE-754 arithmetic.
+Both IRR values were produced by the exact transformation, Horner-evaluated reduced polynomial, bracket-expansion, and 256-iteration bisection procedure specified above and in `docs/financial_conventions.md` — no external solver was used. An independent implementation following the same procedure with the same tolerances is expected to reproduce these values to full `float` precision, since the bisection procedure is itself deterministic and bit-reproducible given identical inputs and IEEE-754 arithmetic. `unlevered_irr`, `going_in_cap_rate`, `noi_by_year`, `exit_noi`, `exit_value`, and every `unlevered_cash_flows` entry are unchanged from any prior golden calculation for this example, because none of them depend on debt; only debt-dependent values (`monthly_debt_service`, `annual_debt_service`, the amortization checkpoints, `remaining_loan_balance`, `net_sale_proceeds`, `levered_cash_flows`, `dscr_by_year`, `headline_dscr`, `equity_multiple`) were regenerated. `levered_irr` is also numerically unchanged at full `float` precision in this particular example, since the debt-order perturbation is too small to change which bisection interval the 256-iteration procedure converges to; this is a property of this specific example, not a general guarantee that `levered_irr` is always insensitive to the PMT operation order.
 
 ## Definition of Done
 
@@ -667,9 +855,16 @@ Phase 2 (the future implementation) is complete only when:
 - The engine's sole public entry point is `analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults`; it accepts only `AcquisitionInputs` and returns only `AcquisitionResults`.
 - `AcquisitionResults` is the exact immutable, slotted, keyword-only dataclass specified in this document, with the field set: `going_in_cap_rate`, `loan_amount`, `initial_equity`, `monthly_debt_service`, `annual_debt_service`, `remaining_loan_balance`, `noi_by_year`, `exit_noi`, `exit_value`, `net_sale_proceeds`, `unlevered_cash_flows`, `levered_cash_flows`, `unlevered_irr`, `levered_irr`, `equity_multiple`, `dscr_by_year`, `headline_dscr`.
 - `annual_debt_service` and `dscr_by_year` are per-hold-year `tuple`s of length `H`; `noi_by_year` is a per-hold-year `tuple` of length `H`; `unlevered_cash_flows` and `levered_cash_flows` are `tuple`s of length `H + 1`; `remaining_loan_balance`, `exit_noi`, `exit_value`, and `net_sale_proceeds` are single scalars representing the exit-date/forward-period quantity.
-- The month-by-month amortization recurrence (not the closed-form `B_m` formula) is the specified Phase 2 implementation path for loan-balance and payment computation, adopted specifically to guarantee bit-reproducible determinism between independent implementations; the closed form remains a valid cross-check but not the authoritative computation.
-- `B_N` (the balance at exact contractual maturity, `m = N`) is defined as exactly `0.0` by mathematical identity, independent of the raw floating-point recurrence result at that single point; no other balance, payment, NOI, ADS, cash flow, DSCR, Equity Multiple, or IRR value is ever rounded, clamped, or adjusted for floating-point residue.
-- Non-finite intermediate or output values, outside the four fields with a frozen `None`/"N/A" convention (`unlevered_irr`, `levered_irr`, `dscr_by_year` entries, `headline_dscr`, `equity_multiple`), cause the engine to fail explicitly rather than return a partially non-finite `AcquisitionResults`; this is an implementation safety rule, not a change to Phase 0 economics.
+- `monthly_debt_service` (`PMT`) is calculated via three ordered branches, checked in this order and based on the original annual `interest_rate`: (1) zero loan amount (`loan_amount == 0.0` → `PMT = 0.0`, returned before any positive-rate denominator is evaluated, regardless of `interest_rate`); (2) zero interest rate (`interest_rate == 0.0` → `monthly_rate = 0.0`, `PMT = loan_amount / N`); (3) positive interest rate (`interest_rate > 0.0`), which itself has two sub-cases: (3a) the derived `monthly_rate` underflows to exactly `0.0` under IEEE-754 division by `12` even though `interest_rate > 0.0` — `PMT = loan_amount / N`, the positive-rate numerical limit, documented as distinct from Branch 2 even though numerically identical, is not a financial reclassification as zero-interest, and never raises `ZeroDivisionError`; and (3b) `monthly_rate > 0.0` is representable, using the stable positive-rate formula below. This ordering is frozen and is not a change to Phase 0 economics — it makes the already-implied zero-loan identity, and the monthly-rate-underflow numerical limit, explicit, first-checked branches rather than incidental consequences of substitution.
+- For Branch 3b (representable positive `monthly_rate`), the `PMT` denominator is evaluated using the frozen numerically stable expression (`log_growth = log1p(r)`, `discount_exponent = -N * log_growth`, `payment_denominator = -expm1(discount_exponent)`), never the naive `1 - (1 + r) ** (-N)` expression, because a genuinely positive but extremely small `r` can satisfy `1.0 + r == 1.0` under IEEE-754 double precision, which would otherwise produce a zero denominator. The numerator is then evaluated divide-first: `rate_fraction = r / payment_denominator`, `PMT = loan_amount * rate_fraction` — never `(loan_amount * r) / payment_denominator`, because that multiply-first order can underflow `loan_amount * r` to exactly `0.0` for a small-but-finite `loan_amount` even when the true `PMT` is finite and nonzero. Both orderings are algebraically equivalent evaluations of the same frozen Phase 0 formula; no minimum positive interest rate is imposed, no positive rate is silently converted to `0`, and no `Decimal`/arbitrary-precision arithmetic is introduced. `discount_exponent = -inf` is a deterministically defined case, not a finiteness failure, when it arises either from ordinary `N * log_growth` float-multiplication overflow, or from a raw `OverflowError` raised while converting/multiplying an extremely large `N` (caught and mapped to `discount_exponent = -inf`, provided `N > 0`, `log_growth > 0`, and both source quantities are otherwise valid) — in both cases `expm1(-inf) = -1.0` exactly, so `payment_denominator = 1.0` and `rate_fraction = r`. No other `OverflowError`, and no other non-finite `discount_exponent`, is covered by this exception.
+- `annual_debt_service[y-1]` (`ADS_y`) is computed by chronological summation of the 12 monthly `Monthly Payment_t` values for that hold year, in month order — never as an independently computed `12 * PMT` expression, even for a fully active year where the two are mathematically equal, because repeated IEEE-754 addition and a single multiplication by `12` can differ in the last bits. This divergence is required to be demonstrated by an actual fixture in tests, not merely asserted as a theoretical possibility.
+- The month-by-month amortization recurrence is the authoritative Phase 2 implementation path for loan balances. Every month must calculate `Interest_t`, then `Principal_t`, then `Ending Balance_t`, and then carry that ending balance forward, exactly as written in Phase 2B; no algebraically equivalent expression may replace that frozen operation order.
+- Amortization is a positive whole number of years, so contractual maturity always occurs after payment `N` at a year boundary. Every active amortization year has 12 scheduled payments (summed chronologically), every modeled year after maturity has zero ADS, and no partial amortization-ending year is reachable under the POC V1 input domain.
+- The closed-form `B_m` formula is only a test/reference oracle for ordinary numerical ranges where it is finite and stable. It is not required for extreme-rate comparisons and must never replace the authoritative recurrence.
+- `B_N` is assigned exactly `0.0` only at contractual maturity after payment `N`, by the mathematical identity of a fully amortizing loan and only after all raw month-`N` quantities pass their immediate finiteness checks. It is not a general clamp, is never applied before `N`, and must not hide earlier material numerical drift. A pre-maturity exit uses the actual recurrence balance without adjustment.
+- Extremely large but finite permitted Interest Rates may cause unchanged or nearly unchanged pre-maturity recurrence balances because of IEEE-754 representational precision. This numerical behavior does not change the debt convention, impose a new rate bound, authorize higher-precision arithmetic, or displace the `B_N := 0.0` maturity identity.
+- Required debt finiteness checks occur immediately after the monthly rate (where `monthly_rate == 0.0` under Branch 3a is finite by construction and not a failure); for Branch 3b, `log_growth`, `discount_exponent`, `payment_denominator`, and `rate_fraction`; the monthly payment; each monthly interest, principal, and raw ending balance; each annual debt-service total; and the exit remaining balance, as applicable. A non-finite required debt quantity raises `NonFiniteResultError` immediately rather than waiting for `AcquisitionResults` assembly, and no raw `ZeroDivisionError`, `OverflowError`, `NaN`, or infinity is ever allowed to leak out as an undocumented result. The single documented exception, in either of its two forms (ordinary float-multiplication overflow, or a caught `OverflowError` while converting/multiplying an extremely large `N`), is `discount_exponent = -inf` arising from extreme `amortization`/`interest_rate` overflow, which is deterministically defined (`payment_denominator = 1.0`) and is not treated as a failure.
+- Non-finite intermediate or output values outside the fields with a frozen `None`/"N/A" convention (`unlevered_irr`, `levered_irr`, `dscr_by_year` entries, `headline_dscr`, `equity_multiple`) cause the engine to fail explicitly rather than return a partially non-finite `AcquisitionResults`; valid later-phase `None` metrics remain valid and are not numerical failures. This is an implementation safety rule, not a change to Phase 0 economics.
 - `None` is the Python representation for every "N/A" case (IRR, DSCR, Equity Multiple), per the task's stated preference.
 - The frozen custom IRR bracket-and-bisection algorithm, exactly as specified in `docs/financial_conventions.md` and restated in this document, is the only permitted IRR solver; no third-party or general-purpose numerical solver may be substituted.
 - The engine package (`src/mini_anchor/engine/`) never imports `openpyxl`, and no engine module knows about Azure, GPT/OpenAI, or any UI/API/CLI framework.
