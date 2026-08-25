@@ -1,11 +1,11 @@
-"""Phase 2A engine contracts and numerical-failure signaling.
+"""Phase 2A/2B engine contracts and numerical-failure signaling.
 
 These contracts are narrow intermediate results, not the final
 ``AcquisitionResults`` contract described in
 ``docs/phase_2_deterministic_engine.md``. ``AcquisitionResults`` cannot be
-legitimately constructed until later Phase 2 parts (debt schedule, exit
-value, cash flows, returns) exist, so Phase 2A defines only the results it
-actually produces.
+legitimately constructed until later Phase 2 parts (exit value, cash flows,
+returns) exist, so this module defines only the results Phase 2A and 2B
+actually produce.
 """
 
 from __future__ import annotations
@@ -49,3 +49,10 @@ class NoiForecast:
 class CapitalStack:
     loan_amount: float
     initial_equity: float
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DebtSchedule:
+    monthly_debt_service: float
+    annual_debt_service: tuple[float, ...]
+    remaining_loan_balance: float

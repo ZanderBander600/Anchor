@@ -10,6 +10,7 @@ import pytest
 
 from mini_anchor.engine.contracts import (
     CapitalStack,
+    DebtSchedule,
     NoiForecast,
     NonFiniteResultError,
     ensure_finite,
@@ -25,6 +26,12 @@ NOI_FORECAST_FIELDS = (
 CAPITAL_STACK_FIELDS = (
     ("loan_amount", float),
     ("initial_equity", float),
+)
+
+DEBT_SCHEDULE_FIELDS = (
+    ("monthly_debt_service", float),
+    ("annual_debt_service", tuple[float, ...]),
+    ("remaining_loan_balance", float),
 )
 
 
@@ -104,6 +111,57 @@ def test_capital_stack_has_no_excel_or_source_metadata() -> None:
     assert not hasattr(capital_stack, "source")
     assert not hasattr(capital_stack, "cell")
     assert not hasattr(capital_stack, "row")
+
+
+def test_debt_schedule_has_exact_fields_order_and_keyword_only_shape() -> None:
+    contract_fields = fields(DebtSchedule)
+
+    assert is_dataclass(DebtSchedule)
+    assert tuple(field.name for field in contract_fields) == tuple(
+        name for name, _ in DEBT_SCHEDULE_FIELDS
+    )
+    assert all(field.kw_only for field in contract_fields)
+    assert DebtSchedule.__slots__ == tuple(name for name, _ in DEBT_SCHEDULE_FIELDS)
+
+
+def test_debt_schedule_has_exact_field_annotation_types() -> None:
+    resolved_types = typing.get_type_hints(DebtSchedule)
+
+    assert resolved_types == dict(DEBT_SCHEDULE_FIELDS)
+
+
+def test_debt_schedule_is_frozen_and_slotted() -> None:
+    debt_schedule = DebtSchedule(
+        monthly_debt_service=179_466.20319611699,
+        annual_debt_service=(2_153_594.438353404,),
+        remaining_loan_balance=29_948_583.641211268,
+    )
+
+    assert not hasattr(debt_schedule, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        debt_schedule.remaining_loan_balance = 0.0  # type: ignore[misc]
+
+
+def test_debt_schedule_annual_debt_service_is_immutable_tuple() -> None:
+    debt_schedule = DebtSchedule(
+        monthly_debt_service=179_466.20319611699,
+        annual_debt_service=(2_153_594.438353404, 2_153_594.438353404),
+        remaining_loan_balance=29_948_583.641211268,
+    )
+
+    assert isinstance(debt_schedule.annual_debt_service, tuple)
+
+
+def test_debt_schedule_has_no_excel_or_source_metadata() -> None:
+    debt_schedule = DebtSchedule(
+        monthly_debt_service=179_466.20319611699,
+        annual_debt_service=(2_153_594.438353404,),
+        remaining_loan_balance=29_948_583.641211268,
+    )
+
+    assert not hasattr(debt_schedule, "source")
+    assert not hasattr(debt_schedule, "cell")
+    assert not hasattr(debt_schedule, "row")
 
 
 def test_non_finite_result_error_is_value_error_subclass() -> None:

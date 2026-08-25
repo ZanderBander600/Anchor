@@ -1,13 +1,14 @@
-"""Golden-case coverage for the Phase 2A subset of AcquisitionResults fields.
+"""Golden-case coverage for the Phase 2A/2B subset of AcquisitionResults fields.
 
 Values are taken from the "Golden Case" section of
 ``docs/phase_2_deterministic_engine.md``, restricted to the fields Phase 2A
-actually produces (NOI forecast, exit NOI, going-in cap rate, loan amount,
-initial equity).
+and Phase 2B actually produce (NOI forecast, exit NOI, going-in cap rate,
+loan amount, initial equity, monthly debt service, annual debt service,
+remaining loan balance).
 """
 
 from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine.debt import calculate_capital_stack
+from mini_anchor.engine.debt import calculate_capital_stack, calculate_debt_schedule
 from mini_anchor.engine.noi import forecast_noi
 
 
@@ -59,3 +60,27 @@ def test_golden_case_initial_equity() -> None:
     result = calculate_capital_stack(make_golden_inputs())
 
     assert result.initial_equity == 17_500_000.0
+
+
+def test_golden_case_monthly_debt_service() -> None:
+    result = calculate_debt_schedule(make_golden_inputs())
+
+    assert result.monthly_debt_service == 179466.20319611699
+
+
+def test_golden_case_annual_debt_service() -> None:
+    result = calculate_debt_schedule(make_golden_inputs())
+
+    assert result.annual_debt_service == (
+        2153594.438353404,
+        2153594.438353404,
+        2153594.438353404,
+        2153594.438353404,
+        2153594.438353404,
+    )
+
+
+def test_golden_case_remaining_loan_balance() -> None:
+    result = calculate_debt_schedule(make_golden_inputs())
+
+    assert result.remaining_loan_balance == 29948583.641211268
