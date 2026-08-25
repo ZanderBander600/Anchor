@@ -12,9 +12,10 @@ here.
 from __future__ import annotations
 
 from ..contracts import AcquisitionInputs
-from .contracts import AcquisitionCashFlows, ensure_finite
+from .contracts import AcquisitionCashFlows, AcquisitionResults, ensure_finite
 from .debt import calculate_capital_stack, calculate_debt_schedule
 from .noi import forecast_noi
+from .returns import calculate_return_metrics
 
 
 def calculate_exit_value(*, exit_noi: float, exit_cap_rate: float) -> float:
@@ -132,4 +133,81 @@ def calculate_acquisition_cash_flows(inputs: AcquisitionInputs) -> AcquisitionCa
         net_sale_proceeds=net_sale_proceeds,
         unlevered_cash_flows=unlevered_cash_flows,
         levered_cash_flows=levered_cash_flows,
+    )
+
+
+# =============================================================================
+# Phase 2E -- final orchestration
+# =============================================================================
+
+
+def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
+    """Convert one ``AcquisitionInputs`` into one ``AcquisitionResults``.
+
+    The sole public engine entry point (``docs/phase_2_deterministic_engine.md``
+    "Public Engine Entry Point"). This function performs no calculation of
+    its own: it calls the Phase 2A NOI forecast, Phase 2A/2B capital stack
+    and debt schedule, and Phase 2C exit-value/cash-flow assembly exactly
+    once each, then passes their results into the Phase 2D return metrics,
+    and finally assembles every result into one ``AcquisitionResults``.
+
+    ``calculate_acquisition_cash_flows`` is intentionally not called here --
+    it independently recomputes the NOI forecast, capital stack, and debt
+    schedule internally, which would duplicate the calculations already
+    performed by this function. Instead, the same lower-level Phase 2C
+    assembly functions it uses (``calculate_exit_value``,
+    ``calculate_net_sale_proceeds``, ``calculate_unlevered_cash_flows``,
+    ``calculate_levered_cash_flows``) are called directly here, reusing the
+    single ``noi_forecast``, ``capital_stack``, and ``debt_schedule``
+    already computed in this function.
+    """
+
+    noi_forecast = forecast_noi(inputs)
+    capital_stack = calculate_capital_stack(inputs)
+    debt_schedule = calculate_debt_schedule(inputs)
+
+    exit_value = calculate_exit_value(
+        exit_noi=noi_forecast.exit_noi, exit_cap_rate=inputs.exit_cap_rate
+    )
+    net_sale_proceeds = calculate_net_sale_proceeds(
+        exit_value=exit_value,
+        remaining_loan_balance=debt_schedule.remaining_loan_balance,
+    )
+    unlevered_cash_flows = calculate_unlevered_cash_flows(
+        purchase_price=inputs.purchase_price,
+        noi_by_year=noi_forecast.noi_by_year,
+        exit_value=exit_value,
+    )
+    levered_cash_flows = calculate_levered_cash_flows(
+        initial_equity=capital_stack.initial_equity,
+        noi_by_year=noi_forecast.noi_by_year,
+        annual_debt_service=debt_schedule.annual_debt_service,
+        net_sale_proceeds=net_sale_proceeds,
+    )
+
+    return_metrics = calculate_return_metrics(
+        noi_by_year=noi_forecast.noi_by_year,
+        annual_debt_service=debt_schedule.annual_debt_service,
+        unlevered_cash_flows=unlevered_cash_flows,
+        levered_cash_flows=levered_cash_flows,
+    )
+
+    return AcquisitionResults(
+        going_in_cap_rate=noi_forecast.going_in_cap_rate,
+        loan_amount=capital_stack.loan_amount,
+        initial_equity=capital_stack.initial_equity,
+        monthly_debt_service=debt_schedule.monthly_debt_service,
+        annual_debt_service=debt_schedule.annual_debt_service,
+        remaining_loan_balance=debt_schedule.remaining_loan_balance,
+        noi_by_year=noi_forecast.noi_by_year,
+        exit_noi=noi_forecast.exit_noi,
+        exit_value=exit_value,
+        net_sale_proceeds=net_sale_proceeds,
+        unlevered_cash_flows=unlevered_cash_flows,
+        levered_cash_flows=levered_cash_flows,
+        unlevered_irr=return_metrics.unlevered_irr,
+        levered_irr=return_metrics.levered_irr,
+        equity_multiple=return_metrics.equity_multiple,
+        dscr_by_year=return_metrics.dscr_by_year,
+        headline_dscr=return_metrics.headline_dscr,
     )

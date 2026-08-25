@@ -556,12 +556,6 @@ def test_returns_module_does_not_import_openpyxl_at_runtime() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
-def test_analyze_acquisition_does_not_exist_yet() -> None:
-    from mini_anchor.engine import acquisition as acquisition_module
-
-    assert not hasattr(acquisition_module, "analyze_acquisition")
-
-
 def test_acquisition_results_does_not_exist_yet() -> None:
     import mini_anchor.contracts as top_level_contracts
 

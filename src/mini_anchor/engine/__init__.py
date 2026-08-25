@@ -4,11 +4,13 @@ Converts a validated ``AcquisitionInputs`` into ``AcquisitionResults``
 (``docs/phase_2_deterministic_engine.md``). The engine is independent of
 Excel, AI, and any UI/API framework.
 
-This package's public entry point, ``analyze_acquisition``, does not exist
-yet; it is introduced in Phase 2E once the NOI forecast (Phase 2A), debt
-schedule (Phase 2B), exit/cash-flow assembly (Phase 2C), and return metrics
-(Phase 2D) are all in place. Until then, the modules below are internal and
-are imported directly by tests and other in-progress engine code:
+``analyze_acquisition`` is the sole public entry point
+(``docs/phase_2_deterministic_engine.md`` "Public Engine Entry Point"). It
+orchestrates the NOI forecast (Phase 2A), debt schedule (Phase 2B),
+exit/cash-flow assembly (Phase 2C), and return metrics (Phase 2D) into one
+``AcquisitionResults``. The individual Phase 2A/2B/2C/2D modules remain
+importable directly by tests and other in-progress engine code, but are not
+re-exported here, to keep this package's public surface narrow:
 
 - ``mini_anchor.engine.contracts``
 - ``mini_anchor.engine.noi``
@@ -18,3 +20,8 @@ are imported directly by tests and other in-progress engine code:
 """
 
 from __future__ import annotations
+
+from .acquisition import analyze_acquisition
+from .contracts import AcquisitionResults
+
+__all__ = ["analyze_acquisition", "AcquisitionResults"]
