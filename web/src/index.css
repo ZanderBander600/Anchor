@@ -328,3 +328,123 @@ body {
   color: var(--color-text-muted);
   font-family: var(--font-sans);
 }
+
+.sensitivity-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.sensitivity-status {
+  color: var(--color-text-muted);
+  font-size: 0.88rem;
+}
+
+.sensitivity-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 0.75rem;
+}
+
+.sensitivity-tab {
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sensitivity-tab.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+.sensitivity-metric-toggle {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.metric-toggle-button {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.metric-toggle-button.active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.sensitivity-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.sensitivity-table th,
+.sensitivity-table td {
+  text-align: right;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #eef0f3;
+}
+
+.sensitivity-table thead th {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  border-bottom: 2px solid var(--color-border);
+}
+
+.sensitivity-table tbody th {
+  text-align: left;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.sensitivity-table td.sensitivity-cell {
+  font-family: var(--font-mono);
+}
+
+.sensitivity-corner {
+  position: relative;
+  text-align: left;
+  min-width: 6rem;
+}
+
+.sensitivity-row-axis {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-column-axis {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  text-align: right;
+}
+
+.sensitivity-baseline {
+  background: rgba(22, 50, 79, 0.08);
+  font-weight: 700;
+  color: var(--color-accent);
+}
+
+.sensitivity-baseline-tag {
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
+}

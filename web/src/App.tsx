@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { analyzeAcquisition, ApiError } from './api';
+import { analyzeAcquisition, ApiError, fetchSensitivityPresets } from './api';
 import { AssumptionsForm } from './components/AssumptionsForm';
 import { ResultsPanel } from './components/ResultsPanel';
+import { SensitivityPanel } from './components/SensitivityPanel';
 import { buildAcquisitionRequest, DEFAULT_FORM_VALUES, FormValidationError } from './convert';
-import type { AcquisitionFormValues, AcquisitionResults } from './types';
+import type { AcquisitionFormValues, AcquisitionResults, StandardSensitivityPresets } from './types';
 
 export default function App() {
   const [values, setValues] = useState<AcquisitionFormValues>(DEFAULT_FORM_VALUES);
@@ -12,16 +13,24 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [sensitivity, setSensitivity] = useState<StandardSensitivityPresets | null>(null);
+  const [isSensitivityLoading, setIsSensitivityLoading] = useState(false);
+  const [sensitivityError, setSensitivityError] = useState<string | null>(null);
+
   function handleFieldChange(key: keyof AcquisitionFormValues, value: string) {
     setValues((previous) => ({ ...previous, [key]: value }));
     setResults(null);
     setError(null);
+    setSensitivity(null);
+    setSensitivityError(null);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setResults(null);
     setError(null);
+    setSensitivity(null);
+    setSensitivityError(null);
 
     let request;
     try {
@@ -44,8 +53,23 @@ export default function App() {
       } else {
         setError('An unexpected error occurred while analyzing the deal.');
       }
-    } finally {
       setIsSubmitting(false);
+      return;
+    }
+    setIsSubmitting(false);
+
+    setIsSensitivityLoading(true);
+    try {
+      const presets = await fetchSensitivityPresets(request);
+      setSensitivity(presets);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setSensitivityError(apiError.message);
+      } else {
+        setSensitivityError('An unexpected error occurred while calculating sensitivity.');
+      }
+    } finally {
+      setIsSensitivityLoading(false);
     }
   }
 
@@ -74,6 +98,14 @@ export default function App() {
           )}
 
           {results && <ResultsPanel results={results} />}
+
+          {results && (
+            <SensitivityPanel
+              presets={sensitivity}
+              isLoading={isSensitivityLoading}
+              error={sensitivityError}
+            />
+          )}
         </div>
       </main>
     </div>

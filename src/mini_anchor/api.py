@@ -4,7 +4,10 @@ This module is a thin adapter layer, mirroring the role ``cli.py`` plays for
 the terminal. It calls ``validate_acquisition_inputs`` and
 ``analyze_acquisition`` -- the existing, frozen Phase 2/Phase 4 functions --
 and never reproduces or reimplements any financial formula or validation
-rule itself.
+rule itself. The Phase 7 sensitivity endpoints below follow the identical
+pattern, delegating all sensitivity computation to
+``mini_anchor.analysis.sensitivity`` -- this module does no financial math or
+sensitivity math of its own.
 """
 
 from __future__ import annotations
@@ -14,6 +17,14 @@ from typing import Any
 from fastapi import Body, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from .analysis import (
+    StandardSensitivityPresets,
+    TwoWaySensitivityResult,
+    UnknownAssumptionError,
+    UnknownMetricError,
+    build_standard_presets,
+    run_two_way_sensitivity,
+)
 from .engine import AcquisitionResults, analyze_acquisition
 from .validation import InputValidationError, validate_acquisition_inputs
 
@@ -38,6 +49,17 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _validation_error_detail(error: InputValidationError) -> list[dict[str, Any]]:
+    return [
+        {
+            "field_id": issue.field_id,
+            "category": issue.category.value,
+            "message": issue.message,
+        }
+        for issue in error.issues
+    ]
+
+
 @app.post("/analyze", response_model=AcquisitionResults)
 def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults:
     try:
@@ -45,14 +67,97 @@ def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults:
     except InputValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=[
-                {
-                    "field_id": issue.field_id,
-                    "category": issue.category.value,
-                    "message": issue.message,
-                }
-                for issue in error.issues
-            ],
+            detail=_validation_error_detail(error),
         ) from None
 
     return analyze_acquisition(inputs)
+
+
+# =============================================================================
+# Phase 7 -- sensitivity analysis
+#
+# Both endpoints below validate the nested ``inputs`` object with the same
+# ``validate_acquisition_inputs`` used by ``/analyze``, then delegate all
+# sensitivity computation to ``mini_anchor.analysis.sensitivity``. Neither
+# endpoint performs financial or sensitivity math itself.
+# =============================================================================
+
+
+@app.post("/sensitivity", response_model=TwoWaySensitivityResult)
+def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
+    raw_inputs = payload.get("inputs")
+    if not isinstance(raw_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must include an 'inputs' object.",
+        )
+
+    try:
+        inputs = validate_acquisition_inputs(raw_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    missing_fields = [
+        field
+        for field in (
+            "row_assumption",
+            "row_values",
+            "column_assumption",
+            "column_values",
+            "metric",
+        )
+        if field not in payload
+    ]
+    if missing_fields:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Missing required field(s): {', '.join(missing_fields)}.",
+        )
+
+    try:
+        return run_two_way_sensitivity(
+            inputs,
+            row_assumption=payload["row_assumption"],
+            row_values=payload["row_values"],
+            column_assumption=payload["column_assumption"],
+            column_values=payload["column_values"],
+            metric=payload["metric"],
+        )
+    except (UnknownAssumptionError, UnknownMetricError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+
+
+@app.post("/sensitivity/presets", response_model=StandardSensitivityPresets)
+def sensitivity_presets(
+    payload: dict[str, Any] = Body(...),
+) -> StandardSensitivityPresets:
+    raw_inputs = payload.get("inputs")
+    if not isinstance(raw_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must include an 'inputs' object.",
+        )
+
+    try:
+        inputs = validate_acquisition_inputs(raw_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    return build_standard_presets(inputs)

@@ -1,0 +1,329 @@
+"""Phase 7 deterministic sensitivity analysis, built on top of the frozen
+Phase 2 engine.
+
+This module never reproduces a financial formula. Every scenario is
+evaluated by constructing one validated ``AcquisitionInputs`` and calling the
+existing authoritative ``analyze_acquisition`` exactly once; a sensitivity
+result only reads a field off the returned ``AcquisitionResults``. Input
+validation is never reimplemented here either -- every scenario is built
+through ``validate_acquisition_inputs``, the same shared rules the base
+engine and API already use, so an out-of-domain scenario value fails exactly
+as it would on the base analysis, never silently clamped.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Mapping, Sequence
+
+from ..contracts import AcquisitionInputs
+from ..engine import AcquisitionResults, analyze_acquisition
+from ..validation import FIELD_IDS, InputValidationError, validate_acquisition_inputs
+from .contracts import (
+    OneWaySensitivityResult,
+    StandardSensitivityPresets,
+    TwoWaySensitivityResult,
+)
+
+# =============================================================================
+# Supported assumptions and metrics
+# =============================================================================
+
+# Continuous assumptions only (Phase 7 POC scope). Occupancy is intentionally
+# excluded -- it is informational only under the frozen POC convention
+# (``engine/noi.py`` never reads it). Hold period and amortization are
+# discrete structural assumptions, deferred to a later phase.
+SUPPORTED_ASSUMPTIONS: tuple[str, ...] = (
+    "purchase_price",
+    "current_noi",
+    "noi_growth",
+    "exit_cap_rate",
+    "ltv",
+    "interest_rate",
+)
+
+_METRIC_EXTRACTORS: dict[str, Callable[[AcquisitionResults], float | None]] = {
+    "levered_irr": lambda results: results.levered_irr,
+    "unlevered_irr": lambda results: results.unlevered_irr,
+    "equity_multiple": lambda results: results.equity_multiple,
+    "headline_dscr": lambda results: results.headline_dscr,
+    "exit_value": lambda results: results.exit_value,
+}
+
+SUPPORTED_METRICS: tuple[str, ...] = tuple(_METRIC_EXTRACTORS)
+
+
+class UnknownAssumptionError(ValueError):
+    """Raised for a sensitivity assumption identifier outside
+    ``SUPPORTED_ASSUMPTIONS``."""
+
+    def __init__(self, assumption: object) -> None:
+        self.assumption = assumption
+        super().__init__(
+            f"Unknown sensitivity assumption: {assumption!r}. "
+            f"Supported assumptions: {', '.join(SUPPORTED_ASSUMPTIONS)}."
+        )
+
+
+class UnknownMetricError(ValueError):
+    """Raised for a sensitivity metric identifier outside
+    ``SUPPORTED_METRICS``."""
+
+    def __init__(self, metric: object) -> None:
+        self.metric = metric
+        super().__init__(
+            f"Unknown sensitivity metric: {metric!r}. "
+            f"Supported metrics: {', '.join(SUPPORTED_METRICS)}."
+        )
+
+
+def _extract_metric(results: AcquisitionResults, metric: str) -> float | None:
+    return _METRIC_EXTRACTORS[metric](results)
+
+
+def _build_scenario_inputs(
+    base: AcquisitionInputs, changes: Mapping[str, float]
+) -> AcquisitionInputs:
+    """Return a new validated ``AcquisitionInputs`` with ``changes`` applied
+    on top of ``base``. ``base`` is never mutated -- it is frozen, and only
+    read here to seed the unchanged fields."""
+
+    values: dict[str, float | int] = {
+        field_id: getattr(base, field_id) for field_id in FIELD_IDS
+    }
+    values.update(changes)
+    return validate_acquisition_inputs(values)
+
+
+# =============================================================================
+# One-way sensitivity
+# =============================================================================
+
+
+def run_one_way_sensitivity(
+    inputs: AcquisitionInputs,
+    *,
+    assumption: str,
+    values: Sequence[float],
+    metric: str,
+) -> OneWaySensitivityResult:
+    """Vary one assumption across ``values``, calling ``analyze_acquisition``
+    once per scenario, and return the requested ``metric`` for each."""
+
+    if assumption not in SUPPORTED_ASSUMPTIONS:
+        raise UnknownAssumptionError(assumption)
+    if metric not in SUPPORTED_METRICS:
+        raise UnknownMetricError(metric)
+
+    baseline_assumption_value = getattr(inputs, assumption)
+    baseline_metric_value = _extract_metric(analyze_acquisition(inputs), metric)
+
+    assumption_values = tuple(values)
+    metric_values: list[float | None] = []
+    for value in assumption_values:
+        scenario_inputs = _build_scenario_inputs(inputs, {assumption: value})
+        scenario_results = analyze_acquisition(scenario_inputs)
+        metric_values.append(_extract_metric(scenario_results, metric))
+
+    return OneWaySensitivityResult(
+        assumption=assumption,
+        metric=metric,
+        baseline_assumption_value=baseline_assumption_value,
+        baseline_metric_value=baseline_metric_value,
+        assumption_values=assumption_values,
+        metric_values=tuple(metric_values),
+    )
+
+
+# =============================================================================
+# Two-way sensitivity
+# =============================================================================
+
+
+def run_two_way_sensitivity(
+    inputs: AcquisitionInputs,
+    *,
+    row_assumption: str,
+    row_values: Sequence[float],
+    column_assumption: str,
+    column_values: Sequence[float],
+    metric: str,
+) -> TwoWaySensitivityResult:
+    """Vary two assumptions independently over a grid, calling
+    ``analyze_acquisition`` once per cell, and return the requested
+    ``metric`` for each cell."""
+
+    if row_assumption not in SUPPORTED_ASSUMPTIONS:
+        raise UnknownAssumptionError(row_assumption)
+    if column_assumption not in SUPPORTED_ASSUMPTIONS:
+        raise UnknownAssumptionError(column_assumption)
+    if metric not in SUPPORTED_METRICS:
+        raise UnknownMetricError(metric)
+    if row_assumption == column_assumption:
+        raise ValueError(
+            "row_assumption and column_assumption must differ; got "
+            f"{row_assumption!r} for both."
+        )
+
+    baseline_row_value = getattr(inputs, row_assumption)
+    baseline_column_value = getattr(inputs, column_assumption)
+    baseline_metric_value = _extract_metric(analyze_acquisition(inputs), metric)
+
+    row_values_tuple = tuple(row_values)
+    column_values_tuple = tuple(column_values)
+
+    matrix: list[tuple[float | None, ...]] = []
+    for row_value in row_values_tuple:
+        row_cells: list[float | None] = []
+        for column_value in column_values_tuple:
+            scenario_inputs = _build_scenario_inputs(
+                inputs, {row_assumption: row_value, column_assumption: column_value}
+            )
+            scenario_results = analyze_acquisition(scenario_inputs)
+            row_cells.append(_extract_metric(scenario_results, metric))
+        matrix.append(tuple(row_cells))
+
+    return TwoWaySensitivityResult(
+        row_assumption=row_assumption,
+        column_assumption=column_assumption,
+        metric=metric,
+        baseline_row_value=baseline_row_value,
+        baseline_column_value=baseline_column_value,
+        baseline_metric_value=baseline_metric_value,
+        row_values=row_values_tuple,
+        column_values=column_values_tuple,
+        matrix=tuple(matrix),
+    )
+
+
+# =============================================================================
+# Standard POC presets
+# =============================================================================
+
+# Basis-point offsets (1 bp = 0.0001 = 0.01 percentage points).
+_EXIT_CAP_BPS_OFFSETS: tuple[float, ...] = (-0.01, -0.005, 0.0, 0.005, 0.01)
+_INTEREST_RATE_BPS_OFFSETS: tuple[float, ...] = (-0.01, -0.005, 0.0, 0.005, 0.01)
+
+# Percentage-point offsets (1 pp = 0.01).
+_NOI_GROWTH_PP_OFFSETS: tuple[float, ...] = (-0.02, -0.01, 0.0, 0.01, 0.02)
+_LTV_PP_OFFSETS: tuple[float, ...] = (-0.10, -0.05, 0.0, 0.05, 0.10)
+
+# Multipliers of the baseline purchase price.
+_PURCHASE_PRICE_MULTIPLIERS: tuple[float, ...] = (0.90, 0.95, 1.00, 1.05, 1.10)
+
+
+def _valid_scenario_values(
+    inputs: AcquisitionInputs, assumption: str, candidates: Iterable[float]
+) -> tuple[float, ...]:
+    """Return only the ``candidates`` that satisfy the frozen input domain
+    for ``assumption``, in the given order.
+
+    Presets never clamp an out-of-domain candidate into range and never
+    raise for it either -- it is simply omitted. This can make a preset
+    matrix narrower than 5x5 near a domain boundary (for example, a Interest
+    Rate x LTV preset near a baseline interest rate under 100 bps). Domain
+    validity is checked field-by-field via the same shared
+    ``validate_acquisition_inputs`` used everywhere else, never a duplicated
+    check, and because each field's domain is independent of every other
+    field's value, checking one changed field at a time here is equivalent to
+    checking it as part of a full combined scenario.
+    """
+
+    valid_values = []
+    for candidate in candidates:
+        try:
+            _build_scenario_inputs(inputs, {assumption: candidate})
+        except InputValidationError:
+            continue
+        valid_values.append(candidate)
+    return tuple(valid_values)
+
+
+def build_exit_cap_noi_growth_preset(
+    inputs: AcquisitionInputs,
+) -> TwoWaySensitivityResult:
+    """NOI Growth (rows) x Exit Cap Rate (columns), Levered IRR."""
+
+    noi_growth_values = _valid_scenario_values(
+        inputs,
+        "noi_growth",
+        (inputs.noi_growth + offset for offset in _NOI_GROWTH_PP_OFFSETS),
+    )
+    exit_cap_values = _valid_scenario_values(
+        inputs,
+        "exit_cap_rate",
+        (inputs.exit_cap_rate + offset for offset in _EXIT_CAP_BPS_OFFSETS),
+    )
+    return run_two_way_sensitivity(
+        inputs,
+        row_assumption="noi_growth",
+        row_values=noi_growth_values,
+        column_assumption="exit_cap_rate",
+        column_values=exit_cap_values,
+        metric="levered_irr",
+    )
+
+
+def build_purchase_price_exit_cap_preset(
+    inputs: AcquisitionInputs,
+) -> TwoWaySensitivityResult:
+    """Purchase Price (rows) x Exit Cap Rate (columns), Levered IRR."""
+
+    purchase_price_values = _valid_scenario_values(
+        inputs,
+        "purchase_price",
+        (
+            inputs.purchase_price * multiplier
+            for multiplier in _PURCHASE_PRICE_MULTIPLIERS
+        ),
+    )
+    exit_cap_values = _valid_scenario_values(
+        inputs,
+        "exit_cap_rate",
+        (inputs.exit_cap_rate + offset for offset in _EXIT_CAP_BPS_OFFSETS),
+    )
+    return run_two_way_sensitivity(
+        inputs,
+        row_assumption="purchase_price",
+        row_values=purchase_price_values,
+        column_assumption="exit_cap_rate",
+        column_values=exit_cap_values,
+        metric="levered_irr",
+    )
+
+
+def build_interest_rate_ltv_preset(
+    inputs: AcquisitionInputs, *, metric: str = "levered_irr"
+) -> TwoWaySensitivityResult:
+    """Interest Rate (rows) x LTV (columns), for ``metric`` (default Levered
+    IRR; ``headline_dscr`` is also supported, reusing this same grid)."""
+
+    interest_rate_values = _valid_scenario_values(
+        inputs,
+        "interest_rate",
+        (inputs.interest_rate + offset for offset in _INTEREST_RATE_BPS_OFFSETS),
+    )
+    ltv_values = _valid_scenario_values(
+        inputs, "ltv", (inputs.ltv + offset for offset in _LTV_PP_OFFSETS)
+    )
+    return run_two_way_sensitivity(
+        inputs,
+        row_assumption="interest_rate",
+        row_values=interest_rate_values,
+        column_assumption="ltv",
+        column_values=ltv_values,
+        metric=metric,
+    )
+
+
+def build_standard_presets(inputs: AcquisitionInputs) -> StandardSensitivityPresets:
+    """Return all three standard POC sensitivity matrices, plus the optional
+    DSCR variant of the Interest Rate x LTV matrix."""
+
+    return StandardSensitivityPresets(
+        exit_cap_noi_growth=build_exit_cap_noi_growth_preset(inputs),
+        purchase_price_exit_cap=build_purchase_price_exit_cap_preset(inputs),
+        interest_rate_ltv=build_interest_rate_ltv_preset(inputs, metric="levered_irr"),
+        interest_rate_ltv_dscr=build_interest_rate_ltv_preset(
+            inputs, metric="headline_dscr"
+        ),
+    )

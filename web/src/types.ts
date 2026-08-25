@@ -48,3 +48,26 @@ export interface ValidationIssue {
   category: string;
   message: string;
 }
+
+export type SensitivityMetric = 'levered_irr' | 'headline_dscr';
+
+/** Mirrors ``TwoWaySensitivityResult`` in ``src/mini_anchor/analysis/contracts.py``. */
+export interface TwoWaySensitivityResult {
+  row_assumption: string;
+  column_assumption: string;
+  metric: SensitivityMetric;
+  baseline_row_value: number;
+  baseline_column_value: number;
+  baseline_metric_value: number | null;
+  row_values: number[];
+  column_values: number[];
+  matrix: (number | null)[][];
+}
+
+/** Mirrors ``StandardSensitivityPresets`` in ``src/mini_anchor/analysis/contracts.py``. */
+export interface StandardSensitivityPresets {
+  exit_cap_noi_growth: TwoWaySensitivityResult;
+  purchase_price_exit_cap: TwoWaySensitivityResult;
+  interest_rate_ltv: TwoWaySensitivityResult;
+  interest_rate_ltv_dscr: TwoWaySensitivityResult;
+}

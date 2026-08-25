@@ -2,18 +2,65 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
-import { analyzeAcquisition, ApiError } from './api';
-import type { AcquisitionResults } from './types';
+import { analyzeAcquisition, ApiError, fetchSensitivityPresets } from './api';
+import type { AcquisitionResults, StandardSensitivityPresets, TwoWaySensitivityResult } from './types';
 
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');
   return {
     ...actual,
     analyzeAcquisition: vi.fn(),
+    fetchSensitivityPresets: vi.fn(),
   };
 });
 
 const mockAnalyze = vi.mocked(analyzeAcquisition);
+const mockFetchSensitivityPresets = vi.mocked(fetchSensitivityPresets);
+
+// Deliberately distinct from every metric value in `makeResults()` (7.91%,
+// 6.24%, 1.44x, 1.1608x, ...) so text queries against the base results panel
+// never collide with the sensitivity panel's mocked values.
+function makeSensitivityMatrix(
+  overrides: Partial<TwoWaySensitivityResult> = {},
+): TwoWaySensitivityResult {
+  return {
+    row_assumption: 'noi_growth',
+    column_assumption: 'exit_cap_rate',
+    metric: 'levered_irr',
+    baseline_row_value: 0.03,
+    baseline_column_value: 0.055,
+    baseline_metric_value: 0.5,
+    row_values: [0.01, 0.02, 0.03, 0.04, 0.05],
+    column_values: [0.045, 0.05, 0.055, 0.06, 0.065],
+    matrix: [
+      [0.41, 0.42, 0.43, 0.44, 0.45],
+      [0.46, 0.47, 0.48, 0.49, 0.5],
+      [0.51, 0.52, 0.5, 0.53, 0.54],
+      [0.55, 0.56, 0.57, 0.58, 0.59],
+      [0.6, 0.61, 0.62, 0.63, 0.64],
+    ],
+    ...overrides,
+  };
+}
+
+function makeSensitivityPresets(
+  overrides: Partial<StandardSensitivityPresets> = {},
+): StandardSensitivityPresets {
+  return {
+    exit_cap_noi_growth: makeSensitivityMatrix(),
+    purchase_price_exit_cap: makeSensitivityMatrix({ row_assumption: 'purchase_price' }),
+    interest_rate_ltv: makeSensitivityMatrix({
+      row_assumption: 'interest_rate',
+      column_assumption: 'ltv',
+    }),
+    interest_rate_ltv_dscr: makeSensitivityMatrix({
+      row_assumption: 'interest_rate',
+      column_assumption: 'ltv',
+      metric: 'headline_dscr',
+    }),
+    ...overrides,
+  };
+}
 
 function makeResults(overrides: Partial<AcquisitionResults> = {}): AcquisitionResults {
   return {
@@ -57,6 +104,8 @@ function deferred<T>() {
 
 beforeEach(() => {
   mockAnalyze.mockReset();
+  mockFetchSensitivityPresets.mockReset();
+  mockFetchSensitivityPresets.mockResolvedValue(makeSensitivityPresets());
 });
 
 afterEach(() => {
@@ -207,5 +256,59 @@ describe('App workflow', () => {
       interest_rate: 0.0525,
       amortization: 30,
     });
+  });
+});
+
+describe('Sensitivity analysis workflow', () => {
+  it('runs and displays the sensitivity section only after a successful base analysis', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    expect(screen.queryByText('Sensitivity Analysis')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the same raw-decimal request to sensitivity as to the base analysis', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Sensitivity Analysis');
+
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledWith(mockAnalyze.mock.calls[0][0]);
+  });
+
+  it('clears sensitivity results when an assumption is edited after a successful analysis', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Sensitivity Analysis');
+
+    await user.type(screen.getByLabelText(/^Current NOI/), '1');
+
+    expect(screen.queryByText('Sensitivity Analysis')).toBeNull();
+  });
+
+  it('does not corrupt the successful base results when the sensitivity request fails', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchSensitivityPresets.mockRejectedValueOnce(
+      new ApiError('The sensitivity request failed.'),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('The sensitivity request failed.')).toBeTruthy();
+    expect(screen.getByText('7.91%')).toBeTruthy();
+    expect(screen.queryByText('Exit Cap × NOI Growth')).toBeNull();
   });
 });
