@@ -64,3 +64,12 @@ class AcquisitionCashFlows:
     net_sale_proceeds: float
     unlevered_cash_flows: tuple[float, ...]
     levered_cash_flows: tuple[float, ...]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ReturnMetrics:
+    dscr_by_year: tuple[float | None, ...]
+    headline_dscr: float | None
+    equity_multiple: float | None
+    unlevered_irr: float | None
+    levered_irr: float | None

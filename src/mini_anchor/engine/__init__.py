@@ -14,6 +14,7 @@ are imported directly by tests and other in-progress engine code:
 - ``mini_anchor.engine.noi``
 - ``mini_anchor.engine.debt``
 - ``mini_anchor.engine.acquisition``
+- ``mini_anchor.engine.returns``
 """
 
 from __future__ import annotations

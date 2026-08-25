@@ -14,6 +14,7 @@ from mini_anchor.engine.contracts import (
     DebtSchedule,
     NoiForecast,
     NonFiniteResultError,
+    ReturnMetrics,
     ensure_finite,
 )
 
@@ -40,6 +41,14 @@ ACQUISITION_CASH_FLOWS_FIELDS = (
     ("net_sale_proceeds", float),
     ("unlevered_cash_flows", tuple[float, ...]),
     ("levered_cash_flows", tuple[float, ...]),
+)
+
+RETURN_METRICS_FIELDS = (
+    ("dscr_by_year", tuple[float | None, ...]),
+    ("headline_dscr", float | None),
+    ("equity_multiple", float | None),
+    ("unlevered_irr", float | None),
+    ("levered_irr", float | None),
 )
 
 
@@ -229,6 +238,63 @@ def test_acquisition_cash_flows_has_no_excel_or_source_metadata() -> None:
     assert not hasattr(cash_flows, "row")
 
 
+def test_return_metrics_has_exact_fields_order_and_keyword_only_shape() -> None:
+    contract_fields = fields(ReturnMetrics)
+
+    assert is_dataclass(ReturnMetrics)
+    assert tuple(field.name for field in contract_fields) == tuple(
+        name for name, _ in RETURN_METRICS_FIELDS
+    )
+    assert all(field.kw_only for field in contract_fields)
+    assert ReturnMetrics.__slots__ == tuple(name for name, _ in RETURN_METRICS_FIELDS)
+
+
+def test_return_metrics_has_exact_field_annotation_types() -> None:
+    resolved_types = typing.get_type_hints(ReturnMetrics)
+
+    assert resolved_types == dict(RETURN_METRICS_FIELDS)
+
+
+def test_return_metrics_is_frozen_and_slotted() -> None:
+    return_metrics = ReturnMetrics(
+        dscr_by_year=(1.1608499518189,),
+        headline_dscr=1.1608499518189,
+        equity_multiple=1.44288913123241,
+        unlevered_irr=0.062414943980353854,
+        levered_irr=0.07913030056780745,
+    )
+
+    assert not hasattr(return_metrics, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        return_metrics.headline_dscr = 0.0  # type: ignore[misc]
+
+
+def test_return_metrics_dscr_by_year_is_immutable_tuple() -> None:
+    return_metrics = ReturnMetrics(
+        dscr_by_year=(1.1608499518189, None),
+        headline_dscr=1.1608499518189,
+        equity_multiple=1.44288913123241,
+        unlevered_irr=0.062414943980353854,
+        levered_irr=0.07913030056780745,
+    )
+
+    assert isinstance(return_metrics.dscr_by_year, tuple)
+
+
+def test_return_metrics_has_no_excel_or_source_metadata() -> None:
+    return_metrics = ReturnMetrics(
+        dscr_by_year=(1.1608499518189,),
+        headline_dscr=1.1608499518189,
+        equity_multiple=1.44288913123241,
+        unlevered_irr=0.062414943980353854,
+        levered_irr=0.07913030056780745,
+    )
+
+    assert not hasattr(return_metrics, "source")
+    assert not hasattr(return_metrics, "cell")
+    assert not hasattr(return_metrics, "row")
+
+
 def test_non_finite_result_error_is_value_error_subclass() -> None:
     assert issubclass(NonFiniteResultError, ValueError)
 
@@ -263,7 +329,7 @@ def test_ensure_finite_raises_on_nan() -> None:
         ensure_finite("exit_noi", math.nan)
 
 
-def test_engine_package_contains_only_expected_phase_2a_2b_2c_modules() -> None:
+def test_engine_package_contains_only_expected_phase_2a_2b_2c_2d_modules() -> None:
     engine_dir = Path(__file__).resolve().parents[1] / "src" / "mini_anchor" / "engine"
     module_names = {path.name for path in engine_dir.glob("*.py")}
 
@@ -273,10 +339,11 @@ def test_engine_package_contains_only_expected_phase_2a_2b_2c_modules() -> None:
         "noi.py",
         "debt.py",
         "acquisition.py",
+        "returns.py",
     }
 
 
-def test_engine_contracts_noi_debt_acquisition_do_not_import_openpyxl() -> None:
+def test_engine_contracts_noi_debt_acquisition_returns_do_not_import_openpyxl() -> None:
     project_root = Path(__file__).resolve().parents[1]
     environment = os.environ.copy()
     python_path_parts = [str(project_root / "src")]
@@ -294,6 +361,7 @@ def test_engine_contracts_noi_debt_acquisition_do_not_import_openpyxl() -> None:
                 "import mini_anchor.engine.noi; "
                 "import mini_anchor.engine.debt; "
                 "import mini_anchor.engine.acquisition; "
+                "import mini_anchor.engine.returns; "
                 "assert 'openpyxl' not in sys.modules"
             ),
         ],
