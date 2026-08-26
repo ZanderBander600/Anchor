@@ -111,3 +111,19 @@ export interface StandardBreakEvenAnalysis {
   max_interest_rate: BreakEvenResult;
   min_current_noi: BreakEvenResult;
 }
+
+/** Mirrors ``AIAnalysis`` in ``src/mini_anchor/ai/contracts.py`` -- the AI
+ * Analyst's structured, interpretation-only output. Never carries a newly
+ * calculated financial metric. */
+export interface AIAnalysis {
+  executive_summary: string;
+  investment_view: string;
+  strengths: string[];
+  risks: string[];
+  return_drivers: string[];
+  downside_analysis: string;
+  capital_structure_analysis: string;
+  break_even_analysis: string;
+  questions_to_investigate: string[];
+  confidence_notes: string[];
+}

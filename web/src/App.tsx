@@ -3,9 +3,11 @@ import type { FormEvent } from 'react';
 import {
   analyzeAcquisition,
   ApiError,
+  fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchSensitivityPresets,
 } from './api';
+import { AiAnalystPanel } from './components/AiAnalystPanel';
 import { AssumptionsForm } from './components/AssumptionsForm';
 import { BreakEvenPanel } from './components/BreakEvenPanel';
 import { ResultsPanel } from './components/ResultsPanel';
@@ -24,6 +26,7 @@ import type {
   AcquisitionFormValues,
   AcquisitionRequest,
   AcquisitionResults,
+  AIAnalysis,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
   StandardSensitivityPresets,
@@ -50,6 +53,10 @@ export default function App() {
   const [isBreakEvenLoading, setIsBreakEvenLoading] = useState(false);
   const [breakEvenError, setBreakEvenError] = useState<string | null>(null);
 
+  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(null);
+  const [isAiAnalysisLoading, setIsAiAnalysisLoading] = useState(false);
+  const [aiAnalysisError, setAiAnalysisError] = useState<string | null>(null);
+
   function handleFieldChange(key: keyof AcquisitionFormValues, value: string) {
     setValues((previous) => ({ ...previous, [key]: value }));
     setResults(null);
@@ -59,6 +66,8 @@ export default function App() {
     setLastRequest(null);
     setBreakEven(null);
     setBreakEvenError(null);
+    setAiAnalysis(null);
+    setAiAnalysisError(null);
   }
 
   async function runBreakEven(
@@ -106,8 +115,14 @@ export default function App() {
     }
   }
 
+  function clearAiAnalysis() {
+    setAiAnalysis(null);
+    setAiAnalysisError(null);
+  }
+
   function handleTargetLeveredIrrChange(value: string) {
     setTargetLeveredIrrPercent(value);
+    clearAiAnalysis();
     if (lastRequest) {
       void runBreakEven(lastRequest, value, targetEquityMultiple, targetHeadlineDscr, returnHurdleMetric);
     }
@@ -115,6 +130,7 @@ export default function App() {
 
   function handleTargetEquityMultipleChange(value: string) {
     setTargetEquityMultiple(value);
+    clearAiAnalysis();
     if (lastRequest) {
       void runBreakEven(
         lastRequest,
@@ -128,6 +144,7 @@ export default function App() {
 
   function handleTargetHeadlineDscrChange(value: string) {
     setTargetHeadlineDscr(value);
+    clearAiAnalysis();
     if (lastRequest) {
       void runBreakEven(
         lastRequest,
@@ -141,6 +158,7 @@ export default function App() {
 
   function handleReturnHurdleMetricChange(metric: ReturnHurdleMetric) {
     setReturnHurdleMetric(metric);
+    clearAiAnalysis();
     if (lastRequest) {
       void runBreakEven(
         lastRequest,
@@ -149,6 +167,49 @@ export default function App() {
         targetHeadlineDscr,
         metric,
       );
+    }
+  }
+
+  async function handleGenerateAiAnalysis() {
+    if (!lastRequest) {
+      return;
+    }
+
+    let targetLeveredIrr: number;
+    let targetEquityMultipleValue: number;
+    let targetHeadlineDscrValue: number;
+    try {
+      targetLeveredIrr = parsePercent('Target Levered IRR', targetLeveredIrrPercent);
+      targetEquityMultipleValue = parseNumber('Target Equity Multiple', targetEquityMultiple);
+      targetHeadlineDscrValue = parseNumber('Target Year 1 DSCR', targetHeadlineDscr);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setAiAnalysis(null);
+        setAiAnalysisError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    setIsAiAnalysisLoading(true);
+    setAiAnalysisError(null);
+    try {
+      const analysis = await fetchAIAnalysis(
+        lastRequest,
+        targetLeveredIrr,
+        targetEquityMultipleValue,
+        targetHeadlineDscrValue,
+        returnHurdleMetric,
+      );
+      setAiAnalysis(analysis);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setAiAnalysisError(apiError.message);
+      } else {
+        setAiAnalysisError('An unexpected error occurred while generating the AI analysis.');
+      }
+    } finally {
+      setIsAiAnalysisLoading(false);
     }
   }
 
@@ -161,6 +222,8 @@ export default function App() {
     setLastRequest(null);
     setBreakEven(null);
     setBreakEvenError(null);
+    setAiAnalysis(null);
+    setAiAnalysisError(null);
 
     let request;
     try {
@@ -259,6 +322,15 @@ export default function App() {
               onTargetEquityMultipleChange={handleTargetEquityMultipleChange}
               onTargetHeadlineDscrChange={handleTargetHeadlineDscrChange}
               onReturnHurdleMetricChange={handleReturnHurdleMetricChange}
+            />
+          )}
+
+          {results && (
+            <AiAnalystPanel
+              analysis={aiAnalysis}
+              isLoading={isAiAnalysisLoading}
+              error={aiAnalysisError}
+              onGenerate={() => void handleGenerateAiAnalysis()}
             />
           )}
         </div>

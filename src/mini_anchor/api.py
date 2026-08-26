@@ -17,6 +17,12 @@ from typing import Any
 from fastapi import Body, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from .ai import (
+    AIAnalysis,
+    AIConfigurationError,
+    AIProviderError,
+    generate_ai_analysis,
+)
 from .analysis import (
     InvalidBreakEvenTargetError,
     ReturnHurdleMetric,
@@ -241,4 +247,81 @@ def break_even(payload: dict[str, Any] = Body(...)) -> StandardBreakEvenAnalysis
     except InvalidBreakEvenTargetError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+
+
+# =============================================================================
+# Phase 9A -- AI Analyst
+#
+# Delegates all context assembly and the provider call to
+# ``mini_anchor.ai.generate_ai_analysis``; this endpoint performs no
+# financial math, sensitivity math, break-even search, or OpenAI call of
+# its own.
+# =============================================================================
+
+
+@app.post("/ai/analysis", response_model=AIAnalysis)
+def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
+    raw_inputs = payload.get("inputs")
+    if not isinstance(raw_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must include an 'inputs' object.",
+        )
+
+    try:
+        inputs = validate_acquisition_inputs(raw_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    missing_fields = [
+        field
+        for field in ("target_levered_irr", "target_headline_dscr", "target_equity_multiple")
+        if field not in payload
+    ]
+    if missing_fields:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Missing required field(s): {', '.join(missing_fields)}.",
+        )
+
+    target_levered_irr = _numeric_target(payload, "target_levered_irr")
+    target_headline_dscr = _numeric_target(payload, "target_headline_dscr")
+    target_equity_multiple = _numeric_target(payload, "target_equity_multiple")
+
+    return_hurdle_metric_raw = payload.get("return_hurdle_metric", ReturnHurdleMetric.LEVERED_IRR.value)
+    try:
+        return_hurdle_metric = ReturnHurdleMetric(return_hurdle_metric_raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "return_hurdle_metric must be one of "
+                f"{[member.value for member in ReturnHurdleMetric]}; "
+                f"got {return_hurdle_metric_raw!r}."
+            ),
+        ) from None
+
+    try:
+        return generate_ai_analysis(
+            inputs,
+            target_levered_irr=target_levered_irr,
+            target_equity_multiple=target_equity_multiple,
+            target_headline_dscr=target_headline_dscr,
+            return_hurdle_metric=return_hurdle_metric,
+        )
+    except InvalidBreakEvenTargetError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except AIConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from None
+    except AIProviderError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
         ) from None

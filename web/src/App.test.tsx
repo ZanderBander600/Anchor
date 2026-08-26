@@ -2,9 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
-import { analyzeAcquisition, ApiError, fetchBreakEvenAnalysis, fetchSensitivityPresets } from './api';
+import {
+  analyzeAcquisition,
+  ApiError,
+  fetchAIAnalysis,
+  fetchBreakEvenAnalysis,
+  fetchSensitivityPresets,
+} from './api';
 import type {
   AcquisitionResults,
+  AIAnalysis,
   BreakEvenResult,
   StandardBreakEvenAnalysis,
   StandardSensitivityPresets,
@@ -18,12 +25,14 @@ vi.mock('./api', async () => {
     analyzeAcquisition: vi.fn(),
     fetchSensitivityPresets: vi.fn(),
     fetchBreakEvenAnalysis: vi.fn(),
+    fetchAIAnalysis: vi.fn(),
   };
 });
 
 const mockAnalyze = vi.mocked(analyzeAcquisition);
 const mockFetchSensitivityPresets = vi.mocked(fetchSensitivityPresets);
 const mockFetchBreakEvenAnalysis = vi.mocked(fetchBreakEvenAnalysis);
+const mockFetchAIAnalysis = vi.mocked(fetchAIAnalysis);
 
 // Deliberately distinct from every metric value in `makeResults()` (7.91%,
 // 6.24%, 1.44x, 1.1608x, ...) so text queries against the base results panel
@@ -176,12 +185,30 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function makeAiAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
+  return {
+    executive_summary: 'Five-year hold with moderate leverage.',
+    investment_view: 'Return profile clears the supplied hurdles at baseline.',
+    strengths: ['Levered IRR clears the target hurdle at baseline.'],
+    risks: ['Exit cap rate expansion compresses returns per the sensitivity matrix.'],
+    return_drivers: ['NOI growth'],
+    downside_analysis: 'Levered IRR remains positive across the tested exit cap range.',
+    capital_structure_analysis: '65% LTV produces a Year 1 DSCR above 1.15x.',
+    break_even_analysis: 'Maximum purchase price break-even was found within the tested range.',
+    questions_to_investigate: ['What is the in-place rent roll composition?'],
+    confidence_notes: ['No tenant credit data was supplied.'],
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   mockAnalyze.mockReset();
   mockFetchSensitivityPresets.mockReset();
   mockFetchSensitivityPresets.mockResolvedValue(makeSensitivityPresets());
   mockFetchBreakEvenAnalysis.mockReset();
   mockFetchBreakEvenAnalysis.mockResolvedValue(makeBreakEvenAnalysis());
+  mockFetchAIAnalysis.mockReset();
+  mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysis());
 });
 
 afterEach(() => {
@@ -649,5 +676,183 @@ describe('Break-even analysis workflow', () => {
 
     pending.resolve(makeBreakEvenAnalysis());
     expect(await screen.findByText('Maximum Purchase Price')).toBeTruthy();
+  });
+});
+
+describe('AI Analyst workflow', () => {
+  it('shows the AI Analyst section only after a successful base analysis', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    expect(screen.queryByText('Anchor AI Analyst')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('Anchor AI Analyst')).toBeTruthy();
+    expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('does not auto-generate an AI analysis after the base analysis completes', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+    await screen.findByText('Break-Even Analysis');
+
+    expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('generates an AI analysis only when the Generate button is clicked', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    expect(await screen.findByText('Investment View')).toBeTruthy();
+    expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
+    expect(mockFetchAIAnalysis).toHaveBeenCalledWith(
+      mockAnalyze.mock.calls[0][0],
+      0.10,
+      1.50,
+      1.20,
+      'levered_irr',
+    );
+  });
+
+  it('shows a loading state and disables the Generate button while pending', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    const pending = deferred<AIAnalysis>();
+    mockFetchAIAnalysis.mockReturnValueOnce(pending.promise);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    expect(await screen.findByText(/Generating AI analysis/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Generating…' })).toHaveProperty('disabled', true);
+
+    pending.resolve(makeAiAnalysis());
+    expect(await screen.findByRole('button', { name: 'Generate AI Analysis' })).toBeTruthy();
+  });
+
+  it('renders the mocked structured AI response, including strengths/risks/questions lists', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    expect(await screen.findByText('Levered IRR clears the target hurdle at baseline.')).toBeTruthy();
+    expect(
+      screen.getByText('Exit cap rate expansion compresses returns per the sensitivity matrix.'),
+    ).toBeTruthy();
+    expect(screen.getByText('What is the in-place rent roll composition?')).toBeTruthy();
+  });
+
+  it('shows an AI-specific error without removing the deterministic results', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchAIAnalysis.mockRejectedValueOnce(
+      new ApiError('OPENAI_API_KEY is not configured.'),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    expect(await screen.findByText('OPENAI_API_KEY is not configured.')).toBeTruthy();
+    expect(screen.getByText('7.91%')).toBeTruthy();
+    expect(screen.getByText('Break-Even Analysis')).toBeTruthy();
+    expect(screen.getByText('Sensitivity Analysis')).toBeTruthy();
+  });
+
+  it('clears AI output when a base assumption is edited', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Investment View');
+
+    await user.type(screen.getByLabelText(/^Current NOI/), '1');
+
+    expect(screen.queryByText('Anchor AI Analyst')).toBeNull();
+    expect(screen.queryByText('Investment View')).toBeNull();
+  });
+
+  it('clears AI output when a break-even hurdle changes', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Investment View');
+
+    const irrInput = screen.getByLabelText(/^Target Levered IRR/);
+    await user.clear(irrInput);
+    await user.type(irrInput, '12');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Investment View')).toBeNull();
+    });
+    // The AI section itself remains -- only its prior output is cleared,
+    // and no new AI request is spent automatically (still just the one
+    // call from the earlier manual "Generate AI Analysis" click).
+    expect(screen.getByText('Anchor AI Analyst')).toBeTruthy();
+    expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it('replaces the prior AI output with the second generation', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchAIAnalysis.mockResolvedValueOnce(
+      makeAiAnalysis({ investment_view: 'First view.' }),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    expect(await screen.findByText('First view.')).toBeTruthy();
+
+    mockFetchAIAnalysis.mockResolvedValueOnce(
+      makeAiAnalysis({ investment_view: 'Second view.' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    expect(await screen.findByText('Second view.')).toBeTruthy();
+    expect(screen.queryByText('First view.')).toBeNull();
+    expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(2);
+  });
+
+  it('never renders anything resembling a raw API key', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Investment View');
+
+    expect(document.body.innerHTML).not.toMatch(/sk-[A-Za-z0-9]/);
+    expect(document.body.innerHTML.toLowerCase()).not.toContain('openai_api_key');
   });
 });
