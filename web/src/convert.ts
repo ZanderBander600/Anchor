@@ -7,7 +7,7 @@ import type { AcquisitionFormValues, AcquisitionRequest } from './types';
  */
 export class FormValidationError extends Error {}
 
-function parseNumber(label: string, raw: string): number {
+export function parseNumber(label: string, raw: string): number {
   const trimmed = raw.trim();
   if (trimmed === '') {
     throw new FormValidationError(`${label} is required.`);
@@ -20,7 +20,7 @@ function parseNumber(label: string, raw: string): number {
 }
 
 /** Converts an analyst-facing percentage (e.g. "5.25") to a decimal fraction (0.0525). */
-function parsePercent(label: string, raw: string): number {
+export function parsePercent(label: string, raw: string): number {
   return parseNumber(label, raw) / 100;
 }
 
@@ -51,3 +51,7 @@ export const DEFAULT_FORM_VALUES: AcquisitionFormValues = {
   interestRate: '5.25',
   amortization: '30',
 };
+
+export const DEFAULT_TARGET_LEVERED_IRR_PERCENT = '10.00';
+export const DEFAULT_TARGET_HEADLINE_DSCR = '1.20';
+export const DEFAULT_TARGET_EQUITY_MULTIPLE = '1.50';

@@ -71,3 +71,43 @@ export interface StandardSensitivityPresets {
   interest_rate_ltv: TwoWaySensitivityResult;
   interest_rate_ltv_dscr: TwoWaySensitivityResult;
 }
+
+export type BreakEvenType =
+  | 'max_purchase_price'
+  | 'max_exit_cap_rate'
+  | 'min_noi_growth'
+  | 'max_interest_rate'
+  | 'min_current_noi';
+
+export type BreakEvenStatus = 'solved' | 'no_solution_in_range';
+
+export type BreakEvenMetric = 'levered_irr' | 'headline_dscr' | 'equity_multiple';
+
+/** Which return metric drives the three return-hurdle break-even questions
+ * (Maximum Purchase Price, Maximum Exit Cap Rate, Minimum NOI Growth).
+ * Mirrors ``ReturnHurdleMetric`` in ``src/mini_anchor/analysis/contracts.py``. */
+export type ReturnHurdleMetric = 'levered_irr' | 'equity_multiple';
+
+/** Mirrors ``BreakEvenResult`` in ``src/mini_anchor/analysis/contracts.py``. */
+export interface BreakEvenResult {
+  break_even_type: BreakEvenType;
+  assumption: string;
+  metric: BreakEvenMetric;
+  target_metric_value: number;
+  baseline_assumption_value: number;
+  baseline_metric_value: number | null;
+  solved_assumption_value: number | null;
+  solved_metric_value: number | null;
+  lower_search_bound: number;
+  upper_search_bound: number;
+  status: BreakEvenStatus;
+}
+
+/** Mirrors ``StandardBreakEvenAnalysis`` in ``src/mini_anchor/analysis/contracts.py``. */
+export interface StandardBreakEvenAnalysis {
+  max_purchase_price: BreakEvenResult;
+  max_exit_cap_rate: BreakEvenResult;
+  min_noi_growth: BreakEvenResult;
+  max_interest_rate: BreakEvenResult;
+  min_current_noi: BreakEvenResult;
+}

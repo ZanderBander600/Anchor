@@ -448,3 +448,73 @@ body {
   font-weight: 600;
   font-family: var(--font-sans);
 }
+
+.break-even-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.break-even-hurdles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.break-even-hurdle-field {
+  width: 10rem;
+}
+
+.break-even-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.break-even-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: #fbfbfc;
+}
+
+.break-even-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.break-even-subtitle {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.break-even-value {
+  margin-top: 0.2rem;
+  font-size: 1.35rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+}
+
+.break-even-no-solution {
+  font-size: 0.95rem;
+  font-family: var(--font-sans);
+  color: var(--color-text-muted);
+}
+
+.break-even-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}

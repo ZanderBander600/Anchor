@@ -12,8 +12,14 @@ import ast
 from pathlib import Path
 from unittest.mock import patch
 
+from mini_anchor.analysis import break_even as break_even_module
 from mini_anchor.analysis import sensitivity as sensitivity_module
-from mini_anchor.analysis import run_one_way_sensitivity, run_two_way_sensitivity
+from mini_anchor.analysis import (
+    BreakEvenDirection,
+    run_one_way_sensitivity,
+    run_two_way_sensitivity,
+    solve_break_even_threshold,
+)
 from mini_anchor.contracts import AcquisitionInputs
 from mini_anchor.engine import analyze_acquisition
 
@@ -82,3 +88,54 @@ def test_two_way_sensitivity_calls_analyze_acquisition_for_every_cell() -> None:
 
     # One baseline call, plus one call per matrix cell.
     assert mock_analyze.call_count == 1 + (len(row_values) * len(column_values))
+
+
+def test_break_even_package_has_no_openpyxl_import() -> None:
+    for source_file in Path(break_even_module.__file__).parent.glob("*.py"):
+        tree = ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module] if node.module else []
+            else:
+                continue
+            assert not any(
+                name is not None and name.startswith("openpyxl") for name in names
+            ), f"{source_file} must not import openpyxl"
+
+
+def test_break_even_package_has_no_scipy_or_numpy_import() -> None:
+    for source_file in Path(break_even_module.__file__).parent.glob("*.py"):
+        tree = ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module] if node.module else []
+            else:
+                continue
+            for name in names:
+                assert not (
+                    name is not None
+                    and (name.startswith("scipy") or name.startswith("numpy"))
+                ), f"{source_file} must not import scipy or numpy"
+
+
+def test_break_even_solver_calls_analyze_acquisition_for_every_candidate() -> None:
+    with patch(
+        "mini_anchor.analysis.break_even.analyze_acquisition", wraps=analyze_acquisition
+    ) as mock_analyze:
+        solve_break_even_threshold(
+            GOLDEN_INPUTS,
+            assumption="purchase_price",
+            metric="levered_irr",
+            target=0.10,
+            direction=BreakEvenDirection.MAXIMUM,
+            lower_bound=25_000_000.0,
+            upper_bound=75_000_000.0,
+        )
+
+    # Both bound evaluations, plus every bisection midpoint, went through
+    # the authoritative engine entry point -- at least the two bounds.
+    assert mock_analyze.call_count >= 2

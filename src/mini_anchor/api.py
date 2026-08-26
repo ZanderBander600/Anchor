@@ -18,10 +18,14 @@ from fastapi import Body, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .analysis import (
+    InvalidBreakEvenTargetError,
+    ReturnHurdleMetric,
+    StandardBreakEvenAnalysis,
     StandardSensitivityPresets,
     TwoWaySensitivityResult,
     UnknownAssumptionError,
     UnknownMetricError,
+    build_standard_break_even_analysis,
     build_standard_presets,
     run_two_way_sensitivity,
 )
@@ -161,3 +165,80 @@ def sensitivity_presets(
         ) from None
 
     return build_standard_presets(inputs)
+
+
+# =============================================================================
+# Phase 8 -- break-even analysis
+#
+# Delegates all break-even solving to ``mini_anchor.analysis.break_even``;
+# this endpoint performs no financial math and no threshold search itself.
+# =============================================================================
+
+
+def _numeric_target(payload: dict[str, Any], field: str) -> float:
+    value = payload[field]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"{field} must be a numeric value.",
+        )
+    return float(value)
+
+
+@app.post("/break-even", response_model=StandardBreakEvenAnalysis)
+def break_even(payload: dict[str, Any] = Body(...)) -> StandardBreakEvenAnalysis:
+    raw_inputs = payload.get("inputs")
+    if not isinstance(raw_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must include an 'inputs' object.",
+        )
+
+    try:
+        inputs = validate_acquisition_inputs(raw_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    missing_fields = [
+        field
+        for field in ("target_levered_irr", "target_headline_dscr", "target_equity_multiple")
+        if field not in payload
+    ]
+    if missing_fields:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Missing required field(s): {', '.join(missing_fields)}.",
+        )
+
+    target_levered_irr = _numeric_target(payload, "target_levered_irr")
+    target_headline_dscr = _numeric_target(payload, "target_headline_dscr")
+    target_equity_multiple = _numeric_target(payload, "target_equity_multiple")
+
+    return_hurdle_metric_raw = payload.get("return_hurdle_metric", ReturnHurdleMetric.LEVERED_IRR.value)
+    try:
+        return_hurdle_metric = ReturnHurdleMetric(return_hurdle_metric_raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "return_hurdle_metric must be one of "
+                f"{[member.value for member in ReturnHurdleMetric]}; "
+                f"got {return_hurdle_metric_raw!r}."
+            ),
+        ) from None
+
+    try:
+        return build_standard_break_even_analysis(
+            inputs,
+            target_levered_irr=target_levered_irr,
+            target_headline_dscr=target_headline_dscr,
+            target_equity_multiple=target_equity_multiple,
+            return_hurdle_metric=return_hurdle_metric,
+        )
+    except InvalidBreakEvenTargetError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None

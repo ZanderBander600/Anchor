@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
-import { analyzeAcquisition, ApiError, fetchSensitivityPresets } from './api';
-import type { AcquisitionResults, StandardSensitivityPresets, TwoWaySensitivityResult } from './types';
+import { analyzeAcquisition, ApiError, fetchBreakEvenAnalysis, fetchSensitivityPresets } from './api';
+import type {
+  AcquisitionResults,
+  BreakEvenResult,
+  StandardBreakEvenAnalysis,
+  StandardSensitivityPresets,
+  TwoWaySensitivityResult,
+} from './types';
 
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');
@@ -11,11 +17,13 @@ vi.mock('./api', async () => {
     ...actual,
     analyzeAcquisition: vi.fn(),
     fetchSensitivityPresets: vi.fn(),
+    fetchBreakEvenAnalysis: vi.fn(),
   };
 });
 
 const mockAnalyze = vi.mocked(analyzeAcquisition);
 const mockFetchSensitivityPresets = vi.mocked(fetchSensitivityPresets);
+const mockFetchBreakEvenAnalysis = vi.mocked(fetchBreakEvenAnalysis);
 
 // Deliberately distinct from every metric value in `makeResults()` (7.91%,
 // 6.24%, 1.44x, 1.1608x, ...) so text queries against the base results panel
@@ -57,6 +65,72 @@ function makeSensitivityPresets(
       row_assumption: 'interest_rate',
       column_assumption: 'ltv',
       metric: 'headline_dscr',
+    }),
+    ...overrides,
+  };
+}
+
+function makeBreakEvenResult(overrides: Partial<BreakEvenResult> = {}): BreakEvenResult {
+  return {
+    break_even_type: 'max_purchase_price',
+    assumption: 'purchase_price',
+    metric: 'levered_irr',
+    target_metric_value: 0.10,
+    baseline_assumption_value: 50_000_000,
+    baseline_metric_value: 0.0791303,
+    solved_assumption_value: 46_820_000,
+    solved_metric_value: 0.10001,
+    lower_search_bound: 25_000_000,
+    upper_search_bound: 75_000_000,
+    status: 'solved',
+    ...overrides,
+  };
+}
+
+function makeBreakEvenAnalysis(
+  overrides: Partial<StandardBreakEvenAnalysis> = {},
+): StandardBreakEvenAnalysis {
+  return {
+    max_purchase_price: makeBreakEvenResult(),
+    max_exit_cap_rate: makeBreakEvenResult({
+      break_even_type: 'max_exit_cap_rate',
+      assumption: 'exit_cap_rate',
+      baseline_assumption_value: 0.055,
+      solved_assumption_value: 0.0612,
+      lower_search_bound: 0.025,
+      upper_search_bound: 0.105,
+    }),
+    min_noi_growth: makeBreakEvenResult({
+      break_even_type: 'min_noi_growth',
+      assumption: 'noi_growth',
+      baseline_assumption_value: 0.03,
+      solved_assumption_value: 0.0417,
+      lower_search_bound: -0.07,
+      upper_search_bound: 0.13,
+    }),
+    max_interest_rate: makeBreakEvenResult({
+      break_even_type: 'max_interest_rate',
+      assumption: 'interest_rate',
+      metric: 'headline_dscr',
+      target_metric_value: 1.20,
+      baseline_assumption_value: 0.0525,
+      baseline_metric_value: 1.1608,
+      solved_assumption_value: 0.0461,
+      solved_metric_value: 1.2001,
+      lower_search_bound: 0.0,
+      upper_search_bound: 0.2,
+    }),
+    min_current_noi: makeBreakEvenResult({
+      break_even_type: 'min_current_noi',
+      assumption: 'current_noi',
+      metric: 'headline_dscr',
+      target_metric_value: 1.20,
+      baseline_assumption_value: 2_500_000,
+      baseline_metric_value: 1.1608,
+      solved_assumption_value: 2_585_000,
+      solved_metric_value: 1.2001,
+      lower_search_bound: 1_250_000,
+      upper_search_bound: 3_750_000,
     }),
     ...overrides,
   };
@@ -106,6 +180,8 @@ beforeEach(() => {
   mockAnalyze.mockReset();
   mockFetchSensitivityPresets.mockReset();
   mockFetchSensitivityPresets.mockResolvedValue(makeSensitivityPresets());
+  mockFetchBreakEvenAnalysis.mockReset();
+  mockFetchBreakEvenAnalysis.mockResolvedValue(makeBreakEvenAnalysis());
 });
 
 afterEach(() => {
@@ -310,5 +386,268 @@ describe('Sensitivity analysis workflow', () => {
     expect(await screen.findByText('The sensitivity request failed.')).toBeTruthy();
     expect(screen.getByText('7.91%')).toBeTruthy();
     expect(screen.queryByText('Exit Cap × NOI Growth')).toBeNull();
+  });
+});
+
+describe('Break-even analysis workflow', () => {
+  it('runs and displays the break-even section only after a successful base analysis', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    expect(screen.queryByText('Break-Even Analysis')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('Break-Even Analysis')).toBeTruthy();
+    expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders default hurdle controls and all five result cards', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Break-Even Analysis');
+
+    expect(screen.getByLabelText(/^Target Levered IRR/)).toHaveProperty('value', '10.00');
+    expect(screen.getByLabelText(/^Target Equity Multiple/)).toHaveProperty('value', '1.50');
+    expect(screen.getByLabelText(/^Target Year 1 DSCR/)).toHaveProperty('value', '1.20');
+    expect(screen.getByText('Maximum Purchase Price')).toBeTruthy();
+    expect(screen.getByText('Maximum Exit Cap')).toBeTruthy();
+    expect(screen.getByText('Minimum NOI Growth')).toBeTruthy();
+    expect(screen.getByText('Maximum Interest Rate')).toBeTruthy();
+    expect(screen.getByText('Minimum Current NOI')).toBeTruthy();
+  });
+
+  it('converts the default IRR percent hurdle to a decimal exactly once, with the default Levered IRR return hurdle', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Break-Even Analysis');
+
+    expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledWith(
+      mockAnalyze.mock.calls[0][0],
+      0.10,
+      1.50,
+      1.20,
+      'levered_irr',
+    );
+  });
+
+  it('changing the IRR hurdle refreshes only break-even, not the base analysis or sensitivity', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Break-Even Analysis');
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
+    expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1);
+
+    const irrInput = screen.getByLabelText(/^Target Levered IRR/);
+    await user.clear(irrInput);
+    await user.type(irrInput, '12');
+
+    await waitFor(() => {
+      expect(mockFetchBreakEvenAnalysis.mock.calls.length).toBeGreaterThan(1);
+    });
+
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
+    const lastCall =
+      mockFetchBreakEvenAnalysis.mock.calls[mockFetchBreakEvenAnalysis.mock.calls.length - 1];
+    expect(lastCall[1]).toBeCloseTo(0.12);
+    expect(lastCall[2]).toBeCloseTo(1.50);
+    expect(lastCall[3]).toBeCloseTo(1.20);
+    expect(lastCall[4]).toBe('levered_irr');
+  });
+
+  it('changing the DSCR hurdle refreshes only break-even', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Break-Even Analysis');
+
+    const initialCallCount = mockFetchBreakEvenAnalysis.mock.calls.length;
+
+    const dscrInput = screen.getByLabelText(/^Target Year 1 DSCR/);
+    await user.clear(dscrInput);
+    await user.type(dscrInput, '1.3');
+
+    await waitFor(() => {
+      expect(mockFetchBreakEvenAnalysis.mock.calls.length).toBeGreaterThan(initialCallCount);
+    });
+
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
+    const lastCall =
+      mockFetchBreakEvenAnalysis.mock.calls[mockFetchBreakEvenAnalysis.mock.calls.length - 1];
+    expect(lastCall[1]).toBeCloseTo(0.10);
+    expect(lastCall[2]).toBeCloseTo(1.50);
+    expect(lastCall[3]).toBeCloseTo(1.3);
+    expect(lastCall[4]).toBe('levered_irr');
+  });
+
+  it('changing the target Equity Multiple reruns only break-even, treating "1.65" as 1.65x not a percentage', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Break-Even Analysis');
+
+    const initialCallCount = mockFetchBreakEvenAnalysis.mock.calls.length;
+
+    const emInput = screen.getByLabelText(/^Target Equity Multiple/);
+    await user.clear(emInput);
+    await user.type(emInput, '1.65');
+
+    await waitFor(() => {
+      expect(mockFetchBreakEvenAnalysis.mock.calls.length).toBeGreaterThan(initialCallCount);
+    });
+
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
+    const lastCall =
+      mockFetchBreakEvenAnalysis.mock.calls[mockFetchBreakEvenAnalysis.mock.calls.length - 1];
+    expect(lastCall[1]).toBeCloseTo(0.10);
+    expect(lastCall[2]).toBeCloseTo(1.65);
+    expect(lastCall[3]).toBeCloseTo(1.20);
+  });
+
+  it('switching the return-hurdle toggle to Equity Multiple reruns only break-even and updates only the three return-hurdle cards', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Break-Even Analysis');
+    expect(screen.getAllByText('for 10.00% Levered IRR').length).toBe(3);
+
+    mockFetchBreakEvenAnalysis.mockResolvedValueOnce(
+      makeBreakEvenAnalysis({
+        max_purchase_price: makeBreakEvenResult({
+          metric: 'equity_multiple',
+          target_metric_value: 1.50,
+          solved_assumption_value: 44_120_000,
+          solved_metric_value: 1.5002,
+        }),
+        max_exit_cap_rate: makeBreakEvenResult({
+          break_even_type: 'max_exit_cap_rate',
+          assumption: 'exit_cap_rate',
+          metric: 'equity_multiple',
+          target_metric_value: 1.50,
+          baseline_assumption_value: 0.055,
+          solved_assumption_value: 0.0589,
+          solved_metric_value: 1.5002,
+          lower_search_bound: 0.025,
+          upper_search_bound: 0.105,
+        }),
+        min_noi_growth: makeBreakEvenResult({
+          break_even_type: 'min_noi_growth',
+          assumption: 'noi_growth',
+          metric: 'equity_multiple',
+          target_metric_value: 1.50,
+          baseline_assumption_value: 0.03,
+          solved_assumption_value: 0.0398,
+          solved_metric_value: 1.5002,
+          lower_search_bound: -0.07,
+          upper_search_bound: 0.13,
+        }),
+      }),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Equity Multiple' }));
+
+    await waitFor(() => {
+      expect(mockFetchBreakEvenAnalysis.mock.calls.length).toBeGreaterThan(1);
+    });
+    const lastCall =
+      mockFetchBreakEvenAnalysis.mock.calls[mockFetchBreakEvenAnalysis.mock.calls.length - 1];
+    expect(lastCall[4]).toBe('equity_multiple');
+
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
+
+    expect(await screen.findByText('$44,120,000')).toBeTruthy();
+    expect(screen.getAllByText('for 1.50x Equity Multiple').length).toBe(3);
+    expect(screen.queryByText('for 10.00% Levered IRR')).toBeNull();
+
+    // DSCR cards remain unaffected -- same values, same subtitle.
+    expect(screen.getByText('Maximum Interest Rate')).toBeTruthy();
+    expect(screen.getByText('Minimum Current NOI')).toBeTruthy();
+    expect(screen.getAllByText('for 1.20x Year 1 DSCR').length).toBe(2);
+  });
+
+  it('shows "Not found in tested range" and never claims impossibility', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchBreakEvenAnalysis.mockResolvedValue(
+      makeBreakEvenAnalysis({
+        max_purchase_price: makeBreakEvenResult({
+          status: 'no_solution_in_range',
+          solved_assumption_value: null,
+          solved_metric_value: null,
+        }),
+      }),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('Not found in tested range')).toBeTruthy();
+    expect(screen.queryByText(/impossible/i)).toBeNull();
+    expect(screen.queryByText(/no solution exists/i)).toBeNull();
+  });
+
+  it('clears break-even results when a base assumption is edited', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Break-Even Analysis');
+
+    await user.type(screen.getByLabelText(/^Current NOI/), '1');
+
+    expect(screen.queryByText('Break-Even Analysis')).toBeNull();
+  });
+
+  it('does not corrupt base or sensitivity results when the break-even request fails', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchBreakEvenAnalysis.mockRejectedValueOnce(
+      new ApiError('The break-even request failed.'),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('The break-even request failed.')).toBeTruthy();
+    expect(screen.getByText('7.91%')).toBeTruthy();
+    expect(screen.getByText('Sensitivity Analysis')).toBeTruthy();
+    expect(screen.queryByText('Maximum Purchase Price')).toBeNull();
+  });
+
+  it('shows a loading state while break-even is calculating', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    const pending = deferred<StandardBreakEvenAnalysis>();
+    mockFetchBreakEvenAnalysis.mockReturnValueOnce(pending.promise);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText(/Calculating break-even/)).toBeTruthy();
+
+    pending.resolve(makeBreakEvenAnalysis());
+    expect(await screen.findByText('Maximum Purchase Price')).toBeTruthy();
   });
 });
