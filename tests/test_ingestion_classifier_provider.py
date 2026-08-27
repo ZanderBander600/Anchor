@@ -178,6 +178,115 @@ def test_two_candidates_with_the_same_value_are_not_marked_conflicting() -> None
 
 
 # =============================================================================
+# Conflict determination compares normalized semantic values, not raw
+# strings (live-pipeline regression: $45,000,000 and $45.0 million were
+# wrongly surfaced as conflicting). Each pair below cites distinct,
+# non-redundant anchors so dedup never collapses them -- both candidates
+# must survive as separate, non-conflicting evidence.
+# =============================================================================
+
+
+def test_equivalent_purchase_price_in_different_magnitude_representations_is_not_conflicting() -> None:
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(anchor="paragraph:0", page=2, text="Purchase Price: $45,000,000"),
+            DocumentAnchor(
+                anchor="paragraph:1",
+                page=4,
+                text="Purchase Price (Financial Summary): $45.0 million",
+            ),
+        )
+    )
+    raw = _empty_response(
+        {
+            "purchase_price": [
+                {"value": "45000000", "status": "stated", "anchor": "paragraph:0"},
+                {"value": "$45.0 million", "status": "stated", "anchor": "paragraph:1"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.purchase_price.candidates) == 2
+    assert all(c.status is EvidenceStatus.STATED for c in result.purchase_price.candidates)
+
+
+def test_equivalent_current_noi_in_different_magnitude_representations_is_not_conflicting() -> None:
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(anchor="paragraph:0", page=2, text="Current NOI: $2,500,000"),
+            DocumentAnchor(anchor="paragraph:1", page=4, text="In-Place NOI: $2.50 million"),
+        )
+    )
+    raw = _empty_response(
+        {
+            "current_noi": [
+                {"value": "2500000", "status": "stated", "anchor": "paragraph:0"},
+                {"value": "$2.50 million", "status": "stated", "anchor": "paragraph:1"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.current_noi.candidates) == 2
+    assert all(c.status is EvidenceStatus.STATED for c in result.current_noi.candidates)
+
+
+def test_equivalent_percent_and_decimal_fraction_is_not_conflicting() -> None:
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(anchor="paragraph:0", page=2, text="Current Occupancy: 95%"),
+            DocumentAnchor(anchor="paragraph:1", page=4, text="Stabilized occupancy assumption: 0.95"),
+        )
+    )
+    raw = _empty_response(
+        {
+            "occupancy": [
+                {"value": "95%", "status": "stated", "anchor": "paragraph:0"},
+                {"value": "0.95", "status": "interpreted", "anchor": "paragraph:1"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.occupancy.candidates) == 2
+    assert all(c.status is not EvidenceStatus.CONFLICTING for c in result.occupancy.candidates)
+
+
+def test_genuinely_differing_percent_values_are_still_conflicting() -> None:
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(anchor="paragraph:0", page=2, text="Current Occupancy: 95%"),
+            DocumentAnchor(anchor="paragraph:1", page=6, text="Current Occupancy: 94%"),
+        )
+    )
+    raw = _empty_response(
+        {
+            "occupancy": [
+                {"value": "95%", "status": "stated", "anchor": "paragraph:0"},
+                {"value": "94%", "status": "stated", "anchor": "paragraph:1"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.occupancy.candidates) == 2
+    assert all(c.status is EvidenceStatus.CONFLICTING for c in result.occupancy.candidates)
+
+
+# =============================================================================
 # KTD12 -- deterministic anchor/value verification
 # =============================================================================
 
@@ -385,6 +494,399 @@ def test_text_field_value_not_present_in_snippet_is_unverifiable() -> None:
     result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
 
     assert result.deal_context.address.candidates[0].status is EvidenceStatus.UNVERIFIABLE
+
+
+# =============================================================================
+# Deterministic candidate deduplication -- same field, same normalized
+# value, same evidence status, and equivalent/redundant source evidence
+# (one physical fact flattened into more than one Azure DI anchor).
+# =============================================================================
+
+
+def test_identical_value_from_two_redundant_anchors_is_deduplicated() -> None:
+    """The exact bug report shape: the same fact restated in a paragraph
+    and in a table cell produces two 'stated' candidates for the same
+    value -- these collapse to one."""
+
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(anchor="paragraph:0", page=1, text="Purchase Price: $45,000,000"),
+            DocumentAnchor(anchor="table:0:cell:1:1", page=2, text="Purchase Price: $45,000,000"),
+        )
+    )
+    raw = _empty_response(
+        {
+            "purchase_price": [
+                {"value": "45000000", "status": "stated", "anchor": "paragraph:0"},
+                {"value": "45000000", "status": "stated", "anchor": "table:0:cell:1:1"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.purchase_price.candidates) == 1
+    assert result.purchase_price.candidates[0].status is EvidenceStatus.STATED
+
+
+def test_equivalent_value_in_a_different_representation_is_deduplicated() -> None:
+    """Deduplication compares normalized values, not literal strings: a
+    percent-scale field's literal-percent and decimal-fraction
+    representations of the same evidence still collapse."""
+
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(anchor="paragraph:0", page=1, text="Occupancy: 95.0%"),
+            DocumentAnchor(anchor="table:0:cell:0:0", page=1, text="Occupancy: 95.0%"),
+        )
+    )
+    raw = _empty_response(
+        {
+            "occupancy": [
+                {"value": "0.95", "status": "interpreted", "anchor": "paragraph:0"},
+                {"value": "95.0", "status": "interpreted", "anchor": "table:0:cell:0:0"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.occupancy.candidates) == 1
+
+
+def test_same_value_but_different_status_is_not_deduplicated() -> None:
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(anchor="paragraph:0", page=1, text="Purchase Price: $45,000,000"),
+            DocumentAnchor(anchor="paragraph:1", page=1, text="Purchase Price: $45,000,000"),
+        )
+    )
+    raw = _empty_response(
+        {
+            "purchase_price": [
+                {"value": "45000000", "status": "stated", "anchor": "paragraph:0"},
+                {"value": "45000000", "status": "interpreted", "anchor": "paragraph:1"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.purchase_price.candidates) == 2
+
+
+def test_same_value_but_non_redundant_evidence_is_not_deduplicated() -> None:
+    """Two genuinely distinct statements of the same figure, from
+    unrelated evidence text, are corroboration -- not the Azure DI
+    duplicate-anchor artifact dedup exists to remove -- so both stay."""
+
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(anchor="paragraph:0", page=1, text="Asking Price: $45,000,000"),
+            DocumentAnchor(
+                anchor="paragraph:1",
+                page=5,
+                text="The seller's broker opinion of value is $45,000,000.",
+            ),
+        )
+    )
+    raw = _empty_response(
+        {
+            "purchase_price": [
+                {"value": "45000000", "status": "stated", "anchor": "paragraph:0"},
+                {"value": "45000000", "status": "stated", "anchor": "paragraph:1"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.purchase_price.candidates) == 2
+
+
+def test_genuinely_conflicting_candidates_are_never_deduplicated() -> None:
+    """R8: differing values for the same field are never collapsed by
+    dedup, even when both cite anchors on the same page/section."""
+
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(anchor="paragraph:0", page=1, text="Current Occupancy: 95.0%"),
+            DocumentAnchor(
+                anchor="paragraph:1", page=1, text="Trailing Twelve-Month Occupancy: 94.0%"
+            ),
+        )
+    )
+    raw = _empty_response(
+        {
+            "occupancy": [
+                {"value": "95.0", "status": "stated", "anchor": "paragraph:0"},
+                {"value": "94.0", "status": "stated", "anchor": "paragraph:1"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.occupancy.candidates) == 2
+    assert all(c.status is EvidenceStatus.CONFLICTING for c in result.occupancy.candidates)
+    assert {c.value for c in result.occupancy.candidates} == {"95.0", "94.0"}
+
+
+def test_unverifiable_candidates_with_no_provenance_are_never_deduplicated() -> None:
+    """A candidate with no citation to compare (nonexistent anchor) is
+    never treated as redundant with another, even if the values match."""
+
+    document = StructuredDocument(
+        anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="Purchase Price: $45,000,000"),)
+    )
+    raw = _empty_response(
+        {
+            "purchase_price": [
+                {"value": "45000000", "status": "stated", "anchor": "paragraph:99"},
+                {"value": "45000000", "status": "stated", "anchor": "paragraph:98"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.purchase_price.candidates) == 2
+    assert all(c.status is EvidenceStatus.UNVERIFIABLE for c in result.purchase_price.candidates)
+
+
+# =============================================================================
+# Human-readable magnitude normalization (K/thousand, M/million, B/billion)
+# -- representation normalization only, never a financial calculation.
+# =============================================================================
+
+
+def test_million_word_suffix_verifies_the_full_numeric_value() -> None:
+    document = StructuredDocument(
+        anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="Purchase Price: $45.0 million"),)
+    )
+    raw = _empty_response(
+        {"purchase_price": [{"value": "45000000", "status": "stated", "anchor": "paragraph:0"}]}
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert result.purchase_price.candidates[0].status is EvidenceStatus.STATED
+
+
+def test_million_word_suffix_with_decimal_verifies_the_full_numeric_value() -> None:
+    document = StructuredDocument(
+        anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="Current NOI: $2.50 million"),)
+    )
+    raw = _empty_response(
+        {"current_noi": [{"value": "2500000", "status": "stated", "anchor": "paragraph:0"}]}
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert result.current_noi.candidates[0].status is EvidenceStatus.STATED
+
+
+def test_m_suffix_with_no_space_verifies_the_full_numeric_value() -> None:
+    document = StructuredDocument(
+        anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="Purchase Price: $45M"),)
+    )
+    raw = _empty_response(
+        {"purchase_price": [{"value": "45000000", "status": "stated", "anchor": "paragraph:0"}]}
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert result.purchase_price.candidates[0].status is EvidenceStatus.STATED
+
+
+def test_k_suffix_verifies_the_full_numeric_value() -> None:
+    document = StructuredDocument(
+        anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="Current NOI: $150K"),)
+    )
+    raw = _empty_response(
+        {"current_noi": [{"value": "150000", "status": "stated", "anchor": "paragraph:0"}]}
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert result.current_noi.candidates[0].status is EvidenceStatus.STATED
+
+
+def test_thousand_word_suffix_verifies_the_full_numeric_value() -> None:
+    document = StructuredDocument(
+        anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="Current NOI: $150 thousand"),)
+    )
+    raw = _empty_response(
+        {"current_noi": [{"value": "150000", "status": "stated", "anchor": "paragraph:0"}]}
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert result.current_noi.candidates[0].status is EvidenceStatus.STATED
+
+
+def test_billion_word_suffix_verifies_the_full_numeric_value() -> None:
+    document = StructuredDocument(
+        anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="Purchase Price: $1.2 billion"),)
+    )
+    raw = _empty_response(
+        {"purchase_price": [{"value": "1200000000", "status": "stated", "anchor": "paragraph:0"}]}
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert result.purchase_price.candidates[0].status is EvidenceStatus.STATED
+
+
+def test_b_suffix_verifies_the_full_numeric_value() -> None:
+    document = StructuredDocument(
+        anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="Purchase Price: $1.2B"),)
+    )
+    raw = _empty_response(
+        {"purchase_price": [{"value": "1200000000", "status": "stated", "anchor": "paragraph:0"}]}
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert result.purchase_price.candidates[0].status is EvidenceStatus.STATED
+
+
+def test_magnitude_normalization_does_not_break_a_genuine_mismatch() -> None:
+    """A cited $45 thousand must still never verify a proposed $45,000,000
+    -- magnitude parsing is representation normalization, not license to
+    match any figure at any scale."""
+
+    document = StructuredDocument(
+        anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="Purchase Price: $45 thousand"),)
+    )
+    raw = _empty_response(
+        {"purchase_price": [{"value": "45000000", "status": "stated", "anchor": "paragraph:0"}]}
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert result.purchase_price.candidates[0].status is EvidenceStatus.UNVERIFIABLE
+
+
+def test_unrelated_hyphenated_word_in_snippet_does_not_corrupt_the_match() -> None:
+    """Root cause of the 'expected occupancy conflict not surfaced' report:
+    a snippet's own unrelated hyphenated qualifier (T-12 is common OM
+    shorthand for trailing-twelve-months) must never be misread as part of
+    the cited number -- verification must find 94.0 among the snippet's
+    numbers, not seize on the unrelated "-12" from "T-12" and reject it."""
+
+    document = StructuredDocument(
+        anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="T-12 Occupancy: 94.0%"),)
+    )
+    raw = _empty_response(
+        {"occupancy": [{"value": "94.0", "status": "stated", "anchor": "paragraph:0"}]}
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert result.occupancy.candidates[0].status is EvidenceStatus.STATED
+
+
+def test_magnitude_suffix_does_not_apply_outside_numeric_or_hybrid_fields() -> None:
+    """A text field's value must still be matched by normalized substring,
+    unaffected by magnitude-word parsing (e.g. a property named containing
+    the word "Million")."""
+
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(
+                anchor="paragraph:0", page=1, text="Property Name: Million Oaks Apartments"
+            ),
+        )
+    )
+    raw = _empty_response(
+        {
+            "property_name": [
+                {"value": "Million Oaks Apartments", "status": "stated", "anchor": "paragraph:0"}
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert result.deal_context.property_name.candidates[0].status is EvidenceStatus.STATED
+
+
+# =============================================================================
+# Diagnostic regression for the "expected occupancy conflict not surfaced"
+# report: proves the deterministic stages downstream of the GPT response
+# (anchor/value verification, conflict resolution, dedup) never drop a
+# second, distinctly-anchored, distinctly-valued occupancy candidate. If a
+# live extraction ever shows only one occupancy candidate again, this test
+# passing means the cause is upstream of this module -- either Azure DI
+# never produced a separate anchor for the second value, or the GPT
+# response itself omitted the second candidate.
+# =============================================================================
+
+
+def test_two_distinctly_anchored_occupancy_values_both_survive_end_to_end() -> None:
+    document = StructuredDocument(
+        anchors=(
+            DocumentAnchor(anchor="paragraph:0", page=1, text="Current Occupancy: 95.0%"),
+            DocumentAnchor(
+                anchor="paragraph:1",
+                page=1,
+                text="Trailing Twelve-Month (T-12) Occupancy: 94.0%",
+            ),
+        )
+    )
+    raw = _empty_response(
+        {
+            "occupancy": [
+                {"value": "95.0", "status": "stated", "anchor": "paragraph:0"},
+                {"value": "94.0", "status": "stated", "anchor": "paragraph:1"},
+            ]
+        }
+    )
+    client = _fake_client(json.dumps(raw))
+    provider = GPTClassifierProvider(client=client)
+
+    result = provider.classify(system_prompt="sys", user_prompt="user", document=document)
+
+    assert len(result.occupancy.candidates) == 2
+    values_by_status = {c.value: c.status for c in result.occupancy.candidates}
+    assert values_by_status == {
+        "95.0": EvidenceStatus.CONFLICTING,
+        "94.0": EvidenceStatus.CONFLICTING,
+    }
+    assert all(c.provenance is not None for c in result.occupancy.candidates)
 
 
 # =============================================================================

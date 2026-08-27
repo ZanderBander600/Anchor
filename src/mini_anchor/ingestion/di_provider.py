@@ -14,6 +14,7 @@ paragraphs and table cells.
 from __future__ import annotations
 
 import os
+from io import BytesIO
 from typing import Any
 
 from .contracts import (
@@ -104,6 +105,72 @@ def _build_structured_document(result: Any) -> StructuredDocument:
     return StructuredDocument(anchors=tuple(anchors))
 
 
+def _source_page_count(pdf_bytes: bytes) -> int | None:
+    """Best-effort source PDF page count via ``pypdf`` -- the same library
+    ``mini_anchor.api``'s KTD9 upload-page-ceiling guard already uses on
+    this same ``pdf_bytes``, reused here rather than adding a dependency.
+
+    Returns ``None`` (never raises) when the bytes cannot be opened here --
+    by the time a real upload reaches this provider, the FastAPI layer has
+    already confirmed the file opens as a PDF (KTD9); this is a defense-
+    in-depth completeness check on top of that, not the PDF's validity
+    gate, so an injected/synthetic ``pdf_bytes`` this module cannot open
+    (as unit tests use) simply skips the check below rather than failing
+    it.
+    """
+
+    import pypdf
+
+    try:
+        return len(pypdf.PdfReader(BytesIO(pdf_bytes)).pages)
+    except Exception:
+        return None
+
+
+def _check_every_source_page_was_processed(
+    document: StructuredDocument, source_page_count: int | None
+) -> None:
+    """Azure DI can silently process only a prefix of the uploaded PDF --
+    for example, the free (F0) pricing tier analyzes only the first 2
+    pages of any document and returns a normal, warning-free response for
+    the pages it did process (confirmed against a live F0 resource: no
+    exception, no populated warnings field). Left unchecked, that reads
+    indistinguishably from "the rest of the document simply had no
+    evidence for any field" -- every field on an unprocessed page would be
+    silently reported ``missing`` rather than the truncation ever being
+    surfaced.
+
+    Compares the distinct page numbers actually present in the flattened
+    ``StructuredDocument`` against every page 1..``source_page_count`` the
+    uploaded PDF actually has (KTD9's own pypdf page count). Any source
+    page absent from that set fails extraction outright with an explicit,
+    sanitized ``ExtractionProviderError`` -- never downgraded to a per-
+    field ``missing`` result, and never silently chunked/re-requested
+    (S0, not client-side chunking, is the intended fix for a real
+    multi-page OM).
+
+    A ``None`` ``source_page_count`` (this module could not determine it)
+    skips the check entirely -- there is nothing to compare against.
+    """
+
+    if source_page_count is None:
+        return
+
+    returned_pages = {anchor.page for anchor in document.anchors}
+    expected_pages = set(range(1, source_page_count + 1))
+    missing_pages = sorted(expected_pages - returned_pages)
+    if missing_pages:
+        raise ExtractionProviderError(
+            "Azure Document Intelligence only processed "
+            f"{len(returned_pages & expected_pages)} of {source_page_count} "
+            f"page(s) in the uploaded document (missing page(s): "
+            f"{missing_pages}). This commonly means the configured Azure "
+            "Document Intelligence resource's pricing tier/service limits "
+            "cap how many pages a single request processes -- check the "
+            "resource's tier and limits before retrying."
+        )
+
+
 class AzureDocumentIntelligenceProvider:
     """Thin adapter over Azure DI's ``prebuilt-layout`` model.
 
@@ -137,9 +204,10 @@ class AzureDocumentIntelligenceProvider:
 
         Raises ``ExtractionConfigurationError`` if Azure DI credentials are
         not configured (no call attempted), or ``ExtractionProviderError``
-        if the call fails, times out, or returns an unusable response. The
-        error message is always sanitized -- never the raw SDK exception
-        text.
+        if the call fails, times out, returns an unusable response, or
+        (see ``_check_every_source_page_was_processed``) did not process
+        every page of the uploaded PDF. The error message is always
+        sanitized -- never the raw SDK exception text.
         """
 
         client = self._get_client()
@@ -159,4 +227,6 @@ class AzureDocumentIntelligenceProvider:
                 f"The Azure Document Intelligence request failed ({error.__class__.__name__})."
             ) from error
 
-        return _build_structured_document(result)
+        document = _build_structured_document(result)
+        _check_every_source_page_was_processed(document, _source_page_count(pdf_bytes))
+        return document

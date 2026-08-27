@@ -13,7 +13,12 @@ its text must literally/numerically support the proposed value. A
 candidate that fails either check is downgraded to ``unverifiable`` before
 it is returned. A field where two or more verified candidates propose
 differing values has every verified candidate relabeled ``conflicting``
-(R8).
+(R8). Finally, a candidate that is a deterministic duplicate of one
+already kept for that field -- same normalized value, same evidence
+status, and equivalent/redundant source evidence -- is collapsed before
+the field's candidates are returned, so one physical fact flattened into
+more than one Azure DI anchor is never shown as repeated candidates; a
+genuine conflict is never collapsed this way.
 """
 
 from __future__ import annotations
@@ -110,14 +115,62 @@ def _resolve_api_key() -> str:
 # =============================================================================
 
 
+# Human-readable magnitude suffixes/words (K/thousand, M/million, B/billion)
+# -- representation normalization only (e.g. "$45.0 million" literally means
+# 45000000), never a financial calculation. Multi-letter words are listed
+# before the single-letter codes only for readability; the trailing ``\b``
+# below makes the match unambiguous regardless of alternation order.
+_MAGNITUDE_MULTIPLIERS: dict[str, float] = {
+    "thousand": 1_000.0,
+    "million": 1_000_000.0,
+    "billion": 1_000_000_000.0,
+    "k": 1_000.0,
+    "m": 1_000_000.0,
+    "b": 1_000_000_000.0,
+}
+# Extracts one coherent number token per match: an optional sign directly
+# attached to an optional currency symbol and the digits, then an optional
+# magnitude suffix/word (K/thousand, M/million, B/billion -- representation
+# normalization only, e.g. "$45.0 million" literally means 45000000, never
+# a financial calculation) immediately after those same digits. Anchored to
+# a single contiguous digit run rather than stripping every non-numeric
+# character from the whole string and concatenating what is left -- OM text
+# is full of unrelated hyphens (e.g. "Twelve-Month", "T-12", "in-place",
+# "Sub-Market") that a blanket strip would otherwise misread as part of the
+# number, silently corrupting its sign/magnitude.
+_NUMBER_TOKEN_PATTERN = re.compile(
+    r"(-)?\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)(?:\s*(thousand|million|billion|[kmb])\b)?",
+    re.IGNORECASE,
+)
+
+
+def _numeric_tokens(text: str) -> list[float]:
+    """Every number literally present in ``text``, in the order it
+    appears, magnitude-suffix-aware. OM narrative text routinely states
+    more than one number in the same sentence or table cell (e.g. "T-12
+    Occupancy: 94.0%" -- "12" from "T-12" and "94.0" are both numbers in
+    that snippet), so verification must check whether the proposed value
+    matches *any* number the snippet states, never only the first one
+    found."""
+
+    tokens: list[float] = []
+    for match in _NUMBER_TOKEN_PATTERN.finditer(text):
+        try:
+            value = float(match.group(2).replace(",", ""))
+        except ValueError:
+            continue
+        suffix = match.group(3)
+        if suffix:
+            value *= _MAGNITUDE_MULTIPLIERS[suffix.lower()]
+        if match.group(1):
+            value = -value
+        tokens.append(value)
+    return tokens
+
+
 def _parse_numeric(text: str) -> float | None:
-    cleaned = re.sub(r"[^0-9.\-]", "", text)
-    if not cleaned or cleaned in {"-", ".", "-."}:
-        return None
-    try:
-        return float(cleaned)
-    except ValueError:
-        return None
+    tokens = _numeric_tokens(text)
+    return tokens[0] if tokens else None
 
 
 def _isclose(a: float, b: float) -> bool:
@@ -148,16 +201,16 @@ def _normalize_text(text: str) -> str:
 def _value_supported_by_snippet(field_id: str, value: str, snippet: str) -> bool:
     if field_id in _NUMERIC_FIELD_IDS:
         value_number = _parse_numeric(value)
-        snippet_number = _parse_numeric(snippet)
-        if value_number is None or snippet_number is None:
+        if value_number is None:
             return False
-        return _numeric_match(field_id, value_number, snippet_number)
+        return any(
+            _numeric_match(field_id, value_number, token) for token in _numeric_tokens(snippet)
+        )
 
     if field_id == _HYBRID_FIELD_ID:
         value_number = _parse_numeric(value)
-        snippet_number = _parse_numeric(snippet)
-        if value_number is not None and snippet_number is not None and _numeric_match(
-            field_id, value_number, snippet_number
+        if value_number is not None and any(
+            _numeric_match(field_id, value_number, token) for token in _numeric_tokens(snippet)
         ):
             return True
         return _normalize_text(value) in _normalize_text(snippet)
@@ -206,20 +259,29 @@ def _parse_candidate(
 
 
 def _resolve_conflicts(
-    candidates: tuple[ExtractionCandidate, ...],
+    field_id: str, candidates: tuple[ExtractionCandidate, ...]
 ) -> tuple[ExtractionCandidate, ...]:
     """R8: when two or more verified (stated/interpreted) candidates for one
     field propose differing values, every verified candidate is relabeled
     ``conflicting``. Unverifiable candidates are left as-is -- they were
-    never confirmed as a document-stated value in the first place."""
+    never confirmed as a document-stated value in the first place.
+
+    "Differing" is judged by ``_values_equivalent`` -- the same normalized
+    value (including percent-scale equivalence, e.g. 95% == 0.95, and
+    magnitude-suffix equivalence, e.g. $45,000,000 == $45.0 million) --
+    never raw string equality, so two representations of the same
+    document-stated fact are never surfaced as a conflict (only a true
+    differing value, e.g. 95% vs 94%, is)."""
 
     verified = [
         candidate
         for candidate in candidates
         if candidate.status in (EvidenceStatus.STATED, EvidenceStatus.INTERPRETED)
     ]
-    distinct_values = {candidate.value for candidate in verified}
-    if len(distinct_values) <= 1:
+    if not verified:
+        return candidates
+    reference_value = verified[0].value
+    if all(_values_equivalent(field_id, reference_value, c.value) for c in verified):
         return candidates
 
     resolved: list[ExtractionCandidate] = []
@@ -237,6 +299,60 @@ def _resolve_conflicts(
     return tuple(resolved)
 
 
+def _values_equivalent(field_id: str, value_a: str, value_b: str) -> bool:
+    """Same normalized proposed value for one field -- the same numeric
+    comparison (including the percent-scale equivalence) already used to
+    verify a candidate against its snippet (KTD12), or normalized text
+    equality for text fields."""
+
+    if field_id in _NUMERIC_FIELD_IDS or field_id == _HYBRID_FIELD_ID:
+        number_a = _parse_numeric(value_a)
+        number_b = _parse_numeric(value_b)
+        if number_a is not None and number_b is not None:
+            return _numeric_match(field_id, number_a, number_b)
+    return _normalize_text(value_a) == _normalize_text(value_b)
+
+
+def _is_redundant_evidence(a: ExtractionCandidate, b: ExtractionCandidate) -> bool:
+    """Equivalent/redundant source evidence: both candidates carry a real
+    citation (never dedup a candidate that has none to compare), and that
+    citation is either the exact same anchor or an anchor whose text is,
+    once normalized, the same underlying statement -- e.g. a table cell
+    and a paragraph that both flatten the same physical fact from the
+    source document."""
+
+    if a.provenance is None or b.provenance is None:
+        return False
+    if a.provenance.anchor == b.provenance.anchor:
+        return True
+    snippet_a = _normalize_text(a.provenance.snippet)
+    snippet_b = _normalize_text(b.provenance.snippet)
+    return snippet_a == snippet_b or snippet_a in snippet_b or snippet_b in snippet_a
+
+
+def _deduplicate_candidates(
+    field_id: str, candidates: tuple[ExtractionCandidate, ...]
+) -> tuple[ExtractionCandidate, ...]:
+    """Collapses a candidate that is a deterministic duplicate of one
+    already kept for this field: the same normalized proposed value, the
+    same evidence status, and equivalent/redundant source evidence (see
+    ``_is_redundant_evidence``). Never collapses candidates that differ in
+    value or status, so a genuine conflict (R8) always survives as
+    multiple candidates."""
+
+    kept: list[ExtractionCandidate] = []
+    for candidate in candidates:
+        if any(
+            candidate.status == existing.status
+            and _values_equivalent(field_id, candidate.value, existing.value)
+            and _is_redundant_evidence(candidate, existing)
+            for existing in kept
+        ):
+            continue
+        kept.append(candidate)
+    return tuple(kept)
+
+
 def _parse_field(
     field_id: str, raw: Mapping[str, Any], anchors_by_id: Mapping[str, Any]
 ) -> FieldCandidates:
@@ -248,7 +364,8 @@ def _parse_field(
     candidates = tuple(
         _parse_candidate(field_id, raw_candidate, anchors_by_id) for raw_candidate in raw_candidates
     )
-    return FieldCandidates(field_id=field_id, candidates=_resolve_conflicts(candidates))
+    resolved = _resolve_conflicts(field_id, candidates)
+    return FieldCandidates(field_id=field_id, candidates=_deduplicate_candidates(field_id, resolved))
 
 
 def _parse_classification(raw: Mapping[str, Any], document: StructuredDocument) -> ExtractionResult:

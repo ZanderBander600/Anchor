@@ -9,9 +9,11 @@ cleanly, and provider/timeout failures never leaking a raw exception.
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass, field
 from typing import Any
 
+import pypdf
 import pytest
 
 from mini_anchor.ingestion.contracts import (
@@ -193,3 +195,86 @@ def test_poller_timeout_raises_provider_error_not_an_unhandled_hang() -> None:
         provider.analyze(b"%PDF-1.4 ...")
 
     assert "poller exceeded 90s" not in str(exc_info.value)
+
+
+# =============================================================================
+# Provider-side page-completeness guard: Azure DI (notably the free F0
+# tier) can silently process only a prefix of the uploaded PDF, returning a
+# normal, warning-free response for the pages it did process. Never let
+# that read as "the rest of the document had no evidence" (fields silently
+# reported missing) -- fail extraction explicitly instead. ``pdf_bytes``
+# here are real, pypdf-openable PDFs (via ``pypdf.PdfWriter``) so the
+# source-page-count comparison actually engages; every other test in this
+# file intentionally uses non-parseable placeholder bytes so that
+# comparison is skipped (see ``_source_page_count``'s None fallback).
+# =============================================================================
+
+
+def _pdf_bytes(page_count: int) -> bytes:
+    writer = pypdf.PdfWriter()
+    for _ in range(page_count):
+        writer.add_blank_page(width=612, height=792)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def _paragraph_on_page(page_number: int) -> _FakeParagraph:
+    return _FakeParagraph(
+        content=f"Content on page {page_number}",
+        bounding_regions=[_FakeBoundingRegion(page_number=page_number)],
+    )
+
+
+def test_all_source_pages_processed_by_azure_passes() -> None:
+    client = _FakeClient(
+        outcome=_FakeAnalyzeResult(paragraphs=[_paragraph_on_page(p) for p in range(1, 9)])
+    )
+    provider = AzureDocumentIntelligenceProvider(client=client)
+
+    document = provider.analyze(_pdf_bytes(8))
+
+    assert isinstance(document, StructuredDocument)
+    assert {anchor.page for anchor in document.anchors} == set(range(1, 9))
+
+
+def test_azure_silently_truncating_an_8_page_pdf_to_2_pages_fails_explicitly() -> None:
+    """The exact live-bug shape: an 8-page source PDF, Azure DI (F0 tier)
+    only returns evidence for pages 1-2. This must fail extraction outright
+    -- never be reported as pages 3-8's fields simply being ``missing``."""
+
+    client = _FakeClient(
+        outcome=_FakeAnalyzeResult(paragraphs=[_paragraph_on_page(1), _paragraph_on_page(2)])
+    )
+    provider = AzureDocumentIntelligenceProvider(client=client)
+
+    with pytest.raises(ExtractionProviderError) as exc_info:
+        provider.analyze(_pdf_bytes(8))
+
+    message = str(exc_info.value)
+    assert "2" in message and "8" in message
+
+
+def test_single_page_pdf_fully_processed_by_azure_passes() -> None:
+    client = _FakeClient(outcome=_FakeAnalyzeResult(paragraphs=[_paragraph_on_page(1)]))
+    provider = AzureDocumentIntelligenceProvider(client=client)
+
+    document = provider.analyze(_pdf_bytes(1))
+
+    assert isinstance(document, StructuredDocument)
+    assert {anchor.page for anchor in document.anchors} == {1}
+
+
+def test_non_pdf_bytes_skip_the_completeness_check_rather_than_failing() -> None:
+    """``pdf_bytes`` this module cannot open locally (as every other test
+    in this file uses) must not turn into a spurious completeness failure
+    -- by the time a real upload reaches this provider, KTD9 has already
+    confirmed the file opens as a PDF; this check is defense-in-depth on
+    top of that, not the PDF's validity gate."""
+
+    client = _FakeClient(outcome=WELL_FORMED_RESULT)
+    provider = AzureDocumentIntelligenceProvider(client=client)
+
+    document = provider.analyze(b"%PDF-1.4 ...")
+
+    assert isinstance(document, StructuredDocument)
