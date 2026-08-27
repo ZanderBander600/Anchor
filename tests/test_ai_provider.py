@@ -1,5 +1,5 @@
 """Tests for the Phase 9A AI Analyst OpenAI provider adapter
-(``mini_anchor.ai.provider``).
+(``anchor.ai.provider``).
 
 Every test here uses a fake client object -- never the real ``openai`` SDK
 or a network call -- per the "TESTING WITHOUT API SPEND" requirement.
@@ -17,8 +17,8 @@ from typing import Any
 
 import pytest
 
-from mini_anchor.ai.contracts import AIAnalysis
-from mini_anchor.ai.provider import (
+from anchor.ai.contracts import AIAnalysis
+from anchor.ai.provider import (
     DEFAULT_MODEL,
     AIConfigurationError,
     AIProviderError,

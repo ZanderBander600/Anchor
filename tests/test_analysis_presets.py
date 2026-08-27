@@ -1,18 +1,18 @@
 """Tests for the standard Phase 7 sensitivity presets
-(``mini_anchor.analysis.sensitivity`` preset builders)."""
+(``anchor.analysis.sensitivity`` preset builders)."""
 
 from __future__ import annotations
 
 import pytest
 
-from mini_anchor.analysis import (
+from anchor.analysis import (
     StandardSensitivityPresets,
     build_exit_cap_noi_growth_preset,
     build_interest_rate_ltv_preset,
     build_purchase_price_exit_cap_preset,
     build_standard_presets,
 )
-from mini_anchor.contracts import AcquisitionInputs
+from anchor.contracts import AcquisitionInputs
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,

@@ -2,9 +2,9 @@ import math
 
 import pytest
 
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine.contracts import CapitalStack, DebtSchedule, NonFiniteResultError
-from mini_anchor.engine.debt import (
+from anchor.contracts import AcquisitionInputs
+from anchor.engine.contracts import CapitalStack, DebtSchedule, NonFiniteResultError
+from anchor.engine.debt import (
     calculate_amortization_schedule,
     calculate_annual_debt_service,
     calculate_capital_stack,

@@ -3,8 +3,8 @@ from math import inf, nan, nextafter
 
 import pytest
 
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.validation import (
+from anchor.contracts import AcquisitionInputs
+from anchor.validation import (
     FIELD_IDS,
     InputIssue,
     InputValidationError,

@@ -10,17 +10,17 @@ import math
 
 import pytest
 
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine.contracts import AcquisitionCashFlows, NonFiniteResultError
-from mini_anchor.engine.acquisition import (
+from anchor.contracts import AcquisitionInputs
+from anchor.engine.contracts import AcquisitionCashFlows, NonFiniteResultError
+from anchor.engine.acquisition import (
     calculate_acquisition_cash_flows,
     calculate_exit_value,
     calculate_levered_cash_flows,
     calculate_net_sale_proceeds,
     calculate_unlevered_cash_flows,
 )
-from mini_anchor.engine.debt import calculate_capital_stack, calculate_debt_schedule
-from mini_anchor.engine.noi import calculate_exit_noi, forecast_noi
+from anchor.engine.debt import calculate_capital_stack, calculate_debt_schedule
+from anchor.engine.noi import calculate_exit_noi, forecast_noi
 
 
 # Stringent absolute tolerance for financial outputs, mirroring

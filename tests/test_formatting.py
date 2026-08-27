@@ -8,7 +8,7 @@ formatting is presentation-only per ``docs/financial_conventions.md``
 
 from __future__ import annotations
 
-from mini_anchor.formatting import (
+from anchor.formatting import (
     format_bps,
     format_currency,
     format_multiple,

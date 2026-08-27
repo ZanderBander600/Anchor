@@ -1,5 +1,5 @@
 """Tests for the Phase 8 deterministic break-even layer
-(``mini_anchor.analysis.break_even``).
+(``anchor.analysis.break_even``).
 
 Covers the core bounded threshold solver, each of the five standard POC
 break-even questions, and ``build_standard_break_even_analysis``. Confirms
@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mini_anchor.analysis import (
+from anchor.analysis import (
     BreakEvenDirection,
     BreakEvenStatus,
     BreakEvenType,
@@ -30,9 +30,9 @@ from mini_anchor.analysis import (
     solve_min_current_noi,
     solve_min_noi_growth,
 )
-from mini_anchor.analysis import break_even as break_even_module
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import analyze_acquisition
+from anchor.analysis import break_even as break_even_module
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import analyze_acquisition
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,

@@ -1,5 +1,5 @@
 """Tests for the Phase 9A deterministic presentation layer
-(``mini_anchor.ai.presentation``).
+(``anchor.ai.presentation``).
 
 Covers the Phase 9A final live-evaluation regressions:
 
@@ -24,8 +24,8 @@ import re
 
 import pytest
 
-from mini_anchor.ai.analyst import build_analysis_context
-from mini_anchor.ai.presentation import (
+from anchor.ai.analyst import build_analysis_context
+from anchor.ai.presentation import (
     UnknownPresentationFieldError,
     build_presentation_payload,
     format_currency,
@@ -34,7 +34,7 @@ from mini_anchor.ai.presentation import (
     format_multiple,
     format_percent,
 )
-from mini_anchor.contracts import AcquisitionInputs
+from anchor.contracts import AcquisitionInputs
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,

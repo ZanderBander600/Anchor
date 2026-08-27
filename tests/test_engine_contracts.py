@@ -8,7 +8,7 @@ import typing
 
 import pytest
 
-from mini_anchor.engine.contracts import (
+from anchor.engine.contracts import (
     AcquisitionCashFlows,
     CapitalStack,
     DebtSchedule,
@@ -330,7 +330,7 @@ def test_ensure_finite_raises_on_nan() -> None:
 
 
 def test_engine_package_contains_only_expected_phase_2a_2b_2c_2d_modules() -> None:
-    engine_dir = Path(__file__).resolve().parents[1] / "src" / "mini_anchor" / "engine"
+    engine_dir = Path(__file__).resolve().parents[1] / "src" / "anchor" / "engine"
     module_names = {path.name for path in engine_dir.glob("*.py")}
 
     assert module_names == {
@@ -356,12 +356,12 @@ def test_engine_contracts_noi_debt_acquisition_returns_do_not_import_openpyxl() 
             sys.executable,
             "-c",
             (
-                "import sys; import mini_anchor.engine; "
-                "import mini_anchor.engine.contracts; "
-                "import mini_anchor.engine.noi; "
-                "import mini_anchor.engine.debt; "
-                "import mini_anchor.engine.acquisition; "
-                "import mini_anchor.engine.returns; "
+                "import sys; import anchor.engine; "
+                "import anchor.engine.contracts; "
+                "import anchor.engine.noi; "
+                "import anchor.engine.debt; "
+                "import anchor.engine.acquisition; "
+                "import anchor.engine.returns; "
                 "assert 'openpyxl' not in sys.modules"
             ),
         ],

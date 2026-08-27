@@ -1,5 +1,5 @@
 """Tests for Phase 9A ``AnalysisContext`` construction
-(``mini_anchor.ai.analyst.build_analysis_context``).
+(``anchor.ai.analyst.build_analysis_context``).
 
 Confirms the context includes all 9 ``AcquisitionInputs`` fields, the
 complete ``AcquisitionResults``, the standard sensitivities, and the
@@ -14,11 +14,11 @@ from __future__ import annotations
 from dataclasses import fields
 from unittest.mock import patch
 
-from mini_anchor.ai.analyst import build_analysis_context
-from mini_anchor.analysis import ReturnHurdleMetric
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine.contracts import AcquisitionResults
-from mini_anchor.validation import FIELD_IDS
+from anchor.ai.analyst import build_analysis_context
+from anchor.analysis import ReturnHurdleMetric
+from anchor.contracts import AcquisitionInputs
+from anchor.engine.contracts import AcquisitionResults
+from anchor.validation import FIELD_IDS
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,
@@ -119,7 +119,7 @@ def test_context_preserves_raw_decimal_values_not_presentation_strings() -> None
 
 
 def analyze_acquisition_result_levered_irr() -> float | None:
-    from mini_anchor.engine import analyze_acquisition
+    from anchor.engine import analyze_acquisition
 
     return analyze_acquisition(GOLDEN_INPUTS).levered_irr
 
@@ -143,10 +143,10 @@ def test_context_respects_explicit_equity_multiple_return_hurdle() -> None:
 
 
 def test_build_analysis_context_delegates_to_engine_and_analysis_layers() -> None:
-    from mini_anchor.engine import analyze_acquisition
+    from anchor.engine import analyze_acquisition
 
     with patch(
-        "mini_anchor.ai.analyst.analyze_acquisition", wraps=analyze_acquisition
+        "anchor.ai.analyst.analyze_acquisition", wraps=analyze_acquisition
     ) as mock_analyze:
         _build()
 
@@ -154,14 +154,14 @@ def test_build_analysis_context_delegates_to_engine_and_analysis_layers() -> Non
 
 
 def test_build_analysis_context_calls_standard_presets_and_break_even_once_each() -> None:
-    from mini_anchor.analysis import build_standard_break_even_analysis, build_standard_presets
+    from anchor.analysis import build_standard_break_even_analysis, build_standard_presets
 
     with (
         patch(
-            "mini_anchor.ai.analyst.build_standard_presets", wraps=build_standard_presets
+            "anchor.ai.analyst.build_standard_presets", wraps=build_standard_presets
         ) as mock_presets,
         patch(
-            "mini_anchor.ai.analyst.build_standard_break_even_analysis",
+            "anchor.ai.analyst.build_standard_break_even_analysis",
             wraps=build_standard_break_even_analysis,
         ) as mock_break_even,
     ):

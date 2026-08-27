@@ -1,5 +1,5 @@
 """Tests for the Phase 10A OM ingestion contracts
-(``mini_anchor.ingestion.contracts``).
+(``anchor.ingestion.contracts``).
 
 Mirrors the style of ``test_ai_contracts.py``: construction/frozen checks
 for every dataclass, the exact five-member ``EvidenceStatus`` enum, and the
@@ -12,7 +12,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from mini_anchor.ingestion.contracts import (
+from anchor.ingestion.contracts import (
     ACQUISITION_FIELD_IDS,
     DEAL_CONTEXT_FIELD_IDS,
     DealContext,

@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import AcquisitionResults, analyze_acquisition
-from mini_anchor.report import build_report
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import AcquisitionResults, analyze_acquisition
+from anchor.report import build_report
 
 
 def make_golden_inputs() -> AcquisitionInputs:

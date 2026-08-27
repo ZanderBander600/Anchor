@@ -16,13 +16,13 @@ import sys
 
 import pytest
 
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import returns as returns_module
-from mini_anchor.engine.acquisition import calculate_acquisition_cash_flows
-from mini_anchor.engine.contracts import NonFiniteResultError, ReturnMetrics
-from mini_anchor.engine.debt import calculate_debt_schedule
-from mini_anchor.engine.noi import forecast_noi
-from mini_anchor.engine.returns import (
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import returns as returns_module
+from anchor.engine.acquisition import calculate_acquisition_cash_flows
+from anchor.engine.contracts import NonFiniteResultError, ReturnMetrics
+from anchor.engine.debt import calculate_debt_schedule
+from anchor.engine.noi import forecast_noi
+from anchor.engine.returns import (
     calculate_dscr_by_year,
     calculate_equity_multiple,
     calculate_headline_dscr,
@@ -541,7 +541,7 @@ def test_returns_module_does_not_import_openpyxl_at_runtime() -> None:
             sys.executable,
             "-c",
             (
-                "import sys; import mini_anchor.engine.returns; "
+                "import sys; import anchor.engine.returns; "
                 "assert 'openpyxl' not in sys.modules; "
                 "assert 'numpy' not in sys.modules; "
                 "assert 'scipy' not in sys.modules"
@@ -558,6 +558,6 @@ def test_returns_module_does_not_import_openpyxl_at_runtime() -> None:
 
 
 def test_acquisition_results_does_not_exist_yet() -> None:
-    import mini_anchor.contracts as top_level_contracts
+    import anchor.contracts as top_level_contracts
 
     assert not hasattr(top_level_contracts, "AcquisitionResults")

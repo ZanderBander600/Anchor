@@ -2,7 +2,7 @@
 
 Confirms ``azure`` is imported only inside ``di_provider.py``, ``openai``
 only inside ``classifier_provider.py``, that neither SDK (nor
-``mini_anchor.ai``) reaches ``engine/``, ``analysis/``, or any other
+``anchor.ai``) reaches ``engine/``, ``analysis/``, or any other
 ``ingestion/`` module, that ``engine`` alone never pulls either SDK into
 ``sys.modules``, that ``ingestion/`` reproduces no financial formula (no
 ``math`` import), and -- the runtime check KD1 actually depends on -- that
@@ -20,13 +20,13 @@ from pathlib import Path
 import subprocess
 import sys
 
-from mini_anchor.ingestion import di_provider as di_provider_module
-from mini_anchor.ingestion.contracts import DocumentAnchor, StructuredDocument
-from mini_anchor.ingestion.orchestrator import extract_om
+from anchor.ingestion import di_provider as di_provider_module
+from anchor.ingestion.contracts import DocumentAnchor, StructuredDocument
+from anchor.ingestion.orchestrator import extract_om
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_ENGINE_DIR = _PROJECT_ROOT / "src" / "mini_anchor" / "engine"
-_ANALYSIS_DIR = _PROJECT_ROOT / "src" / "mini_anchor" / "analysis"
+_ENGINE_DIR = _PROJECT_ROOT / "src" / "anchor" / "engine"
+_ANALYSIS_DIR = _PROJECT_ROOT / "src" / "anchor" / "analysis"
 _INGESTION_DIR = Path(di_provider_module.__file__).parent
 
 
@@ -92,27 +92,27 @@ def test_analysis_package_has_no_azure_or_openai_import() -> None:
 def test_engine_package_does_not_import_ingestion_package() -> None:
     for source_file in _ENGINE_DIR.glob("*.py"):
         names = _imported_module_names(source_file)
-        assert not any("mini_anchor.ingestion" in name for name in names), (
-            f"{source_file} must not import mini_anchor.ingestion"
+        assert not any("anchor.ingestion" in name for name in names), (
+            f"{source_file} must not import anchor.ingestion"
         )
 
 
 def test_analysis_package_does_not_import_ingestion_package() -> None:
     for source_file in _ANALYSIS_DIR.glob("*.py"):
         names = _imported_module_names(source_file)
-        assert not any("mini_anchor.ingestion" in name for name in names), (
-            f"{source_file} must not import mini_anchor.ingestion"
+        assert not any("anchor.ingestion" in name for name in names), (
+            f"{source_file} must not import anchor.ingestion"
         )
 
 
 def test_ingestion_package_does_not_import_ai_package() -> None:
-    """KTD10: neither provider raises mini_anchor.ai's exception hierarchy --
-    ingestion never imports mini_anchor.ai at all."""
+    """KTD10: neither provider raises anchor.ai's exception hierarchy --
+    ingestion never imports anchor.ai at all."""
 
     for source_file in _INGESTION_DIR.glob("*.py"):
         names = _imported_module_names(source_file)
-        assert not any("mini_anchor.ai" in name for name in names), (
-            f"{source_file} must not import mini_anchor.ai"
+        assert not any("anchor.ai" in name for name in names), (
+            f"{source_file} must not import anchor.ai"
         )
 
 
@@ -133,7 +133,7 @@ def test_engine_import_does_not_pull_in_azure_or_openai() -> None:
         [
             sys.executable,
             "-c",
-            "import sys; import mini_anchor.engine; "
+            "import sys; import anchor.engine; "
             "assert 'azure' not in sys.modules; assert 'openai' not in sys.modules",
         ],
         cwd=_PROJECT_ROOT,
@@ -182,7 +182,7 @@ class _SpyClassifierProvider:
         self.received_system_prompt = system_prompt
         self.received_user_prompt = user_prompt
         self.received_document = document
-        from mini_anchor.ingestion.contracts import (
+        from anchor.ingestion.contracts import (
             DealContext,
             ExtractionResult,
             FieldCandidates,

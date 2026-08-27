@@ -1,7 +1,7 @@
 """Architecture guardrails for the Phase 9A AI Analyst layer.
 
-Confirms the frozen engine never imports ``openai`` or ``mini_anchor.ai``,
-that ``openai`` is imported only inside ``mini_anchor.ai.provider`` (never
+Confirms the frozen engine never imports ``openai`` or ``anchor.ai``,
+that ``openai`` is imported only inside ``anchor.ai.provider`` (never
 elsewhere, and never anywhere under ``engine/`` or ``analysis/``), that the
 ``ai`` package never reproduces a financial formula (no ``math`` import),
 and that the AI layer consumes deterministic outputs only by delegating to
@@ -19,11 +19,11 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from mini_anchor.ai import analyst as ai_analyst_module
-from mini_anchor.ai import provider as ai_provider_module
-from mini_anchor.analysis import build_standard_break_even_analysis, build_standard_presets
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import analyze_acquisition
+from anchor.ai import analyst as ai_analyst_module
+from anchor.ai import provider as ai_provider_module
+from anchor.analysis import build_standard_break_even_analysis, build_standard_presets
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import analyze_acquisition
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,
@@ -38,8 +38,8 @@ GOLDEN_INPUTS = AcquisitionInputs(
 )
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_ENGINE_DIR = _PROJECT_ROOT / "src" / "mini_anchor" / "engine"
-_ANALYSIS_DIR = _PROJECT_ROOT / "src" / "mini_anchor" / "analysis"
+_ENGINE_DIR = _PROJECT_ROOT / "src" / "anchor" / "engine"
+_ANALYSIS_DIR = _PROJECT_ROOT / "src" / "anchor" / "analysis"
 _AI_DIR = Path(ai_analyst_module.__file__).parent
 
 
@@ -74,16 +74,16 @@ def test_analysis_package_has_no_openai_import() -> None:
 def test_engine_package_does_not_import_ai_package() -> None:
     for source_file in _ENGINE_DIR.glob("*.py"):
         names = _imported_module_names(source_file)
-        assert not any("mini_anchor.ai" in name for name in names), (
-            f"{source_file} must not import mini_anchor.ai"
+        assert not any("anchor.ai" in name for name in names), (
+            f"{source_file} must not import anchor.ai"
         )
 
 
 def test_analysis_package_does_not_import_ai_package() -> None:
     for source_file in _ANALYSIS_DIR.glob("*.py"):
         names = _imported_module_names(source_file)
-        assert not any("mini_anchor.ai" in name for name in names), (
-            f"{source_file} must not import mini_anchor.ai"
+        assert not any("anchor.ai" in name for name in names), (
+            f"{source_file} must not import anchor.ai"
         )
 
 
@@ -117,7 +117,7 @@ def test_engine_import_does_not_pull_in_openai() -> None:
         [
             sys.executable,
             "-c",
-            "import sys; import mini_anchor.engine; assert 'openai' not in sys.modules",
+            "import sys; import anchor.engine; assert 'openai' not in sys.modules",
         ],
         cwd=_PROJECT_ROOT,
         env=environment,
@@ -136,7 +136,7 @@ def test_engine_import_does_not_pull_in_openai() -> None:
 
 def test_ai_analyst_delegates_to_the_authoritative_engine_entry_point() -> None:
     with patch(
-        "mini_anchor.ai.analyst.analyze_acquisition", wraps=analyze_acquisition
+        "anchor.ai.analyst.analyze_acquisition", wraps=analyze_acquisition
     ) as mock_analyze:
         ai_analyst_module.build_analysis_context(
             GOLDEN_INPUTS,
@@ -151,10 +151,10 @@ def test_ai_analyst_delegates_to_the_authoritative_engine_entry_point() -> None:
 def test_ai_analyst_delegates_to_the_authoritative_analysis_entry_points() -> None:
     with (
         patch(
-            "mini_anchor.ai.analyst.build_standard_presets", wraps=build_standard_presets
+            "anchor.ai.analyst.build_standard_presets", wraps=build_standard_presets
         ) as mock_presets,
         patch(
-            "mini_anchor.ai.analyst.build_standard_break_even_analysis",
+            "anchor.ai.analyst.build_standard_break_even_analysis",
             wraps=build_standard_break_even_analysis,
         ) as mock_break_even,
     ):
