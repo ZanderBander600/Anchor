@@ -6,7 +6,7 @@ the terminal. It calls ``validate_acquisition_inputs`` and
 and never reproduces or reimplements any financial formula or validation
 rule itself. The Phase 7 sensitivity endpoints below follow the identical
 pattern, delegating all sensitivity computation to
-``mini_anchor.analysis.sensitivity`` -- this module does no financial math or
+``anchor.analysis.sensitivity`` -- this module does no financial math or
 sensitivity math of its own.
 """
 
@@ -50,7 +50,7 @@ from .ingestion import (
 )
 from .validation import InputValidationError, validate_acquisition_inputs
 
-app = FastAPI(title="Mini-Anchor API")
+app = FastAPI(title="Anchor API")
 
 # =============================================================================
 # Phase 10A -- OM ingestion upload ceilings (KTD9)
@@ -159,7 +159,7 @@ def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults:
 #
 # Both endpoints below validate the nested ``inputs`` object with the same
 # ``validate_acquisition_inputs`` used by ``/analyze``, then delegate all
-# sensitivity computation to ``mini_anchor.analysis.sensitivity``. Neither
+# sensitivity computation to ``anchor.analysis.sensitivity``. Neither
 # endpoint performs financial or sensitivity math itself.
 # =============================================================================
 
@@ -247,7 +247,7 @@ def sensitivity_presets(
 # =============================================================================
 # Phase 8 -- break-even analysis
 #
-# Delegates all break-even solving to ``mini_anchor.analysis.break_even``;
+# Delegates all break-even solving to ``anchor.analysis.break_even``;
 # this endpoint performs no financial math and no threshold search itself.
 # =============================================================================
 
@@ -325,7 +325,7 @@ def break_even(payload: dict[str, Any] = Body(...)) -> StandardBreakEvenAnalysis
 # Phase 9A -- AI Analyst
 #
 # Delegates all context assembly and the provider call to
-# ``mini_anchor.ai.generate_ai_analysis``; this endpoint performs no
+# ``anchor.ai.generate_ai_analysis``; this endpoint performs no
 # financial math, sensitivity math, break-even search, or OpenAI call of
 # its own.
 # =============================================================================
@@ -403,7 +403,7 @@ def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
 #
 # Validates the upload (content-type, size, page count -- KTD9) then
 # delegates the entire extraction/classification pipeline to
-# ``mini_anchor.ingestion.extract_om``. This endpoint performs no
+# ``anchor.ingestion.extract_om``. This endpoint performs no
 # extraction, classification, or financial math of its own, and never
 # calls the deterministic engine. Azure DI/OpenAI credentials are read only
 # inside the ingestion package's own provider modules (R15) -- never

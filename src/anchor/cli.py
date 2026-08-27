@@ -20,9 +20,9 @@ from .validation import InputValidationError
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m mini_anchor",
+        prog="python -m anchor",
         description=(
-            "Analyze a Mini-Anchor Excel acquisition workbook and print a "
+            "Analyze a Anchor Excel acquisition workbook and print a "
             "formatted investment summary."
         ),
     )

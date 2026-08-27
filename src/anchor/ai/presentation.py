@@ -11,12 +11,12 @@ formatted value is read unchanged from one field of ``AnalysisContext``,
 and every hurdle label is a plain three-way comparison (above/at/below)
 between two already-trusted numbers.
 
-``build_presentation_payload`` is the only entry point ``mini_anchor.ai.
+``build_presentation_payload`` is the only entry point ``anchor.ai.
 prompts`` needs: it turns one ``AnalysisContext`` into a fully
 JSON-serializable, presentation-formatted evidence payload for the model
 -facing user prompt. The raw ``AnalysisContext`` (and therefore every raw
 decimal) remains available unchanged wherever else it is needed -- this
-module only changes what the model is shown, never what Mini-Anchor stores
+module only changes what the model is shown, never what Anchor stores
 or computes.
 """
 

@@ -1,4 +1,4 @@
-"""Mini-Anchor deterministic acquisition engine.
+"""Anchor deterministic acquisition engine.
 
 Converts a validated ``AcquisitionInputs`` into ``AcquisitionResults``
 (``docs/phase_2_deterministic_engine.md``). The engine is independent of
@@ -12,11 +12,11 @@ exit/cash-flow assembly (Phase 2C), and return metrics (Phase 2D) into one
 importable directly by tests and other in-progress engine code, but are not
 re-exported here, to keep this package's public surface narrow:
 
-- ``mini_anchor.engine.contracts``
-- ``mini_anchor.engine.noi``
-- ``mini_anchor.engine.debt``
-- ``mini_anchor.engine.acquisition``
-- ``mini_anchor.engine.returns``
+- ``anchor.engine.contracts``
+- ``anchor.engine.noi``
+- ``anchor.engine.debt``
+- ``anchor.engine.acquisition``
+- ``anchor.engine.returns``
 """
 
 from __future__ import annotations

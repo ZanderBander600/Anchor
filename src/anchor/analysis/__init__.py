@@ -1,8 +1,8 @@
-"""Mini-Anchor Phase 7 sensitivity-analysis and Phase 8 break-even-analysis
+"""Anchor Phase 7 sensitivity-analysis and Phase 8 break-even-analysis
 layers.
 
-Sits above the frozen Phase 2 engine (``mini_anchor.engine``) and below the
-FastAPI adapter (``mini_anchor.api``):
+Sits above the frozen Phase 2 engine (``anchor.engine``) and below the
+FastAPI adapter (``anchor.api``):
 
     financial engine
           ^

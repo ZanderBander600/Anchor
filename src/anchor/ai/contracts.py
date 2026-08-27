@@ -1,6 +1,6 @@
 """Phase 9A AI Analyst contracts.
 
-Like ``mini_anchor.engine.contracts`` and ``mini_anchor.analysis.contracts``,
+Like ``anchor.engine.contracts`` and ``anchor.analysis.contracts``,
 this module performs no calculation of its own -- it only describes the
 shape of the deterministic context handed to the model
 (``AnalysisContext``) and the structured interpretation handed back
@@ -25,7 +25,7 @@ from ..engine.contracts import AcquisitionResults
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AnalysisContext:
-    """The complete deterministic Mini-Anchor context supplied to the AI
+    """The complete deterministic Anchor context supplied to the AI
     Analyst for one request.
 
     Every field is either the original validated ``AcquisitionInputs``, an

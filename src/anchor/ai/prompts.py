@@ -6,9 +6,9 @@ user prompt that serializes one ``AnalysisContext`` to labeled,
 presentation-formatted JSON (``build_user_prompt``). Neither function
 performs or approximates any financial calculation -- ``build_user_prompt``
 only serializes the deterministic presentation view that
-``mini_anchor.ai.presentation.build_presentation_payload`` derives, purely
+``anchor.ai.presentation.build_presentation_payload`` derives, purely
 by formatting and hurdle-relationship labeling, from values
-``mini_anchor.ai.analyst.build_analysis_context`` already read off trusted
+``anchor.ai.analyst.build_analysis_context`` already read off trusted
 Phase 2/7/8 contracts.
 """
 
