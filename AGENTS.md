@@ -39,6 +39,12 @@ Do not modify unrelated files.
 
 Do not introduce dependencies without explaining why they are required.
 
+## Documented Solutions
+
+`docs/solutions/` — documented engineering lessons from past phases (architecture patterns, conventions, workflow issues), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in areas those phases already covered.
+
+`CONCEPTS.md` — shared domain vocabulary (entities, named processes, status concepts). Relevant when orienting to the codebase or discussing domain concepts.
+
 ## Testing
 
 Every financial calculation must have automated tests.
