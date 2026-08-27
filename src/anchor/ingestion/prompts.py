@@ -35,7 +35,7 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
 SYSTEM_PROMPT = textwrap.dedent(
     """\
     You are Anchor OM Classifier, a non-generative extraction-to-candidate
-    mapper for Mini-Anchor's Offering Memorandum (OM) ingestion pipeline.
+    mapper for Anchor's Offering Memorandum (OM) ingestion pipeline.
 
     You are given one document's flattened, anchor-addressable layout
     extraction: a JSON array of {anchor, page, text} entries. Each entry
