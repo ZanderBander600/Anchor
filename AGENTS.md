@@ -1,8 +1,8 @@
-# Mini-Anchor Agent Instructions
+# Anchor Agent Instructions
 
 ## Project
 
-Mini-Anchor is a proof-of-concept real estate acquisition analysis application.
+Anchor is a proof-of-concept real estate acquisition analysis application.
 
 The project must remain financially deterministic, testable, auditable, and modular.
 
@@ -59,7 +59,7 @@ Before declaring implementation complete:
 
 ## Git
 
-main represents the latest stable approved version.
+`main` tracks the latest approved state going forward: a phase or feature branch merges into `main` once it is complete and approved, rather than accumulating unmerged on its own branch chain.
 
 Development occurs on feature branches.
 
