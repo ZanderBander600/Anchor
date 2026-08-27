@@ -8,11 +8,14 @@ import {
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchSensitivityPresets,
+  uploadOm,
 } from './api';
 import type {
   AcquisitionResults,
   AIAnalysis,
   BreakEvenResult,
+  ExtractionResult,
+  FieldCandidates,
   StandardBreakEvenAnalysis,
   StandardSensitivityPresets,
   TwoWaySensitivityResult,
@@ -26,6 +29,7 @@ vi.mock('./api', async () => {
     fetchSensitivityPresets: vi.fn(),
     fetchBreakEvenAnalysis: vi.fn(),
     fetchAIAnalysis: vi.fn(),
+    uploadOm: vi.fn(),
   };
 });
 
@@ -33,6 +37,52 @@ const mockAnalyze = vi.mocked(analyzeAcquisition);
 const mockFetchSensitivityPresets = vi.mocked(fetchSensitivityPresets);
 const mockFetchBreakEvenAnalysis = vi.mocked(fetchBreakEvenAnalysis);
 const mockFetchAIAnalysis = vi.mocked(fetchAIAnalysis);
+const mockUploadOm = vi.mocked(uploadOm);
+
+function missingField(field_id: string): FieldCandidates {
+  return { field_id, candidates: [] };
+}
+
+function makeExtractionResult(overrides: Partial<ExtractionResult> = {}): ExtractionResult {
+  const base: ExtractionResult = {
+    purchase_price: {
+      field_id: 'purchase_price',
+      candidates: [
+        {
+          value: '48000000',
+          status: 'stated',
+          provenance: { page: 1, anchor: 'paragraph:0', snippet: 'Purchase Price: $48,000,000' },
+        },
+      ],
+    },
+    current_noi: missingField('current_noi'),
+    occupancy: missingField('occupancy'),
+    noi_growth: missingField('noi_growth'),
+    hold_period: missingField('hold_period'),
+    exit_cap_rate: {
+      field_id: 'exit_cap_rate',
+      candidates: [
+        {
+          value: '6%',
+          status: 'stated',
+          provenance: { page: 2, anchor: 'paragraph:1', snippet: 'Exit cap rate: 6%' },
+        },
+      ],
+    },
+    ltv: missingField('ltv'),
+    interest_rate: missingField('interest_rate'),
+    amortization: missingField('amortization'),
+    deal_context: {
+      property_name: missingField('property_name'),
+      address: missingField('address'),
+      property_type: missingField('property_type'),
+      unit_count_or_building_area: missingField('unit_count_or_building_area'),
+      year_built: missingField('year_built'),
+    },
+    ...overrides,
+  };
+  return base;
+}
 
 // Deliberately distinct from every metric value in `makeResults()` (7.91%,
 // 6.24%, 1.44x, 1.1608x, ...) so text queries against the base results panel
@@ -209,6 +259,7 @@ beforeEach(() => {
   mockFetchBreakEvenAnalysis.mockResolvedValue(makeBreakEvenAnalysis());
   mockFetchAIAnalysis.mockReset();
   mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysis());
+  mockUploadOm.mockReset();
 });
 
 afterEach(() => {
@@ -854,5 +905,128 @@ describe('AI Analyst workflow', () => {
 
     expect(document.body.innerHTML).not.toMatch(/sk-[A-Za-z0-9]/);
     expect(document.body.innerHTML.toLowerCase()).not.toContain('openai_api_key');
+  });
+});
+
+describe('OM ingestion workflow', () => {
+  async function uploadAndApprove(user: ReturnType<typeof userEvent.setup>) {
+    render(<App />);
+    mockUploadOm.mockResolvedValue(makeExtractionResult());
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+
+    await screen.findByRole('heading', { name: 'Purchase Price' }, { timeout: 3000 });
+  }
+
+  it('pre-fills AssumptionsForm with approved candidate values', async () => {
+    const user = userEvent.setup();
+    await uploadAndApprove(user);
+
+    const purchasePriceCard = screen.getByRole('heading', { name: 'Purchase Price' }).closest('.om-field-card') as HTMLElement;
+    await user.click(
+      Array.from(purchasePriceCard.querySelectorAll('button')).find((b) => b.textContent === 'Approve')!,
+    );
+    const exitCapCard = screen.getByRole('heading', { name: 'Exit Cap Rate' }).closest('.om-field-card') as HTMLElement;
+    await user.click(
+      Array.from(exitCapCard.querySelectorAll('button')).find((b) => b.textContent === 'Approve')!,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '6');
+  });
+
+  it('excludes unapproved and unresolved-conflict fields from the pre-filled values', async () => {
+    const user = userEvent.setup();
+    await uploadAndApprove(user);
+
+    // Approve only purchase price; leave exit cap rate (and every other
+    // field) pending.
+    const purchasePriceCard = screen.getByRole('heading', { name: 'Purchase Price' }).closest('.om-field-card') as HTMLElement;
+    await user.click(
+      Array.from(purchasePriceCard.querySelectorAll('button')).find((b) => b.textContent === 'Approve')!,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    // Exit Cap Rate was never approved -- the golden default must be untouched.
+    expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '5.5');
+  });
+
+  it('shows the excluded-fields summary before the analyst finishes review', async () => {
+    const user = userEvent.setup();
+    await uploadAndApprove(user);
+
+    const summary = screen.getByText(/Not carried to the form/);
+    expect(summary.textContent).toContain('Current NOI');
+    expect(summary.textContent).toContain('Hold Period');
+  });
+
+  it('leaves pre-filled values editable in AssumptionsForm after handoff', async () => {
+    const user = userEvent.setup();
+    await uploadAndApprove(user);
+
+    const purchasePriceCard = screen.getByRole('heading', { name: 'Purchase Price' }).closest('.om-field-card') as HTMLElement;
+    await user.click(
+      Array.from(purchasePriceCard.querySelectorAll('button')).find((b) => b.textContent === 'Approve')!,
+    );
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    const purchasePriceInput = screen.getByLabelText(/^Purchase Price/);
+    expect(purchasePriceInput).toHaveProperty('disabled', false);
+
+    await user.clear(purchasePriceInput);
+    await user.type(purchasePriceInput, '52000000');
+
+    expect(purchasePriceInput).toHaveProperty('value', '52000000');
+  });
+
+  it('never calls /analyze automatically after landing on the pre-filled form', async () => {
+    const user = userEvent.setup();
+    await uploadAndApprove(user);
+
+    const purchasePriceCard = screen.getByRole('heading', { name: 'Purchase Price' }).closest('.om-field-card') as HTMLElement;
+    await user.click(
+      Array.from(purchasePriceCard.querySelectorAll('button')).find((b) => b.textContent === 'Approve')!,
+    );
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('shows an explicit failure state on an OM extraction error', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    mockUploadOm.mockRejectedValue(new ApiError('The Azure Document Intelligence request failed.'));
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+
+    expect(await screen.findByText('The Azure Document Intelligence request failed.')).toBeTruthy();
+  });
+
+  it('clears stale deterministic results when OM-approved values are handed off', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    expect(await screen.findByText('7.91%')).toBeTruthy();
+
+    mockUploadOm.mockResolvedValue(makeExtractionResult());
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await screen.findByRole('heading', { name: 'Purchase Price' });
+
+    const purchasePriceCard = screen.getByRole('heading', { name: 'Purchase Price' }).closest('.om-field-card') as HTMLElement;
+    await user.click(
+      Array.from(purchasePriceCard.querySelectorAll('button')).find((b) => b.textContent === 'Approve')!,
+    );
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(screen.queryByText('7.91%')).toBeNull();
   });
 });

@@ -2,6 +2,7 @@ import type {
   AcquisitionRequest,
   AcquisitionResults,
   AIAnalysis,
+  ExtractionResult,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
   StandardSensitivityPresets,
@@ -213,4 +214,56 @@ export async function fetchAIAnalysis(
   }
 
   return (await response.json()) as AIAnalysis;
+}
+
+/**
+ * Uploads an Offering Memorandum PDF to the FastAPI ``POST /ingestion/om``
+ * endpoint as multipart form data and returns the raw ``ExtractionResult``
+ * JSON. Performs no extraction, classification, or provenance verification
+ * of its own -- the backend ingestion layer is authoritative -- and never
+ * talks to Azure/OpenAI directly (no provider credential is ever available
+ * to the browser). The browser sets the multipart ``Content-Type`` boundary
+ * itself, so this function must not set that header explicitly.
+ */
+export async function uploadOm(file: File): Promise<ExtractionResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/ingestion/om`, {
+      method: 'POST',
+      body: formData,
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Mini-Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  if (response.status === 503) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string' ? body.detail : 'The OM ingestion service is not configured.';
+    throw new ApiError(message);
+  }
+
+  if (response.status === 502) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string' ? body.detail : 'The OM extraction request failed.';
+    throw new ApiError(message);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string'
+        ? body.detail
+        : `The OM upload was rejected (HTTP ${response.status}).`;
+    throw new ApiError(message);
+  }
+
+  return (await response.json()) as ExtractionResult;
 }

@@ -22,6 +22,76 @@ export interface AcquisitionRequest {
   amortization: number;
 }
 
+/** The 9 existing AcquisitionInputs field ids, in a fixed order. Mirrors
+ * ``ACQUISITION_FIELD_IDS`` in ``src/mini_anchor/ingestion/contracts.py``. */
+export const ACQUISITION_FIELD_IDS = [
+  'purchase_price',
+  'current_noi',
+  'occupancy',
+  'noi_growth',
+  'hold_period',
+  'exit_cap_rate',
+  'ltv',
+  'interest_rate',
+  'amortization',
+] as const;
+
+export type AcquisitionFieldId = (typeof ACQUISITION_FIELD_IDS)[number];
+
+/** Mirrors ``EvidenceStatus`` in ``src/mini_anchor/ingestion/contracts.py``. */
+export type EvidenceStatus = 'stated' | 'interpreted' | 'conflicting' | 'unverifiable' | 'missing';
+
+/** Mirrors ``Provenance`` in ``src/mini_anchor/ingestion/contracts.py``. */
+export interface Provenance {
+  page: number;
+  anchor: string;
+  snippet: string;
+}
+
+/** Mirrors ``ExtractionCandidate`` in ``src/mini_anchor/ingestion/contracts.py``.
+ * ``value`` is always a free-form string exactly as GPT proposed it (e.g.
+ * "1000000", "5.5%", or "0.055") -- never a pre-parsed number. */
+export interface ExtractionCandidate {
+  value: string;
+  status: EvidenceStatus;
+  provenance: Provenance | null;
+}
+
+/** Mirrors ``FieldCandidates`` in ``src/mini_anchor/ingestion/contracts.py``.
+ * An empty ``candidates`` array means the field is missing (R7); two or
+ * more candidates typically carry status "conflicting" (R8). */
+export interface FieldCandidates {
+  field_id: string;
+  candidates: ExtractionCandidate[];
+}
+
+/** Mirrors ``DealContext`` in ``src/mini_anchor/ingestion/contracts.py`` --
+ * the 5 fixed, read-only deal-context fields (R2/KD5). Never eligible to
+ * enter ``AcquisitionRequest``/``AcquisitionInputs``. */
+export interface DealContext {
+  property_name: FieldCandidates;
+  address: FieldCandidates;
+  property_type: FieldCandidates;
+  unit_count_or_building_area: FieldCandidates;
+  year_built: FieldCandidates;
+}
+
+/** Mirrors ``ExtractionResult`` in ``src/mini_anchor/ingestion/contracts.py``
+ * -- one assembled OM extraction outcome: candidates for the 9
+ * ``AcquisitionInputs`` fields plus the 5 read-only deal-context fields. */
+export interface ExtractionResult {
+  purchase_price: FieldCandidates;
+  current_noi: FieldCandidates;
+  occupancy: FieldCandidates;
+  noi_growth: FieldCandidates;
+  hold_period: FieldCandidates;
+  exit_cap_rate: FieldCandidates;
+  ltv: FieldCandidates;
+  interest_rate: FieldCandidates;
+  amortization: FieldCandidates;
+  deal_context: DealContext;
+}
+
 /** Mirrors ``AcquisitionResults`` in ``src/mini_anchor/engine/contracts.py``. */
 export interface AcquisitionResults {
   going_in_cap_rate: number;

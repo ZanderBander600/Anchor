@@ -6,14 +6,17 @@ import {
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchSensitivityPresets,
+  uploadOm,
 } from './api';
 import { AiAnalystPanel } from './components/AiAnalystPanel';
 import { AssumptionsForm } from './components/AssumptionsForm';
 import { BreakEvenPanel } from './components/BreakEvenPanel';
+import { OmReviewPanel } from './components/OmReviewPanel';
 import { ResultsPanel } from './components/ResultsPanel';
 import { SensitivityPanel } from './components/SensitivityPanel';
 import {
   buildAcquisitionRequest,
+  buildApprovedFormValues,
   DEFAULT_FORM_VALUES,
   DEFAULT_TARGET_EQUITY_MULTIPLE,
   DEFAULT_TARGET_HEADLINE_DSCR,
@@ -23,10 +26,12 @@ import {
   parsePercent,
 } from './convert';
 import type {
+  AcquisitionFieldId,
   AcquisitionFormValues,
   AcquisitionRequest,
   AcquisitionResults,
   AIAnalysis,
+  ExtractionResult,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
   StandardSensitivityPresets,
@@ -57,8 +62,11 @@ export default function App() {
   const [isAiAnalysisLoading, setIsAiAnalysisLoading] = useState(false);
   const [aiAnalysisError, setAiAnalysisError] = useState<string | null>(null);
 
-  function handleFieldChange(key: keyof AcquisitionFormValues, value: string) {
-    setValues((previous) => ({ ...previous, [key]: value }));
+  const [ocrExtraction, setOcrExtraction] = useState<ExtractionResult | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
+
+  function resetDownstreamAnalysisState() {
     setResults(null);
     setError(null);
     setSensitivity(null);
@@ -68,6 +76,38 @@ export default function App() {
     setBreakEvenError(null);
     setAiAnalysis(null);
     setAiAnalysisError(null);
+  }
+
+  function handleFieldChange(key: keyof AcquisitionFormValues, value: string) {
+    setValues((previous) => ({ ...previous, [key]: value }));
+    resetDownstreamAnalysisState();
+  }
+
+  async function handleUploadOm(file: File) {
+    setIsExtracting(true);
+    setExtractionError(null);
+    setOcrExtraction(null);
+    try {
+      const extraction = await uploadOm(file);
+      setOcrExtraction(extraction);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setExtractionError(apiError.message);
+      } else {
+        setExtractionError('An unexpected error occurred while extracting the OM.');
+      }
+    } finally {
+      setIsExtracting(false);
+    }
+  }
+
+  function handleFinishOmReview(approvedValues: Partial<Record<AcquisitionFieldId, string>>) {
+    const formValues = buildApprovedFormValues(approvedValues);
+    if (Object.keys(formValues).length === 0) {
+      return;
+    }
+    setValues((previous) => ({ ...previous, ...formValues }));
+    resetDownstreamAnalysisState();
   }
 
   async function runBreakEven(
@@ -283,6 +323,14 @@ export default function App() {
       </header>
 
       <main className="app-main">
+        <OmReviewPanel
+          extraction={ocrExtraction}
+          isLoading={isExtracting}
+          error={extractionError}
+          onUpload={(file) => void handleUploadOm(file)}
+          onFinishReview={handleFinishOmReview}
+        />
+
         <AssumptionsForm
           values={values}
           onFieldChange={handleFieldChange}
