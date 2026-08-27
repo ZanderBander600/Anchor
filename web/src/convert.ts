@@ -61,7 +61,7 @@ export const DEFAULT_TARGET_EQUITY_MULTIPLE = '1.50';
 // Phase 10A -- OM ingestion candidate values -> AssumptionsForm handoff
 // (U9, KTD4/KTD5). Converts a raw ingestion candidate value string (as
 // proposed by the classifier -- see FIELD_DESCRIPTIONS in
-// src/mini_anchor/ingestion/prompts.py) into the plain, percent-scale
+// src/anchor/ingestion/prompts.py) into the plain, percent-scale
 // numeric string AssumptionsForm's fields expect. Reuses no financial
 // validation of its own; the existing buildAcquisitionRequest/AssumptionsForm
 // path above remains the sole authority once a value reaches the form.
@@ -97,7 +97,7 @@ export const ACQUISITION_FIELD_TO_FORM_KEY: Record<AcquisitionFieldId, keyof Acq
  * propose either the literal percentage ("5.5%") or the decimal-fraction
  * equivalent ("0.055"); AssumptionsForm always wants the percent-scale
  * number ("5.5"). Mirrors `_PERCENT_SCALE_FIELD_IDS` in
- * `src/mini_anchor/ingestion/classifier_provider.py`. */
+ * `src/anchor/ingestion/classifier_provider.py`. */
 const PERCENT_SCALE_FIELD_IDS: ReadonlySet<AcquisitionFieldId> = new Set([
   'occupancy',
   'noi_growth',

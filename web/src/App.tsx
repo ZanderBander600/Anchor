@@ -318,7 +318,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>Mini-Anchor</h1>
+        <h1>Anchor</h1>
         <p>Commercial Real Estate Acquisition Analysis</p>
       </header>
 

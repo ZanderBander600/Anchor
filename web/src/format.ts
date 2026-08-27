@@ -1,6 +1,6 @@
 /**
  * Presentation-only formatting helpers, mirroring
- * ``src/mini_anchor/formatting.py``. These never alter the underlying
+ * ``src/anchor/formatting.py``. These never alter the underlying
  * numeric value -- only how it is displayed.
  */
 

@@ -38,7 +38,7 @@ export async function analyzeAcquisition(
     });
   } catch {
     throw new ApiError(
-      'Could not reach the Mini-Anchor API. Confirm the backend is running at ' +
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
         `${API_BASE_URL}.`,
     );
   }
@@ -78,7 +78,7 @@ export async function fetchSensitivityPresets(
     });
   } catch {
     throw new ApiError(
-      'Could not reach the Mini-Anchor API. Confirm the backend is running at ' +
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
         `${API_BASE_URL}.`,
     );
   }
@@ -128,7 +128,7 @@ export async function fetchBreakEvenAnalysis(
     });
   } catch {
     throw new ApiError(
-      'Could not reach the Mini-Anchor API. Confirm the backend is running at ' +
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
         `${API_BASE_URL}.`,
     );
   }
@@ -180,7 +180,7 @@ export async function fetchAIAnalysis(
     });
   } catch {
     throw new ApiError(
-      'Could not reach the Mini-Anchor API. Confirm the backend is running at ' +
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
         `${API_BASE_URL}.`,
     );
   }
@@ -237,7 +237,7 @@ export async function uploadOm(file: File): Promise<ExtractionResult> {
     });
   } catch {
     throw new ApiError(
-      'Could not reach the Mini-Anchor API. Confirm the backend is running at ' +
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
         `${API_BASE_URL}.`,
     );
   }
