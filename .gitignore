@@ -40,4 +40,5 @@ node_modules/
 # Credentials
 *.pem
 *.key
-credentials.json.pytest-temp/
+credentials.json
+.pytest-temp/
