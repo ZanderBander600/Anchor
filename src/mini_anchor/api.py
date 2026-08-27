@@ -12,10 +12,16 @@ sensitivity math of its own.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from io import BytesIO
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException, status
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import Headers
+from starlette.responses import PlainTextResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .ai import (
     AIAnalysis,
@@ -36,9 +42,74 @@ from .analysis import (
     run_two_way_sensitivity,
 )
 from .engine import AcquisitionResults, analyze_acquisition
+from .ingestion import (
+    ExtractionConfigurationError,
+    ExtractionProviderError,
+    ExtractionResult,
+    extract_om,
+)
 from .validation import InputValidationError, validate_acquisition_inputs
 
 app = FastAPI(title="Mini-Anchor API")
+
+# =============================================================================
+# Phase 10A -- OM ingestion upload ceilings (KTD9)
+#
+# A POC-scale guard against an oversized, malformed, or spoofed upload
+# reaching a paid Azure DI/OpenAI call -- not a service-imposed limit (Azure's
+# own Standard tier runs far higher: 500 MB / 2,000 pages).
+# =============================================================================
+
+_INGESTION_PATH = "/ingestion/om"
+_MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB
+_MAX_UPLOAD_PAGES = 75
+_PDF_PARSE_TIMEOUT_SECONDS = 5  # KTD11 -- bounds the local pypdf page-count parse.
+_PDF_SIGNATURE = b"%PDF-"
+
+
+class _IngestionUploadSizeGuard:
+    """ASGI middleware rejecting an oversized OM upload by its declared
+    ``Content-Length`` (KTD9(b)) before Starlette's multipart form parser
+    reads any of the body.
+
+    This is the only point in the request pipeline that runs before
+    FastAPI resolves the ``UploadFile``/``File()`` dependency for
+    ``/ingestion/om`` -- by the time that route's own body executes, the
+    full upload has already been parsed, so the declared-size check can't
+    happen inside the route itself.
+    """
+
+    def __init__(self, app: ASGIApp, *, path: str, max_bytes: int) -> None:
+        self._app = app
+        self._path = path
+        self._max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] == "http"
+            and scope.get("method") == "POST"
+            and scope.get("path") == self._path
+        ):
+            content_length = Headers(scope=scope).get("content-length")
+            declared_bytes: int | None = None
+            if content_length is not None:
+                try:
+                    declared_bytes = int(content_length)
+                except ValueError:
+                    declared_bytes = None
+            if declared_bytes is not None and declared_bytes > self._max_bytes:
+                response = PlainTextResponse(
+                    f"Upload exceeds the maximum allowed size of {self._max_bytes} bytes.",
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                )
+                await response(scope, receive, send)
+                return
+        await self._app(scope, receive, send)
+
+
+app.add_middleware(
+    _IngestionUploadSizeGuard, path=_INGESTION_PATH, max_bytes=_MAX_UPLOAD_BYTES
+)
 
 # Allows the local Vite dev server (Phase 6 web UI) to call this API from the
 # browser. Pure API plumbing -- does not touch request/response semantics or
@@ -322,6 +393,117 @@ def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
         ) from None
     except AIProviderError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+        ) from None
+
+
+# =============================================================================
+# Phase 10A -- OM ingestion
+#
+# Validates the upload (content-type, size, page count -- KTD9) then
+# delegates the entire extraction/classification pipeline to
+# ``mini_anchor.ingestion.extract_om``. This endpoint performs no
+# extraction, classification, or financial math of its own, and never
+# calls the deterministic engine. Azure DI/OpenAI credentials are read only
+# inside the ingestion package's own provider modules (R15) -- never
+# accepted from or echoed to this request/response.
+#
+# A plain ``def`` route, not ``async def`` (KTD2): the Azure DI SDK's
+# poller performs blocking I/O even from its async client, so this route
+# is dispatched to FastAPI's shared threadpool like every other route in
+# this file, made survivable only by the KTD11 timeouts each synchronous
+# step below carries.
+# =============================================================================
+
+
+def _reject_upload(detail: str) -> None:
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+def _validate_content_type(file: UploadFile) -> None:
+    if file.content_type != "application/pdf":
+        _reject_upload("Uploaded file must have content-type 'application/pdf'.")
+
+
+def _read_upload_bytes(file: UploadFile) -> bytes:
+    """Read the upload's bytes, never buffering more than
+    ``_MAX_UPLOAD_BYTES + 1`` into memory regardless of what the request
+    declared (KTD9(c)) -- a missing or understated ``Content-Length``
+    cannot bypass this guard."""
+
+    file.file.seek(0)
+    contents = file.file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(contents) > _MAX_UPLOAD_BYTES:
+        _reject_upload(f"Upload exceeds the maximum allowed size of {_MAX_UPLOAD_BYTES} bytes.")
+    return contents
+
+
+def _validate_pdf_signature(pdf_bytes: bytes) -> None:
+    # The client-supplied content-type header is spoofable (KTD9); this
+    # confirms the bytes actually start with the PDF signature.
+    if not pdf_bytes.startswith(_PDF_SIGNATURE):
+        _reject_upload("Uploaded file does not appear to be a valid PDF.")
+
+
+def _validate_page_count(pdf_bytes: bytes) -> None:
+    """KTD9: reject a PDF pypdf cannot open at all, or one whose page count
+    (once determined) exceeds the ceiling. A PDF pypdf opens but cannot
+    reliably determine a page count for is *not* rejected here -- it
+    proceeds to the Azure DI call, the final arbiter of processability.
+    The open step is bounded by the KTD11 timeout, since it runs
+    synchronously against fully attacker-controlled bytes on the same
+    shared threadpool KTD2 accepts as a tradeoff."""
+
+    import pypdf
+
+    def _open_reader() -> Any:
+        return pypdf.PdfReader(BytesIO(pdf_bytes))
+
+    # Not a `with` block: ThreadPoolExecutor.__exit__ calls shutdown(wait=True)
+    # by default, which would block on a hung worker thread and defeat the
+    # timeout below (Python cannot forcibly kill a running thread). Shutting
+    # down with wait=False lets this call return promptly regardless of
+    # whether the submitted parse ever finishes.
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_open_reader)
+    try:
+        reader = future.result(timeout=_PDF_PARSE_TIMEOUT_SECONDS)
+    except FutureTimeoutError:
+        executor.shutdown(wait=False)
+        _reject_upload("The uploaded PDF took too long to parse locally.")
+    except Exception:
+        executor.shutdown(wait=False)
+        _reject_upload("The uploaded file could not be opened as a PDF.")
+    else:
+        executor.shutdown(wait=False)
+
+    try:
+        page_count = len(reader.pages)
+    except Exception:
+        return  # KTD9: page-count ambiguity is not rejected here.
+
+    if page_count > _MAX_UPLOAD_PAGES:
+        _reject_upload(
+            f"The uploaded PDF exceeds the maximum allowed page count of {_MAX_UPLOAD_PAGES}."
+        )
+
+
+@app.post(_INGESTION_PATH, response_model=ExtractionResult)
+def ingest_om(file: UploadFile = File(...)) -> ExtractionResult:
+    _validate_content_type(file)
+
+    pdf_bytes = _read_upload_bytes(file)
+    _validate_pdf_signature(pdf_bytes)
+    _validate_page_count(pdf_bytes)
+
+    try:
+        return extract_om(pdf_bytes)
+    except ExtractionConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from None
+    except ExtractionProviderError as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
         ) from None

@@ -8,6 +8,15 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "openai>=1.60",
+    # Phase 10A ingestion (KTD6): Azure DI non-generative extraction layer (KD1).
+    "azure-ai-documentintelligence>=1.0",
+    # Phase 10A ingestion (KTD6): required by FastAPI's UploadFile/File() parsing,
+    # which no existing endpoint uses. Pinned >=0.0.18 -- 0.0.14-0.0.15 shipped an
+    # import-namespace break.
+    "python-multipart>=0.0.18",
+    # Phase 10A ingestion (KTD6): enforces the KTD9 page-count ceiling locally,
+    # before any (paid) Azure DI call is made.
+    "pypdf>=5.0",
 ]
 
 [project.optional-dependencies]
