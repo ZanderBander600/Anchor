@@ -1,5 +1,5 @@
 """Tests for the Phase 8 break-even endpoint (``POST /break-even``) in
-``mini_anchor.api``.
+``anchor.api``.
 
 Mirrors ``test_api_sensitivity.py``'s style: covers the JSON contract (raw
 decimals, ``None`` -> ``null``, exactly five results), error handling for
@@ -15,9 +15,9 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from mini_anchor.analysis import build_standard_break_even_analysis
-from mini_anchor.api import app
-from mini_anchor.contracts import AcquisitionInputs
+from anchor.analysis import build_standard_break_even_analysis
+from anchor.api import app
+from anchor.contracts import AcquisitionInputs
 
 GOLDEN_INPUTS_PAYLOAD: dict[str, Any] = {
     "purchase_price": 50_000_000,
@@ -200,7 +200,7 @@ def test_break_even_repeated_identical_request_returns_identical_response(
 
 def test_break_even_delegates_to_analysis_layer(client: TestClient) -> None:
     with patch(
-        "mini_anchor.api.build_standard_break_even_analysis",
+        "anchor.api.build_standard_break_even_analysis",
         wraps=build_standard_break_even_analysis,
     ) as mock_build:
         response = client.post("/break-even", json=GENERIC_REQUEST)

@@ -1,4 +1,4 @@
-"""Canonical Excel ingestion for Mini-Anchor acquisition inputs."""
+"""Canonical Excel ingestion for Anchor acquisition inputs."""
 
 from __future__ import annotations
 

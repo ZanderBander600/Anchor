@@ -129,6 +129,6 @@ describe('uploadOm', () => {
     const file = new File([new Uint8Array([1])], 'om.pdf', { type: 'application/pdf' });
 
     await expect(uploadOm(file)).rejects.toBeInstanceOf(ApiError);
-    await expect(uploadOm(file)).rejects.toThrow(/Could not reach the Mini-Anchor API/);
+    await expect(uploadOm(file)).rejects.toThrow(/Could not reach the Anchor API/);
   });
 });

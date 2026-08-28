@@ -10,10 +10,10 @@ from zipfile import ZipFile
 import pytest
 from openpyxl import Workbook, load_workbook
 
-import mini_anchor.excel_reader as excel_reader
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.excel_reader import read_acquisition_inputs
-from mini_anchor.validation import (
+import anchor.excel_reader as excel_reader
+from anchor.contracts import AcquisitionInputs
+from anchor.excel_reader import read_acquisition_inputs
+from anchor.validation import (
     FIELD_IDS,
     InputIssue,
     InputValidationError,
@@ -66,7 +66,7 @@ EXPECTED = AcquisitionInputs(
     interest_rate=0.0525,
     amortization=30,
 )
-EXAMPLE_WORKBOOK = Path(__file__).resolve().parents[1] / "examples" / "mini_anchor_input.xlsx"
+EXAMPLE_WORKBOOK = Path(__file__).resolve().parents[1] / "examples" / "anchor_input.xlsx"
 
 
 def _canonical_rows(

@@ -6,9 +6,9 @@ user prompt that serializes one ``AnalysisContext`` to labeled,
 presentation-formatted JSON (``build_user_prompt``). Neither function
 performs or approximates any financial calculation -- ``build_user_prompt``
 only serializes the deterministic presentation view that
-``mini_anchor.ai.presentation.build_presentation_payload`` derives, purely
+``anchor.ai.presentation.build_presentation_payload`` derives, purely
 by formatting and hurdle-relationship labeling, from values
-``mini_anchor.ai.analyst.build_analysis_context`` already read off trusted
+``anchor.ai.analyst.build_analysis_context`` already read off trusted
 Phase 2/7/8 contracts.
 """
 
@@ -23,22 +23,22 @@ from .presentation import build_presentation_payload
 SYSTEM_PROMPT = textwrap.dedent(
     """\
     You are Anchor AI Analyst, a concise institutional commercial real
-    estate (CRE) acquisition investment analyst working inside Mini-Anchor.
+    estate (CRE) acquisition investment analyst working inside Anchor.
 
     You are given one deterministic AnalysisContext JSON payload produced
-    entirely by Mini-Anchor's frozen Python financial engine and analysis
+    entirely by Anchor's frozen Python financial engine and analysis
     layers: the base acquisition inputs, the base AcquisitionResults, the
     standard sensitivity matrices, and the standard break-even results.
     Your job is to interpret that data. You never calculate it.
 
     GROUNDING RULES (mandatory):
     1. Every numerical statement you make must be grounded in the supplied
-       deterministic Mini-Anchor data -- never a number you derived
+       deterministic Anchor data -- never a number you derived
        yourself.
     2. Do not independently calculate or estimate IRR, Equity Multiple,
        DSCR, debt service, loan balance, exit value, NOI forecast,
        acquisition cash flows, sensitivities, or break-even values. Those
-       calculations belong exclusively to Mini-Anchor's deterministic
+       calculations belong exclusively to Anchor's deterministic
        engine; you only interpret its already-computed output.
     2a. Do not calculate a spread, difference, delta, basis-point gap, or
        any other derived ratio or metric between two or more supplied
@@ -56,7 +56,7 @@ SYSTEM_PROMPT = textwrap.dedent(
     5. If the supplied evidence is insufficient to support a conclusion,
        say so explicitly rather than filling the gap with a guess.
     6. Occupancy is informational only in this context: under the frozen
-       Mini-Anchor POC convention, Current NOI already reflects
+       Anchor POC convention, Current NOI already reflects
        occupancy/vacancy, so occupancy itself drives no calculation you
        are shown.
     7. Break-even results are bounded-search results. A status of
@@ -65,7 +65,7 @@ SYSTEM_PROMPT = textwrap.dedent(
        "impossible" or as "no solution exists".
     8. Any risk commentary must conceptually cite the specific supplied
        metric, sensitivity cell, or break-even result it is based on.
-    9. Do not pretend Mini-Anchor knows market comps, tenant credit, lease rollover,
+    9. Do not pretend Anchor knows market comps, tenant credit, lease rollover,
        market rents, CapEx, taxes, or location fundamentals -- none of
        that was supplied, so do not discuss it as if it were.
     10. Any claim comparing supplied values to a hurdle (for example, DSCR
@@ -110,8 +110,8 @@ def build_user_prompt(context: AnalysisContext) -> str:
     payload = build_presentation_payload(context)
     serialized = json.dumps(payload, indent=2)
     return (
-        "Deterministic Mini-Anchor evidence (JSON below). Every value has "
-        "already been formatted for direct human presentation by Mini-"
+        "Deterministic Anchor evidence (JSON below). Every value has "
+        "already been formatted for direct human presentation by "
         "Anchor's deterministic presentation layer: currency in $/K/M, "
         "rates and IRRs as percentages, equity multiple and DSCR in \"x\" "
         "notation, and years/whole-number fields left as-is. Wherever a "

@@ -15,11 +15,11 @@ from unittest.mock import patch
 
 import pytest
 
-import mini_anchor.engine as engine_package
-import mini_anchor.engine.acquisition as acquisition_module
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import AcquisitionResults, analyze_acquisition
-from mini_anchor.engine.acquisition import calculate_acquisition_cash_flows
+import anchor.engine as engine_package
+import anchor.engine.acquisition as acquisition_module
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import AcquisitionResults, analyze_acquisition
+from anchor.engine.acquisition import calculate_acquisition_cash_flows
 
 
 # Stringent absolute tolerance mirroring tests/test_engine_golden_case.py:
@@ -443,9 +443,9 @@ def test_analyze_acquisition_matches_manual_phase_2a_2b_2c_2d_assembly() -> None
     # the committed Phase 2A/2B/2C/2D functions and assembling their results
     # by hand would produce -- proving there is one authoritative path for
     # every calculation.
-    from mini_anchor.engine.debt import calculate_capital_stack, calculate_debt_schedule
-    from mini_anchor.engine.noi import forecast_noi
-    from mini_anchor.engine.returns import calculate_return_metrics
+    from anchor.engine.debt import calculate_capital_stack, calculate_debt_schedule
+    from anchor.engine.noi import forecast_noi
+    from anchor.engine.returns import calculate_return_metrics
 
     inputs = make_golden_inputs()
 

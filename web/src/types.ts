@@ -23,7 +23,7 @@ export interface AcquisitionRequest {
 }
 
 /** The 9 existing AcquisitionInputs field ids, in a fixed order. Mirrors
- * ``ACQUISITION_FIELD_IDS`` in ``src/mini_anchor/ingestion/contracts.py``. */
+ * ``ACQUISITION_FIELD_IDS`` in ``src/anchor/ingestion/contracts.py``. */
 export const ACQUISITION_FIELD_IDS = [
   'purchase_price',
   'current_noi',
@@ -38,17 +38,17 @@ export const ACQUISITION_FIELD_IDS = [
 
 export type AcquisitionFieldId = (typeof ACQUISITION_FIELD_IDS)[number];
 
-/** Mirrors ``EvidenceStatus`` in ``src/mini_anchor/ingestion/contracts.py``. */
+/** Mirrors ``EvidenceStatus`` in ``src/anchor/ingestion/contracts.py``. */
 export type EvidenceStatus = 'stated' | 'interpreted' | 'conflicting' | 'unverifiable' | 'missing';
 
-/** Mirrors ``Provenance`` in ``src/mini_anchor/ingestion/contracts.py``. */
+/** Mirrors ``Provenance`` in ``src/anchor/ingestion/contracts.py``. */
 export interface Provenance {
   page: number;
   anchor: string;
   snippet: string;
 }
 
-/** Mirrors ``ExtractionCandidate`` in ``src/mini_anchor/ingestion/contracts.py``.
+/** Mirrors ``ExtractionCandidate`` in ``src/anchor/ingestion/contracts.py``.
  * ``value`` is always a free-form string exactly as GPT proposed it (e.g.
  * "1000000", "5.5%", or "0.055") -- never a pre-parsed number. */
 export interface ExtractionCandidate {
@@ -57,7 +57,7 @@ export interface ExtractionCandidate {
   provenance: Provenance | null;
 }
 
-/** Mirrors ``FieldCandidates`` in ``src/mini_anchor/ingestion/contracts.py``.
+/** Mirrors ``FieldCandidates`` in ``src/anchor/ingestion/contracts.py``.
  * An empty ``candidates`` array means the field is missing (R7); two or
  * more candidates typically carry status "conflicting" (R8). */
 export interface FieldCandidates {
@@ -65,7 +65,7 @@ export interface FieldCandidates {
   candidates: ExtractionCandidate[];
 }
 
-/** Mirrors ``DealContext`` in ``src/mini_anchor/ingestion/contracts.py`` --
+/** Mirrors ``DealContext`` in ``src/anchor/ingestion/contracts.py`` --
  * the 5 fixed, read-only deal-context fields (R2/KD5). Never eligible to
  * enter ``AcquisitionRequest``/``AcquisitionInputs``. */
 export interface DealContext {
@@ -76,7 +76,7 @@ export interface DealContext {
   year_built: FieldCandidates;
 }
 
-/** Mirrors ``ExtractionResult`` in ``src/mini_anchor/ingestion/contracts.py``
+/** Mirrors ``ExtractionResult`` in ``src/anchor/ingestion/contracts.py``
  * -- one assembled OM extraction outcome: candidates for the 9
  * ``AcquisitionInputs`` fields plus the 5 read-only deal-context fields. */
 export interface ExtractionResult {
@@ -92,7 +92,7 @@ export interface ExtractionResult {
   deal_context: DealContext;
 }
 
-/** Mirrors ``AcquisitionResults`` in ``src/mini_anchor/engine/contracts.py``. */
+/** Mirrors ``AcquisitionResults`` in ``src/anchor/engine/contracts.py``. */
 export interface AcquisitionResults {
   going_in_cap_rate: number;
   loan_amount: number;
@@ -121,7 +121,7 @@ export interface ValidationIssue {
 
 export type SensitivityMetric = 'levered_irr' | 'headline_dscr';
 
-/** Mirrors ``TwoWaySensitivityResult`` in ``src/mini_anchor/analysis/contracts.py``. */
+/** Mirrors ``TwoWaySensitivityResult`` in ``src/anchor/analysis/contracts.py``. */
 export interface TwoWaySensitivityResult {
   row_assumption: string;
   column_assumption: string;
@@ -134,7 +134,7 @@ export interface TwoWaySensitivityResult {
   matrix: (number | null)[][];
 }
 
-/** Mirrors ``StandardSensitivityPresets`` in ``src/mini_anchor/analysis/contracts.py``. */
+/** Mirrors ``StandardSensitivityPresets`` in ``src/anchor/analysis/contracts.py``. */
 export interface StandardSensitivityPresets {
   exit_cap_noi_growth: TwoWaySensitivityResult;
   purchase_price_exit_cap: TwoWaySensitivityResult;
@@ -155,10 +155,10 @@ export type BreakEvenMetric = 'levered_irr' | 'headline_dscr' | 'equity_multiple
 
 /** Which return metric drives the three return-hurdle break-even questions
  * (Maximum Purchase Price, Maximum Exit Cap Rate, Minimum NOI Growth).
- * Mirrors ``ReturnHurdleMetric`` in ``src/mini_anchor/analysis/contracts.py``. */
+ * Mirrors ``ReturnHurdleMetric`` in ``src/anchor/analysis/contracts.py``. */
 export type ReturnHurdleMetric = 'levered_irr' | 'equity_multiple';
 
-/** Mirrors ``BreakEvenResult`` in ``src/mini_anchor/analysis/contracts.py``. */
+/** Mirrors ``BreakEvenResult`` in ``src/anchor/analysis/contracts.py``. */
 export interface BreakEvenResult {
   break_even_type: BreakEvenType;
   assumption: string;
@@ -173,7 +173,7 @@ export interface BreakEvenResult {
   status: BreakEvenStatus;
 }
 
-/** Mirrors ``StandardBreakEvenAnalysis`` in ``src/mini_anchor/analysis/contracts.py``. */
+/** Mirrors ``StandardBreakEvenAnalysis`` in ``src/anchor/analysis/contracts.py``. */
 export interface StandardBreakEvenAnalysis {
   max_purchase_price: BreakEvenResult;
   max_exit_cap_rate: BreakEvenResult;
@@ -182,7 +182,7 @@ export interface StandardBreakEvenAnalysis {
   min_current_noi: BreakEvenResult;
 }
 
-/** Mirrors ``AIAnalysis`` in ``src/mini_anchor/ai/contracts.py`` -- the AI
+/** Mirrors ``AIAnalysis`` in ``src/anchor/ai/contracts.py`` -- the AI
  * Analyst's structured, interpretation-only output. Never carries a newly
  * calculated financial metric. */
 export interface AIAnalysis {

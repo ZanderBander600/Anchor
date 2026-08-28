@@ -41,7 +41,7 @@ def build_report(inputs: AcquisitionInputs, results: AcquisitionResults) -> str:
     lines: list[str] = []
 
     lines.append(_RULE)
-    lines.append("MINI-ANCHOR ACQUISITION ANALYSIS")
+    lines.append("ANCHOR ACQUISITION ANALYSIS")
     lines.append(_RULE)
     lines.append("")
 

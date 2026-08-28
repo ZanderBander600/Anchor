@@ -12,11 +12,11 @@ equity multiple, unlevered IRR, levered IRR).
 
 import pytest
 
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine.acquisition import calculate_acquisition_cash_flows
-from mini_anchor.engine.debt import calculate_capital_stack, calculate_debt_schedule
-from mini_anchor.engine.noi import forecast_noi
-from mini_anchor.engine.returns import calculate_return_metrics
+from anchor.contracts import AcquisitionInputs
+from anchor.engine.acquisition import calculate_acquisition_cash_flows
+from anchor.engine.debt import calculate_capital_stack, calculate_debt_schedule
+from anchor.engine.noi import forecast_noi
+from anchor.engine.returns import calculate_return_metrics
 
 
 # Stringent absolute tolerance mirroring tests/test_engine_returns.py: rejects

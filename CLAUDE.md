@@ -1,4 +1,4 @@
-# Mini-Anchor
+# Anchor
 
 Read `AGENTS.md` before making changes.
 

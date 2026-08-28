@@ -1,4 +1,4 @@
-"""Tests for the ``python -m mini_anchor`` CLI entry point (``cli.py``).
+"""Tests for the ``python -m anchor`` CLI entry point (``cli.py``).
 
 Covers the full ``Excel file -> read_acquisition_inputs -> analyze_acquisition
 -> formatted terminal results`` workflow, error handling for invalid/missing
@@ -13,11 +13,11 @@ from unittest.mock import patch
 
 import pytest
 
-from mini_anchor.cli import main
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import AcquisitionResults, analyze_acquisition
+from anchor.cli import main
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import AcquisitionResults, analyze_acquisition
 
-EXAMPLE_WORKBOOK = Path(__file__).resolve().parents[1] / "examples" / "mini_anchor_input.xlsx"
+EXAMPLE_WORKBOOK = Path(__file__).resolve().parents[1] / "examples" / "anchor_input.xlsx"
 
 
 def test_cli_valid_workbook_prints_formatted_results(capsys: pytest.CaptureFixture[str]) -> None:
@@ -25,7 +25,7 @@ def test_cli_valid_workbook_prints_formatted_results(capsys: pytest.CaptureFixtu
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "MINI-ANCHOR ACQUISITION ANALYSIS" in captured.out
+    assert "ANCHOR ACQUISITION ANALYSIS" in captured.out
     assert "ASSUMPTIONS" in captured.out
     assert "Purchase Price:          $50,000,000" in captured.out
     assert "Going-In Cap Rate:        5.00%" in captured.out
@@ -95,11 +95,11 @@ def test_cli_does_not_independently_calculate_financial_outputs(
     sentinel_report = "SENTINEL REPORT TEXT"
 
     with (
-        patch("mini_anchor.cli.read_acquisition_inputs", return_value=inputs) as mock_read,
+        patch("anchor.cli.read_acquisition_inputs", return_value=inputs) as mock_read,
         patch(
-            "mini_anchor.cli.analyze_acquisition", wraps=analyze_acquisition
+            "anchor.cli.analyze_acquisition", wraps=analyze_acquisition
         ) as mock_analyze,
-        patch("mini_anchor.cli.build_report", return_value=sentinel_report) as mock_build,
+        patch("anchor.cli.build_report", return_value=sentinel_report) as mock_build,
     ):
         exit_code = main([str(EXAMPLE_WORKBOOK)])
 

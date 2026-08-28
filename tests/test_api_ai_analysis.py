@@ -1,9 +1,9 @@
 """Tests for the Phase 9A AI Analyst endpoint (``POST /ai/analysis``) in
-``mini_anchor.api``.
+``anchor.api``.
 
 Mirrors ``test_api_break_even.py``'s style. No test in this module makes a
 real OpenAI API call: the OpenAI provider is always faked, either by
-patching ``mini_anchor.api.generate_ai_analysis`` directly (for the
+patching ``anchor.api.generate_ai_analysis`` directly (for the
 endpoint's own request/response contract) or by injecting a fake
 ``OpenAIAnalystProvider`` (to prove the endpoint builds a real,
 deterministic context and calls the provider exactly once).
@@ -18,10 +18,10 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from mini_anchor.ai.contracts import AIAnalysis
-from mini_anchor.ai.provider import AIConfigurationError, AIProviderError
-from mini_anchor.api import app
-from mini_anchor.contracts import AcquisitionInputs
+from anchor.ai.contracts import AIAnalysis
+from anchor.ai.provider import AIConfigurationError, AIProviderError
+from anchor.api import app
+from anchor.contracts import AcquisitionInputs
 
 GOLDEN_INPUTS_PAYLOAD: dict[str, Any] = {
     "purchase_price": 50_000_000,
@@ -90,7 +90,7 @@ def client() -> TestClient:
 
 
 def test_ai_analysis_valid_request_returns_200(client: TestClient) -> None:
-    with patch("mini_anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS) as mock_generate:
+    with patch("anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS) as mock_generate:
         response = client.post("/ai/analysis", json=GENERIC_REQUEST)
 
     assert response.status_code == 200
@@ -98,7 +98,7 @@ def test_ai_analysis_valid_request_returns_200(client: TestClient) -> None:
 
 
 def test_ai_analysis_returns_the_structured_ai_analysis_shape(client: TestClient) -> None:
-    with patch("mini_anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS):
+    with patch("anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS):
         response = client.post("/ai/analysis", json=GENERIC_REQUEST)
 
     body = response.json()
@@ -119,14 +119,14 @@ def test_ai_analysis_returns_the_structured_ai_analysis_shape(client: TestClient
 
 
 def test_ai_analysis_provider_invoked_exactly_once(client: TestClient) -> None:
-    with patch("mini_anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS) as mock_generate:
+    with patch("anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS) as mock_generate:
         client.post("/ai/analysis", json=GENERIC_REQUEST)
 
     assert mock_generate.call_count == 1
 
 
 def test_ai_analysis_repeated_mocked_request_is_deterministic(client: TestClient) -> None:
-    with patch("mini_anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS):
+    with patch("anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS):
         first = client.post("/ai/analysis", json=GENERIC_REQUEST)
         second = client.post("/ai/analysis", json=GENERIC_REQUEST)
 
@@ -145,7 +145,7 @@ def test_ai_analysis_builds_deterministic_context_and_calls_provider_once(
 ) -> None:
     fake_provider = _RecordingProvider()
 
-    with patch("mini_anchor.ai.analyst.OpenAIAnalystProvider", return_value=fake_provider):
+    with patch("anchor.ai.analyst.OpenAIAnalystProvider", return_value=fake_provider):
         response = client.post("/ai/analysis", json=GENERIC_REQUEST)
 
     assert response.status_code == 200
@@ -230,7 +230,7 @@ def test_ai_analysis_invalid_return_hurdle_metric_returns_422(client: TestClient
 
 def test_ai_analysis_missing_configuration_returns_503(client: TestClient) -> None:
     with patch(
-        "mini_anchor.api.generate_ai_analysis",
+        "anchor.api.generate_ai_analysis",
         side_effect=AIConfigurationError("OPENAI_API_KEY is not configured."),
     ):
         response = client.post("/ai/analysis", json=GENERIC_REQUEST)
@@ -243,7 +243,7 @@ def test_ai_analysis_provider_failure_returns_502_without_raw_stack_trace(
     client: TestClient,
 ) -> None:
     with patch(
-        "mini_anchor.api.generate_ai_analysis",
+        "anchor.api.generate_ai_analysis",
         side_effect=AIProviderError("The AI provider request failed (TimeoutError)."),
     ):
         response = client.post("/ai/analysis", json=GENERIC_REQUEST)

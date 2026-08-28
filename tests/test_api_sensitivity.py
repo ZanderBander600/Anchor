@@ -1,5 +1,5 @@
 """Tests for the Phase 7 sensitivity endpoints (``POST /sensitivity`` and
-``POST /sensitivity/presets``) in ``mini_anchor.api``.
+``POST /sensitivity/presets``) in ``anchor.api``.
 
 Mirrors ``test_api.py``'s style: covers the JSON contract (raw decimals,
 ``None`` -> ``null``, exact matrix dimensions), error handling for invalid
@@ -15,10 +15,10 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from mini_anchor.analysis import run_two_way_sensitivity
-from mini_anchor.api import app
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import analyze_acquisition
+from anchor.analysis import run_two_way_sensitivity
+from anchor.api import app
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import analyze_acquisition
 
 GOLDEN_INPUTS_PAYLOAD: dict[str, Any] = {
     "purchase_price": 50_000_000,
@@ -169,7 +169,7 @@ def test_sensitivity_repeated_identical_request_returns_identical_response(
 
 def test_sensitivity_delegates_to_analysis_layer(client: TestClient) -> None:
     with patch(
-        "mini_anchor.api.run_two_way_sensitivity", wraps=run_two_way_sensitivity
+        "anchor.api.run_two_way_sensitivity", wraps=run_two_way_sensitivity
     ) as mock_run:
         response = client.post("/sensitivity", json=GENERIC_REQUEST)
 
@@ -183,7 +183,7 @@ def test_sensitivity_base_engine_remains_authoritative(client: TestClient) -> No
     financial value independently."""
 
     with patch(
-        "mini_anchor.analysis.sensitivity.analyze_acquisition", wraps=analyze_acquisition
+        "anchor.analysis.sensitivity.analyze_acquisition", wraps=analyze_acquisition
     ) as mock_analyze:
         response = client.post("/sensitivity", json=GENERIC_REQUEST)
 

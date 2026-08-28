@@ -1,7 +1,7 @@
 """Phase 10A GPT classification provider adapter.
 
-The only module in this package (and, alongside ``mini_anchor.ai.provider``,
-one of only two modules in Mini-Anchor) that imports the ``openai`` SDK.
+The only module in this package (and, alongside ``anchor.ai.provider``,
+one of only two modules in Anchor) that imports the ``openai`` SDK.
 Receives only Azure DI's flattened ``StructuredDocument`` (never the raw
 PDF -- KD1) and maps it to per-field candidates, each carrying an evidence
 status and a citation. This module performs no financial calculation.

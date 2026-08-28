@@ -1,5 +1,5 @@
 """Tests for the Phase 10A OM ingestion orchestrator
-(``mini_anchor.ingestion.orchestrator``).
+(``anchor.ingestion.orchestrator``).
 
 Mirrors ``test_ai_analyst``-style orchestration tests: fake providers only
 (never a real Azure/OpenAI call), asserting each provider is called exactly
@@ -14,7 +14,7 @@ import pickle
 
 import pytest
 
-from mini_anchor.ingestion.contracts import (
+from anchor.ingestion.contracts import (
     DealContext,
     DocumentAnchor,
     EvidenceStatus,
@@ -26,7 +26,7 @@ from mini_anchor.ingestion.contracts import (
     Provenance,
     StructuredDocument,
 )
-from mini_anchor.ingestion.orchestrator import extract_om
+from anchor.ingestion.orchestrator import extract_om
 
 DOCUMENT = StructuredDocument(
     anchors=(DocumentAnchor(anchor="paragraph:0", page=1, text="Purchase Price: $1,000,000"),)

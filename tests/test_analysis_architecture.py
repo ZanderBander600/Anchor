@@ -1,6 +1,6 @@
 """Architecture guardrails for the Phase 7 sensitivity-analysis layer.
 
-Confirms ``mini_anchor.analysis`` sits strictly above the frozen engine --
+Confirms ``anchor.analysis`` sits strictly above the frozen engine --
 it must delegate every scenario to ``analyze_acquisition`` rather than
 duplicating a financial formula, and must not depend on ``openpyxl`` (the
 Excel-ingestion dependency belongs to Phase 1 only).
@@ -12,16 +12,16 @@ import ast
 from pathlib import Path
 from unittest.mock import patch
 
-from mini_anchor.analysis import break_even as break_even_module
-from mini_anchor.analysis import sensitivity as sensitivity_module
-from mini_anchor.analysis import (
+from anchor.analysis import break_even as break_even_module
+from anchor.analysis import sensitivity as sensitivity_module
+from anchor.analysis import (
     BreakEvenDirection,
     run_one_way_sensitivity,
     run_two_way_sensitivity,
     solve_break_even_threshold,
 )
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import analyze_acquisition
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import analyze_acquisition
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,
@@ -57,7 +57,7 @@ def test_one_way_sensitivity_calls_analyze_acquisition_for_every_scenario() -> N
     values = (0.045, 0.05, 0.055, 0.06, 0.065)
 
     with patch(
-        "mini_anchor.analysis.sensitivity.analyze_acquisition", wraps=analyze_acquisition
+        "anchor.analysis.sensitivity.analyze_acquisition", wraps=analyze_acquisition
     ) as mock_analyze:
         run_one_way_sensitivity(
             GOLDEN_INPUTS,
@@ -75,7 +75,7 @@ def test_two_way_sensitivity_calls_analyze_acquisition_for_every_cell() -> None:
     column_values = (0.05, 0.055, 0.06, 0.065)
 
     with patch(
-        "mini_anchor.analysis.sensitivity.analyze_acquisition", wraps=analyze_acquisition
+        "anchor.analysis.sensitivity.analyze_acquisition", wraps=analyze_acquisition
     ) as mock_analyze:
         run_two_way_sensitivity(
             GOLDEN_INPUTS,
@@ -124,7 +124,7 @@ def test_break_even_package_has_no_scipy_or_numpy_import() -> None:
 
 def test_break_even_solver_calls_analyze_acquisition_for_every_candidate() -> None:
     with patch(
-        "mini_anchor.analysis.break_even.analyze_acquisition", wraps=analyze_acquisition
+        "anchor.analysis.break_even.analyze_acquisition", wraps=analyze_acquisition
     ) as mock_analyze:
         solve_break_even_threshold(
             GOLDEN_INPUTS,

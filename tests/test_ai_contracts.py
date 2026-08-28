@@ -1,4 +1,4 @@
-"""Contract tests for the Phase 9A AI Analyst layer (``mini_anchor.ai.contracts``).
+"""Contract tests for the Phase 9A AI Analyst layer (``anchor.ai.contracts``).
 
 Mirrors the style of ``test_engine_contracts.py`` / ``test_analysis_presets.py``:
 frozen/slotted/kw-only shape, exact fields, and immutable tuple collections.
@@ -10,14 +10,14 @@ from dataclasses import FrozenInstanceError, fields, is_dataclass
 
 import pytest
 
-from mini_anchor.ai.contracts import AIAnalysis, AnalysisContext
-from mini_anchor.analysis import (
+from anchor.ai.contracts import AIAnalysis, AnalysisContext
+from anchor.analysis import (
     ReturnHurdleMetric,
     build_standard_break_even_analysis,
     build_standard_presets,
 )
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import analyze_acquisition
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import analyze_acquisition
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,

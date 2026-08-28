@@ -1,5 +1,5 @@
 """Tests for the Phase 10A Azure Document Intelligence provider adapter
-(``mini_anchor.ingestion.di_provider``).
+(``anchor.ingestion.di_provider``).
 
 Every test here uses a fake client object -- never the real ``azure`` SDK
 or a network call. Mirrors the style of ``test_ai_provider.py``: injectable
@@ -16,12 +16,12 @@ from typing import Any
 import pypdf
 import pytest
 
-from mini_anchor.ingestion.contracts import (
+from anchor.ingestion.contracts import (
     ExtractionConfigurationError,
     ExtractionProviderError,
     StructuredDocument,
 )
-from mini_anchor.ingestion.di_provider import AzureDocumentIntelligenceProvider
+from anchor.ingestion.di_provider import AzureDocumentIntelligenceProvider
 
 
 # =============================================================================

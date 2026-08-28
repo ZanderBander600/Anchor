@@ -1,5 +1,5 @@
 """Tests for the Phase 7 deterministic sensitivity layer
-(``mini_anchor.analysis.sensitivity``).
+(``anchor.analysis.sensitivity``).
 
 Covers one-way and two-way sensitivity, and confirms this layer never
 duplicates financial calculation: every scenario must go through
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from mini_anchor.analysis import (
+from anchor.analysis import (
     SUPPORTED_ASSUMPTIONS,
     SUPPORTED_METRICS,
     OneWaySensitivityResult,
@@ -20,9 +20,9 @@ from mini_anchor.analysis import (
     run_one_way_sensitivity,
     run_two_way_sensitivity,
 )
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import analyze_acquisition
-from mini_anchor.validation import InputValidationError
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import analyze_acquisition
+from anchor.validation import InputValidationError
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,

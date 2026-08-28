@@ -1,6 +1,6 @@
-# Mini-Anchor
+# Anchor
 
-Mini-Anchor is a proof-of-concept real estate acquisition analysis application.
+Anchor is a proof-of-concept real estate acquisition analysis application.
 
 ## POC Objective
 
@@ -20,7 +20,7 @@ AI may extract, normalize, summarize, and interpret information.
 
 AI does not calculate authoritative financial outputs.
 
-All core financial calculations are performed by the deterministic Mini-Anchor Python engine.
+All core financial calculations are performed by the deterministic Anchor Python engine.
 
 ## Development Order
 

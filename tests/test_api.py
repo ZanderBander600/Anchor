@@ -15,9 +15,9 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from mini_anchor.api import app
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine import AcquisitionResults, analyze_acquisition
+from anchor.api import app
+from anchor.contracts import AcquisitionInputs
+from anchor.engine import AcquisitionResults, analyze_acquisition
 
 GOLDEN_PAYLOAD: dict[str, Any] = {
     "purchase_price": 50_000_000,
@@ -180,7 +180,7 @@ def test_analyze_calls_analyze_acquisition_exactly_once(client: TestClient) -> N
     what it produces -- never compute a financial value itself."""
 
     with patch(
-        "mini_anchor.api.analyze_acquisition", wraps=analyze_acquisition
+        "anchor.api.analyze_acquisition", wraps=analyze_acquisition
     ) as mock_analyze:
         response = client.post("/analyze", json=GOLDEN_PAYLOAD)
 
@@ -194,7 +194,7 @@ def test_analyze_engine_failure_returns_500(client: TestClient) -> None:
 
     no_raise_client = TestClient(app, raise_server_exceptions=False)
     with patch(
-        "mini_anchor.api.analyze_acquisition", side_effect=RuntimeError("engine boom")
+        "anchor.api.analyze_acquisition", side_effect=RuntimeError("engine boom")
     ):
         response = no_raise_client.post("/analyze", json=GOLDEN_PAYLOAD)
 

@@ -3,7 +3,7 @@ contracts.
 
 These are narrow, immutable output contracts for the deterministic
 sensitivity layer in ``sensitivity.py`` and the deterministic break-even
-layer in ``break_even.py``. Like ``mini_anchor.engine.contracts``, this
+layer in ``break_even.py``. Like ``anchor.engine.contracts``, this
 module performs no calculation of its own -- it only describes the shape of
 already-computed results.
 """

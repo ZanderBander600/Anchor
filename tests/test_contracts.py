@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from mini_anchor.contracts import AcquisitionInputs
+from anchor.contracts import AcquisitionInputs
 
 
 EXPECTED_FIELDS = (
@@ -93,8 +93,8 @@ def test_contract_and_validation_imports_do_not_import_openpyxl() -> None:
             sys.executable,
             "-c",
             (
-                "import sys; import mini_anchor; import mini_anchor.contracts; "
-                "import mini_anchor.validation; "
+                "import sys; import anchor; import anchor.contracts; "
+                "import anchor.validation; "
                 "assert 'openpyxl' not in sys.modules"
             ),
         ],

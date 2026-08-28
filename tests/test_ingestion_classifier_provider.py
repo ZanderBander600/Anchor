@@ -1,5 +1,5 @@
 """Tests for the Phase 10A GPT classification provider adapter
-(``mini_anchor.ingestion.classifier_provider``).
+(``anchor.ingestion.classifier_provider``).
 
 Every test here uses a fake client object -- never the real ``openai`` SDK
 or a network call, per AGENTS.md's "no real Azure/OpenAI calls in automated
@@ -17,8 +17,8 @@ from typing import Any
 
 import pytest
 
-from mini_anchor.ingestion.classifier_provider import GPTClassifierProvider
-from mini_anchor.ingestion.contracts import (
+from anchor.ingestion.classifier_provider import GPTClassifierProvider
+from anchor.ingestion.contracts import (
     DocumentAnchor,
     EvidenceStatus,
     ExtractionConfigurationError,

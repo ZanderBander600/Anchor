@@ -1,10 +1,10 @@
 """Phase 10A Azure Document Intelligence provider adapter.
 
-The only module in this package (and the only module in Mini-Anchor) that
+The only module in this package (and the only module in Anchor) that
 imports the ``azure`` SDK or talks to the Azure Document Intelligence
 service. Isolated here so a different OCR/layout provider could be
-introduced later without touching ``mini_anchor.ingestion.orchestrator`` or
-``mini_anchor.ingestion.classifier_provider``. This module performs no
+introduced later without touching ``anchor.ingestion.orchestrator`` or
+``anchor.ingestion.classifier_provider``. This module performs no
 semantic field classification of its own: it only calls Azure DI's
 ``prebuilt-layout`` model (KTD3 -- layout only, never key-value-pairs) and
 flattens the response to a ``StructuredDocument`` of anchor-addressable
@@ -107,7 +107,7 @@ def _build_structured_document(result: Any) -> StructuredDocument:
 
 def _source_page_count(pdf_bytes: bytes) -> int | None:
     """Best-effort source PDF page count via ``pypdf`` -- the same library
-    ``mini_anchor.api``'s KTD9 upload-page-ceiling guard already uses on
+    ``anchor.api``'s KTD9 upload-page-ceiling guard already uses on
     this same ``pdf_bytes``, reused here rather than adding a dependency.
 
     Returns ``None`` (never raises) when the bytes cannot be opened here --

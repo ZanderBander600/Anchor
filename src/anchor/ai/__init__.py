@@ -1,7 +1,7 @@
-"""Mini-Anchor Phase 9A AI Analyst layer.
+"""Anchor Phase 9A AI Analyst layer.
 
 Sits above the frozen Phase 2 engine and the Phase 7/8 analysis layers, and
-below the FastAPI adapter (``mini_anchor.api``):
+below the FastAPI adapter (``anchor.api``):
 
     financial engine
           ^

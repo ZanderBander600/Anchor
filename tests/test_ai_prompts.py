@@ -1,5 +1,5 @@
 """Tests for the Phase 9A AI Analyst grounding prompt
-(``mini_anchor.ai.prompts``).
+(``anchor.ai.prompts``).
 
 Confirms the system prompt explicitly forbids independent financial
 calculation and invented facts, preserves the bounded break-even
@@ -16,9 +16,9 @@ from __future__ import annotations
 import json
 import re
 
-from mini_anchor.ai.analyst import build_analysis_context
-from mini_anchor.ai.prompts import build_system_prompt, build_user_prompt
-from mini_anchor.contracts import AcquisitionInputs
+from anchor.ai.analyst import build_analysis_context
+from anchor.ai.prompts import build_system_prompt, build_user_prompt
+from anchor.contracts import AcquisitionInputs
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,

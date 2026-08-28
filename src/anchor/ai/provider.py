@@ -1,9 +1,9 @@
 """Phase 9A AI Analyst OpenAI provider adapter.
 
-The only module in this package (and the only module in Mini-Anchor) that
+The only module in this package (and the only module in Anchor) that
 imports the ``openai`` SDK or talks to the OpenAI Responses API. Isolated
 here so a different provider/model could be introduced later without
-touching ``mini_anchor.ai.analyst``, ``mini_anchor.ai.prompts``, or any
+touching ``anchor.ai.analyst``, ``anchor.ai.prompts``, or any
 financial code. This module performs no financial calculation: it only
 sends two already-built prompt strings to the model and converts the
 model's structured JSON reply into ``AIAnalysis``.
@@ -125,7 +125,7 @@ class OpenAIAnalystProvider:
 
     Isolates every OpenAI-specific detail (client construction, model
     resolution, structured-output schema, response parsing) behind one
-    ``generate_analysis`` method, so ``mini_anchor.ai.analyst`` never needs
+    ``generate_analysis`` method, so ``anchor.ai.analyst`` never needs
     to know the Responses API shape. A test may pass a fake ``client`` (any
     object exposing ``.responses.create(...)``) to exercise this class
     without making a real network call.

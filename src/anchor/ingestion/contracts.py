@@ -1,6 +1,6 @@
 """Phase 10A OM ingestion contracts.
 
-Like ``mini_anchor.ai.contracts``, this module performs no extraction,
+Like ``anchor.ai.contracts``, this module performs no extraction,
 classification, or verification of its own -- it only describes the shapes
 every other ingestion module produces or consumes: Azure DI's flattened,
 anchor-addressable extraction payload (``StructuredDocument``), the
@@ -12,7 +12,7 @@ Neither provider (``di_provider``, ``classifier_provider``) defines its own
 exception hierarchy -- both raise the one defined here
 (``ExtractionError``/``ExtractionConfigurationError``/
 ``ExtractionProviderError``), so a failure from either provider maps to the
-same FastAPI status codes (see ``mini_anchor.api``).
+same FastAPI status codes (see ``anchor.api``).
 """
 
 from __future__ import annotations
@@ -20,10 +20,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-# The 9 existing AcquisitionInputs field ids (mini_anchor.contracts), in the
+# The 9 existing AcquisitionInputs field ids (anchor.contracts), in the
 # fixed order ExtractionResult exposes them. Duplicated here rather than
-# imported from mini_anchor.validation so the ingestion package stays
-# self-contained, mirroring how mini_anchor.ai avoids reaching into sibling
+# imported from anchor.validation so the ingestion package stays
+# self-contained, mirroring how anchor.ai avoids reaching into sibling
 # packages for shared constants.
 ACQUISITION_FIELD_IDS: tuple[str, ...] = (
     "purchase_price",

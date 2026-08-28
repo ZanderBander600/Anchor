@@ -1,8 +1,8 @@
-"""Mini-Anchor Phase 10A OM ingestion layer.
+"""Anchor Phase 10A OM ingestion layer.
 
 Sits beside the Phase 9A AI Analyst layer, below the FastAPI adapter
-(``mini_anchor.api``) and strictly above nothing in the deterministic
-engine -- ingestion never calls, imports, or feeds ``mini_anchor.engine``:
+(``anchor.api``) and strictly above nothing in the deterministic
+engine -- ingestion never calls, imports, or feeds ``anchor.engine``:
 
     Azure Document Intelligence (non-generative layout extraction, KD1)
           ^

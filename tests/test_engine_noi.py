@@ -2,9 +2,9 @@ import math
 
 import pytest
 
-from mini_anchor.contracts import AcquisitionInputs
-from mini_anchor.engine.contracts import NoiForecast, NonFiniteResultError
-from mini_anchor.engine.noi import (
+from anchor.contracts import AcquisitionInputs
+from anchor.engine.contracts import NoiForecast, NonFiniteResultError
+from anchor.engine.noi import (
     calculate_exit_noi,
     calculate_going_in_cap_rate,
     calculate_noi_by_year,

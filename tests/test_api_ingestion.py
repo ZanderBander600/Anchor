@@ -1,8 +1,8 @@
 """Tests for the Phase 10A OM ingestion endpoint (``POST /ingestion/om``)
-in ``mini_anchor.api``.
+in ``anchor.api``.
 
 Mirrors ``test_api_ai_analysis.py``'s style. No test in this module makes
-a real Azure DI or OpenAI call: ``mini_anchor.api.extract_om`` is always
+a real Azure DI or OpenAI call: ``anchor.api.extract_om`` is always
 patched, either directly (for the endpoint's own upload-validation and
 error-mapping contract) or left unpatched only where the assertion is
 specifically that it is *never called* (e.g. a rejected upload).
@@ -17,8 +17,8 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from mini_anchor.api import _IngestionUploadSizeGuard, app
-from mini_anchor.ingestion.contracts import (
+from anchor.api import _IngestionUploadSizeGuard, app
+from anchor.ingestion.contracts import (
     DealContext,
     EvidenceStatus,
     ExtractionCandidate,
@@ -137,7 +137,7 @@ def _upload_files(content: bytes, content_type: str = "application/pdf") -> dict
 
 
 def test_valid_upload_returns_200_with_candidates_json(client: TestClient) -> None:
-    with patch("mini_anchor.api.extract_om", return_value=VALID_EXTRACTION_RESULT) as mock_extract:
+    with patch("anchor.api.extract_om", return_value=VALID_EXTRACTION_RESULT) as mock_extract:
         response = client.post(
             "/ingestion/om", files=_upload_files(VALID_PDF_BYTES)
         )
@@ -152,7 +152,7 @@ def test_valid_upload_returns_200_with_candidates_json(client: TestClient) -> No
 
 
 def test_extract_om_is_called_with_the_uploaded_pdf_bytes(client: TestClient) -> None:
-    with patch("mini_anchor.api.extract_om", return_value=VALID_EXTRACTION_RESULT) as mock_extract:
+    with patch("anchor.api.extract_om", return_value=VALID_EXTRACTION_RESULT) as mock_extract:
         client.post("/ingestion/om", files=_upload_files(VALID_PDF_BYTES))
 
     mock_extract.assert_called_once_with(VALID_PDF_BYTES)
@@ -164,7 +164,7 @@ def test_extract_om_is_called_with_the_uploaded_pdf_bytes(client: TestClient) ->
 
 
 def test_non_pdf_content_type_is_rejected_without_a_provider_call(client: TestClient) -> None:
-    with patch("mini_anchor.api.extract_om") as mock_extract:
+    with patch("anchor.api.extract_om") as mock_extract:
         response = client.post(
             "/ingestion/om",
             files={"file": ("om.txt", b"just some text", "text/plain")},
@@ -177,7 +177,7 @@ def test_non_pdf_content_type_is_rejected_without_a_provider_call(client: TestCl
 def test_spoofed_content_type_on_non_pdf_bytes_is_rejected_without_a_provider_call(
     client: TestClient,
 ) -> None:
-    with patch("mini_anchor.api.extract_om") as mock_extract:
+    with patch("anchor.api.extract_om") as mock_extract:
         response = client.post(
             "/ingestion/om",
             files={"file": ("om.pdf", b"this is not a pdf at all", "application/pdf")},
@@ -195,9 +195,9 @@ def test_spoofed_content_type_on_non_pdf_bytes_is_rejected_without_a_provider_ca
 def test_body_exceeding_the_size_ceiling_is_rejected_without_a_provider_call(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("mini_anchor.api._MAX_UPLOAD_BYTES", 10)
+    monkeypatch.setattr("anchor.api._MAX_UPLOAD_BYTES", 10)
 
-    with patch("mini_anchor.api.extract_om") as mock_extract:
+    with patch("anchor.api.extract_om") as mock_extract:
         response = client.post("/ingestion/om", files=_upload_files(VALID_PDF_BYTES))
 
     assert 400 <= response.status_code < 500
@@ -277,10 +277,10 @@ def test_upload_size_guard_passes_through_a_request_within_the_ceiling() -> None
 def test_pdf_over_the_page_ceiling_is_rejected_without_a_provider_call(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("mini_anchor.api._MAX_UPLOAD_PAGES", 1)
+    monkeypatch.setattr("anchor.api._MAX_UPLOAD_PAGES", 1)
     two_page_pdf = _build_minimal_pdf(page_count=2)
 
-    with patch("mini_anchor.api.extract_om") as mock_extract:
+    with patch("anchor.api.extract_om") as mock_extract:
         response = client.post("/ingestion/om", files=_upload_files(two_page_pdf))
 
     assert 400 <= response.status_code < 500
@@ -290,7 +290,7 @@ def test_pdf_over_the_page_ceiling_is_rejected_without_a_provider_call(
 def test_unopenable_pdf_bytes_are_rejected_as_400_not_500(client: TestClient) -> None:
     garbage = b"%PDF-1.4\nthis is not a real pdf body structure at all\n%%EOF"
 
-    with patch("mini_anchor.api.extract_om") as mock_extract:
+    with patch("anchor.api.extract_om") as mock_extract:
         response = client.post("/ingestion/om", files=_upload_files(garbage))
 
     assert response.status_code == 400
@@ -312,7 +312,7 @@ def test_page_count_ambiguity_is_not_rejected_and_proceeds_to_extraction(
 
     monkeypatch.setattr(pypdf, "PdfReader", _AmbiguousPageCountReader)
 
-    with patch("mini_anchor.api.extract_om", return_value=VALID_EXTRACTION_RESULT) as mock_extract:
+    with patch("anchor.api.extract_om", return_value=VALID_EXTRACTION_RESULT) as mock_extract:
         response = client.post("/ingestion/om", files=_upload_files(VALID_PDF_BYTES))
 
     assert response.status_code == 200
@@ -331,9 +331,9 @@ def test_local_pdf_parse_timeout_is_rejected_without_a_provider_call(
     import pypdf
 
     monkeypatch.setattr(pypdf, "PdfReader", _SlowReader)
-    monkeypatch.setattr("mini_anchor.api._PDF_PARSE_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr("anchor.api._PDF_PARSE_TIMEOUT_SECONDS", 0.05)
 
-    with patch("mini_anchor.api.extract_om") as mock_extract:
+    with patch("anchor.api.extract_om") as mock_extract:
         response = client.post("/ingestion/om", files=_upload_files(VALID_PDF_BYTES))
 
     assert 400 <= response.status_code < 500
@@ -347,7 +347,7 @@ def test_local_pdf_parse_timeout_is_rejected_without_a_provider_call(
 
 def test_configuration_error_returns_503(client: TestClient) -> None:
     with patch(
-        "mini_anchor.api.extract_om",
+        "anchor.api.extract_om",
         side_effect=ExtractionConfigurationError("AZURE_DOCUMENTINTELLIGENCE_KEY is not configured."),
     ):
         response = client.post("/ingestion/om", files=_upload_files(VALID_PDF_BYTES))
@@ -358,7 +358,7 @@ def test_configuration_error_returns_503(client: TestClient) -> None:
 
 def test_provider_failure_returns_502_without_raw_stack_trace(client: TestClient) -> None:
     with patch(
-        "mini_anchor.api.extract_om",
+        "anchor.api.extract_om",
         side_effect=ExtractionProviderError("The Azure Document Intelligence request failed (TimeoutError)."),
     ):
         response = client.post("/ingestion/om", files=_upload_files(VALID_PDF_BYTES))
