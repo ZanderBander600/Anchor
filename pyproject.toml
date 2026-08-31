@@ -28,3 +28,11 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# Windows: the OS-global, username-keyed pytest-of-<user> temp base can collide
+# across distinct Windows accounts that resolve to the same username string
+# (e.g. a sandboxed execution account vs. the interactive account), leaving one
+# principal locked out with PermissionError: [WinError 5]. Route tmp_path/tmpdir
+# to a repo-local, gitignored directory instead so Anchor's tests never depend
+# on that shared machine-global path. See testing-conventions-and-architecture-
+# guardrails.md item 7 for the confirmed root cause.
+addopts = "--basetemp=.pytest-temp"
