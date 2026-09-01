@@ -53,7 +53,7 @@ export function AiAnalystPanel({ analysis, isLoading, error, onGenerate }: AiAna
         <h3 className="card-title">Anchor AI Analyst</h3>
         <button
           type="button"
-          className="ai-generate-button"
+          className="btn btn-primary btn-sm"
           onClick={onGenerate}
           disabled={isLoading}
         >

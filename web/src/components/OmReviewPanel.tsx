@@ -11,6 +11,22 @@ import type {
 } from '../types';
 import { ACQUISITION_FIELD_IDS } from '../types';
 
+function DocumentIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false">
+      <path
+        d="M5 2.5h6.5L15 6v11.5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-14a1 1 0 0 1 1-1Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M11.5 2.5V6H15" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M6.5 10h6M6.5 12.5h6M6.5 15h4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 const EVIDENCE_LABELS: Record<EvidenceStatus, string> = {
   stated: 'Stated',
   interpreted: 'Interpreted',
@@ -76,7 +92,11 @@ function CandidateRow({ candidate, isApproved, onApprove }: CandidateRowProps) {
           No verifiable source citation.
         </p>
       )}
-      <button type="button" className="om-approve-button" onClick={onApprove}>
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm om-approve-button"
+        onClick={onApprove}
+      >
         {isApproved ? 'Approved' : 'Approve'}
       </button>
     </div>
@@ -152,19 +172,24 @@ function FieldReviewCard({ fieldId, field, reviewState, onApprove, onEdit, onRej
               value={draft}
               onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft(event.target.value)}
             />
-            <button type="button" onClick={commitEdit}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={commitEdit}>
               Save
             </button>
-            <button type="button" onClick={() => setIsEditing(false)}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setIsEditing(false)}>
               Cancel
             </button>
           </>
         ) : (
-          <button type="button" onClick={startEdit}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={startEdit}>
             Edit
           </button>
         )}
-        <button type="button" onClick={onReject} disabled={reviewState.kind === 'rejected'}>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={onReject}
+          disabled={reviewState.kind === 'rejected'}
+        >
           Reject
         </button>
       </div>
@@ -258,7 +283,15 @@ export function OmReviewPanel({ extraction, isLoading, error, onUpload, onFinish
 
   return (
     <section className="card om-review-panel">
-      <h3 className="card-title">OM Ingestion Review</h3>
+      <div className="card-title-row">
+        <span className="card-icon card-icon-om">
+          <DocumentIcon />
+        </span>
+        <div>
+          <h3 className="card-title">OM Ingestion Review</h3>
+          <p className="card-subtitle">Offering Memorandum (PDF)</p>
+        </div>
+      </div>
 
       <div className="om-upload-row">
         <label className="om-upload-label" htmlFor="om-upload-input">
@@ -312,7 +345,7 @@ export function OmReviewPanel({ extraction, isLoading, error, onUpload, onFinish
                 ? `Not carried to the form (still pending, rejected, or unresolved): ${excludedLabels.join(', ')}.`
                 : 'All fields reviewed and approved.'}
             </p>
-            <button type="button" className="om-finish-button" onClick={handleFinish}>
+            <button type="button" className="btn btn-primary" onClick={handleFinish}>
               Use approved values
             </button>
           </div>
