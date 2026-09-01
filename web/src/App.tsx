@@ -17,10 +17,10 @@ import { OmReviewPanel } from './components/OmReviewPanel';
 import { ResultsPanel } from './components/ResultsPanel';
 import { SensitivityPanel } from './components/SensitivityPanel';
 import {
+  BLANK_FORM_VALUES,
   buildAcquisitionRequest,
   buildApprovedFormValues,
   buildFormValuesFromAcquisitionInputs,
-  DEFAULT_FORM_VALUES,
   DEFAULT_TARGET_EQUITY_MULTIPLE,
   DEFAULT_TARGET_HEADLINE_DSCR,
   DEFAULT_TARGET_LEVERED_IRR_PERCENT,
@@ -41,7 +41,7 @@ import type {
 } from './types';
 
 export default function App() {
-  const [values, setValues] = useState<AcquisitionFormValues>(DEFAULT_FORM_VALUES);
+  const [values, setValues] = useState<AcquisitionFormValues>(BLANK_FORM_VALUES);
   const [results, setResults] = useState<AcquisitionResults | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);

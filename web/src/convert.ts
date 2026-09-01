@@ -41,6 +41,12 @@ export function buildAcquisitionRequest(
   };
 }
 
+/**
+ * The golden-deal fixture values (U9's tracked example workbook, the CLI's
+ * canonical sample deal). Kept as-is for tests and as the OM/Excel
+ * conversion baseline -- no longer used to pre-populate the form on initial
+ * load; see `BLANK_FORM_VALUES` (U10).
+ */
 export const DEFAULT_FORM_VALUES: AcquisitionFormValues = {
   purchasePrice: '50000000',
   currentNoi: '2500000',
@@ -51,6 +57,26 @@ export const DEFAULT_FORM_VALUES: AcquisitionFormValues = {
   ltv: '65',
   interestRate: '5.25',
   amortization: '30',
+};
+
+/**
+ * The App's initial `AssumptionsForm` state (U10): every field blank, so a
+ * new session never appears to have a deal already loaded. `parseNumber`
+ * already rejects a blank required field with a `FormValidationError`
+ * rather than defaulting it to `0` (see `convert.test.ts`), so this is safe
+ * to submit as-is -- clicking Analyze Deal on it surfaces the existing
+ * validation error instead of silently reaching the engine.
+ */
+export const BLANK_FORM_VALUES: AcquisitionFormValues = {
+  purchasePrice: '',
+  currentNoi: '',
+  occupancy: '',
+  noiGrowth: '',
+  holdPeriod: '',
+  exitCapRate: '',
+  ltv: '',
+  interestRate: '',
+  amortization: '',
 };
 
 export const DEFAULT_TARGET_LEVERED_IRR_PERCENT = '10.00';

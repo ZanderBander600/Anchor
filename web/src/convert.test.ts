@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BLANK_FORM_VALUES,
   buildAcquisitionRequest,
   buildApprovedFormValues,
   buildFormValuesFromAcquisitionInputs,
@@ -50,6 +51,25 @@ describe('buildAcquisitionRequest', () => {
     expect(() =>
       buildAcquisitionRequest({ ...DEFAULT_FORM_VALUES, currentNoi: 'abc' }),
     ).toThrow(FormValidationError);
+  });
+
+  it('rejects an entirely blank form (BLANK_FORM_VALUES, U10) rather than treating any field as zero', () => {
+    let error: unknown;
+    try {
+      buildAcquisitionRequest(BLANK_FORM_VALUES);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(FormValidationError);
+    expect((error as FormValidationError).message).toBe('Purchase Price is required.');
+  });
+});
+
+describe('BLANK_FORM_VALUES', () => {
+  it('is entirely blank strings, distinct from the golden-deal defaults', () => {
+    expect(Object.values(BLANK_FORM_VALUES).every((value) => value === '')).toBe(true);
+    expect(BLANK_FORM_VALUES).not.toEqual(DEFAULT_FORM_VALUES);
   });
 });
 

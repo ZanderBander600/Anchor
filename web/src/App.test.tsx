@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import {
@@ -11,6 +11,7 @@ import {
   uploadExcel,
   uploadOm,
 } from './api';
+import { DEFAULT_FORM_VALUES } from './convert';
 import type {
   AcquisitionRequest,
   AcquisitionResults,
@@ -239,6 +240,46 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+/**
+ * Fills AssumptionsForm with the golden-deal fixture values. The app now
+ * starts with every assumption field blank (U10) -- most of the tests below
+ * are exercising analysis/sensitivity/break-even/AI-analyst behavior that
+ * assumes a valid, already-populated deal, not the blank-start behavior
+ * itself, so they call this immediately after `render(<App />)` to reach
+ * that starting point deliberately rather than relying on it being the
+ * default. Uses `fireEvent` (synchronous) rather than `userEvent.type` so it
+ * can be called without `await` from every existing call site.
+ */
+function fillGoldenDeal() {
+  fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+    target: { value: DEFAULT_FORM_VALUES.purchasePrice },
+  });
+  fireEvent.change(screen.getByLabelText(/^Current NOI/), {
+    target: { value: DEFAULT_FORM_VALUES.currentNoi },
+  });
+  fireEvent.change(screen.getByLabelText(/^Occupancy/), {
+    target: { value: DEFAULT_FORM_VALUES.occupancy },
+  });
+  fireEvent.change(screen.getByLabelText(/^NOI Growth/), {
+    target: { value: DEFAULT_FORM_VALUES.noiGrowth },
+  });
+  fireEvent.change(screen.getByLabelText(/^Hold Period/), {
+    target: { value: DEFAULT_FORM_VALUES.holdPeriod },
+  });
+  fireEvent.change(screen.getByLabelText(/^Exit Cap Rate/), {
+    target: { value: DEFAULT_FORM_VALUES.exitCapRate },
+  });
+  fireEvent.change(screen.getByLabelText(/^LTV/), {
+    target: { value: DEFAULT_FORM_VALUES.ltv },
+  });
+  fireEvent.change(screen.getByLabelText(/^Interest Rate/), {
+    target: { value: DEFAULT_FORM_VALUES.interestRate },
+  });
+  fireEvent.change(screen.getByLabelText(/^Amortization/), {
+    target: { value: DEFAULT_FORM_VALUES.amortization },
+  });
+}
+
 function makeAiAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
   return {
     executive_summary: 'Five-year hold with moderate leverage.',
@@ -272,21 +313,35 @@ afterEach(() => {
 });
 
 describe('App workflow', () => {
-  it('renders the golden defaults in the form', () => {
+  it('renders all nine assumption fields blank on initial load (U10)', () => {
     render(<App />);
 
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '50000000');
-    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', '2500000');
-    expect(screen.getByLabelText(/^Occupancy/)).toHaveProperty('value', '95');
-    expect(screen.getByLabelText(/^Hold Period/)).toHaveProperty('value', '5');
-    expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '5.5');
-    expect(screen.getByLabelText(/^LTV/)).toHaveProperty('value', '65');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Occupancy/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^NOI Growth/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Hold Period/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^LTV/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Interest Rate/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Amortization/)).toHaveProperty('value', '');
+  });
+
+  it('shows a validation error and never calls /analyze when submitting a blank form', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText(/Purchase Price is required/)).toBeTruthy();
+    expect(mockAnalyze).not.toHaveBeenCalled();
   });
 
   it('shows key results after a successful analysis', async () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
@@ -298,6 +353,7 @@ describe('App workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     expect(await screen.findByText('7.91%')).toBeTruthy();
@@ -314,6 +370,7 @@ describe('App workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValueOnce(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     expect(await screen.findByText('7.91%')).toBeTruthy();
@@ -333,6 +390,7 @@ describe('App workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValueOnce(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     expect(await screen.findByText('7.91%')).toBeTruthy();
@@ -350,6 +408,7 @@ describe('App workflow', () => {
     const pending = deferred<AcquisitionResults>();
     mockAnalyze.mockReturnValueOnce(pending.promise);
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
@@ -367,6 +426,7 @@ describe('App workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValueOnce(makeResults({ levered_irr: 0.0791303 }));
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     expect(await screen.findByText('7.91%')).toBeTruthy();
@@ -390,6 +450,7 @@ describe('App workflow', () => {
       }),
     );
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
@@ -401,6 +462,7 @@ describe('App workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
@@ -423,6 +485,7 @@ describe('Sensitivity analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     expect(screen.queryByText('Sensitivity Analysis')).toBeNull();
 
@@ -436,6 +499,7 @@ describe('Sensitivity analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Sensitivity Analysis');
@@ -447,6 +511,7 @@ describe('Sensitivity analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Sensitivity Analysis');
@@ -463,6 +528,7 @@ describe('Sensitivity analysis workflow', () => {
       new ApiError('The sensitivity request failed.'),
     );
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
@@ -477,6 +543,7 @@ describe('Break-even analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     expect(screen.queryByText('Break-Even Analysis')).toBeNull();
 
@@ -490,6 +557,7 @@ describe('Break-even analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Break-Even Analysis');
@@ -508,6 +576,7 @@ describe('Break-even analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Break-Even Analysis');
@@ -525,6 +594,7 @@ describe('Break-even analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Break-Even Analysis');
@@ -554,6 +624,7 @@ describe('Break-even analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Break-Even Analysis');
@@ -582,6 +653,7 @@ describe('Break-even analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Break-Even Analysis');
@@ -609,6 +681,7 @@ describe('Break-even analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Break-Even Analysis');
@@ -682,6 +755,7 @@ describe('Break-even analysis workflow', () => {
       }),
     );
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
@@ -694,6 +768,7 @@ describe('Break-even analysis workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Break-Even Analysis');
@@ -710,6 +785,7 @@ describe('Break-even analysis workflow', () => {
       new ApiError('The break-even request failed.'),
     );
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
@@ -725,6 +801,7 @@ describe('Break-even analysis workflow', () => {
     const pending = deferred<StandardBreakEvenAnalysis>();
     mockFetchBreakEvenAnalysis.mockReturnValueOnce(pending.promise);
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
@@ -740,6 +817,7 @@ describe('AI Analyst workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     expect(screen.queryByText('Anchor AI Analyst')).toBeNull();
 
@@ -753,6 +831,7 @@ describe('AI Analyst workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Anchor AI Analyst');
@@ -765,6 +844,7 @@ describe('AI Analyst workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Anchor AI Analyst');
@@ -788,6 +868,7 @@ describe('AI Analyst workflow', () => {
     const pending = deferred<AIAnalysis>();
     mockFetchAIAnalysis.mockReturnValueOnce(pending.promise);
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Anchor AI Analyst');
@@ -805,6 +886,7 @@ describe('AI Analyst workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Anchor AI Analyst');
@@ -824,6 +906,7 @@ describe('AI Analyst workflow', () => {
       new ApiError('OPENAI_API_KEY is not configured.'),
     );
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Anchor AI Analyst');
@@ -839,6 +922,7 @@ describe('AI Analyst workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Anchor AI Analyst');
@@ -855,6 +939,7 @@ describe('AI Analyst workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Anchor AI Analyst');
@@ -882,6 +967,7 @@ describe('AI Analyst workflow', () => {
       makeAiAnalysis({ investment_view: 'First view.' }),
     );
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Anchor AI Analyst');
@@ -902,6 +988,7 @@ describe('AI Analyst workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await screen.findByText('Anchor AI Analyst');
@@ -957,8 +1044,9 @@ describe('OM ingestion workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Use approved values' }));
 
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
-    // Exit Cap Rate was never approved -- the golden default must be untouched.
-    expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '5.5');
+    // Exit Cap Rate was never approved -- it must stay blank (U10), not fall
+    // back to a default value.
+    expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '');
   });
 
   it('shows the excluded-fields summary before the analyst finishes review', async () => {
@@ -1017,6 +1105,7 @@ describe('OM ingestion workflow', () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     expect(await screen.findByText('7.91%')).toBeTruthy();
@@ -1127,9 +1216,10 @@ describe('Excel ingestion workflow', () => {
     pending.resolve(makeAcquisitionRequest());
   });
 
-  it('shows a validation error and leaves the form unchanged on a malformed workbook', async () => {
+  it('shows a validation error and leaves existing form values unchanged on a malformed workbook', async () => {
     const user = userEvent.setup();
     render(<App />);
+    fillGoldenDeal();
     mockUploadExcel.mockRejectedValue(
       new ApiError("Value for Field ID 'purchase_price' is blank at Inputs!C2.", [
         { field_id: 'purchase_price', category: 'blank_value', message: "Value for Field ID 'purchase_price' is blank at Inputs!C2." },
@@ -1144,15 +1234,34 @@ describe('Excel ingestion workflow', () => {
     expect(
       await screen.findByText("Value for Field ID 'purchase_price' is blank at Inputs!C2."),
     ).toBeTruthy();
-    // The golden defaults must be untouched by the failed upload.
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '50000000');
+    // A failed upload must not corrupt values already entered in the form.
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', DEFAULT_FORM_VALUES.purchasePrice);
     expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('leaves blank fields blank (never zero) on a malformed workbook when the form was never filled', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    mockUploadExcel.mockRejectedValue(
+      new ApiError("Value for Field ID 'purchase_price' is blank at Inputs!C2.", [
+        { field_id: 'purchase_price', category: 'blank_value', message: "Value for Field ID 'purchase_price' is blank at Inputs!C2." },
+      ]),
+    );
+
+    const file = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    await screen.findByText("Value for Field ID 'purchase_price' is blank at Inputs!C2.");
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
   });
 
   it('clears stale deterministic results when a workbook upload replaces the form values', async () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
+    fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     expect(await screen.findByText('7.91%')).toBeTruthy();
