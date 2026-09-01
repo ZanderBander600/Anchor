@@ -7,6 +7,19 @@ interface ExcelUploadPanelProps {
   onUpload: (file: File) => void;
 }
 
+function SpreadsheetIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false">
+      <rect x="2.5" y="2.5" width="15" height="15" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M2.5 8h15M2.5 13h15M8 2.5v15M13 2.5v15"
+        stroke="currentColor"
+        strokeWidth="1.1"
+      />
+    </svg>
+  );
+}
+
 /**
  * Lets the analyst upload a canonical Anchor Excel workbook. Unlike
  * `OmReviewPanel`, there is no per-field candidate/evidence review here --
@@ -29,7 +42,15 @@ export function ExcelUploadPanel({ isLoading, error, successMessage, onUpload }:
 
   return (
     <section className="card excel-upload-panel">
-      <h3 className="card-title">Excel Upload</h3>
+      <div className="card-title-row">
+        <span className="card-icon card-icon-excel">
+          <SpreadsheetIcon />
+        </span>
+        <div>
+          <h3 className="card-title">Excel Upload</h3>
+          <p className="card-subtitle">Canonical Anchor workbook (.xlsx)</p>
+        </div>
+      </div>
 
       <div className="excel-upload-row">
         <label className="excel-upload-label" htmlFor="excel-upload-input">

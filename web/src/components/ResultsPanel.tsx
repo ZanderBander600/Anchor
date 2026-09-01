@@ -9,9 +9,9 @@ interface StatProps {
 
 function StatCard({ label, value }: StatProps) {
   return (
-    <div className="stat-card">
+    <div className="stat-card stat-card-primary">
       <span className="stat-label">{label}</span>
-      <span className="stat-value">{value}</span>
+      <span className="stat-value stat-value-primary">{value}</span>
     </div>
   );
 }
@@ -32,12 +32,12 @@ interface ResultsPanelProps {
 export function ResultsPanel({ results }: ResultsPanelProps) {
   return (
     <div className="results-panel">
-      <section className="card">
+      <section className="headline-stats">
         <h3 className="card-title">Key Returns</h3>
         <div className="stat-grid">
           <StatCard label="Levered IRR" value={formatPercent(results.levered_irr)} />
-          <StatCard label="Unlevered IRR" value={formatPercent(results.unlevered_irr)} />
           <StatCard label="Equity Multiple" value={formatMultiple(results.equity_multiple)} />
+          <StatCard label="Going-In Cap Rate" value={formatPercent(results.going_in_cap_rate)} />
           <StatCard label="Year 1 DSCR" value={formatMultiple(results.dscr_by_year[0])} />
         </div>
       </section>
@@ -45,7 +45,7 @@ export function ResultsPanel({ results }: ResultsPanelProps) {
       <div className="card-row">
         <section className="card">
           <h3 className="card-title">Property</h3>
-          <InfoRow label="Going-In Cap Rate" value={formatPercent(results.going_in_cap_rate)} />
+          <InfoRow label="Unlevered IRR" value={formatPercent(results.unlevered_irr)} />
           <InfoRow label="Exit NOI" value={formatCurrency(results.exit_noi)} />
           <InfoRow label="Exit Value" value={formatCurrency(results.exit_value)} />
         </section>

@@ -352,25 +352,35 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>Anchor</h1>
-        <p>Commercial Real Estate Acquisition Analysis</p>
+        <div className="app-header-brand">
+          <img className="app-header-logo" src="/anchor-mark.png" alt="" />
+          <div>
+            <h1>Anchor</h1>
+            <p>Commercial Real Estate Acquisition Analysis</p>
+          </div>
+        </div>
       </header>
 
       <main className="app-main">
-        <ExcelUploadPanel
-          isLoading={isUploadingExcel}
-          error={excelUploadError}
-          successMessage={excelUploadSuccessMessage}
-          onUpload={(file) => void handleUploadExcel(file)}
-        />
+        <div className="intake-section">
+          <h2 className="section-heading">Deal Intake</h2>
+          <div className="intake-grid">
+            <ExcelUploadPanel
+              isLoading={isUploadingExcel}
+              error={excelUploadError}
+              successMessage={excelUploadSuccessMessage}
+              onUpload={(file) => void handleUploadExcel(file)}
+            />
 
-        <OmReviewPanel
-          extraction={ocrExtraction}
-          isLoading={isExtracting}
-          error={extractionError}
-          onUpload={(file) => void handleUploadOm(file)}
-          onFinishReview={handleFinishOmReview}
-        />
+            <OmReviewPanel
+              extraction={ocrExtraction}
+              isLoading={isExtracting}
+              error={extractionError}
+              onUpload={(file) => void handleUploadOm(file)}
+              onFinishReview={handleFinishOmReview}
+            />
+          </div>
+        </div>
 
         <AssumptionsForm
           values={values}
