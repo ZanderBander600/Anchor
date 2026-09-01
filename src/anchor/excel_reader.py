@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from io import BytesIO
 from numbers import Real
 from os import PathLike, fsdecode, fspath
 from typing import Any
@@ -27,7 +28,8 @@ _TEXT_CELL_TYPES = frozenset({"s", "inlineStr"})
 def read_acquisition_inputs(
     workbook_path: str | PathLike[str],
 ) -> AcquisitionInputs:
-    """Read one canonical ``.xlsx`` workbook into validated acquisition inputs.
+    """Read one canonical ``.xlsx`` workbook file into validated acquisition
+    inputs.
 
     All workbook and ingestion failures are translated into an ordered
     :class:`InputValidationError` collection. Formulas are intentionally loaded
@@ -37,8 +39,30 @@ def read_acquisition_inputs(
     identifier = _workbook_identifier(workbook_path)
     if not identifier.casefold().endswith(".xlsx"):
         raise _workbook_open_error(identifier)
+    return _read_acquisition_inputs_from_source(workbook_path, identifier)
+
+
+def read_acquisition_inputs_from_bytes(data: bytes) -> AcquisitionInputs:
+    """Read one canonical ``.xlsx`` workbook held entirely in memory (e.g. an
+    HTTP upload) into validated acquisition inputs.
+
+    Delegates to the exact same parsing and validation path as
+    :func:`read_acquisition_inputs` -- the only difference is the in-memory
+    source and the identifier used in error messages. There is no filename to
+    extension-check here; a caller that needs to reject a non-``.xlsx``
+    upload before this point (e.g. by filename or content signature) does so
+    at its own layer.
+    """
+
+    return _read_acquisition_inputs_from_source(BytesIO(data), "<uploaded workbook>")
+
+
+def _read_acquisition_inputs_from_source(
+    source: str | PathLike[str] | BytesIO,
+    identifier: str,
+) -> AcquisitionInputs:
     try:
-        workbook = load_workbook(workbook_path, data_only=False)
+        workbook = load_workbook(source, data_only=False)
     except Exception:
         raise _workbook_open_error(identifier) from None
 

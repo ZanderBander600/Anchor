@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BLANK_FORM_VALUES,
   buildAcquisitionRequest,
   buildApprovedFormValues,
+  buildFormValuesFromAcquisitionInputs,
   candidateValueToFormValue,
   DEFAULT_FORM_VALUES,
   FormValidationError,
@@ -49,6 +51,25 @@ describe('buildAcquisitionRequest', () => {
     expect(() =>
       buildAcquisitionRequest({ ...DEFAULT_FORM_VALUES, currentNoi: 'abc' }),
     ).toThrow(FormValidationError);
+  });
+
+  it('rejects an entirely blank form (BLANK_FORM_VALUES, U10) rather than treating any field as zero', () => {
+    let error: unknown;
+    try {
+      buildAcquisitionRequest(BLANK_FORM_VALUES);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(FormValidationError);
+    expect((error as FormValidationError).message).toBe('Purchase Price is required.');
+  });
+});
+
+describe('BLANK_FORM_VALUES', () => {
+  it('is entirely blank strings, distinct from the golden-deal defaults', () => {
+    expect(Object.values(BLANK_FORM_VALUES).every((value) => value === '')).toBe(true);
+    expect(BLANK_FORM_VALUES).not.toEqual(DEFAULT_FORM_VALUES);
   });
 });
 
@@ -100,5 +121,85 @@ describe('buildApprovedFormValues', () => {
 
   it('returns an empty object when nothing was approved', () => {
     expect(buildApprovedFormValues({})).toEqual({});
+  });
+});
+
+describe('buildFormValuesFromAcquisitionInputs', () => {
+  it('converts the golden-deal API contract back to the form defaults', () => {
+    const values = buildFormValuesFromAcquisitionInputs({
+      purchase_price: 50_000_000,
+      current_noi: 2_500_000,
+      occupancy: 0.95,
+      noi_growth: 0.03,
+      hold_period: 5,
+      exit_cap_rate: 0.055,
+      ltv: 0.65,
+      interest_rate: 0.0525,
+      amortization: 30,
+    });
+
+    expect(values).toEqual(DEFAULT_FORM_VALUES);
+  });
+
+  it('always includes all nine fields', () => {
+    const values = buildFormValuesFromAcquisitionInputs({
+      purchase_price: 1,
+      current_noi: 0,
+      occupancy: 0,
+      noi_growth: -0.5,
+      hold_period: 1,
+      exit_cap_rate: 0.01,
+      ltv: 0,
+      interest_rate: 0,
+      amortization: 1,
+    });
+
+    expect(Object.keys(values).sort()).toEqual(
+      [
+        'purchasePrice',
+        'currentNoi',
+        'occupancy',
+        'noiGrowth',
+        'holdPeriod',
+        'exitCapRate',
+        'ltv',
+        'interestRate',
+        'amortization',
+      ].sort(),
+    );
+  });
+
+  it('does not leak binary floating-point noise from the percent-scale conversion', () => {
+    const values = buildFormValuesFromAcquisitionInputs({
+      purchase_price: 1,
+      current_noi: 1,
+      occupancy: 0.1,
+      noi_growth: 0.29,
+      hold_period: 1,
+      exit_cap_rate: 0.01,
+      ltv: 0.7,
+      interest_rate: 0.0475,
+      amortization: 1,
+    });
+
+    expect(values.occupancy).toBe('10');
+    expect(values.noiGrowth).toBe('29');
+    expect(values.ltv).toBe('70');
+    expect(values.interestRate).toBe('4.75');
+  });
+
+  it('round-trips through buildAcquisitionRequest', () => {
+    const request = buildAcquisitionRequest(DEFAULT_FORM_VALUES);
+    const roundTripped = buildAcquisitionRequest(buildFormValuesFromAcquisitionInputs(request));
+
+    expect(roundTripped.purchase_price).toBeCloseTo(request.purchase_price);
+    expect(roundTripped.current_noi).toBeCloseTo(request.current_noi);
+    expect(roundTripped.occupancy).toBeCloseTo(request.occupancy);
+    expect(roundTripped.noi_growth).toBeCloseTo(request.noi_growth);
+    expect(roundTripped.hold_period).toBeCloseTo(request.hold_period);
+    expect(roundTripped.exit_cap_rate).toBeCloseTo(request.exit_cap_rate);
+    expect(roundTripped.ltv).toBeCloseTo(request.ltv);
+    expect(roundTripped.interest_rate).toBeCloseTo(request.interest_rate);
+    expect(roundTripped.amortization).toBeCloseTo(request.amortization);
   });
 });

@@ -6,18 +6,21 @@ import {
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchSensitivityPresets,
+  uploadExcel,
   uploadOm,
 } from './api';
 import { AiAnalystPanel } from './components/AiAnalystPanel';
 import { AssumptionsForm } from './components/AssumptionsForm';
 import { BreakEvenPanel } from './components/BreakEvenPanel';
+import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
 import { ResultsPanel } from './components/ResultsPanel';
 import { SensitivityPanel } from './components/SensitivityPanel';
 import {
+  BLANK_FORM_VALUES,
   buildAcquisitionRequest,
   buildApprovedFormValues,
-  DEFAULT_FORM_VALUES,
+  buildFormValuesFromAcquisitionInputs,
   DEFAULT_TARGET_EQUITY_MULTIPLE,
   DEFAULT_TARGET_HEADLINE_DSCR,
   DEFAULT_TARGET_LEVERED_IRR_PERCENT,
@@ -38,7 +41,7 @@ import type {
 } from './types';
 
 export default function App() {
-  const [values, setValues] = useState<AcquisitionFormValues>(DEFAULT_FORM_VALUES);
+  const [values, setValues] = useState<AcquisitionFormValues>(BLANK_FORM_VALUES);
   const [results, setResults] = useState<AcquisitionResults | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +68,10 @@ export default function App() {
   const [ocrExtraction, setOcrExtraction] = useState<ExtractionResult | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionError, setExtractionError] = useState<string | null>(null);
+
+  const [isUploadingExcel, setIsUploadingExcel] = useState(false);
+  const [excelUploadError, setExcelUploadError] = useState<string | null>(null);
+  const [excelUploadSuccessMessage, setExcelUploadSuccessMessage] = useState<string | null>(null);
 
   function resetDownstreamAnalysisState() {
     setResults(null);
@@ -108,6 +115,33 @@ export default function App() {
     }
     setValues((previous) => ({ ...previous, ...formValues }));
     resetDownstreamAnalysisState();
+  }
+
+  async function handleUploadExcel(file: File) {
+    setIsUploadingExcel(true);
+    setExcelUploadError(null);
+    setExcelUploadSuccessMessage(null);
+    try {
+      const inputs = await uploadExcel(file);
+      setValues(buildFormValuesFromAcquisitionInputs(inputs));
+      resetDownstreamAnalysisState();
+      setExcelUploadSuccessMessage(
+        `Workbook loaded successfully. 9 assumptions imported from "${file.name}". ` +
+          'Review the values below, make any changes, then click Analyze Deal.',
+      );
+      document.querySelector('.assumptions-form')?.scrollIntoView?.({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setExcelUploadError(apiError.message);
+      } else {
+        setExcelUploadError('An unexpected error occurred while parsing the workbook.');
+      }
+    } finally {
+      setIsUploadingExcel(false);
+    }
   }
 
   async function runBreakEven(
@@ -323,6 +357,13 @@ export default function App() {
       </header>
 
       <main className="app-main">
+        <ExcelUploadPanel
+          isLoading={isUploadingExcel}
+          error={excelUploadError}
+          successMessage={excelUploadSuccessMessage}
+          onUpload={(file) => void handleUploadExcel(file)}
+        />
+
         <OmReviewPanel
           extraction={ocrExtraction}
           isLoading={isExtracting}

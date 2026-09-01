@@ -12,6 +12,7 @@ sensitivity math of its own.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from io import BytesIO
@@ -41,7 +42,9 @@ from .analysis import (
     build_standard_presets,
     run_two_way_sensitivity,
 )
+from .contracts import AcquisitionInputs
 from .engine import AcquisitionResults, analyze_acquisition
+from .excel_reader import read_acquisition_inputs_from_bytes
 from .ingestion import (
     ExtractionConfigurationError,
     ExtractionProviderError,
@@ -53,11 +56,12 @@ from .validation import InputValidationError, validate_acquisition_inputs
 app = FastAPI(title="Anchor API")
 
 # =============================================================================
-# Phase 10A -- OM ingestion upload ceilings (KTD9)
+# Phase 10A/10B -- ingestion upload ceilings (KTD9)
 #
 # A POC-scale guard against an oversized, malformed, or spoofed upload
-# reaching a paid Azure DI/OpenAI call -- not a service-imposed limit (Azure's
-# own Standard tier runs far higher: 500 MB / 2,000 pages).
+# reaching a paid Azure DI/OpenAI call (OM) or an expensive in-memory
+# workbook parse (Excel) -- not a service-imposed limit (Azure's own
+# Standard tier runs far higher: 500 MB / 2,000 pages).
 # =============================================================================
 
 _INGESTION_PATH = "/ingestion/om"
@@ -66,30 +70,34 @@ _MAX_UPLOAD_PAGES = 75
 _PDF_PARSE_TIMEOUT_SECONDS = 5  # KTD11 -- bounds the local pypdf page-count parse.
 _PDF_SIGNATURE = b"%PDF-"
 
+_EXCEL_INGESTION_PATH = "/ingestion/excel"
+_MAX_EXCEL_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB -- a structured input workbook is small.
+_XLSX_SIGNATURE = b"PK\x03\x04"  # .xlsx is a zip archive (OOXML).
+
 
 class _IngestionUploadSizeGuard:
-    """ASGI middleware rejecting an oversized OM upload by its declared
-    ``Content-Length`` (KTD9(b)) before Starlette's multipart form parser
-    reads any of the body.
+    """ASGI middleware rejecting an oversized ingestion upload by its
+    declared ``Content-Length`` (KTD9(b)) before Starlette's multipart form
+    parser reads any of the body.
 
-    This is the only point in the request pipeline that runs before
-    FastAPI resolves the ``UploadFile``/``File()`` dependency for
-    ``/ingestion/om`` -- by the time that route's own body executes, the
-    full upload has already been parsed, so the declared-size check can't
-    happen inside the route itself.
+    One instance guards every ingestion path this app exposes, each with its
+    own byte ceiling (``limits``) -- this is the only point in the request
+    pipeline that runs before FastAPI resolves the ``UploadFile``/``File()``
+    dependency for any of them, so the declared-size check can't happen
+    inside the route itself.
     """
 
-    def __init__(self, app: ASGIApp, *, path: str, max_bytes: int) -> None:
+    def __init__(self, app: ASGIApp, *, limits: Mapping[str, int]) -> None:
         self._app = app
-        self._path = path
-        self._max_bytes = max_bytes
+        self._limits = limits
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] == "http"
-            and scope.get("method") == "POST"
-            and scope.get("path") == self._path
-        ):
+        max_bytes = (
+            self._limits.get(scope.get("path"))
+            if scope["type"] == "http" and scope.get("method") == "POST"
+            else None
+        )
+        if max_bytes is not None:
             content_length = Headers(scope=scope).get("content-length")
             declared_bytes: int | None = None
             if content_length is not None:
@@ -97,9 +105,9 @@ class _IngestionUploadSizeGuard:
                     declared_bytes = int(content_length)
                 except ValueError:
                     declared_bytes = None
-            if declared_bytes is not None and declared_bytes > self._max_bytes:
+            if declared_bytes is not None and declared_bytes > max_bytes:
                 response = PlainTextResponse(
-                    f"Upload exceeds the maximum allowed size of {self._max_bytes} bytes.",
+                    f"Upload exceeds the maximum allowed size of {max_bytes} bytes.",
                     status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 )
                 await response(scope, receive, send)
@@ -108,7 +116,11 @@ class _IngestionUploadSizeGuard:
 
 
 app.add_middleware(
-    _IngestionUploadSizeGuard, path=_INGESTION_PATH, max_bytes=_MAX_UPLOAD_BYTES
+    _IngestionUploadSizeGuard,
+    limits={
+        _INGESTION_PATH: _MAX_UPLOAD_BYTES,
+        _EXCEL_INGESTION_PATH: _MAX_EXCEL_UPLOAD_BYTES,
+    },
 )
 
 # Allows the local Vite dev server (Phase 6 web UI) to call this API from the
@@ -426,16 +438,15 @@ def _validate_content_type(file: UploadFile) -> None:
         _reject_upload("Uploaded file must have content-type 'application/pdf'.")
 
 
-def _read_upload_bytes(file: UploadFile) -> bytes:
-    """Read the upload's bytes, never buffering more than
-    ``_MAX_UPLOAD_BYTES + 1`` into memory regardless of what the request
-    declared (KTD9(c)) -- a missing or understated ``Content-Length``
-    cannot bypass this guard."""
+def _read_upload_bytes(file: UploadFile, *, max_bytes: int) -> bytes:
+    """Read the upload's bytes, never buffering more than ``max_bytes + 1``
+    into memory regardless of what the request declared (KTD9(c)) -- a
+    missing or understated ``Content-Length`` cannot bypass this guard."""
 
     file.file.seek(0)
-    contents = file.file.read(_MAX_UPLOAD_BYTES + 1)
-    if len(contents) > _MAX_UPLOAD_BYTES:
-        _reject_upload(f"Upload exceeds the maximum allowed size of {_MAX_UPLOAD_BYTES} bytes.")
+    contents = file.file.read(max_bytes + 1)
+    if len(contents) > max_bytes:
+        _reject_upload(f"Upload exceeds the maximum allowed size of {max_bytes} bytes.")
     return contents
 
 
@@ -493,7 +504,7 @@ def _validate_page_count(pdf_bytes: bytes) -> None:
 def ingest_om(file: UploadFile = File(...)) -> ExtractionResult:
     _validate_content_type(file)
 
-    pdf_bytes = _read_upload_bytes(file)
+    pdf_bytes = _read_upload_bytes(file, max_bytes=_MAX_UPLOAD_BYTES)
     _validate_pdf_signature(pdf_bytes)
     _validate_page_count(pdf_bytes)
 
@@ -506,4 +517,48 @@ def ingest_om(file: UploadFile = File(...)) -> ExtractionResult:
     except ExtractionProviderError as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+        ) from None
+
+
+# =============================================================================
+# Phase 10B -- Excel ingestion (web upload)
+#
+# Reuses the exact same deterministic workbook reader the CLI has always
+# used (``read_acquisition_inputs_from_bytes``, sharing its parsing/
+# validation implementation with the path-based ``read_acquisition_inputs``)
+# -- this endpoint performs no workbook parsing, financial validation, or
+# financial math of its own, and never calls the deterministic engine.
+# Unlike ``/ingestion/om``, there is no external provider and no partial/
+# candidate result: a workbook is either fully valid (200, the nine
+# validated inputs) or it isn't (422, the same ordered issue list
+# ``/analyze`` already returns for a bad payload).
+# =============================================================================
+
+
+def _validate_xlsx_filename(file: UploadFile) -> None:
+    filename = file.filename or ""
+    if not filename.casefold().endswith(".xlsx"):
+        _reject_upload("Uploaded file must be a .xlsx workbook.")
+
+
+def _validate_xlsx_signature(data: bytes) -> None:
+    # The client-supplied filename is spoofable (KTD9); this confirms the
+    # bytes actually start with the .xlsx (zip/OOXML) signature.
+    if not data.startswith(_XLSX_SIGNATURE):
+        _reject_upload("Uploaded file does not appear to be a valid .xlsx workbook.")
+
+
+@app.post(_EXCEL_INGESTION_PATH, response_model=AcquisitionInputs)
+def ingest_excel(file: UploadFile = File(...)) -> AcquisitionInputs:
+    _validate_xlsx_filename(file)
+
+    workbook_bytes = _read_upload_bytes(file, max_bytes=_MAX_EXCEL_UPLOAD_BYTES)
+    _validate_xlsx_signature(workbook_bytes)
+
+    try:
+        return read_acquisition_inputs_from_bytes(workbook_bytes)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
         ) from None

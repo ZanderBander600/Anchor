@@ -218,6 +218,15 @@ body {
   font-size: 0.88rem;
 }
 
+.success-banner {
+  background: #e2f4e8;
+  border: 1px solid #b9e2c6;
+  color: #1f7a3f;
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  font-size: 0.88rem;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

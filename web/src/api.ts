@@ -267,3 +267,54 @@ export async function uploadOm(file: File): Promise<ExtractionResult> {
 
   return (await response.json()) as ExtractionResult;
 }
+
+/**
+ * Uploads an Anchor Excel acquisition workbook to the FastAPI
+ * ``POST /ingestion/excel`` endpoint as multipart form data and returns the
+ * nine validated ``AcquisitionRequest`` fields. Performs no workbook
+ * parsing or financial validation of its own -- the backend Excel reader
+ * (shared with the CLI) is authoritative. The browser sets the multipart
+ * ``Content-Type`` boundary itself, so this function must not set that
+ * header explicitly. Unlike ``uploadOm``, a successful response is already
+ * a complete, validated input set -- there is no candidate/evidence review
+ * step -- and a malformed workbook fails with the exact same 422 issue-list
+ * shape ``analyzeAcquisition`` already handles.
+ */
+export async function uploadExcel(file: File): Promise<AcquisitionRequest> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/ingestion/excel`, {
+      method: 'POST',
+      body: formData,
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  if (response.status === 422) {
+    const body = await response.json().catch(() => null);
+    const issues: ValidationIssue[] = Array.isArray(body?.detail) ? body.detail : [];
+    const message =
+      issues.length > 0
+        ? issues.map((issue) => issue.message).join(' ')
+        : 'The uploaded workbook failed validation.';
+    throw new ApiError(message, issues);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string'
+        ? body.detail
+        : `The Excel upload was rejected (HTTP ${response.status}).`;
+    throw new ApiError(message);
+  }
+
+  return (await response.json()) as AcquisitionRequest;
+}
