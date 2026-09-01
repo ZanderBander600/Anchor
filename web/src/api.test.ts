@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, uploadExcel, uploadOm } from './api';
-import type { AcquisitionRequest, ExtractionResult } from './types';
+import { ApiError, createDeal, getDeal, listDeals, updateDeal, uploadExcel, uploadOm } from './api';
+import type { AcquisitionRequest, Deal, ExtractionResult } from './types';
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -216,5 +216,135 @@ describe('uploadExcel', () => {
 
     await expect(uploadExcel(file)).rejects.toBeInstanceOf(ApiError);
     await expect(uploadExcel(file)).rejects.toThrow(/Could not reach the Anchor API/);
+  });
+});
+
+const GOLDEN_INPUTS: AcquisitionRequest = {
+  purchase_price: 50_000_000,
+  current_noi: 2_500_000,
+  occupancy: 0.95,
+  noi_growth: 0.03,
+  hold_period: 5,
+  exit_cap_rate: 0.055,
+  ltv: 0.65,
+  interest_rate: 0.0525,
+  amortization: 30,
+};
+
+function dealFixture(overrides: Partial<Deal> = {}): Deal {
+  return {
+    id: 'deal-1',
+    name: '111 Main St',
+    inputs: GOLDEN_INPUTS,
+    created_at: '2026-09-03T12:00:00+00:00',
+    updated_at: '2026-09-03T12:00:00+00:00',
+    ...overrides,
+  };
+}
+
+describe('createDeal', () => {
+  it('POSTs the name and inputs to /deals and returns the created deal', async () => {
+    const deal = dealFixture();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await createDeal('111 Main St', GOLDEN_INPUTS);
+
+    expect(result).toEqual(deal);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ name: '111 Main St', inputs: GOLDEN_INPUTS });
+  });
+
+  it('surfaces a 422 validation failure with the issue-list shape', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(422, {
+        detail: [{ field_id: 'purchase_price', category: 'out_of_domain_value', message: 'bad price' }],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    let caught: ApiError | undefined;
+    try {
+      await createDeal('Bad Deal', { ...GOLDEN_INPUTS, purchase_price: -1 });
+    } catch (error) {
+      caught = error as ApiError;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    expect(caught?.issues[0].field_id).toBe('purchase_price');
+  });
+
+  it('throws an ApiError on a network failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createDeal('Deal', GOLDEN_INPUTS)).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('updateDeal', () => {
+  it('PUTs the name and inputs to /deals/{id} and returns the updated deal', async () => {
+    const deal = dealFixture({ name: 'Renamed Deal' });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await updateDeal('deal-1', 'Renamed Deal', GOLDEN_INPUTS);
+
+    expect(result).toEqual(deal);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/deal-1');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({ name: 'Renamed Deal', inputs: GOLDEN_INPUTS });
+  });
+
+  it('surfaces a 404 for an unknown deal id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(404, { detail: 'not found' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(updateDeal('missing', 'Deal', GOLDEN_INPUTS)).rejects.toThrow(/could not be found/);
+  });
+});
+
+describe('getDeal', () => {
+  it('GETs one deal by id', async () => {
+    const deal = dealFixture();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getDeal('deal-1');
+
+    expect(result).toEqual(deal);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/deal-1');
+  });
+
+  it('surfaces a 404 for an unknown deal id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(404, { detail: 'not found' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getDeal('missing')).rejects.toThrow(/could not be found/);
+  });
+});
+
+describe('listDeals', () => {
+  it('GETs /deals and returns the array as-is', async () => {
+    const deals = [dealFixture({ id: 'a' }), dealFixture({ id: 'b' })];
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deals));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await listDeals();
+
+    expect(result).toEqual(deals);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals');
+  });
+
+  it('throws an ApiError on a network failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(listDeals()).rejects.toBeInstanceOf(ApiError);
   });
 });

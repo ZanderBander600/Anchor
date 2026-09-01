@@ -3,15 +3,21 @@ import type { FormEvent } from 'react';
 import {
   analyzeAcquisition,
   ApiError,
+  createDeal,
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchSensitivityPresets,
+  getDeal,
+  listDeals,
+  updateDeal,
   uploadExcel,
   uploadOm,
 } from './api';
 import { AiAnalystPanel } from './components/AiAnalystPanel';
 import { AssumptionsForm } from './components/AssumptionsForm';
 import { BreakEvenPanel } from './components/BreakEvenPanel';
+import { DealBar } from './components/DealBar';
+import { DealLibraryPanel } from './components/DealLibraryPanel';
 import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
 import { ResultsPanel } from './components/ResultsPanel';
@@ -34,6 +40,7 @@ import type {
   AcquisitionRequest,
   AcquisitionResults,
   AIAnalysis,
+  Deal,
   ExtractionResult,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
@@ -73,6 +80,34 @@ export default function App() {
   const [excelUploadError, setExcelUploadError] = useState<string | null>(null);
   const [excelUploadSuccessMessage, setExcelUploadSuccessMessage] = useState<string | null>(null);
 
+  // Persistence Phase B -- Deal Bar / Deal Library. `currentDealId` is set
+  // only after a deal is created or opened (never guessed at); it is what
+  // decides whether Save Deal calls POST /deals (null) or PUT /deals/{id}
+  // (set). No AcquisitionResults is ever part of this state -- reopening a
+  // deal always means resubmitting its inputs to the existing /analyze.
+  const [view, setView] = useState<'workspace' | 'library'>('workspace');
+  const [dealName, setDealName] = useState('');
+  const [currentDealId, setCurrentDealId] = useState<string | null>(null);
+  const [isSavingDeal, setIsSavingDeal] = useState(false);
+  const [saveDealError, setSaveDealError] = useState<string | null>(null);
+  const [saveDealSuccessMessage, setSaveDealSuccessMessage] = useState<string | null>(null);
+
+  const [savedDeals, setSavedDeals] = useState<Deal[]>([]);
+  const [isDealsLoading, setIsDealsLoading] = useState(false);
+  const [dealsError, setDealsError] = useState<string | null>(null);
+
+  function clearSaveDealFeedback() {
+    setSaveDealError(null);
+    setSaveDealSuccessMessage(null);
+  }
+
+  function clearIntakeFeedback() {
+    setOcrExtraction(null);
+    setExtractionError(null);
+    setExcelUploadSuccessMessage(null);
+    setExcelUploadError(null);
+  }
+
   function resetDownstreamAnalysisState() {
     setResults(null);
     setError(null);
@@ -88,6 +123,7 @@ export default function App() {
   function handleFieldChange(key: keyof AcquisitionFormValues, value: string) {
     setValues((previous) => ({ ...previous, [key]: value }));
     resetDownstreamAnalysisState();
+    clearSaveDealFeedback();
   }
 
   async function handleUploadOm(file: File) {
@@ -115,6 +151,7 @@ export default function App() {
     }
     setValues((previous) => ({ ...previous, ...formValues }));
     resetDownstreamAnalysisState();
+    clearSaveDealFeedback();
   }
 
   async function handleUploadExcel(file: File) {
@@ -125,6 +162,7 @@ export default function App() {
       const inputs = await uploadExcel(file);
       setValues(buildFormValuesFromAcquisitionInputs(inputs));
       resetDownstreamAnalysisState();
+      clearSaveDealFeedback();
       setExcelUploadSuccessMessage(
         `Workbook loaded successfully. 9 assumptions imported from "${file.name}". ` +
           'Review the values below, make any changes, then click Analyze Deal.',
@@ -142,6 +180,114 @@ export default function App() {
     } finally {
       setIsUploadingExcel(false);
     }
+  }
+
+  // ===========================================================================
+  // Persistence Phase B -- Deal Bar / Deal Library handlers.
+  //
+  // Save persists exactly the nine assumptions already converged onto
+  // `values` via `buildAcquisitionRequest` (the same conversion/validation
+  // `handleSubmit` already uses) -- it never cares whether they arrived by
+  // typing, Excel, or OM, and it never calls `/analyze`. Opening a deal
+  // populates the form via the existing `buildFormValuesFromAcquisitionInputs`
+  // conversion and clears stale analysis state, but likewise never calls
+  // `/analyze` -- the analyst clicks Analyze Deal explicitly, same as today.
+  // ===========================================================================
+
+  function handleDealNameChange(value: string) {
+    setDealName(value);
+  }
+
+  async function handleSaveDeal() {
+    let request: AcquisitionRequest;
+    try {
+      request = buildAcquisitionRequest(values);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setSaveDealSuccessMessage(null);
+        setSaveDealError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    const name = dealName.trim() || 'Untitled Deal';
+
+    setIsSavingDeal(true);
+    setSaveDealError(null);
+    setSaveDealSuccessMessage(null);
+    try {
+      const deal = currentDealId
+        ? await updateDeal(currentDealId, name, request)
+        : await createDeal(name, request);
+      setCurrentDealId(deal.id);
+      setDealName(deal.name);
+      setSaveDealSuccessMessage(`"${deal.name}" saved.`);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setSaveDealError(apiError.message);
+      } else {
+        setSaveDealError('An unexpected error occurred while saving the deal.');
+      }
+    } finally {
+      setIsSavingDeal(false);
+    }
+  }
+
+  async function loadSavedDeals() {
+    setIsDealsLoading(true);
+    setDealsError(null);
+    try {
+      const deals = await listDeals();
+      setSavedDeals(deals);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDealsError(apiError.message);
+      } else {
+        setDealsError('An unexpected error occurred while loading the deal library.');
+      }
+    } finally {
+      setIsDealsLoading(false);
+    }
+  }
+
+  function handleOpenLibrary() {
+    setView('library');
+    void loadSavedDeals();
+  }
+
+  function handleCloseLibrary() {
+    setView('workspace');
+  }
+
+  async function handleOpenDeal(deal: Deal) {
+    setDealsError(null);
+    try {
+      const fullDeal = await getDeal(deal.id);
+      setValues(buildFormValuesFromAcquisitionInputs(fullDeal.inputs));
+      setDealName(fullDeal.name);
+      setCurrentDealId(fullDeal.id);
+      resetDownstreamAnalysisState();
+      clearSaveDealFeedback();
+      clearIntakeFeedback();
+      setView('workspace');
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDealsError(apiError.message);
+      } else {
+        setDealsError('An unexpected error occurred while opening the deal.');
+      }
+    }
+  }
+
+  function handleNewDeal() {
+    setValues(BLANK_FORM_VALUES);
+    setDealName('');
+    setCurrentDealId(null);
+    resetDownstreamAnalysisState();
+    clearSaveDealFeedback();
+    clearIntakeFeedback();
+    setView('workspace');
   }
 
   async function runBreakEven(
@@ -362,77 +508,101 @@ export default function App() {
       </header>
 
       <main className="app-main">
-        <div className="intake-section">
-          <h2 className="section-heading">Deal Intake</h2>
-          <div className="intake-grid">
-            <ExcelUploadPanel
-              isLoading={isUploadingExcel}
-              error={excelUploadError}
-              successMessage={excelUploadSuccessMessage}
-              onUpload={(file) => void handleUploadExcel(file)}
+        {view === 'library' ? (
+          <DealLibraryPanel
+            deals={savedDeals}
+            isLoading={isDealsLoading}
+            error={dealsError}
+            onOpen={(deal) => void handleOpenDeal(deal)}
+            onClose={handleCloseLibrary}
+          />
+        ) : (
+          <>
+            <DealBar
+              dealName={dealName}
+              onDealNameChange={handleDealNameChange}
+              isSavedDeal={currentDealId !== null}
+              isSaving={isSavingDeal}
+              error={saveDealError}
+              successMessage={saveDealSuccessMessage}
+              onSaveDeal={() => void handleSaveDeal()}
+              onOpenLibrary={handleOpenLibrary}
+              onNewDeal={handleNewDeal}
             />
 
-            <OmReviewPanel
-              extraction={ocrExtraction}
-              isLoading={isExtracting}
-              error={extractionError}
-              onUpload={(file) => void handleUploadOm(file)}
-              onFinishReview={handleFinishOmReview}
-            />
-          </div>
-        </div>
+            <div className="intake-section">
+              <h2 className="section-heading">Deal Intake</h2>
+              <div className="intake-grid">
+                <ExcelUploadPanel
+                  isLoading={isUploadingExcel}
+                  error={excelUploadError}
+                  successMessage={excelUploadSuccessMessage}
+                  onUpload={(file) => void handleUploadExcel(file)}
+                />
 
-        <AssumptionsForm
-          values={values}
-          onFieldChange={handleFieldChange}
-          onSubmit={handleSubmit}
-          isSubmitting={isSubmitting}
-        />
-
-        <div className="results-column">
-          {error && <div className="error-banner">{error}</div>}
-
-          {!results && !error && (
-            <div className="empty-state">
-              Enter assumptions and click <strong>Analyze Deal</strong> to see results.
+                <OmReviewPanel
+                  extraction={ocrExtraction}
+                  isLoading={isExtracting}
+                  error={extractionError}
+                  onUpload={(file) => void handleUploadOm(file)}
+                  onFinishReview={handleFinishOmReview}
+                />
+              </div>
             </div>
-          )}
 
-          {results && <ResultsPanel results={results} />}
-
-          {results && (
-            <SensitivityPanel
-              presets={sensitivity}
-              isLoading={isSensitivityLoading}
-              error={sensitivityError}
+            <AssumptionsForm
+              values={values}
+              onFieldChange={handleFieldChange}
+              onSubmit={handleSubmit}
+              isSubmitting={isSubmitting}
             />
-          )}
 
-          {results && (
-            <BreakEvenPanel
-              analysis={breakEven}
-              isLoading={isBreakEvenLoading}
-              error={breakEvenError}
-              targetLeveredIrrPercent={targetLeveredIrrPercent}
-              targetEquityMultiple={targetEquityMultiple}
-              targetHeadlineDscr={targetHeadlineDscr}
-              returnHurdleMetric={returnHurdleMetric}
-              onTargetLeveredIrrChange={handleTargetLeveredIrrChange}
-              onTargetEquityMultipleChange={handleTargetEquityMultipleChange}
-              onTargetHeadlineDscrChange={handleTargetHeadlineDscrChange}
-              onReturnHurdleMetricChange={handleReturnHurdleMetricChange}
-            />
-          )}
+            <div className="results-column">
+              {error && <div className="error-banner">{error}</div>}
 
-          {results && (
-            <AiAnalystPanel
-              analysis={aiAnalysis}
-              isLoading={isAiAnalysisLoading}
-              error={aiAnalysisError}
-              onGenerate={() => void handleGenerateAiAnalysis()}
-            />
-          )}
-        </div>
+              {!results && !error && (
+                <div className="empty-state">
+                  Enter assumptions and click <strong>Analyze Deal</strong> to see results.
+                </div>
+              )}
+
+              {results && <ResultsPanel results={results} />}
+
+              {results && (
+                <SensitivityPanel
+                  presets={sensitivity}
+                  isLoading={isSensitivityLoading}
+                  error={sensitivityError}
+                />
+              )}
+
+              {results && (
+                <BreakEvenPanel
+                  analysis={breakEven}
+                  isLoading={isBreakEvenLoading}
+                  error={breakEvenError}
+                  targetLeveredIrrPercent={targetLeveredIrrPercent}
+                  targetEquityMultiple={targetEquityMultiple}
+                  targetHeadlineDscr={targetHeadlineDscr}
+                  returnHurdleMetric={returnHurdleMetric}
+                  onTargetLeveredIrrChange={handleTargetLeveredIrrChange}
+                  onTargetEquityMultipleChange={handleTargetEquityMultipleChange}
+                  onTargetHeadlineDscrChange={handleTargetHeadlineDscrChange}
+                  onReturnHurdleMetricChange={handleReturnHurdleMetricChange}
+                />
+              )}
+
+              {results && (
+                <AiAnalystPanel
+                  analysis={aiAnalysis}
+                  isLoading={isAiAnalysisLoading}
+                  error={aiAnalysisError}
+                  onGenerate={() => void handleGenerateAiAnalysis()}
+                />
+              )}
+            </div>
+          </>
+        )}
       </main>
     </div>
   );

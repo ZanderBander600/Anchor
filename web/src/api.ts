@@ -2,6 +2,7 @@ import type {
   AcquisitionRequest,
   AcquisitionResults,
   AIAnalysis,
+  Deal,
   ExtractionResult,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
@@ -317,4 +318,114 @@ export async function uploadExcel(file: File): Promise<AcquisitionRequest> {
   }
 
   return (await response.json()) as AcquisitionRequest;
+}
+
+// =============================================================================
+// Persistence Phase B -- Deal Library
+//
+// Each function mirrors the shape of ``analyzeAcquisition`` above: POST/PUT
+// send the same nine-field ``AcquisitionRequest`` shape ``/analyze`` already
+// accepts, and a 422 response carries the identical issue-list shape,
+// because both endpoints validate through the same backend function. These
+// functions never call ``/analyze`` themselves -- saving is not analyzing.
+// =============================================================================
+
+async function _handleDealResponse(response: Response, failureMessage: string): Promise<Deal> {
+  if (response.status === 422) {
+    const body = await response.json().catch(() => null);
+    const issues: ValidationIssue[] = Array.isArray(body?.detail) ? body.detail : [];
+    const message =
+      issues.length > 0
+        ? issues.map((issue) => issue.message).join(' ')
+        : 'The submitted deal failed validation.';
+    throw new ApiError(message, issues);
+  }
+
+  if (response.status === 404) {
+    throw new ApiError('That deal could not be found. It may have been deleted.');
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`${failureMessage} (HTTP ${response.status}).`);
+  }
+
+  return (await response.json()) as Deal;
+}
+
+/** POSTs a new deal (name + the nine assumptions) to ``/deals``. Used for a
+ * deal that has never been saved -- ``currentDealId`` is still ``null``. */
+export async function createDeal(name: string, inputs: AcquisitionRequest): Promise<Deal> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, inputs }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  return _handleDealResponse(response, 'The deal could not be saved');
+}
+
+/** PUTs an already-saved deal's name and assumptions to ``/deals/{id}``. */
+export async function updateDeal(
+  dealId: string,
+  name: string,
+  inputs: AcquisitionRequest,
+): Promise<Deal> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals/${encodeURIComponent(dealId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, inputs }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  return _handleDealResponse(response, 'The deal could not be updated');
+}
+
+/** GETs one saved deal by id, for reopening it into the assumptions form. */
+export async function getDeal(dealId: string): Promise<Deal> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals/${encodeURIComponent(dealId)}`);
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  return _handleDealResponse(response, 'The deal could not be loaded');
+}
+
+/** GETs every saved deal for the Deal Library, most recently updated
+ * first (the backend's own ordering -- this function does not re-sort). */
+export async function listDeals(): Promise<Deal[]> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals`);
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`The deal library could not be loaded (HTTP ${response.status}).`);
+  }
+
+  return (await response.json()) as Deal[];
 }

@@ -113,6 +113,18 @@ export interface AcquisitionResults {
   headline_dscr: number | null;
 }
 
+/** Mirrors ``Deal`` in ``src/anchor/deals/contracts.py``. ``inputs`` is the
+ * exact ``AcquisitionRequest`` shape ``/analyze`` already accepts -- a
+ * saved deal carries no derived/result data of its own; reopening it means
+ * resubmitting ``inputs`` to the existing ``/analyze`` endpoint. */
+export interface Deal {
+  id: string;
+  name: string;
+  inputs: AcquisitionRequest;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ValidationIssue {
   field_id: string | null;
   category: string;
