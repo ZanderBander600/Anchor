@@ -22,21 +22,72 @@ def calculate_loan_amount(*, purchase_price: float, ltv: float) -> float:
     return ensure_finite("loan_amount", loan_amount)
 
 
-def calculate_initial_equity(*, purchase_price: float, loan_amount: float) -> float:
-    initial_equity = purchase_price - loan_amount
+def calculate_acquisition_costs(
+    *, purchase_price: float, acquisition_cost_pct: float
+) -> float:
+    """Underwriting V2 Gate 2: ``acquisition_costs = purchase_price *
+    acquisition_cost_pct``. Funded entirely by equity -- never affects
+    ``loan_amount``, which continues to derive from ``purchase_price``
+    alone."""
+
+    acquisition_costs = purchase_price * acquisition_cost_pct
+    return ensure_finite("acquisition_costs", acquisition_costs)
+
+
+def calculate_financing_fee(*, loan_amount: float, financing_fee_pct: float) -> float:
+    """Underwriting V2 Gate 2: ``financing_fee = loan_amount *
+    financing_fee_pct``. Funded entirely by equity -- never affects
+    ``loan_amount`` or any debt-service calculation. Naturally ``0.0``
+    whenever ``loan_amount`` is ``0.0`` (e.g. ``ltv = 0``), with no special
+    case required."""
+
+    financing_fee = loan_amount * financing_fee_pct
+    return ensure_finite("financing_fee", financing_fee)
+
+
+def calculate_initial_equity(
+    *,
+    purchase_price: float,
+    loan_amount: float,
+    acquisition_costs: float = 0.0,
+    financing_fee: float = 0.0,
+) -> float:
+    """``initial_equity = purchase_price - loan_amount + acquisition_costs
+    + financing_fee``. At Gate 2 neutral defaults (both cost terms
+    ``0.0``), this reduces to exactly the V1 formula
+    ``purchase_price - loan_amount``."""
+
+    initial_equity = purchase_price - loan_amount + acquisition_costs + financing_fee
     return ensure_finite("initial_equity", initial_equity)
 
 
 def calculate_capital_stack(inputs: AcquisitionInputs) -> CapitalStack:
-    """Compute the Phase 2A capital-stack basics for one ``AcquisitionInputs``."""
+    """Compute the Phase 2A capital-stack basics, plus the Underwriting V2
+    Gate 2 acquisition-cost/financing-fee terms, for one
+    ``AcquisitionInputs``."""
 
     loan_amount = calculate_loan_amount(
         purchase_price=inputs.purchase_price, ltv=inputs.ltv
     )
-    initial_equity = calculate_initial_equity(
-        purchase_price=inputs.purchase_price, loan_amount=loan_amount
+    acquisition_costs = calculate_acquisition_costs(
+        purchase_price=inputs.purchase_price,
+        acquisition_cost_pct=inputs.acquisition_cost_pct,
     )
-    return CapitalStack(loan_amount=loan_amount, initial_equity=initial_equity)
+    financing_fee = calculate_financing_fee(
+        loan_amount=loan_amount, financing_fee_pct=inputs.financing_fee_pct
+    )
+    initial_equity = calculate_initial_equity(
+        purchase_price=inputs.purchase_price,
+        loan_amount=loan_amount,
+        acquisition_costs=acquisition_costs,
+        financing_fee=financing_fee,
+    )
+    return CapitalStack(
+        loan_amount=loan_amount,
+        acquisition_costs=acquisition_costs,
+        financing_fee=financing_fee,
+        initial_equity=initial_equity,
+    )
 
 
 # --- Phase 2B: loan structure -------------------------------------------------

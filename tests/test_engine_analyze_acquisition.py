@@ -32,6 +32,8 @@ def strict(expected: object) -> object:
 ACQUISITION_RESULTS_FIELDS = (
     ("going_in_cap_rate", float),
     ("loan_amount", float),
+    ("acquisition_costs", float),
+    ("financing_fee", float),
     ("initial_equity", float),
     ("monthly_debt_service", float),
     ("annual_debt_service", tuple[float, ...]),
@@ -39,6 +41,7 @@ ACQUISITION_RESULTS_FIELDS = (
     ("noi_by_year", tuple[float, ...]),
     ("exit_noi", float),
     ("exit_value", float),
+    ("disposition_costs", float),
     ("net_sale_proceeds", float),
     ("unlevered_cash_flows", tuple[float, ...]),
     ("levered_cash_flows", tuple[float, ...]),

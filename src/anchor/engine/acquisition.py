@@ -19,22 +19,44 @@ from .returns import calculate_return_metrics
 
 
 def calculate_exit_value(*, exit_noi: float, exit_cap_rate: float) -> float:
-    """Return ``Exit Value = Exit NOI / Exit Cap Rate``.
+    """Return ``Exit Value = Exit NOI / Exit Cap Rate`` -- the gross,
+    unmodified market-value estimate.
 
-    Sale costs are 0 (Phase 0 exclusion). ``exit_cap_rate > 0`` is already
-    guaranteed by the input domain, so this division is always defined.
+    ``exit_cap_rate > 0`` is already guaranteed by the input domain, so this
+    division is always defined. Underwriting V2 Gate 2's disposition costs
+    are never folded into this value; see ``calculate_disposition_costs``
+    and ``calculate_net_sale_proceeds`` below, which deduct them only when
+    deriving the *net* sale figure.
     """
 
     exit_value = exit_noi / exit_cap_rate
     return ensure_finite("exit_value", exit_value)
 
 
-def calculate_net_sale_proceeds(
-    *, exit_value: float, remaining_loan_balance: float
+def calculate_disposition_costs(
+    *, exit_value: float, disposition_cost_pct: float
 ) -> float:
-    """Return the levered net sale proceeds: ``Exit Value - Remaining Loan Balance``."""
+    """Underwriting V2 Gate 2: ``disposition_costs = exit_value *
+    disposition_cost_pct`` -- a percentage of the gross sale price.
+    ``exit_value`` itself (``calculate_exit_value``) is never reduced by
+    this; it stays the gross market-value estimate."""
 
-    net_sale_proceeds = exit_value - remaining_loan_balance
+    disposition_costs = exit_value * disposition_cost_pct
+    return ensure_finite("disposition_costs", disposition_costs)
+
+
+def calculate_net_sale_proceeds(
+    *,
+    exit_value: float,
+    remaining_loan_balance: float,
+    disposition_costs: float = 0.0,
+) -> float:
+    """Return the levered net sale proceeds: ``Exit Value - Disposition
+    Costs - Remaining Loan Balance``. At the Gate 2 neutral default
+    (``disposition_costs = 0.0``), this reduces to exactly the V1 formula
+    ``Exit Value - Remaining Loan Balance``."""
+
+    net_sale_proceeds = exit_value - disposition_costs - remaining_loan_balance
     return ensure_finite("net_sale_proceeds", net_sale_proceeds)
 
 
@@ -43,23 +65,32 @@ def calculate_unlevered_cash_flows(
     purchase_price: float,
     noi_by_year: tuple[float, ...],
     exit_value: float,
+    acquisition_costs: float = 0.0,
+    disposition_costs: float = 0.0,
 ) -> tuple[float, ...]:
     """Return ``(UCF_0, UCF_1, ..., UCF_H)``, length ``H + 1``.
 
-    ``UCF_0 = -purchase_price``; ``UCF_y = NOI_y`` for ``1 <= y < H``;
-    ``UCF_H = NOI_H + exit_value``. No debt term appears anywhere in this
-    series, and ``exit_noi`` (already folded into ``exit_value``) is never
-    added again as a separate operating cash flow.
+    ``UCF_0 = -(purchase_price + acquisition_costs)``; ``UCF_y = NOI_y``
+    for ``1 <= y < H``; ``UCF_H = NOI_H + exit_value - disposition_costs``.
+    At the Gate 2 neutral defaults (both cost terms ``0.0``), this reduces
+    to exactly the V1 formulas. No debt term appears anywhere in this
+    series (a financing fee, being debt-related, never appears in the
+    unlevered series either), and ``exit_noi`` (already folded into
+    ``exit_value``) is never added again as a separate operating cash flow.
     """
 
     hold_period = len(noi_by_year)
 
-    cash_flows = [ensure_finite("unlevered_cash_flows[0]", -purchase_price)]
+    cash_flows = [
+        ensure_finite(
+            "unlevered_cash_flows[0]", -(purchase_price + acquisition_costs)
+        )
+    ]
     for year in range(1, hold_period):
         ucf_y = noi_by_year[year - 1]
         cash_flows.append(ensure_finite(f"unlevered_cash_flows[{year}]", ucf_y))
 
-    ucf_h = noi_by_year[hold_period - 1] + exit_value
+    ucf_h = noi_by_year[hold_period - 1] + exit_value - disposition_costs
     cash_flows.append(ensure_finite(f"unlevered_cash_flows[{hold_period}]", ucf_h))
 
     return tuple(cash_flows)
@@ -111,15 +142,21 @@ def calculate_acquisition_cash_flows(inputs: AcquisitionInputs) -> AcquisitionCa
     exit_value = calculate_exit_value(
         exit_noi=noi_forecast.exit_noi, exit_cap_rate=inputs.exit_cap_rate
     )
+    disposition_costs = calculate_disposition_costs(
+        exit_value=exit_value, disposition_cost_pct=inputs.disposition_cost_pct
+    )
     net_sale_proceeds = calculate_net_sale_proceeds(
         exit_value=exit_value,
         remaining_loan_balance=debt_schedule.remaining_loan_balance,
+        disposition_costs=disposition_costs,
     )
 
     unlevered_cash_flows = calculate_unlevered_cash_flows(
         purchase_price=inputs.purchase_price,
         noi_by_year=noi_forecast.noi_by_year,
         exit_value=exit_value,
+        acquisition_costs=capital_stack.acquisition_costs,
+        disposition_costs=disposition_costs,
     )
     levered_cash_flows = calculate_levered_cash_flows(
         initial_equity=capital_stack.initial_equity,
@@ -130,6 +167,7 @@ def calculate_acquisition_cash_flows(inputs: AcquisitionInputs) -> AcquisitionCa
 
     return AcquisitionCashFlows(
         exit_value=exit_value,
+        disposition_costs=disposition_costs,
         net_sale_proceeds=net_sale_proceeds,
         unlevered_cash_flows=unlevered_cash_flows,
         levered_cash_flows=levered_cash_flows,
@@ -154,12 +192,13 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
     ``calculate_acquisition_cash_flows`` is intentionally not called here --
     it independently recomputes the NOI forecast, capital stack, and debt
     schedule internally, which would duplicate the calculations already
-    performed by this function. Instead, the same lower-level Phase 2C
-    assembly functions it uses (``calculate_exit_value``,
-    ``calculate_net_sale_proceeds``, ``calculate_unlevered_cash_flows``,
-    ``calculate_levered_cash_flows``) are called directly here, reusing the
-    single ``noi_forecast``, ``capital_stack``, and ``debt_schedule``
-    already computed in this function.
+    performed by this function. Instead, the same lower-level Phase 2C /
+    Underwriting V2 Gate 2 assembly functions it uses (``calculate_exit_value``,
+    ``calculate_disposition_costs``, ``calculate_net_sale_proceeds``,
+    ``calculate_unlevered_cash_flows``, ``calculate_levered_cash_flows``) are
+    called directly here, reusing the single ``noi_forecast``,
+    ``capital_stack``, and ``debt_schedule`` already computed in this
+    function.
     """
 
     noi_forecast = forecast_noi(inputs)
@@ -169,14 +208,20 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
     exit_value = calculate_exit_value(
         exit_noi=noi_forecast.exit_noi, exit_cap_rate=inputs.exit_cap_rate
     )
+    disposition_costs = calculate_disposition_costs(
+        exit_value=exit_value, disposition_cost_pct=inputs.disposition_cost_pct
+    )
     net_sale_proceeds = calculate_net_sale_proceeds(
         exit_value=exit_value,
         remaining_loan_balance=debt_schedule.remaining_loan_balance,
+        disposition_costs=disposition_costs,
     )
     unlevered_cash_flows = calculate_unlevered_cash_flows(
         purchase_price=inputs.purchase_price,
         noi_by_year=noi_forecast.noi_by_year,
         exit_value=exit_value,
+        acquisition_costs=capital_stack.acquisition_costs,
+        disposition_costs=disposition_costs,
     )
     levered_cash_flows = calculate_levered_cash_flows(
         initial_equity=capital_stack.initial_equity,
@@ -195,6 +240,8 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
     return AcquisitionResults(
         going_in_cap_rate=noi_forecast.going_in_cap_rate,
         loan_amount=capital_stack.loan_amount,
+        acquisition_costs=capital_stack.acquisition_costs,
+        financing_fee=capital_stack.financing_fee,
         initial_equity=capital_stack.initial_equity,
         monthly_debt_service=debt_schedule.monthly_debt_service,
         annual_debt_service=debt_schedule.annual_debt_service,
@@ -202,6 +249,7 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
         noi_by_year=noi_forecast.noi_by_year,
         exit_noi=noi_forecast.exit_noi,
         exit_value=exit_value,
+        disposition_costs=disposition_costs,
         net_sale_proceeds=net_sale_proceeds,
         unlevered_cash_flows=unlevered_cash_flows,
         levered_cash_flows=levered_cash_flows,

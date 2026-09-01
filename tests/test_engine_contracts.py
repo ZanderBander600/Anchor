@@ -27,6 +27,8 @@ NOI_FORECAST_FIELDS = (
 
 CAPITAL_STACK_FIELDS = (
     ("loan_amount", float),
+    ("acquisition_costs", float),
+    ("financing_fee", float),
     ("initial_equity", float),
 )
 
@@ -38,6 +40,7 @@ DEBT_SCHEDULE_FIELDS = (
 
 ACQUISITION_CASH_FLOWS_FIELDS = (
     ("exit_value", float),
+    ("disposition_costs", float),
     ("net_sale_proceeds", float),
     ("unlevered_cash_flows", tuple[float, ...]),
     ("levered_cash_flows", tuple[float, ...]),
@@ -115,7 +118,12 @@ def test_capital_stack_has_exact_field_annotation_types() -> None:
 
 
 def test_capital_stack_is_frozen_and_slotted() -> None:
-    capital_stack = CapitalStack(loan_amount=32_500_000.0, initial_equity=17_500_000.0)
+    capital_stack = CapitalStack(
+        loan_amount=32_500_000.0,
+        acquisition_costs=0.0,
+        financing_fee=0.0,
+        initial_equity=17_500_000.0,
+    )
 
     assert not hasattr(capital_stack, "__dict__")
     with pytest.raises(FrozenInstanceError):
@@ -123,7 +131,12 @@ def test_capital_stack_is_frozen_and_slotted() -> None:
 
 
 def test_capital_stack_has_no_excel_or_source_metadata() -> None:
-    capital_stack = CapitalStack(loan_amount=32_500_000.0, initial_equity=17_500_000.0)
+    capital_stack = CapitalStack(
+        loan_amount=32_500_000.0,
+        acquisition_costs=0.0,
+        financing_fee=0.0,
+        initial_equity=17_500_000.0,
+    )
 
     assert not hasattr(capital_stack, "source")
     assert not hasattr(capital_stack, "cell")
@@ -203,6 +216,7 @@ def test_acquisition_cash_flows_has_exact_field_annotation_types() -> None:
 def test_acquisition_cash_flows_is_frozen_and_slotted() -> None:
     cash_flows = AcquisitionCashFlows(
         exit_value=52_694_276.10454546,
+        disposition_costs=0.0,
         net_sale_proceeds=22_745_692.46333419,
         unlevered_cash_flows=(-50_000_000.0, 55_508_048.12954546),
         levered_cash_flows=(-17_500_000.0, 23_405_870.04998079),
@@ -216,6 +230,7 @@ def test_acquisition_cash_flows_is_frozen_and_slotted() -> None:
 def test_acquisition_cash_flows_tuples_are_immutable() -> None:
     cash_flows = AcquisitionCashFlows(
         exit_value=52_694_276.10454546,
+        disposition_costs=0.0,
         net_sale_proceeds=22_745_692.46333419,
         unlevered_cash_flows=(-50_000_000.0, 55_508_048.12954546),
         levered_cash_flows=(-17_500_000.0, 23_405_870.04998079),
@@ -228,6 +243,7 @@ def test_acquisition_cash_flows_tuples_are_immutable() -> None:
 def test_acquisition_cash_flows_has_no_excel_or_source_metadata() -> None:
     cash_flows = AcquisitionCashFlows(
         exit_value=52_694_276.10454546,
+        disposition_costs=0.0,
         net_sale_proceeds=22_745_692.46333419,
         unlevered_cash_flows=(-50_000_000.0, 55_508_048.12954546),
         levered_cash_flows=(-17_500_000.0, 23_405_870.04998079),

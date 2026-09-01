@@ -107,6 +107,8 @@ def test_build_report_only_formats_precomputed_engine_values() -> None:
     mutated = AcquisitionResults(
         going_in_cap_rate=results.going_in_cap_rate,
         loan_amount=results.loan_amount,
+        acquisition_costs=results.acquisition_costs,
+        financing_fee=results.financing_fee,
         initial_equity=results.initial_equity,
         monthly_debt_service=results.monthly_debt_service,
         annual_debt_service=results.annual_debt_service,
@@ -114,6 +116,7 @@ def test_build_report_only_formats_precomputed_engine_values() -> None:
         noi_by_year=results.noi_by_year,
         exit_noi=results.exit_noi,
         exit_value=results.exit_value,
+        disposition_costs=results.disposition_costs,
         net_sale_proceeds=results.net_sale_proceeds,
         unlevered_cash_flows=results.unlevered_cash_flows,
         levered_cash_flows=results.levered_cash_flows,

@@ -70,6 +70,8 @@ def test_context_carries_every_acquisition_results_field() -> None:
     assert result_field_names == {
         "going_in_cap_rate",
         "loan_amount",
+        "acquisition_costs",
+        "financing_fee",
         "initial_equity",
         "monthly_debt_service",
         "annual_debt_service",
@@ -77,6 +79,7 @@ def test_context_carries_every_acquisition_results_field() -> None:
         "noi_by_year",
         "exit_noi",
         "exit_value",
+        "disposition_costs",
         "net_sale_proceeds",
         "unlevered_cash_flows",
         "levered_cash_flows",
