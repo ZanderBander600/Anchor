@@ -1167,4 +1167,64 @@ describe('Excel ingestion workflow', () => {
       expect(screen.queryByText('7.91%')).toBeNull();
     });
   });
+
+  it('shows a success message naming the uploaded file after a successful import', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    expect(
+      await screen.findByText(
+        'Workbook loaded successfully. 9 assumptions imported from "anchor_input.xlsx". ' +
+          'Review the values below, make any changes, then click Analyze Deal.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('does not show a success message on a failed upload', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    mockUploadExcel.mockRejectedValue(
+      new ApiError("Value for Field ID 'purchase_price' is blank at Inputs!C2.", [
+        {
+          field_id: 'purchase_price',
+          category: 'blank_value',
+          message: "Value for Field ID 'purchase_price' is blank at Inputs!C2.",
+        },
+      ]),
+    );
+
+    const file = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    await screen.findByText("Value for Field ID 'purchase_price' is blank at Inputs!C2.");
+    expect(screen.queryByText(/Workbook loaded successfully/)).toBeNull();
+  });
+
+  it('clears a stale success message once a new upload starts loading', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+    expect(await screen.findByText(/Workbook loaded successfully/)).toBeTruthy();
+
+    const pending = deferred<AcquisitionRequest>();
+    mockUploadExcel.mockReturnValueOnce(pending.promise);
+    const file = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    expect(screen.queryByText(/Workbook loaded successfully/)).toBeNull();
+    pending.resolve(makeAcquisitionRequest());
+  });
+
+  it('scrolls the assumptions form into view after a successful import', async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+  });
 });

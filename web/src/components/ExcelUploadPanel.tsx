@@ -3,6 +3,7 @@ import type { ChangeEvent } from 'react';
 interface ExcelUploadPanelProps {
   isLoading: boolean;
   error: string | null;
+  successMessage: string | null;
   onUpload: (file: File) => void;
 }
 
@@ -14,9 +15,10 @@ interface ExcelUploadPanelProps {
  * successful upload pre-fills the existing `AssumptionsForm` (via the
  * parent's merge into `values`), where the analyst reviews and edits it
  * exactly like a manually typed or OM-approved value -- this panel never
- * calls `/analyze` itself.
+ * calls `/analyze` itself. `successMessage` is purely a visual confirmation
+ * that the import happened; it carries no approval semantics of its own.
  */
-export function ExcelUploadPanel({ isLoading, error, onUpload }: ExcelUploadPanelProps) {
+export function ExcelUploadPanel({ isLoading, error, successMessage, onUpload }: ExcelUploadPanelProps) {
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -46,7 +48,11 @@ export function ExcelUploadPanel({ isLoading, error, onUpload }: ExcelUploadPane
 
       {error && <div className="error-banner">{error}</div>}
 
-      {!isLoading && !error && (
+      {!isLoading && !error && successMessage && (
+        <div className="success-banner">{successMessage}</div>
+      )}
+
+      {!isLoading && !error && !successMessage && (
         <div className="excel-upload-empty">
           Upload the canonical Anchor .xlsx workbook to pre-fill the assumptions below.
         </div>

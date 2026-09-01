@@ -71,6 +71,7 @@ export default function App() {
 
   const [isUploadingExcel, setIsUploadingExcel] = useState(false);
   const [excelUploadError, setExcelUploadError] = useState<string | null>(null);
+  const [excelUploadSuccessMessage, setExcelUploadSuccessMessage] = useState<string | null>(null);
 
   function resetDownstreamAnalysisState() {
     setResults(null);
@@ -119,10 +120,19 @@ export default function App() {
   async function handleUploadExcel(file: File) {
     setIsUploadingExcel(true);
     setExcelUploadError(null);
+    setExcelUploadSuccessMessage(null);
     try {
       const inputs = await uploadExcel(file);
       setValues(buildFormValuesFromAcquisitionInputs(inputs));
       resetDownstreamAnalysisState();
+      setExcelUploadSuccessMessage(
+        `Workbook loaded successfully. 9 assumptions imported from "${file.name}". ` +
+          'Review the values below, make any changes, then click Analyze Deal.',
+      );
+      document.querySelector('.assumptions-form')?.scrollIntoView?.({
+        behavior: 'smooth',
+        block: 'start',
+      });
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setExcelUploadError(apiError.message);
@@ -350,6 +360,7 @@ export default function App() {
         <ExcelUploadPanel
           isLoading={isUploadingExcel}
           error={excelUploadError}
+          successMessage={excelUploadSuccessMessage}
           onUpload={(file) => void handleUploadExcel(file)}
         />
 
