@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from datetime import date, datetime, time, timedelta
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
@@ -12,7 +13,7 @@ from openpyxl import Workbook, load_workbook
 
 import anchor.excel_reader as excel_reader
 from anchor.contracts import AcquisitionInputs
-from anchor.excel_reader import read_acquisition_inputs
+from anchor.excel_reader import read_acquisition_inputs, read_acquisition_inputs_from_bytes
 from anchor.validation import (
     FIELD_IDS,
     InputIssue,
@@ -806,3 +807,104 @@ def test_workbook_library_exception_after_open_is_translated(
     assert captured.value.issues[0].category is IssueCategory.WORKBOOK_OPEN
     assert "sensitive parse detail" not in str(captured.value)
     assert workbook.closed is True
+
+
+# =============================================================================
+# read_acquisition_inputs_from_bytes -- shares _read_acquisition_inputs_from_source
+# with the path-based reader above; these tests prove behavioral parity rather
+# than re-deriving the full malformed-workbook matrix already covered for the
+# path-based entry point.
+# =============================================================================
+
+
+def _workbook_bytes(
+    *,
+    rows: Iterable[tuple[object, object, object, object]] | None = None,
+    headers: Iterable[object] = HEADERS,
+    sheet_title: str = "Inputs",
+    configure: Callable[[Workbook, Any], None] | None = None,
+) -> bytes:
+    workbook, worksheet = _populate_workbook(rows=rows, headers=headers, sheet_title=sheet_title)
+    if configure is not None:
+        configure(workbook, worksheet)
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+    return buffer.getvalue()
+
+
+def test_bytes_reader_returns_identical_result_to_path_reader_for_the_canonical_workbook() -> None:
+    data = EXAMPLE_WORKBOOK.read_bytes()
+
+    from_bytes = read_acquisition_inputs_from_bytes(data)
+    from_path = read_acquisition_inputs(EXAMPLE_WORKBOOK)
+
+    assert from_bytes == from_path == EXPECTED
+
+
+def test_bytes_reader_returns_exact_inputs_and_types_for_a_freshly_built_workbook() -> None:
+    result = read_acquisition_inputs_from_bytes(_workbook_bytes())
+
+    assert result == EXPECTED
+    for field_id in FIELD_IDS:
+        expected_type = int if field_id in {"hold_period", "amortization"} else float
+        assert type(getattr(result, field_id)) is expected_type
+
+
+def test_bytes_reader_reports_the_same_issue_as_the_path_reader_for_a_missing_sheet(
+    tmp_path: Path,
+) -> None:
+    data = _workbook_bytes(sheet_title="NotInputs")
+    path = _write_workbook(tmp_path, sheet_title="NotInputs")
+
+    bytes_issues = _capture_issues_from_bytes(data)
+    path_issues = _capture_issues(path)
+
+    assert len(bytes_issues) == len(path_issues) == 1
+    assert bytes_issues[0].category == path_issues[0].category == IssueCategory.MISSING_SHEET
+    assert bytes_issues[0].message == path_issues[0].message
+
+
+def test_bytes_reader_reports_the_same_issue_as_the_path_reader_for_a_blank_value(
+    tmp_path: Path,
+) -> None:
+    values: dict[str, object] = dict(VALUES)
+    values["purchase_price"] = None
+    rows = _canonical_rows(values)
+
+    data = _workbook_bytes(rows=rows)
+    path = _write_workbook(tmp_path, rows=rows)
+
+    bytes_issues = _capture_issues_from_bytes(data)
+    path_issues = _capture_issues(path)
+
+    assert len(bytes_issues) == len(path_issues) == 1
+    assert bytes_issues[0].category == path_issues[0].category == IssueCategory.BLANK_VALUE
+    assert bytes_issues[0].field_id == path_issues[0].field_id == "purchase_price"
+    assert bytes_issues[0].message == path_issues[0].message
+
+
+def test_bytes_reader_rejects_unopenable_bytes_with_the_workbook_open_category() -> None:
+    with pytest.raises(InputValidationError) as captured:
+        read_acquisition_inputs_from_bytes(b"this is not a real xlsx file at all")
+
+    issues = captured.value.issues
+    assert len(issues) == 1
+    assert issues[0].category is IssueCategory.WORKBOOK_OPEN
+    assert "<uploaded workbook>" in issues[0].message
+
+
+def test_bytes_reader_does_not_require_or_check_a_filename_extension() -> None:
+    """Unlike read_acquisition_inputs, the bytes entry point has no filename
+    to gate on -- valid workbook bytes are accepted regardless of any
+    filename the caller might otherwise have had for the upload."""
+
+    result = read_acquisition_inputs_from_bytes(_workbook_bytes())
+
+    assert result == EXPECTED
+
+
+def _capture_issues_from_bytes(data: bytes) -> tuple[InputIssue, ...]:
+    with pytest.raises(InputValidationError) as captured:
+        read_acquisition_inputs_from_bytes(data)
+    return captured.value.issues

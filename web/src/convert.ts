@@ -164,3 +164,42 @@ export function buildApprovedFormValues(
   }
   return result;
 }
+
+// =============================================================================
+// Phase 10B -- Excel ingestion (web upload) candidate values -> AssumptionsForm
+// handoff. Unlike OM's buildApprovedFormValues, the backend Excel upload
+// endpoint always returns all nine fields already fully validated (never a
+// partial/candidate result), so this is a plain, always-complete numeric
+// conversion -- the inverse of buildAcquisitionRequest.
+// =============================================================================
+
+/** Rounds to a sane display precision and strips binary-float noise
+ * introduced by the `* 100` percent-scale conversion below (e.g. so
+ * `0.1 * 100` never renders as `"10.000000000000002"`). Real acquisition
+ * inputs never need more than a handful of decimal places. */
+function formatDisplayNumber(value: number): string {
+  return String(Math.round(value * 1e6) / 1e6);
+}
+
+/**
+ * Converts a fully validated `AcquisitionRequest` (the shape the backend
+ * Excel upload endpoint -- and `/analyze` -- both use) into the percent-scale
+ * `AcquisitionFormValues` strings `AssumptionsForm` expects. All nine fields
+ * are always present, since a workbook that failed validation never reaches
+ * this function -- the endpoint returns 422, not a partial result.
+ */
+export function buildFormValuesFromAcquisitionInputs(
+  inputs: AcquisitionRequest,
+): AcquisitionFormValues {
+  return {
+    purchasePrice: formatDisplayNumber(inputs.purchase_price),
+    currentNoi: formatDisplayNumber(inputs.current_noi),
+    occupancy: formatDisplayNumber(inputs.occupancy * 100),
+    noiGrowth: formatDisplayNumber(inputs.noi_growth * 100),
+    holdPeriod: formatDisplayNumber(inputs.hold_period),
+    exitCapRate: formatDisplayNumber(inputs.exit_cap_rate * 100),
+    ltv: formatDisplayNumber(inputs.ltv * 100),
+    interestRate: formatDisplayNumber(inputs.interest_rate * 100),
+    amortization: formatDisplayNumber(inputs.amortization),
+  };
+}

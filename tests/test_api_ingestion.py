@@ -217,7 +217,7 @@ def test_upload_size_guard_rejects_an_oversized_declared_content_length() -> Non
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"ok"})
 
-    guard = _IngestionUploadSizeGuard(downstream_app, path="/ingestion/om", max_bytes=10)
+    guard = _IngestionUploadSizeGuard(downstream_app, limits={"/ingestion/om": 10})
 
     sent_messages: list[dict[str, Any]] = []
 
@@ -249,7 +249,7 @@ def test_upload_size_guard_passes_through_a_request_within_the_ceiling() -> None
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"ok"})
 
-    guard = _IngestionUploadSizeGuard(downstream_app, path="/ingestion/om", max_bytes=1000)
+    guard = _IngestionUploadSizeGuard(downstream_app, limits={"/ingestion/om": 1000})
 
     async def receive() -> dict[str, Any]:
         return {"type": "http.request", "body": b"", "more_body": False}

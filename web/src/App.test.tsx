@@ -8,9 +8,11 @@ import {
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchSensitivityPresets,
+  uploadExcel,
   uploadOm,
 } from './api';
 import type {
+  AcquisitionRequest,
   AcquisitionResults,
   AIAnalysis,
   BreakEvenResult,
@@ -30,6 +32,7 @@ vi.mock('./api', async () => {
     fetchBreakEvenAnalysis: vi.fn(),
     fetchAIAnalysis: vi.fn(),
     uploadOm: vi.fn(),
+    uploadExcel: vi.fn(),
   };
 });
 
@@ -38,6 +41,7 @@ const mockFetchSensitivityPresets = vi.mocked(fetchSensitivityPresets);
 const mockFetchBreakEvenAnalysis = vi.mocked(fetchBreakEvenAnalysis);
 const mockFetchAIAnalysis = vi.mocked(fetchAIAnalysis);
 const mockUploadOm = vi.mocked(uploadOm);
+const mockUploadExcel = vi.mocked(uploadExcel);
 
 function missingField(field_id: string): FieldCandidates {
   return { field_id, candidates: [] };
@@ -260,6 +264,7 @@ beforeEach(() => {
   mockFetchAIAnalysis.mockReset();
   mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysis());
   mockUploadOm.mockReset();
+  mockUploadExcel.mockReset();
 });
 
 afterEach(() => {
@@ -1028,5 +1033,138 @@ describe('OM ingestion workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Use approved values' }));
 
     expect(screen.queryByText('7.91%')).toBeNull();
+  });
+});
+
+function makeAcquisitionRequest(overrides: Partial<AcquisitionRequest> = {}): AcquisitionRequest {
+  return {
+    purchase_price: 48_000_000,
+    current_noi: 2_400_000,
+    occupancy: 0.93,
+    noi_growth: 0.025,
+    hold_period: 7,
+    exit_cap_rate: 0.06,
+    ltv: 0.6,
+    interest_rate: 0.05,
+    amortization: 25,
+    ...overrides,
+  };
+}
+
+describe('Excel ingestion workflow', () => {
+  async function uploadWorkbook(user: ReturnType<typeof userEvent.setup>) {
+    render(<App />);
+    mockUploadExcel.mockResolvedValue(makeAcquisitionRequest());
+
+    const file = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    });
+  }
+
+  it('pre-fills all nine AssumptionsForm fields from the parsed workbook', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', '2400000');
+    expect(screen.getByLabelText(/^Occupancy/)).toHaveProperty('value', '93');
+    expect(screen.getByLabelText(/^NOI Growth/)).toHaveProperty('value', '2.5');
+    expect(screen.getByLabelText(/^Hold Period/)).toHaveProperty('value', '7');
+    expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '6');
+    expect(screen.getByLabelText(/^LTV/)).toHaveProperty('value', '60');
+    expect(screen.getByLabelText(/^Interest Rate/)).toHaveProperty('value', '5');
+    expect(screen.getByLabelText(/^Amortization/)).toHaveProperty('value', '25');
+  });
+
+  it('leaves pre-filled values editable in AssumptionsForm after upload', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    const purchasePriceInput = screen.getByLabelText(/^Purchase Price/);
+    expect(purchasePriceInput).toHaveProperty('disabled', false);
+
+    await user.clear(purchasePriceInput);
+    await user.type(purchasePriceInput, '52000000');
+
+    expect(purchasePriceInput).toHaveProperty('value', '52000000');
+  });
+
+  it('never calls /analyze automatically after a successful upload', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('running Analyze Deal after upload submits the parsed values', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    await uploadWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    expect(mockAnalyze).toHaveBeenCalledWith(makeAcquisitionRequest());
+  });
+
+  it('shows a loading state while the workbook is being parsed', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<AcquisitionRequest>();
+    mockUploadExcel.mockReturnValueOnce(pending.promise);
+    render(<App />);
+
+    const file = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    expect(await screen.findByText(/Parsing workbook/)).toBeTruthy();
+    pending.resolve(makeAcquisitionRequest());
+  });
+
+  it('shows a validation error and leaves the form unchanged on a malformed workbook', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    mockUploadExcel.mockRejectedValue(
+      new ApiError("Value for Field ID 'purchase_price' is blank at Inputs!C2.", [
+        { field_id: 'purchase_price', category: 'blank_value', message: "Value for Field ID 'purchase_price' is blank at Inputs!C2." },
+      ]),
+    );
+
+    const file = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    expect(
+      await screen.findByText("Value for Field ID 'purchase_price' is blank at Inputs!C2."),
+    ).toBeTruthy();
+    // The golden defaults must be untouched by the failed upload.
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '50000000');
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('clears stale deterministic results when a workbook upload replaces the form values', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    expect(await screen.findByText('7.91%')).toBeTruthy();
+
+    mockUploadExcel.mockResolvedValue(makeAcquisitionRequest());
+    const file = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    await waitFor(() => {
+      expect(screen.queryByText('7.91%')).toBeNull();
+    });
   });
 });

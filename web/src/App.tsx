@@ -6,17 +6,20 @@ import {
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchSensitivityPresets,
+  uploadExcel,
   uploadOm,
 } from './api';
 import { AiAnalystPanel } from './components/AiAnalystPanel';
 import { AssumptionsForm } from './components/AssumptionsForm';
 import { BreakEvenPanel } from './components/BreakEvenPanel';
+import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
 import { ResultsPanel } from './components/ResultsPanel';
 import { SensitivityPanel } from './components/SensitivityPanel';
 import {
   buildAcquisitionRequest,
   buildApprovedFormValues,
+  buildFormValuesFromAcquisitionInputs,
   DEFAULT_FORM_VALUES,
   DEFAULT_TARGET_EQUITY_MULTIPLE,
   DEFAULT_TARGET_HEADLINE_DSCR,
@@ -66,6 +69,9 @@ export default function App() {
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionError, setExtractionError] = useState<string | null>(null);
 
+  const [isUploadingExcel, setIsUploadingExcel] = useState(false);
+  const [excelUploadError, setExcelUploadError] = useState<string | null>(null);
+
   function resetDownstreamAnalysisState() {
     setResults(null);
     setError(null);
@@ -108,6 +114,24 @@ export default function App() {
     }
     setValues((previous) => ({ ...previous, ...formValues }));
     resetDownstreamAnalysisState();
+  }
+
+  async function handleUploadExcel(file: File) {
+    setIsUploadingExcel(true);
+    setExcelUploadError(null);
+    try {
+      const inputs = await uploadExcel(file);
+      setValues(buildFormValuesFromAcquisitionInputs(inputs));
+      resetDownstreamAnalysisState();
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setExcelUploadError(apiError.message);
+      } else {
+        setExcelUploadError('An unexpected error occurred while parsing the workbook.');
+      }
+    } finally {
+      setIsUploadingExcel(false);
+    }
   }
 
   async function runBreakEven(
@@ -323,6 +347,12 @@ export default function App() {
       </header>
 
       <main className="app-main">
+        <ExcelUploadPanel
+          isLoading={isUploadingExcel}
+          error={excelUploadError}
+          onUpload={(file) => void handleUploadExcel(file)}
+        />
+
         <OmReviewPanel
           extraction={ocrExtraction}
           isLoading={isExtracting}

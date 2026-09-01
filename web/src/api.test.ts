@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, uploadOm } from './api';
-import type { ExtractionResult } from './types';
+import { ApiError, uploadExcel, uploadOm } from './api';
+import type { AcquisitionRequest, ExtractionResult } from './types';
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -130,5 +130,91 @@ describe('uploadOm', () => {
 
     await expect(uploadOm(file)).rejects.toBeInstanceOf(ApiError);
     await expect(uploadOm(file)).rejects.toThrow(/Could not reach the Anchor API/);
+  });
+});
+
+function acquisitionRequestFixture(): AcquisitionRequest {
+  return {
+    purchase_price: 50_000_000,
+    current_noi: 2_500_000,
+    occupancy: 0.95,
+    noi_growth: 0.03,
+    hold_period: 5,
+    exit_cap_rate: 0.055,
+    ltv: 0.65,
+    interest_rate: 0.0525,
+    amortization: 30,
+  };
+}
+
+const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+describe('uploadExcel', () => {
+  it('returns the validated nine-field AcquisitionRequest on a successful upload', async () => {
+    const inputs = acquisitionRequestFixture();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, inputs));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const file = new File([new Uint8Array([1, 2, 3])], 'anchor_input.xlsx', { type: XLSX_TYPE });
+    const result = await uploadExcel(file);
+
+    expect(result).toEqual(inputs);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/ingestion/excel');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeInstanceOf(FormData);
+    // The browser must set the multipart boundary itself.
+    expect(init.headers).toBeUndefined();
+  });
+
+  it('surfaces the 422 validation issue list with the same shape /analyze uses', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(422, {
+        detail: [
+          {
+            field_id: 'purchase_price',
+            category: 'blank_value',
+            message: "Value for Field ID 'purchase_price' is blank at Inputs!C2.",
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const file = new File([new Uint8Array([1])], 'anchor_input.xlsx', { type: XLSX_TYPE });
+
+    let caught: ApiError | null = null;
+    try {
+      await uploadExcel(file);
+    } catch (error) {
+      caught = error as ApiError;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    expect(caught?.issues).toHaveLength(1);
+    expect(caught?.issues[0].field_id).toBe('purchase_price');
+    expect(caught?.message).toBe("Value for Field ID 'purchase_price' is blank at Inputs!C2.");
+  });
+
+  it('rejects a malformed/rejected upload with a 4xx message', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(400, { detail: 'Uploaded file must be a .xlsx workbook.' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const file = new File([new Uint8Array([1])], 'not-a-workbook.csv', { type: 'text/csv' });
+
+    await expect(uploadExcel(file)).rejects.toThrow('Uploaded file must be a .xlsx workbook.');
+  });
+
+  it('throws an ApiError on a network failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const file = new File([new Uint8Array([1])], 'anchor_input.xlsx', { type: XLSX_TYPE });
+
+    await expect(uploadExcel(file)).rejects.toBeInstanceOf(ApiError);
+    await expect(uploadExcel(file)).rejects.toThrow(/Could not reach the Anchor API/);
   });
 });
