@@ -45,6 +45,18 @@ GOLDEN_INPUTS = AcquisitionInputs(
     amortization=30,
 )
 
+# Underwriting V2 Gate 1: every /deals response's ``inputs`` now always
+# carries these five fields too, at their neutral default whenever a
+# request payload (like GOLDEN_PAYLOAD/AWKWARD_PAYLOAD below) omits them --
+# exactly the backward-compatible behavior Gate 1 requires.
+V2_NEUTRAL_DEFAULTS: dict[str, Any] = {
+    "acquisition_cost_pct": 0.0,
+    "financing_fee_pct": 0.0,
+    "disposition_cost_pct": 0.0,
+    "annual_capex_reserve": 0.0,
+    "io_period": 0,
+}
+
 # Long binary-fraction values hostile to a lossy round-trip path.
 AWKWARD_PAYLOAD: dict[str, Any] = {
     "purchase_price": 12_345_678.913571113,
@@ -72,7 +84,7 @@ def test_create_deal_returns_the_saved_deal(client: TestClient) -> None:
     body = response.json()
     assert body["name"] == "111 Main St"
     assert body["id"]
-    assert body["inputs"] == GOLDEN_PAYLOAD
+    assert body["inputs"] == GOLDEN_PAYLOAD | V2_NEUTRAL_DEFAULTS
     assert body["created_at"]
     assert body["updated_at"]
 
@@ -157,7 +169,7 @@ def test_update_deal_persists_new_name_and_inputs(client: TestClient) -> None:
     body = response.json()
     assert body["id"] == created["id"]
     assert body["name"] == "Renamed"
-    assert body["inputs"] == AWKWARD_PAYLOAD
+    assert body["inputs"] == AWKWARD_PAYLOAD | V2_NEUTRAL_DEFAULTS
     assert body["created_at"] == created["created_at"]
 
 
@@ -184,7 +196,7 @@ def test_update_deal_rejects_invalid_inputs(client: TestClient) -> None:
     assert response.status_code == 422
     # The deal must be unchanged -- a rejected update must not partially write.
     unchanged = client.get(f"/deals/{created['id']}").json()
-    assert unchanged["inputs"] == GOLDEN_PAYLOAD
+    assert unchanged["inputs"] == GOLDEN_PAYLOAD | V2_NEUTRAL_DEFAULTS
 
 
 # =============================================================================
@@ -201,7 +213,7 @@ def test_saved_inputs_round_trip_without_changing_economic_meaning(
 
     fetched = client.get(f"/deals/{created['id']}").json()
 
-    assert fetched["inputs"] == AWKWARD_PAYLOAD
+    assert fetched["inputs"] == AWKWARD_PAYLOAD | V2_NEUTRAL_DEFAULTS
 
 
 def test_reopened_deal_analyzed_matches_analyzing_the_original_inputs_directly(
@@ -275,7 +287,7 @@ def test_duplicate_deal_returns_a_new_deal_with_a_new_id(client: TestClient) -> 
     assert response.status_code == 200
     copy = response.json()
     assert copy["id"] != original["id"]
-    assert copy["inputs"] == GOLDEN_PAYLOAD
+    assert copy["inputs"] == GOLDEN_PAYLOAD | V2_NEUTRAL_DEFAULTS
     assert copy["name"] == "111 Main St (Copy)"
 
 

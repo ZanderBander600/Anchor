@@ -5,10 +5,12 @@ import pytest
 
 from anchor.contracts import AcquisitionInputs
 from anchor.validation import (
+    ALL_FIELD_IDS,
     FIELD_IDS,
     InputIssue,
     InputValidationError,
     IssueCategory,
+    V2_FIELD_IDS,
     _normalize_field_value,
     validate_acquisition_inputs,
 )
@@ -425,4 +427,170 @@ def test_issue_categories_cover_every_frozen_phase_one_condition() -> None:
         "OUT_OF_DOMAIN_VALUE",
         "NON_WHOLE_NUMBER_HOLD_PERIOD",
         "NON_WHOLE_NUMBER_AMORTIZATION",
+        "NON_WHOLE_NUMBER_IO_PERIOD",
     )
+
+
+# =============================================================================
+# Underwriting V2 Gate 1 (docs/underwriting_v2_financial_conventions.md):
+# acquisition_cost_pct, financing_fee_pct, disposition_cost_pct,
+# annual_capex_reserve, io_period -- optional, neutral-default-when-absent.
+# =============================================================================
+
+
+def test_v2_field_ids_are_frozen_and_disjoint_from_the_nine_required_fields() -> None:
+    assert V2_FIELD_IDS == (
+        "acquisition_cost_pct",
+        "financing_fee_pct",
+        "disposition_cost_pct",
+        "annual_capex_reserve",
+        "io_period",
+    )
+    assert set(V2_FIELD_IDS).isdisjoint(FIELD_IDS)
+    assert ALL_FIELD_IDS == FIELD_IDS + V2_FIELD_IDS
+
+
+def test_absent_v2_fields_default_to_neutral_values_not_a_missing_field_issue() -> None:
+    result = validate_acquisition_inputs(VALID_VALUES)
+
+    assert result.acquisition_cost_pct == 0.0
+    assert result.financing_fee_pct == 0.0
+    assert result.disposition_cost_pct == 0.0
+    assert result.annual_capex_reserve == 0.0
+    assert result.io_period == 0
+    assert type(result.io_period) is int
+
+
+@pytest.mark.parametrize(
+    ("field_id", "value", "expected"),
+    [
+        ("acquisition_cost_pct", 0.0, 0.0),
+        ("acquisition_cost_pct", 1.0, 1.0),
+        ("acquisition_cost_pct", 0.02, 0.02),
+        ("financing_fee_pct", 0.0, 0.0),
+        ("financing_fee_pct", 1.0, 1.0),
+        ("disposition_cost_pct", 0.0, 0.0),
+        ("disposition_cost_pct", 1.0, 1.0),
+        ("annual_capex_reserve", 0.0, 0.0),
+        ("annual_capex_reserve", 50_000.0, 50_000.0),
+        ("annual_capex_reserve", 1_000_000_000.0, 1_000_000_000.0),
+        ("io_period", 0, 0),
+        ("io_period", 2, 2),
+        ("io_period", 30, 30),
+    ],
+)
+def test_v2_fields_accept_valid_boundary_values(
+    field_id: str, value: object, expected: object
+) -> None:
+    result = validate_with(field_id, value)
+
+    assert getattr(result, field_id) == expected
+
+
+@pytest.mark.parametrize(
+    "field_id",
+    ["acquisition_cost_pct", "financing_fee_pct", "disposition_cost_pct", "annual_capex_reserve"],
+)
+def test_v2_currency_and_percent_fields_reject_negative_values(field_id: str) -> None:
+    issue = only_issue(field_id, -0.0001)
+
+    assert issue.category is IssueCategory.OUT_OF_DOMAIN_VALUE
+    assert issue.field_id == field_id
+
+
+@pytest.mark.parametrize(
+    "field_id", ["acquisition_cost_pct", "financing_fee_pct", "disposition_cost_pct"]
+)
+def test_v2_percentage_fields_reject_values_above_one(field_id: str) -> None:
+    issue = only_issue(field_id, nextafter(1.0, inf))
+
+    assert issue.category is IssueCategory.OUT_OF_DOMAIN_VALUE
+    assert issue.field_id == field_id
+
+
+def test_annual_capex_reserve_has_no_upper_bound() -> None:
+    # Consistent with purchase_price/current_noi: a currency field, not a
+    # ratio -- no upper domain bound is imposed.
+    result = validate_with("annual_capex_reserve", 999_999_999_999.0)
+
+    assert result.annual_capex_reserve == 999_999_999_999.0
+
+
+def test_io_period_rejects_non_integer_values() -> None:
+    issue = only_issue("io_period", 2.5)
+
+    assert issue.category is IssueCategory.NON_WHOLE_NUMBER_IO_PERIOD
+    assert issue.field_id == "io_period"
+
+
+def test_io_period_rejects_negative_values() -> None:
+    issue = only_issue("io_period", -1)
+
+    assert issue.category is IssueCategory.OUT_OF_DOMAIN_VALUE
+    assert issue.field_id == "io_period"
+
+
+def test_io_period_zero_is_valid_unlike_hold_period_and_amortization() -> None:
+    # io_period's minimum is 0 (no IO phase); hold_period/amortization's
+    # frozen minimum remains 1 -- confirms the two are not conflated.
+    result = validate_with("io_period", 0)
+
+    assert result.io_period == 0
+    with pytest.raises(InputValidationError):
+        validate_with("hold_period", 0)
+    with pytest.raises(InputValidationError):
+        validate_with("amortization", 0)
+
+
+def test_io_period_may_equal_hold_period() -> None:
+    values = VALID_VALUES | {"io_period": VALID_VALUES["hold_period"]}
+
+    result = validate_acquisition_inputs(values)
+
+    assert result.io_period == result.hold_period
+
+
+def test_io_period_may_exceed_hold_period() -> None:
+    values = VALID_VALUES | {"io_period": VALID_VALUES["hold_period"] + 10}
+
+    result = validate_acquisition_inputs(values)
+
+    assert result.io_period == VALID_VALUES["hold_period"] + 10
+
+
+def test_no_relationship_is_imposed_between_io_period_and_amortization() -> None:
+    # io_period may exceed amortization too -- no cross-field check ties them.
+    values = VALID_VALUES | {"io_period": VALID_VALUES["amortization"] + 100}
+
+    result = validate_acquisition_inputs(values)
+
+    assert result.io_period == VALID_VALUES["amortization"] + 100
+
+
+def test_supplying_a_v2_field_id_is_never_an_unknown_field_id() -> None:
+    values = VALID_VALUES | {"io_period": 2}
+
+    result = validate_acquisition_inputs(values)
+
+    assert result.io_period == 2
+
+
+def test_old_nine_field_payload_and_explicit_neutral_v2_payload_validate_identically() -> None:
+    """The Gate 1 backward-compatibility contract at the validation layer:
+    an old nine-field payload and the same payload with all five V2 fields
+    explicitly supplied at their neutral value must validate to an equal
+    ``AcquisitionInputs``."""
+
+    implicit = validate_acquisition_inputs(VALID_VALUES)
+    explicit = validate_acquisition_inputs(
+        VALID_VALUES
+        | {
+            "acquisition_cost_pct": 0,
+            "financing_fee_pct": 0,
+            "disposition_cost_pct": 0,
+            "annual_capex_reserve": 0,
+            "io_period": 0,
+        }
+    )
+
+    assert implicit == explicit

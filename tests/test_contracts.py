@@ -19,6 +19,11 @@ EXPECTED_FIELDS = (
     ("ltv", float),
     ("interest_rate", float),
     ("amortization", int),
+    ("acquisition_cost_pct", float),
+    ("financing_fee_pct", float),
+    ("disposition_cost_pct", float),
+    ("annual_capex_reserve", float),
+    ("io_period", int),
 )
 
 
@@ -41,7 +46,7 @@ def test_contract_has_exact_fields_order_annotations_and_keyword_only_shape() ->
 
     assert is_dataclass(AcquisitionInputs)
     assert tuple((field.name, field.type) for field in contract_fields) == EXPECTED_FIELDS
-    assert len(contract_fields) == 9
+    assert len(contract_fields) == 14
     assert all(field.kw_only for field in contract_fields)
     assert AcquisitionInputs.__slots__ == tuple(name for name, _ in EXPECTED_FIELDS)
 
@@ -78,6 +83,57 @@ def test_contract_contains_only_supplied_inputs() -> None:
     assert not hasattr(inputs, "source")
     assert not hasattr(inputs, "going_in_cap_rate")
     assert not hasattr(inputs, "irr")
+
+
+def test_old_nine_field_construction_still_works_via_v2_defaults() -> None:
+    """Underwriting V2 Gate 1 backward compatibility: existing internal
+    construction using only the original nine keyword arguments must
+    continue working, with the five new fields taking their neutral
+    dataclass default."""
+
+    inputs = AcquisitionInputs(
+        purchase_price=50_000_000.0,
+        current_noi=2_500_000.0,
+        occupancy=0.95,
+        noi_growth=0.03,
+        hold_period=5,
+        exit_cap_rate=0.055,
+        ltv=0.65,
+        interest_rate=0.0525,
+        amortization=30,
+    )
+
+    assert inputs.acquisition_cost_pct == 0.0
+    assert inputs.financing_fee_pct == 0.0
+    assert inputs.disposition_cost_pct == 0.0
+    assert inputs.annual_capex_reserve == 0.0
+    assert inputs.io_period == 0
+    assert type(inputs.io_period) is int
+
+
+def test_v2_fields_can_be_supplied_explicitly() -> None:
+    inputs = AcquisitionInputs(
+        purchase_price=50_000_000.0,
+        current_noi=2_500_000.0,
+        occupancy=0.95,
+        noi_growth=0.03,
+        hold_period=5,
+        exit_cap_rate=0.055,
+        ltv=0.65,
+        interest_rate=0.0525,
+        amortization=30,
+        acquisition_cost_pct=0.02,
+        financing_fee_pct=0.01,
+        disposition_cost_pct=0.025,
+        annual_capex_reserve=50_000.0,
+        io_period=2,
+    )
+
+    assert inputs.acquisition_cost_pct == 0.02
+    assert inputs.financing_fee_pct == 0.01
+    assert inputs.disposition_cost_pct == 0.025
+    assert inputs.annual_capex_reserve == 50_000.0
+    assert inputs.io_period == 2
 
 
 def test_contract_and_validation_imports_do_not_import_openpyxl() -> None:

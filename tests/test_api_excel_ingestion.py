@@ -129,6 +129,13 @@ def test_valid_upload_returns_200_with_the_nine_validated_inputs(client: TestCli
         "ltv": 0.65,
         "interest_rate": 0.0525,
         "amortization": 30,
+        # Underwriting V2 Gate 1: absent from this legacy nine-field
+        # workbook, so each defaults to its neutral value.
+        "acquisition_cost_pct": 0.0,
+        "financing_fee_pct": 0.0,
+        "disposition_cost_pct": 0.0,
+        "annual_capex_reserve": 0.0,
+        "io_period": 0,
     }
 
 
@@ -156,6 +163,13 @@ def test_valid_upload_of_the_tracked_example_workbook_matches_cli_golden_values(
         "ltv": EXPECTED.ltv,
         "interest_rate": EXPECTED.interest_rate,
         "amortization": EXPECTED.amortization,
+        # Underwriting V2 Gate 1: absent from this legacy nine-field
+        # workbook, so each defaults to its neutral value.
+        "acquisition_cost_pct": EXPECTED.acquisition_cost_pct,
+        "financing_fee_pct": EXPECTED.financing_fee_pct,
+        "disposition_cost_pct": EXPECTED.disposition_cost_pct,
+        "annual_capex_reserve": EXPECTED.annual_capex_reserve,
+        "io_period": EXPECTED.io_period,
     }
 
 
