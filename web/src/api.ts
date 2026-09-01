@@ -429,3 +429,51 @@ export async function listDeals(): Promise<Deal[]> {
 
   return (await response.json()) as Deal[];
 }
+
+// =============================================================================
+// Persistence Phase C -- duplicate / delete
+// =============================================================================
+
+/** POSTs to ``/deals/{id}/duplicate`` and returns the newly created copy
+ * (a new id, fresh timestamps, the same nine inputs). Never triggers
+ * `/analyze` -- the caller decides what to do with the copy. */
+export async function duplicateDeal(dealId: string, name?: string): Promise<Deal> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals/${encodeURIComponent(dealId)}/duplicate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(name ? { name } : {}),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  return _handleDealResponse(response, 'The deal could not be duplicated');
+}
+
+/** DELETEs a saved deal. No soft-delete/history -- this is permanent. */
+export async function deleteDeal(dealId: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals/${encodeURIComponent(dealId)}`, {
+      method: 'DELETE',
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  if (response.status === 404) {
+    throw new ApiError('That deal could not be found. It may have already been deleted.');
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`The deal could not be deleted (HTTP ${response.status}).`);
+  }
+}

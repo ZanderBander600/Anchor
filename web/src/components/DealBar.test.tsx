@@ -15,7 +15,8 @@ function renderDealBar(overrides: Partial<DealBarProps> = {}) {
     isSavedDeal: false,
     isSaving: false,
     error: null,
-    successMessage: null,
+    saveStatus: 'unsaved-deal',
+    lastSavedAt: null,
     onSaveDeal: vi.fn(),
     onOpenLibrary: vi.fn(),
     onNewDeal: vi.fn(),
@@ -99,16 +100,37 @@ describe('DealBar', () => {
     expect(screen.getByText('The deal could not be saved.')).toBeTruthy();
   });
 
-  it('shows a success banner when there is no error', () => {
-    renderDealBar({ successMessage: '"111 Main St" saved.' });
+  describe('save status', () => {
+    it('shows "Unsaved deal" for a never-saved deal', () => {
+      renderDealBar({ saveStatus: 'unsaved-deal' });
 
-    expect(screen.getByText('"111 Main St" saved.')).toBeTruthy();
-  });
+      expect(screen.getByText('Unsaved deal')).toBeTruthy();
+    });
 
-  it('prioritizes the error banner over a stale success message', () => {
-    renderDealBar({ error: 'Save failed.', successMessage: '"111 Main St" saved.' });
+    it('shows "Unsaved changes" when an opened/saved deal has since changed', () => {
+      renderDealBar({ saveStatus: 'unsaved-changes' });
 
-    expect(screen.getByText('Save failed.')).toBeTruthy();
-    expect(screen.queryByText('"111 Main St" saved.')).toBeNull();
+      expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    });
+
+    it('shows "Saved" when the workspace matches its last-saved snapshot', () => {
+      renderDealBar({ saveStatus: 'saved' });
+
+      expect(screen.getByText(/^Saved/)).toBeTruthy();
+    });
+
+    it('appends the last-saved time when saved and available', () => {
+      renderDealBar({ saveStatus: 'saved', lastSavedAt: '2026-09-01T12:00:00+00:00' });
+
+      const status = screen.getByText(/^Saved/);
+      expect(status.textContent).toContain('·');
+    });
+
+    it('does not append a timestamp when not saved', () => {
+      renderDealBar({ saveStatus: 'unsaved-changes', lastSavedAt: '2026-09-01T12:00:00+00:00' });
+
+      const status = screen.getByText('Unsaved changes');
+      expect(status.textContent).toBe('Unsaved changes');
+    });
   });
 });

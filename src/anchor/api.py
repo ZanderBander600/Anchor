@@ -567,16 +567,19 @@ def ingest_excel(file: UploadFile = File(...)) -> AcquisitionInputs:
 
 
 # =============================================================================
-# Persistence Phase A -- Deal Library backend foundation
+# Persistence Phase A/C -- Deal Library backend foundation
 #
 # Delegates all storage to ``anchor.deals`` (a thin SQLite adapter -- see
-# ``anchor/deals/store.py``). Every route below validates the submitted
-# ``inputs`` with the exact same ``validate_acquisition_inputs`` used by
-# ``/analyze`` *before* it ever reaches the store, so a saved deal can never
-# hold a value that would fail validation on reopen. This module performs
-# no financial calculation and never calls ``analyze_acquisition`` --
-# reanalyzing a reopened deal is the existing, unmodified ``/analyze``
-# endpoint, driven by the client the same way a manually typed deal is.
+# ``anchor/deals/store.py``). Every create/update route validates the
+# submitted ``inputs`` with the exact same ``validate_acquisition_inputs``
+# used by ``/analyze`` *before* it ever reaches the store, so a saved deal
+# can never hold a value that would fail validation on reopen. Duplicate
+# (Phase C) copies only ``AcquisitionInputs`` via ``anchor.deals`` --
+# already-validated data reused as-is -- and delete removes a row with no
+# soft-delete/history. This module performs no financial calculation and
+# never calls ``analyze_acquisition`` -- reanalyzing a reopened or
+# duplicated deal is the existing, unmodified ``/analyze`` endpoint, driven
+# by the client the same way a manually typed deal is.
 # =============================================================================
 
 
@@ -634,6 +637,32 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
     inputs = _require_deal_inputs(payload)
     try:
         return deals_store.update_deal(deal_id, name, inputs)
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+
+
+@app.delete("/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_deal(deal_id: str) -> None:
+    try:
+        deals_store.delete_deal(deal_id)
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+
+
+@app.post("/deals/{deal_id}/duplicate", response_model=Deal)
+def duplicate_deal(deal_id: str, payload: dict[str, Any] = Body(default={})) -> Deal:
+    name = payload.get("name")
+    if name is not None and (not isinstance(name, str) or not name.strip()):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="'name' must be a non-empty string when provided.",
+        )
+    try:
+        return deals_store.duplicate_deal(deal_id, name=name.strip() if name else None)
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)

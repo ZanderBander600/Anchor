@@ -230,3 +230,117 @@ def test_reopened_deal_analyzed_matches_analyzing_the_original_inputs_directly(
     assert reanalyzed_result.json()["equity_multiple"] == pytest.approx(
         expected.equity_multiple
     )
+
+
+# =============================================================================
+# Persistence Phase C -- DELETE /deals/{id}, POST /deals/{id}/duplicate
+# =============================================================================
+
+
+def test_delete_deal_returns_204(client: TestClient) -> None:
+    created = client.post(
+        "/deals", json={"name": "111 Main St", "inputs": GOLDEN_PAYLOAD}
+    ).json()
+
+    response = client.delete(f"/deals/{created['id']}")
+
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+def test_deleted_deal_is_gone(client: TestClient) -> None:
+    created = client.post(
+        "/deals", json={"name": "111 Main St", "inputs": GOLDEN_PAYLOAD}
+    ).json()
+
+    client.delete(f"/deals/{created['id']}")
+
+    assert client.get(f"/deals/{created['id']}").status_code == 404
+    assert client.get("/deals").json() == []
+
+
+def test_delete_deal_missing_id_returns_404(client: TestClient) -> None:
+    response = client.delete("/deals/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_duplicate_deal_returns_a_new_deal_with_a_new_id(client: TestClient) -> None:
+    original = client.post(
+        "/deals", json={"name": "111 Main St", "inputs": GOLDEN_PAYLOAD}
+    ).json()
+
+    response = client.post(f"/deals/{original['id']}/duplicate", json={})
+
+    assert response.status_code == 200
+    copy = response.json()
+    assert copy["id"] != original["id"]
+    assert copy["inputs"] == GOLDEN_PAYLOAD
+    assert copy["name"] == "111 Main St (Copy)"
+
+
+def test_duplicate_deal_accepts_a_name_override(client: TestClient) -> None:
+    original = client.post(
+        "/deals", json={"name": "111 Main St", "inputs": GOLDEN_PAYLOAD}
+    ).json()
+
+    response = client.post(
+        f"/deals/{original['id']}/duplicate", json={"name": "222 Oak Ave"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "222 Oak Ave"
+
+
+def test_duplicate_deal_does_not_mutate_the_original(client: TestClient) -> None:
+    original = client.post(
+        "/deals", json={"name": "111 Main St", "inputs": GOLDEN_PAYLOAD}
+    ).json()
+
+    client.post(f"/deals/{original['id']}/duplicate", json={})
+
+    unchanged = client.get(f"/deals/{original['id']}").json()
+    assert unchanged == original
+
+
+def test_duplicate_deal_missing_id_returns_404(client: TestClient) -> None:
+    response = client.post("/deals/does-not-exist/duplicate", json={})
+
+    assert response.status_code == 404
+
+
+def test_duplicate_deal_appears_in_the_library_alongside_the_original(
+    client: TestClient,
+) -> None:
+    original = client.post(
+        "/deals", json={"name": "111 Main St", "inputs": GOLDEN_PAYLOAD}
+    ).json()
+
+    copy = client.post(f"/deals/{original['id']}/duplicate", json={}).json()
+
+    ids = {deal["id"] for deal in client.get("/deals").json()}
+    assert ids == {original["id"], copy["id"]}
+
+
+def test_duplicated_deal_reanalyzed_matches_the_original_deterministic_result(
+    client: TestClient,
+) -> None:
+    """The Phase C counterpart of the Phase A reopen-round-trip proof:
+    duplicating a deal and resubmitting the copy's inputs to the existing
+    /analyze produces exactly the same result as analyzing the original --
+    duplication introduces zero numeric drift and the deterministic engine
+    is never bypassed."""
+
+    direct_result = client.post("/analyze", json=GOLDEN_PAYLOAD)
+    assert direct_result.status_code == 200
+
+    original = client.post(
+        "/deals", json={"name": "111 Main St", "inputs": GOLDEN_PAYLOAD}
+    ).json()
+    copy = client.post(f"/deals/{original['id']}/duplicate", json={}).json()
+    reopened_copy = client.get(f"/deals/{copy['id']}").json()
+
+    reanalyzed_result = client.post("/analyze", json=reopened_copy["inputs"])
+
+    assert reanalyzed_result.status_code == 200
+    assert reanalyzed_result.json() == direct_result.json()

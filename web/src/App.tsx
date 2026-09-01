@@ -4,6 +4,8 @@ import {
   analyzeAcquisition,
   ApiError,
   createDeal,
+  deleteDeal,
+  duplicateDeal,
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchSensitivityPresets,
@@ -17,6 +19,7 @@ import { AiAnalystPanel } from './components/AiAnalystPanel';
 import { AssumptionsForm } from './components/AssumptionsForm';
 import { BreakEvenPanel } from './components/BreakEvenPanel';
 import { DealBar } from './components/DealBar';
+import type { SaveStatus } from './components/DealBar';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
 import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
@@ -80,7 +83,7 @@ export default function App() {
   const [excelUploadError, setExcelUploadError] = useState<string | null>(null);
   const [excelUploadSuccessMessage, setExcelUploadSuccessMessage] = useState<string | null>(null);
 
-  // Persistence Phase B -- Deal Bar / Deal Library. `currentDealId` is set
+  // Persistence Phase B/C -- Deal Bar / Deal Library. `currentDealId` is set
   // only after a deal is created or opened (never guessed at); it is what
   // decides whether Save Deal calls POST /deals (null) or PUT /deals/{id}
   // (set). No AcquisitionResults is ever part of this state -- reopening a
@@ -90,15 +93,51 @@ export default function App() {
   const [currentDealId, setCurrentDealId] = useState<string | null>(null);
   const [isSavingDeal, setIsSavingDeal] = useState(false);
   const [saveDealError, setSaveDealError] = useState<string | null>(null);
-  const [saveDealSuccessMessage, setSaveDealSuccessMessage] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
 
   const [savedDeals, setSavedDeals] = useState<Deal[]>([]);
   const [isDealsLoading, setIsDealsLoading] = useState(false);
   const [dealsError, setDealsError] = useState<string | null>(null);
 
-  function clearSaveDealFeedback() {
+  // Phase C -- unsaved-changes tracking. `savedSnapshot` is the
+  // {dealName, values} pair as of the last successful Save or Open (or the
+  // blank starting point). Dirty-ness is a single deterministic comparison
+  // against it -- deliberately not a scattered set of manual "mark dirty"
+  // calls sprinkled through every handler, so it can never drift out of
+  // sync with a handler someone forgets to update. Analyze/sensitivity/
+  // break-even/AI-analyst never touch this snapshot, so they can never
+  // affect dirty state, by construction rather than by remembering not to.
+  interface DealSnapshot {
+    dealName: string;
+    values: AcquisitionFormValues;
+  }
+  const BLANK_SNAPSHOT: DealSnapshot = { dealName: '', values: BLANK_FORM_VALUES };
+  const [savedSnapshot, setSavedSnapshot] = useState<DealSnapshot>(BLANK_SNAPSHOT);
+
+  function isSameSnapshot(a: DealSnapshot, b: DealSnapshot): boolean {
+    if (a.dealName !== b.dealName) {
+      return false;
+    }
+    const fieldKeys = Object.keys(a.values) as (keyof AcquisitionFormValues)[];
+    return fieldKeys.every((key) => a.values[key] === b.values[key]);
+  }
+
+  const isDirty = !isSameSnapshot({ dealName, values }, savedSnapshot);
+  const saveStatus: SaveStatus =
+    currentDealId === null ? 'unsaved-deal' : isDirty ? 'unsaved-changes' : 'saved';
+
+  /** Prompts before a New Deal / Open Deal action would discard unsaved
+   * work; returns true if it is safe to proceed (nothing to lose, or the
+   * analyst confirmed). Cancelling leaves the workspace exactly as-is. */
+  function confirmDiscardIfDirty(): boolean {
+    if (!isDirty) {
+      return true;
+    }
+    return window.confirm('You have unsaved changes that will be lost. Continue?');
+  }
+
+  function clearSaveDealError() {
     setSaveDealError(null);
-    setSaveDealSuccessMessage(null);
   }
 
   function clearIntakeFeedback() {
@@ -123,7 +162,7 @@ export default function App() {
   function handleFieldChange(key: keyof AcquisitionFormValues, value: string) {
     setValues((previous) => ({ ...previous, [key]: value }));
     resetDownstreamAnalysisState();
-    clearSaveDealFeedback();
+    clearSaveDealError();
   }
 
   async function handleUploadOm(file: File) {
@@ -151,7 +190,7 @@ export default function App() {
     }
     setValues((previous) => ({ ...previous, ...formValues }));
     resetDownstreamAnalysisState();
-    clearSaveDealFeedback();
+    clearSaveDealError();
   }
 
   async function handleUploadExcel(file: File) {
@@ -162,7 +201,7 @@ export default function App() {
       const inputs = await uploadExcel(file);
       setValues(buildFormValuesFromAcquisitionInputs(inputs));
       resetDownstreamAnalysisState();
-      clearSaveDealFeedback();
+      clearSaveDealError();
       setExcelUploadSuccessMessage(
         `Workbook loaded successfully. 9 assumptions imported from "${file.name}". ` +
           'Review the values below, make any changes, then click Analyze Deal.',
@@ -183,7 +222,7 @@ export default function App() {
   }
 
   // ===========================================================================
-  // Persistence Phase B -- Deal Bar / Deal Library handlers.
+  // Persistence Phase B/C -- Deal Bar / Deal Library handlers.
   //
   // Save persists exactly the nine assumptions already converged onto
   // `values` via `buildAcquisitionRequest` (the same conversion/validation
@@ -192,10 +231,27 @@ export default function App() {
   // populates the form via the existing `buildFormValuesFromAcquisitionInputs`
   // conversion and clears stale analysis state, but likewise never calls
   // `/analyze` -- the analyst clicks Analyze Deal explicitly, same as today.
+  // New Deal and Open Deal both discard unsaved work, so both are guarded
+  // by `confirmDiscardIfDirty()` first. Duplicate/delete never touch the
+  // engine and never mark the *current* workspace saved/dirty by
+  // themselves -- only Save/Open/New change `savedSnapshot`.
   // ===========================================================================
 
   function handleDealNameChange(value: string) {
     setDealName(value);
+  }
+
+  /** Shared by New Deal and by deleting the currently-open deal: both end
+   * in the same blank, never-saved workspace state. */
+  function resetToBlankDeal() {
+    setValues(BLANK_FORM_VALUES);
+    setDealName('');
+    setCurrentDealId(null);
+    setLastSavedAt(null);
+    setSavedSnapshot(BLANK_SNAPSHOT);
+    resetDownstreamAnalysisState();
+    clearSaveDealError();
+    clearIntakeFeedback();
   }
 
   async function handleSaveDeal() {
@@ -204,7 +260,6 @@ export default function App() {
       request = buildAcquisitionRequest(values);
     } catch (validationError) {
       if (validationError instanceof FormValidationError) {
-        setSaveDealSuccessMessage(null);
         setSaveDealError(validationError.message);
         return;
       }
@@ -215,14 +270,14 @@ export default function App() {
 
     setIsSavingDeal(true);
     setSaveDealError(null);
-    setSaveDealSuccessMessage(null);
     try {
       const deal = currentDealId
         ? await updateDeal(currentDealId, name, request)
         : await createDeal(name, request);
       setCurrentDealId(deal.id);
       setDealName(deal.name);
-      setSaveDealSuccessMessage(`"${deal.name}" saved.`);
+      setLastSavedAt(deal.updated_at);
+      setSavedSnapshot({ dealName: deal.name, values });
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setSaveDealError(apiError.message);
@@ -261,14 +316,20 @@ export default function App() {
   }
 
   async function handleOpenDeal(deal: Deal) {
+    if (!confirmDiscardIfDirty()) {
+      return;
+    }
     setDealsError(null);
     try {
       const fullDeal = await getDeal(deal.id);
-      setValues(buildFormValuesFromAcquisitionInputs(fullDeal.inputs));
+      const openedValues = buildFormValuesFromAcquisitionInputs(fullDeal.inputs);
+      setValues(openedValues);
       setDealName(fullDeal.name);
       setCurrentDealId(fullDeal.id);
+      setLastSavedAt(fullDeal.updated_at);
+      setSavedSnapshot({ dealName: fullDeal.name, values: openedValues });
       resetDownstreamAnalysisState();
-      clearSaveDealFeedback();
+      clearSaveDealError();
       clearIntakeFeedback();
       setView('workspace');
     } catch (apiError) {
@@ -281,13 +342,54 @@ export default function App() {
   }
 
   function handleNewDeal() {
-    setValues(BLANK_FORM_VALUES);
-    setDealName('');
-    setCurrentDealId(null);
-    resetDownstreamAnalysisState();
-    clearSaveDealFeedback();
-    clearIntakeFeedback();
+    if (!confirmDiscardIfDirty()) {
+      return;
+    }
+    resetToBlankDeal();
     setView('workspace');
+  }
+
+  /** Duplicates a saved deal and refreshes the library in place. Chosen
+   * over auto-opening the copy: staying in the library is the simpler,
+   * less surprising result -- it never touches the current workspace
+   * (so it can never trigger/bypass the unsaved-changes guard) and lets
+   * the analyst see the new copy appear in context, right next to the
+   * original, before deciding whether to open it. */
+  async function handleDuplicateDeal(deal: Deal) {
+    setDealsError(null);
+    try {
+      await duplicateDeal(deal.id);
+      await loadSavedDeals();
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDealsError(apiError.message);
+      } else {
+        setDealsError('An unexpected error occurred while duplicating the deal.');
+      }
+    }
+  }
+
+  /** Confirmation happens in `DealLibraryPanel` itself (window.confirm)
+   * before `onDelete` is ever called -- by the time this runs, the analyst
+   * has already agreed. If the deleted deal is the one currently open, the
+   * workspace is reset to a blank, never-saved deal rather than left
+   * pointing at an id that no longer exists (a later Save would otherwise
+   * 404 against a deleted id). */
+  async function handleDeleteDeal(deal: Deal) {
+    setDealsError(null);
+    try {
+      await deleteDeal(deal.id);
+      if (currentDealId === deal.id) {
+        resetToBlankDeal();
+      }
+      await loadSavedDeals();
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDealsError(apiError.message);
+      } else {
+        setDealsError('An unexpected error occurred while deleting the deal.');
+      }
+    }
   }
 
   async function runBreakEven(
@@ -514,6 +616,8 @@ export default function App() {
             isLoading={isDealsLoading}
             error={dealsError}
             onOpen={(deal) => void handleOpenDeal(deal)}
+            onDuplicate={(deal) => void handleDuplicateDeal(deal)}
+            onDelete={(deal) => void handleDeleteDeal(deal)}
             onClose={handleCloseLibrary}
           />
         ) : (
@@ -524,7 +628,8 @@ export default function App() {
               isSavedDeal={currentDealId !== null}
               isSaving={isSavingDeal}
               error={saveDealError}
-              successMessage={saveDealSuccessMessage}
+              saveStatus={saveStatus}
+              lastSavedAt={lastSavedAt}
               onSaveDeal={() => void handleSaveDeal()}
               onOpenLibrary={handleOpenLibrary}
               onNewDeal={handleNewDeal}

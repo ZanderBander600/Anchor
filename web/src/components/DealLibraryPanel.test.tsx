@@ -38,6 +38,8 @@ function renderPanel(overrides: Partial<DealLibraryPanelProps> = {}) {
     isLoading: false,
     error: null,
     onOpen: vi.fn(),
+    onDuplicate: vi.fn(),
+    onDelete: vi.fn(),
     onClose: vi.fn(),
     ...overrides,
   };
@@ -108,5 +110,59 @@ describe('DealLibraryPanel', () => {
 
     renderPanel({ error: 'Failed.', deals: [] });
     expect(screen.queryByText(/No saved deals yet/)).toBeNull();
+  });
+
+  describe('duplicate', () => {
+    it('calls onDuplicate with the clicked deal', async () => {
+      const user = userEvent.setup();
+      const onDuplicate = vi.fn();
+      const deal = dealFixture();
+      renderPanel({ deals: [deal], onDuplicate });
+
+      await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+
+      expect(onDuplicate).toHaveBeenCalledWith(deal);
+    });
+
+    it('never asks for confirmation (non-destructive)', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const user = userEvent.setup();
+      renderPanel({ deals: [dealFixture()] });
+
+      await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+
+      expect(confirmSpy).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
+  });
+
+  describe('delete', () => {
+    it('requires confirmation before calling onDelete', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const user = userEvent.setup();
+      const onDelete = vi.fn();
+      const deal = dealFixture();
+      renderPanel({ deals: [deal], onDelete });
+
+      await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(confirmSpy.mock.calls[0][0]).toContain('111 Main St');
+      expect(onDelete).toHaveBeenCalledWith(deal);
+      confirmSpy.mockRestore();
+    });
+
+    it('does not call onDelete when the confirmation is cancelled', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      const user = userEvent.setup();
+      const onDelete = vi.fn();
+      renderPanel({ deals: [dealFixture()], onDelete });
+
+      await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(onDelete).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
   });
 });

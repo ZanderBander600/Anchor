@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, createDeal, getDeal, listDeals, updateDeal, uploadExcel, uploadOm } from './api';
+import {
+  ApiError,
+  createDeal,
+  deleteDeal,
+  duplicateDeal,
+  getDeal,
+  listDeals,
+  updateDeal,
+  uploadExcel,
+  uploadOm,
+} from './api';
 import type { AcquisitionRequest, Deal, ExtractionResult } from './types';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -346,5 +356,65 @@ describe('listDeals', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(listDeals()).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('duplicateDeal', () => {
+  it('POSTs to /deals/{id}/duplicate with no body when no name is given', async () => {
+    const copy = dealFixture({ id: 'deal-2', name: '111 Main St (Copy)' });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, copy));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await duplicateDeal('deal-1');
+
+    expect(result).toEqual(copy);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/deal-1/duplicate');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({});
+  });
+
+  it('POSTs the name override when one is given', async () => {
+    const copy = dealFixture({ id: 'deal-2', name: '222 Oak Ave' });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, copy));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await duplicateDeal('deal-1', '222 Oak Ave');
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ name: '222 Oak Ave' });
+  });
+
+  it('surfaces a 404 for an unknown deal id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(404, { detail: 'not found' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(duplicateDeal('missing')).rejects.toThrow(/could not be found/);
+  });
+});
+
+describe('deleteDeal', () => {
+  it('DELETEs /deals/{id} and resolves with no value on success', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(204, undefined));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(deleteDeal('deal-1')).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/deal-1');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('surfaces a 404 for an unknown deal id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(404, { detail: 'not found' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(deleteDeal('missing')).rejects.toThrow(/could not be found/);
+  });
+
+  it('throws an ApiError on a network failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(deleteDeal('deal-1')).rejects.toBeInstanceOf(ApiError);
   });
 });

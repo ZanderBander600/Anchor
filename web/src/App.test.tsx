@@ -6,6 +6,8 @@ import {
   analyzeAcquisition,
   ApiError,
   createDeal,
+  deleteDeal,
+  duplicateDeal,
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchSensitivityPresets,
@@ -43,6 +45,8 @@ vi.mock('./api', async () => {
     updateDeal: vi.fn(),
     getDeal: vi.fn(),
     listDeals: vi.fn(),
+    duplicateDeal: vi.fn(),
+    deleteDeal: vi.fn(),
   };
 });
 
@@ -53,6 +57,8 @@ const mockFetchAIAnalysis = vi.mocked(fetchAIAnalysis);
 const mockUploadOm = vi.mocked(uploadOm);
 const mockUploadExcel = vi.mocked(uploadExcel);
 const mockCreateDeal = vi.mocked(createDeal);
+const mockDuplicateDeal = vi.mocked(duplicateDeal);
+const mockDeleteDeal = vi.mocked(deleteDeal);
 const mockUpdateDeal = vi.mocked(updateDeal);
 const mockGetDeal = vi.mocked(getDeal);
 const mockListDeals = vi.mocked(listDeals);
@@ -324,10 +330,18 @@ beforeEach(() => {
   mockGetDeal.mockReset();
   mockListDeals.mockReset();
   mockListDeals.mockResolvedValue([]);
+  mockDuplicateDeal.mockReset();
+  mockDeleteDeal.mockReset();
+  // Default every test to an accepted confirmation so the Phase C
+  // unsaved-changes guard and the Deal Library's delete confirmation don't
+  // block tests that aren't specifically exercising cancellation -- those
+  // tests override a single call with `mockReturnValueOnce(false)`.
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe('App workflow', () => {
@@ -1407,7 +1421,7 @@ describe('Deal persistence workflow', () => {
     expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST);
     expect(mockUpdateDeal).not.toHaveBeenCalled();
     expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
-    expect(await screen.findByText('"111 Main St" saved.')).toBeTruthy();
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
   });
 
   it('Save Deal on an already-opened deal calls updateDeal (PUT /deals/{id})', async () => {
@@ -1575,5 +1589,319 @@ describe('Deal persistence workflow', () => {
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
     expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST);
+  });
+});
+
+// =============================================================================
+// Persistence Phase C -- duplicate, delete, unsaved-changes guard, save status.
+// =============================================================================
+
+describe('Deal persistence workflow -- Phase C', () => {
+  describe('duplicate', () => {
+    it('duplicates a deal from the Deal Library and refreshes the list', async () => {
+      const user = userEvent.setup();
+      const original = makeDeal();
+      const copy = makeDeal({ id: 'deal-2', name: '111 Main St (Copy)' });
+      mockListDeals.mockResolvedValueOnce([original]).mockResolvedValueOnce([original, copy]);
+      mockDuplicateDeal.mockResolvedValue(copy);
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await screen.findByText('111 Main St');
+      await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+
+      await waitFor(() => expect(mockDuplicateDeal).toHaveBeenCalledWith('deal-1'));
+      expect(await screen.findByText('111 Main St (Copy)')).toBeTruthy();
+      expect(mockListDeals).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not automatically analyze the duplicated deal', async () => {
+      const user = userEvent.setup();
+      mockListDeals.mockResolvedValue([makeDeal()]);
+      mockDuplicateDeal.mockResolvedValue(makeDeal({ id: 'deal-2', name: '111 Main St (Copy)' }));
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Duplicate' }));
+
+      await waitFor(() => expect(mockDuplicateDeal).toHaveBeenCalled());
+      expect(mockAnalyze).not.toHaveBeenCalled();
+      // Chosen UX: stays in the library rather than opening the copy.
+      expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy();
+    });
+  });
+
+  describe('delete', () => {
+    it('requires confirmation before calling deleteDeal', async () => {
+      const user = userEvent.setup();
+      mockListDeals.mockResolvedValue([makeDeal()]);
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Delete' }));
+
+      expect(window.confirm).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(window.confirm).mock.calls[0][0]).toContain('111 Main St');
+      await waitFor(() => expect(mockDeleteDeal).toHaveBeenCalledWith('deal-1'));
+    });
+
+    it('cancelled deletion changes nothing', async () => {
+      vi.mocked(window.confirm).mockReturnValueOnce(false);
+      const user = userEvent.setup();
+      mockListDeals.mockResolvedValue([makeDeal()]);
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Delete' }));
+
+      expect(mockDeleteDeal).not.toHaveBeenCalled();
+      expect(screen.getByText('111 Main St')).toBeTruthy();
+    });
+
+    it('confirmed deletion removes the deal and refreshes the library', async () => {
+      const user = userEvent.setup();
+      mockListDeals.mockResolvedValueOnce([makeDeal()]).mockResolvedValueOnce([]);
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await screen.findByText('111 Main St');
+      await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+      await waitFor(() => expect(mockDeleteDeal).toHaveBeenCalledWith('deal-1'));
+      expect(await screen.findByText(/No saved deals yet/)).toBeTruthy();
+    });
+
+    it('deleting the currently-open deal clears its identity without leaving a stale id', async () => {
+      const user = userEvent.setup();
+      const deal = makeDeal();
+      mockListDeals.mockResolvedValue([deal]);
+      mockGetDeal.mockResolvedValue(deal);
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+      await screen.findByRole('button', { name: 'Update Deal' });
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Delete' }));
+      await waitFor(() => expect(mockDeleteDeal).toHaveBeenCalledWith('deal-1'));
+      await user.click(screen.getByRole('button', { name: 'Close' }));
+
+      expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '');
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+      expect(screen.getByRole('button', { name: 'Save Deal' })).toBeTruthy();
+      expect(screen.getByText('Unsaved deal')).toBeTruthy();
+    });
+  });
+
+  describe('unsaved-changes tracking and save status', () => {
+    it('starts as "Unsaved deal" with a blank form', () => {
+      render(<App />);
+
+      expect(screen.getByText('Unsaved deal')).toBeTruthy();
+    });
+
+    it('manual field edits produce "Unsaved changes" once a deal is open', async () => {
+      const user = userEvent.setup();
+      const deal = makeDeal();
+      mockListDeals.mockResolvedValue([deal]);
+      mockGetDeal.mockResolvedValue(deal);
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+      expect(await screen.findByText(/^Saved/)).toBeTruthy();
+
+      fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+        target: { value: '60000000' },
+      });
+
+      expect(screen.getByText('Unsaved changes')).toBeTruthy();
+      expect(screen.queryByText(/^Saved/)).toBeNull();
+    });
+
+    it('deal-name edits produce "Unsaved changes"', async () => {
+      const user = userEvent.setup();
+      const deal = makeDeal();
+      mockListDeals.mockResolvedValue([deal]);
+      mockGetDeal.mockResolvedValue(deal);
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+      expect(await screen.findByText(/^Saved/)).toBeTruthy();
+
+      await user.type(screen.getByLabelText('Deal Name'), ' Renamed');
+
+      expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    });
+
+    it('Excel-populated data is unsaved until saved', async () => {
+      const user = userEvent.setup();
+      mockUploadExcel.mockResolvedValue(GOLDEN_DEAL_REQUEST);
+      render(<App />);
+
+      const file = new File(['PK'], 'anchor_input.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+      await screen.findByText(/Workbook loaded successfully/);
+
+      expect(screen.getByText('Unsaved deal')).toBeTruthy();
+      expect(screen.queryByText(/^Saved/)).toBeNull();
+    });
+
+    it('OM-approved data is unsaved until saved', async () => {
+      const user = userEvent.setup();
+      mockUploadOm.mockResolvedValue(makeExtractionResult());
+      render(<App />);
+
+      const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+      await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+      await screen.findByRole('heading', { name: 'Purchase Price' }, { timeout: 3000 });
+
+      const purchasePriceCard = screen
+        .getByRole('heading', { name: 'Purchase Price' })
+        .closest('.om-field-card') as HTMLElement;
+      await user.click(
+        Array.from(purchasePriceCard.querySelectorAll('button')).find(
+          (b) => b.textContent === 'Approve',
+        )!,
+      );
+      await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+      expect(screen.getByText('Unsaved deal')).toBeTruthy();
+      expect(screen.queryByText(/^Saved/)).toBeNull();
+    });
+
+    it('a successful Save returns the status to "Saved"', async () => {
+      const user = userEvent.setup();
+      mockCreateDeal.mockResolvedValue(makeDeal());
+      render(<App />);
+      fillGoldenDeal();
+      await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+
+      expect(screen.getByText('Unsaved deal')).toBeTruthy();
+
+      await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+
+      expect(await screen.findByText(/^Saved/)).toBeTruthy();
+    });
+
+    it('Analyze Deal does not mark a never-saved deal as saved', async () => {
+      const user = userEvent.setup();
+      mockAnalyze.mockResolvedValue(makeResults());
+      render(<App />);
+      fillGoldenDeal();
+
+      await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+      await screen.findByText('7.91%');
+
+      expect(screen.getByText('Unsaved deal')).toBeTruthy();
+      expect(screen.queryByText(/^Saved/)).toBeNull();
+    });
+
+    it('Analyze Deal does not clear "Unsaved changes" on an already-saved deal', async () => {
+      const user = userEvent.setup();
+      const deal = makeDeal();
+      mockListDeals.mockResolvedValue([deal]);
+      mockGetDeal.mockResolvedValue(deal);
+      mockAnalyze.mockResolvedValue(makeResults());
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+      fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+        target: { value: '60000000' },
+      });
+      expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+      await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+      await screen.findByText('7.91%');
+
+      expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    });
+
+    it('opening a saved deal starts clean ("Saved")', async () => {
+      const user = userEvent.setup();
+      const deal = makeDeal();
+      mockListDeals.mockResolvedValue([deal]);
+      mockGetDeal.mockResolvedValue(deal);
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+      expect(await screen.findByText(/^Saved/)).toBeTruthy();
+    });
+  });
+
+  describe('unsaved-changes guard on New Deal / Open Deal', () => {
+    it('warns before New Deal when the workspace is dirty', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      fillGoldenDeal();
+
+      await user.click(screen.getByRole('button', { name: 'New Deal' }));
+
+      expect(window.confirm).toHaveBeenCalledWith(
+        'You have unsaved changes that will be lost. Continue?',
+      );
+    });
+
+    it('does not warn before New Deal when the workspace is clean', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'New Deal' }));
+
+      expect(window.confirm).not.toHaveBeenCalled();
+    });
+
+    it('cancelling the New Deal warning preserves the current workspace exactly', async () => {
+      vi.mocked(window.confirm).mockReturnValueOnce(false);
+      const user = userEvent.setup();
+      render(<App />);
+      fillGoldenDeal();
+
+      await user.click(screen.getByRole('button', { name: 'New Deal' }));
+
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+        'value',
+        DEFAULT_FORM_VALUES.purchasePrice,
+      );
+    });
+
+    it('warns before opening another deal when the workspace is dirty', async () => {
+      const user = userEvent.setup();
+      mockListDeals.mockResolvedValue([makeDeal()]);
+      render(<App />);
+      fillGoldenDeal();
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+      expect(window.confirm).toHaveBeenCalledWith(
+        'You have unsaved changes that will be lost. Continue?',
+      );
+    });
+
+    it('cancelling the Open warning preserves the current workspace and does not call getDeal', async () => {
+      vi.mocked(window.confirm).mockReturnValueOnce(false);
+      const user = userEvent.setup();
+      mockListDeals.mockResolvedValue([makeDeal()]);
+      render(<App />);
+      fillGoldenDeal();
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+      expect(mockGetDeal).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Close' }));
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+        'value',
+        DEFAULT_FORM_VALUES.purchasePrice,
+      );
+    });
   });
 });

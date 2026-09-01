@@ -14,7 +14,14 @@ import pytest
 
 from anchor.contracts import AcquisitionInputs
 from anchor.deals import Deal, DealNotFoundError
-from anchor.deals.store import create_deal, get_deal, list_deals, update_deal
+from anchor.deals.store import (
+    create_deal,
+    delete_deal,
+    duplicate_deal,
+    get_deal,
+    list_deals,
+    update_deal,
+)
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,
@@ -152,3 +159,101 @@ def test_db_path_creates_missing_parent_directory(tmp_path: Path) -> None:
     create_deal("Deal", GOLDEN_INPUTS, db_path=nested_path)
 
     assert nested_path.exists()
+
+
+# =============================================================================
+# Persistence Phase C -- delete_deal / duplicate_deal
+# =============================================================================
+
+
+def test_delete_deal_removes_an_existing_deal(db_path: Path) -> None:
+    created = create_deal("Deal", GOLDEN_INPUTS, db_path=db_path)
+
+    delete_deal(created.id, db_path=db_path)
+
+    with pytest.raises(DealNotFoundError):
+        get_deal(created.id, db_path=db_path)
+
+
+def test_delete_deal_raises_deal_not_found_error_for_unknown_id(db_path: Path) -> None:
+    with pytest.raises(DealNotFoundError):
+        delete_deal("does-not-exist", db_path=db_path)
+
+
+def test_delete_deal_does_not_affect_other_deals(db_path: Path) -> None:
+    kept = create_deal("Kept Deal", GOLDEN_INPUTS, db_path=db_path)
+    removed = create_deal("Removed Deal", GOLDEN_INPUTS, db_path=db_path)
+
+    delete_deal(removed.id, db_path=db_path)
+
+    remaining = list_deals(db_path=db_path)
+    assert [deal.id for deal in remaining] == [kept.id]
+
+
+def test_duplicate_deal_creates_a_new_id(db_path: Path) -> None:
+    original = create_deal("111 Main St", GOLDEN_INPUTS, db_path=db_path)
+
+    copy = duplicate_deal(original.id, db_path=db_path)
+
+    assert copy.id != original.id
+
+
+def test_duplicate_deal_preserves_all_nine_inputs_exactly(db_path: Path) -> None:
+    original = create_deal("Awkward Deal", AWKWARD_INPUTS, db_path=db_path)
+
+    copy = duplicate_deal(original.id, db_path=db_path)
+
+    assert copy.inputs == AWKWARD_INPUTS
+    assert copy.inputs == original.inputs
+
+
+def test_duplicate_deal_default_name_is_original_name_plus_copy_suffix(db_path: Path) -> None:
+    original = create_deal("111 Main St", GOLDEN_INPUTS, db_path=db_path)
+
+    copy = duplicate_deal(original.id, db_path=db_path)
+
+    assert copy.name == "111 Main St (Copy)"
+
+
+def test_duplicate_deal_accepts_an_explicit_name_override(db_path: Path) -> None:
+    original = create_deal("111 Main St", GOLDEN_INPUTS, db_path=db_path)
+
+    copy = duplicate_deal(original.id, name="222 Oak Ave", db_path=db_path)
+
+    assert copy.name == "222 Oak Ave"
+
+
+def test_duplicate_deal_gets_fresh_timestamps(db_path: Path) -> None:
+    original = create_deal("111 Main St", GOLDEN_INPUTS, db_path=db_path)
+
+    copy = duplicate_deal(original.id, db_path=db_path)
+
+    assert copy.created_at == copy.updated_at
+    # Not asserting copy.created_at > original.created_at -- both calls can
+    # legitimately land in the same microsecond-resolution instant; the
+    # meaningful guarantee is that the copy has its own timestamp pair, not
+    # that it is strictly later than the original's.
+    assert isinstance(copy.created_at, type(original.created_at))
+
+
+def test_duplicate_deal_does_not_mutate_the_original(db_path: Path) -> None:
+    original = create_deal("111 Main St", GOLDEN_INPUTS, db_path=db_path)
+
+    duplicate_deal(original.id, name="A Copy", db_path=db_path)
+
+    unchanged = get_deal(original.id, db_path=db_path)
+    assert unchanged == original
+
+
+def test_duplicate_deal_raises_deal_not_found_error_for_unknown_id(db_path: Path) -> None:
+    with pytest.raises(DealNotFoundError):
+        duplicate_deal("does-not-exist", db_path=db_path)
+
+
+def test_duplicate_deal_appears_alongside_the_original_in_list_deals(db_path: Path) -> None:
+    original = create_deal("111 Main St", GOLDEN_INPUTS, db_path=db_path)
+
+    copy = duplicate_deal(original.id, db_path=db_path)
+
+    ids = {deal.id for deal in list_deals(db_path=db_path)}
+    assert ids == {original.id, copy.id}

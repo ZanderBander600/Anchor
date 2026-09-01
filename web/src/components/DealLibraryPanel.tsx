@@ -6,6 +6,8 @@ export interface DealLibraryPanelProps {
   isLoading: boolean;
   error: string | null;
   onOpen: (deal: Deal) => void;
+  onDuplicate: (deal: Deal) => void;
+  onDelete: (deal: Deal) => void;
   onClose: () => void;
 }
 
@@ -20,13 +22,29 @@ function formatUpdatedAt(iso: string): string {
 }
 
 /**
- * Lists saved deals and lets the analyst open one back into the
- * underwriting workspace. Performs no calculation and never calls
- * `/analyze` -- `purchase_price` is read directly off the deal's stored
- * inputs, not derived. Opening a deal is the caller's responsibility
- * (`onOpen`); this component only renders what `/deals` already returned.
+ * Lists saved deals and lets the analyst open, duplicate, or delete one.
+ * Performs no calculation and never calls `/analyze` -- `purchase_price`
+ * is read directly off the deal's stored inputs, not derived. Duplicate
+ * and delete are the caller's responsibility (`onDuplicate`/`onDelete`);
+ * this component only asks for the one required confirmation before a
+ * delete (`window.confirm`, per the app's existing convention of no custom
+ * confirmation component) and otherwise renders what `/deals` returned.
  */
-export function DealLibraryPanel({ deals, isLoading, error, onOpen, onClose }: DealLibraryPanelProps) {
+export function DealLibraryPanel({
+  deals,
+  isLoading,
+  error,
+  onOpen,
+  onDuplicate,
+  onDelete,
+  onClose,
+}: DealLibraryPanelProps) {
+  function handleDeleteClick(deal: Deal) {
+    if (window.confirm(`Delete "${deal.name}"? This cannot be undone.`)) {
+      onDelete(deal);
+    }
+  }
+
   return (
     <section className="card deal-library-panel">
       <div className="card-title-row deal-library-header">
@@ -60,9 +78,25 @@ export function DealLibraryPanel({ deals, isLoading, error, onOpen, onClose }: D
                   {formatCurrency(deal.inputs.purchase_price)}
                 </span>
               </div>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen(deal)}>
-                Open
-              </button>
+              <div className="deal-library-row-actions">
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen(deal)}>
+                  Open
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => onDuplicate(deal)}
+                >
+                  Duplicate
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm deal-library-delete-button"
+                  onClick={() => handleDeleteClick(deal)}
+                >
+                  Delete
+                </button>
+              </div>
             </li>
           ))}
         </ul>
