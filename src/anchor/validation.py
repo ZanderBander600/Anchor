@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
 
-from .contracts import AcquisitionInputs
+from .contracts import AcquisitionInputs, DetailedOperatingInputs
 
 
 FIELD_IDS = (
@@ -35,6 +35,28 @@ V2_FIELD_IDS = (
 )
 
 ALL_FIELD_IDS = FIELD_IDS + V2_FIELD_IDS
+
+# Detailed Operating Model V2.1 Gate 1
+# (docs/detailed_operating_model_v2_1_financial_conventions.md): the eleven
+# Detailed operating Field IDs. Unlike V2_FIELD_IDS, every one of these is
+# required -- there is no economically meaningful neutral default for e.g.
+# gross_potential_rent -- so DETAILED_FIELD_IDS is validated by its own
+# validate_detailed_operating_inputs (below), never folded into
+# ALL_FIELD_IDS/validate_acquisition_inputs: a Detailed deal supplies all
+# eleven or none, never some subset defaulted like the V2 fields are.
+DETAILED_FIELD_IDS = (
+    "gross_potential_rent",
+    "other_income",
+    "vacancy_credit_loss_pct",
+    "property_taxes",
+    "insurance",
+    "utilities",
+    "repairs_maintenance",
+    "other_operating_expenses",
+    "management_fee_pct",
+    "revenue_growth",
+    "expense_growth",
+)
 
 _YEAR_FIELD_IDS = frozenset(("hold_period", "amortization", "io_period"))
 _YEAR_FIELD_MINIMUM = {"hold_period": 1, "amortization": 1, "io_period": 0}
@@ -101,6 +123,26 @@ _DOMAIN_DESCRIPTIONS = {
     "disposition_cost_pct": "between 0 and 1, inclusive",
     "annual_capex_reserve": "greater than or equal to 0",
     "io_period": "a whole number of years greater than or equal to 0",
+}
+
+_DETAILED_DOMAIN_DESCRIPTIONS = {
+    "gross_potential_rent": "greater than or equal to 0",
+    "other_income": "greater than or equal to 0",
+    "vacancy_credit_loss_pct": "between 0 and 1, inclusive",
+    "property_taxes": "greater than or equal to 0",
+    "insurance": "greater than or equal to 0",
+    "utilities": "greater than or equal to 0",
+    "repairs_maintenance": "greater than or equal to 0",
+    "other_operating_expenses": "greater than or equal to 0",
+    "management_fee_pct": "between 0 and 1, inclusive",
+    # Growth Rate Validation (financial-conventions doc): identical shape to
+    # noi_growth's existing domain -- strictly greater than -1, no upper
+    # bound. g <= -1 makes (1 + g) non-positive, which either collapses
+    # every subsequent year to exactly 0 (g == -1) or flips sign every year
+    # (g < -1) -- neither is economically meaningful for a compounding
+    # dollar amount.
+    "revenue_growth": "greater than -1",
+    "expense_growth": "greater than -1",
 }
 
 _NON_WHOLE_NUMBER_CATEGORY = {
@@ -306,3 +348,148 @@ def validate_acquisition_inputs(values: Mapping[str, object]) -> AcquisitionInpu
         raise InputValidationError(issues)
 
     return AcquisitionInputs(**normalized)
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 1 -- DetailedOperatingInputs validation
+# =============================================================================
+
+
+def _normalize_detailed_field_value(
+    field_id: str,
+    value: object,
+) -> tuple[float | None, InputIssue | None]:
+    """Normalize and validate one known Detailed Field ID in isolation.
+
+    Mirrors ``_normalize_field_value``'s shape, but every Detailed field is
+    a plain float with no whole-number/year handling (``DETAILED_FIELD_IDS``
+    contains no ``hold_period``/``amortization``/``io_period``-style field).
+    """
+
+    if field_id not in DETAILED_FIELD_IDS:
+        representation = _safe_repr(field_id)
+        detail = f": {representation}" if representation is not None else ""
+        raise ValueError(f"Unknown Detailed Field ID{detail}")
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None, _issue(
+            IssueCategory.NON_NUMERIC_VALUE,
+            field_id,
+            value,
+            "must be a numeric value; Booleans and text are not accepted",
+        )
+
+    try:
+        normalized_value = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None, _issue(
+            IssueCategory.NON_FINITE_VALUE,
+            field_id,
+            value,
+            "cannot be normalized to a finite built-in float",
+        )
+
+    if not isfinite(normalized_value):
+        return None, _issue(
+            IssueCategory.NON_FINITE_VALUE,
+            field_id,
+            normalized_value,
+            "must be finite",
+        )
+
+    in_domain = {
+        "gross_potential_rent": normalized_value >= 0,
+        "other_income": normalized_value >= 0,
+        "vacancy_credit_loss_pct": 0 <= normalized_value <= 1,
+        "property_taxes": normalized_value >= 0,
+        "insurance": normalized_value >= 0,
+        "utilities": normalized_value >= 0,
+        "repairs_maintenance": normalized_value >= 0,
+        "other_operating_expenses": normalized_value >= 0,
+        "management_fee_pct": 0 <= normalized_value <= 1,
+        "revenue_growth": normalized_value > -1,
+        "expense_growth": normalized_value > -1,
+    }[field_id]
+
+    if not in_domain:
+        return None, _issue(
+            IssueCategory.OUT_OF_DOMAIN_VALUE,
+            field_id,
+            value,
+            f"must be {_DETAILED_DOMAIN_DESCRIPTIONS[field_id]}",
+        )
+
+    return normalized_value, None
+
+
+def validate_detailed_operating_inputs(
+    values: Mapping[str, object]
+) -> DetailedOperatingInputs:
+    """Normalize and validate a Detailed operating input mapping: all eleven
+    ``DETAILED_FIELD_IDS`` are required -- unlike the five optional
+    Underwriting V2 fields, none has a neutral default, so a missing field
+    here is always a ``MISSING_FIELD_ID`` issue, never a silently-defaulted
+    value.
+
+    Issues are collected deterministically in the same order
+    ``validate_acquisition_inputs`` uses: unknown IDs first, then missing
+    IDs, then value/type/domain issues in canonical field order. This
+    function never reuses or reimplements ``validate_acquisition_inputs``'
+    domain rules -- the eleven Detailed fields are a disjoint field set with
+    their own domain rules (financial-conventions doc), not an extension of
+    ``AcquisitionInputs``'.
+    """
+
+    issues: list[InputIssue] = []
+    normalized: dict[str, float] = {}
+
+    unknown_ids = sorted(
+        (field_id for field_id in values if field_id not in DETAILED_FIELD_IDS),
+        key=_unknown_id_sort_key,
+    )
+    for field_id in unknown_ids:
+        representation = _safe_repr(field_id)
+        if isinstance(field_id, str):
+            supplied_id = field_id
+        elif representation is not None:
+            supplied_id = representation
+        else:
+            supplied_id = f"<{type(field_id).__qualname__}>"
+        display = representation or "that cannot be displayed safely"
+        issues.append(
+            InputIssue(
+                category=IssueCategory.UNKNOWN_FIELD_ID,
+                field_id=supplied_id,
+                value=field_id if representation is not None else None,
+                message=f"Unknown Field ID {display}.",
+            )
+        )
+
+    missing_ids = [
+        field_id for field_id in DETAILED_FIELD_IDS if field_id not in values
+    ]
+    for field_id in missing_ids:
+        issues.append(
+            InputIssue(
+                category=IssueCategory.MISSING_FIELD_ID,
+                field_id=field_id,
+                message=f"Missing required Field ID {field_id!r}.",
+            )
+        )
+
+    for field_id in DETAILED_FIELD_IDS:
+        if field_id not in values:
+            continue
+        normalized_value, issue = _normalize_detailed_field_value(
+            field_id, values[field_id]
+        )
+        if issue is not None:
+            issues.append(issue)
+        else:
+            assert normalized_value is not None
+            normalized[field_id] = normalized_value
+
+    if issues:
+        raise InputValidationError(issues)
+
+    return DetailedOperatingInputs(**normalized)

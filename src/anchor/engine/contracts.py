@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+from typing import Protocol
 
 
 class NonFiniteResultError(ValueError):
@@ -41,6 +42,73 @@ def ensure_finite(field_name: str, value: float) -> float:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class NoiForecast:
     noi_by_year: tuple[float, ...]
+    exit_noi: float
+    going_in_cap_rate: float
+
+
+class OperatingProjectionLike(Protocol):
+    """Detailed Operating Model V2.1 Gate 1
+    (``docs/detailed_operating_model_v2_1_architecture.md`` Section 2.2.1)
+    -- the narrow, structural shape the downstream acquisition/debt/returns
+    engine actually reads off an operating projection, regardless of which
+    mode produced it. Both ``NoiForecast`` (Quick) and ``OperatingProjection``
+    (Detailed, below) satisfy this without modification.
+
+    Deliberately just these three fields: every calculation downstream of
+    ``analyze_acquisition_from_operating_projection`` (capital stack, debt
+    schedule, exit value, cash flows, returns) reads only ``noi_by_year``,
+    ``exit_noi``, and ``going_in_cap_rate`` off its operating projection --
+    never any of ``OperatingProjection``'s eleven Detailed-only line-item
+    schedules. Kept as a field here (rather than re-derived downstream from
+    ``noi_by_year[0] / purchase_price``, which is mathematically equivalent)
+    because both producing contracts already compute it once and
+    ``AcquisitionResults.going_in_cap_rate`` already reads it directly --
+    re-deriving it downstream would be a second, redundant computation of
+    the same value.
+    """
+
+    noi_by_year: tuple[float, ...]
+    exit_noi: float
+    going_in_cap_rate: float
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OperatingProjection:
+    """Detailed Operating Model V2.1 Gate 1
+    (``docs/detailed_operating_model_v2_1_financial_conventions.md``,
+    ``docs/detailed_operating_model_v2_1_architecture.md`` Section 2.1) --
+    the canonical, deterministic Detailed operating schedule: every
+    ``_by_year`` field has length ``hold_period`` (Years 1..H); ``exit_noi``
+    is the single scalar Year ``H+1`` value used only for exit valuation,
+    never a member of ``noi_by_year``.
+
+    Produced solely by
+    ``anchor.engine.operating.build_detailed_operating_projection`` (Gate 2)
+    -- like every other contract in this module, this dataclass performs no
+    calculation of its own. Satisfies ``OperatingProjectionLike`` without
+    needing to declare it explicitly (structural typing) -- the downstream
+    engine (``analyze_acquisition_from_operating_projection``) reads only
+    the three ``OperatingProjectionLike`` fields off an instance of this
+    contract, never any of the eleven line-item schedules below, which
+    exist for display (the institutional operating-statement UI) and for
+    this contract's own golden-case test, not for the acquisition engine.
+    """
+
+    gross_potential_rent_by_year: tuple[float, ...]
+    other_income_by_year: tuple[float, ...]
+    vacancy_credit_loss_by_year: tuple[float, ...]
+    effective_gross_income_by_year: tuple[float, ...]
+
+    property_taxes_by_year: tuple[float, ...]
+    insurance_by_year: tuple[float, ...]
+    utilities_by_year: tuple[float, ...]
+    repairs_maintenance_by_year: tuple[float, ...]
+    other_operating_expenses_by_year: tuple[float, ...]
+    management_fee_by_year: tuple[float, ...]
+
+    total_operating_expenses_by_year: tuple[float, ...]
+    noi_by_year: tuple[float, ...]
+
     exit_noi: float
     going_in_cap_rate: float
 
