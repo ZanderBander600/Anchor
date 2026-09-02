@@ -354,6 +354,12 @@ def test_ensure_finite_raises_on_nan() -> None:
 
 
 def test_engine_package_contains_only_expected_phase_2a_2b_2c_2d_modules() -> None:
+    """Detailed Operating Model V2.1 Gate 2 deliberately adds
+    ``operating_projection.py`` -- the Detailed operating-schedule
+    calculation module (``docs/detailed_operating_model_v2_1_architecture.md``
+    Section 3) -- as an approved, intentional addition to this closed set,
+    updated here rather than left to silently drift."""
+
     engine_dir = Path(__file__).resolve().parents[1] / "src" / "anchor" / "engine"
     module_names = {path.name for path in engine_dir.glob("*.py")}
 
@@ -364,6 +370,7 @@ def test_engine_package_contains_only_expected_phase_2a_2b_2c_2d_modules() -> No
         "debt.py",
         "acquisition.py",
         "returns.py",
+        "operating_projection.py",
     }
 
 
@@ -386,6 +393,7 @@ def test_engine_contracts_noi_debt_acquisition_returns_do_not_import_openpyxl() 
                 "import anchor.engine.debt; "
                 "import anchor.engine.acquisition; "
                 "import anchor.engine.returns; "
+                "import anchor.engine.operating_projection; "
                 "assert 'openpyxl' not in sys.modules"
             ),
         ],
