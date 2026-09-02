@@ -158,18 +158,34 @@ def test_analyze_detailed_golden_case_reconciles_to_the_v2_golden_case(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["loan_amount"] == pytest.approx(6_000_000.0)
-    assert body["initial_equity"] == pytest.approx(4_260_000.0)
-    assert body["noi_by_year"] == pytest.approx(
+    # Gate 4: a "detailed" response is the richer DetailedAcquisitionResults
+    # envelope -- AcquisitionResults fields live under "results", alongside
+    # the new "operating_projection".
+    results = body["results"]
+    assert results["loan_amount"] == pytest.approx(6_000_000.0)
+    assert results["initial_equity"] == pytest.approx(4_260_000.0)
+    assert results["noi_by_year"] == pytest.approx(
         [600_000.0, 618_000.0, 636_540.0, 655_636.2, 675_305.286]
     )
-    assert body["headline_dscr"] == pytest.approx(2.0, abs=1e-5)
-    assert body["levered_irr"] == pytest.approx(0.073802, abs=1e-6)
+    assert results["headline_dscr"] == pytest.approx(2.0, abs=1e-5)
+    assert results["levered_irr"] == pytest.approx(0.073802, abs=1e-6)
+    assert body["operating_projection"]["noi_by_year"] == pytest.approx(
+        [600_000.0, 618_000.0, 636_540.0, 655_636.2, 675_305.286]
+    )
+    assert body["operating_projection"]["gross_potential_rent_by_year"][0] == pytest.approx(
+        800_000.0
+    )
 
 
-def test_analyze_detailed_response_shape_matches_quick_response_shape(
+def test_analyze_detailed_response_nests_every_quick_result_field_plus_operating_projection(
     client: TestClient,
 ) -> None:
+    """Gate 4 deliberately changes the Detailed response shape from Gate
+    5a's original "identical either way" design: every AcquisitionResults
+    field Quick mode returns at the top level is still present for
+    Detailed, just nested under "results", alongside the new
+    "operating_projection" the Quick response never has."""
+
     detailed_response = client.post(
         "/analyze",
         json={
@@ -180,8 +196,10 @@ def test_analyze_detailed_response_shape_matches_quick_response_shape(
     )
     quick_response = client.post("/analyze", json=GOLDEN_QUICK_PAYLOAD)
 
-    assert set(detailed_response.json().keys()) == set(_RESULT_FIELDS)
-    assert set(detailed_response.json().keys()) == set(quick_response.json().keys())
+    detailed_body = detailed_response.json()
+    assert set(detailed_body.keys()) == {"operating_projection", "results"}
+    assert set(detailed_body["results"].keys()) == set(quick_response.json().keys())
+    assert set(detailed_body["results"].keys()) == set(_RESULT_FIELDS)
 
 
 def test_analyze_detailed_missing_terms_object_is_rejected(client: TestClient) -> None:

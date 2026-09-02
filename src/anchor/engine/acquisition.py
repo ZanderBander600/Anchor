@@ -20,6 +20,7 @@ from ..contracts import (
 from .contracts import (
     AcquisitionCashFlows,
     AcquisitionResults,
+    DetailedAcquisitionResults,
     OperatingProjectionLike,
     ensure_finite,
 )
@@ -354,24 +355,27 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
     return analyze_acquisition_from_operating_projection(operating_projection, terms)
 
 
-def analyze_detailed_acquisition(
+def analyze_detailed_acquisition_with_projection(
     terms: AcquisitionTerms,
     detailed_inputs: DetailedOperatingInputs,
-) -> AcquisitionResults:
+) -> DetailedAcquisitionResults:
     """Convert one ``AcquisitionTerms`` + ``DetailedOperatingInputs`` into
-    one ``AcquisitionResults``.
+    one ``DetailedAcquisitionResults`` (Gate 4: the operating projection,
+    exposed for downstream consumers, alongside the unchanged
+    ``AcquisitionResults``).
 
-    The Detailed public engine entry point
+    The richer Detailed public engine entry point
     (``docs/detailed_operating_model_v2_1_architecture.md`` Section 4). No
     ``AcquisitionInputs`` instance is constructed, read, or required
     anywhere in this call -- ``current_noi``, ``noi_growth``, and
     ``occupancy`` simply do not exist in this path. Builds the Detailed
-    operating projection, exactly once, then delegates the entire
-    downstream acquisition/debt/returns calculation to
+    operating projection exactly once and reuses it for both the
+    ``AcquisitionResults`` calculation (via
     ``analyze_acquisition_from_operating_projection`` -- the identical
-    function ``analyze_acquisition`` (above) also calls. Neither entry
-    point duplicates any debt, exit-valuation, transaction-cost, CapEx,
-    IRR, equity-multiple, DSCR, sensitivity, or break-even logic.
+    function ``analyze_acquisition`` above also calls) and the returned
+    envelope's ``operating_projection`` field -- never recomputed. Neither
+    entry point duplicates any debt, exit-valuation, transaction-cost,
+    CapEx, IRR, equity-multiple, DSCR, sensitivity, or break-even logic.
     """
 
     operating_projection = build_detailed_operating_projection(
@@ -379,4 +383,22 @@ def analyze_detailed_acquisition(
         hold_period=terms.hold_period,
         purchase_price=terms.purchase_price,
     )
-    return analyze_acquisition_from_operating_projection(operating_projection, terms)
+    results = analyze_acquisition_from_operating_projection(operating_projection, terms)
+    return DetailedAcquisitionResults(
+        operating_projection=operating_projection, results=results
+    )
+
+
+def analyze_detailed_acquisition(
+    terms: AcquisitionTerms,
+    detailed_inputs: DetailedOperatingInputs,
+) -> AcquisitionResults:
+    """Convert one ``AcquisitionTerms`` + ``DetailedOperatingInputs`` into
+    one ``AcquisitionResults`` -- unchanged public behavior/signature since
+    Gate 3. A thin wrapper around
+    ``analyze_detailed_acquisition_with_projection`` (Gate 4): the operating
+    projection is still computed exactly once, this function simply
+    discards the richer envelope's extra field for a caller that only wants
+    the acquisition results."""
+
+    return analyze_detailed_acquisition_with_projection(terms, detailed_inputs).results

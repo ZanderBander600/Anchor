@@ -50,7 +50,12 @@ from .contracts import (
 )
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError
-from .engine import AcquisitionResults, analyze_acquisition, analyze_detailed_acquisition
+from .engine import (
+    AcquisitionResults,
+    DetailedAcquisitionResults,
+    analyze_acquisition,
+    analyze_detailed_acquisition_with_projection,
+)
 from .env import load_repo_env
 from .excel_reader import ExcelIntakeReport, read_acquisition_inputs_from_bytes_with_report
 from .ingestion import (
@@ -170,12 +175,16 @@ def _validation_error_detail(error: InputValidationError) -> list[dict[str, Any]
     ]
 
 
-def _analyze_detailed(payload: dict[str, Any]) -> AcquisitionResults:
-    """Detailed Operating Model V2.1 Gate 5: the 'detailed' operating_mode
-    branch of ``/analyze``. Validates 'terms' and 'detailed_operating_inputs'
-    with the same shared validators every other consumer uses, then
-    delegates to ``analyze_detailed_acquisition`` -- no financial math or
-    validation rule of its own."""
+def _analyze_detailed(payload: dict[str, Any]) -> DetailedAcquisitionResults:
+    """Detailed Operating Model V2.1 Gate 5 (mode routing) / Gate 4
+    (response shape): the 'detailed' operating_mode branch of ``/analyze``.
+    Validates 'terms' and 'detailed_operating_inputs' with the same shared
+    validators every other consumer uses, then delegates to
+    ``analyze_detailed_acquisition_with_projection`` -- no financial math or
+    validation rule of its own. Returns the richer
+    ``DetailedAcquisitionResults`` envelope (operating projection +
+    acquisition results) so a Detailed-mode frontend can render the
+    institutional operating statement without a second round trip."""
 
     raw_terms = payload.get("terms")
     if not isinstance(raw_terms, dict):
@@ -209,19 +218,23 @@ def _analyze_detailed(payload: dict[str, Any]) -> AcquisitionResults:
             detail=_validation_error_detail(error),
         ) from None
 
-    return analyze_detailed_acquisition(terms, detailed_inputs)
+    return analyze_detailed_acquisition_with_projection(terms, detailed_inputs)
 
 
-@app.post("/analyze", response_model=AcquisitionResults)
-def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults:
+@app.post("/analyze", response_model=AcquisitionResults | DetailedAcquisitionResults)
+def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults | DetailedAcquisitionResults:
     """Detailed Operating Model V2.1 Gate 5: gains an optional
     ``operating_mode`` discriminator (``"quick"`` default / ``"detailed"``).
     A ``"quick"``/absent ``operating_mode`` request is unaffected -- the
     remaining payload is validated and analyzed exactly as before this
     gate; ``operating_mode`` itself is popped first so it is never seen by
-    ``validate_acquisition_inputs`` as an unknown Field ID. A
-    ``"detailed"`` request is delegated to ``_analyze_detailed``. Response
-    shape (``AcquisitionResults``) is identical either way.
+    ``validate_acquisition_inputs`` as an unknown Field ID, and the
+    response is a bare ``AcquisitionResults``, byte-for-byte the same shape
+    as before this gate. A ``"detailed"`` request is delegated to
+    ``_analyze_detailed`` and receives the richer
+    ``DetailedAcquisitionResults`` envelope (Gate 4) -- every
+    ``AcquisitionResults`` field is still present, nested under ``results``,
+    plus ``operating_projection`` for the institutional operating statement.
     """
 
     payload = dict(payload)

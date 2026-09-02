@@ -143,17 +143,21 @@ def test_acquisition_results_has_no_excel_or_source_or_ui_metadata() -> None:
 # =============================================================================
 
 
-def test_engine_package_exposes_only_the_two_entry_points_and_acquisition_results() -> None:
-    """Detailed Operating Model V2.1 Gate 3 deliberately adds
-    ``analyze_detailed_acquisition`` as the second public engine entry
-    point, alongside the existing ``analyze_acquisition`` -- updated here
-    as an approved, intentional addition, not a silent surface-area
-    expansion."""
+def test_engine_package_exposes_only_the_entry_points_and_result_contracts() -> None:
+    """Detailed Operating Model V2.1 Gate 3 deliberately added
+    ``analyze_detailed_acquisition`` as a second public engine entry point,
+    alongside the existing ``analyze_acquisition``; Gate 4 adds
+    ``analyze_detailed_acquisition_with_projection`` and
+    ``DetailedAcquisitionResults`` for exposing the Detailed operating
+    projection to downstream consumers -- each updated here as an approved,
+    intentional addition, not a silent surface-area expansion."""
 
     assert set(engine_package.__all__) == {
         "analyze_acquisition",
         "analyze_detailed_acquisition",
+        "analyze_detailed_acquisition_with_projection",
         "AcquisitionResults",
+        "DetailedAcquisitionResults",
     }
 
 

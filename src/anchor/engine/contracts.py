@@ -211,3 +211,26 @@ class AcquisitionResults:
     dscr_by_year: tuple[float | None, ...]
     headline_dscr: float | None
     min_dscr: float | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DetailedAcquisitionResults:
+    """Detailed Operating Model V2.1 Gate 4 -- the Detailed result envelope.
+
+    Exposes the deterministic ``OperatingProjection`` (the full Detailed
+    revenue/vacancy/EGI/expense-line/NOI schedule) to downstream consumers
+    (API, frontend) *alongside* the unchanged, authoritative
+    ``AcquisitionResults`` -- a higher-level envelope rather than
+    contaminating ``AcquisitionResults`` itself with Detailed-only line
+    items, per the architecture document's contract-separation principle
+    (Section 2.1.1). Quick Underwrite has no equivalent envelope: it
+    returns a bare ``AcquisitionResults``, unchanged.
+
+    Produced only by
+    ``anchor.engine.acquisition.analyze_detailed_acquisition_with_projection``,
+    which computes ``operating_projection`` exactly once and reuses it for
+    both fields below -- this dataclass performs no calculation of its own.
+    """
+
+    operating_projection: OperatingProjection
+    results: AcquisitionResults
