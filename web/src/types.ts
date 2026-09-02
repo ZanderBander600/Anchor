@@ -150,6 +150,121 @@ export interface AcquisitionResults {
   min_dscr: number | null;
 }
 
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 6 -- Detailed Underwrite mode.
+//
+// Mirrors ``OperatingMode``/``AcquisitionTerms``/``DetailedOperatingInputs``/
+// ``DetailedAcquisitionResults`` in ``src/anchor/contracts.py`` and
+// ``src/anchor/engine/contracts.py``. Detailed mode never sends or receives
+// ``current_noi``/``noi_growth``/``occupancy`` -- those three fields simply
+// have no counterpart on any type below, matching the backend engine's
+// Gate 3/4 resolution exactly.
+// =============================================================================
+
+/** Mirrors ``OperatingMode`` in ``src/anchor/contracts.py``. */
+export type OperatingMode = 'quick' | 'detailed';
+
+export interface AcquisitionTermsFormValues {
+  purchasePrice: string;
+  holdPeriod: string;
+  exitCapRate: string;
+  ltv: string;
+  interestRate: string;
+  amortization: string;
+  acquisitionCostPct: string;
+  financingFeePct: string;
+  dispositionCostPct: string;
+  annualCapexReserve: string;
+  ioPeriod: string;
+}
+
+/** Mirrors ``AcquisitionTerms`` in ``src/anchor/contracts.py`` -- the 11
+ * acquisition/debt/exit fields shared by both modes. */
+export interface AcquisitionTermsRequest {
+  purchase_price: number;
+  hold_period: number;
+  exit_cap_rate: number;
+  ltv: number;
+  interest_rate: number;
+  amortization: number;
+  acquisition_cost_pct: number;
+  financing_fee_pct: number;
+  disposition_cost_pct: number;
+  annual_capex_reserve: number;
+  io_period: number;
+}
+
+export interface DetailedOperatingFormValues {
+  grossPotentialRent: string;
+  otherIncome: string;
+  vacancyCreditLossPct: string;
+  propertyTaxes: string;
+  insurance: string;
+  utilities: string;
+  repairsMaintenance: string;
+  otherOperatingExpenses: string;
+  managementFeePct: string;
+  revenueGrowth: string;
+  expenseGrowth: string;
+}
+
+/** Mirrors ``DetailedOperatingInputs`` in ``src/anchor/contracts.py``. */
+export interface DetailedOperatingInputsRequest {
+  gross_potential_rent: number;
+  other_income: number;
+  vacancy_credit_loss_pct: number;
+  property_taxes: number;
+  insurance: number;
+  utilities: number;
+  repairs_maintenance: number;
+  other_operating_expenses: number;
+  management_fee_pct: number;
+  revenue_growth: number;
+  expense_growth: number;
+}
+
+/** The Detailed workspace's combined form state -- the acquisition/debt
+ * terms plus the Operating Model section, kept as two nested groups (rather
+ * than one flat 22-field object) so each half's own blank/default/conversion
+ * helpers can stay as narrow as ``AcquisitionFormValues``'s already are. */
+export interface DetailedFormValues {
+  terms: AcquisitionTermsFormValues;
+  operating: DetailedOperatingFormValues;
+}
+
+/** Mirrors ``OperatingProjection`` in ``src/anchor/engine/contracts.py`` --
+ * the full Detailed revenue/vacancy/EGI/expense-line/NOI schedule. Every
+ * ``_by_year`` field has length ``hold_period`` (Years 1..H); ``exit_noi``
+ * is the single Year H+1 scalar. Every value here is engine-computed -- the
+ * frontend never recalculates any of it, exactly like ``AcquisitionResults``. */
+export interface OperatingProjection {
+  gross_potential_rent_by_year: number[];
+  other_income_by_year: number[];
+  vacancy_credit_loss_by_year: number[];
+  effective_gross_income_by_year: number[];
+  property_taxes_by_year: number[];
+  insurance_by_year: number[];
+  utilities_by_year: number[];
+  repairs_maintenance_by_year: number[];
+  other_operating_expenses_by_year: number[];
+  management_fee_by_year: number[];
+  total_operating_expenses_by_year: number[];
+  noi_by_year: number[];
+  exit_noi: number;
+  going_in_cap_rate: number;
+}
+
+/** Mirrors ``DetailedAcquisitionResults`` in ``src/anchor/engine/contracts.py``
+ * -- the response shape ``POST /analyze`` returns for a ``"detailed"``
+ * ``operating_mode`` request (Gate 4). ``results`` is the exact same
+ * ``AcquisitionResults`` shape a Quick request returns; ``operating_projection``
+ * is the additional Detailed-only schedule the institutional operating
+ * statement renders from. */
+export interface DetailedAcquisitionResults {
+  operating_projection: OperatingProjection;
+  results: AcquisitionResults;
+}
+
 /** Mirrors ``ExcelIntakeReport`` in ``src/anchor/excel_reader.py`` --
  * Underwriting V2 Gate 5's ``POST /ingestion/excel`` response shape.
  * ``defaulted_v2_field_ids`` names exactly which V2 Field IDs were absent

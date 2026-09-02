@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import App from './App';
 import {
   analyzeAcquisition,
+  analyzeDetailedAcquisition,
   ApiError,
   createDeal,
   deleteDeal,
@@ -17,13 +18,20 @@ import {
   uploadExcel,
   uploadOm,
 } from './api';
-import { BLANK_FORM_VALUES, buildAcquisitionRequest, DEFAULT_FORM_VALUES, V2_GOLDEN_FORM_VALUES } from './convert';
+import {
+  BLANK_FORM_VALUES,
+  buildAcquisitionRequest,
+  DEFAULT_FORM_VALUES,
+  DETAILED_GOLDEN_FORM_VALUES,
+  V2_GOLDEN_FORM_VALUES,
+} from './convert';
 import type {
   AcquisitionRequest,
   AcquisitionResults,
   AIAnalysis,
   BreakEvenResult,
   Deal,
+  DetailedAcquisitionResults,
   ExcelIntakeReport,
   ExtractionResult,
   FieldCandidates,
@@ -37,6 +45,7 @@ vi.mock('./api', async () => {
   return {
     ...actual,
     analyzeAcquisition: vi.fn(),
+    analyzeDetailedAcquisition: vi.fn(),
     fetchSensitivityPresets: vi.fn(),
     fetchBreakEvenAnalysis: vi.fn(),
     fetchAIAnalysis: vi.fn(),
@@ -52,6 +61,7 @@ vi.mock('./api', async () => {
 });
 
 const mockAnalyze = vi.mocked(analyzeAcquisition);
+const mockAnalyzeDetailed = vi.mocked(analyzeDetailedAcquisition);
 const mockFetchSensitivityPresets = vi.mocked(fetchSensitivityPresets);
 const mockFetchBreakEvenAnalysis = vi.mocked(fetchBreakEvenAnalysis);
 const mockFetchAIAnalysis = vi.mocked(fetchAIAnalysis);
@@ -433,6 +443,7 @@ function makeAiAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
 
 beforeEach(() => {
   mockAnalyze.mockReset();
+  mockAnalyzeDetailed.mockReset();
   mockFetchSensitivityPresets.mockReset();
   mockFetchSensitivityPresets.mockResolvedValue(makeSensitivityPresets());
   mockFetchBreakEvenAnalysis.mockReset();
@@ -2587,5 +2598,227 @@ describe('Deal persistence workflow -- Phase C', () => {
         DEFAULT_FORM_VALUES.purchasePrice,
       );
     });
+  });
+});
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 6 -- Quick/Detailed mode toggle
+// =============================================================================
+
+/** Fills DetailedAssumptionsForm with the Detailed golden-case fixture
+ * values (the terms and Operating Model sections both), mirroring
+ * fillV2GoldenDeal's style/shape for the Quick form. */
+function fillDetailedGoldenDeal() {
+  fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.purchasePrice },
+  });
+  fireEvent.change(screen.getByLabelText(/^Hold Period/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.holdPeriod },
+  });
+  fireEvent.change(screen.getByLabelText(/^Exit Cap Rate/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.exitCapRate },
+  });
+  fireEvent.change(screen.getByLabelText(/^LTV/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.ltv },
+  });
+  fireEvent.change(screen.getByLabelText(/^Interest Rate/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.interestRate },
+  });
+  fireEvent.change(screen.getByLabelText(/^Amortization/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.amortization },
+  });
+  fireEvent.change(screen.getByLabelText(/^Acquisition Costs/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.acquisitionCostPct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Financing Fee/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.financingFeePct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Disposition Costs/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.dispositionCostPct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Annual CapEx Reserve/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.annualCapexReserve },
+  });
+  fireEvent.change(screen.getByLabelText(/^Interest-Only Period/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.ioPeriod },
+  });
+  fireEvent.change(screen.getByLabelText(/^Gross Potential Rent/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.grossPotentialRent },
+  });
+  fireEvent.change(screen.getByLabelText(/^Other Income/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.otherIncome },
+  });
+  fireEvent.change(screen.getByLabelText(/^Vacancy & Credit Loss/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.vacancyCreditLossPct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Property Taxes/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.propertyTaxes },
+  });
+  fireEvent.change(screen.getByLabelText(/^Insurance/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.insurance },
+  });
+  fireEvent.change(screen.getByLabelText(/^Utilities/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.utilities },
+  });
+  fireEvent.change(screen.getByLabelText(/^Repairs & Maintenance/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.repairsMaintenance },
+  });
+  fireEvent.change(screen.getByLabelText(/^Other Operating Expenses/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.otherOperatingExpenses },
+  });
+  fireEvent.change(screen.getByLabelText(/^Management Fee/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.managementFeePct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Revenue Growth/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.revenueGrowth },
+  });
+  fireEvent.change(screen.getByLabelText(/^Expense Growth/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.expenseGrowth },
+  });
+}
+
+/** The frozen Detailed golden case's engine output
+ * (docs/detailed_operating_model_v2_1_golden_case.md), for tests
+ * demonstrating the Detailed flow end-to-end with authoritative mocked
+ * values -- never reproduced via a TypeScript formula. */
+function makeDetailedResults(): DetailedAcquisitionResults {
+  return {
+    operating_projection: {
+      gross_potential_rent_by_year: [800_000, 824_000, 848_720, 874_181.6, 900_407.05],
+      other_income_by_year: [20_000, 20_600, 21_218, 21_854.54, 22_510.18],
+      vacancy_credit_loss_by_year: [40_000, 41_200, 42_436, 43_709.08, 45_020.35],
+      effective_gross_income_by_year: [780_000, 803_400, 827_502, 852_327.06, 877_896.87],
+      property_taxes_by_year: [60_000, 61_800, 63_654, 65_563.62, 67_530.53],
+      insurance_by_year: [20_000, 20_600, 21_218, 21_854.54, 22_510.18],
+      utilities_by_year: [25_000, 25_750, 26_522.5, 27_318.18, 28_137.72],
+      repairs_maintenance_by_year: [20_000, 20_600, 21_218, 21_854.54, 22_510.18],
+      other_operating_expenses_by_year: [16_000, 16_480, 16_974.4, 17_483.63, 18_008.14],
+      management_fee_by_year: [39_000, 40_170, 41_375.1, 42_616.35, 43_894.84],
+      total_operating_expenses_by_year: [180_000, 185_400, 190_962, 196_690.86, 202_591.59],
+      noi_by_year: [600_000, 618_000, 636_540, 655_636.2, 675_305.29],
+      exit_noi: 695_564.44,
+      going_in_cap_rate: 0.06,
+    },
+    results: makeV2GoldenResults(),
+  };
+}
+
+describe('Detailed Underwrite mode (Gate 6)', () => {
+  it('starts in Quick Underwrite mode by default', () => {
+    render(<App />);
+
+    expect(screen.getByRole('tab', { name: 'Quick Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.getByLabelText(/^Current NOI/)).toBeTruthy();
+  });
+
+  it('switches to the Detailed form and back without losing Quick-mode input', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    expect(screen.queryByLabelText(/^Current NOI/)).toBeNull();
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.purchasePrice,
+    );
+    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.currentNoi,
+    );
+  });
+
+  it('never renders a Current NOI, Occupancy, or NOI Growth field in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.queryByLabelText(/^Current NOI/)).toBeNull();
+    expect(screen.queryByLabelText(/^Occupancy/)).toBeNull();
+    expect(screen.queryByLabelText(/^NOI Growth/)).toBeNull();
+  });
+
+  it('submits the Detailed golden case and renders the operating statement and results', async () => {
+    const user = userEvent.setup();
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    fillDetailedGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+    const [terms, detailedOperatingInputs] = mockAnalyzeDetailed.mock.calls[0];
+    expect(terms).toEqual({
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    });
+    expect(detailedOperatingInputs).toEqual({
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    });
+
+    expect(await screen.findByText('Operating Statement')).toBeTruthy();
+    expect(screen.getByText('Key Returns')).toBeTruthy();
+    expect(screen.getAllByText('$600,000').length).toBeGreaterThan(0);
+  });
+
+  it('surfaces a Detailed validation error without touching Quick-mode state', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(screen.getByText(/is required/)).toBeTruthy();
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.purchasePrice,
+    );
+  });
+
+  it('surfaces an ApiError message from analyzeDetailedAcquisition', async () => {
+    const user = userEvent.setup();
+    mockAnalyzeDetailed.mockRejectedValue(
+      new ApiError('The submitted assumptions failed validation.'),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    fillDetailedGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(
+      await screen.findByText('The submitted assumptions failed validation.'),
+    ).toBeTruthy();
   });
 });

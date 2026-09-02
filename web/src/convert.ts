@@ -2,6 +2,11 @@ import type {
   AcquisitionFieldId,
   AcquisitionFormValues,
   AcquisitionRequest,
+  AcquisitionTermsFormValues,
+  AcquisitionTermsRequest,
+  DetailedFormValues,
+  DetailedOperatingFormValues,
+  DetailedOperatingInputsRequest,
   ExcelIntakeReport,
   V2FieldId,
 } from './types';
@@ -421,3 +426,215 @@ export function buildFormValuesFromExcelIntakeReport(
   }
   return values;
 }
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 6 -- Detailed Underwrite mode.
+//
+// Mirrors the Quick-mode conversion functions above exactly in shape
+// (blank-by-default state, `parseNumber`/`parsePercent`/`parseWholeNumber`
+// reused, never a duplicated validation rule) over the two Detailed field
+// sets instead of the fourteen Quick fields. Neither set has a
+// current_noi/noi_growth/occupancy counterpart -- there is no field to
+// leave blank or convert for them in Detailed mode.
+// =============================================================================
+
+export const BLANK_TERMS_FORM_VALUES: AcquisitionTermsFormValues = {
+  purchasePrice: '',
+  holdPeriod: '',
+  exitCapRate: '',
+  ltv: '',
+  interestRate: '',
+  amortization: '',
+  acquisitionCostPct: '',
+  financingFeePct: '',
+  dispositionCostPct: '',
+  annualCapexReserve: '',
+  ioPeriod: '',
+};
+
+export const BLANK_DETAILED_OPERATING_FORM_VALUES: DetailedOperatingFormValues = {
+  grossPotentialRent: '',
+  otherIncome: '',
+  vacancyCreditLossPct: '',
+  propertyTaxes: '',
+  insurance: '',
+  utilities: '',
+  repairsMaintenance: '',
+  otherOperatingExpenses: '',
+  managementFeePct: '',
+  revenueGrowth: '',
+  expenseGrowth: '',
+};
+
+export const BLANK_DETAILED_FORM_VALUES: DetailedFormValues = {
+  terms: BLANK_TERMS_FORM_VALUES,
+  operating: BLANK_DETAILED_OPERATING_FORM_VALUES,
+};
+
+/** The Detailed-mode counterpart to the frozen V2 golden case
+ * (`V2_GOLDEN_FORM_VALUES`) -- the same $10M deal, reconstructed from its
+ * eleven detailed revenue/expense/growth assumptions
+ * (`docs/detailed_operating_model_v2_1_golden_case.md`) instead of a single
+ * `current_noi`/`noi_growth` pair. Used as the Gate 6 UI integration
+ * fixture. */
+export const DETAILED_GOLDEN_FORM_VALUES: DetailedFormValues = {
+  terms: {
+    purchasePrice: '10000000',
+    holdPeriod: '5',
+    exitCapRate: '6.5',
+    ltv: '60',
+    interestRate: '5',
+    amortization: '30',
+    acquisitionCostPct: '2',
+    financingFeePct: '1',
+    dispositionCostPct: '2.5',
+    annualCapexReserve: '50000',
+    ioPeriod: '2',
+  },
+  operating: {
+    grossPotentialRent: '800000',
+    otherIncome: '20000',
+    vacancyCreditLossPct: '5',
+    propertyTaxes: '60000',
+    insurance: '20000',
+    utilities: '25000',
+    repairsMaintenance: '20000',
+    otherOperatingExpenses: '16000',
+    managementFeePct: '5',
+    revenueGrowth: '3',
+    expenseGrowth: '3',
+  },
+};
+
+export function buildAcquisitionTermsRequest(
+  values: AcquisitionTermsFormValues,
+): AcquisitionTermsRequest {
+  return {
+    purchase_price: parseNumber('Purchase Price', values.purchasePrice),
+    hold_period: parseNumber('Hold Period', values.holdPeriod),
+    exit_cap_rate: parsePercent('Exit Cap Rate', values.exitCapRate),
+    ltv: parsePercent('LTV', values.ltv),
+    interest_rate: parsePercent('Interest Rate', values.interestRate),
+    amortization: parseNumber('Amortization', values.amortization),
+    acquisition_cost_pct: parsePercent('Acquisition Costs', values.acquisitionCostPct),
+    financing_fee_pct: parsePercent('Financing Fee', values.financingFeePct),
+    disposition_cost_pct: parsePercent('Disposition Costs', values.dispositionCostPct),
+    annual_capex_reserve: parseNumber('Annual CapEx Reserve', values.annualCapexReserve),
+    io_period: parseWholeNumber('Interest-Only Period', values.ioPeriod),
+  };
+}
+
+export function buildDetailedOperatingInputsRequest(
+  values: DetailedOperatingFormValues,
+): DetailedOperatingInputsRequest {
+  return {
+    gross_potential_rent: parseNumber('Gross Potential Rent', values.grossPotentialRent),
+    other_income: parseNumber('Other Income', values.otherIncome),
+    vacancy_credit_loss_pct: parsePercent(
+      'Vacancy & Credit Loss',
+      values.vacancyCreditLossPct,
+    ),
+    property_taxes: parseNumber('Property Taxes', values.propertyTaxes),
+    insurance: parseNumber('Insurance', values.insurance),
+    utilities: parseNumber('Utilities', values.utilities),
+    repairs_maintenance: parseNumber('Repairs & Maintenance', values.repairsMaintenance),
+    other_operating_expenses: parseNumber(
+      'Other Operating Expenses',
+      values.otherOperatingExpenses,
+    ),
+    management_fee_pct: parsePercent('Management Fee', values.managementFeePct),
+    revenue_growth: parsePercent('Revenue Growth', values.revenueGrowth),
+    expense_growth: parsePercent('Expense Growth', values.expenseGrowth),
+  };
+}
+
+export interface TermsFieldConfig {
+  key: keyof AcquisitionTermsFormValues;
+  label: string;
+  prefix?: string;
+  suffix?: string;
+}
+
+export interface TermsFieldGroup {
+  title: string;
+  fields: TermsFieldConfig[];
+}
+
+/** The 11 AcquisitionTerms assumptions grouped for display -- the
+ * Detailed-mode counterpart to `ASSUMPTIONS_FIELD_GROUPS`, over the field
+ * set that excludes current_noi/occupancy/noi_growth. */
+export const TERMS_FIELD_GROUPS: TermsFieldGroup[] = [
+  {
+    title: 'Acquisition & Exit',
+    fields: [
+      { key: 'purchasePrice', label: 'Purchase Price', prefix: '$' },
+      { key: 'holdPeriod', label: 'Hold Period', suffix: 'yrs' },
+      { key: 'exitCapRate', label: 'Exit Cap Rate', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Transaction Costs',
+    fields: [
+      { key: 'acquisitionCostPct', label: 'Acquisition Costs', suffix: '%' },
+      { key: 'financingFeePct', label: 'Financing Fee', suffix: '%' },
+      { key: 'dispositionCostPct', label: 'Disposition Costs', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Operations',
+    fields: [{ key: 'annualCapexReserve', label: 'Annual CapEx Reserve', prefix: '$' }],
+  },
+  {
+    title: 'Financing',
+    fields: [
+      { key: 'ltv', label: 'LTV', suffix: '%' },
+      { key: 'interestRate', label: 'Interest Rate', suffix: '%' },
+      { key: 'amortization', label: 'Amortization', suffix: 'yrs' },
+      { key: 'ioPeriod', label: 'Interest-Only Period', suffix: 'yrs' },
+    ],
+  },
+];
+
+export interface OperatingFieldConfig {
+  key: keyof DetailedOperatingFormValues;
+  label: string;
+  prefix?: string;
+  suffix?: string;
+}
+
+export interface OperatingFieldGroup {
+  title: string;
+  fields: OperatingFieldConfig[];
+}
+
+/** The 11 DetailedOperatingInputs assumptions grouped for display, per
+ * `docs/detailed_operating_model_v2_1_financial_conventions.md`'s Revenue /
+ * Operating expenses / Growth grouping. */
+export const DETAILED_OPERATING_FIELD_GROUPS: OperatingFieldGroup[] = [
+  {
+    title: 'Revenue',
+    fields: [
+      { key: 'grossPotentialRent', label: 'Gross Potential Rent', prefix: '$' },
+      { key: 'otherIncome', label: 'Other Income', prefix: '$' },
+      { key: 'vacancyCreditLossPct', label: 'Vacancy & Credit Loss', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Operating Expenses',
+    fields: [
+      { key: 'propertyTaxes', label: 'Property Taxes', prefix: '$' },
+      { key: 'insurance', label: 'Insurance', prefix: '$' },
+      { key: 'utilities', label: 'Utilities', prefix: '$' },
+      { key: 'repairsMaintenance', label: 'Repairs & Maintenance', prefix: '$' },
+      { key: 'otherOperatingExpenses', label: 'Other Operating Expenses', prefix: '$' },
+      { key: 'managementFeePct', label: 'Management Fee', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Growth',
+    fields: [
+      { key: 'revenueGrowth', label: 'Revenue Growth', suffix: '%' },
+      { key: 'expenseGrowth', label: 'Expense Growth', suffix: '%' },
+    ],
+  },
+];

@@ -1,8 +1,11 @@
 import type {
   AcquisitionRequest,
   AcquisitionResults,
+  AcquisitionTermsRequest,
   AIAnalysis,
   Deal,
+  DetailedAcquisitionResults,
+  DetailedOperatingInputsRequest,
   ExcelIntakeReport,
   ExtractionResult,
   ReturnHurdleMetric,
@@ -60,6 +63,54 @@ export async function analyzeAcquisition(
   }
 
   return (await response.json()) as AcquisitionResults;
+}
+
+/**
+ * Detailed Operating Model V2.1 Gate 6: POSTs an ``operating_mode:
+ * "detailed"`` request (``terms`` + ``detailed_operating_inputs``) to the
+ * same FastAPI ``/analyze`` endpoint and returns the raw
+ * ``DetailedAcquisitionResults`` JSON -- the operating projection alongside
+ * the same ``AcquisitionResults`` shape a Quick request returns. Performs
+ * no financial calculation or validation of its own -- the backend is
+ * authoritative, exactly like ``analyzeAcquisition``.
+ */
+export async function analyzeDetailedAcquisition(
+  terms: AcquisitionTermsRequest,
+  detailedOperatingInputs: DetailedOperatingInputsRequest,
+): Promise<DetailedAcquisitionResults> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operating_mode: 'detailed',
+        terms,
+        detailed_operating_inputs: detailedOperatingInputs,
+      }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  if (response.status === 422) {
+    const body = await response.json().catch(() => null);
+    const issues: ValidationIssue[] = Array.isArray(body?.detail) ? body.detail : [];
+    const message =
+      issues.length > 0
+        ? issues.map((issue) => issue.message).join(' ')
+        : 'The submitted assumptions failed validation.';
+    throw new ApiError(message, issues);
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`The analysis request failed (HTTP ${response.status}).`);
+  }
+
+  return (await response.json()) as DetailedAcquisitionResults;
 }
 
 /**

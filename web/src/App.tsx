@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   analyzeAcquisition,
+  analyzeDetailedAcquisition,
   ApiError,
   createDeal,
   deleteDeal,
@@ -21,15 +22,20 @@ import { BreakEvenPanel } from './components/BreakEvenPanel';
 import { DealBar } from './components/DealBar';
 import type { SaveStatus } from './components/DealBar';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
+import { DetailedAssumptionsForm } from './components/DetailedAssumptionsForm';
 import { ExcelReviewPanel } from './components/ExcelReviewPanel';
 import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
+import { OperatingStatementTable } from './components/OperatingStatementTable';
 import { ResultsPanel } from './components/ResultsPanel';
 import { SensitivityPanel } from './components/SensitivityPanel';
 import {
+  BLANK_DETAILED_FORM_VALUES,
   BLANK_FORM_VALUES,
   buildAcquisitionRequest,
+  buildAcquisitionTermsRequest,
   buildApprovedFormValues,
+  buildDetailedOperatingInputsRequest,
   buildFormValuesFromAcquisitionInputs,
   buildFormValuesFromExcelIntakeReport,
   DEFAULT_TARGET_EQUITY_MULTIPLE,
@@ -44,9 +50,14 @@ import type {
   AcquisitionFormValues,
   AcquisitionRequest,
   AcquisitionResults,
+  AcquisitionTermsFormValues,
   AIAnalysis,
   Deal,
+  DetailedAcquisitionResults,
+  DetailedFormValues,
+  DetailedOperatingFormValues,
   ExtractionResult,
+  OperatingMode,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
   StandardSensitivityPresets,
@@ -54,6 +65,83 @@ import type {
 } from './types';
 
 export default function App() {
+  // Detailed Operating Model V2.1 Gate 6: Quick/Detailed mode toggle.
+  // Detailed mode is a self-contained workspace with its own form and
+  // result state below -- it never reads or writes any Quick-mode state
+  // (`values`, `results`, `sensitivity`, `breakEven`, `aiAnalysis`, the
+  // deal library, etc.), so switching modes can never regress or corrupt
+  // Quick's existing behavior. Persistence, sensitivity, break-even, and
+  // the AI Analyst are not yet wired for Detailed mode -- deferred to a
+  // later gate; Detailed mode here covers assumptions entry and the
+  // institutional operating statement only.
+  const [operatingMode, setOperatingMode] = useState<OperatingMode>('quick');
+
+  const [detailedValues, setDetailedValues] = useState<DetailedFormValues>(
+    BLANK_DETAILED_FORM_VALUES,
+  );
+  const [detailedResults, setDetailedResults] = useState<DetailedAcquisitionResults | null>(
+    null,
+  );
+  const [isDetailedSubmitting, setIsDetailedSubmitting] = useState(false);
+  const [detailedError, setDetailedError] = useState<string | null>(null);
+
+  function handleDetailedTermsFieldChange(
+    key: keyof AcquisitionTermsFormValues,
+    value: string,
+  ) {
+    setDetailedValues((previous) => ({
+      ...previous,
+      terms: { ...previous.terms, [key]: value },
+    }));
+    setDetailedResults(null);
+    setDetailedError(null);
+  }
+
+  function handleDetailedOperatingFieldChange(
+    key: keyof DetailedOperatingFormValues,
+    value: string,
+  ) {
+    setDetailedValues((previous) => ({
+      ...previous,
+      operating: { ...previous.operating, [key]: value },
+    }));
+    setDetailedResults(null);
+    setDetailedError(null);
+  }
+
+  async function handleDetailedSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setDetailedResults(null);
+    setDetailedError(null);
+
+    let terms;
+    let detailedOperatingInputs;
+    try {
+      terms = buildAcquisitionTermsRequest(detailedValues.terms);
+      detailedOperatingInputs = buildDetailedOperatingInputsRequest(detailedValues.operating);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setDetailedError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    setIsDetailedSubmitting(true);
+    try {
+      const nextResults = await analyzeDetailedAcquisition(terms, detailedOperatingInputs);
+      setDetailedResults(nextResults);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedError(apiError.message);
+      } else {
+        setDetailedError('An unexpected error occurred while analyzing the deal.');
+      }
+    } finally {
+      setIsDetailedSubmitting(false);
+    }
+  }
+
   const [values, setValues] = useState<AcquisitionFormValues>(BLANK_FORM_VALUES);
   const [results, setResults] = useState<AcquisitionResults | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -691,7 +779,66 @@ export default function App() {
       </header>
 
       <main className="app-main">
-        {view === 'library' ? (
+        <div className="operating-mode-toggle" role="tablist" aria-label="Underwriting Mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={operatingMode === 'quick'}
+            className={
+              operatingMode === 'quick'
+                ? 'mode-toggle-button mode-toggle-button-active'
+                : 'mode-toggle-button'
+            }
+            onClick={() => setOperatingMode('quick')}
+          >
+            Quick Underwrite
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={operatingMode === 'detailed'}
+            className={
+              operatingMode === 'detailed'
+                ? 'mode-toggle-button mode-toggle-button-active'
+                : 'mode-toggle-button'
+            }
+            onClick={() => setOperatingMode('detailed')}
+          >
+            Detailed Underwrite
+          </button>
+        </div>
+
+        {operatingMode === 'detailed' ? (
+          <>
+            <DetailedAssumptionsForm
+              termsValues={detailedValues.terms}
+              operatingValues={detailedValues.operating}
+              onTermsFieldChange={handleDetailedTermsFieldChange}
+              onOperatingFieldChange={handleDetailedOperatingFieldChange}
+              onSubmit={(event) => void handleDetailedSubmit(event)}
+              isSubmitting={isDetailedSubmitting}
+            />
+
+            <div className="results-column">
+              {detailedError && <div className="error-banner">{detailedError}</div>}
+
+              {!detailedResults && !detailedError && (
+                <div className="empty-state">
+                  Enter assumptions and click <strong>Analyze Deal</strong> to see results.
+                </div>
+              )}
+
+              {detailedResults && <ResultsPanel results={detailedResults.results} />}
+
+              {detailedResults && (
+                <OperatingStatementTable
+                  operatingProjection={detailedResults.operating_projection}
+                  results={detailedResults.results}
+                />
+              )}
+            </div>
+          </>
+        ) : view === 'library' ? (
           <DealLibraryPanel
             deals={savedDeals}
             isLoading={isDealsLoading}

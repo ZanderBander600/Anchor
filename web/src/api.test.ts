@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  analyzeDetailedAcquisition,
   ApiError,
   createDeal,
   deleteDeal,
@@ -10,7 +11,15 @@ import {
   uploadExcel,
   uploadOm,
 } from './api';
-import type { AcquisitionRequest, Deal, ExcelIntakeReport, ExtractionResult } from './types';
+import type {
+  AcquisitionRequest,
+  AcquisitionTermsRequest,
+  Deal,
+  DetailedAcquisitionResults,
+  DetailedOperatingInputsRequest,
+  ExcelIntakeReport,
+  ExtractionResult,
+} from './types';
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -429,5 +438,145 @@ describe('deleteDeal', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(deleteDeal('deal-1')).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 6
+// =============================================================================
+
+const GOLDEN_TERMS: AcquisitionTermsRequest = {
+  purchase_price: 10_000_000,
+  hold_period: 5,
+  exit_cap_rate: 0.065,
+  ltv: 0.6,
+  interest_rate: 0.05,
+  amortization: 30,
+  acquisition_cost_pct: 0.02,
+  financing_fee_pct: 0.01,
+  disposition_cost_pct: 0.025,
+  annual_capex_reserve: 50_000,
+  io_period: 2,
+};
+
+const GOLDEN_DETAILED_OPERATING_INPUTS: DetailedOperatingInputsRequest = {
+  gross_potential_rent: 800_000,
+  other_income: 20_000,
+  vacancy_credit_loss_pct: 0.05,
+  property_taxes: 60_000,
+  insurance: 20_000,
+  utilities: 25_000,
+  repairs_maintenance: 20_000,
+  other_operating_expenses: 16_000,
+  management_fee_pct: 0.05,
+  revenue_growth: 0.03,
+  expense_growth: 0.03,
+};
+
+function detailedResultsFixture(): DetailedAcquisitionResults {
+  return {
+    operating_projection: {
+      gross_potential_rent_by_year: [800_000, 824_000, 848_720, 874_181.6, 900_407.05],
+      other_income_by_year: [20_000, 20_600, 21_218, 21_854.54, 22_510.18],
+      vacancy_credit_loss_by_year: [40_000, 41_200, 42_436, 43_709.08, 45_020.35],
+      effective_gross_income_by_year: [780_000, 803_400, 827_502, 852_327.06, 877_896.87],
+      property_taxes_by_year: [60_000, 61_800, 63_654, 65_563.62, 67_530.53],
+      insurance_by_year: [20_000, 20_600, 21_218, 21_854.54, 22_510.18],
+      utilities_by_year: [25_000, 25_750, 26_522.5, 27_318.18, 28_137.72],
+      repairs_maintenance_by_year: [20_000, 20_600, 21_218, 21_854.54, 22_510.18],
+      other_operating_expenses_by_year: [16_000, 16_480, 16_974.4, 17_483.63, 18_008.14],
+      management_fee_by_year: [39_000, 40_170, 41_375.1, 42_616.35, 43_894.84],
+      total_operating_expenses_by_year: [180_000, 185_400, 190_962, 196_690.86, 202_591.59],
+      noi_by_year: [600_000, 618_000, 636_540, 655_636.2, 675_305.29],
+      exit_noi: 695_564.44,
+      going_in_cap_rate: 0.06,
+    },
+    results: {
+      going_in_cap_rate: 0.06,
+      loan_amount: 6_000_000,
+      acquisition_costs: 200_000,
+      financing_fee: 60_000,
+      initial_equity: 4_260_000,
+      monthly_debt_service: 32_209.3,
+      annual_debt_service: [300_000, 300_000, 386_511.57, 386_511.57, 386_511.57],
+      remaining_loan_balance: 5_720_615.68,
+      noi_by_year: [600_000, 618_000, 636_540, 655_636.2, 675_305.29],
+      capex_by_year: [50_000, 50_000, 50_000, 50_000, 50_000],
+      exit_noi: 695_564.44,
+      exit_value: 10_700_991.46,
+      disposition_costs: 267_524.79,
+      net_sale_proceeds: 4_712_850.99,
+      unlevered_cash_flows: [-10_200_000, 550_000, 568_000, 586_540, 605_636.2, 11_058_771.95],
+      levered_cash_flows: [-4_260_000, 250_000, 268_000, 200_028.43, 219_124.63, 4_951_644.71],
+      unlevered_irr: 0.061388,
+      levered_irr: 0.073802,
+      equity_multiple: 1.38235,
+      dscr_by_year: [2.0, 2.06, 1.64688, 1.69629, 1.74718],
+      headline_dscr: 2.0,
+      min_dscr: 1.64688,
+    },
+  };
+}
+
+describe('analyzeDetailedAcquisition', () => {
+  it('POSTs operating_mode "detailed" with terms and detailed_operating_inputs', async () => {
+    const detailedResults = detailedResultsFixture();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, detailedResults));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await analyzeDetailedAcquisition(
+      GOLDEN_TERMS,
+      GOLDEN_DETAILED_OPERATING_INPUTS,
+    );
+
+    expect(result).toEqual(detailedResults);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/analyze');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      operating_mode: 'detailed',
+      terms: GOLDEN_TERMS,
+      detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+    });
+  });
+
+  it('surfaces a 422 validation failure with the issue-list shape', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(422, {
+        detail: [{ field_id: 'ltv', category: 'out_of_domain_value', message: 'bad ltv' }],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    let caught: ApiError | undefined;
+    try {
+      await analyzeDetailedAcquisition(
+        { ...GOLDEN_TERMS, ltv: 1.5 },
+        GOLDEN_DETAILED_OPERATING_INPUTS,
+      );
+    } catch (error) {
+      caught = error as ApiError;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    expect(caught?.issues[0].field_id).toBe('ltv');
+  });
+
+  it('throws an ApiError on a network failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      analyzeDetailedAcquisition(GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('throws an ApiError on a generic non-ok response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(500, {}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      analyzeDetailedAcquisition(GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
+    ).rejects.toBeInstanceOf(ApiError);
   });
 });

@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BLANK_DETAILED_FORM_VALUES,
   BLANK_FORM_VALUES,
   buildAcquisitionRequest,
+  buildAcquisitionTermsRequest,
   buildApprovedFormValues,
+  buildDetailedOperatingInputsRequest,
   buildFormValuesFromAcquisitionInputs,
   buildFormValuesFromExcelIntakeReport,
   buildV2ReviewMessage,
   candidateValueToFormValue,
   DEFAULT_FORM_VALUES,
+  DETAILED_GOLDEN_FORM_VALUES,
   FormValidationError,
   V2_GOLDEN_FORM_VALUES,
 } from './convert';
@@ -464,5 +468,112 @@ describe('buildV2ReviewMessage (Underwriting V2 Gate 6)', () => {
     expect(message?.toLowerCase()).not.toContain('missing from');
     expect(message?.toLowerCase()).not.toContain('failed');
     expect(message?.toLowerCase()).not.toContain('error');
+  });
+});
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 6
+// =============================================================================
+
+describe('buildAcquisitionTermsRequest', () => {
+  it('converts the Detailed golden-case terms to the API decimal contract', () => {
+    const request = buildAcquisitionTermsRequest(DETAILED_GOLDEN_FORM_VALUES.terms);
+
+    expect(request).toEqual({
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    });
+  });
+
+  it('rejects a blank required field', () => {
+    expect(() =>
+      buildAcquisitionTermsRequest({ ...DETAILED_GOLDEN_FORM_VALUES.terms, purchasePrice: '' }),
+    ).toThrow(FormValidationError);
+  });
+
+  it('rejects a fractional interest-only period', () => {
+    expect(() =>
+      buildAcquisitionTermsRequest({ ...DETAILED_GOLDEN_FORM_VALUES.terms, ioPeriod: '1.5' }),
+    ).toThrow(FormValidationError);
+  });
+
+  it('has no current_noi, occupancy, or noi_growth field to build', () => {
+    const request = buildAcquisitionTermsRequest(DETAILED_GOLDEN_FORM_VALUES.terms);
+
+    expect(request).not.toHaveProperty('current_noi');
+    expect(request).not.toHaveProperty('occupancy');
+    expect(request).not.toHaveProperty('noi_growth');
+  });
+});
+
+describe('buildDetailedOperatingInputsRequest', () => {
+  it('converts the Detailed golden-case operating assumptions to the API decimal contract', () => {
+    const request = buildDetailedOperatingInputsRequest(DETAILED_GOLDEN_FORM_VALUES.operating);
+
+    expect(request).toEqual({
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    });
+  });
+
+  it('rejects a blank required field', () => {
+    expect(() =>
+      buildDetailedOperatingInputsRequest({
+        ...DETAILED_GOLDEN_FORM_VALUES.operating,
+        grossPotentialRent: '',
+      }),
+    ).toThrow(FormValidationError);
+  });
+
+  it('converts analyst-facing percentages to decimals', () => {
+    const request = buildDetailedOperatingInputsRequest({
+      ...DETAILED_GOLDEN_FORM_VALUES.operating,
+      vacancyCreditLossPct: '7.5',
+      managementFeePct: '4',
+      revenueGrowth: '2.5',
+      expenseGrowth: '-1',
+    });
+
+    expect(request.vacancy_credit_loss_pct).toBeCloseTo(0.075);
+    expect(request.management_fee_pct).toBeCloseTo(0.04);
+    expect(request.revenue_growth).toBeCloseTo(0.025);
+    expect(request.expense_growth).toBeCloseTo(-0.01);
+  });
+});
+
+describe('BLANK_DETAILED_FORM_VALUES', () => {
+  it('every terms and operating field starts blank', () => {
+    const termsValues = Object.values(BLANK_DETAILED_FORM_VALUES.terms);
+    const operatingValues = Object.values(BLANK_DETAILED_FORM_VALUES.operating);
+
+    expect(termsValues.every((value) => value === '')).toBe(true);
+    expect(operatingValues.every((value) => value === '')).toBe(true);
+  });
+
+  it('submitting blank Detailed values surfaces a validation error, not a silent default', () => {
+    expect(() => buildAcquisitionTermsRequest(BLANK_DETAILED_FORM_VALUES.terms)).toThrow(
+      FormValidationError,
+    );
+    expect(() =>
+      buildDetailedOperatingInputsRequest(BLANK_DETAILED_FORM_VALUES.operating),
+    ).toThrow(FormValidationError);
   });
 });
