@@ -42,7 +42,12 @@ from .analysis import (
     build_standard_presets,
     run_two_way_sensitivity,
 )
-from .contracts import AcquisitionInputs, OperatingMode
+from .contracts import (
+    AcquisitionInputs,
+    AcquisitionTerms,
+    DetailedOperatingInputs,
+    OperatingMode,
+)
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError
 from .engine import AcquisitionResults, analyze_acquisition, analyze_detailed_acquisition
@@ -648,19 +653,26 @@ def ingest_excel(file: UploadFile = File(...)) -> ExcelIntakeReport:
 
 
 # =============================================================================
-# Persistence Phase A/C -- Deal Library backend foundation
+# Persistence Phase A/C / Detailed Operating Model V2.1 Gate 5b -- Deal
+# Library backend foundation
 #
 # Delegates all storage to ``anchor.deals`` (a thin SQLite adapter -- see
 # ``anchor/deals/store.py``). Every create/update route validates the
-# submitted ``inputs`` with the exact same ``validate_acquisition_inputs``
-# used by ``/analyze`` *before* it ever reaches the store, so a saved deal
-# can never hold a value that would fail validation on reopen. Duplicate
-# (Phase C) copies only ``AcquisitionInputs`` via ``anchor.deals`` --
-# already-validated data reused as-is -- and delete removes a row with no
+# submitted assumptions with the exact same shared validators ``/analyze``
+# uses *before* they ever reach the store, so a saved deal can never hold a
+# value that would fail validation on reopen. Duplicate (Phase C) copies
+# only already-validated assumptions via ``anchor.deals`` -- reused as-is --
+# and delete removes a row (or row pair, for a Detailed deal) with no
 # soft-delete/history. This module performs no financial calculation and
-# never calls ``analyze_acquisition`` -- reanalyzing a reopened or
-# duplicated deal is the existing, unmodified ``/analyze`` endpoint, driven
-# by the client the same way a manually typed deal is.
+# never calls ``analyze_acquisition``/``analyze_detailed_acquisition`` --
+# reanalyzing a reopened or duplicated deal is the existing, unmodified
+# ``/analyze`` endpoint, driven by the client the same way a manually typed
+# deal is.
+#
+# ``operating_mode`` (mirroring ``/analyze``'s discriminator exactly): a
+# ``"quick"``/absent request sends ``inputs`` and is completely unaffected
+# by this gate; a ``"detailed"`` request sends ``terms`` and
+# ``detailed_operating_inputs`` instead.
 # =============================================================================
 
 
@@ -672,6 +684,21 @@ def _require_deal_name(payload: dict[str, Any]) -> str:
             detail="A non-empty 'name' is required.",
         )
     return name.strip()
+
+
+def _require_operating_mode(payload: dict[str, Any]) -> OperatingMode:
+    raw_operating_mode = payload.get("operating_mode", OperatingMode.QUICK.value)
+    try:
+        return OperatingMode(raw_operating_mode)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "operating_mode must be one of "
+                f"{[member.value for member in OperatingMode]}; "
+                f"got {raw_operating_mode!r}."
+            ),
+        ) from None
 
 
 def _require_deal_inputs(payload: dict[str, Any]) -> AcquisitionInputs:
@@ -690,9 +717,53 @@ def _require_deal_inputs(payload: dict[str, Any]) -> AcquisitionInputs:
         ) from None
 
 
+def _require_deal_terms(payload: dict[str, Any]) -> AcquisitionTerms:
+    raw_terms = payload.get("terms")
+    if not isinstance(raw_terms, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A 'detailed' operating_mode request must include a 'terms' object.",
+        )
+    try:
+        return validate_acquisition_terms(raw_terms)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+
+def _require_deal_detailed_operating_inputs(
+    payload: dict[str, Any]
+) -> DetailedOperatingInputs:
+    raw_detailed_inputs = payload.get("detailed_operating_inputs")
+    if not isinstance(raw_detailed_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "A 'detailed' operating_mode request must include a "
+                "'detailed_operating_inputs' object."
+            ),
+        )
+    try:
+        return validate_detailed_operating_inputs(raw_detailed_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+
 @app.post("/deals", response_model=Deal)
 def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
     name = _require_deal_name(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    if operating_mode is OperatingMode.DETAILED:
+        terms = _require_deal_terms(payload)
+        detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+        return deals_store.create_detailed_deal(name, terms, detailed_inputs)
+
     inputs = _require_deal_inputs(payload)
     return deals_store.create_deal(name, inputs)
 
@@ -715,8 +786,17 @@ def get_deal(deal_id: str) -> Deal:
 @app.put("/deals/{deal_id}", response_model=Deal)
 def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
     name = _require_deal_name(payload)
-    inputs = _require_deal_inputs(payload)
+    operating_mode = _require_operating_mode(payload)
+
     try:
+        if operating_mode is OperatingMode.DETAILED:
+            terms = _require_deal_terms(payload)
+            detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+            return deals_store.update_detailed_deal(
+                deal_id, name, terms, detailed_inputs
+            )
+
+        inputs = _require_deal_inputs(payload)
         return deals_store.update_deal(deal_id, name, inputs)
     except DealNotFoundError as error:
         raise HTTPException(
