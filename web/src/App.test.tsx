@@ -17,7 +17,7 @@ import {
   uploadExcel,
   uploadOm,
 } from './api';
-import { buildAcquisitionRequest, DEFAULT_FORM_VALUES, V2_GOLDEN_FORM_VALUES } from './convert';
+import { BLANK_FORM_VALUES, buildAcquisitionRequest, DEFAULT_FORM_VALUES, V2_GOLDEN_FORM_VALUES } from './convert';
 import type {
   AcquisitionRequest,
   AcquisitionResults,
@@ -1463,6 +1463,9 @@ function makeAcquisitionRequest(overrides: Partial<AcquisitionRequest> = {}): Ac
 }
 
 describe('Excel ingestion workflow', () => {
+  /** Uploads the default (legacy nine-field) workbook and waits for the
+   * Excel Ingestion Review panel to appear -- never waits on the active
+   * `AssumptionsForm`, which this upload must not touch. */
   async function uploadWorkbook(user: ReturnType<typeof userEvent.setup>) {
     render(<App />);
     mockUploadExcel.mockResolvedValue(makeExcelIntakeReport());
@@ -1473,34 +1476,64 @@ describe('Excel ingestion workflow', () => {
     await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+      expect(screen.getByLabelText('Excel Review Purchase Price')).toHaveProperty(
+        'value',
+        '48000000',
+      );
     });
   }
 
-  it('pre-fills all nine AssumptionsForm fields from the parsed workbook', async () => {
+  /** Completes the five blanked V2 review fields with explicit zeros --
+   * the minimum needed to unblock approval of a legacy workbook. */
+  async function completeBlankedV2ReviewFields(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText('Excel Review Acquisition Costs'), '0');
+    await user.type(screen.getByLabelText('Excel Review Financing Fee'), '0');
+    await user.type(screen.getByLabelText('Excel Review Disposition Costs'), '0');
+    await user.type(screen.getByLabelText('Excel Review Annual CapEx Reserve'), '0');
+    await user.type(screen.getByLabelText('Excel Review Interest-Only Period'), '0');
+  }
+
+  it('does not immediately populate active assumptions after upload', async () => {
     const user = userEvent.setup();
     await uploadWorkbook(user);
 
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
-    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', '2400000');
-    expect(screen.getByLabelText(/^Occupancy/)).toHaveProperty('value', '93');
-    expect(screen.getByLabelText(/^NOI Growth/)).toHaveProperty('value', '2.5');
-    expect(screen.getByLabelText(/^Hold Period/)).toHaveProperty('value', '7');
-    expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '6');
-    expect(screen.getByLabelText(/^LTV/)).toHaveProperty('value', '60');
-    expect(screen.getByLabelText(/^Interest Rate/)).toHaveProperty('value', '5');
-    expect(screen.getByLabelText(/^Amortization/)).toHaveProperty('value', '25');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_FORM_VALUES.purchasePrice,
+    );
   });
 
-  it('leaves all five V2 fields visibly blank for a legacy nine-field workbook (Gate 6)', async () => {
+  it('creates a temporary Excel review with all nine imported values for a legacy workbook', async () => {
     const user = userEvent.setup();
     await uploadWorkbook(user);
 
-    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '');
-    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '');
-    expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '');
-    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '');
-    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Excel Review Purchase Price')).toHaveProperty('value', '48000000');
+    expect(screen.getByLabelText('Excel Review Current NOI')).toHaveProperty('value', '2400000');
+    expect(screen.getByLabelText('Excel Review Occupancy')).toHaveProperty('value', '93');
+    expect(screen.getByLabelText('Excel Review NOI Growth')).toHaveProperty('value', '2.5');
+    expect(screen.getByLabelText('Excel Review Hold Period')).toHaveProperty('value', '7');
+    expect(screen.getByLabelText('Excel Review Exit Cap Rate')).toHaveProperty('value', '6');
+    expect(screen.getByLabelText('Excel Review LTV')).toHaveProperty('value', '60');
+    expect(screen.getByLabelText('Excel Review Interest Rate')).toHaveProperty('value', '5');
+    expect(screen.getByLabelText('Excel Review Amortization')).toHaveProperty('value', '25');
+  });
+
+  it('leaves all five V2 fields visibly blank in review for a legacy nine-field workbook (Gate 6)', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    expect(screen.getByLabelText('Excel Review Acquisition Costs')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Excel Review Financing Fee')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Excel Review Disposition Costs')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Excel Review Annual CapEx Reserve')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Excel Review Interest-Only Period')).toHaveProperty('value', '');
+  });
+
+  it('marks the five blanked V2 fields as requiring analyst input', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    expect(screen.getAllByText('Requires input')).toHaveLength(5);
   });
 
   it('shows the additional-assumptions review message for a legacy workbook, phrased as required review not extraction failure', async () => {
@@ -1517,27 +1550,60 @@ describe('Excel ingestion workflow', () => {
     expect(banner.textContent?.toLowerCase()).not.toContain('failed');
   });
 
-  it('blocks Analyze after a legacy upload until the blanked V2 fields are completed', async () => {
+  it('review values are editable', async () => {
     const user = userEvent.setup();
     await uploadWorkbook(user);
 
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('Acquisition Costs is required.')).toBeTruthy();
-    expect(mockAnalyze).not.toHaveBeenCalled();
+    const reviewPurchasePrice = screen.getByLabelText('Excel Review Purchase Price');
+    await user.clear(reviewPurchasePrice);
+    await user.type(reviewPurchasePrice, '52000000');
 
-    await user.type(screen.getByLabelText(/^Acquisition Costs/), '0');
-    await user.type(screen.getByLabelText(/^Financing Fee/), '0');
-    await user.type(screen.getByLabelText(/^Disposition Costs/), '0');
-    await user.type(screen.getByLabelText(/^Annual CapEx Reserve/), '0');
-    await user.type(screen.getByLabelText(/^Interest-Only Period/), '0');
-    mockAnalyze.mockResolvedValue(makeResults());
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-
-    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
-    expect(mockAnalyze).toHaveBeenCalledWith(makeAcquisitionRequest());
+    expect(reviewPurchasePrice).toHaveProperty('value', '52000000');
+    // Editing the review must not touch the still-untouched active form.
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_FORM_VALUES.purchasePrice,
+    );
   });
 
-  it('populates all fourteen fields with no review warning for a complete V2 workbook', async () => {
+  it('blocks approval for a legacy workbook until the blanked V2 fields are completed, and an explicit zero satisfies them', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+    expect(await screen.findByText('Acquisition Costs is required.')).toBeTruthy();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_FORM_VALUES.purchasePrice,
+    );
+
+    await completeBlankedV2ReviewFields(user);
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    });
+    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '0');
+    expect(screen.queryByRole('button', { name: 'Approve & Load Assumptions' })).toBeNull();
+  });
+
+  it('once all five V2 values are completed, the legacy workbook can be approved into the active assumptions', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+    await completeBlankedV2ReviewFields(user);
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    });
+    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', '2400000');
+    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '0');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '0');
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('populates all fourteen review values with no missing-V2 completion required for a complete V2 workbook', async () => {
     const user = userEvent.setup();
     render(<App />);
     mockUploadExcel.mockResolvedValue(
@@ -1559,54 +1625,93 @@ describe('Excel ingestion workflow', () => {
     await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+      expect(screen.getByLabelText('Excel Review Purchase Price')).toHaveProperty(
+        'value',
+        '48000000',
+      );
     });
-    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '2');
-    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '1');
-    expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '2.5');
-    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '50000');
-    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
+    expect(screen.getByLabelText('Excel Review Acquisition Costs')).toHaveProperty('value', '2');
+    expect(screen.getByLabelText('Excel Review Financing Fee')).toHaveProperty('value', '1');
+    expect(screen.getByLabelText('Excel Review Disposition Costs')).toHaveProperty('value', '2.5');
+    expect(screen.getByLabelText('Excel Review Annual CapEx Reserve')).toHaveProperty(
+      'value',
+      '50000',
+    );
+    expect(screen.getByLabelText('Excel Review Interest-Only Period')).toHaveProperty('value', '2');
     expect(screen.queryByText(/Additional underwriting assumptions/)).toBeNull();
+    expect(screen.queryByText('Requires input')).toBeNull();
 
-    mockAnalyze.mockResolvedValue(makeResults());
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
-  });
-
-  it('leaves pre-filled values editable in AssumptionsForm after upload', async () => {
-    const user = userEvent.setup();
-    await uploadWorkbook(user);
-
-    const purchasePriceInput = screen.getByLabelText(/^Purchase Price/);
-    expect(purchasePriceInput).toHaveProperty('disabled', false);
-
-    await user.clear(purchasePriceInput);
-    await user.type(purchasePriceInput, '52000000');
-
-    expect(purchasePriceInput).toHaveProperty('value', '52000000');
-  });
-
-  it('never calls /analyze automatically after a successful upload', async () => {
-    const user = userEvent.setup();
-    await uploadWorkbook(user);
-
+    // No missing-V2 completion required -- approval succeeds immediately.
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '2');
+    });
     expect(mockAnalyze).not.toHaveBeenCalled();
   });
 
-  it('running Analyze Deal after upload submits the parsed values (once the blanked V2 fields are completed)', async () => {
+  it('Approve & Load Assumptions never automatically calls Analyze', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+    await completeBlankedV2ReviewFields(user);
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    });
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('running Analyze Deal after approval submits the approved values', async () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     await uploadWorkbook(user);
-    await user.type(screen.getByLabelText(/^Acquisition Costs/), '0');
-    await user.type(screen.getByLabelText(/^Financing Fee/), '0');
-    await user.type(screen.getByLabelText(/^Disposition Costs/), '0');
-    await user.type(screen.getByLabelText(/^Annual CapEx Reserve/), '0');
-    await user.type(screen.getByLabelText(/^Interest-Only Period/), '0');
+    await completeBlankedV2ReviewFields(user);
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    });
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     expect(mockAnalyze).toHaveBeenCalledWith(makeAcquisitionRequest());
+  });
+
+  it('Cancel Review discards the pending review and leaves active assumptions unchanged', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
+
+    expect(screen.queryByLabelText('Excel Review Purchase Price')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve & Load Assumptions' })).toBeNull();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_FORM_VALUES.purchasePrice,
+    );
+  });
+
+  it('uploading a second workbook replaces the pending review cleanly rather than merging', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    mockUploadExcel.mockResolvedValue(
+      makeExcelIntakeReport({ inputs: makeAcquisitionRequest({ purchase_price: 61_000_000 }) }),
+    );
+    const secondFile = new File(['PK'], 'anchor_input_v2.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), secondFile);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Excel Review Purchase Price')).toHaveProperty(
+        'value',
+        '61000000',
+      );
+    });
+    // Exactly one review panel/field exists -- the two uploads were never merged.
+    expect(screen.getAllByLabelText('Excel Review Purchase Price')).toHaveLength(1);
   });
 
   it('shows a loading state while the workbook is being parsed', async () => {
@@ -1624,7 +1729,7 @@ describe('Excel ingestion workflow', () => {
     pending.resolve(makeExcelIntakeReport());
   });
 
-  it('shows a validation error and leaves existing form values unchanged on a malformed workbook', async () => {
+  it('shows a validation error and leaves existing form values and any pending review unchanged on a malformed workbook', async () => {
     const user = userEvent.setup();
     render(<App />);
     fillGoldenDeal();
@@ -1642,30 +1747,14 @@ describe('Excel ingestion workflow', () => {
     expect(
       await screen.findByText("Value for Field ID 'purchase_price' is blank at Inputs!C2."),
     ).toBeTruthy();
-    // A failed upload must not corrupt values already entered in the form.
+    // A failed upload must not corrupt values already entered in the form,
+    // and must never create a review panel of its own.
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', DEFAULT_FORM_VALUES.purchasePrice);
+    expect(screen.queryByLabelText('Excel Review Purchase Price')).toBeNull();
     expect(mockAnalyze).not.toHaveBeenCalled();
   });
 
-  it('leaves blank fields blank (never zero) on a malformed workbook when the form was never filled', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    mockUploadExcel.mockRejectedValue(
-      new ApiError("Value for Field ID 'purchase_price' is blank at Inputs!C2.", [
-        { field_id: 'purchase_price', category: 'blank_value', message: "Value for Field ID 'purchase_price' is blank at Inputs!C2." },
-      ]),
-    );
-
-    const file = new File(['PK'], 'anchor_input.xlsx', {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
-
-    await screen.findByText("Value for Field ID 'purchase_price' is blank at Inputs!C2.");
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
-  });
-
-  it('clears stale deterministic results when a workbook upload replaces the form values', async () => {
+  it('deterministic results remain visible immediately after upload, and clear only once the review is approved', async () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
@@ -1679,20 +1768,45 @@ describe('Excel ingestion workflow', () => {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
     await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+    await waitFor(() => {
+      expect(screen.getByLabelText('Excel Review Purchase Price')).toHaveProperty(
+        'value',
+        '48000000',
+      );
+    });
+    // Upload alone must not touch Analyze state.
+    expect(screen.getByText('7.91%')).toBeTruthy();
+
+    await completeBlankedV2ReviewFields(user);
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
 
     await waitFor(() => {
       expect(screen.queryByText('7.91%')).toBeNull();
     });
   });
 
-  it('shows a success message naming the uploaded file after a successful import', async () => {
+  it('shows a review-oriented success message naming the uploaded file, not an immediate-population message', async () => {
     const user = userEvent.setup();
     await uploadWorkbook(user);
 
     expect(
       await screen.findByText(
-        'Workbook loaded successfully. 9 assumptions imported from "anchor_input.xlsx". ' +
-          'Review the values below, make any changes, then click Analyze Deal.',
+        'Workbook parsed successfully. Review the imported assumptions below before loading them ' +
+          'into the deal.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('shows a concise success confirmation after approval', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+    await completeBlankedV2ReviewFields(user);
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    expect(
+      await screen.findByText(
+        'Excel assumptions approved and loaded. Review the deal assumptions, then click Analyze Deal.',
       ),
     ).toBeTruthy();
   });
@@ -1716,13 +1830,13 @@ describe('Excel ingestion workflow', () => {
     await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
 
     await screen.findByText("Value for Field ID 'purchase_price' is blank at Inputs!C2.");
-    expect(screen.queryByText(/Workbook loaded successfully/)).toBeNull();
+    expect(screen.queryByText(/Workbook parsed successfully/)).toBeNull();
   });
 
-  it('clears a stale success message once a new upload starts loading', async () => {
+  it('clears a stale review success message once a new upload starts loading', async () => {
     const user = userEvent.setup();
     await uploadWorkbook(user);
-    expect(await screen.findByText(/Workbook loaded successfully/)).toBeTruthy();
+    expect(await screen.findByText(/Workbook parsed successfully/)).toBeTruthy();
 
     const pending = deferred<ExcelIntakeReport>();
     mockUploadExcel.mockReturnValueOnce(pending.promise);
@@ -1731,18 +1845,24 @@ describe('Excel ingestion workflow', () => {
     });
     await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
 
-    expect(screen.queryByText(/Workbook loaded successfully/)).toBeNull();
+    expect(screen.queryByText(/Workbook parsed successfully/)).toBeNull();
     pending.resolve(makeExcelIntakeReport());
   });
 
-  it('scrolls the assumptions form into view after a successful import', async () => {
+  it('scrolls the assumptions form into view after approval, not after upload', async () => {
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;
 
     const user = userEvent.setup();
     await uploadWorkbook(user);
+    expect(scrollIntoView).not.toHaveBeenCalled();
 
-    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+    await completeBlankedV2ReviewFields(user);
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    await waitFor(() => {
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+    });
   });
 });
 
@@ -1985,7 +2105,7 @@ describe('Deal persistence workflow', () => {
     expect(mockUpdateDeal).not.toHaveBeenCalled();
   });
 
-  it('Excel-populated assumptions can be saved -- persistence does not care where values originated', async () => {
+  it('Excel-populated assumptions can be saved once approved -- persistence does not care where values originated', async () => {
     const user = userEvent.setup();
     mockUploadExcel.mockResolvedValue({ inputs: GOLDEN_DEAL_REQUEST, defaulted_v2_field_ids: [] });
     mockCreateDeal.mockResolvedValue(makeDeal());
@@ -1995,7 +2115,9 @@ describe('Deal persistence workflow', () => {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
     await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
-    await screen.findByText(/Workbook loaded successfully/);
+    await screen.findByText(/Workbook parsed successfully/);
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+    await screen.findByText(/Excel assumptions approved and loaded/);
 
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
@@ -2202,7 +2324,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       expect(screen.getByText('Unsaved changes')).toBeTruthy();
     });
 
-    it('Excel-populated data is unsaved until saved', async () => {
+    it('Excel-populated (approved) data is unsaved until saved', async () => {
       const user = userEvent.setup();
       mockUploadExcel.mockResolvedValue({ inputs: GOLDEN_DEAL_REQUEST, defaulted_v2_field_ids: [] });
       render(<App />);
@@ -2211,10 +2333,84 @@ describe('Deal persistence workflow -- Phase C', () => {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       });
       await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
-      await screen.findByText(/Workbook loaded successfully/);
+      await screen.findByText(/Workbook parsed successfully/);
+      await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+      await screen.findByText(/Excel assumptions approved and loaded/);
 
       expect(screen.getByText('Unsaved deal')).toBeTruthy();
       expect(screen.queryByText(/^Saved/)).toBeNull();
+    });
+
+    it('uploading Excel while a saved deal is open does not mark it dirty before approval', async () => {
+      const user = userEvent.setup();
+      const deal = makeDeal();
+      mockListDeals.mockResolvedValue([deal]);
+      mockGetDeal.mockResolvedValue(deal);
+      mockUploadExcel.mockResolvedValue({ inputs: GOLDEN_DEAL_REQUEST, defaulted_v2_field_ids: [] });
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+      expect(await screen.findByText(/^Saved/)).toBeTruthy();
+
+      const file = new File(['PK'], 'anchor_input.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+      await screen.findByText(/Workbook parsed successfully/);
+
+      expect(screen.getByText(/^Saved/)).toBeTruthy();
+      expect(screen.queryByText('Unsaved changes')).toBeNull();
+    });
+
+    it('approving Excel into a saved deal marks it dirty', async () => {
+      const user = userEvent.setup();
+      const deal = makeDeal();
+      mockListDeals.mockResolvedValue([deal]);
+      mockGetDeal.mockResolvedValue(deal);
+      mockUploadExcel.mockResolvedValue({
+        inputs: { ...GOLDEN_DEAL_REQUEST, purchase_price: 61_000_000 },
+        defaulted_v2_field_ids: [],
+      });
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+      expect(await screen.findByText(/^Saved/)).toBeTruthy();
+
+      const file = new File(['PK'], 'anchor_input.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+      await screen.findByText(/Workbook parsed successfully/);
+      await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+      expect(await screen.findByText('Unsaved changes')).toBeTruthy();
+      expect(screen.queryByText(/^Saved/)).toBeNull();
+    });
+
+    it('cancelling review on a saved deal leaves it saved and clean', async () => {
+      const user = userEvent.setup();
+      const deal = makeDeal();
+      mockListDeals.mockResolvedValue([deal]);
+      mockGetDeal.mockResolvedValue(deal);
+      mockUploadExcel.mockResolvedValue({ inputs: GOLDEN_DEAL_REQUEST, defaulted_v2_field_ids: [] });
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+      expect(await screen.findByText(/^Saved/)).toBeTruthy();
+
+      const file = new File(['PK'], 'anchor_input.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+      await screen.findByText(/Workbook parsed successfully/);
+      await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
+
+      expect(screen.queryByLabelText('Excel Review Purchase Price')).toBeNull();
+      expect(screen.getByText(/^Saved/)).toBeTruthy();
+      expect(screen.queryByText('Unsaved changes')).toBeNull();
     });
 
     it('OM-approved data is unsaved until saved', async () => {
@@ -2322,6 +2518,28 @@ describe('Deal persistence workflow -- Phase C', () => {
       await user.click(screen.getByRole('button', { name: 'New Deal' }));
 
       expect(window.confirm).not.toHaveBeenCalled();
+    });
+
+    it('a New Deal remains blank until an Excel review is approved -- upload alone never special-cases it', async () => {
+      const user = userEvent.setup();
+      mockUploadExcel.mockResolvedValue({ inputs: GOLDEN_DEAL_REQUEST, defaulted_v2_field_ids: [] });
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'New Deal' }));
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+
+      const file = new File(['PK'], 'anchor_input.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+      await screen.findByText(/Workbook parsed successfully/);
+
+      // Still requires review and approval, exactly like a non-blank deal.
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+      expect(screen.getByLabelText('Excel Review Purchase Price')).toHaveProperty(
+        'value',
+        String(GOLDEN_DEAL_REQUEST.purchase_price),
+      );
     });
 
     it('cancelling the New Deal warning preserves the current workspace exactly', async () => {

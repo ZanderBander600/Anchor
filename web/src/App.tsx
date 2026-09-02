@@ -21,6 +21,7 @@ import { BreakEvenPanel } from './components/BreakEvenPanel';
 import { DealBar } from './components/DealBar';
 import type { SaveStatus } from './components/DealBar';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
+import { ExcelReviewPanel } from './components/ExcelReviewPanel';
 import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
 import { ResultsPanel } from './components/ResultsPanel';
@@ -31,7 +32,6 @@ import {
   buildApprovedFormValues,
   buildFormValuesFromAcquisitionInputs,
   buildFormValuesFromExcelIntakeReport,
-  buildV2ReviewMessage,
   DEFAULT_TARGET_EQUITY_MULTIPLE,
   DEFAULT_TARGET_HEADLINE_DSCR,
   DEFAULT_TARGET_LEVERED_IRR_PERCENT,
@@ -50,8 +50,8 @@ import type {
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
   StandardSensitivityPresets,
+  V2FieldId,
 } from './types';
-import { ACQUISITION_FIELD_IDS, V2_FIELD_IDS } from './types';
 
 export default function App() {
   const [values, setValues] = useState<AcquisitionFormValues>(BLANK_FORM_VALUES);
@@ -85,10 +85,20 @@ export default function App() {
   const [isUploadingExcel, setIsUploadingExcel] = useState(false);
   const [excelUploadError, setExcelUploadError] = useState<string | null>(null);
   const [excelUploadSuccessMessage, setExcelUploadSuccessMessage] = useState<string | null>(null);
-  // Underwriting V2 Gate 6: set only when the uploaded workbook left at
-  // least one V2 field defaulted (a legacy/partial workbook) -- null for a
-  // complete fourteen-field workbook, so no warning renders.
-  const [excelV2ReviewMessage, setExcelV2ReviewMessage] = useState<string | null>(null);
+
+  // Excel ingestion review (analyst-control parity with OM ingestion, R9/R11
+  // equivalent): a successful workbook parse never touches `values` -- it
+  // lands here as a temporary, analyst-editable proposal. Nothing here is
+  // read by dirty tracking, Save, or Analyze; only `handleApproveExcelReview`
+  // ever copies it into `values`. `excelReview` is replaced wholesale (never
+  // merged) by a second upload, and cleared by both approval and cancel.
+  interface ExcelReviewState {
+    fileName: string;
+    values: AcquisitionFormValues;
+    requiredV2FieldIds: V2FieldId[];
+  }
+  const [excelReview, setExcelReview] = useState<ExcelReviewState | null>(null);
+  const [excelReviewError, setExcelReviewError] = useState<string | null>(null);
 
   // Persistence Phase B/C -- Deal Bar / Deal Library. `currentDealId` is set
   // only after a deal is created or opened (never guessed at); it is what
@@ -152,7 +162,8 @@ export default function App() {
     setExtractionError(null);
     setExcelUploadSuccessMessage(null);
     setExcelUploadError(null);
-    setExcelV2ReviewMessage(null);
+    setExcelReview(null);
+    setExcelReviewError(null);
   }
 
   function resetDownstreamAnalysisState() {
@@ -201,27 +212,31 @@ export default function App() {
     clearSaveDealError();
   }
 
+  /**
+   * Parses the workbook and stores it as a temporary Excel review proposal
+   * only -- deliberately never calls `setValues`, `resetDownstreamAnalysisState`,
+   * or `clearSaveDealError` here. Active assumptions, dirty state, Save
+   * state, and Analyze state must all remain exactly as they were until the
+   * analyst explicitly approves (`handleApproveExcelReview`). A second
+   * upload while a review is already pending replaces it wholesale, never
+   * merges two workbooks.
+   */
   async function handleUploadExcel(file: File) {
     setIsUploadingExcel(true);
     setExcelUploadError(null);
     setExcelUploadSuccessMessage(null);
-    setExcelV2ReviewMessage(null);
+    setExcelReviewError(null);
     try {
       const report = await uploadExcel(file);
-      setValues(buildFormValuesFromExcelIntakeReport(report));
-      resetDownstreamAnalysisState();
-      clearSaveDealError();
-      const importedCount =
-        ACQUISITION_FIELD_IDS.length + V2_FIELD_IDS.length - report.defaulted_v2_field_ids.length;
-      setExcelUploadSuccessMessage(
-        `Workbook loaded successfully. ${importedCount} assumption${importedCount === 1 ? '' : 's'} ` +
-          `imported from "${file.name}". Review the values below, make any changes, then click Analyze Deal.`,
-      );
-      setExcelV2ReviewMessage(buildV2ReviewMessage(report.defaulted_v2_field_ids));
-      document.querySelector('.assumptions-form')?.scrollIntoView?.({
-        behavior: 'smooth',
-        block: 'start',
+      setExcelReview({
+        fileName: file.name,
+        values: buildFormValuesFromExcelIntakeReport(report),
+        requiredV2FieldIds: report.defaulted_v2_field_ids,
       });
+      setExcelUploadSuccessMessage(
+        'Workbook parsed successfully. Review the imported assumptions below before loading them ' +
+          'into the deal.',
+      );
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setExcelUploadError(apiError.message);
@@ -231,6 +246,60 @@ export default function App() {
     } finally {
       setIsUploadingExcel(false);
     }
+  }
+
+  function handleExcelReviewFieldChange(key: keyof AcquisitionFormValues, value: string) {
+    setExcelReview((previous) =>
+      previous ? { ...previous, values: { ...previous.values, [key]: value } } : previous,
+    );
+    setExcelReviewError(null);
+  }
+
+  /**
+   * Validates and converts the review state using the exact same
+   * `buildAcquisitionRequest`/`buildFormValuesFromAcquisitionInputs`
+   * round trip `handleSubmit`/`handleSaveDeal` already use -- no duplicate
+   * financial validation lives here. A blank required field (including any
+   * still-defaulted Underwriting V2 field, explicit `0` aside) surfaces the
+   * existing "X is required." error and blocks approval. Only on success
+   * does this touch `values`, so dirty tracking and Save/Analyze state only
+   * ever change here, never on upload. Never auto-runs Analyze.
+   */
+  function handleApproveExcelReview() {
+    if (!excelReview) {
+      return;
+    }
+    let request: AcquisitionRequest;
+    try {
+      request = buildAcquisitionRequest(excelReview.values);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setExcelReviewError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+    setValues(buildFormValuesFromAcquisitionInputs(request));
+    resetDownstreamAnalysisState();
+    clearSaveDealError();
+    setExcelReview(null);
+    setExcelReviewError(null);
+    setExcelUploadSuccessMessage(
+      'Excel assumptions approved and loaded. Review the deal assumptions, then click Analyze Deal.',
+    );
+    document.querySelector('.assumptions-form')?.scrollIntoView?.({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  }
+
+  /** Discards the pending Excel review without touching the active deal --
+   * leaves `values`, dirty state, and saved/clean status exactly as they
+   * were before the upload. */
+  function handleCancelExcelReview() {
+    setExcelReview(null);
+    setExcelReviewError(null);
+    setExcelUploadSuccessMessage(null);
   }
 
   // ===========================================================================
@@ -654,7 +723,6 @@ export default function App() {
                   isLoading={isUploadingExcel}
                   error={excelUploadError}
                   successMessage={excelUploadSuccessMessage}
-                  reviewMessage={excelV2ReviewMessage}
                   onUpload={(file) => void handleUploadExcel(file)}
                 />
 
@@ -666,6 +734,18 @@ export default function App() {
                   onFinishReview={handleFinishOmReview}
                 />
               </div>
+
+              {excelReview && (
+                <ExcelReviewPanel
+                  fileName={excelReview.fileName}
+                  values={excelReview.values}
+                  requiredV2FieldIds={excelReview.requiredV2FieldIds}
+                  error={excelReviewError}
+                  onFieldChange={handleExcelReviewFieldChange}
+                  onApprove={handleApproveExcelReview}
+                  onCancel={handleCancelExcelReview}
+                />
+              )}
             </div>
 
             <AssumptionsForm

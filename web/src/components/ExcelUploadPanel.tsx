@@ -4,15 +4,10 @@ interface ExcelUploadPanelProps {
   isLoading: boolean;
   error: string | null;
   successMessage: string | null;
-  /** Underwriting V2 Gate 6: set only when the uploaded workbook left at
-   * least one V2 field defaulted (a legacy/partial workbook) -- naming
-   * exactly which additional assumptions need analyst review before
-   * Analyze/Save. Null for a complete fourteen-field workbook. */
-  reviewMessage?: string | null;
   onUpload: (file: File) => void;
 }
 
-function SpreadsheetIcon() {
+export function SpreadsheetIcon() {
   return (
     <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false">
       <rect x="2.5" y="2.5" width="15" height="15" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
@@ -28,19 +23,20 @@ function SpreadsheetIcon() {
 /**
  * Lets the analyst upload a canonical Anchor Excel workbook. Unlike
  * `OmReviewPanel`, there is no per-field candidate/evidence review here --
- * the backend Excel reader either returns all nine fields already fully
- * validated, or rejects the whole upload with a 422 issue list. A
- * successful upload pre-fills the existing `AssumptionsForm` (via the
- * parent's merge into `values`), where the analyst reviews and edits it
- * exactly like a manually typed or OM-approved value -- this panel never
- * calls `/analyze` itself. `successMessage` is purely a visual confirmation
- * that the import happened; it carries no approval semantics of its own.
+ * the backend Excel reader either returns all fourteen fields already fully
+ * validated (defaulting any absent Underwriting V2 field to a neutral
+ * compatibility value, see `ExcelIntakeReport.defaulted_v2_field_ids`), or
+ * rejects the whole upload with a 422 issue list. A successful upload never
+ * touches the active `AssumptionsForm` itself -- it hands the parsed
+ * workbook to `ExcelReviewPanel` as a temporary, analyst-editable review
+ * state (same analyst-control philosophy as OM ingestion: Upload -> Review
+ * -> Approve -> Populate Assumptions). `successMessage` is purely a visual
+ * confirmation; it carries no approval semantics of its own.
  */
 export function ExcelUploadPanel({
   isLoading,
   error,
   successMessage,
-  reviewMessage,
   onUpload,
 }: ExcelUploadPanelProps) {
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -84,13 +80,10 @@ export function ExcelUploadPanel({
         <div className="success-banner">{successMessage}</div>
       )}
 
-      {!isLoading && !error && reviewMessage && (
-        <div className="v2-review-banner">{reviewMessage}</div>
-      )}
-
       {!isLoading && !error && !successMessage && (
         <div className="excel-upload-empty">
-          Upload the canonical Anchor .xlsx workbook to pre-fill the assumptions below.
+          Upload the canonical Anchor .xlsx workbook to review its assumptions before loading them
+          into the deal.
         </div>
       )}
     </section>

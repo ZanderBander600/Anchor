@@ -140,6 +140,64 @@ export const BLANK_FORM_VALUES: AcquisitionFormValues = {
   ioPeriod: '',
 };
 
+export interface FieldConfig {
+  key: keyof AcquisitionFormValues;
+  label: string;
+  prefix?: string;
+  suffix?: string;
+}
+
+export interface FieldGroup {
+  title: string;
+  fields: FieldConfig[];
+}
+
+/** The 14 canonical assumptions grouped for display -- shared by
+ * `AssumptionsForm` and `ExcelReviewPanel` (Excel Ingestion Review) so both
+ * surfaces group, label, and format (currency/percent/years) every field
+ * identically rather than maintaining a second, potentially-drifting field
+ * list. Lives here (not in a component file) purely so both components can
+ * import it without one depending on the other. */
+export const ASSUMPTIONS_FIELD_GROUPS: FieldGroup[] = [
+  {
+    title: 'Acquisition',
+    fields: [
+      { key: 'purchasePrice', label: 'Purchase Price', prefix: '$' },
+      { key: 'currentNoi', label: 'Current NOI', prefix: '$' },
+      { key: 'occupancy', label: 'Occupancy', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Growth & Exit',
+    fields: [
+      { key: 'noiGrowth', label: 'NOI Growth', suffix: '%' },
+      { key: 'holdPeriod', label: 'Hold Period', suffix: 'yrs' },
+      { key: 'exitCapRate', label: 'Exit Cap Rate', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Transaction Costs',
+    fields: [
+      { key: 'acquisitionCostPct', label: 'Acquisition Costs', suffix: '%' },
+      { key: 'financingFeePct', label: 'Financing Fee', suffix: '%' },
+      { key: 'dispositionCostPct', label: 'Disposition Costs', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Operations',
+    fields: [{ key: 'annualCapexReserve', label: 'Annual CapEx Reserve', prefix: '$' }],
+  },
+  {
+    title: 'Financing',
+    fields: [
+      { key: 'ltv', label: 'LTV', suffix: '%' },
+      { key: 'interestRate', label: 'Interest Rate', suffix: '%' },
+      { key: 'amortization', label: 'Amortization', suffix: 'yrs' },
+      { key: 'ioPeriod', label: 'Interest-Only Period', suffix: 'yrs' },
+    ],
+  },
+];
+
 export const DEFAULT_TARGET_LEVERED_IRR_PERCENT = '10.00';
 export const DEFAULT_TARGET_HEADLINE_DSCR = '1.20';
 export const DEFAULT_TARGET_EQUITY_MULTIPLE = '1.50';

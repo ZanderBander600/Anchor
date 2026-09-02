@@ -1137,6 +1137,32 @@ body {
   color: var(--color-text-muted);
 }
 
+/* Excel Ingestion Review -- reuses .card/.om-field-header/.om-handoff/
+   .field-* (see AssumptionsForm) for a consistent visual language with the
+   OM review workflow and the main assumptions form; only the grouped-card
+   grid layout below is specific to this panel. */
+.excel-review-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.excel-review-group {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.excel-review-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .ai-analyst-list {
   margin: 0;
   padding-left: 1.1rem;
