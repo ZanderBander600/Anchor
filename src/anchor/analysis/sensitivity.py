@@ -16,9 +16,17 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Callable, Iterable, Mapping, Sequence
 
-from ..contracts import AcquisitionInputs
-from ..engine import AcquisitionResults, analyze_acquisition
-from ..validation import InputValidationError, validate_acquisition_inputs
+from ..contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs
+from ..engine import (
+    AcquisitionResults,
+    analyze_acquisition,
+    analyze_detailed_acquisition_with_projection,
+)
+from ..validation import (
+    InputValidationError,
+    validate_acquisition_inputs,
+    validate_acquisition_terms,
+)
 from .contracts import (
     OneWaySensitivityResult,
     StandardSensitivityPresets,
@@ -37,6 +45,19 @@ SUPPORTED_ASSUMPTIONS: tuple[str, ...] = (
     "purchase_price",
     "current_noi",
     "noi_growth",
+    "exit_cap_rate",
+    "ltv",
+    "interest_rate",
+)
+
+# Detailed Operating Model V2.1 Gate 8: exactly the SUPPORTED_ASSUMPTIONS
+# subset that exists on AcquisitionTerms -- current_noi and noi_growth have
+# no Detailed counterpart (Gate 3/4's resolution: a Detailed deal has no
+# AcquisitionInputs, so neither field exists to vary). Detailed-only
+# dimensions (revenue_growth, vacancy_credit_loss_pct, expense_growth) are
+# explicitly deferred -- not added here "merely to claim completeness."
+DETAILED_SUPPORTED_ASSUMPTIONS: tuple[str, ...] = (
+    "purchase_price",
     "exit_cap_rate",
     "ltv",
     "interest_rate",
@@ -337,4 +358,143 @@ def build_standard_presets(inputs: AcquisitionInputs) -> StandardSensitivityPres
         interest_rate_ltv_dscr=build_interest_rate_ltv_preset(
             inputs, metric="headline_dscr"
         ),
+    )
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 8 -- Detailed sensitivity
+#
+# For a Detailed base deal, every scenario preserves detailed_operating_inputs
+# completely unchanged -- only the varied AcquisitionTerms field(s) differ
+# between the baseline and each scenario cell. This is the direct Detailed
+# counterpart of the Gate 9A fix: dataclasses.replace on the complete
+# AcquisitionTerms contract, never a hand-maintained field-list
+# reconstruction that could silently drop a field.
+# =============================================================================
+
+
+def _build_detailed_scenario_terms(
+    base: AcquisitionTerms, changes: Mapping[str, float]
+) -> AcquisitionTerms:
+    """Detailed counterpart to ``_build_scenario_inputs``: immutable
+    replacement of the complete ``AcquisitionTerms`` contract. ``base`` is
+    never mutated -- it is frozen. Still routed through
+    ``validate_acquisition_terms`` -- domain validation is never
+    reimplemented here."""
+
+    candidate = dataclasses.replace(base, **changes)
+    return validate_acquisition_terms(dataclasses.asdict(candidate))
+
+
+def _analyze_detailed_scenario(
+    terms: AcquisitionTerms, detailed_operating_inputs: DetailedOperatingInputs
+) -> AcquisitionResults:
+    return analyze_detailed_acquisition_with_projection(
+        terms, detailed_operating_inputs
+    ).results
+
+
+def run_detailed_one_way_sensitivity(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    assumption: str,
+    values: Sequence[float],
+    metric: str,
+) -> OneWaySensitivityResult:
+    """Detailed counterpart to ``run_one_way_sensitivity``: vary one
+    ``AcquisitionTerms`` assumption across ``values``, calling
+    ``analyze_detailed_acquisition_with_projection`` once per scenario --
+    ``detailed_operating_inputs`` is passed through unchanged to every
+    scenario, never varied and never dropped."""
+
+    if assumption not in DETAILED_SUPPORTED_ASSUMPTIONS:
+        raise UnknownAssumptionError(assumption)
+    if metric not in SUPPORTED_METRICS:
+        raise UnknownMetricError(metric)
+
+    baseline_assumption_value = getattr(terms, assumption)
+    baseline_metric_value = _extract_metric(
+        _analyze_detailed_scenario(terms, detailed_operating_inputs), metric
+    )
+
+    assumption_values = tuple(values)
+    metric_values: list[float | None] = []
+    for value in assumption_values:
+        scenario_terms = _build_detailed_scenario_terms(terms, {assumption: value})
+        scenario_results = _analyze_detailed_scenario(
+            scenario_terms, detailed_operating_inputs
+        )
+        metric_values.append(_extract_metric(scenario_results, metric))
+
+    return OneWaySensitivityResult(
+        assumption=assumption,
+        metric=metric,
+        baseline_assumption_value=baseline_assumption_value,
+        baseline_metric_value=baseline_metric_value,
+        assumption_values=assumption_values,
+        metric_values=tuple(metric_values),
+    )
+
+
+def run_detailed_two_way_sensitivity(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    row_assumption: str,
+    row_values: Sequence[float],
+    column_assumption: str,
+    column_values: Sequence[float],
+    metric: str,
+) -> TwoWaySensitivityResult:
+    """Detailed counterpart to ``run_two_way_sensitivity``: vary two
+    ``AcquisitionTerms`` assumptions independently over a grid, calling
+    ``analyze_detailed_acquisition_with_projection`` once per cell --
+    ``detailed_operating_inputs`` is passed through unchanged to every
+    cell."""
+
+    if row_assumption not in DETAILED_SUPPORTED_ASSUMPTIONS:
+        raise UnknownAssumptionError(row_assumption)
+    if column_assumption not in DETAILED_SUPPORTED_ASSUMPTIONS:
+        raise UnknownAssumptionError(column_assumption)
+    if metric not in SUPPORTED_METRICS:
+        raise UnknownMetricError(metric)
+    if row_assumption == column_assumption:
+        raise ValueError(
+            "row_assumption and column_assumption must differ; got "
+            f"{row_assumption!r} for both."
+        )
+
+    baseline_row_value = getattr(terms, row_assumption)
+    baseline_column_value = getattr(terms, column_assumption)
+    baseline_metric_value = _extract_metric(
+        _analyze_detailed_scenario(terms, detailed_operating_inputs), metric
+    )
+
+    row_values_tuple = tuple(row_values)
+    column_values_tuple = tuple(column_values)
+
+    matrix: list[tuple[float | None, ...]] = []
+    for row_value in row_values_tuple:
+        row_cells: list[float | None] = []
+        for column_value in column_values_tuple:
+            scenario_terms = _build_detailed_scenario_terms(
+                terms, {row_assumption: row_value, column_assumption: column_value}
+            )
+            scenario_results = _analyze_detailed_scenario(
+                scenario_terms, detailed_operating_inputs
+            )
+            row_cells.append(_extract_metric(scenario_results, metric))
+        matrix.append(tuple(row_cells))
+
+    return TwoWaySensitivityResult(
+        row_assumption=row_assumption,
+        column_assumption=column_assumption,
+        metric=metric,
+        baseline_row_value=baseline_row_value,
+        baseline_column_value=baseline_column_value,
+        baseline_metric_value=baseline_metric_value,
+        row_values=row_values_tuple,
+        column_values=column_values_tuple,
+        matrix=tuple(matrix),
     )
