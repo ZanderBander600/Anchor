@@ -94,6 +94,22 @@ _YEAR_FIELDS: frozenset[str] = frozenset(
     }
 )
 
+# =============================================================================
+# Deliberate-omission allowlist (Gate 8 architecture guardrail)
+#
+# A future ``AcquisitionInputs``/``AcquisitionResults`` field that is *not*
+# supposed to reach the AI Analyst belongs here, named and reasoned about
+# explicitly. ``tests/test_ai_presentation.py`` fails loudly if any field of
+# either dataclass is missing from both ``_format_inputs``/``_format_results``
+# and this allowlist -- so a field can only ever go unseen by the model on
+# purpose, never by accident (e.g. someone adding a field to the dataclass
+# without remembering this presentation layer exists). Empty today: every
+# current field of both dataclasses is presented.
+# =============================================================================
+
+INTENTIONALLY_EXCLUDED_INPUT_FIELDS: frozenset[str] = frozenset()
+INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset()
+
 # A hurdle-relevant metric maps to the ``AnalysisContext`` attribute holding
 # its user-supplied hurdle target. Only these three metrics have a hurdle in
 # the frozen Phase 9A spec.
