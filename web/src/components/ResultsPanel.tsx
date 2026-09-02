@@ -69,7 +69,7 @@ export function ResultsPanel({ results }: ResultsPanelProps) {
           <InfoRow label="Financing Fee" value={formatCurrency(results.financing_fee)} />
           <InfoRow label="Initial Equity" value={formatCurrency(results.initial_equity)} />
           <InfoRow
-            label="Monthly Debt Service"
+            label="Post-IO Monthly Payment"
             value={formatCurrency(results.monthly_debt_service)}
           />
           <InfoRow
