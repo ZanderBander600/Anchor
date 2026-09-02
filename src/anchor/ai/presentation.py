@@ -43,9 +43,23 @@ _PERCENT_FIELDS: frozenset[str] = frozenset(
         "going_in_cap_rate",
         "levered_irr",
         "unlevered_irr",
+        # Underwriting V2 Gate 7: acquisition_cost_pct is a percentage of
+        # purchase price, financing_fee_pct of loan amount, and
+        # disposition_cost_pct of gross exit value.
+        "acquisition_cost_pct",
+        "financing_fee_pct",
+        "disposition_cost_pct",
     }
 )
-_MULTIPLE_FIELDS: frozenset[str] = frozenset({"equity_multiple", "headline_dscr"})
+_MULTIPLE_FIELDS: frozenset[str] = frozenset(
+    {
+        "equity_multiple",
+        "headline_dscr",
+        # Underwriting V2 Gate 7: the minimum DSCR during the hold --
+        # independently represented from headline_dscr (Year 1 DSCR).
+        "min_dscr",
+    }
+)
 _CURRENCY_FIELDS: frozenset[str] = frozenset(
     {
         "purchase_price",
@@ -61,9 +75,40 @@ _CURRENCY_FIELDS: frozenset[str] = frozenset(
         "net_sale_proceeds",
         "unlevered_cash_flows",
         "levered_cash_flows",
+        # Underwriting V2 Gate 7 dollar results/reserve, all already
+        # computed by the deterministic engine -- never derived here.
+        "acquisition_costs",
+        "financing_fee",
+        "disposition_costs",
+        "capex_by_year",
+        "annual_capex_reserve",
     }
 )
-_YEAR_FIELDS: frozenset[str] = frozenset({"hold_period", "amortization"})
+_YEAR_FIELDS: frozenset[str] = frozenset(
+    {
+        "hold_period",
+        "amortization",
+        # Underwriting V2 Gate 7: whole years of interest-only debt before
+        # scheduled principal amortization begins.
+        "io_period",
+    }
+)
+
+# =============================================================================
+# Deliberate-omission allowlist (Gate 8 architecture guardrail)
+#
+# A future ``AcquisitionInputs``/``AcquisitionResults`` field that is *not*
+# supposed to reach the AI Analyst belongs here, named and reasoned about
+# explicitly. ``tests/test_ai_presentation.py`` fails loudly if any field of
+# either dataclass is missing from both ``_format_inputs``/``_format_results``
+# and this allowlist -- so a field can only ever go unseen by the model on
+# purpose, never by accident (e.g. someone adding a field to the dataclass
+# without remembering this presentation layer exists). Empty today: every
+# current field of both dataclasses is presented.
+# =============================================================================
+
+INTENTIONALLY_EXCLUDED_INPUT_FIELDS: frozenset[str] = frozenset()
+INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset()
 
 # A hurdle-relevant metric maps to the ``AnalysisContext`` attribute holding
 # its user-supplied hurdle target. Only these three metrics have a hurdle in
@@ -251,6 +296,21 @@ def _format_inputs(inputs: AcquisitionInputs) -> dict[str, Any]:
         "ltv": format_metric_value("ltv", inputs.ltv),
         "interest_rate": format_metric_value("interest_rate", inputs.interest_rate),
         "amortization": format_metric_value("amortization", inputs.amortization),
+        # Underwriting V2 Gate 7 -- see SYSTEM_PROMPT for the semantic
+        # definition of each (percentage base, reserve treatment, timing).
+        "acquisition_cost_pct": format_metric_value(
+            "acquisition_cost_pct", inputs.acquisition_cost_pct
+        ),
+        "financing_fee_pct": format_metric_value(
+            "financing_fee_pct", inputs.financing_fee_pct
+        ),
+        "disposition_cost_pct": format_metric_value(
+            "disposition_cost_pct", inputs.disposition_cost_pct
+        ),
+        "annual_capex_reserve": format_metric_value(
+            "annual_capex_reserve", inputs.annual_capex_reserve
+        ),
+        "io_period": format_metric_value("io_period", inputs.io_period),
     }
 
 
@@ -258,6 +318,8 @@ def _format_results(results: AcquisitionResults) -> dict[str, Any]:
     return {
         "going_in_cap_rate": format_metric_value("going_in_cap_rate", results.going_in_cap_rate),
         "loan_amount": format_metric_value("loan_amount", results.loan_amount),
+        "acquisition_costs": format_metric_value("acquisition_costs", results.acquisition_costs),
+        "financing_fee": format_metric_value("financing_fee", results.financing_fee),
         "initial_equity": format_metric_value("initial_equity", results.initial_equity),
         "monthly_debt_service": format_metric_value(
             "monthly_debt_service", results.monthly_debt_service
@@ -267,8 +329,10 @@ def _format_results(results: AcquisitionResults) -> dict[str, Any]:
             "remaining_loan_balance", results.remaining_loan_balance
         ),
         "noi_by_year": _format_tuple("noi_by_year", results.noi_by_year),
+        "capex_by_year": _format_tuple("capex_by_year", results.capex_by_year),
         "exit_noi": format_metric_value("exit_noi", results.exit_noi),
         "exit_value": format_metric_value("exit_value", results.exit_value),
+        "disposition_costs": format_metric_value("disposition_costs", results.disposition_costs),
         "net_sale_proceeds": format_metric_value("net_sale_proceeds", results.net_sale_proceeds),
         "unlevered_cash_flows": _format_tuple(
             "unlevered_cash_flows", results.unlevered_cash_flows
@@ -279,6 +343,7 @@ def _format_results(results: AcquisitionResults) -> dict[str, Any]:
         "equity_multiple": format_metric_value("equity_multiple", results.equity_multiple),
         "dscr_by_year": _format_tuple("headline_dscr", results.dscr_by_year),
         "headline_dscr": format_metric_value("headline_dscr", results.headline_dscr),
+        "min_dscr": format_metric_value("min_dscr", results.min_dscr),
     }
 
 

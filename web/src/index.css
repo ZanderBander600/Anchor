@@ -490,6 +490,12 @@ body {
   font-size: 1.85rem;
 }
 
+.stat-caption {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
 .card-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -902,6 +908,20 @@ body {
   gap: 1.25rem;
 }
 
+/* Underwriting V2 Gate 6 -- shared "additional assumptions require review"
+   messaging for the OM and Excel intake panels. Warning-toned, but never
+   implies extraction failure -- these fields are never extracted/present
+   by design in this release. */
+.v2-review-banner {
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning);
+  color: var(--color-warning);
+  border-radius: var(--radius-control);
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+}
+
+
 .om-section-title {
   margin: 0 0 0.5rem;
   font-size: 0.75rem;
@@ -1117,6 +1137,32 @@ body {
   color: var(--color-text-muted);
 }
 
+/* Excel Ingestion Review -- reuses .card/.om-field-header/.om-handoff/
+   .field-* (see AssumptionsForm) for a consistent visual language with the
+   OM review workflow and the main assumptions form; only the grouped-card
+   grid layout below is specific to this panel. */
+.excel-review-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.excel-review-group {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.excel-review-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .ai-analyst-list {
   margin: 0;
   padding-left: 1.1rem;
@@ -1125,4 +1171,124 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
+}
+
+/* =========================================================================
+   Persistence Phase B -- Deal Bar and Deal Library
+   ========================================================================= */
+
+.deal-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.deal-bar-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.deal-bar-identity {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.deal-name-field {
+  flex: 1 1 260px;
+  max-width: 420px;
+}
+
+.deal-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.save-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.save-status-unsaved-deal,
+.save-status-unsaved-changes {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.save-status-saved {
+  background: var(--color-positive-bg);
+  color: var(--color-positive);
+}
+
+.deal-library-panel {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.deal-library-header {
+  justify-content: space-between;
+}
+
+.deal-library-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.deal-library-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-muted);
+}
+
+.deal-library-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.deal-library-row-name {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.deal-library-row-meta {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.deal-library-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.deal-library-delete-button:hover:not(:disabled) {
+  border-color: var(--color-negative);
+  color: var(--color-negative);
 }

@@ -32,13 +32,17 @@ def strict(expected: object) -> object:
 ACQUISITION_RESULTS_FIELDS = (
     ("going_in_cap_rate", float),
     ("loan_amount", float),
+    ("acquisition_costs", float),
+    ("financing_fee", float),
     ("initial_equity", float),
     ("monthly_debt_service", float),
     ("annual_debt_service", tuple[float, ...]),
     ("remaining_loan_balance", float),
     ("noi_by_year", tuple[float, ...]),
+    ("capex_by_year", tuple[float, ...]),
     ("exit_noi", float),
     ("exit_value", float),
+    ("disposition_costs", float),
     ("net_sale_proceeds", float),
     ("unlevered_cash_flows", tuple[float, ...]),
     ("levered_cash_flows", tuple[float, ...]),
@@ -47,6 +51,7 @@ ACQUISITION_RESULTS_FIELDS = (
     ("equity_multiple", float | None),
     ("dscr_by_year", tuple[float | None, ...]),
     ("headline_dscr", float | None),
+    ("min_dscr", float | None),
 )
 
 
@@ -479,3 +484,4 @@ def test_analyze_acquisition_matches_manual_phase_2a_2b_2c_2d_assembly() -> None
     assert result.equity_multiple == return_metrics.equity_multiple
     assert result.dscr_by_year == return_metrics.dscr_by_year
     assert result.headline_dscr == return_metrics.headline_dscr
+    assert result.min_dscr == return_metrics.min_dscr

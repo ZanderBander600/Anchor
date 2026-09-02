@@ -18,6 +18,7 @@ export function CashFlowTable({ results }: CashFlowTableProps) {
             <tr>
               <th>Year</th>
               <th>NOI</th>
+              <th>CapEx</th>
               <th>Annual Debt Service</th>
               <th>DSCR</th>
               <th>Unlevered Cash Flow</th>
@@ -30,6 +31,7 @@ export function CashFlowTable({ results }: CashFlowTableProps) {
               <td className="muted">—</td>
               <td className="muted">—</td>
               <td className="muted">—</td>
+              <td className="muted">—</td>
               <td>{formatCurrency(results.unlevered_cash_flows[0])}</td>
               <td>{formatCurrency(results.levered_cash_flows[0])}</td>
             </tr>
@@ -39,6 +41,7 @@ export function CashFlowTable({ results }: CashFlowTableProps) {
                 <tr key={year}>
                   <td>{year}</td>
                   <td>{formatCurrency(results.noi_by_year[index])}</td>
+                  <td>{formatCurrency(results.capex_by_year[index])}</td>
                   <td>{formatCurrency(results.annual_debt_service[index])}</td>
                   <td>{formatMultiple(results.dscr_by_year[index])}</td>
                   <td>{formatCurrency(results.unlevered_cash_flows[year])}</td>

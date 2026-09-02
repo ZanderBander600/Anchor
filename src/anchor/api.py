@@ -43,8 +43,11 @@ from .analysis import (
     run_two_way_sensitivity,
 )
 from .contracts import AcquisitionInputs
+from . import deals as deals_store
+from .deals import Deal, DealNotFoundError
 from .engine import AcquisitionResults, analyze_acquisition
-from .excel_reader import read_acquisition_inputs_from_bytes
+from .env import load_repo_env
+from .excel_reader import ExcelIntakeReport, read_acquisition_inputs_from_bytes_with_report
 from .ingestion import (
     ExtractionConfigurationError,
     ExtractionProviderError,
@@ -52,6 +55,10 @@ from .ingestion import (
     extract_om,
 )
 from .validation import InputValidationError, validate_acquisition_inputs
+
+# Load repo-local .env (if present) before any request can resolve OpenAI /
+# Azure DI credentials via os.environ -- see anchor.env for precedence rules.
+load_repo_env()
 
 app = FastAPI(title="Anchor API")
 
@@ -524,14 +531,16 @@ def ingest_om(file: UploadFile = File(...)) -> ExtractionResult:
 # Phase 10B -- Excel ingestion (web upload)
 #
 # Reuses the exact same deterministic workbook reader the CLI has always
-# used (``read_acquisition_inputs_from_bytes``, sharing its parsing/
-# validation implementation with the path-based ``read_acquisition_inputs``)
-# -- this endpoint performs no workbook parsing, financial validation, or
+# used (``read_acquisition_inputs_from_bytes_with_report``, sharing its
+# parsing/validation implementation with the path-based
+# ``read_acquisition_inputs``/``read_acquisition_inputs_with_report``) --
+# this endpoint performs no workbook parsing, financial validation, or
 # financial math of its own, and never calls the deterministic engine.
 # Unlike ``/ingestion/om``, there is no external provider and no partial/
-# candidate result: a workbook is either fully valid (200, the nine
-# validated inputs) or it isn't (422, the same ordered issue list
-# ``/analyze`` already returns for a bad payload).
+# candidate result: a workbook is either fully valid (200, the fourteen
+# validated inputs plus which V2 Field IDs were defaulted -- Underwriting V2
+# Gate 5) or it isn't (422, the same ordered issue list ``/analyze`` already
+# returns for a bad payload).
 # =============================================================================
 
 
@@ -548,17 +557,120 @@ def _validate_xlsx_signature(data: bytes) -> None:
         _reject_upload("Uploaded file does not appear to be a valid .xlsx workbook.")
 
 
-@app.post(_EXCEL_INGESTION_PATH, response_model=AcquisitionInputs)
-def ingest_excel(file: UploadFile = File(...)) -> AcquisitionInputs:
+@app.post(_EXCEL_INGESTION_PATH, response_model=ExcelIntakeReport)
+def ingest_excel(file: UploadFile = File(...)) -> ExcelIntakeReport:
     _validate_xlsx_filename(file)
 
     workbook_bytes = _read_upload_bytes(file, max_bytes=_MAX_EXCEL_UPLOAD_BYTES)
     _validate_xlsx_signature(workbook_bytes)
 
     try:
-        return read_acquisition_inputs_from_bytes(workbook_bytes)
+        return read_acquisition_inputs_from_bytes_with_report(workbook_bytes)
     except InputValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=_validation_error_detail(error),
+        ) from None
+
+
+# =============================================================================
+# Persistence Phase A/C -- Deal Library backend foundation
+#
+# Delegates all storage to ``anchor.deals`` (a thin SQLite adapter -- see
+# ``anchor/deals/store.py``). Every create/update route validates the
+# submitted ``inputs`` with the exact same ``validate_acquisition_inputs``
+# used by ``/analyze`` *before* it ever reaches the store, so a saved deal
+# can never hold a value that would fail validation on reopen. Duplicate
+# (Phase C) copies only ``AcquisitionInputs`` via ``anchor.deals`` --
+# already-validated data reused as-is -- and delete removes a row with no
+# soft-delete/history. This module performs no financial calculation and
+# never calls ``analyze_acquisition`` -- reanalyzing a reopened or
+# duplicated deal is the existing, unmodified ``/analyze`` endpoint, driven
+# by the client the same way a manually typed deal is.
+# =============================================================================
+
+
+def _require_deal_name(payload: dict[str, Any]) -> str:
+    name = payload.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A non-empty 'name' is required.",
+        )
+    return name.strip()
+
+
+def _require_deal_inputs(payload: dict[str, Any]) -> AcquisitionInputs:
+    raw_inputs = payload.get("inputs")
+    if not isinstance(raw_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must include an 'inputs' object.",
+        )
+    try:
+        return validate_acquisition_inputs(raw_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+
+@app.post("/deals", response_model=Deal)
+def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
+    name = _require_deal_name(payload)
+    inputs = _require_deal_inputs(payload)
+    return deals_store.create_deal(name, inputs)
+
+
+@app.get("/deals", response_model=list[Deal])
+def list_deals() -> list[Deal]:
+    return deals_store.list_deals()
+
+
+@app.get("/deals/{deal_id}", response_model=Deal)
+def get_deal(deal_id: str) -> Deal:
+    try:
+        return deals_store.get_deal(deal_id)
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+
+
+@app.put("/deals/{deal_id}", response_model=Deal)
+def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
+    name = _require_deal_name(payload)
+    inputs = _require_deal_inputs(payload)
+    try:
+        return deals_store.update_deal(deal_id, name, inputs)
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+
+
+@app.delete("/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_deal(deal_id: str) -> None:
+    try:
+        deals_store.delete_deal(deal_id)
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+
+
+@app.post("/deals/{deal_id}/duplicate", response_model=Deal)
+def duplicate_deal(deal_id: str, payload: dict[str, Any] = Body(default={})) -> Deal:
+    name = payload.get("name")
+    if name is not None and (not isinstance(name, str) or not name.strip()):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="'name' must be a non-empty string when provided.",
+        )
+    try:
+        return deals_store.duplicate_deal(deal_id, name=name.strip() if name else None)
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
         ) from None

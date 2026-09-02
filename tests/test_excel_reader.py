@@ -13,9 +13,17 @@ from openpyxl import Workbook, load_workbook
 
 import anchor.excel_reader as excel_reader
 from anchor.contracts import AcquisitionInputs
-from anchor.excel_reader import read_acquisition_inputs, read_acquisition_inputs_from_bytes
+from anchor.excel_reader import (
+    ExcelIntakeReport,
+    read_acquisition_inputs,
+    read_acquisition_inputs_from_bytes,
+    read_acquisition_inputs_from_bytes_with_report,
+    read_acquisition_inputs_with_report,
+)
 from anchor.validation import (
+    ALL_FIELD_IDS,
     FIELD_IDS,
+    V2_FIELD_IDS,
     InputIssue,
     InputValidationError,
     IssueCategory,
@@ -908,3 +916,238 @@ def _capture_issues_from_bytes(data: bytes) -> tuple[InputIssue, ...]:
     with pytest.raises(InputValidationError) as captured:
         read_acquisition_inputs_from_bytes(data)
     return captured.value.issues
+
+
+# =============================================================================
+# Underwriting V2 Gate 5 -- optional V2 Field IDs + ExcelIntakeReport.
+#
+# The 99 tests above this line exercise only the nine legacy V1 Field IDs
+# (FIELD_IDS) and are left completely unmodified -- they remain the
+# permanent legacy nine-field workbook regression. Everything below is new
+# Gate 5 coverage for the five optional V2 Field IDs and the
+# defaulted-field intake metadata.
+# =============================================================================
+
+
+V2_VALUES: dict[str, int | float] = {
+    "acquisition_cost_pct": 0.02,
+    "financing_fee_pct": 0.01,
+    "disposition_cost_pct": 0.025,
+    "annual_capex_reserve": 50_000,
+    "io_period": 2,
+}
+V2_LABELS = {
+    "acquisition_cost_pct": "Acquisition Cost %",
+    "financing_fee_pct": "Financing Fee %",
+    "disposition_cost_pct": "Disposition Cost %",
+    "annual_capex_reserve": "Annual CapEx Reserve",
+    "io_period": "Interest-Only Period",
+}
+V2_UNITS = {
+    "acquisition_cost_pct": "%",
+    "financing_fee_pct": "%",
+    "disposition_cost_pct": "%",
+    "annual_capex_reserve": "USD/year",
+    "io_period": "years",
+}
+ALL_VALUES: dict[str, int | float] = {**VALUES, **V2_VALUES}
+ALL_LABELS = {**LABELS, **V2_LABELS}
+ALL_UNITS = {**UNITS, **V2_UNITS}
+
+EXPECTED_V2 = AcquisitionInputs(
+    purchase_price=50_000_000.0,
+    current_noi=2_500_000.0,
+    occupancy=0.95,
+    noi_growth=0.03,
+    hold_period=5,
+    exit_cap_rate=0.055,
+    ltv=0.65,
+    interest_rate=0.0525,
+    amortization=30,
+    acquisition_cost_pct=0.02,
+    financing_fee_pct=0.01,
+    disposition_cost_pct=0.025,
+    annual_capex_reserve=50_000.0,
+    io_period=2,
+)
+
+
+def _all_canonical_rows(
+    values: dict[str, object] | None = None,
+    field_ids: Iterable[str] = ALL_FIELD_IDS,
+) -> list[tuple[object, object, object, object]]:
+    supplied = ALL_VALUES if values is None else values
+    return [
+        (field_id, ALL_LABELS[field_id], supplied[field_id], ALL_UNITS[field_id])
+        for field_id in field_ids
+    ]
+
+
+def test_complete_fourteen_field_workbook_parses_successfully(tmp_path: Path) -> None:
+    report = read_acquisition_inputs_with_report(
+        _write_workbook(tmp_path, rows=_all_canonical_rows())
+    )
+
+    assert report.inputs == EXPECTED_V2
+
+
+def test_complete_workbook_returns_all_five_v2_fields_correctly(tmp_path: Path) -> None:
+    report = read_acquisition_inputs_with_report(
+        _write_workbook(tmp_path, rows=_all_canonical_rows())
+    )
+
+    assert report.inputs.acquisition_cost_pct == 0.02
+    assert report.inputs.financing_fee_pct == 0.01
+    assert report.inputs.disposition_cost_pct == 0.025
+    assert report.inputs.annual_capex_reserve == 50_000.0
+    assert report.inputs.io_period == 2
+
+
+def test_complete_workbook_reports_no_defaulted_v2_fields(tmp_path: Path) -> None:
+    report = read_acquisition_inputs_with_report(
+        _write_workbook(tmp_path, rows=_all_canonical_rows())
+    )
+
+    assert report.defaulted_v2_field_ids == ()
+
+
+def test_legacy_nine_field_workbook_parses_successfully_via_report(tmp_path: Path) -> None:
+    report = read_acquisition_inputs_with_report(_write_workbook(tmp_path))
+
+    assert report.inputs == EXPECTED
+
+
+def test_legacy_workbook_defaults_exactly_the_five_missing_v2_fields(tmp_path: Path) -> None:
+    report = read_acquisition_inputs_with_report(_write_workbook(tmp_path))
+
+    assert report.inputs.acquisition_cost_pct == 0.0
+    assert report.inputs.financing_fee_pct == 0.0
+    assert report.inputs.disposition_cost_pct == 0.0
+    assert report.inputs.annual_capex_reserve == 0.0
+    assert report.inputs.io_period == 0
+
+
+def test_defaulted_field_metadata_contains_exactly_those_five_field_ids(
+    tmp_path: Path,
+) -> None:
+    report = read_acquisition_inputs_with_report(_write_workbook(tmp_path))
+
+    assert set(report.defaulted_v2_field_ids) == set(V2_FIELD_IDS)
+    assert report.defaulted_v2_field_ids == V2_FIELD_IDS  # canonical order
+
+
+@pytest.mark.parametrize("present_v2_field_id", V2_FIELD_IDS)
+def test_workbook_with_some_but_not_all_v2_fields_defaults_only_the_absent_ones(
+    tmp_path: Path, present_v2_field_id: str
+) -> None:
+    rows = _all_canonical_rows(
+        field_ids=(*FIELD_IDS, present_v2_field_id)
+    )
+    report = read_acquisition_inputs_with_report(_write_workbook(tmp_path, rows=rows))
+
+    expected_defaulted = tuple(
+        field_id for field_id in V2_FIELD_IDS if field_id != present_v2_field_id
+    )
+    assert report.defaulted_v2_field_ids == expected_defaulted
+    assert getattr(report.inputs, present_v2_field_id) == V2_VALUES[present_v2_field_id]
+
+
+def test_present_but_blank_v2_field_is_a_validation_error_not_a_silent_default(
+    tmp_path: Path,
+) -> None:
+    rows = _all_canonical_rows(
+        values={**ALL_VALUES, "acquisition_cost_pct": None},
+        field_ids=(*FIELD_IDS, "acquisition_cost_pct"),
+    )
+    issue = _single_issue(_write_workbook(tmp_path, rows=rows))
+
+    assert issue.category is IssueCategory.BLANK_VALUE
+    assert issue.field_id == "acquisition_cost_pct"
+
+
+@pytest.mark.parametrize(
+    "field_id", ("acquisition_cost_pct", "financing_fee_pct", "disposition_cost_pct")
+)
+def test_present_but_invalid_percentage_fails_validation(
+    tmp_path: Path, field_id: str
+) -> None:
+    rows = _all_canonical_rows(
+        values={**ALL_VALUES, field_id: 1.5},
+        field_ids=(*FIELD_IDS, field_id),
+    )
+    issue = _single_issue(_write_workbook(tmp_path, rows=rows))
+
+    assert issue.category is IssueCategory.OUT_OF_DOMAIN_VALUE
+    assert issue.field_id == field_id
+
+
+def test_present_invalid_io_period_fails_validation(tmp_path: Path) -> None:
+    rows = _all_canonical_rows(
+        values={**ALL_VALUES, "io_period": -1},
+        field_ids=(*FIELD_IDS, "io_period"),
+    )
+    issue = _single_issue(_write_workbook(tmp_path, rows=rows))
+
+    assert issue.category is IssueCategory.OUT_OF_DOMAIN_VALUE
+    assert issue.field_id == "io_period"
+
+
+def test_present_fractional_io_period_fails_validation(tmp_path: Path) -> None:
+    rows = _all_canonical_rows(
+        values={**ALL_VALUES, "io_period": 2.5},
+        field_ids=(*FIELD_IDS, "io_period"),
+    )
+    issue = _single_issue(_write_workbook(tmp_path, rows=rows))
+
+    assert issue.category is IssueCategory.NON_WHOLE_NUMBER_IO_PERIOD
+    assert issue.field_id == "io_period"
+
+
+def test_bytes_reader_with_report_matches_path_reader_with_report_for_complete_workbook() -> (
+    None
+):
+    rows = _all_canonical_rows()
+    workbook, worksheet = _populate_workbook(rows=rows)
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+
+    from_bytes = read_acquisition_inputs_from_bytes_with_report(buffer.getvalue())
+
+    assert from_bytes.inputs == EXPECTED_V2
+    assert from_bytes.defaulted_v2_field_ids == ()
+
+
+def test_canonical_v2_example_workbook_has_all_fourteen_fields_and_no_defaults() -> None:
+    example_v2 = (
+        Path(__file__).resolve().parents[1] / "examples" / "anchor_input_v2.xlsx"
+    )
+    report = read_acquisition_inputs_with_report(example_v2)
+
+    assert report.defaulted_v2_field_ids == ()
+    assert report.inputs.acquisition_cost_pct == 0.02
+    assert report.inputs.financing_fee_pct == 0.01
+    assert report.inputs.disposition_cost_pct == 0.025
+    assert report.inputs.annual_capex_reserve == 50_000.0
+    assert report.inputs.io_period == 2
+
+
+def test_legacy_workbook_economics_reproduce_the_existing_v1_neutral_case(
+    tmp_path: Path,
+) -> None:
+    """A legacy nine-field workbook's parsed inputs, run through the
+    authoritative engine, must reproduce exactly the frozen V1 golden case
+    -- proving the V2-aware reader introduces zero drift for legacy
+    workbooks."""
+    from anchor.engine import analyze_acquisition
+
+    result = analyze_acquisition(read_acquisition_inputs(_write_workbook(tmp_path)))
+
+    assert result.loan_amount == 32_500_000.0
+    assert result.initial_equity == 17_500_000.0
+    assert result.levered_irr == pytest.approx(0.07913030056780745, rel=0.0, abs=1e-9)
+    assert result.unlevered_irr == pytest.approx(0.062414943980353854, rel=0.0, abs=1e-9)
+    assert result.equity_multiple == pytest.approx(1.44288913123241, rel=0.0, abs=1e-9)
+    assert result.acquisition_costs == 0.0
+    assert result.financing_fee == 0.0
+    assert result.disposition_costs == 0.0

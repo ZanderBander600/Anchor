@@ -17,6 +17,10 @@ dependencies = [
     # Phase 10A ingestion (KTD6): enforces the KTD9 page-count ceiling locally,
     # before any (paid) Azure DI call is made.
     "pypdf>=5.0",
+    # Loads repo-local .env (OpenAI / Azure DI credentials) into the process
+    # environment for local development; see anchor.env. Real environment
+    # variables always take precedence -- see anchor.env's override=False.
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

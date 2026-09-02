@@ -1,44 +1,6 @@
 import type { ChangeEvent, FormEvent } from 'react';
+import { ASSUMPTIONS_FIELD_GROUPS } from '../convert';
 import type { AcquisitionFormValues } from '../types';
-
-interface FieldConfig {
-  key: keyof AcquisitionFormValues;
-  label: string;
-  prefix?: string;
-  suffix?: string;
-}
-
-interface FieldGroup {
-  title: string;
-  fields: FieldConfig[];
-}
-
-const FIELD_GROUPS: FieldGroup[] = [
-  {
-    title: 'Property & Income',
-    fields: [
-      { key: 'purchasePrice', label: 'Purchase Price', prefix: '$' },
-      { key: 'currentNoi', label: 'Current NOI', prefix: '$' },
-      { key: 'occupancy', label: 'Occupancy', suffix: '%' },
-    ],
-  },
-  {
-    title: 'Growth & Hold',
-    fields: [
-      { key: 'noiGrowth', label: 'NOI Growth', suffix: '%' },
-      { key: 'holdPeriod', label: 'Hold Period', suffix: 'yrs' },
-      { key: 'exitCapRate', label: 'Exit Cap Rate', suffix: '%' },
-    ],
-  },
-  {
-    title: 'Financing',
-    fields: [
-      { key: 'ltv', label: 'LTV', suffix: '%' },
-      { key: 'interestRate', label: 'Interest Rate', suffix: '%' },
-      { key: 'amortization', label: 'Amortization', suffix: 'yrs' },
-    ],
-  },
-];
 
 interface AssumptionsFormProps {
   values: AcquisitionFormValues;
@@ -57,7 +19,7 @@ export function AssumptionsForm({
     <form className="card assumptions-form" onSubmit={onSubmit}>
       <h2 className="card-title">Assumptions</h2>
       <div className="field-grid">
-        {FIELD_GROUPS.map((group) => (
+        {ASSUMPTIONS_FIELD_GROUPS.map((group) => (
           <div className="assumptions-group" key={group.title}>
             <h3 className="assumptions-group-title">{group.title}</h3>
             <div className="assumptions-group-fields">

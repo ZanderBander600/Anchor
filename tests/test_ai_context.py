@@ -1,7 +1,7 @@
 """Tests for Phase 9A ``AnalysisContext`` construction
 (``anchor.ai.analyst.build_analysis_context``).
 
-Confirms the context includes all 9 ``AcquisitionInputs`` fields, the
+Confirms the context includes every ``AcquisitionInputs`` field, the
 complete ``AcquisitionResults``, the standard sensitivities, and the
 standard break-even analysis; that raw decimals are preserved with no
 presentation formatting; that the base inputs are never mutated; and that
@@ -18,7 +18,6 @@ from anchor.ai.analyst import build_analysis_context
 from anchor.analysis import ReturnHurdleMetric
 from anchor.contracts import AcquisitionInputs
 from anchor.engine.contracts import AcquisitionResults
-from anchor.validation import FIELD_IDS
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,
@@ -43,12 +42,11 @@ def _build(**overrides: object):
     return build_analysis_context(GOLDEN_INPUTS, **values)  # type: ignore[arg-type]
 
 
-def test_context_carries_all_nine_acquisition_input_fields() -> None:
+def test_context_carries_every_acquisition_input_field() -> None:
     context = _build()
 
-    assert set(FIELD_IDS) == {field.name for field in fields(AcquisitionInputs)}
-    for field_id in FIELD_IDS:
-        assert getattr(context.inputs, field_id) == getattr(GOLDEN_INPUTS, field_id)
+    for field in fields(AcquisitionInputs):
+        assert getattr(context.inputs, field.name) == getattr(GOLDEN_INPUTS, field.name)
 
 
 def test_context_base_inputs_are_unchanged_and_not_mutated() -> None:
@@ -72,13 +70,17 @@ def test_context_carries_every_acquisition_results_field() -> None:
     assert result_field_names == {
         "going_in_cap_rate",
         "loan_amount",
+        "acquisition_costs",
+        "financing_fee",
         "initial_equity",
         "monthly_debt_service",
         "annual_debt_service",
         "remaining_loan_balance",
         "noi_by_year",
+        "capex_by_year",
         "exit_noi",
         "exit_value",
+        "disposition_costs",
         "net_sale_proceeds",
         "unlevered_cash_flows",
         "levered_cash_flows",
@@ -87,6 +89,7 @@ def test_context_carries_every_acquisition_results_field() -> None:
         "equity_multiple",
         "dscr_by_year",
         "headline_dscr",
+        "min_dscr",
     }
 
 

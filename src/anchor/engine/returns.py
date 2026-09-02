@@ -52,6 +52,18 @@ def calculate_headline_dscr(*, dscr_by_year: tuple[float | None, ...]) -> float 
     return dscr_by_year[0]
 
 
+def calculate_min_dscr(*, dscr_by_year: tuple[float | None, ...]) -> float | None:
+    """Underwriting V2 Gate 4: return the minimum of the non-``None``
+    entries in ``dscr_by_year``, or ``None`` if every entry is ``None``.
+    Supplements ``headline_dscr`` (``DSCR_1``); does not replace it -- the
+    two may coincide, e.g. when Year 1 is the covenant-tightest year."""
+
+    defined_values = [dscr for dscr in dscr_by_year if dscr is not None]
+    if not defined_values:
+        return None
+    return min(defined_values)
+
+
 # =============================================================================
 # Equity Multiple
 # =============================================================================
@@ -243,6 +255,7 @@ def calculate_return_metrics(
         noi_by_year=noi_by_year, annual_debt_service=annual_debt_service
     )
     headline_dscr = calculate_headline_dscr(dscr_by_year=dscr_by_year)
+    min_dscr = calculate_min_dscr(dscr_by_year=dscr_by_year)
     equity_multiple = calculate_equity_multiple(levered_cash_flows=levered_cash_flows)
     unlevered_irr = calculate_irr(unlevered_cash_flows)
     levered_irr = calculate_irr(levered_cash_flows)
@@ -250,6 +263,7 @@ def calculate_return_metrics(
     return ReturnMetrics(
         dscr_by_year=dscr_by_year,
         headline_dscr=headline_dscr,
+        min_dscr=min_dscr,
         equity_multiple=equity_multiple,
         unlevered_irr=unlevered_irr,
         levered_irr=levered_irr,

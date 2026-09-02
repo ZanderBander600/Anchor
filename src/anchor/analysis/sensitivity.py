@@ -13,11 +13,12 @@ as it would on the base analysis, never silently clamped.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from ..contracts import AcquisitionInputs
 from ..engine import AcquisitionResults, analyze_acquisition
-from ..validation import FIELD_IDS, InputValidationError, validate_acquisition_inputs
+from ..validation import InputValidationError, validate_acquisition_inputs
 from .contracts import (
     OneWaySensitivityResult,
     StandardSensitivityPresets,
@@ -84,14 +85,24 @@ def _build_scenario_inputs(
     base: AcquisitionInputs, changes: Mapping[str, float]
 ) -> AcquisitionInputs:
     """Return a new validated ``AcquisitionInputs`` with ``changes`` applied
-    on top of ``base``. ``base`` is never mutated -- it is frozen, and only
-    read here to seed the unchanged fields."""
+    on top of ``base``. ``base`` is never mutated -- it is frozen.
 
-    values: dict[str, float | int] = {
-        field_id: getattr(base, field_id) for field_id in FIELD_IDS
-    }
-    values.update(changes)
-    return validate_acquisition_inputs(values)
+    Uses ``dataclasses.replace`` (via ``dataclasses.asdict`` into the shared
+    validator) rather than seeding a values dict from a hand-maintained
+    field-id list: every field of ``base`` not named in ``changes`` --
+    including all five Underwriting V2 fields, and any field added in the
+    future -- carries over automatically. A field-list reconstruction here
+    previously reset every scenario's V2 fields (acquisition_cost_pct,
+    financing_fee_pct, disposition_cost_pct, annual_capex_reserve, io_period)
+    to their neutral defaults, silently discarding a V2 base deal's actual
+    assumptions in every sensitivity cell (Gate 9A root cause). Still routed
+    through ``validate_acquisition_inputs`` -- domain validation is never
+    reimplemented here, and out-of-domain scenario values still raise
+    ``InputValidationError`` exactly as before.
+    """
+
+    candidate = dataclasses.replace(base, **changes)
+    return validate_acquisition_inputs(dataclasses.asdict(candidate))
 
 
 # =============================================================================

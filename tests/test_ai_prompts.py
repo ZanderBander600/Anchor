@@ -128,6 +128,68 @@ def test_system_prompt_tells_model_to_defer_to_supplied_hurdle_labels() -> None:
 
 
 # =============================================================================
+# Gate 9F: repetition/structure guidance (added only after the Gate 9A-9C
+# deterministic sensitivity/break-even fix, per the report -- these check
+# prompt instructions, never brittle LLM prose).
+# =============================================================================
+
+
+def test_system_prompt_tells_model_not_to_repeat_a_material_issue_verbatim() -> None:
+    prompt = build_system_prompt()
+
+    lowered = _normalize_whitespace(prompt.lower())
+    assert "state a material issue fully the first time it appears" in lowered
+    assert "do not repeat the same observation near-verbatim in a later section" in lowered
+
+
+def test_system_prompt_tells_model_executive_summary_synthesizes_not_repeats() -> None:
+    prompt = build_system_prompt()
+
+    lowered = _normalize_whitespace(prompt.lower())
+    assert "executive summary must synthesize the overall investment picture" in lowered
+    assert "do not restate every item from strengths, risks, or return drivers there" in lowered
+
+
+def test_system_prompt_tells_model_questions_are_unresolved_diligence_not_restated_risks() -> None:
+    prompt = build_system_prompt()
+
+    lowered = _normalize_whitespace(prompt.lower())
+    assert "questions to investigate must contain only unresolved diligence" in lowered
+    assert "do not use it to restate a risk or conclusion already covered" in lowered
+
+
+def test_system_prompt_tells_model_confidence_notes_focus_on_evidence_limitations() -> None:
+    prompt = build_system_prompt()
+
+    lowered = _normalize_whitespace(prompt.lower())
+    assert "confidence notes must focus on evidence limitations" in lowered
+    assert (
+        "do not use it to restate a return, coverage, or break-even conclusion"
+        in lowered
+    )
+
+
+def test_system_prompt_tells_model_to_prioritize_few_most_decision_relevant_items() -> None:
+    prompt = build_system_prompt()
+
+    lowered = _normalize_whitespace(prompt.lower())
+    assert "prioritize the few most" in lowered
+    assert "decision-relevant items" in lowered
+    assert "do not enumerate every sensitivity cell" in lowered
+
+
+def test_system_prompt_structure_guidance_does_not_hardcode_a_golden_case_conclusion() -> None:
+    """Gate 9F: the new repetition/structure guidance is process-level only
+    -- it must never name a specific deal's number (e.g. the V2 golden
+    case's 7.38% Levered IRR or $9.5M break-even purchase price)."""
+
+    prompt = build_system_prompt()
+
+    for forbidden in ("7.38%", "7.380240", "9.5m", "9,500,000", "$10.0m", "10,000,000"):
+        assert forbidden not in prompt.lower()
+
+
+# =============================================================================
 # User prompt (presentation-formatted evidence)
 # =============================================================================
 

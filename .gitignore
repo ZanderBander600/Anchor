@@ -42,3 +42,10 @@ node_modules/
 *.key
 credentials.json
 .pytest-temp/
+
+# Persistence Phase A -- local SQLite deal store (user data, never source)
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

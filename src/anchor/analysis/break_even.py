@@ -24,13 +24,14 @@ Architecture (mirrors ``sensitivity.py``):
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Mapping
 from enum import StrEnum
 from math import isfinite
 
 from ..contracts import AcquisitionInputs
 from ..engine import AcquisitionResults, analyze_acquisition
-from ..validation import FIELD_IDS, InputValidationError, validate_acquisition_inputs
+from ..validation import InputValidationError, validate_acquisition_inputs
 from .contracts import (
     BreakEvenResult,
     BreakEvenStatus,
@@ -62,14 +63,24 @@ def _build_scenario_inputs(
     base: AcquisitionInputs, changes: Mapping[str, float]
 ) -> AcquisitionInputs:
     """Return a new validated ``AcquisitionInputs`` with ``changes`` applied
-    on top of ``base``. ``base`` is never mutated -- it is frozen, and only
-    read here to seed the unchanged fields."""
+    on top of ``base``. ``base`` is never mutated -- it is frozen.
 
-    values: dict[str, float | int] = {
-        field_id: getattr(base, field_id) for field_id in FIELD_IDS
-    }
-    values.update(changes)
-    return validate_acquisition_inputs(values)
+    Uses ``dataclasses.replace`` (via ``dataclasses.asdict`` into the shared
+    validator) rather than seeding a values dict from a hand-maintained
+    field-id list: every field of ``base`` not named in ``changes`` --
+    including all five Underwriting V2 fields, and any field added in the
+    future -- carries over automatically. A field-list reconstruction here
+    previously reset every candidate's V2 fields (acquisition_cost_pct,
+    financing_fee_pct, disposition_cost_pct, annual_capex_reserve, io_period)
+    to their neutral defaults, silently discarding a V2 base deal's actual
+    assumptions in every break-even candidate (Gate 9A root cause). Still
+    routed through ``validate_acquisition_inputs`` -- domain validation is
+    never reimplemented here, and an out-of-domain candidate (including a
+    search bound) still raises ``InputValidationError`` exactly as before.
+    """
+
+    candidate = dataclasses.replace(base, **changes)
+    return validate_acquisition_inputs(dataclasses.asdict(candidate))
 
 
 def _evaluate_candidate(
@@ -92,6 +103,62 @@ def _meets_hurdle(metric_value: float | None, target: float) -> bool:
     candidate, deterministically, never a fabricated pass or fail sentinel."""
 
     return metric_value is not None and metric_value >= target
+
+
+def _resolve_undefined_favorable_endpoint(
+    inputs: AcquisitionInputs,
+    *,
+    assumption: str,
+    metric: str,
+    undefined_value: float,
+    other_value: float,
+    other_metric: float | None,
+    tolerance: float,
+    max_iterations: int,
+) -> tuple[float, float] | tuple[None, None]:
+    """Gate 9G: the documented favorable endpoint (``undefined_value``)
+    evaluated to an undefined (``None``) ``metric`` -- e.g. ``headline_dscr``
+    is ``None`` at ``interest_rate == 0.0`` with a positive ``io_period``,
+    because Year-1 annual debt service is then exactly zero. That is a
+    correct, frozen engine convention (never fabricated as zero or
+    infinity) -- but an undefined *endpoint* is not evidence that ``metric``
+    is undefined everywhere in the search interval, so it must not by
+    itself force ``NO_SOLUTION_IN_RANGE``.
+
+    Bisects between ``undefined_value`` and ``other_value`` for the point
+    closest to ``undefined_value`` at which ``metric`` first becomes
+    defined -- the same deterministic, tolerance-bounded bisection style as
+    the main threshold search, generalized over any assumption/metric this
+    solver evaluates (never a hardcoded probe offset). The caller then
+    treats the returned point as the effective favorable boundary and
+    proceeds with the existing, unchanged solver logic from there, so a
+    genuine threshold discovered beyond it is still located exactly as
+    before.
+
+    Returns ``(None, None)`` if ``metric`` is undefined at ``other_value``
+    too -- the whole interval is undefined, so there is genuinely nothing
+    to search (a real ``NO_SOLUTION_IN_RANGE``, not a boundary artifact).
+    """
+
+    if other_metric is None:
+        return None, None
+
+    still_undefined_value = undefined_value
+    defined_value, defined_metric = other_value, other_metric
+
+    for _ in range(max_iterations):
+        if abs(defined_value - still_undefined_value) <= tolerance:
+            break
+        midpoint = (still_undefined_value + defined_value) / 2
+        midpoint_metric = _evaluate_candidate(
+            inputs, assumption=assumption, metric=metric, candidate_value=midpoint
+        )
+        if midpoint_metric is None:
+            still_undefined_value = midpoint
+        else:
+            defined_value, defined_metric = midpoint, midpoint_metric
+
+    return defined_value, defined_metric
 
 
 # =============================================================================
@@ -213,8 +280,32 @@ def solve_break_even_threshold(
         favorable_value, favorable_metric = upper_bound, metric_at_upper
         unfavorable_value, unfavorable_metric = lower_bound, metric_at_lower
 
+    tolerance = _ASSUMPTION_TOLERANCES[assumption]
+
+    # Gate 9G: the documented favorable endpoint itself may be an undefined
+    # (None) metric (e.g. headline_dscr at interest_rate == 0.0 with a
+    # positive io_period -- zero Year-1 debt service is a correct, frozen
+    # engine convention, not a fabricated value). That does not mean no
+    # solution exists in the interval -- resolve to the nearest point with a
+    # defined metric before deciding, so a real qualifying value found just
+    # inside the boundary is never masked as NO_SOLUTION_IN_RANGE.
+    if favorable_metric is None:
+        favorable_value, favorable_metric = _resolve_undefined_favorable_endpoint(
+            inputs,
+            assumption=assumption,
+            metric=metric,
+            undefined_value=favorable_value,
+            other_value=unfavorable_value,
+            other_metric=unfavorable_metric,
+            tolerance=tolerance,
+            max_iterations=_MAX_ITERATIONS,
+        )
+
     # Not even the most favorable end of the documented range satisfies the
-    # hurdle -- report NO_SOLUTION_IN_RANGE, never "impossible".
+    # hurdle -- report NO_SOLUTION_IN_RANGE, never "impossible". This also
+    # covers the case above where the metric is undefined throughout the
+    # entire interval (``_resolve_undefined_favorable_endpoint`` returns
+    # ``None``, which never satisfies a hurdle either).
     if not _meets_hurdle(favorable_metric, target):
         return None, None, BreakEvenStatus.NO_SOLUTION_IN_RANGE
 
@@ -223,7 +314,6 @@ def solve_break_even_threshold(
     if _meets_hurdle(unfavorable_metric, target):
         return unfavorable_value, unfavorable_metric, BreakEvenStatus.SOLVED
 
-    tolerance = _ASSUMPTION_TOLERANCES[assumption]
     qualifying_value, qualifying_metric = favorable_value, favorable_metric
     failing_value = unfavorable_value
 

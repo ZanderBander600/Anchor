@@ -20,7 +20,24 @@ FIELD_IDS = (
     "amortization",
 )
 
-_YEAR_FIELD_IDS = frozenset(("hold_period", "amortization"))
+# Underwriting V2 Gate 1 (docs/underwriting_v2_financial_conventions.md):
+# optional, not required -- absent from a payload/workbook, each defaults to
+# its neutral value via the AcquisitionInputs dataclass default rather than
+# raising a missing-field issue. Deliberately kept out of FIELD_IDS itself,
+# since FIELD_IDS also drives the Excel reader's and sensitivity/break-even's
+# required-field-id sets, neither of which this gate extends.
+V2_FIELD_IDS = (
+    "acquisition_cost_pct",
+    "financing_fee_pct",
+    "disposition_cost_pct",
+    "annual_capex_reserve",
+    "io_period",
+)
+
+ALL_FIELD_IDS = FIELD_IDS + V2_FIELD_IDS
+
+_YEAR_FIELD_IDS = frozenset(("hold_period", "amortization", "io_period"))
+_YEAR_FIELD_MINIMUM = {"hold_period": 1, "amortization": 1, "io_period": 0}
 _MAX_SAFE_REPR_LENGTH = 200
 
 
@@ -38,6 +55,7 @@ class IssueCategory(StrEnum):
     OUT_OF_DOMAIN_VALUE = "out_of_domain_value"
     NON_WHOLE_NUMBER_HOLD_PERIOD = "non_whole_number_hold_period"
     NON_WHOLE_NUMBER_AMORTIZATION = "non_whole_number_amortization"
+    NON_WHOLE_NUMBER_IO_PERIOD = "non_whole_number_io_period"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -78,6 +96,17 @@ _DOMAIN_DESCRIPTIONS = {
     "ltv": "between 0 and 1, inclusive",
     "interest_rate": "greater than or equal to 0",
     "amortization": "a whole number of years greater than or equal to 1",
+    "acquisition_cost_pct": "between 0 and 1, inclusive",
+    "financing_fee_pct": "between 0 and 1, inclusive",
+    "disposition_cost_pct": "between 0 and 1, inclusive",
+    "annual_capex_reserve": "greater than or equal to 0",
+    "io_period": "a whole number of years greater than or equal to 0",
+}
+
+_NON_WHOLE_NUMBER_CATEGORY = {
+    "hold_period": IssueCategory.NON_WHOLE_NUMBER_HOLD_PERIOD,
+    "amortization": IssueCategory.NON_WHOLE_NUMBER_AMORTIZATION,
+    "io_period": IssueCategory.NON_WHOLE_NUMBER_IO_PERIOD,
 }
 
 
@@ -129,7 +158,7 @@ def _normalize_field_value(
 ) -> tuple[float | int | None, InputIssue | None]:
     """Normalize and validate one known canonical field in isolation."""
 
-    if field_id not in FIELD_IDS:
+    if field_id not in ALL_FIELD_IDS:
         representation = _safe_repr(field_id)
         detail = f": {representation}" if representation is not None else ""
         raise ValueError(f"Unknown canonical Field ID{detail}")
@@ -152,20 +181,15 @@ def _normalize_field_value(
                     "must be finite",
                 )
             if not value.is_integer():
-                category = (
-                    IssueCategory.NON_WHOLE_NUMBER_HOLD_PERIOD
-                    if field_id == "hold_period"
-                    else IssueCategory.NON_WHOLE_NUMBER_AMORTIZATION
-                )
                 return None, _issue(
-                    category,
+                    _NON_WHOLE_NUMBER_CATEGORY[field_id],
                     field_id,
                     value,
                     "must be a whole number of years",
                 )
 
         normalized_year = int(value)
-        if normalized_year < 1:
+        if normalized_year < _YEAR_FIELD_MINIMUM[field_id]:
             return None, _issue(
                 IssueCategory.OUT_OF_DOMAIN_VALUE,
                 field_id,
@@ -200,6 +224,10 @@ def _normalize_field_value(
         "exit_cap_rate": normalized_value > 0,
         "ltv": 0 <= normalized_value <= 1,
         "interest_rate": normalized_value >= 0,
+        "acquisition_cost_pct": 0 <= normalized_value <= 1,
+        "financing_fee_pct": 0 <= normalized_value <= 1,
+        "disposition_cost_pct": 0 <= normalized_value <= 1,
+        "annual_capex_reserve": normalized_value >= 0,
     }[field_id]
 
     if not in_domain:
@@ -214,7 +242,16 @@ def _normalize_field_value(
 
 
 def validate_acquisition_inputs(values: Mapping[str, object]) -> AcquisitionInputs:
-    """Normalize and validate an exact nine-field acquisition input mapping.
+    """Normalize and validate an acquisition input mapping: the nine
+    required POC V1 Field IDs, plus the five optional Underwriting V2
+    Field IDs (``V2_FIELD_IDS``).
+
+    The nine V1 Field IDs remain exactly as required as before -- a missing
+    one is still a ``MISSING_FIELD_ID`` issue. A V2 Field ID is validated
+    when supplied, but its absence is not an issue: the returned
+    ``AcquisitionInputs`` simply takes that field's neutral dataclass
+    default, so an existing nine-field payload continues to validate
+    unchanged.
 
     Issues are collected deterministically: unknown IDs first, then missing IDs,
     then value/type/domain issues in canonical field order.
@@ -224,7 +261,7 @@ def validate_acquisition_inputs(values: Mapping[str, object]) -> AcquisitionInpu
     normalized: dict[str, float | int] = {}
 
     unknown_ids = sorted(
-        (field_id for field_id in values if field_id not in FIELD_IDS),
+        (field_id for field_id in values if field_id not in ALL_FIELD_IDS),
         key=_unknown_id_sort_key,
     )
     for field_id in unknown_ids:
@@ -255,7 +292,7 @@ def validate_acquisition_inputs(values: Mapping[str, object]) -> AcquisitionInpu
             )
         )
 
-    for field_id in FIELD_IDS:
+    for field_id in ALL_FIELD_IDS:
         if field_id not in values:
             continue
         normalized_value, issue = _normalize_field_value(field_id, values[field_id])

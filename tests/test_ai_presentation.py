@@ -21,12 +21,17 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import fields
 
 import pytest
 
 from anchor.ai.analyst import build_analysis_context
 from anchor.ai.presentation import (
+    INTENTIONALLY_EXCLUDED_INPUT_FIELDS,
+    INTENTIONALLY_EXCLUDED_RESULT_FIELDS,
     UnknownPresentationFieldError,
+    _format_inputs,
+    _format_results,
     build_presentation_payload,
     format_currency,
     format_hurdle_relationship,
@@ -35,6 +40,8 @@ from anchor.ai.presentation import (
     format_percent,
 )
 from anchor.contracts import AcquisitionInputs
+from anchor.engine import analyze_acquisition
+from anchor.engine.contracts import AcquisitionResults
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,
@@ -352,3 +359,59 @@ def test_presentation_layer_never_averages_or_derives_new_numeric_values() -> No
     assert payload["base_inputs"]["purchase_price"] == format_metric_value(
         "purchase_price", context.inputs.purchase_price
     )
+
+
+# =============================================================================
+# Gate 8 architecture guardrail -- deliberate omission, not accidental drift.
+#
+# A future field added to AcquisitionInputs or AcquisitionResults must
+# either be presented to the AI Analyst or be named explicitly in
+# presentation.py's INTENTIONALLY_EXCLUDED_*_FIELDS allowlist. This test
+# fails the moment a new dataclass field exists that neither
+# _format_inputs/_format_results nor the allowlist accounts for -- so
+# omission from AI context can only ever be a deliberate decision, never a
+# forgotten one. It never forces every field to be shown (the allowlist
+# provides the deliberate-exclusion escape hatch) and never touches the
+# presentation classification/formatting logic itself.
+# =============================================================================
+
+
+def test_every_acquisition_input_field_is_presented_or_deliberately_excluded() -> None:
+    formatted = _format_inputs(GOLDEN_INPUTS)
+
+    dataclass_fields = {field.name for field in fields(AcquisitionInputs)}
+    accounted_for = set(formatted) | INTENTIONALLY_EXCLUDED_INPUT_FIELDS
+    missing = dataclass_fields - accounted_for
+
+    assert not missing, (
+        f"AcquisitionInputs field(s) {missing} are neither formatted by "
+        "_format_inputs nor listed in INTENTIONALLY_EXCLUDED_INPUT_FIELDS "
+        "-- the AI Analyst presentation layer must deliberately decide "
+        "whether to show a new field, not silently omit it."
+    )
+
+
+def test_every_acquisition_results_field_is_presented_or_deliberately_excluded() -> None:
+    results = analyze_acquisition(GOLDEN_INPUTS)
+    formatted = _format_results(results)
+
+    dataclass_fields = {field.name for field in fields(AcquisitionResults)}
+    accounted_for = set(formatted) | INTENTIONALLY_EXCLUDED_RESULT_FIELDS
+    missing = dataclass_fields - accounted_for
+
+    assert not missing, (
+        f"AcquisitionResults field(s) {missing} are neither formatted by "
+        "_format_results nor listed in INTENTIONALLY_EXCLUDED_RESULT_FIELDS "
+        "-- the AI Analyst presentation layer must deliberately decide "
+        "whether to show a new field, not silently omit it."
+    )
+
+
+def test_intentional_exclusion_allowlists_are_currently_empty() -> None:
+    """Documents the current state: every existing field of both dataclasses
+    is presented today. If this ever legitimately changes, update the
+    allowlist in presentation.py (with a comment explaining why) rather than
+    this test."""
+
+    assert INTENTIONALLY_EXCLUDED_INPUT_FIELDS == frozenset()
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
