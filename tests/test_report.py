@@ -126,6 +126,7 @@ def test_build_report_only_formats_precomputed_engine_values() -> None:
         equity_multiple=results.equity_multiple,
         dscr_by_year=results.dscr_by_year,
         headline_dscr=results.headline_dscr,
+        min_dscr=results.min_dscr,
     )
 
     report = build_report(inputs, mutated)

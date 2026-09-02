@@ -50,6 +50,7 @@ ACQUISITION_CASH_FLOWS_FIELDS = (
 RETURN_METRICS_FIELDS = (
     ("dscr_by_year", tuple[float | None, ...]),
     ("headline_dscr", float | None),
+    ("min_dscr", float | None),
     ("equity_multiple", float | None),
     ("unlevered_irr", float | None),
     ("levered_irr", float | None),
@@ -279,6 +280,7 @@ def test_return_metrics_is_frozen_and_slotted() -> None:
     return_metrics = ReturnMetrics(
         dscr_by_year=(1.1608499518189,),
         headline_dscr=1.1608499518189,
+        min_dscr=1.1608499518189,
         equity_multiple=1.44288913123241,
         unlevered_irr=0.062414943980353854,
         levered_irr=0.07913030056780745,
@@ -293,6 +295,7 @@ def test_return_metrics_dscr_by_year_is_immutable_tuple() -> None:
     return_metrics = ReturnMetrics(
         dscr_by_year=(1.1608499518189, None),
         headline_dscr=1.1608499518189,
+        min_dscr=1.1608499518189,
         equity_multiple=1.44288913123241,
         unlevered_irr=0.062414943980353854,
         levered_irr=0.07913030056780745,
@@ -305,6 +308,7 @@ def test_return_metrics_has_no_excel_or_source_metadata() -> None:
     return_metrics = ReturnMetrics(
         dscr_by_year=(1.1608499518189,),
         headline_dscr=1.1608499518189,
+        min_dscr=1.1608499518189,
         equity_multiple=1.44288913123241,
         unlevered_irr=0.062414943980353854,
         levered_irr=0.07913030056780745,

@@ -305,4 +305,5 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
         equity_multiple=return_metrics.equity_multiple,
         dscr_by_year=return_metrics.dscr_by_year,
         headline_dscr=return_metrics.headline_dscr,
+        min_dscr=return_metrics.min_dscr,
     )

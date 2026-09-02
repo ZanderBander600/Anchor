@@ -88,8 +88,14 @@ class AcquisitionCashFlows:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ReturnMetrics:
+    """Underwriting V2 Gate 4 adds ``min_dscr`` -- the minimum of the
+    non-``None`` entries in ``dscr_by_year``, or ``None`` if every entry is
+    ``None``. It supplements ``headline_dscr`` (``DSCR_1``); it does not
+    replace it."""
+
     dscr_by_year: tuple[float | None, ...]
     headline_dscr: float | None
+    min_dscr: float | None
     equity_multiple: float | None
     unlevered_irr: float | None
     levered_irr: float | None
@@ -99,8 +105,9 @@ class ReturnMetrics:
 class AcquisitionResults:
     """The Phase 2 public output contract, plus the three Underwriting V2
     Gate 2 transaction-cost fields (``acquisition_costs``,
-    ``financing_fee``, ``disposition_costs``) and the Gate 3
-    ``capex_by_year`` series (``docs/underwriting_v2_financial_conventions.md``).
+    ``financing_fee``, ``disposition_costs``), the Gate 3 ``capex_by_year``
+    series, and the Gate 4 ``min_dscr``
+    (``docs/underwriting_v2_financial_conventions.md``).
 
     Exact V1 field set and order frozen by the "Phase 2 Output Contract"
     and "Frozen Phase 2 Decisions" sections of
@@ -135,3 +142,4 @@ class AcquisitionResults:
     equity_multiple: float | None
     dscr_by_year: tuple[float | None, ...]
     headline_dscr: float | None
+    min_dscr: float | None

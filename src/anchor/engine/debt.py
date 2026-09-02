@@ -99,6 +99,29 @@ def calculate_scheduled_payment_count(*, amortization: int) -> int:
     return amortization * 12
 
 
+def calculate_io_months(*, io_period: int) -> int:
+    """Underwriting V2 Gate 4: ``io_months = io_period * 12``, the number of
+    interest-only months preceding the amortizing phase. At the neutral
+    default (``io_period = 0``), this is ``0`` and the IO phase never
+    triggers anywhere downstream."""
+
+    return io_period * 12
+
+
+def calculate_io_payment(*, loan_amount: float, monthly_rate: float) -> float:
+    """Underwriting V2 Gate 4: the constant IO-phase monthly payment.
+
+    ``Payment_t = beginning_balance_t * monthly_rate`` during IO, and since
+    IO principal is always ``0`` the balance never moves, so
+    ``beginning_balance_t == loan_amount`` for every IO month -- this
+    reduces to the single computation below rather than a recurrence. Zero
+    ``loan_amount`` or zero ``monthly_rate`` both naturally yield ``0.0``
+    with no special-case branching required."""
+
+    io_payment = loan_amount * monthly_rate
+    return ensure_finite("io_payment", io_payment)
+
+
 def calculate_monthly_rate(*, interest_rate: float) -> float:
     """Return ``r = interest_rate / 12``.
 
@@ -234,15 +257,41 @@ def calculate_monthly_debt_service(
 
 
 def calculate_monthly_payment(
-    *, monthly_debt_service: float, month: int, n_payments: int
+    *,
+    monthly_debt_service: float,
+    month: int,
+    n_payments: int,
+    io_months: int = 0,
+    io_payment: float = 0.0,
 ) -> float:
-    """Return ``Monthly Payment_t``: ``PMT`` for ``1 <= t <= N``, else ``0.0``."""
+    """Return ``Monthly Payment_t``.
 
-    return monthly_debt_service if month <= n_payments else 0.0
+    Underwriting V2 Gate 4: for ``1 <= t <= io_months`` (the IO phase),
+    returns the constant ``io_payment``. For
+    ``io_months < t <= io_months + n_payments`` (the amortizing phase,
+    still exactly ``n_payments`` months long, unshifted in duration),
+    returns ``PMT`` (``monthly_debt_service``) -- unchanged from V1. Past
+    that, returns ``0.0``, preserving the existing post-maturity treatment.
+
+    At the V1-neutral default (``io_months = 0``), the first branch never
+    triggers and this reduces to exactly the V1 formula
+    ``PMT for 1 <= t <= N, else 0.0``.
+    """
+
+    if month <= io_months:
+        return io_payment
+
+    amortizing_month = month - io_months
+    return monthly_debt_service if amortizing_month <= n_payments else 0.0
 
 
 def calculate_annual_debt_service(
-    *, monthly_debt_service: float, n_payments: int, hold_period: int
+    *,
+    monthly_debt_service: float,
+    n_payments: int,
+    hold_period: int,
+    io_months: int = 0,
+    io_payment: float = 0.0,
 ) -> tuple[float, ...]:
     """Return ``ADS_1 .. ADS_H`` by chronological monthly summation.
 
@@ -250,7 +299,10 @@ def calculate_annual_debt_service(
     ``Monthly Payment_t`` values for hold year ``y`` in chronological month
     order. This is never replaced by the algebraically equivalent
     ``12 * PMT`` shortcut, because repeated IEEE-754 addition and a single
-    multiplication by 12 can differ in the last bits.
+    multiplication by 12 can differ in the last bits. Underwriting V2
+    Gate 4: because ``io_months`` is always a whole number of years
+    (``io_period * 12``), the IO-to-amortizing transition always falls on a
+    year boundary -- no ``ADS_y`` ever blends IO and amortizing payments.
     """
 
     annual_debt_service = []
@@ -263,6 +315,8 @@ def calculate_annual_debt_service(
                 monthly_debt_service=monthly_debt_service,
                 month=month,
                 n_payments=n_payments,
+                io_months=io_months,
+                io_payment=io_payment,
             )
             ads_y = ads_y + payment_t
         annual_debt_service.append(
@@ -278,6 +332,8 @@ def calculate_amortization_schedule(
     monthly_debt_service: float,
     n_payments: int,
     months_to_run: int,
+    io_months: int = 0,
+    io_payment: float = 0.0,
 ) -> tuple[float, ...]:
     """Return the ending balance after each month ``1 .. months_to_run``.
 
@@ -288,19 +344,34 @@ def calculate_amortization_schedule(
     be algebraically simplified to
     ``Beginning Balance_t * (1 + monthly_rate) - Payment_t``.
 
-    At month ``N`` (contractual maturity), the frozen ``B_N := 0.0``
-    identity is applied to the raw ending balance only after that raw value
-    has passed its own finiteness check. This never applies to any month
-    ``m < N``.
+    Underwriting V2 Gate 4: during the IO phase (``1 <= t <= io_months``),
+    ``payment_t`` is the constant ``io_payment``, computed as
+    ``loan_amount * monthly_rate`` -- the same product ``interest_t`` below
+    independently recomputes as ``beginning_balance * monthly_rate`` (with
+    ``beginning_balance`` still ``== loan_amount``, since it never moves
+    during IO). Both are the same operands in the same order, so
+    ``principal_t = payment_t - interest_t`` is exactly ``0.0``, bit for
+    bit -- the flat IO balance falls directly out of the general recurrence
+    below with no special-cased branch.
+
+    At month ``io_months + N`` (contractual maturity of the amortizing
+    phase), the frozen ``B := 0.0`` identity is applied to the raw ending
+    balance only after that raw value has passed its own finiteness check.
+    This never applies to any earlier month. At the V1-neutral default
+    (``io_months = 0``), this is exactly month ``N``, the original V1
+    condition.
     """
 
     ending_balances = []
     beginning_balance = loan_amount
+    maturity_month = io_months + n_payments
     for month in range(1, months_to_run + 1):
         payment_t = calculate_monthly_payment(
             monthly_debt_service=monthly_debt_service,
             month=month,
             n_payments=n_payments,
+            io_months=io_months,
+            io_payment=io_payment,
         )
 
         interest_t = beginning_balance * monthly_rate
@@ -312,7 +383,7 @@ def calculate_amortization_schedule(
         ending_balance_t = beginning_balance - principal_t
         ending_balance_t = ensure_finite(f"ending_balance[{month}]", ending_balance_t)
 
-        if month == n_payments:
+        if month == maturity_month:
             ending_balance_t = 0.0
 
         ending_balances.append(ending_balance_t)
@@ -328,27 +399,50 @@ def calculate_remaining_loan_balance(
     monthly_debt_service: float,
     n_payments: int,
     hold_period: int,
+    io_months: int = 0,
+    io_payment: float = 0.0,
 ) -> float:
-    """Return ``B_exit = B_min(12H, N)``, the balance at the sale date."""
+    """Return ``B_exit = B_min(12H, io_months + N)``, the balance at the
+    sale date. Underwriting V2 Gate 4: the loan's total life is now
+    ``io_months + N`` rather than just ``N``, so a sale entirely within the
+    IO phase (``12H <= io_months``) runs no amortizing months at all and
+    the balance stays exactly ``loan_amount``; a sale after the loan's full
+    life is capped at that life, unchanged in spirit from V1. At the
+    V1-neutral default (``io_months = 0``), this is exactly ``B_min(12H,
+    N)``, the original V1 formula."""
 
-    months_to_run = min(hold_period * 12, n_payments)
+    months_to_run = min(hold_period * 12, io_months + n_payments)
     ending_balances = calculate_amortization_schedule(
         loan_amount=loan_amount,
         monthly_rate=monthly_rate,
         monthly_debt_service=monthly_debt_service,
         n_payments=n_payments,
         months_to_run=months_to_run,
+        io_months=io_months,
+        io_payment=io_payment,
     )
     return ensure_finite("remaining_loan_balance", ending_balances[-1])
 
 
 def calculate_debt_schedule(inputs: AcquisitionInputs) -> DebtSchedule:
-    """Compute the Phase 2B debt schedule for one ``AcquisitionInputs``."""
+    """Compute the Phase 2B debt schedule for one ``AcquisitionInputs``,
+    plus the Underwriting V2 Gate 4 interest-only period.
+
+    ``monthly_debt_service`` keeps its V1 meaning exactly: the amortizing
+    (post-IO) PMT, computed via the existing, unmodified
+    ``calculate_monthly_debt_service`` from ``loan_amount``,
+    ``interest_rate``, and ``n_payments`` alone -- ``io_period`` never
+    enters that computation, because the balance entering the amortizing
+    phase always equals the original ``loan_amount`` exactly (IO principal
+    is always ``0``)."""
 
     loan_amount = calculate_loan_amount(
         purchase_price=inputs.purchase_price, ltv=inputs.ltv
     )
     n_payments = calculate_scheduled_payment_count(amortization=inputs.amortization)
+    monthly_rate = calculate_monthly_rate(interest_rate=inputs.interest_rate)
+    io_months = calculate_io_months(io_period=inputs.io_period)
+    io_payment = calculate_io_payment(loan_amount=loan_amount, monthly_rate=monthly_rate)
 
     monthly_debt_service = calculate_monthly_debt_service(
         loan_amount=loan_amount,
@@ -359,14 +453,17 @@ def calculate_debt_schedule(inputs: AcquisitionInputs) -> DebtSchedule:
         monthly_debt_service=monthly_debt_service,
         n_payments=n_payments,
         hold_period=inputs.hold_period,
+        io_months=io_months,
+        io_payment=io_payment,
     )
-    monthly_rate = calculate_monthly_rate(interest_rate=inputs.interest_rate)
     remaining_loan_balance = calculate_remaining_loan_balance(
         loan_amount=loan_amount,
         monthly_rate=monthly_rate,
         monthly_debt_service=monthly_debt_service,
         n_payments=n_payments,
         hold_period=inputs.hold_period,
+        io_months=io_months,
+        io_payment=io_payment,
     )
 
     return DebtSchedule(

@@ -51,6 +51,7 @@ ACQUISITION_RESULTS_FIELDS = (
     ("equity_multiple", float | None),
     ("dscr_by_year", tuple[float | None, ...]),
     ("headline_dscr", float | None),
+    ("min_dscr", float | None),
 )
 
 
@@ -483,3 +484,4 @@ def test_analyze_acquisition_matches_manual_phase_2a_2b_2c_2d_assembly() -> None
     assert result.equity_multiple == return_metrics.equity_multiple
     assert result.dscr_by_year == return_metrics.dscr_by_year
     assert result.headline_dscr == return_metrics.headline_dscr
+    assert result.min_dscr == return_metrics.min_dscr

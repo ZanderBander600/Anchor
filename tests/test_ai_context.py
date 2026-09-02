@@ -89,6 +89,7 @@ def test_context_carries_every_acquisition_results_field() -> None:
         "equity_multiple",
         "dscr_by_year",
         "headline_dscr",
+        "min_dscr",
     }
 
 
