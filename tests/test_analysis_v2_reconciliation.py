@@ -25,6 +25,22 @@ This module proves the fix at three levels:
      authoritative Levered IRR ~7.380240%); and
   3. V1-neutral backward compatibility (a deal with all V2 fields at their
      default carries no behavior change).
+
+Gate 9G (solver-level fix, not a Gate 9A/9B/9C consequence): fixing Gate
+9A exposed a second, independent defect -- ``solve_max_interest_rate``'s
+documented lower search bound is exactly ``interest_rate = 0.0``, and with
+a positive ``io_period`` the Year-1 interest-only payment there is exactly
+0.0, so ``headline_dscr`` is correctly ``None`` at that exact boundary
+(the frozen ``ADS_y == 0 => DSCR_y is None`` convention). The solver
+treated that undefined *endpoint* as "does not meet the hurdle" and
+reported ``NO_SOLUTION_IN_RANGE``, even though a qualifying rate exists
+immediately inside the range. ``break_even._resolve_undefined_favorable_
+endpoint`` now bisects inward from an undefined favorable endpoint for the
+nearest point with a defined metric before that decision is made -- a
+change to the generic ``solve_break_even_threshold`` solver itself
+(applies to any assumption/metric it evaluates), not a special case for
+interest rate or the V2 golden case. Both the engine's DSCR-undefined
+convention and every other break-even/sensitivity behavior are unchanged.
 """
 
 from __future__ import annotations
@@ -38,6 +54,7 @@ from anchor.analysis import (
     build_standard_break_even_analysis,
     build_standard_presets,
     run_two_way_sensitivity,
+    solve_max_interest_rate,
 )
 from anchor.analysis import break_even as break_even_module
 from anchor.analysis import sensitivity as sensitivity_module
@@ -324,6 +341,9 @@ def test_min_noi_growth_break_even_is_directionally_consistent() -> None:
         ("max_exit_cap_rate", "exit_cap_rate", "levered_irr", 0.10),
         ("min_noi_growth", "noi_growth", "levered_irr", 0.10),
         ("min_current_noi", "current_noi", "headline_dscr", 1.20),
+        # Gate 9G: max_interest_rate now solves (was NO_SOLUTION_IN_RANGE
+        # before the undefined-favorable-endpoint fix -- see below).
+        ("max_interest_rate", "interest_rate", "headline_dscr", 1.20),
     ],
 )
 def test_solved_break_even_values_reevaluate_through_the_engine_within_tolerance(
@@ -356,6 +376,7 @@ def test_solved_break_even_values_reevaluate_through_the_engine_within_tolerance
         ("max_exit_cap_rate", "exit_cap_rate", True),
         ("min_noi_growth", "noi_growth", False),
         ("min_current_noi", "current_noi", False),
+        ("max_interest_rate", "interest_rate", True),
     ],
 )
 def test_solved_break_even_values_are_directionally_consistent_just_inside_and_outside(
@@ -384,44 +405,117 @@ def test_solved_break_even_values_are_directionally_consistent_just_inside_and_o
     assert unfavorable_metric is None or unfavorable_metric < result.target_metric_value
 
 
-def test_max_interest_rate_dscr_break_even_documents_the_zero_rate_io_boundary_edge_case() -> None:
-    """Gate 9C coverage: revalidates Maximum Interest Rate for the DSCR
-    target against the V2 deal. The default search lower bound is exactly
-    0.0, and with io_period=2 the Year-1 payment during the IO period is
-    interest-only (principal * rate) -- at interest_rate=0.0 that payment is
-    exactly 0.0, and the frozen DSCR convention
-    (`engine.returns.calculate_dscr_by_year`: ADS_y == 0 => DSCR_y is None,
-    never a fabricated infinity) makes headline_dscr None at that exact
-    boundary. The solver only checks the two documented endpoints and never
-    fabricates a value for an undefined boundary metric, so it reports
-    NO_SOLUTION_IN_RANGE even though a qualifying interest rate exists
-    strictly inside (0, upper_bound]. This is a pre-existing edge case in
-    the boundary-only search heuristic, exposed now that the V2 io_period is
-    correctly preserved (it was previously masked by the Gate 9A bug, which
-    always reset io_period to 0 for every candidate) -- not a new
-    regression, and out of scope for this fix (search-bounds mechanics are
-    otherwise preserved). This test documents current, unchanged behavior;
-    see the Gate 9 report for the recommendation to assess it separately.
-    """
+# =============================================================================
+# 3b. Gate 9G -- undefined-favorable-endpoint fix. The V2 golden case's
+# default Maximum Interest Rate search lower bound is exactly 0.0, and with
+# io_period=2 the Year-1 payment during the IO period is interest-only
+# (principal * rate) -- at interest_rate=0.0 that payment is exactly 0.0,
+# and the frozen DSCR convention (`engine.returns.calculate_dscr_by_year`:
+# ADS_y == 0 => DSCR_y is None, never a fabricated infinity) makes
+# headline_dscr None at that exact boundary. Before Gate 9G, the solver
+# only checked the two documented endpoints and treated that undefined
+# favorable endpoint as "does not meet the hurdle," reporting
+# NO_SOLUTION_IN_RANGE even though a qualifying interest rate exists
+# strictly inside (0, upper_bound]. `_resolve_undefined_favorable_endpoint`
+# now bisects inward from the undefined endpoint for the nearest point with
+# a defined metric before deciding, so this genuinely solves.
+# =============================================================================
+
+
+def test_max_interest_rate_dscr_break_even_solves_for_the_v2_golden_case() -> None:
+    """(1) Positive IO + an undefined (zero-rate) favorable endpoint must
+    still locate a valid maximum-interest-rate solution, not
+    NO_SOLUTION_IN_RANGE."""
 
     result = V2_BREAK_EVEN.max_interest_rate
+    assert result.status == BreakEvenStatus.SOLVED
+    assert result.solved_assumption_value is not None
+    assert result.solved_metric_value is not None
+    assert result.lower_search_bound == 0.0
+    assert 0.0 < result.solved_assumption_value < result.upper_search_bound
+
+
+def test_max_interest_rate_zero_rate_boundary_still_produces_none_dscr() -> None:
+    """(5) The frozen engine convention is unchanged by the solver fix:
+    interest_rate == 0.0 with a positive io_period still yields a headline
+    DSCR of None (zero Year-1 debt service), never a fabricated value."""
+
+    boundary_results = analyze_acquisition(
+        dataclasses.replace(V2_GOLDEN_INPUTS, interest_rate=0.0)
+    )
+    assert boundary_results.headline_dscr is None
+    assert boundary_results.annual_debt_service[0] == 0.0
+
+
+def test_max_interest_rate_solved_value_is_not_the_undefined_boundary_itself() -> None:
+    """The solved rate must be a genuine interior threshold, never the
+    undefined boundary value (0.0) itself, and never merely a fixed probe
+    offset from it -- the resolved value should sit well inside the
+    documented range, reflecting where headline_dscr actually crosses the
+    1.20x target."""
+
+    result = V2_BREAK_EVEN.max_interest_rate
+    assert result.solved_assumption_value > 0.01  # clearly not a tiny probe artifact
+    assert result.solved_assumption_value < result.upper_search_bound - 0.01
+
+
+def test_break_even_reports_genuine_no_solution_when_the_entire_interval_is_undefined() -> None:
+    """(7) An undefined *endpoint* must not be over-corrected into always
+    finding a solution -- when headline_dscr is undefined across the whole
+    documented interval (zero LTV: no debt, so no DSCR at any rate), the
+    solver must still correctly report NO_SOLUTION_IN_RANGE."""
+
+    zero_ltv_inputs = dataclasses.replace(V2_GOLDEN_INPUTS, ltv=0.0)
+    result = solve_max_interest_rate(zero_ltv_inputs, target_headline_dscr=1.20)
+
     assert result.status == BreakEvenStatus.NO_SOLUTION_IN_RANGE
     assert result.solved_assumption_value is None
     assert result.solved_metric_value is None
 
-    # Confirm *why*: headline_dscr is genuinely None at the lower bound...
-    boundary_results = analyze_acquisition(
-        dataclasses.replace(V2_GOLDEN_INPUTS, interest_rate=result.lower_search_bound)
-    )
-    assert result.lower_search_bound == 0.0
-    assert boundary_results.headline_dscr is None
 
-    # ...even though a qualifying rate exists just inside the range.
-    just_inside_results = analyze_acquisition(
-        dataclasses.replace(V2_GOLDEN_INPUTS, interest_rate=0.001)
+def test_break_even_reports_genuine_no_solution_for_an_unreachable_dscr_target() -> None:
+    """(7) A target the favorable, defined region of the range still can't
+    reach must still correctly report NO_SOLUTION_IN_RANGE (the endpoint-
+    resolution fix must not paper over a target that is simply too high).
+
+    Uses the V1-neutral deal (io_period=0): its headline_dscr at
+    interest_rate=0.0 is a *finite* ceiling (~2.31x, a fully-amortizing
+    payment even at 0% interest) rather than the unbounded-as-rate-goes-to-
+    zero behavior an io_period>0 deal exhibits (see the V2 golden case's
+    own solved max_interest_rate above, where DSCR is not capped near
+    rate=0) -- so a target above that finite ceiling is a genuine,
+    unreachable-in-range case for this deal, uncomplicated by the Gate 9G
+    endpoint-resolution fix (which never triggers here, since the favorable
+    endpoint is already defined)."""
+
+    result = solve_max_interest_rate(V1_GOLDEN_INPUTS, target_headline_dscr=3.0)
+
+    assert result.status == BreakEvenStatus.NO_SOLUTION_IN_RANGE
+    assert result.solved_assumption_value is None
+    assert result.solved_metric_value is None
+
+
+def test_v1_neutral_max_interest_rate_break_even_is_unaffected_by_the_endpoint_fix() -> None:
+    """(6) A V1-neutral (io_period=0, fully amortizing) deal's favorable
+    endpoint (interest_rate=0.0) already has a defined headline_dscr --
+    the fix's resolution path is never triggered, and the question solves
+    exactly as it always has."""
+
+    result = solve_max_interest_rate(V1_GOLDEN_INPUTS, target_headline_dscr=1.20)
+
+    assert result.status == BreakEvenStatus.SOLVED
+    assert result.solved_assumption_value is not None
+
+    boundary_results = analyze_acquisition(
+        dataclasses.replace(V1_GOLDEN_INPUTS, interest_rate=0.0)
     )
-    assert just_inside_results.headline_dscr is not None
-    assert just_inside_results.headline_dscr >= 1.20
+    assert boundary_results.headline_dscr is not None
+
+    candidate = dataclasses.replace(
+        V1_GOLDEN_INPUTS, interest_rate=result.solved_assumption_value
+    )
+    reevaluated = analyze_acquisition(candidate).headline_dscr
+    assert reevaluated == pytest.approx(1.20, abs=0.003)
 
 
 def test_min_current_noi_break_even_solves_for_the_v2_deal() -> None:
@@ -431,8 +525,20 @@ def test_min_current_noi_break_even_solves_for_the_v2_deal() -> None:
     assert result.solved_assumption_value < V2_GOLDEN_INPUTS.current_noi
 
 
+def test_min_current_noi_break_even_result_is_unchanged_by_the_gate_9g_fix() -> None:
+    """(8) solve_min_current_noi's favorable endpoint (1.5x baseline
+    current NOI) was already a defined headline_dscr for the V2 golden
+    case, so the Gate 9G endpoint-resolution path never triggers here --
+    pins the exact solved values to prove the fix left this solver's
+    output bit-for-bit unchanged."""
+
+    result = V2_BREAK_EVEN.min_current_noi
+    assert result.solved_assumption_value == pytest.approx(360_058.59375, abs=0.01)
+    assert result.solved_metric_value == pytest.approx(1.2001953125, abs=1e-9)
+
+
 def test_break_even_dscr_questions_target_headline_dscr_not_min_dscr() -> None:
-    """Gate 9C: confirms these two solvers intentionally target the
+    """(9) Gate 9C/9G: confirms these two solvers intentionally target the
     existing headline (Year 1) DSCR convention, unchanged by this fix --
     never silently switched to min_dscr."""
 
