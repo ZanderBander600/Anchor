@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from io import BytesIO
 from numbers import Real
 from os import PathLike, fsdecode, fspath
@@ -12,7 +12,9 @@ from openpyxl import load_workbook
 
 from .contracts import AcquisitionInputs
 from .validation import (
+    ALL_FIELD_IDS,
     FIELD_IDS,
+    V2_FIELD_IDS,
     InputIssue,
     InputValidationError,
     IssueCategory,
@@ -23,6 +25,23 @@ from .validation import (
 _INPUTS_SHEET = "Inputs"
 _HEADERS = ("Field ID", "Input", "Value", "Unit")
 _TEXT_CELL_TYPES = frozenset({"s", "inlineStr"})
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExcelIntakeReport:
+    """Underwriting V2 Gate 5: the smallest explicit contract for Excel
+    intake metadata beyond ``AcquisitionInputs`` itself.
+
+    ``defaulted_v2_field_ids`` names exactly which of the five optional V2
+    Field IDs (``V2_FIELD_IDS``) were absent from the workbook and therefore
+    took their neutral dataclass default, in canonical field order. This is
+    intake UX metadata only -- not a general provenance system, and
+    deliberately not folded into ``AcquisitionInputs`` itself, which stays
+    the same deterministic, provenance-free contract the engine consumes.
+    """
+
+    inputs: AcquisitionInputs
+    defaulted_v2_field_ids: tuple[str, ...]
 
 
 def read_acquisition_inputs(
@@ -36,10 +55,7 @@ def read_acquisition_inputs(
     as formulas so a cached result can never be mistaken for a literal value.
     """
 
-    identifier = _workbook_identifier(workbook_path)
-    if not identifier.casefold().endswith(".xlsx"):
-        raise _workbook_open_error(identifier)
-    return _read_acquisition_inputs_from_source(workbook_path, identifier)
+    return read_acquisition_inputs_with_report(workbook_path).inputs
 
 
 def read_acquisition_inputs_from_bytes(data: bytes) -> AcquisitionInputs:
@@ -54,13 +70,34 @@ def read_acquisition_inputs_from_bytes(data: bytes) -> AcquisitionInputs:
     at its own layer.
     """
 
+    return read_acquisition_inputs_from_bytes_with_report(data).inputs
+
+
+def read_acquisition_inputs_with_report(
+    workbook_path: str | PathLike[str],
+) -> ExcelIntakeReport:
+    """Like :func:`read_acquisition_inputs`, but also returns which V2 Field
+    IDs were absent from the workbook and therefore defaulted (Underwriting
+    V2 Gate 5)."""
+
+    identifier = _workbook_identifier(workbook_path)
+    if not identifier.casefold().endswith(".xlsx"):
+        raise _workbook_open_error(identifier)
+    return _read_acquisition_inputs_from_source(workbook_path, identifier)
+
+
+def read_acquisition_inputs_from_bytes_with_report(data: bytes) -> ExcelIntakeReport:
+    """Like :func:`read_acquisition_inputs_from_bytes`, but also returns
+    which V2 Field IDs were absent from the workbook and therefore defaulted
+    (Underwriting V2 Gate 5)."""
+
     return _read_acquisition_inputs_from_source(BytesIO(data), "<uploaded workbook>")
 
 
 def _read_acquisition_inputs_from_source(
     source: str | PathLike[str] | BytesIO,
     identifier: str,
-) -> AcquisitionInputs:
+) -> ExcelIntakeReport:
     try:
         workbook = load_workbook(source, data_only=False)
     except Exception:
@@ -87,7 +124,7 @@ def _read_acquisition_inputs_from_source(
 
         row_issues: list[InputIssue] = []
         records: dict[str, list[tuple[int, Any]]] = {
-            field_id: [] for field_id in FIELD_IDS
+            field_id: [] for field_id in ALL_FIELD_IDS
         }
 
         for row_number in range(2, _last_content_row(worksheet) + 1):
@@ -142,7 +179,13 @@ def _read_acquisition_inputs_from_source(
         if issues:
             raise InputValidationError(issues)
 
-        return validate_acquisition_inputs(normalized)
+        inputs = validate_acquisition_inputs(normalized)
+        defaulted_v2_field_ids = tuple(
+            field_id for field_id in V2_FIELD_IDS if not records[field_id]
+        )
+        return ExcelIntakeReport(
+            inputs=inputs, defaulted_v2_field_ids=defaulted_v2_field_ids
+        )
     except InputValidationError:
         raise
     except Exception:
@@ -252,7 +295,7 @@ def _malformed_field_id_issue(row_number: int, detail: str) -> InputIssue:
 
 def _duplicate_issues(records: dict[str, list[tuple[int, Any]]]) -> list[InputIssue]:
     issues: list[InputIssue] = []
-    for field_id in FIELD_IDS:
+    for field_id in ALL_FIELD_IDS:
         occurrences = records[field_id]
         if len(occurrences) <= 1:
             continue
@@ -286,7 +329,7 @@ def _normalize_unique_values(
     issues: list[InputIssue] = []
     normalized: dict[str, float | int] = {}
 
-    for field_id in FIELD_IDS:
+    for field_id in ALL_FIELD_IDS:
         occurrences = records[field_id]
         if len(occurrences) != 1:
             continue

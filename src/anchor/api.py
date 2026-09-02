@@ -46,7 +46,7 @@ from .contracts import AcquisitionInputs
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError
 from .engine import AcquisitionResults, analyze_acquisition
-from .excel_reader import read_acquisition_inputs_from_bytes
+from .excel_reader import ExcelIntakeReport, read_acquisition_inputs_from_bytes_with_report
 from .ingestion import (
     ExtractionConfigurationError,
     ExtractionProviderError,
@@ -526,14 +526,16 @@ def ingest_om(file: UploadFile = File(...)) -> ExtractionResult:
 # Phase 10B -- Excel ingestion (web upload)
 #
 # Reuses the exact same deterministic workbook reader the CLI has always
-# used (``read_acquisition_inputs_from_bytes``, sharing its parsing/
-# validation implementation with the path-based ``read_acquisition_inputs``)
-# -- this endpoint performs no workbook parsing, financial validation, or
+# used (``read_acquisition_inputs_from_bytes_with_report``, sharing its
+# parsing/validation implementation with the path-based
+# ``read_acquisition_inputs``/``read_acquisition_inputs_with_report``) --
+# this endpoint performs no workbook parsing, financial validation, or
 # financial math of its own, and never calls the deterministic engine.
 # Unlike ``/ingestion/om``, there is no external provider and no partial/
-# candidate result: a workbook is either fully valid (200, the nine
-# validated inputs) or it isn't (422, the same ordered issue list
-# ``/analyze`` already returns for a bad payload).
+# candidate result: a workbook is either fully valid (200, the fourteen
+# validated inputs plus which V2 Field IDs were defaulted -- Underwriting V2
+# Gate 5) or it isn't (422, the same ordered issue list ``/analyze`` already
+# returns for a bad payload).
 # =============================================================================
 
 
@@ -550,15 +552,15 @@ def _validate_xlsx_signature(data: bytes) -> None:
         _reject_upload("Uploaded file does not appear to be a valid .xlsx workbook.")
 
 
-@app.post(_EXCEL_INGESTION_PATH, response_model=AcquisitionInputs)
-def ingest_excel(file: UploadFile = File(...)) -> AcquisitionInputs:
+@app.post(_EXCEL_INGESTION_PATH, response_model=ExcelIntakeReport)
+def ingest_excel(file: UploadFile = File(...)) -> ExcelIntakeReport:
     _validate_xlsx_filename(file)
 
     workbook_bytes = _read_upload_bytes(file, max_bytes=_MAX_EXCEL_UPLOAD_BYTES)
     _validate_xlsx_signature(workbook_bytes)
 
     try:
-        return read_acquisition_inputs_from_bytes(workbook_bytes)
+        return read_acquisition_inputs_from_bytes_with_report(workbook_bytes)
     except InputValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

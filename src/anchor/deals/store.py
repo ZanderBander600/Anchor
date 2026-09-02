@@ -9,8 +9,11 @@ needing to change.
 
 Numeric representation -- read before changing anything here
 ==============================================================
-``AcquisitionInputs`` (``anchor/contracts.py``) declares its seven
-fractional fields as plain ``float`` and its two year fields as plain
+``AcquisitionInputs`` (``anchor/contracts.py``) declares its eleven
+fractional fields (the original seven, plus Underwriting V2's
+``acquisition_cost_pct``/``financing_fee_pct``/``disposition_cost_pct``/
+``annual_capex_reserve``) as plain ``float`` and its three year fields
+(``hold_period``/``amortization``, plus V2's ``io_period``) as plain
 ``int``; ``validate_acquisition_inputs`` (``anchor/validation.py``)
 produces them via bare ``float(value)`` / ``int(value)`` calls. Anchor's
 canonical numeric type is Python's native ``float`` (IEEE 754 binary64),
@@ -28,8 +31,9 @@ canonical type were ``Decimal`` (SQLite has no fixed-point column type,
 and coercing ``Decimal`` through ``REAL`` genuinely would be lossy); it is
 not, so this is the direct, correct representation rather than a shortcut.
 
-``hold_period``/``amortization`` map to SQLite ``INTEGER`` (a signed
-64-bit integer) -- exact for the small whole-year values these fields hold.
+``hold_period``/``amortization``/``io_period`` map to SQLite ``INTEGER``
+(a signed 64-bit integer) -- exact for the small whole-year values these
+fields hold.
 
 Database path
 =============
@@ -59,23 +63,49 @@ from .contracts import Deal, DealNotFoundError
 
 _DEFAULT_DB_PATH = Path("data/anchor.db")
 
+# Underwriting V2 Gate 5: schema version 1 adds the five V2 columns below.
+# A fresh database is created directly at this version (the CREATE TABLE
+# already declares all fourteen input columns); an existing pre-V2 database
+# is migrated forward in ``_migrate`` via ``ALTER TABLE ... ADD COLUMN``,
+# gated by ``PRAGMA user_version`` -- no Alembic/SQLAlchemy, no data
+# rewrite, matching the migration strategy the Phase A persistence design
+# already anticipated.
+_SCHEMA_VERSION = 1
+
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS deals (
-    id             TEXT PRIMARY KEY,
-    name           TEXT NOT NULL,
-    purchase_price REAL NOT NULL,
-    current_noi    REAL NOT NULL,
-    occupancy      REAL NOT NULL,
-    noi_growth     REAL NOT NULL,
-    hold_period    INTEGER NOT NULL,
-    exit_cap_rate  REAL NOT NULL,
-    ltv            REAL NOT NULL,
-    interest_rate  REAL NOT NULL,
-    amortization   INTEGER NOT NULL,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
+    id                    TEXT PRIMARY KEY,
+    name                  TEXT NOT NULL,
+    purchase_price        REAL NOT NULL,
+    current_noi           REAL NOT NULL,
+    occupancy             REAL NOT NULL,
+    noi_growth            REAL NOT NULL,
+    hold_period           INTEGER NOT NULL,
+    exit_cap_rate         REAL NOT NULL,
+    ltv                   REAL NOT NULL,
+    interest_rate         REAL NOT NULL,
+    amortization          INTEGER NOT NULL,
+    acquisition_cost_pct  REAL NOT NULL DEFAULT 0.0,
+    financing_fee_pct     REAL NOT NULL DEFAULT 0.0,
+    disposition_cost_pct  REAL NOT NULL DEFAULT 0.0,
+    annual_capex_reserve  REAL NOT NULL DEFAULT 0.0,
+    io_period             INTEGER NOT NULL DEFAULT 0,
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
 )
 """
+
+# Underwriting V2 Gate 5's five new columns, in the order they are added to
+# a pre-V2 database by ``_migrate``: (column name, SQLite column type,
+# neutral-default SQL literal). The literal matches the exact same neutral
+# default ``AcquisitionInputs`` itself declares for each field.
+_V2_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("acquisition_cost_pct", "REAL", "0.0"),
+    ("financing_fee_pct", "REAL", "0.0"),
+    ("disposition_cost_pct", "REAL", "0.0"),
+    ("annual_capex_reserve", "REAL", "0.0"),
+    ("io_period", "INTEGER", "0"),
+)
 
 _INPUT_COLUMNS: tuple[str, ...] = (
     "purchase_price",
@@ -87,7 +117,44 @@ _INPUT_COLUMNS: tuple[str, ...] = (
     "ltv",
     "interest_rate",
     "amortization",
+    "acquisition_cost_pct",
+    "financing_fee_pct",
+    "disposition_cost_pct",
+    "annual_capex_reserve",
+    "io_period",
 )
+
+
+def _migrate(connection: sqlite3.Connection) -> None:
+    """Bring an existing ``deals`` table up to ``_SCHEMA_VERSION``, if it
+    isn't already.
+
+    Column presence (``PRAGMA table_info``), not just ``user_version``,
+    decides which ``ALTER TABLE ADD COLUMN`` statements actually run --
+    a brand-new database's ``CREATE TABLE`` already declares all fourteen
+    input columns, so none of the five ``ALTER`` statements below ever
+    fire for it; only a genuine pre-V2 database (created before this gate)
+    is missing them and gets them added. SQLite itself backfills the
+    ``NOT NULL ... DEFAULT`` value into every existing row for a column
+    added this way -- no explicit ``UPDATE`` is needed. Safe to call on
+    every connection: a database already at ``_SCHEMA_VERSION`` returns
+    immediately."""
+
+    current_version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if current_version >= _SCHEMA_VERSION:
+        return
+
+    existing_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(deals)")
+    }
+    for column_name, column_type, default_literal in _V2_MIGRATION_COLUMNS:
+        if column_name not in existing_columns:
+            connection.execute(
+                f"ALTER TABLE deals ADD COLUMN {column_name} {column_type} "
+                f"NOT NULL DEFAULT {default_literal}"
+            )
+
+    connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
 def get_db_path() -> Path:
@@ -114,6 +181,7 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(resolved_path)
     connection.row_factory = sqlite3.Row
     connection.execute(_CREATE_TABLE_SQL)
+    _migrate(connection)
     try:
         with connection:
             yield connection
@@ -136,6 +204,11 @@ def _row_to_deal(row: sqlite3.Row) -> Deal:
         ltv=row["ltv"],
         interest_rate=row["interest_rate"],
         amortization=row["amortization"],
+        acquisition_cost_pct=row["acquisition_cost_pct"],
+        financing_fee_pct=row["financing_fee_pct"],
+        disposition_cost_pct=row["disposition_cost_pct"],
+        annual_capex_reserve=row["annual_capex_reserve"],
+        io_period=row["io_period"],
     )
     return Deal(
         id=row["id"],

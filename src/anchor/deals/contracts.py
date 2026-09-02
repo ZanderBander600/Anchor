@@ -26,9 +26,10 @@ class Deal:
     """One saved, named acquisition deal.
 
     ``id`` is a server-generated identifier, opaque to callers. ``inputs``
-    is the exact nine-field ``AcquisitionInputs`` contract the engine
-    already consumes -- persistence adds no tenth field and reinterprets
-    none of the nine.
+    is the exact ``AcquisitionInputs`` contract the engine already consumes
+    (the original nine fields plus, since Underwriting V2 Gate 5, the five
+    optional V2 fields) -- persistence adds no field of its own and
+    reinterprets none of them.
     """
 
     id: str

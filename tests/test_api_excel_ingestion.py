@@ -2,7 +2,7 @@
 in ``anchor.api``.
 
 Mirrors ``test_api_ingestion.py``'s style. Unlike OM ingestion, there is no
-external provider to mock: ``read_acquisition_inputs_from_bytes`` is the
+external provider to mock: ``read_acquisition_inputs_from_bytes_with_report`` is the
 same deterministic, frozen Phase 1 parsing/validation path the CLI has
 always used (shared with ``read_acquisition_inputs`` -- see
 ``tests/test_excel_reader.py`` for the parity tests proving that), so most
@@ -114,28 +114,38 @@ def _upload_files(content: bytes, filename: str = "anchor_input.xlsx") -> dict[s
 # =============================================================================
 
 
+# Underwriting V2 Gate 5: absent from a legacy nine-field workbook, so each
+# both defaults to its neutral value on ``inputs`` and is named in the
+# response's ``defaulted_v2_field_ids``.
+V2_NEUTRAL_DEFAULTS: dict[str, Any] = {
+    "acquisition_cost_pct": 0.0,
+    "financing_fee_pct": 0.0,
+    "disposition_cost_pct": 0.0,
+    "annual_capex_reserve": 0.0,
+    "io_period": 0,
+}
+V2_FIELD_IDS = tuple(V2_NEUTRAL_DEFAULTS)
+
+
 def test_valid_upload_returns_200_with_the_nine_validated_inputs(client: TestClient) -> None:
     response = client.post("/ingestion/excel", files=_upload_files(VALID_WORKBOOK_BYTES))
 
     assert response.status_code == 200
     body = response.json()
     assert body == {
-        "purchase_price": 50_000_000.0,
-        "current_noi": 2_500_000.0,
-        "occupancy": 0.95,
-        "noi_growth": 0.03,
-        "hold_period": 5,
-        "exit_cap_rate": 0.055,
-        "ltv": 0.65,
-        "interest_rate": 0.0525,
-        "amortization": 30,
-        # Underwriting V2 Gate 1: absent from this legacy nine-field
-        # workbook, so each defaults to its neutral value.
-        "acquisition_cost_pct": 0.0,
-        "financing_fee_pct": 0.0,
-        "disposition_cost_pct": 0.0,
-        "annual_capex_reserve": 0.0,
-        "io_period": 0,
+        "inputs": {
+            "purchase_price": 50_000_000.0,
+            "current_noi": 2_500_000.0,
+            "occupancy": 0.95,
+            "noi_growth": 0.03,
+            "hold_period": 5,
+            "exit_cap_rate": 0.055,
+            "ltv": 0.65,
+            "interest_rate": 0.0525,
+            "amortization": 30,
+            **V2_NEUTRAL_DEFAULTS,
+        },
+        "defaulted_v2_field_ids": list(V2_FIELD_IDS),
     }
 
 
@@ -154,30 +164,35 @@ def test_valid_upload_of_the_tracked_example_workbook_matches_cli_golden_values(
 
     assert response.status_code == 200
     assert response.json() == {
-        "purchase_price": EXPECTED.purchase_price,
-        "current_noi": EXPECTED.current_noi,
-        "occupancy": EXPECTED.occupancy,
-        "noi_growth": EXPECTED.noi_growth,
-        "hold_period": EXPECTED.hold_period,
-        "exit_cap_rate": EXPECTED.exit_cap_rate,
-        "ltv": EXPECTED.ltv,
-        "interest_rate": EXPECTED.interest_rate,
-        "amortization": EXPECTED.amortization,
-        # Underwriting V2 Gate 1: absent from this legacy nine-field
-        # workbook, so each defaults to its neutral value.
-        "acquisition_cost_pct": EXPECTED.acquisition_cost_pct,
-        "financing_fee_pct": EXPECTED.financing_fee_pct,
-        "disposition_cost_pct": EXPECTED.disposition_cost_pct,
-        "annual_capex_reserve": EXPECTED.annual_capex_reserve,
-        "io_period": EXPECTED.io_period,
+        "inputs": {
+            "purchase_price": EXPECTED.purchase_price,
+            "current_noi": EXPECTED.current_noi,
+            "occupancy": EXPECTED.occupancy,
+            "noi_growth": EXPECTED.noi_growth,
+            "hold_period": EXPECTED.hold_period,
+            "exit_cap_rate": EXPECTED.exit_cap_rate,
+            "ltv": EXPECTED.ltv,
+            "interest_rate": EXPECTED.interest_rate,
+            "amortization": EXPECTED.amortization,
+            "acquisition_cost_pct": EXPECTED.acquisition_cost_pct,
+            "financing_fee_pct": EXPECTED.financing_fee_pct,
+            "disposition_cost_pct": EXPECTED.disposition_cost_pct,
+            "annual_capex_reserve": EXPECTED.annual_capex_reserve,
+            "io_period": EXPECTED.io_period,
+        },
+        "defaulted_v2_field_ids": list(V2_FIELD_IDS),
     }
 
 
 def test_endpoint_delegates_to_the_shared_bytes_reader_rather_than_reimplementing_parsing(
     client: TestClient,
 ) -> None:
+    from anchor.excel_reader import ExcelIntakeReport
+
+    stub_report = ExcelIntakeReport(inputs=EXPECTED, defaulted_v2_field_ids=V2_FIELD_IDS)
     with patch(
-        "anchor.api.read_acquisition_inputs_from_bytes", wraps=lambda data: EXPECTED
+        "anchor.api.read_acquisition_inputs_from_bytes_with_report",
+        wraps=lambda data: stub_report,
     ) as mock_read:
         response = client.post("/ingestion/excel", files=_upload_files(VALID_WORKBOOK_BYTES))
 
@@ -191,7 +206,7 @@ def test_endpoint_delegates_to_the_shared_bytes_reader_rather_than_reimplementin
 
 
 def test_non_xlsx_filename_is_rejected_without_parsing(client: TestClient) -> None:
-    with patch("anchor.api.read_acquisition_inputs_from_bytes") as mock_read:
+    with patch("anchor.api.read_acquisition_inputs_from_bytes_with_report") as mock_read:
         response = client.post(
             "/ingestion/excel",
             files={"file": ("anchor_input.csv", b"just some text", "text/csv")},
@@ -202,7 +217,7 @@ def test_non_xlsx_filename_is_rejected_without_parsing(client: TestClient) -> No
 
 
 def test_xlsx_filename_with_non_xlsx_bytes_is_rejected_without_parsing(client: TestClient) -> None:
-    with patch("anchor.api.read_acquisition_inputs_from_bytes") as mock_read:
+    with patch("anchor.api.read_acquisition_inputs_from_bytes_with_report") as mock_read:
         response = client.post(
             "/ingestion/excel",
             files=_upload_files(b"this is not a real xlsx file at all"),
@@ -222,7 +237,7 @@ def test_body_exceeding_the_size_ceiling_is_rejected_without_parsing(
 ) -> None:
     monkeypatch.setattr("anchor.api._MAX_EXCEL_UPLOAD_BYTES", 10)
 
-    with patch("anchor.api.read_acquisition_inputs_from_bytes") as mock_read:
+    with patch("anchor.api.read_acquisition_inputs_from_bytes_with_report") as mock_read:
         response = client.post("/ingestion/excel", files=_upload_files(VALID_WORKBOOK_BYTES))
 
     assert 400 <= response.status_code < 500
@@ -367,3 +382,98 @@ def test_om_ingestion_endpoint_still_registered_after_excel_ingestion_added(
     # Rejected for not being a real PDF, but the route exists and is reachable.
     assert 400 <= response.status_code < 500
     mock_extract.assert_not_called()
+
+
+# =============================================================================
+# Underwriting V2 Gate 5 -- Excel values sent to /analyze reproduce direct
+# engine analysis (both the legacy-nine and the complete-fourteen case).
+# =============================================================================
+
+
+def _v2_workbook_bytes() -> bytes:
+    v2_values: dict[str, int | float] = {
+        "acquisition_cost_pct": 0.02,
+        "financing_fee_pct": 0.01,
+        "disposition_cost_pct": 0.025,
+        "annual_capex_reserve": 50_000,
+        "io_period": 2,
+    }
+    v2_labels = {
+        "acquisition_cost_pct": "Acquisition Cost %",
+        "financing_fee_pct": "Financing Fee %",
+        "disposition_cost_pct": "Disposition Cost %",
+        "annual_capex_reserve": "Annual CapEx Reserve",
+        "io_period": "Interest-Only Period",
+    }
+    v2_units = {
+        "acquisition_cost_pct": "%",
+        "financing_fee_pct": "%",
+        "disposition_cost_pct": "%",
+        "annual_capex_reserve": "USD/year",
+        "io_period": "years",
+    }
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Inputs"
+    worksheet.append(HEADERS)
+    for field_id in FIELD_ORDER:
+        worksheet.append((field_id, LABELS[field_id], VALUES[field_id], UNITS[field_id]))
+    for field_id, value in v2_values.items():
+        worksheet.append((field_id, v2_labels[field_id], value, v2_units[field_id]))
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+    return buffer.getvalue()
+
+
+def test_legacy_workbook_excel_values_sent_to_analyze_reproduce_direct_engine_analysis(
+    client: TestClient,
+) -> None:
+    from anchor.engine import analyze_acquisition
+
+    excel_response = client.post("/ingestion/excel", files=_upload_files(VALID_WORKBOOK_BYTES))
+    assert excel_response.status_code == 200
+    excel_inputs = excel_response.json()["inputs"]
+
+    analyze_response = client.post("/analyze", json=excel_inputs)
+    assert analyze_response.status_code == 200
+
+    direct_result = analyze_acquisition(EXPECTED)
+    assert analyze_response.json()["levered_irr"] == pytest.approx(direct_result.levered_irr)
+    assert analyze_response.json()["equity_multiple"] == pytest.approx(
+        direct_result.equity_multiple
+    )
+    assert analyze_response.json()["loan_amount"] == direct_result.loan_amount
+
+
+def test_complete_v2_workbook_excel_values_sent_to_analyze_reproduce_direct_engine_analysis(
+    client: TestClient,
+) -> None:
+    from anchor.contracts import AcquisitionInputs as _AcquisitionInputs
+    from anchor.engine import analyze_acquisition
+
+    excel_response = client.post(
+        "/ingestion/excel", files=_upload_files(_v2_workbook_bytes())
+    )
+    assert excel_response.status_code == 200
+    body = excel_response.json()
+    assert body["defaulted_v2_field_ids"] == []
+    excel_inputs = body["inputs"]
+
+    analyze_response = client.post("/analyze", json=excel_inputs)
+    assert analyze_response.status_code == 200
+
+    direct_inputs = _AcquisitionInputs(
+        **{k: v for k, v in VALUES.items()},
+        acquisition_cost_pct=0.02,
+        financing_fee_pct=0.01,
+        disposition_cost_pct=0.025,
+        annual_capex_reserve=50_000.0,
+        io_period=2,
+    )
+    direct_result = analyze_acquisition(direct_inputs)
+    assert analyze_response.json()["levered_irr"] == pytest.approx(direct_result.levered_irr)
+    assert analyze_response.json()["unlevered_irr"] == pytest.approx(
+        direct_result.unlevered_irr
+    )
+    assert analyze_response.json()["min_dscr"] == pytest.approx(direct_result.min_dscr)
