@@ -45,6 +45,22 @@ def calculate_disposition_costs(
     return ensure_finite("disposition_costs", disposition_costs)
 
 
+def calculate_capex_by_year(
+    *, annual_capex_reserve: float, hold_period: int
+) -> tuple[float, ...]:
+    """Underwriting V2 Gate 3: return ``(CapEx_1, .., CapEx_H)``, length
+    ``hold_period``, each entry equal to the constant nominal-dollar
+    ``annual_capex_reserve``. Modeled strictly below NOI -- this series is
+    computed independently of ``noi_by_year`` and never modifies it; it is
+    reused directly by both cash-flow series below rather than
+    recomputed."""
+
+    return tuple(
+        ensure_finite(f"capex_by_year[{year}]", annual_capex_reserve)
+        for year in range(hold_period)
+    )
+
+
 def calculate_net_sale_proceeds(
     *,
     exit_value: float,
@@ -67,19 +83,24 @@ def calculate_unlevered_cash_flows(
     exit_value: float,
     acquisition_costs: float = 0.0,
     disposition_costs: float = 0.0,
+    capex_by_year: tuple[float, ...] = (),
 ) -> tuple[float, ...]:
     """Return ``(UCF_0, UCF_1, ..., UCF_H)``, length ``H + 1``.
 
-    ``UCF_0 = -(purchase_price + acquisition_costs)``; ``UCF_y = NOI_y``
-    for ``1 <= y < H``; ``UCF_H = NOI_H + exit_value - disposition_costs``.
-    At the Gate 2 neutral defaults (both cost terms ``0.0``), this reduces
-    to exactly the V1 formulas. No debt term appears anywhere in this
-    series (a financing fee, being debt-related, never appears in the
-    unlevered series either), and ``exit_noi`` (already folded into
-    ``exit_value``) is never added again as a separate operating cash flow.
+    ``UCF_0 = -(purchase_price + acquisition_costs)``; ``UCF_y = NOI_y -
+    CapEx_y`` for ``1 <= y < H``; ``UCF_H = NOI_H - CapEx_H + exit_value -
+    disposition_costs``. At the Gate 2/3 neutral defaults (all cost terms
+    ``0.0``, ``capex_by_year`` empty/all-zero), this reduces to exactly the
+    V1 formulas. No debt term appears anywhere in this series (a financing
+    fee, being debt-related, never appears in the unlevered series
+    either), and ``exit_noi`` (already folded into ``exit_value``) is never
+    added again as a separate operating cash flow. CapEx may exceed NOI in
+    any year, producing a negative entry -- it is never capped or
+    rejected.
     """
 
     hold_period = len(noi_by_year)
+    capex = capex_by_year or tuple(0.0 for _ in range(hold_period))
 
     cash_flows = [
         ensure_finite(
@@ -87,10 +108,15 @@ def calculate_unlevered_cash_flows(
         )
     ]
     for year in range(1, hold_period):
-        ucf_y = noi_by_year[year - 1]
+        ucf_y = noi_by_year[year - 1] - capex[year - 1]
         cash_flows.append(ensure_finite(f"unlevered_cash_flows[{year}]", ucf_y))
 
-    ucf_h = noi_by_year[hold_period - 1] + exit_value - disposition_costs
+    ucf_h = (
+        noi_by_year[hold_period - 1]
+        - capex[hold_period - 1]
+        + exit_value
+        - disposition_costs
+    )
     cash_flows.append(ensure_finite(f"unlevered_cash_flows[{hold_period}]", ucf_h))
 
     return tuple(cash_flows)
@@ -102,27 +128,33 @@ def calculate_levered_cash_flows(
     noi_by_year: tuple[float, ...],
     annual_debt_service: tuple[float, ...],
     net_sale_proceeds: float,
+    capex_by_year: tuple[float, ...] = (),
 ) -> tuple[float, ...]:
     """Return ``(LCF_0, LCF_1, ..., LCF_H)``, length ``H + 1``.
 
-    ``LCF_0 = -initial_equity``; ``LCF_y = NOI_y - ADS_y`` for
-    ``1 <= y < H``; ``LCF_H = NOI_H - ADS_H + net_sale_proceeds``. The
-    already-computed ``net_sale_proceeds`` (Phase 2C) is used directly for
-    the sale component of ``LCF_H`` rather than re-expanding
+    ``LCF_0 = -initial_equity``; ``LCF_y = NOI_y - ADS_y - CapEx_y`` for
+    ``1 <= y < H``; ``LCF_H = NOI_H - ADS_H - CapEx_H + net_sale_proceeds``.
+    The already-computed ``net_sale_proceeds`` (Phase 2C) is used directly
+    for the sale component of ``LCF_H`` rather than re-expanding
     ``exit_value - remaining_loan_balance`` inline, so the single computed
-    value is reused rather than recomputed.
+    value is reused rather than recomputed. At the Gate 3 neutral default
+    (``capex_by_year`` empty/all-zero), this reduces to exactly the prior
+    formulas. CapEx may exceed the year's operating cash flow, producing a
+    negative entry -- it is never capped or rejected.
     """
 
     hold_period = len(noi_by_year)
+    capex = capex_by_year or tuple(0.0 for _ in range(hold_period))
 
     cash_flows = [ensure_finite("levered_cash_flows[0]", -initial_equity)]
     for year in range(1, hold_period):
-        lcf_y = noi_by_year[year - 1] - annual_debt_service[year - 1]
+        lcf_y = noi_by_year[year - 1] - annual_debt_service[year - 1] - capex[year - 1]
         cash_flows.append(ensure_finite(f"levered_cash_flows[{year}]", lcf_y))
 
     lcf_h = (
         noi_by_year[hold_period - 1]
         - annual_debt_service[hold_period - 1]
+        - capex[hold_period - 1]
         + net_sale_proceeds
     )
     cash_flows.append(ensure_finite(f"levered_cash_flows[{hold_period}]", lcf_h))
@@ -150,6 +182,10 @@ def calculate_acquisition_cash_flows(inputs: AcquisitionInputs) -> AcquisitionCa
         remaining_loan_balance=debt_schedule.remaining_loan_balance,
         disposition_costs=disposition_costs,
     )
+    capex_by_year = calculate_capex_by_year(
+        annual_capex_reserve=inputs.annual_capex_reserve,
+        hold_period=inputs.hold_period,
+    )
 
     unlevered_cash_flows = calculate_unlevered_cash_flows(
         purchase_price=inputs.purchase_price,
@@ -157,18 +193,21 @@ def calculate_acquisition_cash_flows(inputs: AcquisitionInputs) -> AcquisitionCa
         exit_value=exit_value,
         acquisition_costs=capital_stack.acquisition_costs,
         disposition_costs=disposition_costs,
+        capex_by_year=capex_by_year,
     )
     levered_cash_flows = calculate_levered_cash_flows(
         initial_equity=capital_stack.initial_equity,
         noi_by_year=noi_forecast.noi_by_year,
         annual_debt_service=debt_schedule.annual_debt_service,
         net_sale_proceeds=net_sale_proceeds,
+        capex_by_year=capex_by_year,
     )
 
     return AcquisitionCashFlows(
         exit_value=exit_value,
         disposition_costs=disposition_costs,
         net_sale_proceeds=net_sale_proceeds,
+        capex_by_year=capex_by_year,
         unlevered_cash_flows=unlevered_cash_flows,
         levered_cash_flows=levered_cash_flows,
     )
@@ -193,8 +232,9 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
     it independently recomputes the NOI forecast, capital stack, and debt
     schedule internally, which would duplicate the calculations already
     performed by this function. Instead, the same lower-level Phase 2C /
-    Underwriting V2 Gate 2 assembly functions it uses (``calculate_exit_value``,
-    ``calculate_disposition_costs``, ``calculate_net_sale_proceeds``,
+    Underwriting V2 Gate 2/3 assembly functions it uses
+    (``calculate_exit_value``, ``calculate_disposition_costs``,
+    ``calculate_net_sale_proceeds``, ``calculate_capex_by_year``,
     ``calculate_unlevered_cash_flows``, ``calculate_levered_cash_flows``) are
     called directly here, reusing the single ``noi_forecast``,
     ``capital_stack``, and ``debt_schedule`` already computed in this
@@ -216,18 +256,24 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
         remaining_loan_balance=debt_schedule.remaining_loan_balance,
         disposition_costs=disposition_costs,
     )
+    capex_by_year = calculate_capex_by_year(
+        annual_capex_reserve=inputs.annual_capex_reserve,
+        hold_period=inputs.hold_period,
+    )
     unlevered_cash_flows = calculate_unlevered_cash_flows(
         purchase_price=inputs.purchase_price,
         noi_by_year=noi_forecast.noi_by_year,
         exit_value=exit_value,
         acquisition_costs=capital_stack.acquisition_costs,
         disposition_costs=disposition_costs,
+        capex_by_year=capex_by_year,
     )
     levered_cash_flows = calculate_levered_cash_flows(
         initial_equity=capital_stack.initial_equity,
         noi_by_year=noi_forecast.noi_by_year,
         annual_debt_service=debt_schedule.annual_debt_service,
         net_sale_proceeds=net_sale_proceeds,
+        capex_by_year=capex_by_year,
     )
 
     return_metrics = calculate_return_metrics(
@@ -247,6 +293,7 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
         annual_debt_service=debt_schedule.annual_debt_service,
         remaining_loan_balance=debt_schedule.remaining_loan_balance,
         noi_by_year=noi_forecast.noi_by_year,
+        capex_by_year=capex_by_year,
         exit_noi=noi_forecast.exit_noi,
         exit_value=exit_value,
         disposition_costs=disposition_costs,

@@ -39,6 +39,7 @@ ACQUISITION_RESULTS_FIELDS = (
     ("annual_debt_service", tuple[float, ...]),
     ("remaining_loan_balance", float),
     ("noi_by_year", tuple[float, ...]),
+    ("capex_by_year", tuple[float, ...]),
     ("exit_noi", float),
     ("exit_value", float),
     ("disposition_costs", float),

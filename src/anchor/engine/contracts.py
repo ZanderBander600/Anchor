@@ -71,11 +71,17 @@ class AcquisitionCashFlows:
     """Underwriting V2 Gate 2 adds ``disposition_costs``. ``exit_value``
     remains the gross, unmodified market-value estimate; disposition costs
     are deducted only when deriving ``net_sale_proceeds`` and the terminal
-    cash-flow entries, never folded back into ``exit_value`` itself."""
+    cash-flow entries, never folded back into ``exit_value`` itself.
+
+    Underwriting V2 Gate 3 adds ``capex_by_year`` -- the deterministic,
+    below-NOI annual CapEx-reserve series consumed by both cash-flow
+    tuples below. It is computed once and reused, never recomputed
+    per series."""
 
     exit_value: float
     disposition_costs: float
     net_sale_proceeds: float
+    capex_by_year: tuple[float, ...]
     unlevered_cash_flows: tuple[float, ...]
     levered_cash_flows: tuple[float, ...]
 
@@ -93,17 +99,19 @@ class ReturnMetrics:
 class AcquisitionResults:
     """The Phase 2 public output contract, plus the three Underwriting V2
     Gate 2 transaction-cost fields (``acquisition_costs``,
-    ``financing_fee``, ``disposition_costs`` --
-    ``docs/underwriting_v2_financial_conventions.md``).
+    ``financing_fee``, ``disposition_costs``) and the Gate 3
+    ``capex_by_year`` series (``docs/underwriting_v2_financial_conventions.md``).
 
     Exact V1 field set and order frozen by the "Phase 2 Output Contract"
     and "Frozen Phase 2 Decisions" sections of
     ``docs/phase_2_deterministic_engine.md``. Produced only by
     ``analyze_acquisition`` in ``acquisition.py``, which assembles it from
-    the already-computed Phase 2A/2B/2C/2D (and now Gate 2) results below --
-    this dataclass itself performs no calculation. The meaning of every
+    the already-computed Phase 2A/2B/2C/2D (and now Gate 2/3) results below
+    -- this dataclass itself performs no calculation. The meaning of every
     pre-existing field is unchanged; ``exit_value`` in particular remains
-    the gross market-value estimate, never reduced by ``disposition_costs``.
+    the gross market-value estimate, never reduced by ``disposition_costs``,
+    and ``noi_by_year`` is never reduced by ``capex_by_year`` -- CapEx is
+    modeled strictly below NOI, in the cash-flow series only.
     """
 
     going_in_cap_rate: float
@@ -115,6 +123,7 @@ class AcquisitionResults:
     annual_debt_service: tuple[float, ...]
     remaining_loan_balance: float
     noi_by_year: tuple[float, ...]
+    capex_by_year: tuple[float, ...]
     exit_noi: float
     exit_value: float
     disposition_costs: float

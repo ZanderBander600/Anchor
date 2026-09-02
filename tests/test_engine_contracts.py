@@ -42,6 +42,7 @@ ACQUISITION_CASH_FLOWS_FIELDS = (
     ("exit_value", float),
     ("disposition_costs", float),
     ("net_sale_proceeds", float),
+    ("capex_by_year", tuple[float, ...]),
     ("unlevered_cash_flows", tuple[float, ...]),
     ("levered_cash_flows", tuple[float, ...]),
 )
@@ -218,6 +219,7 @@ def test_acquisition_cash_flows_is_frozen_and_slotted() -> None:
         exit_value=52_694_276.10454546,
         disposition_costs=0.0,
         net_sale_proceeds=22_745_692.46333419,
+        capex_by_year=(0.0,),
         unlevered_cash_flows=(-50_000_000.0, 55_508_048.12954546),
         levered_cash_flows=(-17_500_000.0, 23_405_870.04998079),
     )
@@ -232,6 +234,7 @@ def test_acquisition_cash_flows_tuples_are_immutable() -> None:
         exit_value=52_694_276.10454546,
         disposition_costs=0.0,
         net_sale_proceeds=22_745_692.46333419,
+        capex_by_year=(0.0,),
         unlevered_cash_flows=(-50_000_000.0, 55_508_048.12954546),
         levered_cash_flows=(-17_500_000.0, 23_405_870.04998079),
     )
@@ -245,6 +248,7 @@ def test_acquisition_cash_flows_has_no_excel_or_source_metadata() -> None:
         exit_value=52_694_276.10454546,
         disposition_costs=0.0,
         net_sale_proceeds=22_745_692.46333419,
+        capex_by_year=(0.0,),
         unlevered_cash_flows=(-50_000_000.0, 55_508_048.12954546),
         levered_cash_flows=(-17_500_000.0, 23_405_870.04998079),
     )
