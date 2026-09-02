@@ -708,6 +708,50 @@ No route is implemented today. Recommended shape for Gate 5:
 
 ## 6. Persistence Concept
 
+**Status: implemented (Gate 5b), superseding the original single-table
+proposal below.** During implementation, the originally-proposed "option
+1" (widen `current_noi`/`noi_growth`/`occupancy` to nullable on the
+existing `deals` table) turned out to require a full SQLite table rebuild
+-- `ALTER TABLE` cannot relax an existing `NOT NULL` constraint, only add/
+rename/drop columns. That is a materially different, riskier migration than
+every other gate's purely additive `ALTER TABLE ADD COLUMN`. Resolved (user
+direction) by splitting storage across two purely additive new tables
+instead, leaving `deals` structurally untouched forever:
+
+- `deals` (Quick) -- unchanged: same columns, same `NOT NULL` constraints,
+  same rows, forever. Never gains a Detailed row.
+- `detailed_deals` (new) -- the eleven `AcquisitionTerms` fields, one row
+  per Detailed deal.
+- `detailed_operating_inputs` (new) -- the eleven `DetailedOperatingInputs`
+  fields, `deal_id` a 1:1 primary key referencing `detailed_deals.id`.
+
+Both new tables are created via `CREATE TABLE IF NOT EXISTS`,
+unconditionally, on every connection -- exactly like `deals` itself. No
+`ALTER` of any existing column, ever. Schema version bumped `1 -> 2`; the
+existing Underwriting V2 Gate 5 `ALTER TABLE ADD COLUMN` migration step is
+untouched and still runs for a genuine pre-V2 database.
+
+`Deal` (`deals/contracts.py`) is one domain-level abstraction with an
+`operating_mode` field: a `QUICK` deal has `inputs` populated and `terms`/
+`detailed_operating_inputs` both `None`; a `DETAILED` deal has `terms`/
+`detailed_operating_inputs` populated and `inputs` `None` -- enforced by a
+`__post_init__` invariant, never a fabricated `AcquisitionInputs`.
+`create_deal`/`update_deal` keep their exact pre-Gate-5b signatures and
+behavior (Quick-only); `create_detailed_deal`/`update_detailed_deal` are
+their new Detailed counterparts; `get_deal`/`list_deals`/`delete_deal`/
+`duplicate_deal` dispatch across both tables by id (ids are never shared
+between the two tables), presenting the one unified domain interface.
+`POST`/`PUT /deals` gained the same `operating_mode` discriminator as
+`/analyze`.
+
+See `src/anchor/deals/store.py`'s module docstring and
+`tests/test_deals_store_detailed_v2_1.py` for the full implementation and
+its regression coverage (existing-Quick-database migration safety, Quick
+economics unchanged, Detailed-creates-no-Quick-row, exact round-trips for
+both new contracts, cross-mode CRUD, restart, and migration idempotency).
+
+### Original Phase 0 proposal (superseded, kept for history)
+
 Extending the existing `deals` table (Section 1.10), following the exact
 `PRAGMA user_version`-gated migration precedent already proven for
 Underwriting V2 Gate 5:
