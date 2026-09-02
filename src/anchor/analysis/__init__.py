@@ -14,8 +14,8 @@ FastAPI adapter (``anchor.api``):
 
 This package never reproduces or algebraically rearranges a financial
 formula -- every sensitivity scenario and every break-even candidate is
-evaluated by calling ``analyze_acquisition`` and reading a field off its
-result.
+evaluated by calling ``analyze_acquisition``/``analyze_detailed_acquisition_
+with_projection`` and reading a field off its result.
 """
 
 from __future__ import annotations
@@ -25,11 +25,12 @@ from .break_even import (
     InvalidBreakEvenBoundsError,
     InvalidBreakEvenTargetError,
     build_standard_break_even_analysis,
+    build_standard_detailed_break_even_analysis,
     solve_break_even_threshold,
+    solve_detailed_break_even_threshold,
     solve_detailed_max_exit_cap_rate,
     solve_detailed_max_interest_rate,
     solve_detailed_max_purchase_price,
-    solve_detailed_break_even_threshold,
     solve_max_exit_cap_rate,
     solve_max_interest_rate,
     solve_max_purchase_price,
@@ -43,6 +44,8 @@ from .contracts import (
     OneWaySensitivityResult,
     ReturnHurdleMetric,
     StandardBreakEvenAnalysis,
+    StandardDetailedBreakEvenAnalysis,
+    StandardDetailedSensitivityPresets,
     StandardSensitivityPresets,
     TwoWaySensitivityResult,
 )
@@ -52,9 +55,12 @@ from .sensitivity import (
     SUPPORTED_METRICS,
     UnknownAssumptionError,
     UnknownMetricError,
+    build_detailed_interest_rate_ltv_preset,
+    build_detailed_purchase_price_exit_cap_preset,
     build_exit_cap_noi_growth_preset,
     build_interest_rate_ltv_preset,
     build_purchase_price_exit_cap_preset,
+    build_standard_detailed_presets,
     build_standard_presets,
     run_detailed_one_way_sensitivity,
     run_detailed_two_way_sensitivity,
@@ -69,6 +75,7 @@ __all__ = [
     "OneWaySensitivityResult",
     "TwoWaySensitivityResult",
     "StandardSensitivityPresets",
+    "StandardDetailedSensitivityPresets",
     "UnknownAssumptionError",
     "UnknownMetricError",
     "run_one_way_sensitivity",
@@ -79,12 +86,16 @@ __all__ = [
     "build_purchase_price_exit_cap_preset",
     "build_interest_rate_ltv_preset",
     "build_standard_presets",
+    "build_detailed_purchase_price_exit_cap_preset",
+    "build_detailed_interest_rate_ltv_preset",
+    "build_standard_detailed_presets",
     "BreakEvenDirection",
     "BreakEvenResult",
     "BreakEvenStatus",
     "BreakEvenType",
     "ReturnHurdleMetric",
     "StandardBreakEvenAnalysis",
+    "StandardDetailedBreakEvenAnalysis",
     "InvalidBreakEvenBoundsError",
     "InvalidBreakEvenTargetError",
     "solve_break_even_threshold",
@@ -98,4 +109,5 @@ __all__ = [
     "solve_detailed_max_exit_cap_rate",
     "solve_detailed_max_interest_rate",
     "build_standard_break_even_analysis",
+    "build_standard_detailed_break_even_analysis",
 ]

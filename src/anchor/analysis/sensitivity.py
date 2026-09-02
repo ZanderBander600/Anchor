@@ -29,6 +29,7 @@ from ..validation import (
 )
 from .contracts import (
     OneWaySensitivityResult,
+    StandardDetailedSensitivityPresets,
     StandardSensitivityPresets,
     TwoWaySensitivityResult,
 )
@@ -497,4 +498,108 @@ def run_detailed_two_way_sensitivity(
         row_values=row_values_tuple,
         column_values=column_values_tuple,
         matrix=tuple(matrix),
+    )
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 9 (AI Analyst) -- standard Detailed
+# preset bundle, mirroring build_standard_presets so the AI context can
+# receive "the already-authoritative Detailed sensitivity ... outputs where
+# the existing Quick AI path receives those analyses" without the AI layer
+# (or this module) inventing a new dimension. Composes only the already-
+# built, already-tested run_detailed_two_way_sensitivity -- no new scenario
+# logic.
+# =============================================================================
+
+
+def _valid_detailed_scenario_values(
+    terms: AcquisitionTerms, assumption: str, candidates: Iterable[float]
+) -> tuple[float, ...]:
+    """Detailed counterpart to ``_valid_scenario_values``: only the
+    ``candidates`` that satisfy the shared ``AcquisitionTerms`` domain for
+    ``assumption``, in the given order. Never clamps or raises for an
+    out-of-domain candidate -- it is simply omitted."""
+
+    valid_values = []
+    for candidate in candidates:
+        try:
+            _build_detailed_scenario_terms(terms, {assumption: candidate})
+        except InputValidationError:
+            continue
+        valid_values.append(candidate)
+    return tuple(valid_values)
+
+
+def build_detailed_purchase_price_exit_cap_preset(
+    terms: AcquisitionTerms, detailed_operating_inputs: DetailedOperatingInputs
+) -> TwoWaySensitivityResult:
+    """Purchase Price (rows) x Exit Cap Rate (columns), Levered IRR --
+    Detailed counterpart of ``build_purchase_price_exit_cap_preset``."""
+
+    purchase_price_values = _valid_detailed_scenario_values(
+        terms,
+        "purchase_price",
+        (terms.purchase_price * multiplier for multiplier in _PURCHASE_PRICE_MULTIPLIERS),
+    )
+    exit_cap_values = _valid_detailed_scenario_values(
+        terms, "exit_cap_rate", (terms.exit_cap_rate + offset for offset in _EXIT_CAP_BPS_OFFSETS)
+    )
+    return run_detailed_two_way_sensitivity(
+        terms,
+        detailed_operating_inputs,
+        row_assumption="purchase_price",
+        row_values=purchase_price_values,
+        column_assumption="exit_cap_rate",
+        column_values=exit_cap_values,
+        metric="levered_irr",
+    )
+
+
+def build_detailed_interest_rate_ltv_preset(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    metric: str = "levered_irr",
+) -> TwoWaySensitivityResult:
+    """Interest Rate (rows) x LTV (columns), for ``metric`` -- Detailed
+    counterpart of ``build_interest_rate_ltv_preset``."""
+
+    interest_rate_values = _valid_detailed_scenario_values(
+        terms,
+        "interest_rate",
+        (terms.interest_rate + offset for offset in _INTEREST_RATE_BPS_OFFSETS),
+    )
+    ltv_values = _valid_detailed_scenario_values(
+        terms, "ltv", (terms.ltv + offset for offset in _LTV_PP_OFFSETS)
+    )
+    return run_detailed_two_way_sensitivity(
+        terms,
+        detailed_operating_inputs,
+        row_assumption="interest_rate",
+        row_values=interest_rate_values,
+        column_assumption="ltv",
+        column_values=ltv_values,
+        metric=metric,
+    )
+
+
+def build_standard_detailed_presets(
+    terms: AcquisitionTerms, detailed_operating_inputs: DetailedOperatingInputs
+) -> StandardDetailedSensitivityPresets:
+    """Return the standard Detailed sensitivity bundle: Purchase Price x
+    Exit Cap Rate, Interest Rate x LTV, and its DSCR variant -- exactly the
+    ``StandardSensitivityPresets`` members that exist for
+    ``DETAILED_SUPPORTED_ASSUMPTIONS`` (no ``exit_cap_noi_growth`` member;
+    see ``StandardDetailedSensitivityPresets``)."""
+
+    return StandardDetailedSensitivityPresets(
+        purchase_price_exit_cap=build_detailed_purchase_price_exit_cap_preset(
+            terms, detailed_operating_inputs
+        ),
+        interest_rate_ltv=build_detailed_interest_rate_ltv_preset(
+            terms, detailed_operating_inputs, metric="levered_irr"
+        ),
+        interest_rate_ltv_dscr=build_detailed_interest_rate_ltv_preset(
+            terms, detailed_operating_inputs, metric="headline_dscr"
+        ),
     )

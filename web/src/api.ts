@@ -270,6 +270,77 @@ export async function fetchAIAnalysis(
 }
 
 /**
+ * Detailed Operating Model V2.1 Gate 9: POSTs an ``operating_mode:
+ * "detailed"`` request (``terms`` + ``detailed_operating_inputs``, the
+ * three hurdle targets, and the selected return-hurdle metric) to the same
+ * FastAPI ``/ai/analysis`` endpoint and returns the raw ``AIAnalysis``
+ * JSON -- the identical response shape ``fetchAIAnalysis`` returns for
+ * Quick mode. Performs no interpretation or calculation of its own -- the
+ * backend AI Analyst layer is authoritative, and this function never talks
+ * to OpenAI directly.
+ */
+export async function fetchDetailedAIAnalysis(
+  terms: AcquisitionTermsRequest,
+  detailedOperatingInputs: DetailedOperatingInputsRequest,
+  targetLeveredIrr: number,
+  targetEquityMultiple: number,
+  targetHeadlineDscr: number,
+  returnHurdleMetric: ReturnHurdleMetric,
+): Promise<AIAnalysis> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/ai/analysis`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operating_mode: 'detailed',
+        terms,
+        detailed_operating_inputs: detailedOperatingInputs,
+        target_levered_irr: targetLeveredIrr,
+        target_equity_multiple: targetEquityMultiple,
+        target_headline_dscr: targetHeadlineDscr,
+        return_hurdle_metric: returnHurdleMetric,
+      }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  if (response.status === 422) {
+    const body = await response.json().catch(() => null);
+    const issues: ValidationIssue[] = Array.isArray(body?.detail) ? body.detail : [];
+    const message =
+      issues.length > 0
+        ? issues.map((issue) => issue.message).join(' ')
+        : 'The submitted AI analysis request failed validation.';
+    throw new ApiError(message, issues);
+  }
+
+  if (response.status === 503) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string' ? body.detail : 'The AI Analyst is not configured.';
+    throw new ApiError(message);
+  }
+
+  if (response.status === 502) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string' ? body.detail : 'The AI Analyst request failed.';
+    throw new ApiError(message);
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`The AI analysis request failed (HTTP ${response.status}).`);
+  }
+
+  return (await response.json()) as AIAnalysis;
+}
+
+/**
  * Uploads an Offering Memorandum PDF to the FastAPI ``POST /ingestion/om``
  * endpoint as multipart form data and returns the raw ``ExtractionResult``
  * JSON. Performs no extraction, classification, or provenance verification

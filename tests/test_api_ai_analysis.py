@@ -282,3 +282,170 @@ def test_break_even_endpoint_still_works(client: TestClient) -> None:
     response = client.post("/break-even", json=request)
 
     assert response.status_code == 200
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 9 -- Detailed operating_mode
+# =============================================================================
+
+GOLDEN_TERMS_PAYLOAD: dict[str, Any] = {
+    "purchase_price": 10_000_000,
+    "hold_period": 5,
+    "exit_cap_rate": 0.065,
+    "ltv": 0.60,
+    "interest_rate": 0.05,
+    "amortization": 30,
+    "acquisition_cost_pct": 0.02,
+    "financing_fee_pct": 0.01,
+    "disposition_cost_pct": 0.025,
+    "annual_capex_reserve": 50_000,
+    "io_period": 2,
+}
+
+GOLDEN_DETAILED_OPERATING_PAYLOAD: dict[str, Any] = {
+    "gross_potential_rent": 800_000,
+    "other_income": 20_000,
+    "vacancy_credit_loss_pct": 0.05,
+    "property_taxes": 60_000,
+    "insurance": 20_000,
+    "utilities": 25_000,
+    "repairs_maintenance": 20_000,
+    "other_operating_expenses": 16_000,
+    "management_fee_pct": 0.05,
+    "revenue_growth": 0.03,
+    "expense_growth": 0.03,
+}
+
+DETAILED_REQUEST: dict[str, Any] = {
+    "operating_mode": "detailed",
+    "terms": GOLDEN_TERMS_PAYLOAD,
+    "detailed_operating_inputs": GOLDEN_DETAILED_OPERATING_PAYLOAD,
+    "target_levered_irr": 0.10,
+    "target_headline_dscr": 1.20,
+    "target_equity_multiple": 1.50,
+}
+
+
+def test_ai_analysis_detailed_valid_request_returns_200(client: TestClient) -> None:
+    with patch(
+        "anchor.api.generate_detailed_ai_analysis", return_value=VALID_ANALYSIS
+    ) as mock_generate:
+        response = client.post("/ai/analysis", json=DETAILED_REQUEST)
+
+    assert response.status_code == 200
+    mock_generate.assert_called_once()
+
+
+def test_ai_analysis_detailed_returns_the_same_structured_shape_as_quick(
+    client: TestClient,
+) -> None:
+    with patch("anchor.api.generate_detailed_ai_analysis", return_value=VALID_ANALYSIS):
+        detailed_response = client.post("/ai/analysis", json=DETAILED_REQUEST)
+    with patch("anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS):
+        quick_response = client.post("/ai/analysis", json=GENERIC_REQUEST)
+
+    assert set(detailed_response.json().keys()) == set(quick_response.json().keys())
+
+
+def test_ai_analysis_detailed_builds_deterministic_context_and_calls_provider_once(
+    client: TestClient,
+) -> None:
+    fake_provider = _RecordingProvider()
+
+    with patch("anchor.ai.analyst.OpenAIAnalystProvider", return_value=fake_provider):
+        response = client.post("/ai/analysis", json=DETAILED_REQUEST)
+
+    assert response.status_code == 200
+    assert len(fake_provider.calls) == 1
+
+    user_prompt = fake_provider.calls[0]["user_prompt"]
+    payload = json.loads(user_prompt[user_prompt.index("{") :])
+
+    assert payload["operating_mode"] == "detailed"
+    assert payload["base_terms"]["purchase_price"] == "$10.0M"
+    assert payload["base_detailed_operating_inputs"]["vacancy_credit_loss_pct"] == "5%"
+    assert payload["operating_projection"]["noi_by_year"][0] == "$600.0K"
+    assert "base_inputs" not in payload
+    assert "current_noi" not in user_prompt
+    assert '"noi_growth"' not in user_prompt
+
+
+def test_ai_analysis_detailed_missing_terms_returns_422(client: TestClient) -> None:
+    request = dict(DETAILED_REQUEST)
+    del request["terms"]
+
+    response = client.post("/ai/analysis", json=request)
+
+    assert response.status_code == 422
+
+
+def test_ai_analysis_detailed_missing_detailed_operating_inputs_returns_422(
+    client: TestClient,
+) -> None:
+    request = dict(DETAILED_REQUEST)
+    del request["detailed_operating_inputs"]
+
+    response = client.post("/ai/analysis", json=request)
+
+    assert response.status_code == 422
+
+
+def test_ai_analysis_detailed_invalid_terms_field_returns_422_with_issues(
+    client: TestClient,
+) -> None:
+    request = dict(DETAILED_REQUEST)
+    request["terms"] = GOLDEN_TERMS_PAYLOAD | {"ltv": 1.5}
+
+    response = client.post("/ai/analysis", json=request)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(issue["field_id"] == "ltv" for issue in detail)
+
+
+def test_ai_analysis_detailed_missing_target_field_returns_422(client: TestClient) -> None:
+    request = dict(DETAILED_REQUEST)
+    del request["target_headline_dscr"]
+
+    response = client.post("/ai/analysis", json=request)
+
+    assert response.status_code == 422
+
+
+def test_ai_analysis_detailed_missing_configuration_returns_503(client: TestClient) -> None:
+    with patch("anchor.ai.analyst.OpenAIAnalystProvider") as mock_provider_class:
+        mock_provider_class.return_value.generate_analysis.side_effect = AIConfigurationError(
+            "OPENAI_API_KEY is not configured."
+        )
+        response = client.post("/ai/analysis", json=DETAILED_REQUEST)
+
+    assert response.status_code == 503
+
+
+def test_ai_analysis_detailed_provider_failure_returns_502(client: TestClient) -> None:
+    with patch("anchor.ai.analyst.OpenAIAnalystProvider") as mock_provider_class:
+        mock_provider_class.return_value.generate_analysis.side_effect = AIProviderError(
+            "The AI provider request failed."
+        )
+        response = client.post("/ai/analysis", json=DETAILED_REQUEST)
+
+    assert response.status_code == 502
+
+
+def test_ai_analysis_invalid_operating_mode_returns_422(client: TestClient) -> None:
+    request = dict(DETAILED_REQUEST)
+    request["operating_mode"] = "bogus"
+
+    response = client.post("/ai/analysis", json=request)
+
+    assert response.status_code == 422
+
+
+def test_ai_analysis_quick_operating_mode_explicit_matches_absent(client: TestClient) -> None:
+    with patch("anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS) as mock_generate:
+        response = client.post(
+            "/ai/analysis", json=GENERIC_REQUEST | {"operating_mode": "quick"}
+        )
+
+    assert response.status_code == 200
+    mock_generate.assert_called_once()

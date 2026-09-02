@@ -9,6 +9,7 @@ import {
   duplicateDeal,
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
+  fetchDetailedAIAnalysis,
   fetchSensitivityPresets,
   getDeal,
   listDeals,
@@ -70,10 +71,15 @@ export default function App() {
   // result state below -- it never reads or writes any Quick-mode state
   // (`values`, `results`, `sensitivity`, `breakEven`, `aiAnalysis`, the
   // deal library, etc.), so switching modes can never regress or corrupt
-  // Quick's existing behavior. Persistence, sensitivity, break-even, and
-  // the AI Analyst are not yet wired for Detailed mode -- deferred to a
-  // later gate; Detailed mode here covers assumptions entry and the
-  // institutional operating statement only.
+  // Quick's existing behavior. Persistence and sensitivity/break-even
+  // *UI* are not yet wired for Detailed mode -- deferred to a later gate;
+  // the AI Analyst (Gate 9) is wired below, reusing the same
+  // `AiAnalystPanel` component Quick mode uses, driven by the deterministic
+  // Detailed context the backend already builds. Detailed mode has no
+  // break-even UI of its own yet, so its "Generate AI Analysis" request
+  // uses the same fixed default hurdle targets Quick mode starts with
+  // (`DEFAULT_TARGET_LEVERED_IRR_PERCENT` etc.) -- never a Quick-only value
+  // fabricated for this mode.
   const [operatingMode, setOperatingMode] = useState<OperatingMode>('quick');
 
   const [detailedValues, setDetailedValues] = useState<DetailedFormValues>(
@@ -85,6 +91,15 @@ export default function App() {
   const [isDetailedSubmitting, setIsDetailedSubmitting] = useState(false);
   const [detailedError, setDetailedError] = useState<string | null>(null);
 
+  const [detailedAiAnalysis, setDetailedAiAnalysis] = useState<AIAnalysis | null>(null);
+  const [isDetailedAiAnalysisLoading, setIsDetailedAiAnalysisLoading] = useState(false);
+  const [detailedAiAnalysisError, setDetailedAiAnalysisError] = useState<string | null>(null);
+
+  function clearDetailedAiAnalysis() {
+    setDetailedAiAnalysis(null);
+    setDetailedAiAnalysisError(null);
+  }
+
   function handleDetailedTermsFieldChange(
     key: keyof AcquisitionTermsFormValues,
     value: string,
@@ -95,6 +110,7 @@ export default function App() {
     }));
     setDetailedResults(null);
     setDetailedError(null);
+    clearDetailedAiAnalysis();
   }
 
   function handleDetailedOperatingFieldChange(
@@ -107,12 +123,14 @@ export default function App() {
     }));
     setDetailedResults(null);
     setDetailedError(null);
+    clearDetailedAiAnalysis();
   }
 
   async function handleDetailedSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setDetailedResults(null);
     setDetailedError(null);
+    clearDetailedAiAnalysis();
 
     let terms;
     let detailedOperatingInputs;
@@ -139,6 +157,66 @@ export default function App() {
       }
     } finally {
       setIsDetailedSubmitting(false);
+    }
+  }
+
+  /**
+   * Detailed Operating Model V2.1 Gate 9: generates an AI Analyst
+   * interpretation of the current Detailed deal, sending the same
+   * `terms`/`detailedOperatingInputs` just analyzed (never re-derived or
+   * re-typed) plus the fixed default hurdle targets -- Detailed mode has
+   * no break-even UI of its own yet to source analyst-edited targets from.
+   * Mirrors `handleGenerateAiAnalysis`'s shape exactly, over Detailed's own
+   * independent state.
+   */
+  async function handleGenerateDetailedAiAnalysis() {
+    if (!detailedResults) {
+      return;
+    }
+
+    let terms;
+    let detailedOperatingInputs;
+    let targetLeveredIrr: number;
+    let targetEquityMultipleValue: number;
+    let targetHeadlineDscrValue: number;
+    try {
+      terms = buildAcquisitionTermsRequest(detailedValues.terms);
+      detailedOperatingInputs = buildDetailedOperatingInputsRequest(detailedValues.operating);
+      targetLeveredIrr = parsePercent('Target Levered IRR', DEFAULT_TARGET_LEVERED_IRR_PERCENT);
+      targetEquityMultipleValue = parseNumber(
+        'Target Equity Multiple',
+        DEFAULT_TARGET_EQUITY_MULTIPLE,
+      );
+      targetHeadlineDscrValue = parseNumber('Target Year 1 DSCR', DEFAULT_TARGET_HEADLINE_DSCR);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setDetailedAiAnalysis(null);
+        setDetailedAiAnalysisError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    setIsDetailedAiAnalysisLoading(true);
+    setDetailedAiAnalysisError(null);
+    try {
+      const analysis = await fetchDetailedAIAnalysis(
+        terms,
+        detailedOperatingInputs,
+        targetLeveredIrr,
+        targetEquityMultipleValue,
+        targetHeadlineDscrValue,
+        'levered_irr',
+      );
+      setDetailedAiAnalysis(analysis);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedAiAnalysisError(apiError.message);
+      } else {
+        setDetailedAiAnalysisError('An unexpected error occurred while generating the AI analysis.');
+      }
+    } finally {
+      setIsDetailedAiAnalysisLoading(false);
     }
   }
 
@@ -834,6 +912,15 @@ export default function App() {
                 <OperatingStatementTable
                   operatingProjection={detailedResults.operating_projection}
                   results={detailedResults.results}
+                />
+              )}
+
+              {detailedResults && (
+                <AiAnalystPanel
+                  analysis={detailedAiAnalysis}
+                  isLoading={isDetailedAiAnalysisLoading}
+                  error={detailedAiAnalysisError}
+                  onGenerate={() => void handleGenerateDetailedAiAnalysis()}
                 />
               )}
             </div>

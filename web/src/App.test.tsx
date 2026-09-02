@@ -11,6 +11,7 @@ import {
   duplicateDeal,
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
+  fetchDetailedAIAnalysis,
   fetchSensitivityPresets,
   getDeal,
   listDeals,
@@ -49,6 +50,7 @@ vi.mock('./api', async () => {
     fetchSensitivityPresets: vi.fn(),
     fetchBreakEvenAnalysis: vi.fn(),
     fetchAIAnalysis: vi.fn(),
+    fetchDetailedAIAnalysis: vi.fn(),
     uploadOm: vi.fn(),
     uploadExcel: vi.fn(),
     createDeal: vi.fn(),
@@ -65,6 +67,7 @@ const mockAnalyzeDetailed = vi.mocked(analyzeDetailedAcquisition);
 const mockFetchSensitivityPresets = vi.mocked(fetchSensitivityPresets);
 const mockFetchBreakEvenAnalysis = vi.mocked(fetchBreakEvenAnalysis);
 const mockFetchAIAnalysis = vi.mocked(fetchAIAnalysis);
+const mockFetchDetailedAIAnalysis = vi.mocked(fetchDetailedAIAnalysis);
 const mockUploadOm = vi.mocked(uploadOm);
 const mockUploadExcel = vi.mocked(uploadExcel);
 const mockCreateDeal = vi.mocked(createDeal);
@@ -450,6 +453,8 @@ beforeEach(() => {
   mockFetchBreakEvenAnalysis.mockResolvedValue(makeBreakEvenAnalysis());
   mockFetchAIAnalysis.mockReset();
   mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysis());
+  mockFetchDetailedAIAnalysis.mockReset();
+  mockFetchDetailedAIAnalysis.mockResolvedValue(makeAiAnalysis());
   mockUploadOm.mockReset();
   mockUploadExcel.mockReset();
   mockCreateDeal.mockReset();
@@ -2820,5 +2825,159 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
     expect(
       await screen.findByText('The submitted assumptions failed validation.'),
     ).toBeTruthy();
+  });
+});
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 9 -- AI Analyst in Detailed mode
+// =============================================================================
+
+async function analyzeDetailedGoldenDeal(user: ReturnType<typeof userEvent.setup>) {
+  mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+  await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+  fillDetailedGoldenDeal();
+  await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+  await screen.findByText('Operating Statement');
+}
+
+describe('AI Analyst in Detailed mode (Gate 9)', () => {
+  it('AI Analyst works in Quick mode (regression)', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Key Returns');
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    await waitFor(() => expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockFetchDetailedAIAnalysis).not.toHaveBeenCalled();
+    expect(await screen.findByText('Five-year hold with moderate leverage.')).toBeTruthy();
+  });
+
+  it('AI Analyst works in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
+    expect(await screen.findByText('Five-year hold with moderate leverage.')).toBeTruthy();
+  });
+
+  it('switching modes sends the correct request/context shape', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    // Quick first.
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Key Returns');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1));
+    const [quickInputsArg] = mockFetchAIAnalysis.mock.calls[0];
+    expect(quickInputsArg).toHaveProperty('current_noi');
+    expect(quickInputsArg).toHaveProperty('noi_growth');
+
+    // Now switch to Detailed and generate again.
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await analyzeDetailedGoldenDeal(user);
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
+    const [termsArg, detailedOperatingInputsArg] = mockFetchDetailedAIAnalysis.mock.calls[0];
+    expect(termsArg).not.toHaveProperty('current_noi');
+    expect(termsArg).not.toHaveProperty('noi_growth');
+    expect(detailedOperatingInputsArg).toHaveProperty('vacancy_credit_loss_pct', 0.05);
+
+    // Quick's own call was never re-triggered by the Detailed generate.
+    expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it('Detailed AI uses Detailed analysis results (terms + detailed operating inputs)', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
+    const [terms, detailedOperatingInputs, targetIrr, targetEquityMultiple, targetDscr, metric] =
+      mockFetchDetailedAIAnalysis.mock.calls[0];
+    expect(terms).toEqual({
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    });
+    expect(detailedOperatingInputs).toEqual({
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    });
+    expect(typeof targetIrr).toBe('number');
+    expect(typeof targetEquityMultiple).toBe('number');
+    expect(typeof targetDscr).toBe('number');
+    expect(metric).toBe('levered_irr');
+  });
+
+  it('no Quick-only NOI fields are fabricated for Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
+    const [terms, detailedOperatingInputs] = mockFetchDetailedAIAnalysis.mock.calls[0];
+    const serialized = JSON.stringify({ terms, detailedOperatingInputs });
+    expect(serialized).not.toContain('current_noi');
+    expect(serialized).not.toContain('"noi_growth"');
+    expect(serialized).not.toContain('"occupancy"');
+  });
+
+  it('surfaces an ApiError message from fetchDetailedAIAnalysis without touching Quick state', async () => {
+    const user = userEvent.setup();
+    mockFetchDetailedAIAnalysis.mockRejectedValue(
+      new ApiError('The AI Analyst is not configured.'),
+    );
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    expect(await screen.findByText('The AI Analyst is not configured.')).toBeTruthy();
+  });
+
+  it('clears the Detailed AI analysis when a Detailed assumption is edited', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Five-year hold with moderate leverage.');
+
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+      target: { value: '11000000' },
+    });
+
+    expect(screen.queryByText('Five-year hold with moderate leverage.')).toBeNull();
   });
 });

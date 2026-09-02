@@ -46,6 +46,7 @@ from .contracts import (
     BreakEvenType,
     ReturnHurdleMetric,
     StandardBreakEvenAnalysis,
+    StandardDetailedBreakEvenAnalysis,
 )
 
 # =============================================================================
@@ -1012,4 +1013,56 @@ def solve_detailed_max_interest_rate(
         direction=BreakEvenDirection.MAXIMUM,
         lower_bound=lo,
         upper_bound=hi,
+    )
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 9 (AI Analyst) -- standard Detailed
+# break-even bundle, mirroring build_standard_break_even_analysis so the AI
+# context can receive "the already-authoritative Detailed ... break-even
+# outputs where the existing Quick AI path receives those analyses".
+# Composes only the already-built, already-tested solve_detailed_max_*
+# functions -- no new break-even target.
+# =============================================================================
+
+
+def build_standard_detailed_break_even_analysis(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    target_levered_irr: float,
+    target_headline_dscr: float,
+    target_equity_multiple: float | None = None,
+    return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
+) -> StandardDetailedBreakEvenAnalysis:
+    """Run the three standard Detailed break-even questions for one base
+    ``AcquisitionTerms``/``DetailedOperatingInputs`` pair, each using its
+    documented default search range -- the Detailed counterpart of
+    ``build_standard_break_even_analysis``. ``min_noi_growth``/
+    ``min_current_noi`` have no Detailed equivalent (see
+    ``StandardDetailedBreakEvenAnalysis``), so this bundle has three members
+    instead of five."""
+
+    if return_hurdle_metric is ReturnHurdleMetric.EQUITY_MULTIPLE:
+        if target_equity_multiple is None:
+            raise InvalidBreakEvenTargetError(
+                "target_equity_multiple is required when return_hurdle_metric "
+                "is 'equity_multiple'."
+            )
+        return_hurdle_kwargs: dict[str, float] = {
+            "target_equity_multiple": target_equity_multiple
+        }
+    else:
+        return_hurdle_kwargs = {"target_levered_irr": target_levered_irr}
+
+    return StandardDetailedBreakEvenAnalysis(
+        max_purchase_price=solve_detailed_max_purchase_price(
+            terms, detailed_operating_inputs, **return_hurdle_kwargs
+        ),
+        max_exit_cap_rate=solve_detailed_max_exit_cap_rate(
+            terms, detailed_operating_inputs, **return_hurdle_kwargs
+        ),
+        max_interest_rate=solve_detailed_max_interest_rate(
+            terms, detailed_operating_inputs, target_headline_dscr=target_headline_dscr
+        ),
     )

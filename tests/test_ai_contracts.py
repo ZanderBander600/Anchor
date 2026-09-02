@@ -16,7 +16,7 @@ from anchor.analysis import (
     build_standard_break_even_analysis,
     build_standard_presets,
 )
-from anchor.contracts import AcquisitionInputs
+from anchor.contracts import AcquisitionInputs, OperatingMode
 from anchor.engine import analyze_acquisition
 
 GOLDEN_INPUTS = AcquisitionInputs(
@@ -64,7 +64,11 @@ def _make_ai_analysis(**overrides: object) -> AIAnalysis:
 
 def _make_context(**overrides: object) -> AnalysisContext:
     values: dict[str, object] = {
+        "operating_mode": OperatingMode.QUICK,
         "inputs": GOLDEN_INPUTS,
+        "terms": None,
+        "detailed_operating_inputs": None,
+        "operating_projection": None,
         "results": analyze_acquisition(GOLDEN_INPUTS),
         "sensitivities": build_standard_presets(GOLDEN_INPUTS),
         "break_even": build_standard_break_even_analysis(
@@ -130,7 +134,11 @@ def test_analysis_context_has_exact_fields_and_keyword_only_shape() -> None:
 
     assert is_dataclass(AnalysisContext)
     assert tuple(field.name for field in contract_fields) == (
+        "operating_mode",
         "inputs",
+        "terms",
+        "detailed_operating_inputs",
+        "operating_projection",
         "results",
         "sensitivities",
         "break_even",
@@ -140,6 +148,38 @@ def test_analysis_context_has_exact_fields_and_keyword_only_shape() -> None:
         "return_hurdle_metric",
     )
     assert all(field.kw_only for field in contract_fields)
+
+
+def test_analysis_context_quick_mode_rejects_detailed_fields_populated() -> None:
+    with pytest.raises(ValueError, match="QUICK"):
+        _make_context(terms=object())
+
+
+def test_analysis_context_quick_mode_requires_inputs() -> None:
+    with pytest.raises(ValueError, match="QUICK"):
+        _make_context(inputs=None)
+
+
+def test_analysis_context_detailed_mode_requires_all_three_detailed_fields() -> None:
+    with pytest.raises(ValueError, match="DETAILED"):
+        _make_context(
+            operating_mode=OperatingMode.DETAILED,
+            inputs=None,
+            terms=object(),
+            detailed_operating_inputs=None,
+            operating_projection=None,
+        )
+
+
+def test_analysis_context_detailed_mode_rejects_inputs_populated() -> None:
+    with pytest.raises(ValueError, match="DETAILED"):
+        _make_context(
+            operating_mode=OperatingMode.DETAILED,
+            inputs=GOLDEN_INPUTS,
+            terms=object(),
+            detailed_operating_inputs=object(),
+            operating_projection=object(),
+        )
 
 
 def test_analysis_context_is_frozen_and_slotted() -> None:

@@ -29,6 +29,7 @@ from .ai import (
     AIConfigurationError,
     AIProviderError,
     generate_ai_analysis,
+    generate_detailed_ai_analysis,
 )
 from .analysis import (
     InvalidBreakEvenTargetError,
@@ -433,32 +434,17 @@ def break_even(payload: dict[str, Any] = Body(...)) -> StandardBreakEvenAnalysis
 
 
 # =============================================================================
-# Phase 9A -- AI Analyst
+# Phase 9A / Detailed Operating Model V2.1 Gate 9 -- AI Analyst
 #
 # Delegates all context assembly and the provider call to
-# ``anchor.ai.generate_ai_analysis``; this endpoint performs no
-# financial math, sensitivity math, break-even search, or OpenAI call of
-# its own.
+# ``anchor.ai.generate_ai_analysis``/``generate_detailed_ai_analysis``; this
+# endpoint performs no financial math, sensitivity math, break-even search,
+# or OpenAI call of its own. Gains the same ``operating_mode`` discriminator
+# as ``/analyze`` (Gate 5) -- a "quick"/absent request is unaffected.
 # =============================================================================
 
 
-@app.post("/ai/analysis", response_model=AIAnalysis)
-def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
-    raw_inputs = payload.get("inputs")
-    if not isinstance(raw_inputs, dict):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Request body must include an 'inputs' object.",
-        )
-
-    try:
-        inputs = validate_acquisition_inputs(raw_inputs)
-    except InputValidationError as error:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=_validation_error_detail(error),
-        ) from None
-
+def _require_ai_hurdle_targets(payload: dict[str, Any]) -> tuple[float, float, float, ReturnHurdleMetric]:
     missing_fields = [
         field
         for field in ("target_levered_irr", "target_headline_dscr", "target_equity_multiple")
@@ -486,6 +472,90 @@ def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
                 f"got {return_hurdle_metric_raw!r}."
             ),
         ) from None
+
+    return target_levered_irr, target_headline_dscr, target_equity_multiple, return_hurdle_metric
+
+
+def _ai_analysis_detailed(payload: dict[str, Any]) -> AIAnalysis:
+    """Detailed Operating Model V2.1 Gate 9: the 'detailed' operating_mode
+    branch of ``/ai/analysis``. Validates 'terms' and
+    'detailed_operating_inputs' with the same shared validators every other
+    Detailed consumer uses, then delegates to
+    ``generate_detailed_ai_analysis`` -- no financial math, context
+    assembly, or OpenAI call of its own."""
+
+    terms = _require_deal_terms(payload)
+    detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    (
+        target_levered_irr,
+        target_headline_dscr,
+        target_equity_multiple,
+        return_hurdle_metric,
+    ) = _require_ai_hurdle_targets(payload)
+
+    try:
+        return generate_detailed_ai_analysis(
+            terms,
+            detailed_operating_inputs,
+            target_levered_irr=target_levered_irr,
+            target_equity_multiple=target_equity_multiple,
+            target_headline_dscr=target_headline_dscr,
+            return_hurdle_metric=return_hurdle_metric,
+        )
+    except InvalidBreakEvenTargetError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except AIConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from None
+    except AIProviderError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+        ) from None
+
+
+@app.post("/ai/analysis", response_model=AIAnalysis)
+def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
+    payload = dict(payload)
+    operating_mode_raw = payload.pop("operating_mode", OperatingMode.QUICK.value)
+    try:
+        operating_mode = OperatingMode(operating_mode_raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "operating_mode must be one of "
+                f"{[member.value for member in OperatingMode]}; "
+                f"got {operating_mode_raw!r}."
+            ),
+        ) from None
+
+    if operating_mode is OperatingMode.DETAILED:
+        return _ai_analysis_detailed(payload)
+
+    raw_inputs = payload.get("inputs")
+    if not isinstance(raw_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must include an 'inputs' object.",
+        )
+
+    try:
+        inputs = validate_acquisition_inputs(raw_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    (
+        target_levered_irr,
+        target_headline_dscr,
+        target_equity_multiple,
+        return_hurdle_metric,
+    ) = _require_ai_hurdle_targets(payload)
 
     try:
         return generate_ai_analysis(

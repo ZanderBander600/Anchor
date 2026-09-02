@@ -5,6 +5,7 @@ import {
   createDeal,
   deleteDeal,
   duplicateDeal,
+  fetchDetailedAIAnalysis,
   getDeal,
   listDeals,
   updateDeal,
@@ -578,5 +579,149 @@ describe('analyzeDetailedAcquisition', () => {
     await expect(
       analyzeDetailedAcquisition(GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
     ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 9 -- fetchDetailedAIAnalysis
+// =============================================================================
+
+describe('fetchDetailedAIAnalysis', () => {
+  const AI_ANALYSIS = {
+    executive_summary: 'Summary.',
+    investment_view: 'View.',
+    strengths: ['Strength.'],
+    risks: ['Risk.'],
+    return_drivers: ['Driver.'],
+    downside_analysis: 'Downside.',
+    capital_structure_analysis: 'Capital.',
+    break_even_analysis: 'Break-even.',
+    questions_to_investigate: ['Question.'],
+    confidence_notes: ['Note.'],
+  };
+
+  it('POSTs operating_mode "detailed" with terms, detailed_operating_inputs, and hurdle targets', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, AI_ANALYSIS));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchDetailedAIAnalysis(
+      GOLDEN_TERMS,
+      GOLDEN_DETAILED_OPERATING_INPUTS,
+      0.1,
+      1.5,
+      1.2,
+      'levered_irr',
+    );
+
+    expect(result).toEqual(AI_ANALYSIS);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/ai/analysis');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      operating_mode: 'detailed',
+      terms: GOLDEN_TERMS,
+      detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      target_levered_irr: 0.1,
+      target_equity_multiple: 1.5,
+      target_headline_dscr: 1.2,
+      return_hurdle_metric: 'levered_irr',
+    });
+  });
+
+  it('surfaces a distinct message for a 503 configuration failure', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(503, { detail: 'OPENAI_API_KEY is not configured.' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      fetchDetailedAIAnalysis(
+        GOLDEN_TERMS,
+        GOLDEN_DETAILED_OPERATING_INPUTS,
+        0.1,
+        1.5,
+        1.2,
+        'levered_irr',
+      ),
+    ).rejects.toThrow('OPENAI_API_KEY is not configured.');
+  });
+
+  it('surfaces a distinct message for a 502 provider failure', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(502, { detail: 'The AI provider request failed.' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      fetchDetailedAIAnalysis(
+        GOLDEN_TERMS,
+        GOLDEN_DETAILED_OPERATING_INPUTS,
+        0.1,
+        1.5,
+        1.2,
+        'levered_irr',
+      ),
+    ).rejects.toThrow('The AI provider request failed.');
+  });
+
+  it('surfaces a 422 validation failure with the issue-list shape', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(422, {
+        detail: [{ field_id: 'ltv', category: 'out_of_domain_value', message: 'bad ltv' }],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    let caught: ApiError | undefined;
+    try {
+      await fetchDetailedAIAnalysis(
+        { ...GOLDEN_TERMS, ltv: 1.5 },
+        GOLDEN_DETAILED_OPERATING_INPUTS,
+        0.1,
+        1.5,
+        1.2,
+        'levered_irr',
+      );
+    } catch (error) {
+      caught = error as ApiError;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    expect(caught?.issues[0].field_id).toBe('ltv');
+  });
+
+  it('throws an ApiError on a network failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      fetchDetailedAIAnalysis(
+        GOLDEN_TERMS,
+        GOLDEN_DETAILED_OPERATING_INPUTS,
+        0.1,
+        1.5,
+        1.2,
+        'levered_irr',
+      ),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('never includes current_noi or noi_growth in the request body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, AI_ANALYSIS));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchDetailedAIAnalysis(
+      GOLDEN_TERMS,
+      GOLDEN_DETAILED_OPERATING_INPUTS,
+      0.1,
+      1.5,
+      1.2,
+      'levered_irr',
+    );
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.body).not.toContain('current_noi');
+    expect(init.body).not.toContain('"noi_growth"');
   });
 });
