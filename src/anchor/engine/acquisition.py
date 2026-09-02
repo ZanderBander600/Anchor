@@ -11,10 +11,21 @@ here.
 
 from __future__ import annotations
 
-from ..contracts import AcquisitionInputs
-from .contracts import AcquisitionCashFlows, AcquisitionResults, ensure_finite
+from ..contracts import (
+    AcquisitionInputs,
+    AcquisitionTerms,
+    DetailedOperatingInputs,
+    acquisition_terms_from_inputs,
+)
+from .contracts import (
+    AcquisitionCashFlows,
+    AcquisitionResults,
+    OperatingProjectionLike,
+    ensure_finite,
+)
 from .debt import calculate_capital_stack, calculate_debt_schedule
-from .noi import forecast_noi
+from .noi import build_quick_operating_projection, forecast_noi
+from .operating_projection import build_detailed_operating_projection
 from .returns import calculate_return_metrics
 
 
@@ -165,17 +176,26 @@ def calculate_levered_cash_flows(
 def calculate_acquisition_cash_flows(inputs: AcquisitionInputs) -> AcquisitionCashFlows:
     """Compute the Phase 2C exit value, net sale proceeds, and cash-flow
     tuples for one ``AcquisitionInputs``, built on top of the Phase 2A NOI
-    forecast and Phase 2B debt schedule."""
+    forecast and Phase 2B debt schedule.
+
+    Quick-only convenience/testing entry point -- public signature
+    unchanged by Detailed Operating Model V2.1 Gate 3. Internally now
+    derives ``terms`` via ``acquisition_terms_from_inputs`` and passes it to
+    ``calculate_capital_stack``/``calculate_debt_schedule`` (both retyped to
+    ``AcquisitionTerms`` at this gate); every value read below is otherwise
+    identical to before this gate.
+    """
 
     noi_forecast = forecast_noi(inputs)
-    capital_stack = calculate_capital_stack(inputs)
-    debt_schedule = calculate_debt_schedule(inputs)
+    terms = acquisition_terms_from_inputs(inputs)
+    capital_stack = calculate_capital_stack(terms)
+    debt_schedule = calculate_debt_schedule(terms)
 
     exit_value = calculate_exit_value(
-        exit_noi=noi_forecast.exit_noi, exit_cap_rate=inputs.exit_cap_rate
+        exit_noi=noi_forecast.exit_noi, exit_cap_rate=terms.exit_cap_rate
     )
     disposition_costs = calculate_disposition_costs(
-        exit_value=exit_value, disposition_cost_pct=inputs.disposition_cost_pct
+        exit_value=exit_value, disposition_cost_pct=terms.disposition_cost_pct
     )
     net_sale_proceeds = calculate_net_sale_proceeds(
         exit_value=exit_value,
@@ -183,12 +203,12 @@ def calculate_acquisition_cash_flows(inputs: AcquisitionInputs) -> AcquisitionCa
         disposition_costs=disposition_costs,
     )
     capex_by_year = calculate_capex_by_year(
-        annual_capex_reserve=inputs.annual_capex_reserve,
-        hold_period=inputs.hold_period,
+        annual_capex_reserve=terms.annual_capex_reserve,
+        hold_period=terms.hold_period,
     )
 
     unlevered_cash_flows = calculate_unlevered_cash_flows(
-        purchase_price=inputs.purchase_price,
+        purchase_price=terms.purchase_price,
         noi_by_year=noi_forecast.noi_by_year,
         exit_value=exit_value,
         acquisition_costs=capital_stack.acquisition_costs,
@@ -214,42 +234,43 @@ def calculate_acquisition_cash_flows(inputs: AcquisitionInputs) -> AcquisitionCa
 
 
 # =============================================================================
-# Phase 2E -- final orchestration
+# Phase 2E / Detailed Operating Model V2.1 Gate 3 -- final orchestration
 # =============================================================================
 
 
-def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
-    """Convert one ``AcquisitionInputs`` into one ``AcquisitionResults``.
+def analyze_acquisition_from_operating_projection(
+    operating_projection: OperatingProjectionLike,
+    terms: AcquisitionTerms,
+) -> AcquisitionResults:
+    """The single authoritative downstream acquisition/debt/returns
+    calculation path (``docs/detailed_operating_model_v2_1_architecture.md``
+    Section 3.1/3.2).
 
-    The sole public engine entry point (``docs/phase_2_deterministic_engine.md``
-    "Public Engine Entry Point"). This function performs no calculation of
-    its own: it calls the Phase 2A NOI forecast, Phase 2A/2B capital stack
-    and debt schedule, and Phase 2C exit-value/cash-flow assembly exactly
-    once each, then passes their results into the Phase 2D return metrics,
-    and finally assembles every result into one ``AcquisitionResults``.
+    Extracted from ``analyze_acquisition``'s prior body with zero formula
+    change: every calculation below is exactly what ``analyze_acquisition``
+    already performed, now reading ``noi_by_year``/``exit_noi``/
+    ``going_in_cap_rate`` off ``operating_projection`` (either the Quick
+    ``NoiForecast`` or the Detailed ``OperatingProjection`` -- both satisfy
+    ``OperatingProjectionLike``) and every acquisition/debt/exit assumption
+    off ``terms`` (``AcquisitionTerms``), rather than off a
+    ``forecast_noi(inputs)`` call and an ``AcquisitionInputs`` instance
+    directly.
 
-    ``calculate_acquisition_cash_flows`` is intentionally not called here --
-    it independently recomputes the NOI forecast, capital stack, and debt
-    schedule internally, which would duplicate the calculations already
-    performed by this function. Instead, the same lower-level Phase 2C /
-    Underwriting V2 Gate 2/3 assembly functions it uses
-    (``calculate_exit_value``, ``calculate_disposition_costs``,
-    ``calculate_net_sale_proceeds``, ``calculate_capex_by_year``,
-    ``calculate_unlevered_cash_flows``, ``calculate_levered_cash_flows``) are
-    called directly here, reusing the single ``noi_forecast``,
-    ``capital_stack``, and ``debt_schedule`` already computed in this
-    function.
+    Called by both ``analyze_acquisition`` (Quick) and
+    ``analyze_detailed_acquisition`` (Detailed) below -- neither duplicates
+    any line of this function; both converge here exactly once. This
+    function never reads ``current_noi``, ``noi_growth``, or ``occupancy``
+    -- none of the three exists on either of its parameter types.
     """
 
-    noi_forecast = forecast_noi(inputs)
-    capital_stack = calculate_capital_stack(inputs)
-    debt_schedule = calculate_debt_schedule(inputs)
+    capital_stack = calculate_capital_stack(terms)
+    debt_schedule = calculate_debt_schedule(terms)
 
     exit_value = calculate_exit_value(
-        exit_noi=noi_forecast.exit_noi, exit_cap_rate=inputs.exit_cap_rate
+        exit_noi=operating_projection.exit_noi, exit_cap_rate=terms.exit_cap_rate
     )
     disposition_costs = calculate_disposition_costs(
-        exit_value=exit_value, disposition_cost_pct=inputs.disposition_cost_pct
+        exit_value=exit_value, disposition_cost_pct=terms.disposition_cost_pct
     )
     net_sale_proceeds = calculate_net_sale_proceeds(
         exit_value=exit_value,
@@ -257,12 +278,12 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
         disposition_costs=disposition_costs,
     )
     capex_by_year = calculate_capex_by_year(
-        annual_capex_reserve=inputs.annual_capex_reserve,
-        hold_period=inputs.hold_period,
+        annual_capex_reserve=terms.annual_capex_reserve,
+        hold_period=terms.hold_period,
     )
     unlevered_cash_flows = calculate_unlevered_cash_flows(
-        purchase_price=inputs.purchase_price,
-        noi_by_year=noi_forecast.noi_by_year,
+        purchase_price=terms.purchase_price,
+        noi_by_year=operating_projection.noi_by_year,
         exit_value=exit_value,
         acquisition_costs=capital_stack.acquisition_costs,
         disposition_costs=disposition_costs,
@@ -270,21 +291,21 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
     )
     levered_cash_flows = calculate_levered_cash_flows(
         initial_equity=capital_stack.initial_equity,
-        noi_by_year=noi_forecast.noi_by_year,
+        noi_by_year=operating_projection.noi_by_year,
         annual_debt_service=debt_schedule.annual_debt_service,
         net_sale_proceeds=net_sale_proceeds,
         capex_by_year=capex_by_year,
     )
 
     return_metrics = calculate_return_metrics(
-        noi_by_year=noi_forecast.noi_by_year,
+        noi_by_year=operating_projection.noi_by_year,
         annual_debt_service=debt_schedule.annual_debt_service,
         unlevered_cash_flows=unlevered_cash_flows,
         levered_cash_flows=levered_cash_flows,
     )
 
     return AcquisitionResults(
-        going_in_cap_rate=noi_forecast.going_in_cap_rate,
+        going_in_cap_rate=operating_projection.going_in_cap_rate,
         loan_amount=capital_stack.loan_amount,
         acquisition_costs=capital_stack.acquisition_costs,
         financing_fee=capital_stack.financing_fee,
@@ -292,9 +313,9 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
         monthly_debt_service=debt_schedule.monthly_debt_service,
         annual_debt_service=debt_schedule.annual_debt_service,
         remaining_loan_balance=debt_schedule.remaining_loan_balance,
-        noi_by_year=noi_forecast.noi_by_year,
+        noi_by_year=operating_projection.noi_by_year,
         capex_by_year=capex_by_year,
-        exit_noi=noi_forecast.exit_noi,
+        exit_noi=operating_projection.exit_noi,
         exit_value=exit_value,
         disposition_costs=disposition_costs,
         net_sale_proceeds=net_sale_proceeds,
@@ -307,3 +328,55 @@ def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
         headline_dscr=return_metrics.headline_dscr,
         min_dscr=return_metrics.min_dscr,
     )
+
+
+def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
+    """Convert one ``AcquisitionInputs`` into one ``AcquisitionResults``.
+
+    The sole public Quick engine entry point
+    (``docs/phase_2_deterministic_engine.md`` "Public Engine Entry Point"),
+    unchanged in behavior by Detailed Operating Model V2.1 Gate 3. This
+    function performs no calculation of its own: it builds the Quick
+    operating projection and the shared ``AcquisitionTerms``, exactly once
+    each, then delegates the entire downstream acquisition/debt/returns
+    calculation to ``analyze_acquisition_from_operating_projection`` --
+    the identical function ``analyze_detailed_acquisition`` (below) also
+    calls.
+
+    ``calculate_acquisition_cash_flows`` is intentionally not called here --
+    it independently recomputes the NOI forecast, capital stack, and debt
+    schedule internally, which would duplicate the calculations already
+    performed by this function.
+    """
+
+    operating_projection = build_quick_operating_projection(inputs)
+    terms = acquisition_terms_from_inputs(inputs)
+    return analyze_acquisition_from_operating_projection(operating_projection, terms)
+
+
+def analyze_detailed_acquisition(
+    terms: AcquisitionTerms,
+    detailed_inputs: DetailedOperatingInputs,
+) -> AcquisitionResults:
+    """Convert one ``AcquisitionTerms`` + ``DetailedOperatingInputs`` into
+    one ``AcquisitionResults``.
+
+    The Detailed public engine entry point
+    (``docs/detailed_operating_model_v2_1_architecture.md`` Section 4). No
+    ``AcquisitionInputs`` instance is constructed, read, or required
+    anywhere in this call -- ``current_noi``, ``noi_growth``, and
+    ``occupancy`` simply do not exist in this path. Builds the Detailed
+    operating projection, exactly once, then delegates the entire
+    downstream acquisition/debt/returns calculation to
+    ``analyze_acquisition_from_operating_projection`` -- the identical
+    function ``analyze_acquisition`` (above) also calls. Neither entry
+    point duplicates any debt, exit-valuation, transaction-cost, CapEx,
+    IRR, equity-multiple, DSCR, sensitivity, or break-even logic.
+    """
+
+    operating_projection = build_detailed_operating_projection(
+        detailed_inputs,
+        hold_period=terms.hold_period,
+        purchase_price=terms.purchase_price,
+    )
+    return analyze_acquisition_from_operating_projection(operating_projection, terms)
