@@ -9,6 +9,19 @@ is bit-for-bit interchangeable with a V1-era instance wherever the
 """
 
 from dataclasses import dataclass
+from enum import StrEnum
+
+
+class OperatingMode(StrEnum):
+    """Detailed Operating Model V2.1 Gate 5 -- which operating-input
+    contract a deal (API request or persisted deal) uses: Quick
+    (``AcquisitionInputs``) or Detailed (``AcquisitionTerms`` +
+    ``DetailedOperatingInputs``). ``QUICK`` is always the default -- an
+    existing payload/deal with no ``operating_mode`` present means Quick,
+    unchanged."""
+
+    QUICK = "quick"
+    DETAILED = "detailed"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

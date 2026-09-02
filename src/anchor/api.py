@@ -42,10 +42,10 @@ from .analysis import (
     build_standard_presets,
     run_two_way_sensitivity,
 )
-from .contracts import AcquisitionInputs
+from .contracts import AcquisitionInputs, OperatingMode
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError
-from .engine import AcquisitionResults, analyze_acquisition
+from .engine import AcquisitionResults, analyze_acquisition, analyze_detailed_acquisition
 from .env import load_repo_env
 from .excel_reader import ExcelIntakeReport, read_acquisition_inputs_from_bytes_with_report
 from .ingestion import (
@@ -54,7 +54,12 @@ from .ingestion import (
     ExtractionResult,
     extract_om,
 )
-from .validation import InputValidationError, validate_acquisition_inputs
+from .validation import (
+    InputValidationError,
+    validate_acquisition_inputs,
+    validate_acquisition_terms,
+    validate_detailed_operating_inputs,
+)
 
 # Load repo-local .env (if present) before any request can resolve OpenAI /
 # Azure DI credentials via os.environ -- see anchor.env for precedence rules.
@@ -160,8 +165,77 @@ def _validation_error_detail(error: InputValidationError) -> list[dict[str, Any]
     ]
 
 
+def _analyze_detailed(payload: dict[str, Any]) -> AcquisitionResults:
+    """Detailed Operating Model V2.1 Gate 5: the 'detailed' operating_mode
+    branch of ``/analyze``. Validates 'terms' and 'detailed_operating_inputs'
+    with the same shared validators every other consumer uses, then
+    delegates to ``analyze_detailed_acquisition`` -- no financial math or
+    validation rule of its own."""
+
+    raw_terms = payload.get("terms")
+    if not isinstance(raw_terms, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A 'detailed' operating_mode request must include a 'terms' object.",
+        )
+    raw_detailed_inputs = payload.get("detailed_operating_inputs")
+    if not isinstance(raw_detailed_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "A 'detailed' operating_mode request must include a "
+                "'detailed_operating_inputs' object."
+            ),
+        )
+
+    try:
+        terms = validate_acquisition_terms(raw_terms)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    try:
+        detailed_inputs = validate_detailed_operating_inputs(raw_detailed_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    return analyze_detailed_acquisition(terms, detailed_inputs)
+
+
 @app.post("/analyze", response_model=AcquisitionResults)
 def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults:
+    """Detailed Operating Model V2.1 Gate 5: gains an optional
+    ``operating_mode`` discriminator (``"quick"`` default / ``"detailed"``).
+    A ``"quick"``/absent ``operating_mode`` request is unaffected -- the
+    remaining payload is validated and analyzed exactly as before this
+    gate; ``operating_mode`` itself is popped first so it is never seen by
+    ``validate_acquisition_inputs`` as an unknown Field ID. A
+    ``"detailed"`` request is delegated to ``_analyze_detailed``. Response
+    shape (``AcquisitionResults``) is identical either way.
+    """
+
+    payload = dict(payload)
+    operating_mode_raw = payload.pop("operating_mode", OperatingMode.QUICK.value)
+    try:
+        operating_mode = OperatingMode(operating_mode_raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "operating_mode must be one of "
+                f"{[member.value for member in OperatingMode]}; "
+                f"got {operating_mode_raw!r}."
+            ),
+        ) from None
+
+    if operating_mode is OperatingMode.DETAILED:
+        return _analyze_detailed(payload)
+
     try:
         inputs = validate_acquisition_inputs(payload)
     except InputValidationError as error:

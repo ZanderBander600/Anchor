@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
 
-from .contracts import AcquisitionInputs, DetailedOperatingInputs
+from .contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs
 
 
 FIELD_IDS = (
@@ -56,6 +56,27 @@ DETAILED_FIELD_IDS = (
     "management_fee_pct",
     "revenue_growth",
     "expense_growth",
+)
+
+# Detailed Operating Model V2.1 Gate 5: the eleven AcquisitionTerms Field
+# IDs -- exactly the FIELD_IDS/V2_FIELD_IDS names that are neither
+# current_noi, occupancy, nor noi_growth. Every one of these already has a
+# domain rule in _normalize_field_value (below); validate_acquisition_terms
+# reuses that same function field-by-field rather than redeclaring any
+# domain rule, so a Quick and a Detailed deal validate purchase_price (or
+# any other shared field) identically, by construction.
+TERMS_FIELD_IDS = (
+    "purchase_price",
+    "hold_period",
+    "exit_cap_rate",
+    "ltv",
+    "interest_rate",
+    "amortization",
+    "acquisition_cost_pct",
+    "financing_fee_pct",
+    "disposition_cost_pct",
+    "annual_capex_reserve",
+    "io_period",
 )
 
 _YEAR_FIELD_IDS = frozenset(("hold_period", "amortization", "io_period"))
@@ -348,6 +369,80 @@ def validate_acquisition_inputs(values: Mapping[str, object]) -> AcquisitionInpu
         raise InputValidationError(issues)
 
     return AcquisitionInputs(**normalized)
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 5 -- AcquisitionTerms validation
+# =============================================================================
+
+
+def validate_acquisition_terms(values: Mapping[str, object]) -> AcquisitionTerms:
+    """Normalize and validate an ``AcquisitionTerms`` mapping: all eleven
+    ``TERMS_FIELD_IDS`` are required (``AcquisitionTerms`` has no field
+    defaults -- Detailed Operating Model V2.1 Gate 1). Needed once the
+    Detailed API path can submit ``terms`` directly (the Quick path never
+    calls this -- it reaches ``AcquisitionTerms`` only via
+    ``acquisition_terms_from_inputs``, which performs no validation of its
+    own because its argument is already validated).
+
+    Reuses ``_normalize_field_value`` -- the exact same per-field domain
+    function ``validate_acquisition_inputs`` uses -- for every one of the
+    eleven fields, so a shared field (e.g. ``purchase_price``) validates
+    identically for a Quick and a Detailed deal. Never redeclares a domain
+    rule. Issue ordering mirrors ``validate_acquisition_inputs``: unknown
+    IDs first, then missing IDs, then value/type/domain issues in canonical
+    field order.
+    """
+
+    issues: list[InputIssue] = []
+    normalized: dict[str, float | int] = {}
+
+    unknown_ids = sorted(
+        (field_id for field_id in values if field_id not in TERMS_FIELD_IDS),
+        key=_unknown_id_sort_key,
+    )
+    for field_id in unknown_ids:
+        representation = _safe_repr(field_id)
+        if isinstance(field_id, str):
+            supplied_id = field_id
+        elif representation is not None:
+            supplied_id = representation
+        else:
+            supplied_id = f"<{type(field_id).__qualname__}>"
+        display = representation or "that cannot be displayed safely"
+        issues.append(
+            InputIssue(
+                category=IssueCategory.UNKNOWN_FIELD_ID,
+                field_id=supplied_id,
+                value=field_id if representation is not None else None,
+                message=f"Unknown Field ID {display}.",
+            )
+        )
+
+    missing_ids = [field_id for field_id in TERMS_FIELD_IDS if field_id not in values]
+    for field_id in missing_ids:
+        issues.append(
+            InputIssue(
+                category=IssueCategory.MISSING_FIELD_ID,
+                field_id=field_id,
+                message=f"Missing required Field ID {field_id!r}.",
+            )
+        )
+
+    for field_id in TERMS_FIELD_IDS:
+        if field_id not in values:
+            continue
+        normalized_value, issue = _normalize_field_value(field_id, values[field_id])
+        if issue is not None:
+            issues.append(issue)
+        else:
+            assert normalized_value is not None
+            normalized[field_id] = normalized_value
+
+    if issues:
+        raise InputValidationError(issues)
+
+    return AcquisitionTerms(**normalized)
 
 
 # =============================================================================
