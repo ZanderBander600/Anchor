@@ -15,7 +15,7 @@ interface FieldGroup {
 
 const FIELD_GROUPS: FieldGroup[] = [
   {
-    title: 'Property & Income',
+    title: 'Acquisition',
     fields: [
       { key: 'purchasePrice', label: 'Purchase Price', prefix: '$' },
       { key: 'currentNoi', label: 'Current NOI', prefix: '$' },
@@ -23,7 +23,7 @@ const FIELD_GROUPS: FieldGroup[] = [
     ],
   },
   {
-    title: 'Growth & Hold',
+    title: 'Growth & Exit',
     fields: [
       { key: 'noiGrowth', label: 'NOI Growth', suffix: '%' },
       { key: 'holdPeriod', label: 'Hold Period', suffix: 'yrs' },
@@ -31,11 +31,24 @@ const FIELD_GROUPS: FieldGroup[] = [
     ],
   },
   {
+    title: 'Transaction Costs',
+    fields: [
+      { key: 'acquisitionCostPct', label: 'Acquisition Costs', suffix: '%' },
+      { key: 'financingFeePct', label: 'Financing Fee', suffix: '%' },
+      { key: 'dispositionCostPct', label: 'Disposition Costs', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Operations',
+    fields: [{ key: 'annualCapexReserve', label: 'Annual CapEx Reserve', prefix: '$' }],
+  },
+  {
     title: 'Financing',
     fields: [
       { key: 'ltv', label: 'LTV', suffix: '%' },
       { key: 'interestRate', label: 'Interest Rate', suffix: '%' },
       { key: 'amortization', label: 'Amortization', suffix: 'yrs' },
+      { key: 'ioPeriod', label: 'Interest-Only Period', suffix: 'yrs' },
     ],
   },
 ];

@@ -7,11 +7,19 @@ interface StatProps {
   value: string;
 }
 
-function StatCard({ label, value }: StatProps) {
+interface StatCardProps extends StatProps {
+  /** An optional secondary line under the primary value -- used to pair
+   * Year 1 DSCR with Minimum DSCR (Underwriting V2 Gate 4) without adding a
+   * fifth card to the headline strip. */
+  caption?: string;
+}
+
+function StatCard({ label, value, caption }: StatCardProps) {
   return (
     <div className="stat-card stat-card-primary">
       <span className="stat-label">{label}</span>
       <span className="stat-value stat-value-primary">{value}</span>
+      {caption && <span className="stat-caption">{caption}</span>}
     </div>
   );
 }
@@ -38,7 +46,11 @@ export function ResultsPanel({ results }: ResultsPanelProps) {
           <StatCard label="Levered IRR" value={formatPercent(results.levered_irr)} />
           <StatCard label="Equity Multiple" value={formatMultiple(results.equity_multiple)} />
           <StatCard label="Going-In Cap Rate" value={formatPercent(results.going_in_cap_rate)} />
-          <StatCard label="Year 1 DSCR" value={formatMultiple(results.dscr_by_year[0])} />
+          <StatCard
+            label="Year 1 DSCR"
+            value={formatMultiple(results.dscr_by_year[0])}
+            caption={`Min ${formatMultiple(results.min_dscr)}`}
+          />
         </div>
       </section>
 
@@ -53,6 +65,8 @@ export function ResultsPanel({ results }: ResultsPanelProps) {
         <section className="card">
           <h3 className="card-title">Capitalization</h3>
           <InfoRow label="Loan Amount" value={formatCurrency(results.loan_amount)} />
+          <InfoRow label="Acquisition Costs" value={formatCurrency(results.acquisition_costs)} />
+          <InfoRow label="Financing Fee" value={formatCurrency(results.financing_fee)} />
           <InfoRow label="Initial Equity" value={formatCurrency(results.initial_equity)} />
           <InfoRow
             label="Monthly Debt Service"
@@ -62,10 +76,12 @@ export function ResultsPanel({ results }: ResultsPanelProps) {
             label="Remaining Loan Balance"
             value={formatCurrency(results.remaining_loan_balance)}
           />
+          <InfoRow label="Minimum DSCR" value={formatMultiple(results.min_dscr)} />
         </section>
 
         <section className="card">
           <h3 className="card-title">Exit</h3>
+          <InfoRow label="Disposition Costs" value={formatCurrency(results.disposition_costs)} />
           <InfoRow label="Net Sale Proceeds" value={formatCurrency(results.net_sale_proceeds)} />
         </section>
       </div>

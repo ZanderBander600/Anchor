@@ -30,6 +30,8 @@ import {
   buildAcquisitionRequest,
   buildApprovedFormValues,
   buildFormValuesFromAcquisitionInputs,
+  buildFormValuesFromExcelIntakeReport,
+  buildV2ReviewMessage,
   DEFAULT_TARGET_EQUITY_MULTIPLE,
   DEFAULT_TARGET_HEADLINE_DSCR,
   DEFAULT_TARGET_LEVERED_IRR_PERCENT,
@@ -49,6 +51,7 @@ import type {
   StandardBreakEvenAnalysis,
   StandardSensitivityPresets,
 } from './types';
+import { ACQUISITION_FIELD_IDS, V2_FIELD_IDS } from './types';
 
 export default function App() {
   const [values, setValues] = useState<AcquisitionFormValues>(BLANK_FORM_VALUES);
@@ -82,6 +85,10 @@ export default function App() {
   const [isUploadingExcel, setIsUploadingExcel] = useState(false);
   const [excelUploadError, setExcelUploadError] = useState<string | null>(null);
   const [excelUploadSuccessMessage, setExcelUploadSuccessMessage] = useState<string | null>(null);
+  // Underwriting V2 Gate 6: set only when the uploaded workbook left at
+  // least one V2 field defaulted (a legacy/partial workbook) -- null for a
+  // complete fourteen-field workbook, so no warning renders.
+  const [excelV2ReviewMessage, setExcelV2ReviewMessage] = useState<string | null>(null);
 
   // Persistence Phase B/C -- Deal Bar / Deal Library. `currentDealId` is set
   // only after a deal is created or opened (never guessed at); it is what
@@ -145,6 +152,7 @@ export default function App() {
     setExtractionError(null);
     setExcelUploadSuccessMessage(null);
     setExcelUploadError(null);
+    setExcelV2ReviewMessage(null);
   }
 
   function resetDownstreamAnalysisState() {
@@ -197,15 +205,19 @@ export default function App() {
     setIsUploadingExcel(true);
     setExcelUploadError(null);
     setExcelUploadSuccessMessage(null);
+    setExcelV2ReviewMessage(null);
     try {
-      const inputs = await uploadExcel(file);
-      setValues(buildFormValuesFromAcquisitionInputs(inputs));
+      const report = await uploadExcel(file);
+      setValues(buildFormValuesFromExcelIntakeReport(report));
       resetDownstreamAnalysisState();
       clearSaveDealError();
+      const importedCount =
+        ACQUISITION_FIELD_IDS.length + V2_FIELD_IDS.length - report.defaulted_v2_field_ids.length;
       setExcelUploadSuccessMessage(
-        `Workbook loaded successfully. 9 assumptions imported from "${file.name}". ` +
-          'Review the values below, make any changes, then click Analyze Deal.',
+        `Workbook loaded successfully. ${importedCount} assumption${importedCount === 1 ? '' : 's'} ` +
+          `imported from "${file.name}". Review the values below, make any changes, then click Analyze Deal.`,
       );
+      setExcelV2ReviewMessage(buildV2ReviewMessage(report.defaulted_v2_field_ids));
       document.querySelector('.assumptions-form')?.scrollIntoView?.({
         behavior: 'smooth',
         block: 'start',
@@ -642,6 +654,7 @@ export default function App() {
                   isLoading={isUploadingExcel}
                   error={excelUploadError}
                   successMessage={excelUploadSuccessMessage}
+                  reviewMessage={excelV2ReviewMessage}
                   onUpload={(file) => void handleUploadExcel(file)}
                 />
 

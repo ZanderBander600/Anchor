@@ -17,13 +17,14 @@ import {
   uploadExcel,
   uploadOm,
 } from './api';
-import { DEFAULT_FORM_VALUES } from './convert';
+import { buildAcquisitionRequest, DEFAULT_FORM_VALUES, V2_GOLDEN_FORM_VALUES } from './convert';
 import type {
   AcquisitionRequest,
   AcquisitionResults,
   AIAnalysis,
   BreakEvenResult,
   Deal,
+  ExcelIntakeReport,
   ExtractionResult,
   FieldCandidates,
   StandardBreakEvenAnalysis,
@@ -223,6 +224,8 @@ function makeResults(overrides: Partial<AcquisitionResults> = {}): AcquisitionRe
   return {
     going_in_cap_rate: 0.05,
     loan_amount: 32_500_000,
+    acquisition_costs: 0,
+    financing_fee: 0,
     initial_equity: 17_500_000,
     monthly_debt_service: 179_466.2,
     annual_debt_service: [
@@ -230,8 +233,10 @@ function makeResults(overrides: Partial<AcquisitionResults> = {}): AcquisitionRe
     ],
     remaining_loan_balance: 30_000_000,
     noi_by_year: [2500000, 2575000, 2652250, 2731817.5, 2813772.03],
+    capex_by_year: [0, 0, 0, 0, 0],
     exit_noi: 2898185.19,
     exit_value: 52694276.18,
+    disposition_costs: 0,
     net_sale_proceeds: 22694276.18,
     unlevered_cash_flows: [
       -50000000, 2500000, 2575000, 2652250, 2731817.5, 25698058.03,
@@ -244,6 +249,54 @@ function makeResults(overrides: Partial<AcquisitionResults> = {}): AcquisitionRe
     equity_multiple: 1.442889,
     dscr_by_year: [1.1608, 1.19567, 1.23154, 1.26849, 1.30654],
     headline_dscr: 1.1608,
+    min_dscr: 1.1608,
+    ...overrides,
+  };
+}
+
+/** The frozen Underwriting V2 golden case's engine output (Gate 4), for
+ * tests demonstrating the full V2 flow end-to-end with authoritative
+ * mocked values -- never reproduced via a TypeScript formula. */
+function makeV2GoldenResults(overrides: Partial<AcquisitionResults> = {}): AcquisitionResults {
+  return makeResults({
+    going_in_cap_rate: 0.06,
+    loan_amount: 6_000_000,
+    acquisition_costs: 200_000,
+    financing_fee: 60_000,
+    initial_equity: 4_260_000,
+    monthly_debt_service: 32209.29738072834,
+    annual_debt_service: [300_000, 300_000, 386511.5685687402, 386511.5685687402, 386511.5685687402],
+    remaining_loan_balance: 5720615.679740943,
+    noi_by_year: [600000, 618000, 636540, 655636.2, 675305.286],
+    capex_by_year: [50_000, 50_000, 50_000, 50_000, 50_000],
+    exit_noi: 675305.286,
+    exit_value: 10700991.455076924,
+    disposition_costs: 267524.7863769231,
+    net_sale_proceeds: 4712850.988959057,
+    unlevered_cash_flows: [-10200000, 550000, 568000, 586540, 605636.2, 11058771.9547],
+    levered_cash_flows: [-4260000, 250000, 268000, 200028.43143125979, 219124.63143125974, 4951644.7063903175],
+    unlevered_irr: 0.061388193938218594,
+    levered_irr: 0.07380240064972221,
+    equity_multiple: 1.3823468941908068,
+    dscr_by_year: [2.0, 2.06, 1.6468847293681788, 1.696291271249224, 1.7471800093867011],
+    headline_dscr: 2.0,
+    min_dscr: 1.6468847293681788,
+    ...overrides,
+  });
+}
+
+function makeExcelIntakeReport(
+  overrides: Partial<ExcelIntakeReport> = {},
+): ExcelIntakeReport {
+  return {
+    inputs: makeAcquisitionRequest(),
+    defaulted_v2_field_ids: [
+      'acquisition_cost_pct',
+      'financing_fee_pct',
+      'disposition_cost_pct',
+      'annual_capex_reserve',
+      'io_period',
+    ],
     ...overrides,
   };
 }
@@ -296,6 +349,69 @@ function fillGoldenDeal() {
   });
   fireEvent.change(screen.getByLabelText(/^Amortization/), {
     target: { value: DEFAULT_FORM_VALUES.amortization },
+  });
+  fireEvent.change(screen.getByLabelText(/^Acquisition Costs/), {
+    target: { value: DEFAULT_FORM_VALUES.acquisitionCostPct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Financing Fee/), {
+    target: { value: DEFAULT_FORM_VALUES.financingFeePct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Disposition Costs/), {
+    target: { value: DEFAULT_FORM_VALUES.dispositionCostPct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Annual CapEx Reserve/), {
+    target: { value: DEFAULT_FORM_VALUES.annualCapexReserve },
+  });
+  fireEvent.change(screen.getByLabelText(/^Interest-Only Period/), {
+    target: { value: DEFAULT_FORM_VALUES.ioPeriod },
+  });
+}
+
+/** Fills AssumptionsForm with the frozen Underwriting V2 golden-case
+ * fixture values (Gate 6) -- all fourteen fields, including nonzero V2
+ * assumptions. */
+function fillV2GoldenDeal() {
+  fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.purchasePrice },
+  });
+  fireEvent.change(screen.getByLabelText(/^Current NOI/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.currentNoi },
+  });
+  fireEvent.change(screen.getByLabelText(/^Occupancy/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.occupancy },
+  });
+  fireEvent.change(screen.getByLabelText(/^NOI Growth/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.noiGrowth },
+  });
+  fireEvent.change(screen.getByLabelText(/^Hold Period/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.holdPeriod },
+  });
+  fireEvent.change(screen.getByLabelText(/^Exit Cap Rate/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.exitCapRate },
+  });
+  fireEvent.change(screen.getByLabelText(/^LTV/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.ltv },
+  });
+  fireEvent.change(screen.getByLabelText(/^Interest Rate/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.interestRate },
+  });
+  fireEvent.change(screen.getByLabelText(/^Amortization/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.amortization },
+  });
+  fireEvent.change(screen.getByLabelText(/^Acquisition Costs/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.acquisitionCostPct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Financing Fee/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.financingFeePct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Disposition Costs/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.dispositionCostPct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Annual CapEx Reserve/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.annualCapexReserve },
+  });
+  fireEvent.change(screen.getByLabelText(/^Interest-Only Period/), {
+    target: { value: V2_GOLDEN_FORM_VALUES.ioPeriod },
   });
 }
 
@@ -359,6 +475,122 @@ describe('App workflow', () => {
     expect(screen.getByLabelText(/^Amortization/)).toHaveProperty('value', '');
   });
 
+  it('renders all five Underwriting V2 fields blank on a fresh manual deal (Gate 6)', () => {
+    render(<App />);
+
+    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '');
+  });
+
+  it('blocks Analyze when a V2 field is blank, and unblocks it once completed', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeV2GoldenResults());
+    render(<App />);
+    fillV2GoldenDeal();
+    await user.clear(screen.getByLabelText(/^Interest-Only Period/));
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('Interest-Only Period is required.')).toBeTruthy();
+    expect(mockAnalyze).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText(/^Interest-Only Period/), '2');
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+  });
+
+  it('blocks Save when a V2 field is blank, and unblocks it once completed', async () => {
+    const user = userEvent.setup();
+    mockCreateDeal.mockResolvedValue(makeDeal());
+    render(<App />);
+    fillV2GoldenDeal();
+    await user.clear(screen.getByLabelText(/^Annual CapEx Reserve/));
+    await user.type(screen.getByLabelText('Deal Name'), 'V2 Deal');
+
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+
+    expect(await screen.findByText('Annual CapEx Reserve is required.')).toBeTruthy();
+    expect(mockCreateDeal).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText(/^Annual CapEx Reserve/), '50000');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+
+    await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
+  });
+
+  it('accepts an explicit 0 for a V2 field and submits it', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    expect(mockAnalyze).toHaveBeenCalledWith(
+      expect.objectContaining({
+        acquisition_cost_pct: 0,
+        financing_fee_pct: 0,
+        disposition_cost_pct: 0,
+        annual_capex_reserve: 0,
+        io_period: 0,
+      }),
+    );
+  });
+
+  it('rejects a fractional Interest-Only Period', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    fillV2GoldenDeal();
+    await user.clear(screen.getByLabelText(/^Interest-Only Period/));
+    await user.type(screen.getByLabelText(/^Interest-Only Period/), '2.5');
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('Interest-Only Period must be a whole number.')).toBeTruthy();
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('accepts an Interest-Only Period greater than the hold period', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeV2GoldenResults());
+    render(<App />);
+    fillV2GoldenDeal();
+    await user.clear(screen.getByLabelText(/^Hold Period/));
+    await user.type(screen.getByLabelText(/^Hold Period/), '5');
+    await user.clear(screen.getByLabelText(/^Interest-Only Period/));
+    await user.type(screen.getByLabelText(/^Interest-Only Period/), '10');
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    expect(mockAnalyze).toHaveBeenCalledWith(
+      expect.objectContaining({ hold_period: 5, io_period: 10 }),
+    );
+  });
+
+  it('converts V2 percentage fields to canonical fractions', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeV2GoldenResults());
+    render(<App />);
+    fillV2GoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    expect(mockAnalyze).toHaveBeenCalledWith(
+      expect.objectContaining({
+        acquisition_cost_pct: 0.02,
+        financing_fee_pct: 0.01,
+        disposition_cost_pct: 0.025,
+      }),
+    );
+  });
+
   it('shows a validation error and never calls /analyze when submitting a blank form', async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -379,6 +611,38 @@ describe('App workflow', () => {
 
     expect(await screen.findByText('7.91%')).toBeTruthy();
     expect(screen.getByText('1.44x')).toBeTruthy();
+  });
+
+  it('renders the V2 golden case: transaction costs, CapEx, and Year 1 vs. Minimum DSCR distinctly (Gate 6)', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeV2GoldenResults());
+    render(<App />);
+    fillV2GoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('7.38%')).toBeTruthy(); // Levered IRR
+    expect(screen.getByText('1.38x')).toBeTruthy(); // Equity Multiple
+    expect(screen.getByText('$200,000')).toBeTruthy(); // Acquisition Costs
+    expect(screen.getByText('$60,000')).toBeTruthy(); // Financing Fee
+    expect(screen.getByText('$267,525')).toBeTruthy(); // Disposition Costs
+
+    // Year 1 DSCR (headline strip) and Minimum DSCR render as visibly
+    // distinct values -- never computed in the frontend, only rendered.
+    expect(screen.getAllByText('2.00x').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Min 1.65x')).toBeTruthy();
+  });
+
+  it('shows the annual CapEx series in the year-by-year table', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeV2GoldenResults());
+    render(<App />);
+    fillV2GoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('7.38%');
+
+    expect(screen.getAllByText('$50,000').length).toBeGreaterThanOrEqual(1);
   });
 
   it('clears displayed results when an assumption is edited after a successful analysis', async () => {
@@ -479,6 +743,7 @@ describe('App workflow', () => {
         equity_multiple: null,
         dscr_by_year: [null, null, null, null, null],
         headline_dscr: null,
+        min_dscr: null,
       }),
     );
     render(<App />);
@@ -508,6 +773,11 @@ describe('App workflow', () => {
       ltv: 0.65,
       interest_rate: 0.0525,
       amortization: 30,
+      acquisition_cost_pct: 0,
+      financing_fee_pct: 0,
+      disposition_cost_pct: 0,
+      annual_capex_reserve: 0,
+      io_period: 0,
     });
   });
 });
@@ -1090,6 +1360,21 @@ describe('OM ingestion workflow', () => {
     expect(summary.textContent).toContain('Hold Period');
   });
 
+  it('communicates that the five V2 assumptions require analyst entry, not OM extraction (Gate 6)', async () => {
+    const user = userEvent.setup();
+    await uploadAndApprove(user);
+
+    const notice = screen.getByText(/Additional underwriting assumptions/);
+    expect(notice.textContent).toContain('Acquisition Costs');
+    expect(notice.textContent).toContain('Financing Fee');
+    expect(notice.textContent).toContain('Disposition Costs');
+    expect(notice.textContent).toContain('Annual CapEx Reserve');
+    expect(notice.textContent).toContain('Interest-Only Period');
+
+    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '');
+  });
+
   it('leaves pre-filled values editable in AssumptionsForm after handoff', async () => {
     const user = userEvent.setup();
     await uploadAndApprove(user);
@@ -1168,6 +1453,11 @@ function makeAcquisitionRequest(overrides: Partial<AcquisitionRequest> = {}): Ac
     ltv: 0.6,
     interest_rate: 0.05,
     amortization: 25,
+    acquisition_cost_pct: 0,
+    financing_fee_pct: 0,
+    disposition_cost_pct: 0,
+    annual_capex_reserve: 0,
+    io_period: 0,
     ...overrides,
   };
 }
@@ -1175,7 +1465,7 @@ function makeAcquisitionRequest(overrides: Partial<AcquisitionRequest> = {}): Ac
 describe('Excel ingestion workflow', () => {
   async function uploadWorkbook(user: ReturnType<typeof userEvent.setup>) {
     render(<App />);
-    mockUploadExcel.mockResolvedValue(makeAcquisitionRequest());
+    mockUploadExcel.mockResolvedValue(makeExcelIntakeReport());
 
     const file = new File(['PK'], 'anchor_input.xlsx', {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1202,6 +1492,87 @@ describe('Excel ingestion workflow', () => {
     expect(screen.getByLabelText(/^Amortization/)).toHaveProperty('value', '25');
   });
 
+  it('leaves all five V2 fields visibly blank for a legacy nine-field workbook (Gate 6)', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '');
+  });
+
+  it('shows the additional-assumptions review message for a legacy workbook, phrased as required review not extraction failure', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    const banner = await screen.findByText(/Additional underwriting assumptions.*review/);
+    expect(banner.textContent).toContain('Acquisition Costs');
+    expect(banner.textContent).toContain('Financing Fee');
+    expect(banner.textContent).toContain('Disposition Costs');
+    expect(banner.textContent).toContain('Annual CapEx Reserve');
+    expect(banner.textContent).toContain('Interest-Only Period');
+    expect(banner.textContent?.toLowerCase()).not.toContain('missing from');
+    expect(banner.textContent?.toLowerCase()).not.toContain('failed');
+  });
+
+  it('blocks Analyze after a legacy upload until the blanked V2 fields are completed', async () => {
+    const user = userEvent.setup();
+    await uploadWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    expect(await screen.findByText('Acquisition Costs is required.')).toBeTruthy();
+    expect(mockAnalyze).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText(/^Acquisition Costs/), '0');
+    await user.type(screen.getByLabelText(/^Financing Fee/), '0');
+    await user.type(screen.getByLabelText(/^Disposition Costs/), '0');
+    await user.type(screen.getByLabelText(/^Annual CapEx Reserve/), '0');
+    await user.type(screen.getByLabelText(/^Interest-Only Period/), '0');
+    mockAnalyze.mockResolvedValue(makeResults());
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    expect(mockAnalyze).toHaveBeenCalledWith(makeAcquisitionRequest());
+  });
+
+  it('populates all fourteen fields with no review warning for a complete V2 workbook', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    mockUploadExcel.mockResolvedValue(
+      makeExcelIntakeReport({
+        inputs: makeAcquisitionRequest({
+          acquisition_cost_pct: 0.02,
+          financing_fee_pct: 0.01,
+          disposition_cost_pct: 0.025,
+          annual_capex_reserve: 50_000,
+          io_period: 2,
+        }),
+        defaulted_v2_field_ids: [],
+      }),
+    );
+
+    const file = new File(['PK'], 'anchor_input_v2.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    });
+    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '2');
+    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '1');
+    expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '2.5');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '50000');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
+    expect(screen.queryByText(/Additional underwriting assumptions/)).toBeNull();
+
+    mockAnalyze.mockResolvedValue(makeResults());
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+  });
+
   it('leaves pre-filled values editable in AssumptionsForm after upload', async () => {
     const user = userEvent.setup();
     await uploadWorkbook(user);
@@ -1222,10 +1593,15 @@ describe('Excel ingestion workflow', () => {
     expect(mockAnalyze).not.toHaveBeenCalled();
   });
 
-  it('running Analyze Deal after upload submits the parsed values', async () => {
+  it('running Analyze Deal after upload submits the parsed values (once the blanked V2 fields are completed)', async () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
     await uploadWorkbook(user);
+    await user.type(screen.getByLabelText(/^Acquisition Costs/), '0');
+    await user.type(screen.getByLabelText(/^Financing Fee/), '0');
+    await user.type(screen.getByLabelText(/^Disposition Costs/), '0');
+    await user.type(screen.getByLabelText(/^Annual CapEx Reserve/), '0');
+    await user.type(screen.getByLabelText(/^Interest-Only Period/), '0');
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
@@ -1235,7 +1611,7 @@ describe('Excel ingestion workflow', () => {
 
   it('shows a loading state while the workbook is being parsed', async () => {
     const user = userEvent.setup();
-    const pending = deferred<AcquisitionRequest>();
+    const pending = deferred<ExcelIntakeReport>();
     mockUploadExcel.mockReturnValueOnce(pending.promise);
     render(<App />);
 
@@ -1245,7 +1621,7 @@ describe('Excel ingestion workflow', () => {
     await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
 
     expect(await screen.findByText(/Parsing workbook/)).toBeTruthy();
-    pending.resolve(makeAcquisitionRequest());
+    pending.resolve(makeExcelIntakeReport());
   });
 
   it('shows a validation error and leaves existing form values unchanged on a malformed workbook', async () => {
@@ -1298,7 +1674,7 @@ describe('Excel ingestion workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     expect(await screen.findByText('7.91%')).toBeTruthy();
 
-    mockUploadExcel.mockResolvedValue(makeAcquisitionRequest());
+    mockUploadExcel.mockResolvedValue(makeExcelIntakeReport());
     const file = new File(['PK'], 'anchor_input.xlsx', {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
@@ -1348,7 +1724,7 @@ describe('Excel ingestion workflow', () => {
     await uploadWorkbook(user);
     expect(await screen.findByText(/Workbook loaded successfully/)).toBeTruthy();
 
-    const pending = deferred<AcquisitionRequest>();
+    const pending = deferred<ExcelIntakeReport>();
     mockUploadExcel.mockReturnValueOnce(pending.promise);
     const file = new File(['PK'], 'anchor_input.xlsx', {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1356,7 +1732,7 @@ describe('Excel ingestion workflow', () => {
     await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
 
     expect(screen.queryByText(/Workbook loaded successfully/)).toBeNull();
-    pending.resolve(makeAcquisitionRequest());
+    pending.resolve(makeExcelIntakeReport());
   });
 
   it('scrolls the assumptions form into view after a successful import', async () => {
@@ -1375,18 +1751,11 @@ describe('Excel ingestion workflow', () => {
 // =============================================================================
 
 /** Matches what `fillGoldenDeal()` produces after `buildAcquisitionRequest`
- * -- the same golden case used throughout the backend test suite. */
-const GOLDEN_DEAL_REQUEST: AcquisitionRequest = {
-  purchase_price: 50_000_000,
-  current_noi: 2_500_000,
-  occupancy: 0.95,
-  noi_growth: 0.03,
-  hold_period: 5,
-  exit_cap_rate: 0.055,
-  ltv: 0.65,
-  interest_rate: 0.0525,
-  amortization: 30,
-};
+ * -- the same golden case used throughout the backend test suite. Derived
+ * directly from `DEFAULT_FORM_VALUES` (rather than duplicated by hand) so
+ * it can never silently drift from what `fillGoldenDeal()` actually types
+ * into the form. */
+const GOLDEN_DEAL_REQUEST: AcquisitionRequest = buildAcquisitionRequest(DEFAULT_FORM_VALUES);
 
 function makeDeal(overrides: Partial<Deal> = {}): Deal {
   return {
@@ -1481,6 +1850,45 @@ describe('Deal persistence workflow', () => {
     expect(mockGetDeal).toHaveBeenCalledWith('deal-1');
   });
 
+  it('Open populates all five V2 fields, displaying a persisted zero as "0" rather than blank', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect(await screen.findByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '0');
+    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '0');
+    expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '0');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '0');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '0');
+  });
+
+  it('opening a saved deal with nonzero V2 values shows them, not blanks -- no review warning', async () => {
+    const user = userEvent.setup();
+    const v2Deal = makeDeal({
+      id: 'v2-deal',
+      name: 'V2 Deal',
+      inputs: buildAcquisitionRequest(V2_GOLDEN_FORM_VALUES),
+    });
+    mockListDeals.mockResolvedValue([v2Deal]);
+    mockGetDeal.mockResolvedValue(v2Deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect(await screen.findByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '2');
+    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '1');
+    expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '2.5');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '50000');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
+    expect(screen.queryByText(/Additional underwriting assumptions/)).toBeNull();
+  });
+
   it('opening a deal clears stale analysis results and returns to the workspace', async () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
@@ -1553,6 +1961,11 @@ describe('Deal persistence workflow', () => {
 
     expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '');
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '');
     expect(screen.getByRole('button', { name: 'Save Deal' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Update Deal' })).toBeNull();
 
@@ -1574,7 +1987,7 @@ describe('Deal persistence workflow', () => {
 
   it('Excel-populated assumptions can be saved -- persistence does not care where values originated', async () => {
     const user = userEvent.setup();
-    mockUploadExcel.mockResolvedValue(GOLDEN_DEAL_REQUEST);
+    mockUploadExcel.mockResolvedValue({ inputs: GOLDEN_DEAL_REQUEST, defaulted_v2_field_ids: [] });
     mockCreateDeal.mockResolvedValue(makeDeal());
     render(<App />);
 
@@ -1613,6 +2026,31 @@ describe('Deal persistence workflow -- Phase C', () => {
       await waitFor(() => expect(mockDuplicateDeal).toHaveBeenCalledWith('deal-1'));
       expect(await screen.findByText('111 Main St (Copy)')).toBeTruthy();
       expect(mockListDeals).toHaveBeenCalledTimes(2);
+    });
+
+    it('a duplicated deal, once opened, shows all five V2 assumptions exactly as the original', async () => {
+      const user = userEvent.setup();
+      const original = makeDeal({ inputs: buildAcquisitionRequest(V2_GOLDEN_FORM_VALUES) });
+      const copy = makeDeal({ id: 'deal-2', name: '111 Main St (Copy)', inputs: original.inputs });
+      mockListDeals.mockResolvedValueOnce([original]).mockResolvedValueOnce([original, copy]);
+      mockDuplicateDeal.mockResolvedValue(copy);
+      mockGetDeal.mockResolvedValue(copy);
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await screen.findByText('111 Main St');
+      await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+      await screen.findByText('111 Main St (Copy)');
+
+      const openButtons = screen.getAllByRole('button', { name: 'Open' });
+      await user.click(openButtons[openButtons.length - 1]);
+
+      expect(mockGetDeal).toHaveBeenCalledWith('deal-2');
+      expect(await screen.findByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '2');
+      expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '1');
+      expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '2.5');
+      expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '50000');
+      expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
     });
 
     it('does not automatically analyze the duplicated deal', async () => {
@@ -1720,6 +2158,34 @@ describe('Deal persistence workflow -- Phase C', () => {
       expect(screen.queryByText(/^Saved/)).toBeNull();
     });
 
+    it('editing a V2 field marks an already-saved deal dirty, and saving clears it', async () => {
+      const user = userEvent.setup();
+      const deal = makeDeal();
+      mockListDeals.mockResolvedValue([deal]);
+      mockGetDeal.mockResolvedValue(deal);
+      mockUpdateDeal.mockResolvedValue({
+        ...deal,
+        inputs: { ...deal.inputs, io_period: 3 },
+      });
+      render(<App />);
+
+      await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+      await user.click(await screen.findByRole('button', { name: 'Open' }));
+      expect(await screen.findByText(/^Saved/)).toBeTruthy();
+
+      fireEvent.change(screen.getByLabelText(/^Interest-Only Period/), {
+        target: { value: '3' },
+      });
+
+      expect(screen.getByText('Unsaved changes')).toBeTruthy();
+      expect(screen.queryByText(/^Saved/)).toBeNull();
+
+      await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+
+      expect(await screen.findByText(/^Saved/)).toBeTruthy();
+      expect(screen.queryByText('Unsaved changes')).toBeNull();
+    });
+
     it('deal-name edits produce "Unsaved changes"', async () => {
       const user = userEvent.setup();
       const deal = makeDeal();
@@ -1738,7 +2204,7 @@ describe('Deal persistence workflow -- Phase C', () => {
 
     it('Excel-populated data is unsaved until saved', async () => {
       const user = userEvent.setup();
-      mockUploadExcel.mockResolvedValue(GOLDEN_DEAL_REQUEST);
+      mockUploadExcel.mockResolvedValue({ inputs: GOLDEN_DEAL_REQUEST, defaulted_v2_field_ids: [] });
       render(<App />);
 
       const file = new File(['PK'], 'anchor_input.xlsx', {

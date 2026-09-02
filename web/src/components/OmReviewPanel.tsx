@@ -318,6 +318,13 @@ export function OmReviewPanel({ extraction, isLoading, error, onUpload, onFinish
 
       {extraction && !isLoading && (
         <div className="om-review-body">
+          <div className="om-v2-notice v2-review-banner">
+            Additional underwriting assumptions -- Acquisition Costs, Financing Fee,
+            Disposition Costs, Annual CapEx Reserve, and Interest-Only Period -- are not
+            extracted from the OM in this release. Enter them directly in Assumptions
+            before analyzing or saving.
+          </div>
+
           <div className="om-deal-context">
             <h4 className="om-section-title">Deal Context (reference only)</h4>
             {DEAL_CONTEXT_FIELDS.map(({ key, label }) => (

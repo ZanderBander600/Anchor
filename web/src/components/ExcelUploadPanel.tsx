@@ -4,6 +4,11 @@ interface ExcelUploadPanelProps {
   isLoading: boolean;
   error: string | null;
   successMessage: string | null;
+  /** Underwriting V2 Gate 6: set only when the uploaded workbook left at
+   * least one V2 field defaulted (a legacy/partial workbook) -- naming
+   * exactly which additional assumptions need analyst review before
+   * Analyze/Save. Null for a complete fourteen-field workbook. */
+  reviewMessage?: string | null;
   onUpload: (file: File) => void;
 }
 
@@ -31,7 +36,13 @@ function SpreadsheetIcon() {
  * calls `/analyze` itself. `successMessage` is purely a visual confirmation
  * that the import happened; it carries no approval semantics of its own.
  */
-export function ExcelUploadPanel({ isLoading, error, successMessage, onUpload }: ExcelUploadPanelProps) {
+export function ExcelUploadPanel({
+  isLoading,
+  error,
+  successMessage,
+  reviewMessage,
+  onUpload,
+}: ExcelUploadPanelProps) {
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -71,6 +82,10 @@ export function ExcelUploadPanel({ isLoading, error, successMessage, onUpload }:
 
       {!isLoading && !error && successMessage && (
         <div className="success-banner">{successMessage}</div>
+      )}
+
+      {!isLoading && !error && reviewMessage && (
+        <div className="v2-review-banner">{reviewMessage}</div>
       )}
 
       {!isLoading && !error && !successMessage && (

@@ -3,6 +3,7 @@ import type {
   AcquisitionResults,
   AIAnalysis,
   Deal,
+  ExcelIntakeReport,
   ExtractionResult,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
@@ -272,16 +273,18 @@ export async function uploadOm(file: File): Promise<ExtractionResult> {
 /**
  * Uploads an Anchor Excel acquisition workbook to the FastAPI
  * ``POST /ingestion/excel`` endpoint as multipart form data and returns the
- * nine validated ``AcquisitionRequest`` fields. Performs no workbook
- * parsing or financial validation of its own -- the backend Excel reader
- * (shared with the CLI) is authoritative. The browser sets the multipart
+ * fourteen validated ``AcquisitionRequest`` fields plus which Underwriting
+ * V2 fields were absent from the workbook and therefore defaulted
+ * (``ExcelIntakeReport``, Gate 5). Performs no workbook parsing or
+ * financial validation of its own -- the backend Excel reader (shared with
+ * the CLI) is authoritative. The browser sets the multipart
  * ``Content-Type`` boundary itself, so this function must not set that
  * header explicitly. Unlike ``uploadOm``, a successful response is already
  * a complete, validated input set -- there is no candidate/evidence review
  * step -- and a malformed workbook fails with the exact same 422 issue-list
  * shape ``analyzeAcquisition`` already handles.
  */
-export async function uploadExcel(file: File): Promise<AcquisitionRequest> {
+export async function uploadExcel(file: File): Promise<ExcelIntakeReport> {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -317,15 +320,15 @@ export async function uploadExcel(file: File): Promise<AcquisitionRequest> {
     throw new ApiError(message);
   }
 
-  return (await response.json()) as AcquisitionRequest;
+  return (await response.json()) as ExcelIntakeReport;
 }
 
 // =============================================================================
 // Persistence Phase B -- Deal Library
 //
 // Each function mirrors the shape of ``analyzeAcquisition`` above: POST/PUT
-// send the same nine-field ``AcquisitionRequest`` shape ``/analyze`` already
-// accepts, and a 422 response carries the identical issue-list shape,
+// send the same fourteen-field ``AcquisitionRequest`` shape ``/analyze``
+// already accepts, and a 422 response carries the identical issue-list shape,
 // because both endpoints validate through the same backend function. These
 // functions never call ``/analyze`` themselves -- saving is not analyzing.
 // =============================================================================
@@ -352,7 +355,7 @@ async function _handleDealResponse(response: Response, failureMessage: string): 
   return (await response.json()) as Deal;
 }
 
-/** POSTs a new deal (name + the nine assumptions) to ``/deals``. Used for a
+/** POSTs a new deal (name + the fourteen assumptions) to ``/deals``. Used for a
  * deal that has never been saved -- ``currentDealId`` is still ``null``. */
 export async function createDeal(name: string, inputs: AcquisitionRequest): Promise<Deal> {
   let response: Response;

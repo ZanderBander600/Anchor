@@ -19,6 +19,11 @@ const GOLDEN_INPUTS: Deal['inputs'] = {
   ltv: 0.65,
   interest_rate: 0.0525,
   amortization: 30,
+  acquisition_cost_pct: 0,
+  financing_fee_pct: 0,
+  disposition_cost_pct: 0,
+  annual_capex_reserve: 0,
+  io_period: 0,
 };
 
 function dealFixture(overrides: Partial<Deal> = {}): Deal {

@@ -15,13 +15,17 @@ afterEach(() => {
 const RESULTS: AcquisitionResults = {
   going_in_cap_rate: 0.05,
   loan_amount: 1,
+  acquisition_costs: 1,
+  financing_fee: 1,
   initial_equity: 1,
   monthly_debt_service: 1,
   annual_debt_service: [11, 22, 33],
   remaining_loan_balance: 1,
   noi_by_year: [111, 222, 333],
+  capex_by_year: [5, 6, 7],
   exit_noi: 1,
   exit_value: 1,
+  disposition_costs: 1,
   net_sale_proceeds: 1,
   unlevered_cash_flows: [-999, 100, 200, 9999],
   levered_cash_flows: [-888, 50, 60, 8888],
@@ -30,6 +34,7 @@ const RESULTS: AcquisitionResults = {
   equity_multiple: 1.1,
   dscr_by_year: [1.1, 2.2, 3.3],
   headline_dscr: 1.1,
+  min_dscr: 1.1,
 };
 
 function rowTexts(row: HTMLTableRowElement): string[] {
@@ -46,18 +51,20 @@ describe('CashFlowTable indexing', () => {
       '—',
       '—',
       '—',
+      '—',
       '-$999',
       '-$888',
     ]);
   });
 
-  it('aligns Year 1 with NOI/ADS/DSCR index 0 and cash-flow index 1', () => {
+  it('aligns Year 1 with NOI/CapEx/ADS/DSCR index 0 and cash-flow index 1', () => {
     const { container } = render(<CashFlowTable results={RESULTS} />);
     const rows = container.querySelectorAll('tbody tr');
 
     expect(rowTexts(rows[1] as HTMLTableRowElement)).toEqual([
       '1',
       '$111',
+      '$5',
       '$11',
       '1.10x',
       '$100',
@@ -65,7 +72,7 @@ describe('CashFlowTable indexing', () => {
     ]);
   });
 
-  it('aligns the final hold year with the last NOI/ADS/DSCR entry and its cash-flow index', () => {
+  it('aligns the final hold year with the last NOI/CapEx/ADS/DSCR entry and its cash-flow index', () => {
     const { container } = render(<CashFlowTable results={RESULTS} />);
     const rows = container.querySelectorAll('tbody tr');
     const finalRow = rows[rows.length - 1] as HTMLTableRowElement;
@@ -73,6 +80,7 @@ describe('CashFlowTable indexing', () => {
     expect(rowTexts(finalRow)).toEqual([
       '3',
       '$333',
+      '$7',
       '$33',
       '3.30x',
       '$9,999',

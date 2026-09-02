@@ -10,7 +10,7 @@ import {
   uploadExcel,
   uploadOm,
 } from './api';
-import type { AcquisitionRequest, Deal, ExtractionResult } from './types';
+import type { AcquisitionRequest, Deal, ExcelIntakeReport, ExtractionResult } from './types';
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -154,21 +154,29 @@ function acquisitionRequestFixture(): AcquisitionRequest {
     ltv: 0.65,
     interest_rate: 0.0525,
     amortization: 30,
+    acquisition_cost_pct: 0,
+    financing_fee_pct: 0,
+    disposition_cost_pct: 0,
+    annual_capex_reserve: 0,
+    io_period: 0,
   };
 }
 
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 describe('uploadExcel', () => {
-  it('returns the validated nine-field AcquisitionRequest on a successful upload', async () => {
-    const inputs = acquisitionRequestFixture();
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, inputs));
+  it('returns the ExcelIntakeReport (inputs + defaulted_v2_field_ids) on a successful upload', async () => {
+    const report: ExcelIntakeReport = {
+      inputs: acquisitionRequestFixture(),
+      defaulted_v2_field_ids: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, report));
     vi.stubGlobal('fetch', fetchMock);
 
     const file = new File([new Uint8Array([1, 2, 3])], 'anchor_input.xlsx', { type: XLSX_TYPE });
     const result = await uploadExcel(file);
 
-    expect(result).toEqual(inputs);
+    expect(result).toEqual(report);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain('/ingestion/excel');
@@ -239,6 +247,11 @@ const GOLDEN_INPUTS: AcquisitionRequest = {
   ltv: 0.65,
   interest_rate: 0.0525,
   amortization: 30,
+  acquisition_cost_pct: 0,
+  financing_fee_pct: 0,
+  disposition_cost_pct: 0,
+  annual_capex_reserve: 0,
+  io_period: 0,
 };
 
 function dealFixture(overrides: Partial<Deal> = {}): Deal {

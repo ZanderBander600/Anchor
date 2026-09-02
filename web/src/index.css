@@ -490,6 +490,12 @@ body {
   font-size: 1.85rem;
 }
 
+.stat-caption {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
 .card-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -901,6 +907,20 @@ body {
   flex-direction: column;
   gap: 1.25rem;
 }
+
+/* Underwriting V2 Gate 6 -- shared "additional assumptions require review"
+   messaging for the OM and Excel intake panels. Warning-toned, but never
+   implies extraction failure -- these fields are never extracted/present
+   by design in this release. */
+.v2-review-banner {
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning);
+  color: var(--color-warning);
+  border-radius: var(--radius-control);
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+}
+
 
 .om-section-title {
   margin: 0 0 0.5rem;

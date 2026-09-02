@@ -8,6 +8,15 @@ export interface AcquisitionFormValues {
   ltv: string;
   interestRate: string;
   amortization: string;
+  /** Underwriting V2 Gate 6 -- the five optional-on-the-backend, but
+   * required-once-touched-by-the-analyst, V2 fields. Blank is a distinct,
+   * meaningful state (never silently treated as zero) -- see
+   * `BLANK_FORM_VALUES`/`buildAcquisitionRequest` in `convert.ts`. */
+  acquisitionCostPct: string;
+  financingFeePct: string;
+  dispositionCostPct: string;
+  annualCapexReserve: string;
+  ioPeriod: string;
 }
 
 export interface AcquisitionRequest {
@@ -20,6 +29,11 @@ export interface AcquisitionRequest {
   ltv: number;
   interest_rate: number;
   amortization: number;
+  acquisition_cost_pct: number;
+  financing_fee_pct: number;
+  disposition_cost_pct: number;
+  annual_capex_reserve: number;
+  io_period: number;
 }
 
 /** The 9 existing AcquisitionInputs field ids, in a fixed order. Mirrors
@@ -37,6 +51,20 @@ export const ACQUISITION_FIELD_IDS = [
 ] as const;
 
 export type AcquisitionFieldId = (typeof ACQUISITION_FIELD_IDS)[number];
+
+/** Underwriting V2 Gate 6: the five optional V2 Field IDs, in canonical
+ * order. Mirrors ``V2_FIELD_IDS`` in ``src/anchor/validation.py``. Never
+ * extracted by OM ingestion in this gate -- absent from
+ * ``ACQUISITION_FIELD_IDS``/``ExtractionResult`` on purpose. */
+export const V2_FIELD_IDS = [
+  'acquisition_cost_pct',
+  'financing_fee_pct',
+  'disposition_cost_pct',
+  'annual_capex_reserve',
+  'io_period',
+] as const;
+
+export type V2FieldId = (typeof V2_FIELD_IDS)[number];
 
 /** Mirrors ``EvidenceStatus`` in ``src/anchor/ingestion/contracts.py``. */
 export type EvidenceStatus = 'stated' | 'interpreted' | 'conflicting' | 'unverifiable' | 'missing';
@@ -92,17 +120,25 @@ export interface ExtractionResult {
   deal_context: DealContext;
 }
 
-/** Mirrors ``AcquisitionResults`` in ``src/anchor/engine/contracts.py``. */
+/** Mirrors ``AcquisitionResults`` in ``src/anchor/engine/contracts.py``,
+ * including the Underwriting V2 Gate 2/3/4 fields (``acquisition_costs``,
+ * ``financing_fee``, ``capex_by_year``, ``disposition_costs``,
+ * ``min_dscr``). Every value here is engine-computed -- the frontend never
+ * recalculates any of it. */
 export interface AcquisitionResults {
   going_in_cap_rate: number;
   loan_amount: number;
+  acquisition_costs: number;
+  financing_fee: number;
   initial_equity: number;
   monthly_debt_service: number;
   annual_debt_service: number[];
   remaining_loan_balance: number;
   noi_by_year: number[];
+  capex_by_year: number[];
   exit_noi: number;
   exit_value: number;
+  disposition_costs: number;
   net_sale_proceeds: number;
   unlevered_cash_flows: number[];
   levered_cash_flows: number[];
@@ -111,6 +147,19 @@ export interface AcquisitionResults {
   equity_multiple: number | null;
   dscr_by_year: (number | null)[];
   headline_dscr: number | null;
+  min_dscr: number | null;
+}
+
+/** Mirrors ``ExcelIntakeReport`` in ``src/anchor/excel_reader.py`` --
+ * Underwriting V2 Gate 5's ``POST /ingestion/excel`` response shape.
+ * ``defaulted_v2_field_ids`` names exactly which V2 Field IDs were absent
+ * from the uploaded workbook and therefore took their neutral backend
+ * default -- a compatibility value, not an analyst assumption (Gate 6): the
+ * frontend must leave those specific fields blank, never populate them
+ * with the backend's 0. */
+export interface ExcelIntakeReport {
+  inputs: AcquisitionRequest;
+  defaulted_v2_field_ids: V2FieldId[];
 }
 
 /** Mirrors ``Deal`` in ``src/anchor/deals/contracts.py``. ``inputs`` is the
