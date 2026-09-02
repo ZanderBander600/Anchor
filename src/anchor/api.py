@@ -46,6 +46,7 @@ from .contracts import AcquisitionInputs
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError
 from .engine import AcquisitionResults, analyze_acquisition
+from .env import load_repo_env
 from .excel_reader import ExcelIntakeReport, read_acquisition_inputs_from_bytes_with_report
 from .ingestion import (
     ExtractionConfigurationError,
@@ -54,6 +55,10 @@ from .ingestion import (
     extract_om,
 )
 from .validation import InputValidationError, validate_acquisition_inputs
+
+# Load repo-local .env (if present) before any request can resolve OpenAI /
+# Azure DI credentials via os.environ -- see anchor.env for precedence rules.
+load_repo_env()
 
 app = FastAPI(title="Anchor API")
 
