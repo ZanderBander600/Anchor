@@ -178,6 +178,17 @@ reinvented, for Detailed Underwrite:
    `docs/detailed_operating_model_v2_1_golden_case.md`'s Gate 4 tests should
    follow exactly.
 
+**Resolution note (added before implementation, still Phase 0/docs-only).**
+Section 2.2 and Section 4 below originally left one question open: how should
+a Detailed deal populate `AcquisitionInputs.current_noi`/`.noi_growth`, which
+`analyze_acquisition_from_operating_projection` was proposed to keep
+requiring? That question is now closed, not deferred: the downstream
+engine's shared-parameter shape is a new, concrete `AcquisitionTerms`
+contract (Section 2.2) that simply has no `current_noi`/`noi_growth` fields
+at all — a Detailed deal is never required to fabricate, zero-out, or derive
+an approximate value for either. See Section 2.2 and Section 4 for the full
+resolution; Section 12 records this as closed.
+
 ## 2. Proposed Contracts
 
 ### 2.1 `OperatingProjection` — the canonical operating contract
@@ -254,17 +265,99 @@ shape, unchanged); add `OperatingProjection` as Detailed's output shape;
 define the convergence function (2.2) to accept anything exposing
 `noi_by_year`/`exit_noi`/`going_in_cap_rate` — in practice, either contract.
 
-### 2.2 `AcquisitionOperatingInputs` — the convergence parameter shape
+### 2.2 `AcquisitionTerms` — the shared acquisition/debt contract
 
-The downstream acquisition/debt/returns calculation needs exactly two
-things: an operating projection (`noi_by_year`/`exit_noi`/
-`going_in_cap_rate`) and the non-operating transaction assumptions
-(`purchase_price`, `ltv`, `interest_rate`, `amortization`,
-`acquisition_cost_pct`, `financing_fee_pct`, `disposition_cost_pct`,
-`annual_capex_reserve`, `io_period`, `exit_cap_rate`, `hold_period`). Rather
-than inventing a new parameter object for this, the cleanest seam is a
-**typing.Protocol** (structural typing) that both `NoiForecast` and
-`OperatingProjection` already satisfy without modification:
+The downstream acquisition/debt/returns calculation needs exactly two kinds
+of input: an operating projection (Section 2.2.1) and the assumptions that
+are **independent of how NOI was produced** — purchase economics, financing
+structure, exit assumptions, and the hold period. These are identical
+between Quick and Detailed by construction (both modes underwrite the same
+transaction; only the operating build differs), so they belong on one
+concrete, shared contract rather than being re-derived or duplicated per
+mode:
+
+```python
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AcquisitionTerms:
+    purchase_price: float
+    hold_period: int
+    exit_cap_rate: float
+    ltv: float
+    interest_rate: float
+    amortization: int
+    acquisition_cost_pct: float
+    financing_fee_pct: float
+    disposition_cost_pct: float
+    annual_capex_reserve: float
+    io_period: int
+```
+
+New frozen, `kw_only`, `slots` dataclass in `src/anchor/contracts.py`,
+alongside `AcquisitionInputs`. Eleven fields — every existing
+`AcquisitionInputs` field *except* `current_noi`, `occupancy`, and
+`noi_growth`, which is exactly the three-field difference Section 4 below
+resolves.
+
+**Why a concrete dataclass, not only a `typing.Protocol`.** The Phase 0
+architecture proposed a structural `Protocol` here; after inspection this is
+upgraded to a concrete dataclass because `AcquisitionTerms` is not merely a
+*read shape* two existing contracts happen to satisfy (that description does
+fit `OperatingProjectionLike`, Section 2.2.1, since `NoiForecast` and
+`OperatingProjection` are both genuinely pre-existing/independently-motivated
+contracts) — it is a *new, real value* that must be independently
+constructed for a Detailed deal, which has no `AcquisitionInputs` instance
+supplying it implicitly. A concrete dataclass also gives Gate 5 persistence
+(Section 6) something to store directly for a Detailed deal, and gives
+`debt.py` (Section 2.2.2) a narrower, explicit parameter type instead of an
+unnamed structural shape.
+
+**Where `occupancy` belongs — inspected, not mechanically forced in.**
+`occupancy` is excluded from `AcquisitionTerms`. Three findings from
+inspection support this:
+
+1. `occupancy` is not an acquisition/debt/exit assumption — it has never
+   been read by `debt.py`, `acquisition.py`'s exit/cash-flow assembly, or
+   `returns.py` (confirmed in Section 1.5/1.6/1.9 and the frozen
+   `engine/noi.py` docstring: "Occupancy is informational only and is never
+   read here"). Every field on `AcquisitionTerms` is read by
+   `calculate_capital_stack`/`calculate_debt_schedule`
+   (Section 2.2.2) or the exit-value/cash-flow functions in
+   `acquisition.py`; `occupancy` would be the one field on the contract that
+   no downstream calculation touches, breaking the contract's own
+   "everything here is a shared, load-bearing acquisition/debt assumption"
+   invariant.
+2. Putting `occupancy` on the shared contract would make it visible, and
+   therefore attach economic expectations to it, in Detailed mode — which is
+   precisely the "second active vacancy mechanism" the Phase 0 brief (and
+   this document's own "Occupancy and Vacancy — Resolved Relationship" in
+   the conventions doc) already ruled out. Keeping it off the shared
+   contract is a structural enforcement of that ruling, not just a
+   docstring promise.
+3. `occupancy` remains exactly where it already is: a field on
+   `AcquisitionInputs` only, Quick-mode's own contract, informational,
+   never read by any calculation, unchanged. A Detailed deal simply has no
+   `occupancy` field today — see Section 4 and Gate 6 for whether a future,
+   explicitly non-economic display field is worth adding to
+   `DetailedOperatingInputs` later; V2.1 does not add one, since nothing in
+   Section 3 of the financial-conventions document calls for it.
+
+**2.2.1 `OperatingProjectionLike` — reconsidered and kept minimal.**
+Re-examined during this update per the instruction to confirm it only
+exposes what the downstream engine genuinely requires. `going_in_cap_rate`
+is `noi_by_year[0] / purchase_price` in every existing case
+(`NoiForecast.going_in_cap_rate` is literally `current_noi / purchase_price`,
+and `current_noi == noi_by_year[0]` by the frozen `NOI_1 = current_noi`
+convention) — so it is mathematically derivable from `noi_by_year[0]` and
+`AcquisitionTerms.purchase_price` alone, and does not strictly need to be a
+protocol field. It is kept anyway, for one concrete reason found during
+inspection: both `NoiForecast` and `OperatingProjection` already declare it
+as a first-class field (Section 2.1), and `AcquisitionResults.going_in_cap_rate`
+already reads it directly off the forecast object today
+(`acquisition.py`: `going_in_cap_rate=noi_forecast.going_in_cap_rate`) —
+re-deriving it downstream instead would be a second, redundant computation
+of the same value from the same inputs, which is exactly the kind of
+duplication this whole proposal is designed to avoid. The protocol therefore
+stays exactly as originally proposed:
 
 ```python
 class OperatingProjectionLike(Protocol):
@@ -273,11 +366,60 @@ class OperatingProjectionLike(Protocol):
     going_in_cap_rate: float
 ```
 
-This avoids a third dataclass whose only job would be to re-wrap fields that
-already exist on two other dataclasses, and avoids coupling
-`OperatingProjection`'s definition to `NoiForecast`'s (e.g. via inheritance),
-which would make a future divergence between the two contracts' otherwise-
-identical three fields awkward to express.
+Confirmed minimal: **not** `noi_by_year`, `exit_noi`, and the eleven
+Detailed-only line-item schedules — those never cross into
+`analyze_acquisition_from_operating_projection` (Section 3.1), matching the
+Phase 0 instruction "Do not make downstream calculations depend on detailed
+operating line items."
+
+**2.2.2 Downstream signature consequence.** `calculate_capital_stack` and
+`calculate_debt_schedule` (`src/anchor/engine/debt.py`) currently take the
+whole `inputs: AcquisitionInputs` but, per Section 1.5, read only the eleven
+fields that are now exactly `AcquisitionTerms`' field set
+(`purchase_price`, `ltv`, `acquisition_cost_pct`, `financing_fee_pct`,
+`interest_rate`, `amortization`, `io_period`, `hold_period` — plus
+`exit_cap_rate`/`disposition_cost_pct`/`annual_capex_reserve`, read by the
+exit-value/cash-flow functions in `acquisition.py` rather than `debt.py`
+itself, but from the same shared assumption set). Gate 1/3 retypes both
+functions' parameter from `AcquisitionInputs` to `AcquisitionTerms` — a type
+narrowing with no behavior change, since every field either function reads
+already exists, under the identical name, on `AcquisitionTerms`. This is
+what makes "Both: `AcquisitionTerms` + `OperatingProjectionLike` →
+authoritative acquisition/debt/returns engine" true as a literal function
+signature, not only as a conceptual diagram (Section 10).
+
+**2.2.3 `acquisition_terms_from_inputs` — the Quick-side adapter.**
+
+```python
+def acquisition_terms_from_inputs(inputs: AcquisitionInputs) -> AcquisitionTerms:
+    """Deterministic field projection, no validation of its own -- inputs
+    is already a validated AcquisitionInputs, and every AcquisitionTerms
+    field is copied verbatim from an identically-named AcquisitionInputs
+    field. Never re-validates, never recomputes, never defaults a field
+    AcquisitionInputs didn't already have a valid value for."""
+    return AcquisitionTerms(
+        purchase_price=inputs.purchase_price,
+        hold_period=inputs.hold_period,
+        exit_cap_rate=inputs.exit_cap_rate,
+        ltv=inputs.ltv,
+        interest_rate=inputs.interest_rate,
+        amortization=inputs.amortization,
+        acquisition_cost_pct=inputs.acquisition_cost_pct,
+        financing_fee_pct=inputs.financing_fee_pct,
+        disposition_cost_pct=inputs.disposition_cost_pct,
+        annual_capex_reserve=inputs.annual_capex_reserve,
+        io_period=inputs.io_period,
+    )
+```
+
+Placed in `src/anchor/contracts.py` beside both dataclasses it bridges. This
+is the **only** place the Quick path constructs an `AcquisitionTerms` — it
+does not duplicate `validate_acquisition_inputs`' validation (Section
+"Do not duplicate validation semantics" in Gate 1 below): `inputs` has
+already been validated by the time this adapter runs, and every field is a
+bare, no-op copy. A Detailed deal never calls this adapter; it constructs
+`AcquisitionTerms` directly from its own validated fields (there is no
+`AcquisitionInputs` instance in the Detailed path at all — see Section 4).
 
 ### 2.3 Detailed operating inputs
 
@@ -307,7 +449,7 @@ Phase 0 brief's Section 3 "twelve" framing; the brief's own field list under
 identifiers. The golden-case document's Year 1 reconciliation uses all
 eleven.)
 
-### 2.4 Why a separate contract, not a merged 25-field `AcquisitionInputs`
+### 2.4 Why separate contracts, not a merged 25-field `AcquisitionInputs`
 
 Three reasons, in order of weight:
 
@@ -332,7 +474,14 @@ Three reasons, in order of weight:
    `Deal.inputs: AcquisitionInputs` nests one frozen contract inside another
    rather than flattening fields (Section 1.10); the same pattern extends
    naturally to a Detailed deal nesting `DetailedOperatingInputs` alongside
-   its `AcquisitionInputs` (Section 8).
+   `AcquisitionTerms` (Section 6) — not alongside a full `AcquisitionInputs`,
+   which is the point Section 4 resolves.
+
+The identical reasoning applies to `AcquisitionTerms` vs. flattening its
+eleven fields onto some new Detailed-only mega-contract: `AcquisitionTerms`
+is deliberately the *same* eleven fields for both modes (Section 2.2), never
+duplicated or re-declared per mode, which is what makes the downstream
+engine's signature mode-agnostic (Section 2.2.2).
 
 ### 2.5 Validation
 
@@ -408,46 +557,60 @@ pure refactor:
 ```python
 def analyze_acquisition_from_operating_projection(
     operating_projection: OperatingProjectionLike,
-    inputs: AcquisitionInputs,
+    terms: AcquisitionTerms,
 ) -> AcquisitionResults:
     """Everything analyze_acquisition does today, from
-    calculate_capital_stack(inputs) onward, taking noi_by_year/exit_noi/
+    calculate_capital_stack(terms) onward, taking noi_by_year/exit_noi/
     going_in_cap_rate from operating_projection instead of computing them
-    via forecast_noi(inputs) internally."""
-    capital_stack = calculate_capital_stack(inputs)
-    debt_schedule = calculate_debt_schedule(inputs)
+    via forecast_noi(inputs) internally, and terms (not the whole
+    AcquisitionInputs) for every acquisition/debt/exit assumption."""
+    capital_stack = calculate_capital_stack(terms)
+    debt_schedule = calculate_debt_schedule(terms)
     # ... exactly the existing body, reading operating_projection.noi_by_year /
-    # .exit_noi / .going_in_cap_rate wherever it previously read noi_forecast.*
+    # .exit_noi / .going_in_cap_rate wherever it previously read noi_forecast.*,
+    # and terms.* wherever it previously read inputs.* for a field
+    # AcquisitionTerms carries (every field calculate_capital_stack/
+    # calculate_debt_schedule/exit-value/cash-flow assembly ever reads --
+    # Section 2.2.2).
     ...
 
 def analyze_acquisition(inputs: AcquisitionInputs) -> AcquisitionResults:
     """Unchanged public behavior. Now: build_quick_operating_projection(inputs)
-    then analyze_acquisition_from_operating_projection(projection, inputs)."""
+    + acquisition_terms_from_inputs(inputs), then
+    analyze_acquisition_from_operating_projection(projection, terms)."""
     operating_projection = build_quick_operating_projection(inputs)
-    return analyze_acquisition_from_operating_projection(operating_projection, inputs)
+    terms = acquisition_terms_from_inputs(inputs)
+    return analyze_acquisition_from_operating_projection(operating_projection, terms)
+
+def analyze_detailed_acquisition(
+    terms: AcquisitionTerms,
+    detailed_inputs: DetailedOperatingInputs,
+) -> AcquisitionResults:
+    """The Detailed public entry point (Gate 3). No AcquisitionInputs
+    instance is constructed, read, or required anywhere in this call --
+    current_noi/noi_growth/occupancy simply do not exist in this path."""
+    operating_projection = build_detailed_operating_projection(
+        detailed_inputs, hold_period=terms.hold_period, purchase_price=terms.purchase_price
+    )
+    return analyze_acquisition_from_operating_projection(operating_projection, terms)
 ```
 
-`inputs: AcquisitionInputs` is still required by
-`analyze_acquisition_from_operating_projection` even in the Detailed path,
-because the capital stack and debt schedule (`purchase_price`, `ltv`,
-`interest_rate`, `amortization`, `io_period`, cost percentages) live on
-`AcquisitionInputs`, not on `DetailedOperatingInputs` — **a Detailed deal
-still has an `AcquisitionInputs` instance**, just one whose `current_noi`/
-`noi_growth` are unused/neutral (see Section 8's persistence design for the
-exact convention). This keeps `analyze_acquisition_from_operating_projection`
-'s signature — and every one of its unmodified internal calls
-(`calculate_capital_stack(inputs)`, `calculate_debt_schedule(inputs)`) —
-completely unchanged from today's `analyze_acquisition` body, which is the
-whole point of the refactor: the only thing that changes is *where
-`noi_forecast`/`operating_projection` comes from*, never how it is
-consumed.
-
-A future `build_detailed_acquisition_inputs(...)` helper (Gate 5/6,
-Section 8) is responsible for constructing an internally-consistent
-`AcquisitionInputs` for a Detailed deal (see Section 4's "Detailed-mode
-relationship to `current_noi`/`noi_growth`" below) — that helper, not the
-engine, owns the Quick/Detailed input-reconciliation logic, keeping the
-engine itself agnostic to which mode produced its `AcquisitionInputs`.
+`terms: AcquisitionTerms` — not `inputs: AcquisitionInputs` — is what
+`analyze_acquisition_from_operating_projection` now requires, resolving the
+question the original Phase 0 proposal left open. This is the direct
+consequence of Section 2.2.2's signature narrowing: `calculate_capital_stack`
+and `calculate_debt_schedule` read only fields `AcquisitionTerms` already
+carries, so nothing about the Detailed path ever needs an
+`AcquisitionInputs` instance — not a real one, not a fabricated one, not one
+with `current_noi`/`noi_growth` zeroed out. `analyze_acquisition` (Quick)
+builds its `AcquisitionTerms` via the trivial `acquisition_terms_from_inputs`
+adapter (Section 2.2.3); `analyze_detailed_acquisition` (Detailed) builds
+`AcquisitionTerms` directly from its own already-validated fields. Both
+converge on the exact same `analyze_acquisition_from_operating_projection`
+call, which is oblivious to which path constructed its `terms` argument —
+the whole point of the refactor is that the only thing that changes between
+modes is *where `operating_projection` and `terms` come from*, never how
+either is consumed downstream.
 
 ### 3.2 The Quick/Detailed convergence invariant, stated precisely
 
@@ -462,48 +625,76 @@ calculations continues to live in exactly the files that own them today
 `returns.py`, `analysis/sensitivity.py`, `analysis/break_even.py`), touched
 by this proposal not at all.
 
-## 4. Detailed-Mode Relationship to `current_noi` / `occupancy` / `noi_growth`
+## 4. Detailed-Mode Relationship to `current_noi` / `occupancy` / `noi_growth` — Resolved
 
-Resolved in full in the financial-conventions document ("Quick vs. Detailed
-Behavior", "Occupancy and Vacancy — Resolved Relationship"). Restated here
-as the contract-level consequence:
+**Resolution: a Detailed deal has no `AcquisitionInputs` instance, ever.**
+`current_noi`, `noi_growth`, and `occupancy` are not populated, mirrored,
+approximated, defaulted, or zeroed for a Detailed deal — they are simply
+**absent**, because the Detailed path is built entirely from
+`AcquisitionTerms` (Section 2.2) + `DetailedOperatingInputs` (Section 2.3),
+neither of which has any of those three fields. This replaces the Phase 0
+proposal's original "derive-and-mirror" recommendation (Section 12 below
+records this as the closed migration risk it was).
 
-- **Quick Underwrite:** `AcquisitionInputs.current_noi`/`.noi_growth` are
-  the direct assumptions, exactly as today. `DetailedOperatingInputs` is
-  absent (not constructed, not persisted, not sent).
-- **Detailed Underwrite:** `DetailedOperatingInputs` is the source of truth
-  for NOI. `AcquisitionInputs.current_noi`/`.noi_growth` are **not**
-  analyst-entered for a Detailed deal — recommended convention: they are
-  populated *derivatively*, from the Detailed projection's own
-  `noi_by_year[0]` and the implied Year1→Year2 growth rate, purely so that
-  `AcquisitionInputs` remains a single, always-fully-populated contract for
-  every consumer that doesn't yet know about `OperatingProjection`
-  (Excel/CSV export, any future report that reads `current_noi` display-only,
-  etc.) — **never** so that the engine recomputes NOI from them. The engine
-  only ever reads `noi_by_year`/`exit_noi` off the projection object for a
-  Detailed deal; `current_noi`/`noi_growth` on a Detailed
-  `AcquisitionInputs` are informational mirrors of `noi_by_year[0]`/the
-  implied rate, the same way `occupancy` is already an informational field
-  today, never a second source of truth. This detail (how exactly to derive
-  the mirrored value, and whether to derive it at all vs. leave it as a
-  documented "ignored for Detailed deals" field) is flagged as an open
-  question for Gate 1 rather than settled definitively here — see Section
-  12.
-- `occupancy` remains informational-only, identically, in both modes.
+- **Quick Underwrite (unchanged):** `AcquisitionInputs.current_noi`/
+  `.noi_growth` are the direct, analyst-entered assumptions, exactly as
+  today. `occupancy` remains informational-only, never read by any
+  calculation — unchanged. `AcquisitionInputs` is still the one public,
+  backward-compatible Quick contract; `analyze_acquisition(inputs)` derives
+  `AcquisitionTerms` from it internally via `acquisition_terms_from_inputs`
+  (Section 2.2.3) but this is invisible to every existing caller.
+- **Detailed Underwrite:** the analyst never enters, and the system never
+  stores or displays, a `current_noi` or `noi_growth` value for a Detailed
+  deal. There is no field to leave blank, default, or reconcile — the
+  concept does not exist in this path's type signature.
+  `vacancy_credit_loss_pct` (`DetailedOperatingInputs`) is the sole active
+  vacancy mechanism; `occupancy` has no equivalent field on the Detailed
+  side at all (Section 2.2's "Where `occupancy` belongs" finding) — not
+  because it was forced out mechanically, but because nothing in the
+  Detailed calculation path (`build_detailed_operating_projection`,
+  `analyze_acquisition_from_operating_projection`) ever needs it, and
+  giving it a home there would recreate exactly the "second active vacancy
+  mechanism" risk the brief warned against.
+- **Historical reports/exports that need "the deal's NOI."** Any future
+  consumer that wants a single headline NOI figure for a deal — regardless
+  of which mode produced it — should read `OperatingProjection.noi_by_year[0]`
+  (Detailed) or `NoiForecast.noi_by_year[0]` (Quick) at the point of use,
+  never assume `AcquisitionInputs.current_noi` exists universally. Both
+  already satisfy the shared `OperatingProjectionLike` shape (Section
+  2.2.1), so a mode-agnostic consumer can be written against that
+  protocol's `noi_by_year[0]` without branching on mode at all. This
+  supersedes the Phase 0 proposal's "informational mirror on
+  `AcquisitionInputs`" idea outright — there is no longer a Detailed
+  `AcquisitionInputs` to mirror onto.
+
+This resolution was possible only because of Section 2.2.2's signature
+narrowing (`calculate_capital_stack`/`calculate_debt_schedule` retyped to
+`AcquisitionTerms`) — without that narrowing, the Detailed path would still
+need *something* shaped like `AcquisitionInputs` to satisfy those two
+functions' old signatures, which is exactly what would have forced a fake or
+derived `current_noi`/`noi_growth` value into existence. Narrowing the
+signature removed the need for the value entirely, rather than finding a
+less-bad way to manufacture it.
 
 ## 5. API Concept
 
 No route is implemented today. Recommended shape for Gate 5:
 
 - `POST /analyze` gains an optional `operating_mode` discriminator
-  (`"quick"` default / `"detailed"`) plus an optional nested
-  `detailed_operating_inputs` object, alongside the existing flat `inputs`
-  payload — **additive, not breaking**: an existing nine/fourteen-field
-  payload with no `operating_mode` key continues to mean Quick, unchanged.
-- When `operating_mode == "detailed"`, the route validates
+  (`"quick"` default / `"detailed"`). The existing flat `inputs` payload
+  (fourteen `AcquisitionInputs` fields) remains exactly as-is and is what a
+  `"quick"`/absent `operating_mode` request sends — **additive, not
+  breaking**. A `"detailed"` request sends `terms` (the eleven
+  `AcquisitionTerms` fields — no `current_noi`/`noi_growth`/`occupancy` keys
+  at all, matching Section 4's resolution) and
+  `detailed_operating_inputs` (the eleven `DetailedOperatingInputs` fields)
+  instead of `inputs`.
+- When `operating_mode == "detailed"`, the route validates `terms` (a small
+  `validate_acquisition_terms`, mirroring `validate_acquisition_inputs`'
+  shape but over `AcquisitionTerms`' eleven fields) and
   `detailed_operating_inputs` via `validate_detailed_operating_inputs`,
   builds the projection via `build_detailed_operating_projection`, and calls
-  `analyze_acquisition_from_operating_projection` instead of
+  `analyze_detailed_acquisition` (Section 3.1) instead of
   `analyze_acquisition`. Response shape (`AcquisitionResults`) is
   **unchanged** either way — the frontend does not need a second results
   type.
@@ -537,10 +728,38 @@ Underwriting V2 Gate 5:
   `build_detailed_operating_projection` from the stored
   `DetailedOperatingInputs`, exactly as reopening any deal today means
   recomputing `AcquisitionResults` from stored `AcquisitionInputs`.
-- `Deal.inputs: AcquisitionInputs` stays as-is; a new
-  `Deal.detailed_operating_inputs: DetailedOperatingInputs | None` field is
-  added, `None` for `QUICK` deals — mirroring Section 2.4's contract
-  separation at the persistence layer too.
+- **Post-Section-4 resolution: a `DETAILED` row never populates
+  `current_noi`/`noi_growth`/`occupancy` at all** — not even as a
+  nullable/defaulted value. Two persistence shapes were considered:
+
+  1. **Keep one `deals` table with one row shape**, where `current_noi`,
+     `noi_growth`, and `occupancy` become `NULL`-able columns, `NULL` for
+     every `DETAILED` row (and `NOT NULL` — unchanged — for `QUICK`), and
+     the eleven `AcquisitionTerms` fields (already present as columns since
+     Underwriting V2 Gate 1/5 — `purchase_price`, `hold_period`,
+     `exit_cap_rate`, `ltv`, `interest_rate`, `amortization`,
+     `acquisition_cost_pct`, `financing_fee_pct`, `disposition_cost_pct`,
+     `annual_capex_reserve`, `io_period`) are simply shared, unconditionally
+     populated columns for both modes. `Deal.inputs: AcquisitionInputs`
+     becomes reconstructible only for `QUICK` rows; a `DETAILED` row's
+     `_row_to_deal`-equivalent constructs `AcquisitionTerms` +
+     `DetailedOperatingInputs` instead, never an `AcquisitionInputs` with
+     null-turned-into-fake-zero fields.
+  2. **Two `Deal` shapes** (`QuickDeal`/`DetailedDeal`, or one `Deal` with
+     a `mode`-discriminated union field) with genuinely different schemas —
+     rejected for Gate 5 as a larger migration/API-surface change than the
+     resolution requires; option 1 already gets the "no fabricated
+     current_noi/noi_growth" property without a schema split, by simply
+     widening three existing `NOT NULL` columns to nullable and leaving
+     every other column exactly as Underwriting V2 Gate 5 already defined
+     it.
+
+  **Recommended: option 1** — smallest change consistent with the
+  `PRAGMA user_version` migration precedent (Section 1.10), and the schema
+  a `DETAILED` row ends up with is simply "every `AcquisitionTerms` column
+  populated, every Quick-only column (`current_noi`/`noi_growth`/
+  `occupancy`) `NULL`, every `DetailedOperatingInputs` column populated" —
+  no new table, no new join.
 - No migration is implemented today. This is a design-only recommendation
   for Gate 5.
 
@@ -638,26 +857,51 @@ fields. Recommended shape for a future gate (not implemented today):
 
 ```
 QUICK UNDERWRITE                          DETAILED UNDERWRITE
-current_noi, noi_growth                   11 detailed operating inputs
-        |                                          |
-        v                                          v
-build_quick_operating_projection    build_detailed_operating_projection
-        |                                          |
-        v                                          v
-   NoiForecast                          OperatingProjection
-   (noi_by_year, exit_noi,              (full line-item schedule +
-    going_in_cap_rate)                   noi_by_year, exit_noi,
-        |                                 going_in_cap_rate)
-        |                                          |
-        +------------------+  +--------------------+
-                           |  |
-                           v  v
-          analyze_acquisition_from_operating_projection(projection, inputs)
-                                     |
-                                     v
-                          AcquisitionResults
-              (one contract, one calculation path, unchanged)
+AcquisitionInputs                         AcquisitionTerms (direct)
+(current_noi, noi_growth,                 + 11 DetailedOperatingInputs
+ occupancy, + 11 terms fields)
+        |            \                            |
+        |             \                           |
+        v              v                          v
+build_quick_        acquisition_terms_    build_detailed_operating_projection
+operating_          from_inputs                   |
+projection                |                        |
+        |                 |                        |
+        v                 v                        v
+   NoiForecast      AcquisitionTerms        OperatingProjection
+   (noi_by_year,    (11 shared fields,      (full line-item schedule +
+    exit_noi,        no current_noi/         noi_by_year, exit_noi,
+    going_in_cap_     noi_growth/             going_in_cap_rate)
+    rate)             occupancy)                    |
+        |                 |                         |
+        +-----+     +-----+          +--------------+
+              |     |                |
+              v     v                v
+     analyze_acquisition_    analyze_detailed_acquisition(terms,
+     from_operating_          detailed_inputs)
+     projection(projection, terms)          |
+              |                             |
+              +--------------+--------------+
+                             |
+                             v
+          analyze_acquisition_from_operating_projection
+           (operating_projection: OperatingProjectionLike,
+            terms: AcquisitionTerms)
+                             |
+                             v
+                    AcquisitionResults
+       (one contract, one calculation path, unchanged --
+        no current_noi/noi_growth/occupancy anywhere in the
+        Detailed half of this diagram)
 ```
+
+`analyze_acquisition` (Quick) and `analyze_detailed_acquisition` (Detailed)
+are both thin, mode-specific *builders* of `(operating_projection, terms)`;
+neither performs any acquisition/debt/returns calculation itself, and both
+call the identical `analyze_acquisition_from_operating_projection` exactly
+once. This is the literal, signature-level form of the brief's "only one
+downstream acquisition calculation path" requirement — not just a shared
+formula, but a shared function neither mode duplicates or wraps redundantly.
 
 ## 11. Implementation Sequence
 
@@ -671,16 +915,43 @@ regression obligation unambiguous.
 
 ### Gate 1 — Operating contracts + validation
 
-- **Scope:** `DetailedOperatingInputs` dataclass; `OperatingProjection`
-  dataclass; `validate_detailed_operating_inputs`; growth-rate domain rule
-  (`> -1`) implemented per the conventions document.
+- **Scope:** `AcquisitionTerms` dataclass + `acquisition_terms_from_inputs`
+  adapter (Section 2.2/2.2.3); `DetailedOperatingInputs` dataclass;
+  `OperatingProjection` dataclass; `OperatingProjectionLike` protocol;
+  `validate_detailed_operating_inputs`; growth-rate domain rule (`> -1`)
+  implemented per the conventions document. `AcquisitionTerms` itself needs
+  no new validation function of its own at Gate 1 (see "Do not duplicate
+  validation semantics" below) beyond what Gate 5's future
+  `validate_acquisition_terms` will add once a Detailed deal can be
+  constructed independently of `AcquisitionInputs` via the API.
+- **Do not duplicate validation semantics:** `acquisition_terms_from_inputs`
+  performs no validation (Section 2.2.3) — it only runs on an
+  already-validated `AcquisitionInputs`. Every domain rule for the eleven
+  `AcquisitionTerms` fields already exists in
+  `validate_acquisition_inputs`/`_DOMAIN_DESCRIPTIONS`
+  (`src/anchor/validation.py`) under the same field names; Gate 1 does not
+  re-declare or duplicate those rules for `AcquisitionTerms` — a Quick
+  deal's terms are validated exactly once, when its `AcquisitionInputs` is
+  validated. A standalone `validate_acquisition_terms` (needed once the
+  Detailed API path can submit `terms` directly, Gate 5) should reuse the
+  same domain-description dict/logic rather than re-authoring it — flagged
+  here so Gate 5 does not reintroduce a second, drifting copy of these
+  eleven rules.
 - **Acceptance criteria:** every field/domain in
   `docs/detailed_operating_model_v2_1_financial_conventions.md` has a
   corresponding validation rule; unit tests for each domain boundary
-  (mirroring `test_validation.py`'s existing per-field boundary-test shape).
+  (mirroring `test_validation.py`'s existing per-field boundary-test shape);
+  `acquisition_terms_from_inputs(inputs)` produces an `AcquisitionTerms`
+  whose eleven fields match `inputs`' corresponding fields exactly, for
+  every existing golden-case/test input.
 - **Required regression tests:** none of the existing suite should change
-  behavior — a new `test_validation_detailed.py`-style file only.
-- **Explicit exclusions:** no calculation logic yet; no engine wiring.
+  behavior — a new `test_validation_detailed.py`-style file, plus
+  `test_contracts.py`-adjacent tests for `AcquisitionTerms`
+  immutability/field set and the adapter's field-by-field correctness.
+- **Explicit exclusions:** no calculation logic yet; no engine wiring (the
+  `debt.py` signature narrowing from Section 2.2.2 is Gate 3's change, not
+  Gate 1's — Gate 1 only adds the new contracts, it does not yet retype any
+  existing function).
 
 ### Gate 2 — Detailed operating schedule calculations
 
@@ -702,26 +973,40 @@ regression obligation unambiguous.
 
 ### Gate 3 — Quick/Detailed convergence into one acquisition path
 
-- **Scope:** extract `analyze_acquisition_from_operating_projection` from
-  `analyze_acquisition`'s existing body (pure refactor, zero formula
-  change); add `build_quick_operating_projection` as `forecast_noi`'s
-  Detailed-symmetric name; add `analyze_detailed_acquisition(inputs,
-  detailed_inputs) -> AcquisitionResults` composing
-  `build_detailed_operating_projection` +
-  `analyze_acquisition_from_operating_projection`.
+- **Scope:**
+  1. Retype `calculate_capital_stack`/`calculate_debt_schedule`
+     (`src/anchor/engine/debt.py`) from `inputs: AcquisitionInputs` to
+     `terms: AcquisitionTerms` (Section 2.2.2) — every field either
+     function reads already exists under the same name on
+     `AcquisitionTerms`, so this is a type narrowing with zero formula
+     change.
+  2. Extract `analyze_acquisition_from_operating_projection(operating_projection,
+     terms)` from `analyze_acquisition`'s existing body (pure refactor,
+     zero formula change beyond the (1) narrowing already makes necessary).
+  3. Add `build_quick_operating_projection` as `forecast_noi`'s
+     Detailed-symmetric name (thin wrapper, `noi.py` unchanged).
+  4. Add `acquisition_terms_from_inputs` (Section 2.2.3, contract added at
+     Gate 1; wired into `analyze_acquisition`'s body here).
+  5. Add `analyze_detailed_acquisition(terms, detailed_inputs) ->
+     AcquisitionResults` composing `build_detailed_operating_projection` +
+     `analyze_acquisition_from_operating_projection` — no
+     `AcquisitionInputs` constructed anywhere in this function (Section 4).
 - **Acceptance criteria:** `analyze_acquisition`'s output is bit-for-bit
   unchanged for every existing test input (proves the refactor introduced
   no behavior change); `analyze_detailed_acquisition` exists and is callable
   end-to-end for the golden case (output not yet asserted against the V2
-  golden case — that is Gate 4).
+  golden case — that is Gate 4); `analyze_detailed_acquisition`'s signature
+  contains no `AcquisitionInputs`/`current_noi`/`noi_growth`/`occupancy`
+  parameter, checked by an explicit test (e.g. `inspect.signature`
+  assertion) so this invariant cannot silently regress in a later gate.
 - **Required regression tests:** full existing suite must pass unchanged
-  (this is the refactor-safety gate); a new
-  `test_engine_analyze_acquisition.py`-adjacent test asserting
+  (this is the refactor-safety gate, covering the `debt.py` retyping too);
+  a new `test_engine_analyze_acquisition.py`-adjacent test asserting
   `analyze_acquisition(inputs)` and
   `analyze_acquisition_from_operating_projection(build_quick_operating_projection(inputs),
-  inputs)` produce identical `AcquisitionResults` for a range of inputs (the
-  refactor's own delegation proof, in the existing `wraps=`-assertion style
-  where applicable).
+  acquisition_terms_from_inputs(inputs))` produce identical
+  `AcquisitionResults` for a range of inputs (the refactor's own delegation
+  proof, in the existing `wraps=`-assertion style where applicable).
 - **Explicit exclusions:** no API/persistence/frontend change; no
   cross-model equivalence test yet (Gate 4).
 
@@ -805,19 +1090,19 @@ regression obligation unambiguous.
 
 ## 12. Identified Migration Risks
 
-1. **`current_noi`/`noi_growth` mirroring on a Detailed `AcquisitionInputs`
-   (Section 4) is the one open design question this document does not
-   fully close.** Three sub-options exist (derive-and-mirror; leave at
-   dataclass defaults and document them as ignored for Detailed deals;
-   make `current_noi`/`noi_growth` `Optional` on a Detailed-aware input
-   variant) with different implications for Excel/CSV export and any
-   future report that reads `current_noi` display-only without knowing
-   about `OperatingProjection`. Recommend resolving this explicitly at the
-   start of Gate 1, not deferring it into Gate 3's refactor.
-2. **`Deal.inputs.current_noi`/`.noi_growth` for a persisted Detailed deal**
-   inherits the same open question at the persistence layer (Section 6) —
-   whatever Gate 1 decides must also be reflected consistently in what gets
-   written to the `deals` table for a `DETAILED` row.
+1. **RESOLVED (was open in the original Phase 0 proposal).**
+   `current_noi`/`noi_growth` mirroring on a Detailed deal is no longer a
+   design question: Section 4 resolves it by removing the need for any
+   `AcquisitionInputs` instance in the Detailed path at all, via the
+   `AcquisitionTerms` signature narrowing (Section 2.2.2). No mirrored,
+   derived, or defaulted `current_noi`/`noi_growth` value is ever
+   constructed. A consumer that wants "the deal's NOI" regardless of mode
+   reads `OperatingProjectionLike.noi_by_year[0]` instead (Section 4).
+2. **RESOLVED.** The persistence-layer form of the same question (Section
+   6) is closed the same way: a `DETAILED` `deals` row leaves
+   `current_noi`/`noi_growth`/`occupancy` `NULL` rather than populating them
+   with any value, matching Section 4 exactly at the storage layer too
+   (Section 6, "option 1").
 3. **Frontend type-mirroring drift.** `web/src/types.ts` mirrors Python
    contracts by convention, not codegen (Section 1.14). Adding
    `DetailedOperatingInputs`/`OperatingProjection` doubles the number of
