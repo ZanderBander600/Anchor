@@ -55,7 +55,7 @@ from .contracts import (
     OperatingMode,
 )
 from . import deals as deals_store
-from .deals import Deal, DealNotFoundError
+from .deals import Deal, DealNotFoundError, SnapshotValidationError
 from .engine import (
     AcquisitionResults,
     DetailedAcquisitionResults,
@@ -1008,6 +1008,32 @@ def _optional_deal_context(payload: dict[str, Any]) -> str | None:
     return stripped if stripped else None
 
 
+def _optional_snapshot_dict(payload: dict[str, Any], key: str) -> dict[str, Any] | None:
+    """Owner Return Metrics V3 Gate A6: ``analysis_snapshot``/``ai_snapshot``
+    are optional, already-computed result shapes (the exact JSON a prior
+    ``/analyze``/``/ai/analysis`` response already produced, echoed back
+    unchanged) -- this only checks the coarse shape (present and an object,
+    or absent). Deep validation into the actual ``AcquisitionResults``/
+    ``DetailedAcquisitionResults``/``AIAnalysis`` contract shape happens in
+    the store layer (``SnapshotValidationError``, translated to 422 by the
+    caller), which is the single place that already knows each field's
+    type."""
+
+    raw_value = payload.get(key)
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"'{key}' must be an object when provided.",
+        )
+    return raw_value
+
+
+def _snapshot_validation_error_response(error: SnapshotValidationError) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error))
+
+
 def _require_operating_mode(payload: dict[str, Any]) -> OperatingMode:
     raw_operating_mode = payload.get("operating_mode", OperatingMode.QUICK.value)
     try:
@@ -1081,16 +1107,32 @@ def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
     name = _require_deal_name(payload)
     operating_mode = _require_operating_mode(payload)
     deal_context = _optional_deal_context(payload)
+    analysis_snapshot = _optional_snapshot_dict(payload, "analysis_snapshot")
+    ai_snapshot = _optional_snapshot_dict(payload, "ai_snapshot")
 
-    if operating_mode is OperatingMode.DETAILED:
-        terms = _require_deal_terms(payload)
-        detailed_inputs = _require_deal_detailed_operating_inputs(payload)
-        return deals_store.create_detailed_deal(
-            name, terms, detailed_inputs, deal_context=deal_context
+    try:
+        if operating_mode is OperatingMode.DETAILED:
+            terms = _require_deal_terms(payload)
+            detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+            return deals_store.create_detailed_deal(
+                name,
+                terms,
+                detailed_inputs,
+                deal_context=deal_context,
+                analysis_snapshot=analysis_snapshot,
+                ai_snapshot=ai_snapshot,
+            )
+
+        inputs = _require_deal_inputs(payload)
+        return deals_store.create_deal(
+            name,
+            inputs,
+            deal_context=deal_context,
+            analysis_snapshot=analysis_snapshot,
+            ai_snapshot=ai_snapshot,
         )
-
-    inputs = _require_deal_inputs(payload)
-    return deals_store.create_deal(name, inputs, deal_context=deal_context)
+    except SnapshotValidationError as error:
+        raise _snapshot_validation_error_response(error) from None
 
 
 @app.get("/deals", response_model=list[Deal])
@@ -1113,21 +1155,38 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
     name = _require_deal_name(payload)
     operating_mode = _require_operating_mode(payload)
     deal_context = _optional_deal_context(payload)
+    analysis_snapshot = _optional_snapshot_dict(payload, "analysis_snapshot")
+    ai_snapshot = _optional_snapshot_dict(payload, "ai_snapshot")
 
     try:
         if operating_mode is OperatingMode.DETAILED:
             terms = _require_deal_terms(payload)
             detailed_inputs = _require_deal_detailed_operating_inputs(payload)
             return deals_store.update_detailed_deal(
-                deal_id, name, terms, detailed_inputs, deal_context=deal_context
+                deal_id,
+                name,
+                terms,
+                detailed_inputs,
+                deal_context=deal_context,
+                analysis_snapshot=analysis_snapshot,
+                ai_snapshot=ai_snapshot,
             )
 
         inputs = _require_deal_inputs(payload)
-        return deals_store.update_deal(deal_id, name, inputs, deal_context=deal_context)
+        return deals_store.update_deal(
+            deal_id,
+            name,
+            inputs,
+            deal_context=deal_context,
+            analysis_snapshot=analysis_snapshot,
+            ai_snapshot=ai_snapshot,
+        )
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
         ) from None
+    except SnapshotValidationError as error:
+        raise _snapshot_validation_error_response(error) from None
 
 
 @app.delete("/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1154,3 +1213,53 @@ def duplicate_deal(deal_id: str, payload: dict[str, Any] = Body(default={})) -> 
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
         ) from None
+
+
+# =============================================================================
+# Owner Return Metrics V3 Gate A6 -- silent background cache refresh
+#
+# Two narrow endpoints, each updating exactly one cached snapshot column
+# and nothing else (never ``name``/assumptions/``deal_context``/the other
+# snapshot/``updated_at``) -- the write path for "Analyze/Generate AI
+# Analysis succeeded on an already-saved deal": the frontend calls these
+# only when the deal is already saved and not dirty, so this never marks
+# the deal dirty, never requires another explicit Save, and never touches
+# financial assumptions or Deal Context. See
+# ``anchor.deals.store.update_analysis_snapshot``/``update_ai_snapshot``.
+# =============================================================================
+
+
+@app.put("/deals/{deal_id}/analysis-snapshot", response_model=Deal)
+def update_deal_analysis_snapshot(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
+    raw_snapshot = payload.get("analysis_snapshot")
+    if not isinstance(raw_snapshot, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must include an 'analysis_snapshot' object.",
+        )
+    try:
+        return deals_store.update_analysis_snapshot(deal_id, raw_snapshot)
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+    except SnapshotValidationError as error:
+        raise _snapshot_validation_error_response(error) from None
+
+
+@app.put("/deals/{deal_id}/ai-snapshot", response_model=Deal)
+def update_deal_ai_snapshot(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
+    raw_snapshot = payload.get("ai_snapshot")
+    if not isinstance(raw_snapshot, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must include an 'ai_snapshot' object.",
+        )
+    try:
+        return deals_store.update_ai_snapshot(deal_id, raw_snapshot)
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+    except SnapshotValidationError as error:
+        raise _snapshot_validation_error_response(error) from None

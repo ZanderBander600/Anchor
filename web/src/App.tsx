@@ -17,6 +17,8 @@ import {
   getDeal,
   listDeals,
   updateDeal,
+  updateDealAiSnapshot,
+  updateDealAnalysisSnapshot,
   updateDetailedDeal,
   uploadDetailedExcel,
   uploadDetailedOm,
@@ -85,6 +87,20 @@ import type {
   StandardSensitivityPresets,
   V2FieldId,
 } from './types';
+
+/** Owner Return Metrics V3 Gate A6: `Deal.analysis_snapshot`'s type is
+ * `AcquisitionResults | DetailedAcquisitionResults | null` at the shared
+ * `Deal` shape level (mirroring `inputs` vs. `terms`/
+ * `detailed_operating_inputs`), but `Deal` is not a discriminated union
+ * TypeScript can narrow purely from `operating_mode` -- this checks the one
+ * field only `DetailedAcquisitionResults` has (`operating_projection`,
+ * absent from `AcquisitionResults`) to narrow it for real, rather than an
+ * unchecked type assertion. */
+function isDetailedAnalysisSnapshot(
+  snapshot: AcquisitionResults | DetailedAcquisitionResults,
+): snapshot is DetailedAcquisitionResults {
+  return 'operating_projection' in snapshot;
+}
 
 export default function App() {
   // Detailed Operating Model V2.1 Gate 6: Quick/Detailed mode toggle.
@@ -499,6 +515,8 @@ export default function App() {
     setIsSavingDetailedDeal(true);
     setSaveDetailedDealError(null);
     try {
+      // Owner Return Metrics V3 Gate A6: mirrors handleSaveDeal's snapshot
+      // passthrough exactly -- see its comment.
       const deal = currentDetailedDealId
         ? await updateDetailedDeal(
             currentDetailedDealId,
@@ -506,8 +524,17 @@ export default function App() {
             terms,
             detailedOperatingInputs,
             dealContext,
+            detailedResults,
+            detailedAiAnalysis,
           )
-        : await createDetailedDeal(name, terms, detailedOperatingInputs, dealContext);
+        : await createDetailedDeal(
+            name,
+            terms,
+            detailedOperatingInputs,
+            dealContext,
+            detailedResults,
+            detailedAiAnalysis,
+          );
       setCurrentDetailedDealId(deal.id);
       setDetailedDealName(deal.name);
       setDetailedDealContext(deal.deal_context ?? '');
@@ -693,6 +720,25 @@ export default function App() {
     try {
       const nextResults = await analyzeDetailedAcquisition(terms, detailedOperatingInputs);
       setDetailedResults(nextResults);
+      // Owner Return Metrics V3 Gate A6: silently refresh the persisted
+      // analysis snapshot for an already-saved, not-dirty deal -- fired
+      // without blocking (never awaited inline), so it never delays the
+      // sensitivity/break-even calls below, never marks the deal dirty
+      // (touches no snapshot/dealName/values/dealContext state), and
+      // never requires an explicit Save. Skipped entirely for a new
+      // unsaved deal, or one with unsaved assumption edits (`isDetailedDirty`)
+      // -- caching a snapshot for assumptions that were never actually
+      // saved would violate the "snapshot always matches saved assumptions"
+      // invariant.
+      if (currentDetailedDealId !== null && !isDetailedDirty) {
+        void updateDealAnalysisSnapshot(currentDetailedDealId, nextResults)
+          .then(() => clearSaveDetailedDealError())
+          .catch(() => {
+            setSaveDetailedDealError(
+              'Could not save the latest analysis automatically. Results are shown but may not persist if you reload.',
+            );
+          });
+      }
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setDetailedError(apiError.message);
@@ -783,6 +829,17 @@ export default function App() {
         detailedDealContext.trim() || null,
       );
       setDetailedAiAnalysis(analysis);
+      // Owner Return Metrics V3 Gate A6: mirrors handleGenerateAiAnalysis's
+      // silent background AI-snapshot cache refresh exactly.
+      if (currentDetailedDealId !== null && !isDetailedDirty) {
+        void updateDealAiSnapshot(currentDetailedDealId, analysis)
+          .then(() => clearSaveDetailedDealError())
+          .catch(() => {
+            setSaveDetailedDealError(
+              'Could not save the latest AI analysis automatically. It is shown but may not persist if you reload.',
+            );
+          });
+      }
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setDetailedAiAnalysisError(apiError.message);
@@ -1113,9 +1170,18 @@ export default function App() {
     setIsSavingDeal(true);
     setSaveDealError(null);
     try {
+      // Owner Return Metrics V3 Gate A6: `results`/`aiAnalysis` are always
+      // either null or already valid for the current `values`/`dealContext`
+      // by construction (any assumption edit clears both via
+      // resetDownstreamAnalysisState; a Deal-Context-only edit clears only
+      // aiAnalysis, via clearAiAnalysis) -- so echoing them back here,
+      // whatever they currently are, is always correct: it persists a
+      // current valid snapshot on first Save, preserves one across a
+      // Deal-Context-only Save, and (via createDeal/updateDeal's own
+      // clear-unless-repassed contract) clears one that's no longer valid.
       const deal = currentDealId
-        ? await updateDeal(currentDealId, name, request, dealContextToSave)
-        : await createDeal(name, request, dealContextToSave);
+        ? await updateDeal(currentDealId, name, request, dealContextToSave, results, aiAnalysis)
+        : await createDeal(name, request, dealContextToSave, results, aiAnalysis);
       setCurrentDealId(deal.id);
       setDealName(deal.name);
       setDealContext(deal.deal_context ?? '');
@@ -1199,6 +1265,30 @@ export default function App() {
           dealContext: fullDeal.deal_context ?? '',
         });
         resetDetailedDownstreamAnalysisState();
+        // Owner Return Metrics V3 Gate A6: hydrate the SAME state a live
+        // Analyze/Generate AI Analysis populates -- never a separate
+        // "historical snapshot viewer" render path. `lastDetailedRequest`
+        // is also restored alongside a valid analysis snapshot (not just
+        // `detailedResults`) so "Generate AI Analysis" works immediately
+        // on the reopened deal without first requiring a fresh Analyze
+        // click -- it is exactly the terms/detailedOperatingInputs that
+        // produced the restored snapshot, since a snapshot is only ever
+        // returned when it matches the deal's current assumptions.
+        // Deliberately does not touch sensitivity/break-even state, which
+        // Gate A6 does not persist -- those remain empty until recomputed.
+        if (
+          fullDeal.analysis_snapshot !== null &&
+          isDetailedAnalysisSnapshot(fullDeal.analysis_snapshot)
+        ) {
+          setDetailedResults(fullDeal.analysis_snapshot);
+          setLastDetailedRequest({
+            terms: fullDeal.terms,
+            detailedOperatingInputs: fullDeal.detailed_operating_inputs,
+          });
+        }
+        if (fullDeal.ai_snapshot !== null) {
+          setDetailedAiAnalysis(fullDeal.ai_snapshot);
+        }
         clearSaveDetailedDealError();
         clearDetailedIntakeFeedback();
         setOperatingMode('detailed');
@@ -1234,6 +1324,18 @@ export default function App() {
         dealContext: fullDeal.deal_context ?? '',
       });
       resetDownstreamAnalysisState();
+      // Owner Return Metrics V3 Gate A6: mirrors the Detailed branch above
+      // exactly -- see its comment.
+      if (
+        fullDeal.analysis_snapshot !== null &&
+        !isDetailedAnalysisSnapshot(fullDeal.analysis_snapshot)
+      ) {
+        setResults(fullDeal.analysis_snapshot);
+        setLastRequest(fullDeal.inputs);
+      }
+      if (fullDeal.ai_snapshot !== null) {
+        setAiAnalysis(fullDeal.ai_snapshot);
+      }
       clearSaveDealError();
       clearIntakeFeedback();
       setOperatingMode('quick');
@@ -1437,6 +1539,20 @@ export default function App() {
         dealContext.trim() || null,
       );
       setAiAnalysis(analysis);
+      // Owner Return Metrics V3 Gate A6: silently refresh the persisted AI
+      // snapshot for an already-saved, not-dirty deal -- mirrors the
+      // analysis-snapshot auto-cache in handleSubmit exactly. Skipped for
+      // a new unsaved deal or one with unsaved assumption/context edits,
+      // for the same "never cache against never-saved state" reason.
+      if (currentDealId !== null && !isDirty) {
+        void updateDealAiSnapshot(currentDealId, analysis)
+          .then(() => clearSaveDealError())
+          .catch(() => {
+            setSaveDealError(
+              'Could not save the latest AI analysis automatically. It is shown but may not persist if you reload.',
+            );
+          });
+      }
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setAiAnalysisError(apiError.message);
@@ -1475,6 +1591,17 @@ export default function App() {
     try {
       const nextResults = await analyzeAcquisition(request);
       setResults(nextResults);
+      // Owner Return Metrics V3 Gate A6: mirrors handleDetailedSubmit's
+      // silent background cache refresh exactly -- see its comment.
+      if (currentDealId !== null && !isDirty) {
+        void updateDealAnalysisSnapshot(currentDealId, nextResults)
+          .then(() => clearSaveDealError())
+          .catch(() => {
+            setSaveDealError(
+              'Could not save the latest analysis automatically. Results are shown but may not persist if you reload.',
+            );
+          });
+      }
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setError(apiError.message);

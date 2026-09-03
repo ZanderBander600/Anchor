@@ -275,6 +275,8 @@ function dealFixture(overrides: Partial<Deal> = {}): Deal {
     terms: null,
     detailed_operating_inputs: null,
     deal_context: null,
+    analysis_snapshot: null,
+    ai_snapshot: null,
     created_at: '2026-09-03T12:00:00+00:00',
     updated_at: '2026-09-03T12:00:00+00:00',
     ...overrides,
@@ -316,6 +318,8 @@ function detailedDealFixture(overrides: Partial<Deal> = {}): Deal {
       expense_growth: 0.03,
     },
     deal_context: null,
+    analysis_snapshot: null,
+    ai_snapshot: null,
     created_at: '2026-09-03T12:00:00+00:00',
     updated_at: '2026-09-03T12:00:00+00:00',
     ...overrides,
@@ -338,6 +342,8 @@ describe('createDeal', () => {
       name: '111 Main St',
       inputs: GOLDEN_INPUTS,
       deal_context: null,
+      analysis_snapshot: null,
+      ai_snapshot: null,
     });
   });
 
@@ -384,6 +390,8 @@ describe('updateDeal', () => {
       name: 'Renamed Deal',
       inputs: GOLDEN_INPUTS,
       deal_context: null,
+      analysis_snapshot: null,
+      ai_snapshot: null,
     });
   });
 
@@ -421,6 +429,8 @@ describe('createDetailedDeal', () => {
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
       deal_context: null,
+      analysis_snapshot: null,
+      ai_snapshot: null,
     });
   });
 
@@ -480,6 +490,8 @@ describe('updateDetailedDeal', () => {
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
       deal_context: null,
+      analysis_snapshot: null,
+      ai_snapshot: null,
     });
   });
 

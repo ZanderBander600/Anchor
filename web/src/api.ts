@@ -696,13 +696,21 @@ export async function createDeal(
   name: string,
   inputs: AcquisitionRequest,
   dealContext?: string | null,
+  analysisSnapshot?: AcquisitionResults | null,
+  aiSnapshot?: AIAnalysis | null,
 ): Promise<Deal> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/deals`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, inputs, deal_context: dealContext ?? null }),
+      body: JSON.stringify({
+        name,
+        inputs,
+        deal_context: dealContext ?? null,
+        analysis_snapshot: analysisSnapshot ?? null,
+        ai_snapshot: aiSnapshot ?? null,
+      }),
     });
   } catch {
     throw new ApiError(
@@ -720,13 +728,21 @@ export async function updateDeal(
   name: string,
   inputs: AcquisitionRequest,
   dealContext?: string | null,
+  analysisSnapshot?: AcquisitionResults | null,
+  aiSnapshot?: AIAnalysis | null,
 ): Promise<Deal> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/deals/${encodeURIComponent(dealId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, inputs, deal_context: dealContext ?? null }),
+      body: JSON.stringify({
+        name,
+        inputs,
+        deal_context: dealContext ?? null,
+        analysis_snapshot: analysisSnapshot ?? null,
+        ai_snapshot: aiSnapshot ?? null,
+      }),
     });
   } catch {
     throw new ApiError(
@@ -752,6 +768,8 @@ export async function createDetailedDeal(
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
   dealContext?: string | null,
+  analysisSnapshot?: DetailedAcquisitionResults | null,
+  aiSnapshot?: AIAnalysis | null,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -764,6 +782,8 @@ export async function createDetailedDeal(
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
         deal_context: dealContext ?? null,
+        analysis_snapshot: analysisSnapshot ?? null,
+        ai_snapshot: aiSnapshot ?? null,
       }),
     });
   } catch {
@@ -784,6 +804,8 @@ export async function updateDetailedDeal(
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
   dealContext?: string | null,
+  analysisSnapshot?: DetailedAcquisitionResults | null,
+  aiSnapshot?: AIAnalysis | null,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -796,6 +818,8 @@ export async function updateDetailedDeal(
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
         deal_context: dealContext ?? null,
+        analysis_snapshot: analysisSnapshot ?? null,
+        ai_snapshot: aiSnapshot ?? null,
       }),
     });
   } catch {
@@ -806,6 +830,68 @@ export async function updateDetailedDeal(
   }
 
   return _handleDealResponse(response, 'The deal could not be updated');
+}
+
+/**
+ * Owner Return Metrics V3 Gate A6 -- silent background cache refresh.
+ * PUTs only the cached deterministic-analysis snapshot to
+ * ``/deals/{id}/analysis-snapshot``; never touches name, assumptions, Deal
+ * Context, the AI snapshot, or the deal's save timestamp. Used after a
+ * successful Analyze on an already-saved, not-dirty deal -- never marks
+ * the deal dirty and never requires an explicit Save. One shape for both
+ * modes' callers: pass an ``AcquisitionResults`` for Quick or a
+ * ``DetailedAcquisitionResults`` for Detailed, matching whichever mode
+ * ``dealId`` actually is.
+ */
+export async function updateDealAnalysisSnapshot(
+  dealId: string,
+  analysisSnapshot: AcquisitionResults | DetailedAcquisitionResults,
+): Promise<Deal> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/deals/${encodeURIComponent(dealId)}/analysis-snapshot`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ analysis_snapshot: analysisSnapshot }),
+      },
+    );
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  return _handleDealResponse(response, 'The analysis could not be cached');
+}
+
+/**
+ * Owner Return Metrics V3 Gate A6 -- silent background cache refresh, AI
+ * counterpart to ``updateDealAnalysisSnapshot`` above. PUTs only the
+ * cached AI Analyst snapshot; never touches anything else. Used after a
+ * successful Generate AI Analysis on an already-saved, not-dirty deal.
+ */
+export async function updateDealAiSnapshot(
+  dealId: string,
+  aiSnapshot: AIAnalysis,
+): Promise<Deal> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals/${encodeURIComponent(dealId)}/ai-snapshot`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ai_snapshot: aiSnapshot }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  return _handleDealResponse(response, 'The AI analysis could not be cached');
 }
 
 /** GETs one saved deal by id, for reopening it into the assumptions form. */

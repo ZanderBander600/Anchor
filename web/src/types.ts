@@ -399,6 +399,23 @@ export interface Deal {
    * underwriting input, `null` when no context was supplied (including
    * every deal saved before this field existed). */
   deal_context: string | null;
+  /** Owner Return Metrics V3 Gate A6: a CACHE of the last successful
+   * deterministic analysis for these exact assumptions -- never a new
+   * source of truth (Analyze always remains authoritative). `null` when no
+   * analysis has been cached yet, or a previously-cached one was
+   * invalidated by an assumption change, or the cached artifact could not
+   * be read (never surfaced, never blocks opening the deal). The same
+   * `AcquisitionResults` shape for a Quick deal (`operating_mode ===
+   * 'quick'`); the richer `DetailedAcquisitionResults` envelope
+   * (operating projection + results) for a Detailed deal -- mirrors how
+   * `inputs` vs. `terms`/`detailed_operating_inputs` already split by mode. */
+  analysis_snapshot: AcquisitionResults | DetailedAcquisitionResults | null;
+  /** Owner Return Metrics V3 Gate A6: a CACHE of the last successful AI
+   * Analyst output for these exact assumptions and this exact
+   * `deal_context` -- `null` under the same conditions as
+   * `analysis_snapshot` above, plus whenever `deal_context` itself has
+   * changed since the AI ran. Identical shape for both modes. */
+  ai_snapshot: AIAnalysis | null;
   created_at: string;
   updated_at: string;
 }

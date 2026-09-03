@@ -19,6 +19,8 @@ import {
   getDeal,
   listDeals,
   updateDeal,
+  updateDealAiSnapshot,
+  updateDealAnalysisSnapshot,
   updateDetailedDeal,
   uploadDetailedExcel,
   uploadDetailedOm,
@@ -72,6 +74,8 @@ vi.mock('./api', async () => {
     updateDeal: vi.fn(),
     createDetailedDeal: vi.fn(),
     updateDetailedDeal: vi.fn(),
+    updateDealAnalysisSnapshot: vi.fn(),
+    updateDealAiSnapshot: vi.fn(),
     getDeal: vi.fn(),
     listDeals: vi.fn(),
     duplicateDeal: vi.fn(),
@@ -99,6 +103,8 @@ const mockDeleteDeal = vi.mocked(deleteDeal);
 const mockUpdateDeal = vi.mocked(updateDeal);
 const mockGetDeal = vi.mocked(getDeal);
 const mockListDeals = vi.mocked(listDeals);
+const mockUpdateDealAnalysisSnapshot = vi.mocked(updateDealAnalysisSnapshot);
+const mockUpdateDealAiSnapshot = vi.mocked(updateDealAiSnapshot);
 
 function missingField(field_id: string): FieldCandidates {
   return { field_id, candidates: [] };
@@ -712,6 +718,16 @@ beforeEach(() => {
   mockListDeals.mockResolvedValue([]);
   mockDuplicateDeal.mockReset();
   mockDeleteDeal.mockReset();
+  // Owner Return Metrics V3 Gate A6: default to a resolved Promise so the
+  // silent background cache-refresh calls in handleSubmit/
+  // handleDetailedSubmit/handleGenerateAiAnalysis/
+  // handleGenerateDetailedAiAnalysis never throw on `.then()` in a test
+  // that doesn't care about caching -- only tests that specifically assert
+  // on these mocks override the resolved value.
+  mockUpdateDealAnalysisSnapshot.mockReset();
+  mockUpdateDealAnalysisSnapshot.mockResolvedValue(makeDeal());
+  mockUpdateDealAiSnapshot.mockReset();
+  mockUpdateDealAiSnapshot.mockResolvedValue(makeDeal());
   // Default every test to an accepted confirmation so the Phase C
   // unsaved-changes guard and the Deal Library's delete confirmation don't
   // block tests that aren't specifically exercising cancellation -- those
@@ -2181,6 +2197,8 @@ function makeDeal(overrides: Partial<Deal> = {}): Deal {
     terms: null,
     detailed_operating_inputs: null,
     deal_context: null,
+    analysis_snapshot: null,
+    ai_snapshot: null,
     created_at: '2026-09-01T12:00:00+00:00',
     updated_at: '2026-09-01T12:00:00+00:00',
     ...overrides,
@@ -2223,6 +2241,8 @@ function makeDetailedDeal(overrides: Partial<Deal> = {}): Deal {
       expense_growth: 0.03,
     },
     deal_context: null,
+    analysis_snapshot: null,
+    ai_snapshot: null,
     created_at: '2026-09-01T12:00:00+00:00',
     updated_at: '2026-09-01T12:00:00+00:00',
     ...overrides,
@@ -2256,7 +2276,13 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith(
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      null,
+      null,
+      null,
+    );
     expect(mockUpdateDeal).not.toHaveBeenCalled();
     expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
     expect(await screen.findByText(/^Saved/)).toBeTruthy();
@@ -2277,7 +2303,14 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Update Deal' }));
 
     await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
-    expect(mockUpdateDeal).toHaveBeenCalledWith('deal-1', '111 Main St', GOLDEN_DEAL_REQUEST, null);
+    expect(mockUpdateDeal).toHaveBeenCalledWith(
+      'deal-1',
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      null,
+      null,
+      null,
+    );
     expect(mockCreateDeal).not.toHaveBeenCalled();
   });
 
@@ -2417,6 +2450,8 @@ describe('Deal persistence workflow', () => {
         purchase_price: 60_000_000,
       },
       null,
+      null,
+      null,
     );
   });
 
@@ -2477,7 +2512,13 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith(
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      null,
+      null,
+      null,
+    );
   });
 });
 
@@ -3862,6 +3903,8 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
       GOLDEN_DETAILED_TERMS_REQUEST,
       GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
       null,
+      null,
+      null,
     );
     expect(mockUpdateDetailedDeal).not.toHaveBeenCalled();
     expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
@@ -3999,6 +4042,8 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
       deal.name,
       { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 11_000_000 },
       GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
+      null,
+      null,
       null,
     );
   });
@@ -4639,6 +4684,8 @@ describe('Deal Context (Gate A4)', () => {
       '111 Main St',
       GOLDEN_DEAL_REQUEST,
       'Value-add play.',
+      null,
+      null,
     );
   });
 
@@ -4761,7 +4808,13 @@ describe('Deal Context (Gate A4)', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith(
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      null,
+      null,
+      null,
+    );
     expect(screen.queryByText(/error/i)).toBeNull();
   });
 
@@ -4805,5 +4858,365 @@ describe('Deal Context (Gate A4)', () => {
       'value',
       'Strategy typed before analyzing.',
     );
+  });
+});
+
+// =============================================================================
+// Owner Return Metrics V3 Gate A6 -- Persisted Analysis + AI Snapshots
+// =============================================================================
+
+describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
+  it('restores Quick analysis after switching away and back to the same deal', async () => {
+    const user = userEvent.setup();
+    const dealA = makeDeal({ id: 'deal-a', name: 'Deal A' });
+    const dealB = makeDeal({ id: 'deal-b', name: 'Deal B' });
+    mockListDeals.mockResolvedValue([dealA, dealB]);
+    mockAnalyze.mockResolvedValue(makeResults());
+
+    render(<App />);
+
+    mockGetDeal.mockResolvedValueOnce(dealA);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
+    await screen.findByText(/^Saved/);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    await waitFor(() =>
+      expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith('deal-a', makeResults()),
+    );
+
+    mockGetDeal.mockResolvedValueOnce(dealB);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[1]);
+    expect(screen.queryByText('Key Returns')).toBeNull();
+
+    // Simulate reopening deal A after the analysis was cached server-side.
+    mockGetDeal.mockResolvedValueOnce({ ...dealA, analysis_snapshot: makeResults() });
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
+
+    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    // Restored from the cache, not a fresh network call.
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores Detailed analysis (including the operating statement) after switching away and back', async () => {
+    const user = userEvent.setup();
+    const dealA = makeDetailedDeal({ id: 'detailed-a', name: 'Detailed A' });
+    const dealB = makeDetailedDeal({ id: 'detailed-b', name: 'Detailed B' });
+    mockListDeals.mockResolvedValue([dealA, dealB]);
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+
+    render(<App />);
+
+    mockGetDeal.mockResolvedValueOnce(dealA);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
+    expect(
+      screen.getByRole('tab', { name: 'Detailed Underwrite' }),
+    ).toHaveProperty('ariaSelected', 'true');
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    expect(await screen.findByText('Operating Statement')).toBeTruthy();
+    expect(screen.getByText('Key Returns')).toBeTruthy();
+    await waitFor(() =>
+      expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
+        'detailed-a',
+        makeDetailedResults(),
+      ),
+    );
+
+    mockGetDeal.mockResolvedValueOnce(dealB);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[1]);
+    expect(screen.queryByText('Operating Statement')).toBeNull();
+
+    mockGetDeal.mockResolvedValueOnce({ ...dealA, analysis_snapshot: makeDetailedResults() });
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
+
+    // Operating statement AND Owner Return Metrics both restore -- the
+    // complete result surface, not just headline cards.
+    expect(await screen.findByText('Operating Statement')).toBeTruthy();
+    expect(screen.getByText('Owner Returns')).toBeTruthy();
+    expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores Quick AI Analyst output after switching away and back', async () => {
+    const user = userEvent.setup();
+    const dealA = makeDeal({ id: 'deal-a', name: 'Deal A' });
+    const dealB = makeDeal({ id: 'deal-b', name: 'Deal B' });
+    mockListDeals.mockResolvedValue([dealA, dealB]);
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysis());
+
+    render(<App />);
+
+    mockGetDeal.mockResolvedValueOnce(dealA);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    expect(await screen.findByText('Investment View')).toBeTruthy();
+    await waitFor(() =>
+      expect(mockUpdateDealAiSnapshot).toHaveBeenCalledWith('deal-a', makeAiAnalysis()),
+    );
+
+    mockGetDeal.mockResolvedValueOnce(dealB);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[1]);
+    expect(screen.queryByText('Investment View')).toBeNull();
+
+    mockGetDeal.mockResolvedValueOnce({
+      ...dealA,
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysis(),
+    });
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
+
+    expect(await screen.findByText('Investment View')).toBeTruthy();
+    expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores Detailed AI Analyst output after switching away and back', async () => {
+    const user = userEvent.setup();
+    const dealA = makeDetailedDeal({ id: 'detailed-a', name: 'Detailed A' });
+    const dealB = makeDetailedDeal({ id: 'detailed-b', name: 'Detailed B' });
+    mockListDeals.mockResolvedValue([dealA, dealB]);
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    mockFetchDetailedAIAnalysis.mockResolvedValue(makeAiAnalysis());
+
+    render(<App />);
+
+    mockGetDeal.mockResolvedValueOnce(dealA);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    expect(await screen.findByText('Investment View')).toBeTruthy();
+    await waitFor(() =>
+      expect(mockUpdateDealAiSnapshot).toHaveBeenCalledWith('detailed-a', makeAiAnalysis()),
+    );
+
+    mockGetDeal.mockResolvedValueOnce(dealB);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[1]);
+    expect(screen.queryByText('Investment View')).toBeNull();
+
+    mockGetDeal.mockResolvedValueOnce({
+      ...dealA,
+      analysis_snapshot: makeDetailedResults(),
+      ai_snapshot: makeAiAnalysis(),
+    });
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
+
+    expect(await screen.findByText('Investment View')).toBeTruthy();
+    expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it('a financial assumption edit clears the currently-shown result and AI, even when they were restored from a snapshot', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      id: 'deal-1',
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysis(),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    expect(screen.getByText('Investment View')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+      target: { value: '60000000' },
+    });
+
+    expect(screen.queryByText('Key Returns')).toBeNull();
+    expect(screen.queryByText('Investment View')).toBeNull();
+  });
+
+  it('saving a changed financial assumption sends a null analysis/AI snapshot, clearing the stale cache', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      id: 'deal-1',
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysis(),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUpdateDeal.mockResolvedValue({ ...deal, analysis_snapshot: null, ai_snapshot: null });
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+      target: { value: '60000000' },
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+
+    await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
+    const call = mockUpdateDeal.mock.calls[0];
+    expect(call[4]).toBeNull(); // analysisSnapshot
+    expect(call[5]).toBeNull(); // aiSnapshot
+  });
+
+  it('editing Deal Context on a snapshot-restored deal preserves the result and clears the AI', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      id: 'deal-1',
+      deal_context: 'Original strategy.',
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysis(),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    expect(screen.getByText('Investment View')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Deal Context'), {
+      target: { value: 'Updated strategy.' },
+    });
+
+    expect(screen.getByText('Key Returns')).toBeTruthy();
+    expect(screen.queryByText('Investment View')).toBeNull();
+  });
+
+  it('saving a Deal-Context-only edit preserves the analysis snapshot and clears the AI snapshot', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      id: 'deal-1',
+      deal_context: 'Original strategy.',
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysis(),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUpdateDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    fireEvent.change(screen.getByLabelText('Deal Context'), {
+      target: { value: 'Updated strategy.' },
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+
+    await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
+    const [, , , dealContextArg, analysisSnapshotArg, aiSnapshotArg] = mockUpdateDeal.mock.calls[0];
+    expect(dealContextArg).toBe('Updated strategy.');
+    expect(analysisSnapshotArg).toEqual(makeResults()); // preserved
+    expect(aiSnapshotArg).toBeNull(); // cleared
+  });
+
+  it('analyzing a brand-new unsaved deal never silently creates a database row', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    expect(await screen.findByText('Key Returns')).toBeTruthy();
+
+    expect(mockCreateDeal).not.toHaveBeenCalled();
+    expect(mockUpdateDeal).not.toHaveBeenCalled();
+    expect(mockUpdateDealAnalysisSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('the first Save of a new deal persists the current valid analysis and AI output', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysis());
+    mockCreateDeal.mockResolvedValue(makeDeal());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Anchor AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Investment View');
+
+    await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+
+    await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
+    const [, , , analysisSnapshotArg, aiSnapshotArg] = mockCreateDeal.mock.calls[0];
+    expect(analysisSnapshotArg).toEqual(makeResults());
+    expect(aiSnapshotArg).toEqual(makeAiAnalysis());
+  });
+
+  it('Quick and Detailed snapshots never cross-contaminate when switching modes', async () => {
+    const user = userEvent.setup();
+    const quickDeal = makeDeal({ id: 'deal-1', analysis_snapshot: makeResults() });
+    mockListDeals.mockResolvedValue([quickDeal]);
+    mockGetDeal.mockResolvedValue(quickDeal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    expect(await screen.findByText('Key Returns')).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.queryByText('Key Returns')).toBeNull();
+    expect(
+      screen.getByText('Enter assumptions and click', { exact: false }),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+    expect(screen.getByText('Key Returns')).toBeTruthy();
+  });
+
+  it('Duplicate is a pure backend passthrough -- the frontend performs no snapshot handling of its own', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      id: 'deal-1',
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysis(),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockDuplicateDeal.mockResolvedValue({ ...deal, id: 'deal-2' });
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Duplicate' }));
+
+    await waitFor(() => expect(mockDuplicateDeal).toHaveBeenCalledWith('deal-1'));
+    // No snapshot-specific arguments -- duplication of cached results/AI is
+    // entirely a backend (store-layer) decision, per Gate A6 Section 15.
+    expect(mockDuplicateDeal.mock.calls[0]).toEqual(['deal-1']);
+  });
+
+  it('the Deal Library renders normally for deals that carry cached snapshots', async () => {
+    const user = userEvent.setup();
+    mockListDeals.mockResolvedValue([
+      makeDeal({ id: 'a', name: 'Deal A', analysis_snapshot: makeResults(), ai_snapshot: makeAiAnalysis() }),
+      makeDetailedDeal({
+        id: 'b',
+        name: 'Deal B',
+        analysis_snapshot: makeDetailedResults(),
+        ai_snapshot: makeAiAnalysis(),
+      }),
+    ]);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+
+    expect(await screen.findByText('Deal A')).toBeTruthy();
+    expect(screen.getByText('Deal B')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Open' }).length).toBe(2);
   });
 });

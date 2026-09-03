@@ -169,9 +169,17 @@ _QUICK_ONLY_COLUMNS = frozenset(
         "annual_capex_reserve",
         "io_period",
         # Owner Return Metrics V3 Gate A4: one nullable deal-metadata column,
-        # added after this test module was written for Gate 5b -- the only
-        # legitimate addition to this otherwise-frozen list since.
+        # added after this test module was written for Gate 5b.
         "deal_context",
+        # Owner Return Metrics V3 Gate A6: six nullable cached-snapshot
+        # columns, added later still -- the only other legitimate additions
+        # to this otherwise-frozen list since Gate 5b.
+        "analysis_snapshot",
+        "analysis_snapshot_schema_version",
+        "analysis_snapshot_fingerprint",
+        "ai_snapshot",
+        "ai_snapshot_schema_version",
+        "ai_snapshot_fingerprint",
         "created_at",
         "updated_at",
     )
