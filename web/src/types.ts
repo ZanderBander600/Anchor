@@ -292,14 +292,23 @@ export interface DetailedExcelIntakeReport {
   schema_version: string;
 }
 
-/** Mirrors ``Deal`` in ``src/anchor/deals/contracts.py``. ``inputs`` is the
- * exact ``AcquisitionRequest`` shape ``/analyze`` already accepts -- a
- * saved deal carries no derived/result data of its own; reopening it means
- * resubmitting ``inputs`` to the existing ``/analyze`` endpoint. */
+/** Mirrors ``Deal`` in ``src/anchor/deals/contracts.py``. A saved deal
+ * carries no derived/result data of its own -- reopening it means
+ * resubmitting its assumptions to the existing ``/analyze`` endpoint.
+ *
+ * Detailed Operating Model V2.1 Gate 11: one deal is either ``QUICK``
+ * (``inputs`` populated, ``terms``/``detailed_operating_inputs`` both
+ * ``null``) or ``DETAILED`` (``terms``/``detailed_operating_inputs``
+ * populated, ``inputs`` ``null``) -- never a fabricated
+ * ``current_noi``/``noi_growth``/``occupancy`` on a Detailed deal, matching
+ * the backend ``Deal`` dataclass's own invariant exactly. */
 export interface Deal {
   id: string;
   name: string;
-  inputs: AcquisitionRequest;
+  operating_mode: OperatingMode;
+  inputs: AcquisitionRequest | null;
+  terms: AcquisitionTermsRequest | null;
+  detailed_operating_inputs: DetailedOperatingInputsRequest | null;
   created_at: string;
   updated_at: string;
 }

@@ -30,7 +30,54 @@ function dealFixture(overrides: Partial<Deal> = {}): Deal {
   return {
     id: 'deal-1',
     name: '111 Main St',
+    operating_mode: 'quick',
     inputs: GOLDEN_INPUTS,
+    terms: null,
+    detailed_operating_inputs: null,
+    created_at: '2026-09-01T12:00:00+00:00',
+    updated_at: '2026-09-01T12:00:00+00:00',
+    ...overrides,
+  };
+}
+
+const GOLDEN_TERMS: NonNullable<Deal['terms']> = {
+  purchase_price: 10_000_000,
+  hold_period: 5,
+  exit_cap_rate: 0.065,
+  ltv: 0.6,
+  interest_rate: 0.05,
+  amortization: 30,
+  acquisition_cost_pct: 0.02,
+  financing_fee_pct: 0.01,
+  disposition_cost_pct: 0.025,
+  annual_capex_reserve: 50_000,
+  io_period: 2,
+};
+
+const GOLDEN_DETAILED_OPERATING_INPUTS: NonNullable<Deal['detailed_operating_inputs']> = {
+  gross_potential_rent: 800_000,
+  other_income: 20_000,
+  vacancy_credit_loss_pct: 0.05,
+  property_taxes: 60_000,
+  insurance: 20_000,
+  utilities: 25_000,
+  repairs_maintenance: 20_000,
+  other_operating_expenses: 16_000,
+  management_fee_pct: 0.05,
+  revenue_growth: 0.03,
+  expense_growth: 0.03,
+};
+
+/** Detailed Operating Model V2.1 Gate 11 -- a Detailed deal fixture:
+ * `inputs` stays `null`, `terms`/`detailed_operating_inputs` populated. */
+function detailedDealFixture(overrides: Partial<Deal> = {}): Deal {
+  return {
+    id: 'detailed-deal-1',
+    name: 'Golden Detailed Deal',
+    operating_mode: 'detailed',
+    inputs: null,
+    terms: GOLDEN_TERMS,
+    detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
     created_at: '2026-09-01T12:00:00+00:00',
     updated_at: '2026-09-01T12:00:00+00:00',
     ...overrides,
@@ -76,6 +123,31 @@ describe('DealLibraryPanel', () => {
 
     expect(screen.getByText('111 Main St')).toBeTruthy();
     expect(screen.getByText(/Purchase Price \$50,000,000/)).toBeTruthy();
+  });
+
+  it('identifies a Quick deal row with a "Quick" badge', () => {
+    renderPanel({ deals: [dealFixture()] });
+
+    expect(screen.getByText('Quick')).toBeTruthy();
+    expect(screen.queryByText('Detailed')).toBeNull();
+  });
+
+  it('identifies a Detailed deal row with a "Detailed" badge, reading purchase price from terms', () => {
+    renderPanel({ deals: [detailedDealFixture()] });
+
+    expect(screen.getByText('Detailed')).toBeTruthy();
+    expect(screen.getByText(/Purchase Price \$10,000,000/)).toBeTruthy();
+  });
+
+  it('lists Quick and Detailed deals together in one unified library', () => {
+    renderPanel({
+      deals: [dealFixture({ id: 'q1' }), detailedDealFixture({ id: 'd1' })],
+    });
+
+    expect(screen.getByText('111 Main St')).toBeTruthy();
+    expect(screen.getByText('Golden Detailed Deal')).toBeTruthy();
+    expect(screen.getByText('Quick')).toBeTruthy();
+    expect(screen.getByText('Detailed')).toBeTruthy();
   });
 
   it('renders every deal in the given order (backend-provided, most recently updated first)', () => {

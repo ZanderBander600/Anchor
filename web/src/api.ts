@@ -572,6 +572,72 @@ export async function updateDeal(
   return _handleDealResponse(response, 'The deal could not be updated');
 }
 
+/**
+ * Detailed Operating Model V2.1 Gate 11: POSTs a new Detailed deal
+ * (name + ``operating_mode: "detailed"`` + ``terms`` +
+ * ``detailed_operating_inputs``) to ``/deals``. A dedicated function
+ * (mirroring ``createDeal``'s shape exactly) rather than an
+ * overloaded/discriminated ``createDeal`` -- Quick's existing call sites
+ * and tests are unaffected. Used for a Detailed deal that has never been
+ * saved -- ``currentDetailedDealId`` is still ``null``.
+ */
+export async function createDetailedDeal(
+  name: string,
+  terms: AcquisitionTermsRequest,
+  detailedOperatingInputs: DetailedOperatingInputsRequest,
+): Promise<Deal> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        operating_mode: 'detailed',
+        terms,
+        detailed_operating_inputs: detailedOperatingInputs,
+      }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  return _handleDealResponse(response, 'The deal could not be saved');
+}
+
+/** PUTs an already-saved Detailed deal's name, terms, and detailed
+ * operating inputs to ``/deals/{id}``. Mirrors ``updateDeal`` exactly. */
+export async function updateDetailedDeal(
+  dealId: string,
+  name: string,
+  terms: AcquisitionTermsRequest,
+  detailedOperatingInputs: DetailedOperatingInputsRequest,
+): Promise<Deal> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals/${encodeURIComponent(dealId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        operating_mode: 'detailed',
+        terms,
+        detailed_operating_inputs: detailedOperatingInputs,
+      }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  return _handleDealResponse(response, 'The deal could not be updated');
+}
+
 /** GETs one saved deal by id, for reopening it into the assumptions form. */
 export async function getDeal(dealId: string): Promise<Deal> {
   let response: Response;

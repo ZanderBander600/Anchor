@@ -3,12 +3,14 @@ import {
   analyzeDetailedAcquisition,
   ApiError,
   createDeal,
+  createDetailedDeal,
   deleteDeal,
   duplicateDeal,
   fetchDetailedAIAnalysis,
   getDeal,
   listDeals,
   updateDeal,
+  updateDetailedDeal,
   uploadExcel,
   uploadOm,
 } from './api';
@@ -268,7 +270,50 @@ function dealFixture(overrides: Partial<Deal> = {}): Deal {
   return {
     id: 'deal-1',
     name: '111 Main St',
+    operating_mode: 'quick',
     inputs: GOLDEN_INPUTS,
+    terms: null,
+    detailed_operating_inputs: null,
+    created_at: '2026-09-03T12:00:00+00:00',
+    updated_at: '2026-09-03T12:00:00+00:00',
+    ...overrides,
+  };
+}
+
+/** Detailed Operating Model V2.1 Gate 11 -- a saved Detailed deal fixture.
+ * `inputs` stays `null` -- never a fabricated `AcquisitionInputs`. */
+function detailedDealFixture(overrides: Partial<Deal> = {}): Deal {
+  return {
+    id: 'detailed-deal-1',
+    name: 'Golden Detailed Deal',
+    operating_mode: 'detailed',
+    inputs: null,
+    terms: {
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    },
+    detailed_operating_inputs: {
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    },
     created_at: '2026-09-03T12:00:00+00:00',
     updated_at: '2026-09-03T12:00:00+00:00',
     ...overrides,
@@ -337,6 +382,102 @@ describe('updateDeal', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(updateDeal('missing', 'Deal', GOLDEN_INPUTS)).rejects.toThrow(/could not be found/);
+  });
+});
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 11 -- createDetailedDeal/updateDetailedDeal
+// =============================================================================
+
+describe('createDetailedDeal', () => {
+  it('POSTs the name, operating_mode, terms, and detailed_operating_inputs to /deals', async () => {
+    const deal = detailedDealFixture();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await createDetailedDeal(
+      'Golden Detailed Deal',
+      GOLDEN_TERMS,
+      GOLDEN_DETAILED_OPERATING_INPUTS,
+    );
+
+    expect(result).toEqual(deal);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'Golden Detailed Deal',
+      operating_mode: 'detailed',
+      terms: GOLDEN_TERMS,
+      detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+    });
+  });
+
+  it('surfaces a 422 validation failure with the issue-list shape', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(422, {
+        detail: [{ field_id: 'ltv', category: 'out_of_domain_value', message: 'bad ltv' }],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    let caught: ApiError | undefined;
+    try {
+      await createDetailedDeal(
+        'Bad Deal',
+        { ...GOLDEN_TERMS, ltv: 1.5 },
+        GOLDEN_DETAILED_OPERATING_INPUTS,
+      );
+    } catch (error) {
+      caught = error as ApiError;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    expect(caught?.issues[0].field_id).toBe('ltv');
+  });
+
+  it('throws an ApiError on a network failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      createDetailedDeal('Deal', GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('updateDetailedDeal', () => {
+  it('PUTs the name, operating_mode, terms, and detailed_operating_inputs to /deals/{id}', async () => {
+    const deal = detailedDealFixture({ name: 'Renamed Detailed Deal' });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await updateDetailedDeal(
+      'detailed-deal-1',
+      'Renamed Detailed Deal',
+      GOLDEN_TERMS,
+      GOLDEN_DETAILED_OPERATING_INPUTS,
+    );
+
+    expect(result).toEqual(deal);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/detailed-deal-1');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'Renamed Detailed Deal',
+      operating_mode: 'detailed',
+      terms: GOLDEN_TERMS,
+      detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+    });
+  });
+
+  it('surfaces a 404 for an unknown deal id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(404, { detail: 'not found' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      updateDetailedDeal('missing', 'Deal', GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
+    ).rejects.toThrow(/could not be found/);
   });
 });
 

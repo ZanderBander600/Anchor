@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import {
@@ -7,6 +7,7 @@ import {
   analyzeDetailedAcquisition,
   ApiError,
   createDeal,
+  createDetailedDeal,
   deleteDeal,
   duplicateDeal,
   fetchAIAnalysis,
@@ -16,6 +17,7 @@ import {
   getDeal,
   listDeals,
   updateDeal,
+  updateDetailedDeal,
   uploadDetailedExcel,
   uploadExcel,
   uploadOm,
@@ -59,6 +61,8 @@ vi.mock('./api', async () => {
     uploadDetailedExcel: vi.fn(),
     createDeal: vi.fn(),
     updateDeal: vi.fn(),
+    createDetailedDeal: vi.fn(),
+    updateDetailedDeal: vi.fn(),
     getDeal: vi.fn(),
     listDeals: vi.fn(),
     duplicateDeal: vi.fn(),
@@ -76,6 +80,8 @@ const mockUploadOm = vi.mocked(uploadOm);
 const mockUploadExcel = vi.mocked(uploadExcel);
 const mockUploadDetailedExcel = vi.mocked(uploadDetailedExcel);
 const mockCreateDeal = vi.mocked(createDeal);
+const mockCreateDetailedDeal = vi.mocked(createDetailedDeal);
+const mockUpdateDetailedDeal = vi.mocked(updateDetailedDeal);
 const mockDuplicateDeal = vi.mocked(duplicateDeal);
 const mockDeleteDeal = vi.mocked(deleteDeal);
 const mockUpdateDeal = vi.mocked(updateDeal);
@@ -505,6 +511,8 @@ beforeEach(() => {
   mockUploadDetailedExcel.mockReset();
   mockCreateDeal.mockReset();
   mockUpdateDeal.mockReset();
+  mockCreateDetailedDeal.mockReset();
+  mockUpdateDetailedDeal.mockReset();
   mockGetDeal.mockReset();
   mockListDeals.mockReset();
   mockListDeals.mockResolvedValue([]);
@@ -1943,12 +1951,64 @@ function makeDeal(overrides: Partial<Deal> = {}): Deal {
   return {
     id: 'deal-1',
     name: '111 Main St',
+    operating_mode: 'quick',
     inputs: GOLDEN_DEAL_REQUEST,
+    terms: null,
+    detailed_operating_inputs: null,
     created_at: '2026-09-01T12:00:00+00:00',
     updated_at: '2026-09-01T12:00:00+00:00',
     ...overrides,
   };
 }
+
+/** Detailed Operating Model V2.1 Gate 11 -- a saved Detailed deal, shaped
+ * as the `/deals` response (`Deal` with `operating_mode: 'detailed'`).
+ * `inputs` stays `null` -- never a fabricated `AcquisitionInputs`. */
+function makeDetailedDeal(overrides: Partial<Deal> = {}): Deal {
+  return {
+    id: 'detailed-deal-1',
+    name: 'Golden Detailed Deal',
+    operating_mode: 'detailed',
+    inputs: null,
+    terms: {
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    },
+    detailed_operating_inputs: {
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    },
+    created_at: '2026-09-01T12:00:00+00:00',
+    updated_at: '2026-09-01T12:00:00+00:00',
+    ...overrides,
+  };
+}
+
+/** Matches what `fillDetailedGoldenDeal()` produces after
+ * `buildAcquisitionTermsRequest`/`buildDetailedOperatingInputsRequest` --
+ * the same golden values `makeDetailedDeal()`/`makeDetailedExcelIntakeReport()`
+ * already use, kept as one source of truth. */
+const GOLDEN_DETAILED_TERMS_REQUEST = makeDetailedExcelIntakeReport().terms;
+const GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST =
+  makeDetailedExcelIntakeReport().detailed_operating_inputs;
 
 describe('Deal persistence workflow', () => {
   it('starts as a blank, unsaved deal', () => {
@@ -2110,7 +2170,7 @@ describe('Deal persistence workflow', () => {
     mockGetDeal.mockResolvedValue(deal);
     mockUpdateDeal.mockResolvedValue({
       ...deal,
-      inputs: { ...deal.inputs, purchase_price: 60_000_000 },
+      inputs: { ...GOLDEN_DEAL_REQUEST, purchase_price: 60_000_000 },
     });
     render(<App />);
 
@@ -2349,7 +2409,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       mockGetDeal.mockResolvedValue(deal);
       mockUpdateDeal.mockResolvedValue({
         ...deal,
-        inputs: { ...deal.inputs, io_period: 3 },
+        inputs: { ...GOLDEN_DEAL_REQUEST, io_period: 3 },
       });
       render(<App />);
 
@@ -3308,5 +3368,413 @@ describe('Detailed Excel ingestion workflow (Gate 10)', () => {
       revenue_growth: 0.03,
       expense_growth: 0.03,
     });
+  });
+});
+
+describe('Detailed deal persistence workflow (Gate 11)', () => {
+  it('a new Detailed deal can be saved', async () => {
+    const user = userEvent.setup();
+    mockCreateDetailedDeal.mockResolvedValue(makeDetailedDeal());
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    fillDetailedGoldenDeal();
+    await user.type(screen.getByLabelText('Deal Name'), 'Golden Detailed Deal');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+
+    await waitFor(() => expect(mockCreateDetailedDeal).toHaveBeenCalledTimes(1));
+    expect(mockCreateDetailedDeal).toHaveBeenCalledWith(
+      'Golden Detailed Deal',
+      GOLDEN_DETAILED_TERMS_REQUEST,
+      GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
+    );
+    expect(mockUpdateDetailedDeal).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('a saved Detailed deal appears in the Deal Library, identified by mode', async () => {
+    const user = userEvent.setup();
+    mockListDeals.mockResolvedValue([makeDetailedDeal()]);
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+
+    expect(await screen.findByText('Golden Detailed Deal')).toBeTruthy();
+    expect(screen.getByText('Detailed')).toBeTruthy();
+  });
+
+  it('opening a Detailed deal switches to Detailed mode and populates all AcquisitionTerms and DetailedOperatingInputs exactly', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+    expect(screen.getByRole('tab', { name: 'Quick Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect(screen.getByRole('tab', { name: 'Detailed Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+    expect(screen.getByLabelText(/^Hold Period/)).toHaveProperty('value', '5');
+    expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '6.5');
+    expect(screen.getByLabelText(/^LTV/)).toHaveProperty('value', '60');
+    expect(screen.getByLabelText(/^Interest Rate/)).toHaveProperty('value', '5');
+    expect(screen.getByLabelText(/^Amortization/)).toHaveProperty('value', '30');
+    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '2');
+    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '1');
+    expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '2.5');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '50000');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', '800000');
+    expect(screen.getByLabelText(/^Other Income/)).toHaveProperty('value', '20000');
+    expect(screen.getByLabelText(/^Vacancy & Credit Loss/)).toHaveProperty('value', '5');
+    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', '60000');
+    expect(screen.getByLabelText(/^Insurance/)).toHaveProperty('value', '20000');
+    expect(screen.getByLabelText(/^Utilities/)).toHaveProperty('value', '25000');
+    expect(screen.getByLabelText(/^Repairs & Maintenance/)).toHaveProperty('value', '20000');
+    expect(screen.getByLabelText(/^Other Operating Expenses/)).toHaveProperty('value', '16000');
+    expect(screen.getByLabelText(/^Management Fee/)).toHaveProperty('value', '5');
+    expect(screen.getByLabelText(/^Revenue Growth/)).toHaveProperty('value', '3');
+    expect(screen.getByLabelText(/^Expense Growth/)).toHaveProperty('value', '3');
+    expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', 'Golden Detailed Deal');
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('an opened Detailed deal with an explicit zero value renders it as 0, not blank', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal({
+      terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, acquisition_cost_pct: 0 },
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '0');
+  });
+
+  it('editing an AcquisitionTerms field marks a saved Detailed deal dirty', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+      target: { value: '11000000' },
+    });
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+  });
+
+  it('editing a DetailedOperatingInputs field marks a saved Detailed deal dirty', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    fireEvent.change(screen.getByLabelText(/^Gross Potential Rent/), {
+      target: { value: '850000' },
+    });
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+  });
+
+  it('saving an edited Detailed deal clears the dirty state', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUpdateDetailedDeal.mockResolvedValue({
+      ...deal,
+      terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 11_000_000 },
+    });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+      target: { value: '11000000' },
+    });
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+    expect(mockUpdateDetailedDeal).toHaveBeenCalledWith(
+      deal.id,
+      deal.name,
+      { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 11_000_000 },
+      GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
+    );
+  });
+
+  it('Analyze does not mark a saved Detailed deal dirty', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('Generate AI Analysis does not mark a saved Detailed deal dirty', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('Detailed Excel upload does not mark a saved Detailed deal dirty before approval', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedExcel.mockResolvedValue(
+      makeDetailedExcelIntakeReport({
+        terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 12_000_000 },
+      }),
+    );
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '12000000');
+    });
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('Cancel Excel Review preserves the Saved state', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedExcel.mockResolvedValue(
+      makeDetailedExcelIntakeReport({
+        terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 12_000_000 },
+      }),
+    );
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '12000000');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+  });
+
+  it('approving a Detailed Excel review with different values marks the saved deal dirty', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedExcel.mockResolvedValue(
+      makeDetailedExcelIntakeReport({
+        terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 12_000_000 },
+      }),
+    );
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '12000000');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '12000000');
+  });
+
+  it('Duplicate preserves operating mode and all 22 Detailed assumptions', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockDuplicateDeal.mockResolvedValue(
+      makeDetailedDeal({ id: 'detailed-deal-2', name: 'Golden Detailed Deal (Copy)' }),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await screen.findByText('Golden Detailed Deal');
+    await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+
+    await waitFor(() => expect(mockDuplicateDeal).toHaveBeenCalledWith(deal.id));
+  });
+
+  it('Delete works for a Detailed deal', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await screen.findByText('Golden Detailed Deal');
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(mockDeleteDeal).toHaveBeenCalledWith(deal.id));
+    confirmSpy.mockRestore();
+  });
+
+  it('deleting the currently open Detailed deal resets the workspace', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(mockDeleteDeal).toHaveBeenCalledWith(deal.id));
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '');
+    expect(screen.getByText('Unsaved deal')).toBeTruthy();
+    confirmSpy.mockRestore();
+  });
+});
+
+describe('Cross-mode persistence safety (Gate 11)', () => {
+  it('opening a Detailed deal after a Quick deal was open leaves no Quick assumptions/results attached to the Detailed workspace', async () => {
+    const user = userEvent.setup();
+    const quickDeal = makeDeal();
+    const detailedDeal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([quickDeal, detailedDeal]);
+    mockGetDeal.mockImplementation(async (id: string) =>
+      id === quickDeal.id ? quickDeal : detailedDeal,
+    );
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    const quickRow = (await screen.findByText(quickDeal.name)).closest('li');
+    if (!quickRow) throw new Error('Quick deal row not found');
+    await user.click(within(quickRow).getByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Key Returns')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    const detailedRow = (await screen.findByText(detailedDeal.name)).closest('li');
+    if (!detailedRow) throw new Error('Detailed deal row not found');
+    await user.click(within(detailedRow).getByRole('button', { name: 'Open' }));
+
+    expect(screen.getByRole('tab', { name: 'Detailed Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.queryByText('Key Returns')).toBeNull();
+    expect(screen.getByText(/Enter assumptions and click/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+  });
+
+  it('opening a Quick deal after a Detailed deal was open leaves no Detailed assumptions/results attached to the Quick workspace', async () => {
+    const user = userEvent.setup();
+    const quickDeal = makeDeal();
+    const detailedDeal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([quickDeal, detailedDeal]);
+    mockGetDeal.mockImplementation(async (id: string) =>
+      id === quickDeal.id ? quickDeal : detailedDeal,
+    );
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    const detailedRow = (await screen.findByText(detailedDeal.name)).closest('li');
+    if (!detailedRow) throw new Error('Detailed deal row not found');
+    await user.click(within(detailedRow).getByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Operating Statement')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    const quickRow = (await screen.findByText(quickDeal.name)).closest('li');
+    if (!quickRow) throw new Error('Quick deal row not found');
+    await user.click(within(quickRow).getByRole('button', { name: 'Open' }));
+
+    expect(screen.getByRole('tab', { name: 'Quick Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.queryByText('Operating Statement')).toBeNull();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.purchasePrice,
+    );
   });
 });

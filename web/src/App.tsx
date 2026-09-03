@@ -5,6 +5,7 @@ import {
   analyzeDetailedAcquisition,
   ApiError,
   createDeal,
+  createDetailedDeal,
   deleteDeal,
   duplicateDeal,
   fetchAIAnalysis,
@@ -14,6 +15,7 @@ import {
   getDeal,
   listDeals,
   updateDeal,
+  updateDetailedDeal,
   uploadDetailedExcel,
   uploadExcel,
   uploadOm,
@@ -228,6 +230,158 @@ export default function App() {
     setDetailedExcelReview(null);
     setDetailedExcelReviewError(null);
     setDetailedExcelUploadSuccessMessage(null);
+  }
+
+  // ===========================================================================
+  // Detailed Operating Model V2.1 Gate 11 -- Detailed deal persistence.
+  //
+  // Mirrors Quick's Deal Bar / dirty-tracking state below exactly (same
+  // shapes, same single-snapshot-comparison philosophy), over
+  // `DetailedFormValues` instead of `AcquisitionFormValues` and the
+  // dedicated `createDetailedDeal`/`updateDetailedDeal` endpoints -- never a
+  // fabricated `AcquisitionInputs` for a Detailed deal. `view` and
+  // `savedDeals`/`isDealsLoading`/`dealsError` (declared with Quick's
+  // persistence state further below) are shared across both modes: there is
+  // one Deal Library listing both Quick and Detailed deals together, not
+  // two independent libraries. `handleOpenDeal`/`handleDeleteDeal` (also
+  // below) dispatch by `deal.operating_mode` and are the only functions
+  // that touch both this state and Quick's.
+  // ===========================================================================
+
+  const [detailedDealName, setDetailedDealName] = useState('');
+  const [currentDetailedDealId, setCurrentDetailedDealId] = useState<string | null>(null);
+  const [isSavingDetailedDeal, setIsSavingDetailedDeal] = useState(false);
+  const [saveDetailedDealError, setSaveDetailedDealError] = useState<string | null>(null);
+  const [lastDetailedSavedAt, setLastDetailedSavedAt] = useState<string | null>(null);
+
+  interface DetailedDealSnapshot {
+    dealName: string;
+    values: DetailedFormValues;
+  }
+  const BLANK_DETAILED_SNAPSHOT: DetailedDealSnapshot = {
+    dealName: '',
+    values: BLANK_DETAILED_FORM_VALUES,
+  };
+  const [detailedSavedSnapshot, setDetailedSavedSnapshot] =
+    useState<DetailedDealSnapshot>(BLANK_DETAILED_SNAPSHOT);
+
+  function isSameDetailedSnapshot(a: DetailedDealSnapshot, b: DetailedDealSnapshot): boolean {
+    if (a.dealName !== b.dealName) {
+      return false;
+    }
+    const termsKeys = Object.keys(a.values.terms) as (keyof AcquisitionTermsFormValues)[];
+    if (!termsKeys.every((key) => a.values.terms[key] === b.values.terms[key])) {
+      return false;
+    }
+    const operatingKeys = Object.keys(a.values.operating) as (keyof DetailedOperatingFormValues)[];
+    return operatingKeys.every((key) => a.values.operating[key] === b.values.operating[key]);
+  }
+
+  const isDetailedDirty = !isSameDetailedSnapshot(
+    { dealName: detailedDealName, values: detailedValues },
+    detailedSavedSnapshot,
+  );
+  const detailedSaveStatus: SaveStatus =
+    currentDetailedDealId === null
+      ? 'unsaved-deal'
+      : isDetailedDirty
+        ? 'unsaved-changes'
+        : 'saved';
+
+  /** Prompts before a Detailed New Deal / Open Deal action would discard
+   * unsaved Detailed work; mirrors `confirmDiscardIfDirty` exactly, over
+   * `isDetailedDirty`. */
+  function confirmDiscardIfDetailedDirty(): boolean {
+    if (!isDetailedDirty) {
+      return true;
+    }
+    return window.confirm('You have unsaved changes that will be lost. Continue?');
+  }
+
+  function clearSaveDetailedDealError() {
+    setSaveDetailedDealError(null);
+  }
+
+  function clearDetailedIntakeFeedback() {
+    setDetailedExcelUploadSuccessMessage(null);
+    setDetailedExcelUploadError(null);
+    setDetailedExcelReview(null);
+    setDetailedExcelReviewError(null);
+  }
+
+  function handleDetailedDealNameChange(value: string) {
+    setDetailedDealName(value);
+  }
+
+  /** Shared by Detailed New Deal and by deleting the currently-open
+   * Detailed deal: both end in the same blank, never-saved Detailed
+   * workspace state. Never touches any Quick-mode state. */
+  function resetToBlankDetailedDeal() {
+    setDetailedValues(BLANK_DETAILED_FORM_VALUES);
+    setDetailedDealName('');
+    setCurrentDetailedDealId(null);
+    setLastDetailedSavedAt(null);
+    setDetailedSavedSnapshot(BLANK_DETAILED_SNAPSHOT);
+    setDetailedResults(null);
+    setDetailedError(null);
+    clearDetailedAiAnalysis();
+    clearSaveDetailedDealError();
+    clearDetailedIntakeFeedback();
+  }
+
+  /** Persists exactly the 22 assumptions already converged onto
+   * `detailedValues` via `buildAcquisitionTermsRequest`/
+   * `buildDetailedOperatingInputsRequest` -- the same conversion
+   * `handleDetailedSubmit` already uses. Never persists `detailedResults`,
+   * AI output, or any other calculated value; never calls `/analyze`. */
+  async function handleSaveDetailedDeal() {
+    let terms;
+    let detailedOperatingInputs;
+    try {
+      terms = buildAcquisitionTermsRequest(detailedValues.terms);
+      detailedOperatingInputs = buildDetailedOperatingInputsRequest(detailedValues.operating);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setSaveDetailedDealError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    const name = detailedDealName.trim() || 'Untitled Deal';
+
+    setIsSavingDetailedDeal(true);
+    setSaveDetailedDealError(null);
+    try {
+      const deal = currentDetailedDealId
+        ? await updateDetailedDeal(currentDetailedDealId, name, terms, detailedOperatingInputs)
+        : await createDetailedDeal(name, terms, detailedOperatingInputs);
+      setCurrentDetailedDealId(deal.id);
+      setDetailedDealName(deal.name);
+      setLastDetailedSavedAt(deal.updated_at);
+      setDetailedSavedSnapshot({ dealName: deal.name, values: detailedValues });
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setSaveDetailedDealError(apiError.message);
+      } else {
+        setSaveDetailedDealError('An unexpected error occurred while saving the deal.');
+      }
+    } finally {
+      setIsSavingDetailedDeal(false);
+    }
+  }
+
+  /** Smallest consistent interaction with the existing single-toggle UI:
+   * New Deal in Detailed mode preserves the currently selected mode (it is
+   * the Detailed workspace's own New Deal button, rendered only while
+   * Detailed mode is active) rather than offering a separate mode choice --
+   * no navigation redesign. Preserves Quick's own `handleNewDeal` exactly. */
+  function handleNewDetailedDeal() {
+    if (!confirmDiscardIfDetailedDirty()) {
+      return;
+    }
+    resetToBlankDetailedDeal();
+    setView('workspace');
   }
 
   function handleDetailedTermsFieldChange(
@@ -692,13 +846,67 @@ export default function App() {
     setView('workspace');
   }
 
+  /**
+   * Detailed Operating Model V2.1 Gate 11: dispatches by `deal.operating_mode`
+   * -- a Quick deal populates `values`/`savedSnapshot` and switches to Quick
+   * mode; a Detailed deal populates `detailedValues`/`detailedSavedSnapshot`
+   * and switches to Detailed mode, never the other. Only the target mode's
+   * own state is touched (its stale review/results/AI state is cleared, and
+   * its own discard guard applies before replacing same-mode unsaved work);
+   * the other mode's currently-open deal, if any, is left completely
+   * untouched in the background -- exactly like switching the Underwriting
+   * Mode tab already preserves each mode's state independently (Gate 6), so
+   * opening a deal of one mode can never lose or leak the other mode's
+   * assumptions/results.
+   */
   async function handleOpenDeal(deal: Deal) {
+    if (deal.operating_mode === 'detailed') {
+      if (!confirmDiscardIfDetailedDirty()) {
+        return;
+      }
+      setDealsError(null);
+      try {
+        const fullDeal = await getDeal(deal.id);
+        if (fullDeal.terms === null || fullDeal.detailed_operating_inputs === null) {
+          throw new Error('Detailed deal is missing terms/detailed_operating_inputs.');
+        }
+        const openedValues: DetailedFormValues = {
+          terms: buildDetailedTermsFormValuesFromRequest(fullDeal.terms),
+          operating: buildDetailedOperatingFormValuesFromRequest(
+            fullDeal.detailed_operating_inputs,
+          ),
+        };
+        setDetailedValues(openedValues);
+        setDetailedDealName(fullDeal.name);
+        setCurrentDetailedDealId(fullDeal.id);
+        setLastDetailedSavedAt(fullDeal.updated_at);
+        setDetailedSavedSnapshot({ dealName: fullDeal.name, values: openedValues });
+        setDetailedResults(null);
+        setDetailedError(null);
+        clearDetailedAiAnalysis();
+        clearSaveDetailedDealError();
+        clearDetailedIntakeFeedback();
+        setOperatingMode('detailed');
+        setView('workspace');
+      } catch (apiError) {
+        if (apiError instanceof ApiError) {
+          setDealsError(apiError.message);
+        } else {
+          setDealsError('An unexpected error occurred while opening the deal.');
+        }
+      }
+      return;
+    }
+
     if (!confirmDiscardIfDirty()) {
       return;
     }
     setDealsError(null);
     try {
       const fullDeal = await getDeal(deal.id);
+      if (fullDeal.inputs === null) {
+        throw new Error('Quick deal is missing inputs.');
+      }
       const openedValues = buildFormValuesFromAcquisitionInputs(fullDeal.inputs);
       setValues(openedValues);
       setDealName(fullDeal.name);
@@ -708,6 +916,7 @@ export default function App() {
       resetDownstreamAnalysisState();
       clearSaveDealError();
       clearIntakeFeedback();
+      setOperatingMode('quick');
       setView('workspace');
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -748,16 +957,22 @@ export default function App() {
 
   /** Confirmation happens in `DealLibraryPanel` itself (window.confirm)
    * before `onDelete` is ever called -- by the time this runs, the analyst
-   * has already agreed. If the deleted deal is the one currently open, the
-   * workspace is reset to a blank, never-saved deal rather than left
-   * pointing at an id that no longer exists (a later Save would otherwise
-   * 404 against a deleted id). */
+   * has already agreed. If the deleted deal is the one currently open --
+   * checked against both `currentDealId` and `currentDetailedDealId`,
+   * exactly one of which can ever match a given id -- that mode's workspace
+   * is reset to a blank, never-saved deal rather than left pointing at an
+   * id that no longer exists (a later Save would otherwise 404 against a
+   * deleted id). Deleting a deal never changes which mode is currently
+   * selected; only that mode's own state resets. */
   async function handleDeleteDeal(deal: Deal) {
     setDealsError(null);
     try {
       await deleteDeal(deal.id);
       if (currentDealId === deal.id) {
         resetToBlankDeal();
+      }
+      if (currentDetailedDealId === deal.id) {
+        resetToBlankDetailedDeal();
       }
       await loadSavedDeals();
     } catch (apiError) {
@@ -1016,8 +1231,31 @@ export default function App() {
           </button>
         </div>
 
-        {operatingMode === 'detailed' ? (
+        {view === 'library' ? (
+          <DealLibraryPanel
+            deals={savedDeals}
+            isLoading={isDealsLoading}
+            error={dealsError}
+            onOpen={(deal) => void handleOpenDeal(deal)}
+            onDuplicate={(deal) => void handleDuplicateDeal(deal)}
+            onDelete={(deal) => void handleDeleteDeal(deal)}
+            onClose={handleCloseLibrary}
+          />
+        ) : operatingMode === 'detailed' ? (
           <>
+            <DealBar
+              dealName={detailedDealName}
+              onDealNameChange={handleDetailedDealNameChange}
+              isSavedDeal={currentDetailedDealId !== null}
+              isSaving={isSavingDetailedDeal}
+              error={saveDetailedDealError}
+              saveStatus={detailedSaveStatus}
+              lastSavedAt={lastDetailedSavedAt}
+              onSaveDeal={() => void handleSaveDetailedDeal()}
+              onOpenLibrary={handleOpenLibrary}
+              onNewDeal={handleNewDetailedDeal}
+            />
+
             <div className="intake-section">
               <h2 className="section-heading">Deal Intake</h2>
               <div className="intake-grid">
@@ -1080,16 +1318,6 @@ export default function App() {
               )}
             </div>
           </>
-        ) : view === 'library' ? (
-          <DealLibraryPanel
-            deals={savedDeals}
-            isLoading={isDealsLoading}
-            error={dealsError}
-            onOpen={(deal) => void handleOpenDeal(deal)}
-            onDuplicate={(deal) => void handleDuplicateDeal(deal)}
-            onDelete={(deal) => void handleDeleteDeal(deal)}
-            onClose={handleCloseLibrary}
-          />
         ) : (
           <>
             <DealBar
