@@ -2,10 +2,23 @@ import type {
   AcquisitionFieldId,
   AcquisitionFormValues,
   AcquisitionRequest,
+  AcquisitionTermsFormValues,
+  AcquisitionTermsRequest,
+  DetailedExcelIntakeReport,
+  DetailedFormValues,
+  DetailedOperatingFieldId,
+  DetailedOperatingFormValues,
+  DetailedOperatingInputsRequest,
+  DetailedTermsFieldId,
   ExcelIntakeReport,
   V2FieldId,
 } from './types';
-import { ACQUISITION_FIELD_IDS, V2_FIELD_IDS } from './types';
+import {
+  ACQUISITION_FIELD_IDS,
+  DETAILED_OPERATING_FIELD_IDS,
+  DETAILED_TERMS_FIELD_IDS,
+  V2_FIELD_IDS,
+} from './types';
 
 /**
  * Raised for client-side presence/parsing problems only. Domain rules
@@ -304,6 +317,19 @@ function parseCandidateNumber(raw: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+/** Shared by `candidateValueToFormValue`/`detailedCandidateValueToFormValue`:
+ * a literal "%" sign, or a magnitude too large to plausibly be a decimal
+ * fraction, means the value is already percent-scale; otherwise treat it as
+ * the decimal-fraction equivalent and scale up to match the form. */
+function scaleCandidateNumber(rawValue: string, number: number, isPercentScale: boolean): string {
+  if (!isPercentScale) {
+    return String(number);
+  }
+  const isAlreadyPercentScale = rawValue.includes('%') || Math.abs(number) > 1;
+  const percentValue = isAlreadyPercentScale ? number : number * 100;
+  return String(percentValue);
+}
+
 /**
  * Converts one acquisition-field candidate's raw value string to the plain
  * numeric string `AcquisitionFormValues`/`AssumptionsForm` expects. Returns
@@ -316,15 +342,7 @@ export function candidateValueToFormValue(fieldId: AcquisitionFieldId, rawValue:
   if (number === null) {
     return null;
   }
-  if (!PERCENT_SCALE_FIELD_IDS.has(fieldId)) {
-    return String(number);
-  }
-  // A literal "%" sign, or a magnitude too large to plausibly be a decimal
-  // fraction, means the value is already percent-scale; otherwise treat it
-  // as the decimal-fraction equivalent and scale up to match the form.
-  const isAlreadyPercentScale = rawValue.includes('%') || Math.abs(number) > 1;
-  const percentValue = isAlreadyPercentScale ? number : number * 100;
-  return String(percentValue);
+  return scaleCandidateNumber(rawValue, number, PERCENT_SCALE_FIELD_IDS.has(fieldId));
 }
 
 /**
@@ -368,7 +386,7 @@ export function buildApprovedFormValues(
  * introduced by the `* 100` percent-scale conversion below (e.g. so
  * `0.1 * 100` never renders as `"10.000000000000002"`). Real acquisition
  * inputs never need more than a handful of decimal places. */
-function formatDisplayNumber(value: number): string {
+export function formatDisplayNumber(value: number): string {
   return String(Math.round(value * 1e6) / 1e6);
 }
 
@@ -420,4 +438,422 @@ export function buildFormValuesFromExcelIntakeReport(
     values[V2_FIELD_TO_FORM_KEY[fieldId]] = '';
   }
   return values;
+}
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 6 -- Detailed Underwrite mode.
+//
+// Mirrors the Quick-mode conversion functions above exactly in shape
+// (blank-by-default state, `parseNumber`/`parsePercent`/`parseWholeNumber`
+// reused, never a duplicated validation rule) over the two Detailed field
+// sets instead of the fourteen Quick fields. Neither set has a
+// current_noi/noi_growth/occupancy counterpart -- there is no field to
+// leave blank or convert for them in Detailed mode.
+// =============================================================================
+
+export const BLANK_TERMS_FORM_VALUES: AcquisitionTermsFormValues = {
+  purchasePrice: '',
+  holdPeriod: '',
+  exitCapRate: '',
+  ltv: '',
+  interestRate: '',
+  amortization: '',
+  acquisitionCostPct: '',
+  financingFeePct: '',
+  dispositionCostPct: '',
+  annualCapexReserve: '',
+  ioPeriod: '',
+};
+
+export const BLANK_DETAILED_OPERATING_FORM_VALUES: DetailedOperatingFormValues = {
+  grossPotentialRent: '',
+  otherIncome: '',
+  vacancyCreditLossPct: '',
+  propertyTaxes: '',
+  insurance: '',
+  utilities: '',
+  repairsMaintenance: '',
+  otherOperatingExpenses: '',
+  managementFeePct: '',
+  revenueGrowth: '',
+  expenseGrowth: '',
+};
+
+export const BLANK_DETAILED_FORM_VALUES: DetailedFormValues = {
+  terms: BLANK_TERMS_FORM_VALUES,
+  operating: BLANK_DETAILED_OPERATING_FORM_VALUES,
+};
+
+/** The Detailed-mode counterpart to the frozen V2 golden case
+ * (`V2_GOLDEN_FORM_VALUES`) -- the same $10M deal, reconstructed from its
+ * eleven detailed revenue/expense/growth assumptions
+ * (`docs/detailed_operating_model_v2_1_golden_case.md`) instead of a single
+ * `current_noi`/`noi_growth` pair. Used as the Gate 6 UI integration
+ * fixture. */
+export const DETAILED_GOLDEN_FORM_VALUES: DetailedFormValues = {
+  terms: {
+    purchasePrice: '10000000',
+    holdPeriod: '5',
+    exitCapRate: '6.5',
+    ltv: '60',
+    interestRate: '5',
+    amortization: '30',
+    acquisitionCostPct: '2',
+    financingFeePct: '1',
+    dispositionCostPct: '2.5',
+    annualCapexReserve: '50000',
+    ioPeriod: '2',
+  },
+  operating: {
+    grossPotentialRent: '800000',
+    otherIncome: '20000',
+    vacancyCreditLossPct: '5',
+    propertyTaxes: '60000',
+    insurance: '20000',
+    utilities: '25000',
+    repairsMaintenance: '20000',
+    otherOperatingExpenses: '16000',
+    managementFeePct: '5',
+    revenueGrowth: '3',
+    expenseGrowth: '3',
+  },
+};
+
+export function buildAcquisitionTermsRequest(
+  values: AcquisitionTermsFormValues,
+): AcquisitionTermsRequest {
+  return {
+    purchase_price: parseNumber('Purchase Price', values.purchasePrice),
+    hold_period: parseNumber('Hold Period', values.holdPeriod),
+    exit_cap_rate: parsePercent('Exit Cap Rate', values.exitCapRate),
+    ltv: parsePercent('LTV', values.ltv),
+    interest_rate: parsePercent('Interest Rate', values.interestRate),
+    amortization: parseNumber('Amortization', values.amortization),
+    acquisition_cost_pct: parsePercent('Acquisition Costs', values.acquisitionCostPct),
+    financing_fee_pct: parsePercent('Financing Fee', values.financingFeePct),
+    disposition_cost_pct: parsePercent('Disposition Costs', values.dispositionCostPct),
+    annual_capex_reserve: parseNumber('Annual CapEx Reserve', values.annualCapexReserve),
+    io_period: parseWholeNumber('Interest-Only Period', values.ioPeriod),
+  };
+}
+
+export function buildDetailedOperatingInputsRequest(
+  values: DetailedOperatingFormValues,
+): DetailedOperatingInputsRequest {
+  return {
+    gross_potential_rent: parseNumber('Gross Potential Rent', values.grossPotentialRent),
+    other_income: parseNumber('Other Income', values.otherIncome),
+    vacancy_credit_loss_pct: parsePercent(
+      'Vacancy & Credit Loss',
+      values.vacancyCreditLossPct,
+    ),
+    property_taxes: parseNumber('Property Taxes', values.propertyTaxes),
+    insurance: parseNumber('Insurance', values.insurance),
+    utilities: parseNumber('Utilities', values.utilities),
+    repairs_maintenance: parseNumber('Repairs & Maintenance', values.repairsMaintenance),
+    other_operating_expenses: parseNumber(
+      'Other Operating Expenses',
+      values.otherOperatingExpenses,
+    ),
+    management_fee_pct: parsePercent('Management Fee', values.managementFeePct),
+    revenue_growth: parsePercent('Revenue Growth', values.revenueGrowth),
+    expense_growth: parsePercent('Expense Growth', values.expenseGrowth),
+  };
+}
+
+export interface TermsFieldConfig {
+  key: keyof AcquisitionTermsFormValues;
+  label: string;
+  prefix?: string;
+  suffix?: string;
+}
+
+export interface TermsFieldGroup {
+  title: string;
+  fields: TermsFieldConfig[];
+}
+
+/** The 11 AcquisitionTerms assumptions grouped for display -- the
+ * Detailed-mode counterpart to `ASSUMPTIONS_FIELD_GROUPS`, over the field
+ * set that excludes current_noi/occupancy/noi_growth. */
+export const TERMS_FIELD_GROUPS: TermsFieldGroup[] = [
+  {
+    title: 'Acquisition & Exit',
+    fields: [
+      { key: 'purchasePrice', label: 'Purchase Price', prefix: '$' },
+      { key: 'holdPeriod', label: 'Hold Period', suffix: 'yrs' },
+      { key: 'exitCapRate', label: 'Exit Cap Rate', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Transaction Costs',
+    fields: [
+      { key: 'acquisitionCostPct', label: 'Acquisition Costs', suffix: '%' },
+      { key: 'financingFeePct', label: 'Financing Fee', suffix: '%' },
+      { key: 'dispositionCostPct', label: 'Disposition Costs', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Operations',
+    fields: [{ key: 'annualCapexReserve', label: 'Annual CapEx Reserve', prefix: '$' }],
+  },
+  {
+    title: 'Financing',
+    fields: [
+      { key: 'ltv', label: 'LTV', suffix: '%' },
+      { key: 'interestRate', label: 'Interest Rate', suffix: '%' },
+      { key: 'amortization', label: 'Amortization', suffix: 'yrs' },
+      { key: 'ioPeriod', label: 'Interest-Only Period', suffix: 'yrs' },
+    ],
+  },
+];
+
+export interface OperatingFieldConfig {
+  key: keyof DetailedOperatingFormValues;
+  label: string;
+  prefix?: string;
+  suffix?: string;
+}
+
+export interface OperatingFieldGroup {
+  title: string;
+  fields: OperatingFieldConfig[];
+}
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 10 -- Detailed Excel ingestion
+// (`POST /ingestion/excel/detailed`) review-state -> `DetailedFormValues`
+// handoff. Mirrors `buildFormValuesFromAcquisitionInputs`/
+// `buildFormValuesFromExcelIntakeReport` above: the backend Detailed Excel
+// endpoint always returns a fully validated, complete pair of
+// `AcquisitionTermsRequest`/`DetailedOperatingInputsRequest` (there is no
+// defaulted-field concept for Detailed -- every one of the 22 fields is
+// always required), so this is a plain, always-complete numeric
+// conversion, never a partial/candidate result.
+// =============================================================================
+
+export function buildDetailedTermsFormValuesFromRequest(
+  terms: AcquisitionTermsRequest,
+): AcquisitionTermsFormValues {
+  return {
+    purchasePrice: formatDisplayNumber(terms.purchase_price),
+    holdPeriod: formatDisplayNumber(terms.hold_period),
+    exitCapRate: formatDisplayNumber(terms.exit_cap_rate * 100),
+    ltv: formatDisplayNumber(terms.ltv * 100),
+    interestRate: formatDisplayNumber(terms.interest_rate * 100),
+    amortization: formatDisplayNumber(terms.amortization),
+    acquisitionCostPct: formatDisplayNumber(terms.acquisition_cost_pct * 100),
+    financingFeePct: formatDisplayNumber(terms.financing_fee_pct * 100),
+    dispositionCostPct: formatDisplayNumber(terms.disposition_cost_pct * 100),
+    annualCapexReserve: formatDisplayNumber(terms.annual_capex_reserve),
+    ioPeriod: formatDisplayNumber(terms.io_period),
+  };
+}
+
+export function buildDetailedOperatingFormValuesFromRequest(
+  inputs: DetailedOperatingInputsRequest,
+): DetailedOperatingFormValues {
+  return {
+    grossPotentialRent: formatDisplayNumber(inputs.gross_potential_rent),
+    otherIncome: formatDisplayNumber(inputs.other_income),
+    vacancyCreditLossPct: formatDisplayNumber(inputs.vacancy_credit_loss_pct * 100),
+    propertyTaxes: formatDisplayNumber(inputs.property_taxes),
+    insurance: formatDisplayNumber(inputs.insurance),
+    utilities: formatDisplayNumber(inputs.utilities),
+    repairsMaintenance: formatDisplayNumber(inputs.repairs_maintenance),
+    otherOperatingExpenses: formatDisplayNumber(inputs.other_operating_expenses),
+    managementFeePct: formatDisplayNumber(inputs.management_fee_pct * 100),
+    revenueGrowth: formatDisplayNumber(inputs.revenue_growth * 100),
+    expenseGrowth: formatDisplayNumber(inputs.expense_growth * 100),
+  };
+}
+
+/** Converts a `POST /ingestion/excel/detailed` response
+ * (`DetailedExcelIntakeReport`) into `DetailedFormValues` for the Detailed
+ * Excel review state. Every field is always populated -- unlike Quick's
+ * `buildFormValuesFromExcelIntakeReport`, there is no defaulted-field set
+ * to blank out. */
+export function buildDetailedFormValuesFromExcelIntakeReport(
+  report: DetailedExcelIntakeReport,
+): DetailedFormValues {
+  return {
+    terms: buildDetailedTermsFormValuesFromRequest(report.terms),
+    operating: buildDetailedOperatingFormValuesFromRequest(report.detailed_operating_inputs),
+  };
+}
+
+/** The 11 DetailedOperatingInputs assumptions grouped for display, per
+ * `docs/detailed_operating_model_v2_1_financial_conventions.md`'s Revenue /
+ * Operating expenses / Growth grouping. */
+export const DETAILED_OPERATING_FIELD_GROUPS: OperatingFieldGroup[] = [
+  {
+    title: 'Revenue',
+    fields: [
+      { key: 'grossPotentialRent', label: 'Gross Potential Rent', prefix: '$' },
+      { key: 'otherIncome', label: 'Other Income', prefix: '$' },
+      { key: 'vacancyCreditLossPct', label: 'Vacancy & Credit Loss', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Operating Expenses',
+    fields: [
+      { key: 'propertyTaxes', label: 'Property Taxes', prefix: '$' },
+      { key: 'insurance', label: 'Insurance', prefix: '$' },
+      { key: 'utilities', label: 'Utilities', prefix: '$' },
+      { key: 'repairsMaintenance', label: 'Repairs & Maintenance', prefix: '$' },
+      { key: 'otherOperatingExpenses', label: 'Other Operating Expenses', prefix: '$' },
+      { key: 'managementFeePct', label: 'Management Fee', suffix: '%' },
+    ],
+  },
+  {
+    title: 'Growth',
+    fields: [
+      { key: 'revenueGrowth', label: 'Revenue Growth', suffix: '%' },
+      { key: 'expenseGrowth', label: 'Expense Growth', suffix: '%' },
+    ],
+  },
+];
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 12 -- Detailed OM ingestion candidate
+// values -> DetailedFormValues handoff. Mirrors the Quick OM conversion
+// section above exactly in shape (same parse/scale helpers reused, never a
+// duplicated financial rule), over the Detailed field set instead.
+// =============================================================================
+
+/** Human-readable label for each of the 22 Detailed OM target fields, for
+ * display in the Detailed OM review UI. */
+export const DETAILED_OM_FIELD_LABELS: Record<DetailedTermsFieldId | DetailedOperatingFieldId, string> = {
+  purchase_price: 'Purchase Price',
+  hold_period: 'Hold Period',
+  exit_cap_rate: 'Exit Cap Rate',
+  ltv: 'LTV',
+  interest_rate: 'Interest Rate',
+  amortization: 'Amortization',
+  acquisition_cost_pct: 'Acquisition Costs',
+  financing_fee_pct: 'Financing Fee',
+  disposition_cost_pct: 'Disposition Costs',
+  annual_capex_reserve: 'Annual CapEx Reserve',
+  io_period: 'Interest-Only Period',
+  gross_potential_rent: 'Gross Potential Rent',
+  other_income: 'Other Income',
+  vacancy_credit_loss_pct: 'Vacancy & Credit Loss',
+  property_taxes: 'Property Taxes',
+  insurance: 'Insurance',
+  utilities: 'Utilities',
+  repairs_maintenance: 'Repairs & Maintenance',
+  other_operating_expenses: 'Other Operating Expenses',
+  management_fee_pct: 'Management Fee',
+  revenue_growth: 'Revenue Growth',
+  expense_growth: 'Expense Growth',
+};
+
+export const DETAILED_TERMS_FIELD_TO_FORM_KEY: Record<
+  DetailedTermsFieldId,
+  keyof AcquisitionTermsFormValues
+> = {
+  purchase_price: 'purchasePrice',
+  hold_period: 'holdPeriod',
+  exit_cap_rate: 'exitCapRate',
+  ltv: 'ltv',
+  interest_rate: 'interestRate',
+  amortization: 'amortization',
+  acquisition_cost_pct: 'acquisitionCostPct',
+  financing_fee_pct: 'financingFeePct',
+  disposition_cost_pct: 'dispositionCostPct',
+  annual_capex_reserve: 'annualCapexReserve',
+  io_period: 'ioPeriod',
+};
+
+export const DETAILED_OPERATING_FIELD_TO_FORM_KEY: Record<
+  DetailedOperatingFieldId,
+  keyof DetailedOperatingFormValues
+> = {
+  gross_potential_rent: 'grossPotentialRent',
+  other_income: 'otherIncome',
+  vacancy_credit_loss_pct: 'vacancyCreditLossPct',
+  property_taxes: 'propertyTaxes',
+  insurance: 'insurance',
+  utilities: 'utilities',
+  repairs_maintenance: 'repairsMaintenance',
+  other_operating_expenses: 'otherOperatingExpenses',
+  management_fee_pct: 'managementFeePct',
+  revenue_growth: 'revenueGrowth',
+  expense_growth: 'expenseGrowth',
+};
+
+/** Fields whose natural unit is a percentage/ratio, over the Detailed
+ * field set -- mirrors `_DETAILED_PERCENT_SCALE_FIELD_IDS` in
+ * `src/anchor/ingestion/classifier_provider.py`. */
+const DETAILED_OM_PERCENT_SCALE_FIELD_IDS: ReadonlySet<DetailedTermsFieldId | DetailedOperatingFieldId> =
+  new Set([
+    'exit_cap_rate',
+    'ltv',
+    'interest_rate',
+    'acquisition_cost_pct',
+    'financing_fee_pct',
+    'disposition_cost_pct',
+    'vacancy_credit_loss_pct',
+    'management_fee_pct',
+    'revenue_growth',
+    'expense_growth',
+  ]);
+
+/** Converts one Detailed OM candidate's raw value string to the plain
+ * numeric string `DetailedAssumptionsForm` expects. Returns `null` if the
+ * value can't be parsed as a number. Mirrors `candidateValueToFormValue`
+ * exactly, over the Detailed percent-scale field set. */
+export function detailedCandidateValueToFormValue(
+  fieldId: DetailedTermsFieldId | DetailedOperatingFieldId,
+  rawValue: string,
+): string | null {
+  const number = parseCandidateNumber(rawValue);
+  if (number === null) {
+    return null;
+  }
+  return scaleCandidateNumber(rawValue, number, DETAILED_OM_PERCENT_SCALE_FIELD_IDS.has(fieldId));
+}
+
+/** Builds the `AcquisitionTermsFormValues` subset for a set of
+ * analyst-approved Detailed OM candidate values. Mirrors
+ * `buildApprovedFormValues` exactly, over `AcquisitionTermsFieldId`s only
+ * -- the Detailed Operating Inputs half is built separately by
+ * `buildApprovedDetailedOperatingFormValues` below, since
+ * `DetailedFormValues` keeps the two as nested, independently-blank groups
+ * (see `types.ts`). */
+export function buildApprovedDetailedTermsFormValues(
+  approvedValues: Partial<Record<DetailedTermsFieldId, string>>,
+): Partial<AcquisitionTermsFormValues> {
+  const result: Partial<AcquisitionTermsFormValues> = {};
+  for (const fieldId of DETAILED_TERMS_FIELD_IDS) {
+    const rawValue = approvedValues[fieldId];
+    if (rawValue === undefined) {
+      continue;
+    }
+    const formValue = detailedCandidateValueToFormValue(fieldId, rawValue);
+    if (formValue !== null) {
+      result[DETAILED_TERMS_FIELD_TO_FORM_KEY[fieldId]] = formValue;
+    }
+  }
+  return result;
+}
+
+/** Builds the `DetailedOperatingFormValues` subset for a set of
+ * analyst-approved Detailed OM candidate values. See
+ * `buildApprovedDetailedTermsFormValues` above. */
+export function buildApprovedDetailedOperatingFormValues(
+  approvedValues: Partial<Record<DetailedOperatingFieldId, string>>,
+): Partial<DetailedOperatingFormValues> {
+  const result: Partial<DetailedOperatingFormValues> = {};
+  for (const fieldId of DETAILED_OPERATING_FIELD_IDS) {
+    const rawValue = approvedValues[fieldId];
+    if (rawValue === undefined) {
+      continue;
+    }
+    const formValue = detailedCandidateValueToFormValue(fieldId, rawValue);
+    if (formValue !== null) {
+      result[DETAILED_OPERATING_FIELD_TO_FORM_KEY[fieldId]] = formValue;
+    }
+  }
+  return result;
 }

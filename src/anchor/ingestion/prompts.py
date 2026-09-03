@@ -13,7 +13,13 @@ from __future__ import annotations
 import json
 import textwrap
 
-from .contracts import ACQUISITION_FIELD_IDS, DEAL_CONTEXT_FIELD_IDS, StructuredDocument
+from .contracts import (
+    ACQUISITION_FIELD_IDS,
+    DEAL_CONTEXT_FIELD_IDS,
+    DETAILED_OPERATING_FIELD_IDS,
+    DETAILED_TERMS_FIELD_IDS,
+    StructuredDocument,
+)
 
 FIELD_DESCRIPTIONS: dict[str, str] = {
     "purchase_price": "Total purchase / acquisition price of the property.",
@@ -106,6 +112,153 @@ def build_user_prompt(document: StructuredDocument) -> str:
     field_descriptions = {
         field_id: FIELD_DESCRIPTIONS[field_id]
         for field_id in (*ACQUISITION_FIELD_IDS, *DEAL_CONTEXT_FIELD_IDS)
+    }
+    anchors_payload = [
+        {"anchor": anchor.anchor, "page": anchor.page, "text": anchor.text}
+        for anchor in document.anchors
+    ]
+
+    return (
+        "Target fields and what each one means (JSON below):\n"
+        f"{json.dumps(field_descriptions, indent=2)}\n\n"
+        "Extracted document anchors -- the complete evidence available to "
+        "you, produced by Azure Document Intelligence's non-generative "
+        "layout model (JSON array of {anchor, page, text} below). Cite "
+        "only these anchor ids.\n\n"
+        f"{json.dumps(anchors_payload, indent=2)}"
+    )
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 12 -- Detailed OM classification prompts.
+#
+# Reuses ``SYSTEM_PROMPT``'s grounding rules verbatim (a citation must exist
+# and support the value, missing means an empty array, never guess) and adds
+# one further section addressing exactly the discipline risks specific to
+# Detailed underwriting: never compute NOI/EGI/total opex, never derive
+# vacancy_credit_loss_pct from an occupancy statement, never reverse a
+# dollar management-fee expense into management_fee_pct, and never infer
+# revenue_growth/expense_growth from general market commentary. Every one
+# of these is a "leave it unresolved" instruction, not a new capability --
+# the classifier still performs no financial calculation of any kind.
+# =============================================================================
+
+DETAILED_FIELD_DESCRIPTIONS: dict[str, str] = {
+    "purchase_price": "Total purchase / acquisition price of the property.",
+    "hold_period": "Intended hold period in whole years.",
+    "exit_cap_rate": "Assumed exit/terminal capitalization rate.",
+    "ltv": "Loan-to-value ratio.",
+    "interest_rate": "Loan interest rate.",
+    "amortization": "Loan amortization period in whole years.",
+    "acquisition_cost_pct": (
+        "Acquisition/closing cost as a percentage of purchase price, only "
+        "if the document explicitly states such a percentage."
+    ),
+    "financing_fee_pct": (
+        "Loan origination/financing fee as a percentage, only if the "
+        "document explicitly states such a percentage."
+    ),
+    "disposition_cost_pct": (
+        "Disposition/exit cost as a percentage of sale price, only if the "
+        "document explicitly states such a percentage."
+    ),
+    "annual_capex_reserve": "Annual capital expenditure reserve, in dollars.",
+    "io_period": "Interest-only period in whole years, only if the loan terms state one.",
+    "gross_potential_rent": (
+        "Gross potential rent (GPR): total rental income before vacancy/"
+        "credit loss, at full (100%) occupancy. Report only a GPR/"
+        "potential-rent figure the document states directly -- never "
+        "compute it yourself from a unit count and a market rent, and "
+        "never report a net/effective rental income figure here."
+    ),
+    "other_income": "Other/ancillary income (e.g. parking, laundry, fees), in dollars.",
+    "vacancy_credit_loss_pct": (
+        "Vacancy and credit loss as a percentage of gross potential rent, "
+        "only if the document explicitly states a vacancy or credit-loss "
+        "rate/amount as such. Never derive this from an occupancy "
+        "percentage or an occupancy statement -- an occupancy rate is a "
+        "different fact, not this field's evidence."
+    ),
+    "property_taxes": "Annual property tax expense, in dollars.",
+    "insurance": "Annual insurance expense, in dollars.",
+    "utilities": "Annual utilities expense, in dollars.",
+    "repairs_maintenance": "Annual repairs and maintenance expense, in dollars.",
+    "other_operating_expenses": (
+        "Other annual operating expenses not covered by the other named "
+        "expense categories, in dollars."
+    ),
+    "management_fee_pct": (
+        "Property management fee as a percentage of effective gross "
+        "income, only if the document explicitly states a percentage. "
+        "Never calculate this percentage yourself from a dollar "
+        "management-fee expense and a revenue figure -- if the document "
+        "states only a dollar amount, leave this field unresolved (empty "
+        "array)."
+    ),
+    "revenue_growth": (
+        "The document's own explicit underwriting assumption for annual "
+        "revenue growth. Only propose a value when the document states "
+        "this as a specific assumption -- never infer it from general "
+        "market-growth commentary, submarket trends, or historical "
+        "performance narrative."
+    ),
+    "expense_growth": (
+        "The document's own explicit underwriting assumption for annual "
+        "expense growth. Only propose a value when the document states "
+        "this as a specific assumption -- never infer it from general "
+        "market-growth commentary or historical performance narrative."
+    ),
+}
+
+_DETAILED_DISCIPLINE_SECTION = textwrap.dedent(
+    """\
+
+    DETAILED UNDERWRITING DISCIPLINE (mandatory, in addition to the
+    grounding rules above):
+    8. You never calculate effective gross income, operating expense
+       totals, net operating income, debt service, or any other derived
+       financial metric. Every field above is a single source fact or a
+       single explicitly stated assumption -- never a value you computed
+       from other fields.
+    9. If the document reports a historical or in-place NOI figure, do not
+       propose it as evidence for gross_potential_rent, other_income, or
+       any operating-expense field. A reported NOI is not evidence for any
+       target field in this schema.
+    10. vacancy_credit_loss_pct must come from the document's own explicit
+        vacancy/credit-loss statement. An occupancy percentage is a
+        different fact; never treat it as evidence for this field, and
+        never compute "1 minus occupancy" yourself.
+    11. management_fee_pct must come from an explicit percentage stated in
+        the document. If the document states only a dollar management
+        expense, do not compute a percentage from it -- return an empty
+        array for management_fee_pct instead.
+    12. revenue_growth and expense_growth must come from an explicit,
+        specific underwriting assumption stated in the document -- never
+        from general market-growth prose, submarket comparisons, or
+        historical trend narrative.
+    """
+)
+
+DETAILED_SYSTEM_PROMPT = SYSTEM_PROMPT.rstrip() + "\n" + _DETAILED_DISCIPLINE_SECTION
+
+
+def build_detailed_system_prompt() -> str:
+    """Return the fixed Detailed grounding/discipline system prompt (see
+    ``DETAILED_SYSTEM_PROMPT``)."""
+
+    return DETAILED_SYSTEM_PROMPT
+
+
+def build_detailed_user_prompt(document: StructuredDocument) -> str:
+    """Return the per-request Detailed user prompt: the target Detailed
+    field descriptions plus every anchor Azure DI extracted, serialized as
+    JSON. Mirrors ``build_user_prompt`` exactly, over the 22 Detailed
+    fields instead -- no deal-context fields (out of this gate's scope).
+    """
+
+    field_descriptions = {
+        field_id: DETAILED_FIELD_DESCRIPTIONS[field_id]
+        for field_id in (*DETAILED_TERMS_FIELD_IDS, *DETAILED_OPERATING_FIELD_IDS)
     }
     anchors_payload = [
         {"anchor": anchor.anchor, "page": anchor.page, "text": anchor.text}

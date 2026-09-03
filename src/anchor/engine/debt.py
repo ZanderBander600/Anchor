@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from math import expm1, inf, log1p, nan
 
-from ..contracts import AcquisitionInputs
+from ..contracts import AcquisitionTerms
 from .contracts import CapitalStack, DebtSchedule, NonFiniteResultError, ensure_finite
 
 
@@ -61,23 +61,33 @@ def calculate_initial_equity(
     return ensure_finite("initial_equity", initial_equity)
 
 
-def calculate_capital_stack(inputs: AcquisitionInputs) -> CapitalStack:
+def calculate_capital_stack(terms: AcquisitionTerms) -> CapitalStack:
     """Compute the Phase 2A capital-stack basics, plus the Underwriting V2
     Gate 2 acquisition-cost/financing-fee terms, for one
-    ``AcquisitionInputs``."""
+    ``AcquisitionTerms``.
+
+    Detailed Operating Model V2.1 Gate 3: retyped from ``AcquisitionInputs``
+    to ``AcquisitionTerms`` -- every field read below (``purchase_price``,
+    ``ltv``, ``acquisition_cost_pct``, ``financing_fee_pct``) already exists
+    under the same name on ``AcquisitionTerms``, so this is a type
+    narrowing with no formula change. This is what makes the capital stack
+    identical for Quick and Detailed: neither mode's ``current_noi``/
+    ``noi_growth``/``occupancy`` (absent from ``AcquisitionTerms``) was ever
+    read here.
+    """
 
     loan_amount = calculate_loan_amount(
-        purchase_price=inputs.purchase_price, ltv=inputs.ltv
+        purchase_price=terms.purchase_price, ltv=terms.ltv
     )
     acquisition_costs = calculate_acquisition_costs(
-        purchase_price=inputs.purchase_price,
-        acquisition_cost_pct=inputs.acquisition_cost_pct,
+        purchase_price=terms.purchase_price,
+        acquisition_cost_pct=terms.acquisition_cost_pct,
     )
     financing_fee = calculate_financing_fee(
-        loan_amount=loan_amount, financing_fee_pct=inputs.financing_fee_pct
+        loan_amount=loan_amount, financing_fee_pct=terms.financing_fee_pct
     )
     initial_equity = calculate_initial_equity(
-        purchase_price=inputs.purchase_price,
+        purchase_price=terms.purchase_price,
         loan_amount=loan_amount,
         acquisition_costs=acquisition_costs,
         financing_fee=financing_fee,
@@ -424,9 +434,13 @@ def calculate_remaining_loan_balance(
     return ensure_finite("remaining_loan_balance", ending_balances[-1])
 
 
-def calculate_debt_schedule(inputs: AcquisitionInputs) -> DebtSchedule:
-    """Compute the Phase 2B debt schedule for one ``AcquisitionInputs``,
+def calculate_debt_schedule(terms: AcquisitionTerms) -> DebtSchedule:
+    """Compute the Phase 2B debt schedule for one ``AcquisitionTerms``,
     plus the Underwriting V2 Gate 4 interest-only period.
+
+    Detailed Operating Model V2.1 Gate 3: retyped from ``AcquisitionInputs``
+    to ``AcquisitionTerms`` -- see ``calculate_capital_stack`` above for why
+    this is a pure type narrowing.
 
     ``monthly_debt_service`` keeps its V1 meaning exactly: the amortizing
     (post-IO) PMT, computed via the existing, unmodified
@@ -437,22 +451,22 @@ def calculate_debt_schedule(inputs: AcquisitionInputs) -> DebtSchedule:
     is always ``0``)."""
 
     loan_amount = calculate_loan_amount(
-        purchase_price=inputs.purchase_price, ltv=inputs.ltv
+        purchase_price=terms.purchase_price, ltv=terms.ltv
     )
-    n_payments = calculate_scheduled_payment_count(amortization=inputs.amortization)
-    monthly_rate = calculate_monthly_rate(interest_rate=inputs.interest_rate)
-    io_months = calculate_io_months(io_period=inputs.io_period)
+    n_payments = calculate_scheduled_payment_count(amortization=terms.amortization)
+    monthly_rate = calculate_monthly_rate(interest_rate=terms.interest_rate)
+    io_months = calculate_io_months(io_period=terms.io_period)
     io_payment = calculate_io_payment(loan_amount=loan_amount, monthly_rate=monthly_rate)
 
     monthly_debt_service = calculate_monthly_debt_service(
         loan_amount=loan_amount,
-        interest_rate=inputs.interest_rate,
+        interest_rate=terms.interest_rate,
         n_payments=n_payments,
     )
     annual_debt_service = calculate_annual_debt_service(
         monthly_debt_service=monthly_debt_service,
         n_payments=n_payments,
-        hold_period=inputs.hold_period,
+        hold_period=terms.hold_period,
         io_months=io_months,
         io_payment=io_payment,
     )
@@ -461,7 +475,7 @@ def calculate_debt_schedule(inputs: AcquisitionInputs) -> DebtSchedule:
         monthly_rate=monthly_rate,
         monthly_debt_service=monthly_debt_service,
         n_payments=n_payments,
-        hold_period=inputs.hold_period,
+        hold_period=terms.hold_period,
         io_months=io_months,
         io_payment=io_payment,
     )

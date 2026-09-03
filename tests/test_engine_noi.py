@@ -2,9 +2,13 @@ import math
 
 import pytest
 
+from unittest.mock import patch
+
 from anchor.contracts import AcquisitionInputs
 from anchor.engine.contracts import NoiForecast, NonFiniteResultError
+from anchor.engine import noi as noi_module
 from anchor.engine.noi import (
+    build_quick_operating_projection,
     calculate_exit_noi,
     calculate_going_in_cap_rate,
     calculate_noi_by_year,
@@ -339,3 +343,28 @@ def test_calculate_noi_by_year_repeated_calls_are_bit_identical() -> None:
     second = calculate_noi_by_year(current_noi=2_500_000.0, noi_growth=0.03, hold_period=5)
 
     assert first == second
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 3 -- build_quick_operating_projection
+# =============================================================================
+
+
+def test_build_quick_operating_projection_delegates_to_forecast_noi() -> None:
+    inputs = make_inputs()
+
+    with patch.object(
+        noi_module, "forecast_noi", wraps=noi_module.forecast_noi
+    ) as mock_forecast_noi:
+        result = build_quick_operating_projection(inputs)
+
+    mock_forecast_noi.assert_called_once_with(inputs)
+    assert result == forecast_noi(inputs)
+
+
+def test_build_quick_operating_projection_returns_a_noi_forecast() -> None:
+    inputs = make_inputs()
+
+    result = build_quick_operating_projection(inputs)
+
+    assert isinstance(result, NoiForecast)

@@ -4,6 +4,7 @@ import type {
   BreakEvenType,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
+  StandardDetailedBreakEvenAnalysis,
 } from '../types';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
 
@@ -72,7 +73,12 @@ function BreakEvenCard({ title, result }: BreakEvenCardProps) {
 }
 
 interface BreakEvenPanelProps {
-  analysis: StandardBreakEvenAnalysis | null;
+  /** Detailed Operating Model V2.1 Gate 14: also accepts
+   * ``StandardDetailedBreakEvenAnalysis``, which has no ``min_noi_growth``/
+   * ``min_current_noi`` members (neither ``noi_growth`` nor ``current_noi``
+   * exists on ``AcquisitionTerms``/``DetailedOperatingInputs``) -- the card
+   * grids below render only the keys actually present on ``analysis``. */
+  analysis: StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis | null;
   isLoading: boolean;
   error: string | null;
   targetLeveredIrrPercent: string;
@@ -193,14 +199,22 @@ export function BreakEvenPanel({
           </div>
 
           <div className="break-even-grid">
-            {RETURN_HURDLE_CARD_CONFIGS.map((config) => (
-              <BreakEvenCard key={config.key} title={config.title} result={analysis[config.key]} />
+            {RETURN_HURDLE_CARD_CONFIGS.filter((config) => config.key in analysis).map((config) => (
+              <BreakEvenCard
+                key={config.key}
+                title={config.title}
+                result={(analysis as unknown as Record<string, BreakEvenResult>)[config.key]}
+              />
             ))}
           </div>
 
           <div className="break-even-grid">
-            {DSCR_CARD_CONFIGS.map((config) => (
-              <BreakEvenCard key={config.key} title={config.title} result={analysis[config.key]} />
+            {DSCR_CARD_CONFIGS.filter((config) => config.key in analysis).map((config) => (
+              <BreakEvenCard
+                key={config.key}
+                title={config.title}
+                result={(analysis as unknown as Record<string, BreakEvenResult>)[config.key]}
+              />
             ))}
           </div>
         </>

@@ -65,6 +65,23 @@ class StandardSensitivityPresets:
     interest_rate_ltv_dscr: TwoWaySensitivityResult
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StandardDetailedSensitivityPresets:
+    """Detailed Operating Model V2.1 Gate 8/9 -- the Detailed counterpart of
+    ``StandardSensitivityPresets``, over exactly
+    ``sensitivity.DETAILED_SUPPORTED_ASSUMPTIONS`` (``purchase_price``,
+    ``exit_cap_rate``, ``ltv``, ``interest_rate``). No ``exit_cap_noi_growth``
+    member exists here -- ``noi_growth`` has no ``AcquisitionTerms``
+    counterpart (Gate 3/4's resolution), and no Detailed-only dimension
+    (``revenue_growth``, ``vacancy_credit_loss_pct``, ``expense_growth``) is
+    substituted in its place -- that would be a new sensitivity dimension,
+    out of this gate's scope."""
+
+    purchase_price_exit_cap: TwoWaySensitivityResult
+    interest_rate_ltv: TwoWaySensitivityResult
+    interest_rate_ltv_dscr: TwoWaySensitivityResult
+
+
 # =============================================================================
 # Phase 8 -- break-even analysis
 # =============================================================================
@@ -141,3 +158,18 @@ class StandardBreakEvenAnalysis:
     min_noi_growth: BreakEvenResult
     max_interest_rate: BreakEvenResult
     min_current_noi: BreakEvenResult
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StandardDetailedBreakEvenAnalysis:
+    """Detailed Operating Model V2.1 Gate 8/9 -- the Detailed counterpart of
+    ``StandardBreakEvenAnalysis``, over exactly the three break-even
+    questions that are structurally meaningful for a Detailed deal
+    (``max_purchase_price``, ``max_exit_cap_rate``, ``max_interest_rate``).
+    ``min_noi_growth``/``min_current_noi`` have no Detailed equivalent --
+    neither ``noi_growth`` nor ``current_noi`` exists on ``AcquisitionTerms``/
+    ``DetailedOperatingInputs``."""
+
+    max_purchase_price: BreakEvenResult
+    max_exit_cap_rate: BreakEvenResult
+    max_interest_rate: BreakEvenResult

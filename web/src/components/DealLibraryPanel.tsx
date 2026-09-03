@@ -21,14 +21,27 @@ function formatUpdatedAt(iso: string): string {
   return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+/** Detailed Operating Model V2.1 Gate 11: `purchase_price` is shared by
+ * both `AcquisitionInputs` (Quick) and `AcquisitionTerms` (Detailed) --
+ * reads it from whichever one the deal actually populated, never
+ * fabricating a value for the other mode. */
+function purchasePriceOf(deal: Deal): number {
+  return deal.operating_mode === 'detailed'
+    ? (deal.terms?.purchase_price ?? 0)
+    : (deal.inputs?.purchase_price ?? 0);
+}
+
 /**
- * Lists saved deals and lets the analyst open, duplicate, or delete one.
+ * Lists saved deals -- both Quick and Detailed together, most recently
+ * updated first -- and lets the analyst open, duplicate, or delete one.
  * Performs no calculation and never calls `/analyze` -- `purchase_price`
- * is read directly off the deal's stored inputs, not derived. Duplicate
- * and delete are the caller's responsibility (`onDuplicate`/`onDelete`);
- * this component only asks for the one required confirmation before a
- * delete (`window.confirm`, per the app's existing convention of no custom
- * confirmation component) and otherwise renders what `/deals` returned.
+ * is read directly off the deal's stored assumptions, not derived. Each
+ * row shows its operating mode alongside its name so Quick and Detailed
+ * deals are never confused in a unified list. Duplicate and delete are the
+ * caller's responsibility (`onDuplicate`/`onDelete`); this component only
+ * asks for the one required confirmation before a delete (`window.confirm`,
+ * per the app's existing convention of no custom confirmation component)
+ * and otherwise renders what `/deals` returned.
  */
 export function DealLibraryPanel({
   deals,
@@ -72,10 +85,17 @@ export function DealLibraryPanel({
           {deals.map((deal) => (
             <li className="deal-library-row" key={deal.id}>
               <div className="deal-library-row-info">
-                <span className="deal-library-row-name">{deal.name}</span>
+                <span className="deal-library-row-name-line">
+                  <span className="deal-library-row-name">{deal.name}</span>
+                  <span
+                    className={`deal-library-row-mode deal-library-row-mode-${deal.operating_mode}`}
+                  >
+                    {deal.operating_mode === 'detailed' ? 'Detailed' : 'Quick'}
+                  </span>
+                </span>
                 <span className="deal-library-row-meta">
                   Updated {formatUpdatedAt(deal.updated_at)} &middot; Purchase Price{' '}
-                  {formatCurrency(deal.inputs.purchase_price)}
+                  {formatCurrency(purchasePriceOf(deal))}
                 </span>
               </div>
               <div className="deal-library-row-actions">

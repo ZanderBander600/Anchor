@@ -11,7 +11,7 @@ import type {
 } from '../types';
 import { ACQUISITION_FIELD_IDS } from '../types';
 
-function DocumentIcon() {
+export function DocumentIcon() {
   return (
     <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false">
       <path
@@ -43,7 +43,7 @@ const DEAL_CONTEXT_FIELDS: { key: keyof DealContext; label: string }[] = [
   { key: 'year_built', label: 'Year Built' },
 ];
 
-type FieldReviewState =
+export type FieldReviewState =
   | { kind: 'pending' }
   | { kind: 'approved'; value: string; candidateIndex: number | null }
   | { kind: 'rejected' };
@@ -58,25 +58,25 @@ function initialReviewStates(): ReviewStateMap {
   return map;
 }
 
-function EvidenceBadge({ status }: { status: EvidenceStatus }) {
+export function EvidenceBadge({ status }: { status: EvidenceStatus }) {
   return (
     <span className={`om-evidence-badge om-evidence-badge-${status}`}>{EVIDENCE_LABELS[status]}</span>
   );
 }
 
-function ReviewStateBadge({ state }: { state: FieldReviewState }) {
+export function ReviewStateBadge({ state }: { state: FieldReviewState }) {
   const label =
     state.kind === 'pending' ? 'Pending review' : state.kind === 'approved' ? 'Approved' : 'Rejected';
   return <span className={`om-review-state-badge om-review-state-badge-${state.kind}`}>{label}</span>;
 }
 
-interface CandidateRowProps {
+export interface CandidateRowProps {
   candidate: ExtractionCandidate;
   isApproved: boolean;
   onApprove: () => void;
 }
 
-function CandidateRow({ candidate, isApproved, onApprove }: CandidateRowProps) {
+export function CandidateRow({ candidate, isApproved, onApprove }: CandidateRowProps) {
   return (
     <div className={`om-candidate om-candidate-${candidate.status}`}>
       <div className="om-candidate-value-row">
@@ -103,8 +103,8 @@ function CandidateRow({ candidate, isApproved, onApprove }: CandidateRowProps) {
   );
 }
 
-interface FieldReviewCardProps {
-  fieldId: AcquisitionFieldId;
+export interface FieldReviewCardProps {
+  label: string;
   field: FieldCandidates;
   reviewState: FieldReviewState;
   onApprove: (candidateIndex: number, value: string) => void;
@@ -112,10 +112,14 @@ interface FieldReviewCardProps {
   onReject: () => void;
 }
 
-function FieldReviewCard({ fieldId, field, reviewState, onApprove, onEdit, onReject }: FieldReviewCardProps) {
+/** Generic per-field OM review card -- reused as-is by
+ * `DetailedOmReviewPanel` (Gate 12) over the Detailed field set. Takes
+ * `label` directly rather than deriving it from a Quick-only field-id ->
+ * label map, so it carries no assumption about which mode's fields it is
+ * reviewing. */
+export function FieldReviewCard({ label, field, reviewState, onApprove, onEdit, onReject }: FieldReviewCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState('');
-  const label = ACQUISITION_FIELD_LABELS[fieldId];
   const isMissing = field.candidates.length === 0;
 
   function startEdit() {
@@ -336,7 +340,7 @@ export function OmReviewPanel({ extraction, isLoading, error, onUpload, onFinish
             {ACQUISITION_FIELD_IDS.map((fieldId) => (
               <FieldReviewCard
                 key={fieldId}
-                fieldId={fieldId}
+                label={ACQUISITION_FIELD_LABELS[fieldId]}
                 field={extraction[fieldId]}
                 reviewState={reviewStates[fieldId]}
                 onApprove={(candidateIndex, value) => handleApprove(fieldId, candidateIndex, value)}

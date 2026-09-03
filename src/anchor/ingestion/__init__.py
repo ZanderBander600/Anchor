@@ -25,7 +25,10 @@ from __future__ import annotations
 from .contracts import (
     ACQUISITION_FIELD_IDS,
     DEAL_CONTEXT_FIELD_IDS,
+    DETAILED_OPERATING_FIELD_IDS,
+    DETAILED_TERMS_FIELD_IDS,
     DealContext,
+    DetailedExtractionResult,
     DocumentAnchor,
     EvidenceStatus,
     ExtractionCandidate,
@@ -37,12 +40,15 @@ from .contracts import (
     Provenance,
     StructuredDocument,
 )
-from .orchestrator import extract_om
+from .orchestrator import extract_detailed_om, extract_om
 
 __all__ = [
     "ACQUISITION_FIELD_IDS",
     "DEAL_CONTEXT_FIELD_IDS",
+    "DETAILED_OPERATING_FIELD_IDS",
+    "DETAILED_TERMS_FIELD_IDS",
     "DealContext",
+    "DetailedExtractionResult",
     "DocumentAnchor",
     "EvidenceStatus",
     "ExtractionCandidate",
@@ -53,5 +59,6 @@ __all__ = [
     "FieldCandidates",
     "Provenance",
     "StructuredDocument",
+    "extract_detailed_om",
     "extract_om",
 ]

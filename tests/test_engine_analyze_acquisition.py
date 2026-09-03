@@ -143,16 +143,34 @@ def test_acquisition_results_has_no_excel_or_source_or_ui_metadata() -> None:
 # =============================================================================
 
 
-def test_engine_package_exposes_only_analyze_acquisition_and_acquisition_results() -> None:
-    assert set(engine_package.__all__) == {"analyze_acquisition", "AcquisitionResults"}
+def test_engine_package_exposes_only_the_entry_points_and_result_contracts() -> None:
+    """Detailed Operating Model V2.1 Gate 3 deliberately added
+    ``analyze_detailed_acquisition`` as a second public engine entry point,
+    alongside the existing ``analyze_acquisition``; Gate 4 adds
+    ``analyze_detailed_acquisition_with_projection`` and
+    ``DetailedAcquisitionResults`` for exposing the Detailed operating
+    projection to downstream consumers -- each updated here as an approved,
+    intentional addition, not a silent surface-area expansion."""
+
+    assert set(engine_package.__all__) == {
+        "analyze_acquisition",
+        "analyze_detailed_acquisition",
+        "analyze_detailed_acquisition_with_projection",
+        "AcquisitionResults",
+        "DetailedAcquisitionResults",
+    }
 
 
 def test_engine_package_does_not_re_export_internal_helpers() -> None:
     assert not hasattr(engine_package, "forecast_noi")
+    assert not hasattr(engine_package, "build_quick_operating_projection")
+    assert not hasattr(engine_package, "build_detailed_operating_projection")
     assert not hasattr(engine_package, "calculate_capital_stack")
     assert not hasattr(engine_package, "calculate_debt_schedule")
     assert not hasattr(engine_package, "calculate_acquisition_cash_flows")
     assert not hasattr(engine_package, "calculate_return_metrics")
+    assert not hasattr(engine_package, "analyze_acquisition_from_operating_projection")
+    assert not hasattr(engine_package, "acquisition_terms_from_inputs")
 
 
 # =============================================================================
@@ -381,14 +399,22 @@ def test_analyze_acquisition_final_tuple_lengths_correct() -> None:
     assert len(result.levered_cash_flows) == hold_period + 1
 
 
-def test_analyze_acquisition_computes_noi_forecast_exactly_once() -> None:
+def test_analyze_acquisition_computes_operating_projection_exactly_once() -> None:
+    """Detailed Operating Model V2.1 Gate 3: analyze_acquisition now calls
+    build_quick_operating_projection (which itself delegates to the
+    unmodified forecast_noi -- see test_build_quick_operating_projection_
+    delegates_to_forecast_noi in test_engine_noi.py), not forecast_noi
+    directly."""
+
     inputs = make_golden_inputs()
     with patch.object(
-        acquisition_module, "forecast_noi", wraps=acquisition_module.forecast_noi
-    ) as mock_forecast_noi:
+        acquisition_module,
+        "build_quick_operating_projection",
+        wraps=acquisition_module.build_quick_operating_projection,
+    ) as mock_build_projection:
         analyze_acquisition(inputs)
 
-    assert mock_forecast_noi.call_count == 1
+    assert mock_build_projection.call_count == 1
 
 
 def test_analyze_acquisition_computes_capital_stack_exactly_once() -> None:

@@ -1,33 +1,53 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import {
   analyzeAcquisition,
+  analyzeDetailedAcquisition,
   ApiError,
   createDeal,
+  createDetailedDeal,
   deleteDeal,
   duplicateDeal,
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
+  fetchDetailedAIAnalysis,
+  fetchDetailedBreakEvenAnalysis,
+  fetchDetailedSensitivityPresets,
   fetchSensitivityPresets,
   getDeal,
   listDeals,
   updateDeal,
+  updateDetailedDeal,
+  uploadDetailedExcel,
+  uploadDetailedOm,
   uploadExcel,
   uploadOm,
 } from './api';
-import { BLANK_FORM_VALUES, buildAcquisitionRequest, DEFAULT_FORM_VALUES, V2_GOLDEN_FORM_VALUES } from './convert';
+import {
+  BLANK_DETAILED_FORM_VALUES,
+  BLANK_FORM_VALUES,
+  buildAcquisitionRequest,
+  DEFAULT_FORM_VALUES,
+  DETAILED_GOLDEN_FORM_VALUES,
+  V2_GOLDEN_FORM_VALUES,
+} from './convert';
 import type {
   AcquisitionRequest,
   AcquisitionResults,
   AIAnalysis,
   BreakEvenResult,
   Deal,
+  DetailedAcquisitionResults,
+  DetailedExcelIntakeReport,
+  DetailedExtractionResult,
   ExcelIntakeReport,
   ExtractionResult,
   FieldCandidates,
   StandardBreakEvenAnalysis,
+  StandardDetailedBreakEvenAnalysis,
+  StandardDetailedSensitivityPresets,
   StandardSensitivityPresets,
   TwoWaySensitivityResult,
 } from './types';
@@ -37,13 +57,21 @@ vi.mock('./api', async () => {
   return {
     ...actual,
     analyzeAcquisition: vi.fn(),
+    analyzeDetailedAcquisition: vi.fn(),
     fetchSensitivityPresets: vi.fn(),
     fetchBreakEvenAnalysis: vi.fn(),
+    fetchDetailedSensitivityPresets: vi.fn(),
+    fetchDetailedBreakEvenAnalysis: vi.fn(),
     fetchAIAnalysis: vi.fn(),
+    fetchDetailedAIAnalysis: vi.fn(),
     uploadOm: vi.fn(),
+    uploadDetailedOm: vi.fn(),
     uploadExcel: vi.fn(),
+    uploadDetailedExcel: vi.fn(),
     createDeal: vi.fn(),
     updateDeal: vi.fn(),
+    createDetailedDeal: vi.fn(),
+    updateDetailedDeal: vi.fn(),
     getDeal: vi.fn(),
     listDeals: vi.fn(),
     duplicateDeal: vi.fn(),
@@ -52,12 +80,20 @@ vi.mock('./api', async () => {
 });
 
 const mockAnalyze = vi.mocked(analyzeAcquisition);
+const mockAnalyzeDetailed = vi.mocked(analyzeDetailedAcquisition);
 const mockFetchSensitivityPresets = vi.mocked(fetchSensitivityPresets);
 const mockFetchBreakEvenAnalysis = vi.mocked(fetchBreakEvenAnalysis);
+const mockFetchDetailedSensitivityPresets = vi.mocked(fetchDetailedSensitivityPresets);
+const mockFetchDetailedBreakEvenAnalysis = vi.mocked(fetchDetailedBreakEvenAnalysis);
 const mockFetchAIAnalysis = vi.mocked(fetchAIAnalysis);
+const mockFetchDetailedAIAnalysis = vi.mocked(fetchDetailedAIAnalysis);
 const mockUploadOm = vi.mocked(uploadOm);
+const mockUploadDetailedOm = vi.mocked(uploadDetailedOm);
 const mockUploadExcel = vi.mocked(uploadExcel);
+const mockUploadDetailedExcel = vi.mocked(uploadDetailedExcel);
 const mockCreateDeal = vi.mocked(createDeal);
+const mockCreateDetailedDeal = vi.mocked(createDetailedDeal);
+const mockUpdateDetailedDeal = vi.mocked(updateDetailedDeal);
 const mockDuplicateDeal = vi.mocked(duplicateDeal);
 const mockDeleteDeal = vi.mocked(deleteDeal);
 const mockUpdateDeal = vi.mocked(updateDeal);
@@ -109,6 +145,67 @@ function makeExtractionResult(overrides: Partial<ExtractionResult> = {}): Extrac
   return base;
 }
 
+/** Detailed Operating Model V2.1 Gate 12 -- a Detailed OM extraction
+ * fixture: purchase_price and gross_potential_rent stated with evidence,
+ * every other Detailed field missing (never a fabricated zero). */
+function makeDetailedExtractionResult(
+  overrides: Partial<DetailedExtractionResult> = {},
+): DetailedExtractionResult {
+  const base: DetailedExtractionResult = {
+    purchase_price: {
+      field_id: 'purchase_price',
+      candidates: [
+        {
+          value: '10000000',
+          status: 'stated',
+          provenance: { page: 1, anchor: 'paragraph:0', snippet: 'Purchase Price: $10,000,000' },
+        },
+      ],
+    },
+    hold_period: missingField('hold_period'),
+    exit_cap_rate: missingField('exit_cap_rate'),
+    ltv: missingField('ltv'),
+    interest_rate: missingField('interest_rate'),
+    amortization: missingField('amortization'),
+    acquisition_cost_pct: missingField('acquisition_cost_pct'),
+    financing_fee_pct: missingField('financing_fee_pct'),
+    disposition_cost_pct: missingField('disposition_cost_pct'),
+    annual_capex_reserve: missingField('annual_capex_reserve'),
+    io_period: missingField('io_period'),
+    gross_potential_rent: {
+      field_id: 'gross_potential_rent',
+      candidates: [
+        {
+          value: '800000',
+          status: 'stated',
+          provenance: { page: 31, anchor: 'paragraph:1', snippet: 'Potential Base Rent: $800,000' },
+        },
+      ],
+    },
+    other_income: missingField('other_income'),
+    vacancy_credit_loss_pct: missingField('vacancy_credit_loss_pct'),
+    property_taxes: {
+      field_id: 'property_taxes',
+      candidates: [
+        {
+          value: '0',
+          status: 'stated',
+          provenance: { page: 32, anchor: 'paragraph:2', snippet: 'Real Estate Taxes: $0' },
+        },
+      ],
+    },
+    insurance: missingField('insurance'),
+    utilities: missingField('utilities'),
+    repairs_maintenance: missingField('repairs_maintenance'),
+    other_operating_expenses: missingField('other_operating_expenses'),
+    management_fee_pct: missingField('management_fee_pct'),
+    revenue_growth: missingField('revenue_growth'),
+    expense_growth: missingField('expense_growth'),
+    ...overrides,
+  };
+  return base;
+}
+
 // Deliberately distinct from every metric value in `makeResults()` (7.91%,
 // 6.24%, 1.44x, 1.1608x, ...) so text queries against the base results panel
 // never collide with the sensitivity panel's mocked values.
@@ -149,6 +246,62 @@ function makeSensitivityPresets(
       row_assumption: 'interest_rate',
       column_assumption: 'ltv',
       metric: 'headline_dscr',
+    }),
+    ...overrides,
+  };
+}
+
+/** Detailed Operating Model V2.1 Gate 14: the Detailed counterpart of
+ * `makeSensitivityPresets` -- no `exit_cap_noi_growth` member, deliberately
+ * distinct baseline/matrix values (0.09/0.5x territory) so Detailed
+ * sensitivity text queries never collide with Quick's own mocked
+ * sensitivity values in a cross-mode test. */
+function makeDetailedSensitivityPresets(
+  overrides: Partial<StandardDetailedSensitivityPresets> = {},
+): StandardDetailedSensitivityPresets {
+  return {
+    // Every cell is distinct and outside Quick's default matrix's 41%-64%
+    // range -- the [2][2] (baseline) cell is the only one that renders
+    // "9.00%", so a text query for it can never collide with a neighbor.
+    purchase_price_exit_cap: makeSensitivityMatrix({
+      row_assumption: 'purchase_price',
+      column_assumption: 'exit_cap_rate',
+      baseline_row_value: 10_000_000,
+      baseline_column_value: 0.065,
+      baseline_metric_value: 0.09,
+      row_values: [9_000_000, 9_500_000, 10_000_000, 10_500_000, 11_000_000],
+      column_values: [0.055, 0.06, 0.065, 0.07, 0.075],
+      matrix: [
+        [0.05, 0.06, 0.07, 0.08, 0.081],
+        [0.082, 0.083, 0.084, 0.085, 0.086],
+        [0.087, 0.088, 0.09, 0.091, 0.092],
+        [0.093, 0.094, 0.095, 0.096, 0.097],
+        [0.098, 0.099, 0.1, 0.101, 0.102],
+      ],
+    }),
+    interest_rate_ltv: makeSensitivityMatrix({
+      row_assumption: 'interest_rate',
+      column_assumption: 'ltv',
+      baseline_metric_value: 0.09,
+    }),
+    // Same idea for the DSCR variant -- [2][2] is the only cell rendering
+    // "2.00x".
+    interest_rate_ltv_dscr: makeSensitivityMatrix({
+      row_assumption: 'interest_rate',
+      column_assumption: 'ltv',
+      metric: 'headline_dscr',
+      baseline_row_value: 0.05,
+      baseline_column_value: 0.6,
+      baseline_metric_value: 2.0,
+      row_values: [0.03, 0.04, 0.05, 0.06, 0.07],
+      column_values: [0.5, 0.55, 0.6, 0.65, 0.7],
+      matrix: [
+        [1.5, 1.6, 1.7, 1.8, 1.9],
+        [1.91, 1.92, 1.93, 1.94, 1.95],
+        [1.96, 1.97, 2.0, 1.98, 1.99],
+        [2.01, 2.02, 2.03, 2.04, 2.05],
+        [2.06, 2.07, 2.08, 2.09, 2.1],
+      ],
     }),
     ...overrides,
   };
@@ -215,6 +368,46 @@ function makeBreakEvenAnalysis(
       solved_metric_value: 1.2001,
       lower_search_bound: 1_250_000,
       upper_search_bound: 3_750_000,
+    }),
+    ...overrides,
+  };
+}
+
+/** Detailed Operating Model V2.1 Gate 14: the Detailed counterpart of
+ * `makeBreakEvenAnalysis` -- no `min_noi_growth`/`min_current_noi` members
+ * (neither `noi_growth` nor `current_noi` exists on `AcquisitionTerms`/
+ * `DetailedOperatingInputs`), over the Detailed golden case's own
+ * assumption values. */
+function makeDetailedBreakEvenAnalysis(
+  overrides: Partial<StandardDetailedBreakEvenAnalysis> = {},
+): StandardDetailedBreakEvenAnalysis {
+  return {
+    max_purchase_price: makeBreakEvenResult({
+      baseline_assumption_value: 10_000_000,
+      // Deliberately not one of the sensitivity mock's purchase_price row
+      // values (9.0M/9.5M/10.0M/10.5M/11.0M) -- both panels render at once,
+      // and a shared exact-dollar figure would make text queries ambiguous.
+      solved_assumption_value: 9_487_500,
+    }),
+    max_exit_cap_rate: makeBreakEvenResult({
+      break_even_type: 'max_exit_cap_rate',
+      assumption: 'exit_cap_rate',
+      baseline_assumption_value: 0.065,
+      solved_assumption_value: 0.071,
+      lower_search_bound: 0.035,
+      upper_search_bound: 0.115,
+    }),
+    max_interest_rate: makeBreakEvenResult({
+      break_even_type: 'max_interest_rate',
+      assumption: 'interest_rate',
+      metric: 'headline_dscr',
+      target_metric_value: 1.25,
+      baseline_assumption_value: 0.05,
+      baseline_metric_value: 2.0,
+      solved_assumption_value: 0.0712,
+      solved_metric_value: 1.2501,
+      lower_search_bound: 0.0,
+      upper_search_bound: 0.2,
     }),
     ...overrides,
   };
@@ -297,6 +490,46 @@ function makeExcelIntakeReport(
       'annual_capex_reserve',
       'io_period',
     ],
+    ...overrides,
+  };
+}
+
+/** Detailed Operating Model V2.1 Gate 10 -- the Detailed golden case,
+ * shaped as a `POST /ingestion/excel/detailed` response
+ * (`DetailedExcelIntakeReport`). Every field is always present -- there is
+ * no defaulted-field concept for Detailed. */
+function makeDetailedExcelIntakeReport(
+  overrides: Partial<DetailedExcelIntakeReport> = {},
+): DetailedExcelIntakeReport {
+  return {
+    terms: {
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    },
+    detailed_operating_inputs: {
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    },
+    anchor_schema: 'detailed_acquisition',
+    schema_version: '2.1',
     ...overrides,
   };
 }
@@ -433,16 +666,27 @@ function makeAiAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
 
 beforeEach(() => {
   mockAnalyze.mockReset();
+  mockAnalyzeDetailed.mockReset();
   mockFetchSensitivityPresets.mockReset();
   mockFetchSensitivityPresets.mockResolvedValue(makeSensitivityPresets());
   mockFetchBreakEvenAnalysis.mockReset();
   mockFetchBreakEvenAnalysis.mockResolvedValue(makeBreakEvenAnalysis());
+  mockFetchDetailedSensitivityPresets.mockReset();
+  mockFetchDetailedSensitivityPresets.mockResolvedValue(makeDetailedSensitivityPresets());
+  mockFetchDetailedBreakEvenAnalysis.mockReset();
+  mockFetchDetailedBreakEvenAnalysis.mockResolvedValue(makeDetailedBreakEvenAnalysis());
   mockFetchAIAnalysis.mockReset();
   mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysis());
+  mockFetchDetailedAIAnalysis.mockReset();
+  mockFetchDetailedAIAnalysis.mockResolvedValue(makeAiAnalysis());
   mockUploadOm.mockReset();
+  mockUploadDetailedOm.mockReset();
   mockUploadExcel.mockReset();
+  mockUploadDetailedExcel.mockReset();
   mockCreateDeal.mockReset();
   mockUpdateDeal.mockReset();
+  mockCreateDetailedDeal.mockReset();
+  mockUpdateDetailedDeal.mockReset();
   mockGetDeal.mockReset();
   mockListDeals.mockReset();
   mockListDeals.mockResolvedValue([]);
@@ -1881,12 +2125,64 @@ function makeDeal(overrides: Partial<Deal> = {}): Deal {
   return {
     id: 'deal-1',
     name: '111 Main St',
+    operating_mode: 'quick',
     inputs: GOLDEN_DEAL_REQUEST,
+    terms: null,
+    detailed_operating_inputs: null,
     created_at: '2026-09-01T12:00:00+00:00',
     updated_at: '2026-09-01T12:00:00+00:00',
     ...overrides,
   };
 }
+
+/** Detailed Operating Model V2.1 Gate 11 -- a saved Detailed deal, shaped
+ * as the `/deals` response (`Deal` with `operating_mode: 'detailed'`).
+ * `inputs` stays `null` -- never a fabricated `AcquisitionInputs`. */
+function makeDetailedDeal(overrides: Partial<Deal> = {}): Deal {
+  return {
+    id: 'detailed-deal-1',
+    name: 'Golden Detailed Deal',
+    operating_mode: 'detailed',
+    inputs: null,
+    terms: {
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    },
+    detailed_operating_inputs: {
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    },
+    created_at: '2026-09-01T12:00:00+00:00',
+    updated_at: '2026-09-01T12:00:00+00:00',
+    ...overrides,
+  };
+}
+
+/** Matches what `fillDetailedGoldenDeal()` produces after
+ * `buildAcquisitionTermsRequest`/`buildDetailedOperatingInputsRequest` --
+ * the same golden values `makeDetailedDeal()`/`makeDetailedExcelIntakeReport()`
+ * already use, kept as one source of truth. */
+const GOLDEN_DETAILED_TERMS_REQUEST = makeDetailedExcelIntakeReport().terms;
+const GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST =
+  makeDetailedExcelIntakeReport().detailed_operating_inputs;
 
 describe('Deal persistence workflow', () => {
   it('starts as a blank, unsaved deal', () => {
@@ -2048,7 +2344,7 @@ describe('Deal persistence workflow', () => {
     mockGetDeal.mockResolvedValue(deal);
     mockUpdateDeal.mockResolvedValue({
       ...deal,
-      inputs: { ...deal.inputs, purchase_price: 60_000_000 },
+      inputs: { ...GOLDEN_DEAL_REQUEST, purchase_price: 60_000_000 },
     });
     render(<App />);
 
@@ -2287,7 +2583,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       mockGetDeal.mockResolvedValue(deal);
       mockUpdateDeal.mockResolvedValue({
         ...deal,
-        inputs: { ...deal.inputs, io_period: 3 },
+        inputs: { ...GOLDEN_DEAL_REQUEST, io_period: 3 },
       });
       render(<App />);
 
@@ -2587,5 +2883,1610 @@ describe('Deal persistence workflow -- Phase C', () => {
         DEFAULT_FORM_VALUES.purchasePrice,
       );
     });
+  });
+});
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 6 -- Quick/Detailed mode toggle
+// =============================================================================
+
+/** Fills DetailedAssumptionsForm with the Detailed golden-case fixture
+ * values (the terms and Operating Model sections both), mirroring
+ * fillV2GoldenDeal's style/shape for the Quick form. */
+function fillDetailedGoldenDeal() {
+  fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.purchasePrice },
+  });
+  fireEvent.change(screen.getByLabelText(/^Hold Period/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.holdPeriod },
+  });
+  fireEvent.change(screen.getByLabelText(/^Exit Cap Rate/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.exitCapRate },
+  });
+  fireEvent.change(screen.getByLabelText(/^LTV/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.ltv },
+  });
+  fireEvent.change(screen.getByLabelText(/^Interest Rate/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.interestRate },
+  });
+  fireEvent.change(screen.getByLabelText(/^Amortization/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.amortization },
+  });
+  fireEvent.change(screen.getByLabelText(/^Acquisition Costs/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.acquisitionCostPct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Financing Fee/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.financingFeePct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Disposition Costs/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.dispositionCostPct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Annual CapEx Reserve/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.annualCapexReserve },
+  });
+  fireEvent.change(screen.getByLabelText(/^Interest-Only Period/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.terms.ioPeriod },
+  });
+  fireEvent.change(screen.getByLabelText(/^Gross Potential Rent/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.grossPotentialRent },
+  });
+  fireEvent.change(screen.getByLabelText(/^Other Income/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.otherIncome },
+  });
+  fireEvent.change(screen.getByLabelText(/^Vacancy & Credit Loss/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.vacancyCreditLossPct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Property Taxes/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.propertyTaxes },
+  });
+  fireEvent.change(screen.getByLabelText(/^Insurance/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.insurance },
+  });
+  fireEvent.change(screen.getByLabelText(/^Utilities/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.utilities },
+  });
+  fireEvent.change(screen.getByLabelText(/^Repairs & Maintenance/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.repairsMaintenance },
+  });
+  fireEvent.change(screen.getByLabelText(/^Other Operating Expenses/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.otherOperatingExpenses },
+  });
+  fireEvent.change(screen.getByLabelText(/^Management Fee/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.managementFeePct },
+  });
+  fireEvent.change(screen.getByLabelText(/^Revenue Growth/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.revenueGrowth },
+  });
+  fireEvent.change(screen.getByLabelText(/^Expense Growth/), {
+    target: { value: DETAILED_GOLDEN_FORM_VALUES.operating.expenseGrowth },
+  });
+}
+
+/** The frozen Detailed golden case's engine output
+ * (docs/detailed_operating_model_v2_1_golden_case.md), for tests
+ * demonstrating the Detailed flow end-to-end with authoritative mocked
+ * values -- never reproduced via a TypeScript formula. */
+function makeDetailedResults(): DetailedAcquisitionResults {
+  return {
+    operating_projection: {
+      gross_potential_rent_by_year: [800_000, 824_000, 848_720, 874_181.6, 900_407.05],
+      other_income_by_year: [20_000, 20_600, 21_218, 21_854.54, 22_510.18],
+      vacancy_credit_loss_by_year: [40_000, 41_200, 42_436, 43_709.08, 45_020.35],
+      effective_gross_income_by_year: [780_000, 803_400, 827_502, 852_327.06, 877_896.87],
+      property_taxes_by_year: [60_000, 61_800, 63_654, 65_563.62, 67_530.53],
+      insurance_by_year: [20_000, 20_600, 21_218, 21_854.54, 22_510.18],
+      utilities_by_year: [25_000, 25_750, 26_522.5, 27_318.18, 28_137.72],
+      repairs_maintenance_by_year: [20_000, 20_600, 21_218, 21_854.54, 22_510.18],
+      other_operating_expenses_by_year: [16_000, 16_480, 16_974.4, 17_483.63, 18_008.14],
+      management_fee_by_year: [39_000, 40_170, 41_375.1, 42_616.35, 43_894.84],
+      total_operating_expenses_by_year: [180_000, 185_400, 190_962, 196_690.86, 202_591.59],
+      noi_by_year: [600_000, 618_000, 636_540, 655_636.2, 675_305.29],
+      exit_noi: 695_564.44,
+      going_in_cap_rate: 0.06,
+    },
+    results: makeV2GoldenResults(),
+  };
+}
+
+describe('Detailed Underwrite mode (Gate 6)', () => {
+  it('starts in Quick Underwrite mode by default', () => {
+    render(<App />);
+
+    expect(screen.getByRole('tab', { name: 'Quick Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.getByLabelText(/^Current NOI/)).toBeTruthy();
+  });
+
+  it('switches to the Detailed form and back without losing Quick-mode input', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    expect(screen.queryByLabelText(/^Current NOI/)).toBeNull();
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toBeTruthy();
+
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.purchasePrice,
+    );
+    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.currentNoi,
+    );
+  });
+
+  it('never renders a Current NOI, Occupancy, or NOI Growth field in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.queryByLabelText(/^Current NOI/)).toBeNull();
+    expect(screen.queryByLabelText(/^Occupancy/)).toBeNull();
+    expect(screen.queryByLabelText(/^NOI Growth/)).toBeNull();
+  });
+
+  it('submits the Detailed golden case and renders the operating statement and results', async () => {
+    const user = userEvent.setup();
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    fillDetailedGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+    const [terms, detailedOperatingInputs] = mockAnalyzeDetailed.mock.calls[0];
+    expect(terms).toEqual({
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    });
+    expect(detailedOperatingInputs).toEqual({
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    });
+
+    expect(await screen.findByText('Operating Statement')).toBeTruthy();
+    expect(screen.getByText('Key Returns')).toBeTruthy();
+    expect(screen.getAllByText('$600,000').length).toBeGreaterThan(0);
+  });
+
+  it('surfaces a Detailed validation error without touching Quick-mode state', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(screen.getByText(/is required/)).toBeTruthy();
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.purchasePrice,
+    );
+  });
+
+  it('surfaces an ApiError message from analyzeDetailedAcquisition', async () => {
+    const user = userEvent.setup();
+    mockAnalyzeDetailed.mockRejectedValue(
+      new ApiError('The submitted assumptions failed validation.'),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    fillDetailedGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(
+      await screen.findByText('The submitted assumptions failed validation.'),
+    ).toBeTruthy();
+  });
+});
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 9 -- AI Analyst in Detailed mode
+// =============================================================================
+
+async function analyzeDetailedGoldenDeal(user: ReturnType<typeof userEvent.setup>) {
+  mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+  await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+  fillDetailedGoldenDeal();
+  await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+  await screen.findByText('Operating Statement');
+}
+
+describe('AI Analyst in Detailed mode (Gate 9)', () => {
+  it('AI Analyst works in Quick mode (regression)', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Key Returns');
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    await waitFor(() => expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockFetchDetailedAIAnalysis).not.toHaveBeenCalled();
+    expect(await screen.findByText('Five-year hold with moderate leverage.')).toBeTruthy();
+  });
+
+  it('AI Analyst works in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
+    expect(await screen.findByText('Five-year hold with moderate leverage.')).toBeTruthy();
+  });
+
+  it('switching modes sends the correct request/context shape', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    // Quick first.
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Key Returns');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1));
+    const [quickInputsArg] = mockFetchAIAnalysis.mock.calls[0];
+    expect(quickInputsArg).toHaveProperty('current_noi');
+    expect(quickInputsArg).toHaveProperty('noi_growth');
+
+    // Now switch to Detailed and generate again.
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await analyzeDetailedGoldenDeal(user);
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
+    const [termsArg, detailedOperatingInputsArg] = mockFetchDetailedAIAnalysis.mock.calls[0];
+    expect(termsArg).not.toHaveProperty('current_noi');
+    expect(termsArg).not.toHaveProperty('noi_growth');
+    expect(detailedOperatingInputsArg).toHaveProperty('vacancy_credit_loss_pct', 0.05);
+
+    // Quick's own call was never re-triggered by the Detailed generate.
+    expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it('Detailed AI uses Detailed analysis results (terms + detailed operating inputs)', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
+    const [terms, detailedOperatingInputs, targetIrr, targetEquityMultiple, targetDscr, metric] =
+      mockFetchDetailedAIAnalysis.mock.calls[0];
+    expect(terms).toEqual({
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    });
+    expect(detailedOperatingInputs).toEqual({
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    });
+    expect(typeof targetIrr).toBe('number');
+    expect(typeof targetEquityMultiple).toBe('number');
+    expect(typeof targetDscr).toBe('number');
+    expect(metric).toBe('levered_irr');
+  });
+
+  it('no Quick-only NOI fields are fabricated for Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
+    const [terms, detailedOperatingInputs] = mockFetchDetailedAIAnalysis.mock.calls[0];
+    const serialized = JSON.stringify({ terms, detailedOperatingInputs });
+    expect(serialized).not.toContain('current_noi');
+    expect(serialized).not.toContain('"noi_growth"');
+    expect(serialized).not.toContain('"occupancy"');
+  });
+
+  it('surfaces an ApiError message from fetchDetailedAIAnalysis without touching Quick state', async () => {
+    const user = userEvent.setup();
+    mockFetchDetailedAIAnalysis.mockRejectedValue(
+      new ApiError('The AI Analyst is not configured.'),
+    );
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    expect(await screen.findByText('The AI Analyst is not configured.')).toBeTruthy();
+  });
+
+  it('clears the Detailed AI analysis when a Detailed assumption is edited', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Five-year hold with moderate leverage.');
+
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+      target: { value: '11000000' },
+    });
+
+    expect(screen.queryByText('Five-year hold with moderate leverage.')).toBeNull();
+  });
+});
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 14 -- Detailed sensitivity/break-even
+// API/UI wiring
+// =============================================================================
+
+const DETAILED_GOLDEN_TERMS_REQUEST = {
+  purchase_price: 10_000_000,
+  hold_period: 5,
+  exit_cap_rate: 0.065,
+  ltv: 0.6,
+  interest_rate: 0.05,
+  amortization: 30,
+  acquisition_cost_pct: 0.02,
+  financing_fee_pct: 0.01,
+  disposition_cost_pct: 0.025,
+  annual_capex_reserve: 50_000,
+  io_period: 2,
+};
+
+const DETAILED_GOLDEN_OPERATING_REQUEST = {
+  gross_potential_rent: 800_000,
+  other_income: 20_000,
+  vacancy_credit_loss_pct: 0.05,
+  property_taxes: 60_000,
+  insurance: 20_000,
+  utilities: 25_000,
+  repairs_maintenance: 20_000,
+  other_operating_expenses: 16_000,
+  management_fee_pct: 0.05,
+  revenue_growth: 0.03,
+  expense_growth: 0.03,
+};
+
+describe('Detailed sensitivity + break-even (Gate 14)', () => {
+  it('1. Detailed results expose Sensitivity', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
+    // The Detailed-only preset bundle has no exit_cap_noi_growth member --
+    // that tab must never appear for a Detailed result.
+    expect(screen.queryByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Purchase Price × Exit Cap' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Interest Rate × LTV' })).toBeTruthy();
+  });
+
+  it('2. Detailed results expose Break-Even', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    expect(await screen.findByText('Break-Even Analysis')).toBeTruthy();
+    expect(screen.getByText('Maximum Purchase Price')).toBeTruthy();
+    expect(screen.getByText('Maximum Exit Cap')).toBeTruthy();
+    expect(screen.getByText('Maximum Interest Rate')).toBeTruthy();
+    // The Detailed-only bundle has no min_noi_growth/min_current_noi
+    // members -- neither card may appear for a Detailed result.
+    expect(screen.queryByText('Minimum NOI Growth')).toBeNull();
+    expect(screen.queryByText('Minimum Current NOI')).toBeNull();
+  });
+
+  it('3. Detailed sensitivity request uses Detailed inputs', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await waitFor(() => expect(mockFetchDetailedSensitivityPresets).toHaveBeenCalledTimes(1));
+    expect(mockFetchSensitivityPresets).not.toHaveBeenCalled();
+    const [terms, detailedOperatingInputs] = mockFetchDetailedSensitivityPresets.mock.calls[0];
+    expect(terms).toEqual(DETAILED_GOLDEN_TERMS_REQUEST);
+    expect(detailedOperatingInputs).toEqual(DETAILED_GOLDEN_OPERATING_REQUEST);
+  });
+
+  it('4. Detailed break-even request uses Detailed inputs', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await waitFor(() => expect(mockFetchDetailedBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockFetchBreakEvenAnalysis).not.toHaveBeenCalled();
+    const [terms, detailedOperatingInputs, targetIrr, targetEquityMultiple, targetDscr, metric] =
+      mockFetchDetailedBreakEvenAnalysis.mock.calls[0];
+    expect(terms).toEqual(DETAILED_GOLDEN_TERMS_REQUEST);
+    expect(detailedOperatingInputs).toEqual(DETAILED_GOLDEN_OPERATING_REQUEST);
+    expect(targetIrr).toBeCloseTo(0.1);
+    expect(targetEquityMultiple).toBeCloseTo(1.5);
+    expect(targetDscr).toBeCloseTo(1.2);
+    expect(metric).toBe('levered_irr');
+  });
+
+  it('5. Quick sensitivity remains unchanged (regression)', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1));
+    expect(mockFetchDetailedSensitivityPresets).not.toHaveBeenCalled();
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledWith(mockAnalyze.mock.calls[0][0]);
+    // Quick's own preset bundle still has its exit_cap_noi_growth tab.
+    expect(await screen.findByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeTruthy();
+  });
+
+  it('6. Quick break-even remains unchanged (regression)', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockFetchDetailedBreakEvenAnalysis).not.toHaveBeenCalled();
+    // Quick's own bundle still has its min_noi_growth/min_current_noi cards.
+    expect(await screen.findByText('Minimum NOI Growth')).toBeTruthy();
+    expect(screen.getByText('Minimum Current NOI')).toBeTruthy();
+  });
+
+  it('7. Detailed sensitivity/break-even requests never fabricate current_noi/noi_growth/occupancy', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await waitFor(() => expect(mockFetchDetailedSensitivityPresets).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockFetchDetailedBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    const sensitivityArgs = mockFetchDetailedSensitivityPresets.mock.calls[0];
+    const breakEvenArgs = mockFetchDetailedBreakEvenAnalysis.mock.calls[0].slice(0, 2);
+    const serialized = JSON.stringify({ sensitivityArgs, breakEvenArgs });
+    expect(serialized).not.toContain('current_noi');
+    expect(serialized).not.toContain('"noi_growth"');
+    expect(serialized).not.toContain('"occupancy"');
+  });
+
+  it('8. switching modes does not leak sensitivity/break-even state', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    // Quick first -- its default mocked matrix (41%-64%) never contains 9.00%.
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Sensitivity Analysis');
+    expect(screen.getAllByText(/^50\.00%/).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/^9\.00%/)).toHaveLength(0);
+
+    // Switch to Detailed -- no results yet, so no sensitivity/break-even at all.
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    expect(screen.queryByText('Sensitivity Analysis')).toBeNull();
+    expect(screen.queryByText('Break-Even Analysis')).toBeNull();
+
+    // Analyze Detailed -- its own distinctive baseline (9.00%, unique to its
+    // mocked matrix), never Quick's 50.00%.
+    await analyzeDetailedGoldenDeal(user);
+    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
+    expect(screen.getAllByText(/^9\.00%/).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/^50\.00%/)).toHaveLength(0);
+
+    // Switch back to Quick -- its original sensitivity is still there, untouched.
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
+    expect(screen.getAllByText(/^50\.00%/).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/^9\.00%/)).toHaveLength(0);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
+    expect(mockFetchDetailedSensitivityPresets).toHaveBeenCalledTimes(1);
+  });
+
+  it('9. sensitivity result renders correctly in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await screen.findByText('Sensitivity Analysis');
+
+    // Default tab falls back to purchase_price_exit_cap (Detailed has no
+    // exit_cap_noi_growth) -- its mocked baseline cell is the only one in
+    // the grid rendering "9.00%", rendered raw, never recomputed.
+    expect(screen.getAllByText(/^9\.00%/).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('tab', { name: 'Interest Rate × LTV' }));
+    // The DSCR variant's mocked baseline (2.00x) renders once that tab/metric is selected.
+    await user.click(screen.getByRole('button', { name: 'Year 1 DSCR' }));
+    await waitFor(() => expect(screen.getAllByText(/^2\.00x/).length).toBeGreaterThan(0));
+  });
+
+  it('10. break-even result renders correctly in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await screen.findByText('Break-Even Analysis');
+
+    // Solved values come straight from the mock (max_purchase_price:
+    // 9,500,000 / max_exit_cap_rate: 0.071 / max_interest_rate: 0.0712),
+    // rendered by the same formatCurrency/formatPercent helpers Quick uses
+    // -- never recomputed.
+    expect(screen.getByText('$9,487,500')).toBeTruthy();
+    expect(screen.getByText('7.10%')).toBeTruthy();
+    expect(screen.getByText('7.12%')).toBeTruthy();
+  });
+
+  it('11. no formulas are introduced into frontend code -- rendered values are a byte-identical pass-through of the mocked response', async () => {
+    const user = userEvent.setup();
+    // A deliberately unrealistic, distinctive value that could not arise
+    // from any plausible client-side recomputation of the golden inputs --
+    // if this exact figure renders, the component only formatted it.
+    mockFetchDetailedBreakEvenAnalysis.mockResolvedValue(
+      makeDetailedBreakEvenAnalysis({
+        max_purchase_price: makeBreakEvenResult({
+          solved_assumption_value: 12_345_678,
+        }),
+      }),
+    );
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    expect(await screen.findByText('$12,345,678')).toBeTruthy();
+  });
+});
+
+describe('Detailed Excel ingestion workflow (Gate 10)', () => {
+  /** Switches to Detailed mode, uploads the golden Detailed workbook, and
+   * waits for the Detailed Excel Ingestion Review panel to appear -- never
+   * waits on the live `DetailedAssumptionsForm`, which this upload must not
+   * touch. */
+  async function uploadDetailedWorkbook(user: ReturnType<typeof userEvent.setup>) {
+    render(<App />);
+    mockUploadDetailedExcel.mockResolvedValue(makeDetailedExcelIntakeReport());
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '10000000');
+    });
+  }
+
+  it('exposes Excel upload in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.getByLabelText('Upload Anchor Workbook (.xlsx)')).toBeTruthy();
+  });
+
+  it('does not immediately populate active Detailed assumptions after upload', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+    );
+  });
+
+  it('creates a temporary Detailed Excel review with all 22 imported values', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    expect(screen.getByLabelText('Detailed Excel Review Purchase Price')).toHaveProperty(
+      'value',
+      '10000000',
+    );
+    expect(screen.getByLabelText('Detailed Excel Review Hold Period')).toHaveProperty(
+      'value',
+      '5',
+    );
+    expect(screen.getByLabelText('Detailed Excel Review Exit Cap Rate')).toHaveProperty(
+      'value',
+      '6.5',
+    );
+    expect(screen.getByLabelText('Detailed Excel Review Gross Potential Rent')).toHaveProperty(
+      'value',
+      '800000',
+    );
+    expect(
+      screen.getByLabelText('Detailed Excel Review Vacancy & Credit Loss'),
+    ).toHaveProperty('value', '5');
+    expect(screen.getByLabelText('Detailed Excel Review Management Fee')).toHaveProperty(
+      'value',
+      '5',
+    );
+  });
+
+  it('AcquisitionTerms review fields are editable', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    fireEvent.change(screen.getByLabelText('Detailed Excel Review Purchase Price'), {
+      target: { value: '11000000' },
+    });
+
+    expect(screen.getByLabelText('Detailed Excel Review Purchase Price')).toHaveProperty(
+      'value',
+      '11000000',
+    );
+  });
+
+  it('DetailedOperatingInputs review fields are editable', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    fireEvent.change(screen.getByLabelText('Detailed Excel Review Gross Potential Rent'), {
+      target: { value: '850000' },
+    });
+
+    expect(
+      screen.getByLabelText('Detailed Excel Review Gross Potential Rent'),
+    ).toHaveProperty('value', '850000');
+  });
+
+  it('Approve & Load Assumptions populates all Detailed assumptions', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', '800000');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
+    expect(screen.getByLabelText(/^Expense Growth/)).toHaveProperty('value', '3');
+  });
+
+  it('Approve & Load Assumptions never automatically calls Analyze', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+  });
+
+  it('Cancel Review discards the pending review and leaves active Detailed assumptions unchanged', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
+
+    expect(screen.queryByLabelText('Detailed Excel Review Purchase Price')).toBeNull();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+    );
+  });
+
+  it('a saved Quick deal is completely unaffected by a Detailed Excel upload, approval, or cancel', async () => {
+    const user = userEvent.setup();
+    mockCreateDeal.mockResolvedValue(makeDeal());
+    render(<App />);
+    fillGoldenDeal();
+    await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+    await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+
+    mockUploadDetailedExcel.mockResolvedValue(makeDetailedExcelIntakeReport());
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '10000000');
+    });
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+
+    expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '111 Main St');
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Update Deal' })).toBeTruthy();
+    expect(mockUpdateDeal).not.toHaveBeenCalled();
+  });
+
+  it('shows a clear error in Detailed mode when a Quick workbook is uploaded', async () => {
+    const user = userEvent.setup();
+    mockUploadDetailedExcel.mockRejectedValue(
+      new ApiError(
+        'This workbook uses the Quick Underwrite schema. Switch to Quick Underwrite or ' +
+          'upload a Detailed Underwrite workbook.',
+      ),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['PK'], 'anchor_input_v2.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    expect(
+      await screen.findByText(/uses the Quick Underwrite schema/),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText('Detailed Excel Review Purchase Price')).toBeNull();
+  });
+
+  it('Quick mode Excel upload never calls uploadDetailedExcel, and Detailed mode never calls uploadExcel', async () => {
+    const user = userEvent.setup();
+    mockUploadExcel.mockResolvedValue(makeExcelIntakeReport());
+    mockUploadDetailedExcel.mockResolvedValue(makeDetailedExcelIntakeReport());
+    render(<App />);
+
+    const quickFile = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), quickFile);
+    await waitFor(() => expect(mockUploadExcel).toHaveBeenCalledTimes(1));
+    expect(mockUploadDetailedExcel).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const detailedFile = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), detailedFile);
+    await waitFor(() => expect(mockUploadDetailedExcel).toHaveBeenCalledTimes(1));
+    expect(mockUploadExcel).toHaveBeenCalledTimes(1);
+  });
+
+  it('uploading a second Detailed workbook replaces the pending review cleanly rather than merging', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    mockUploadDetailedExcel.mockResolvedValue(
+      makeDetailedExcelIntakeReport({
+        terms: {
+          ...makeDetailedExcelIntakeReport().terms,
+          purchase_price: 12_000_000,
+        },
+      }),
+    );
+    const secondFile = new File(['PK'], 'second_workbook.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), secondFile);
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '12000000');
+    });
+    // Only one review panel's worth of fields -- never two merged copies.
+    expect(screen.getAllByLabelText('Detailed Excel Review Purchase Price')).toHaveLength(1);
+  });
+
+  it('a new/unopened Detailed deal remains blank until Excel approval', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+    );
+  });
+
+  it('the golden Detailed workbook can be approved and then passed into the existing Detailed analysis request path', async () => {
+    const user = userEvent.setup();
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    await uploadDetailedWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+    const [terms, detailedOperatingInputs] = mockAnalyzeDetailed.mock.calls[0];
+    expect(terms).toEqual({
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    });
+    expect(detailedOperatingInputs).toEqual({
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    });
+  });
+});
+
+describe('Detailed deal persistence workflow (Gate 11)', () => {
+  it('a new Detailed deal can be saved', async () => {
+    const user = userEvent.setup();
+    mockCreateDetailedDeal.mockResolvedValue(makeDetailedDeal());
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    fillDetailedGoldenDeal();
+    await user.type(screen.getByLabelText('Deal Name'), 'Golden Detailed Deal');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+
+    await waitFor(() => expect(mockCreateDetailedDeal).toHaveBeenCalledTimes(1));
+    expect(mockCreateDetailedDeal).toHaveBeenCalledWith(
+      'Golden Detailed Deal',
+      GOLDEN_DETAILED_TERMS_REQUEST,
+      GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
+    );
+    expect(mockUpdateDetailedDeal).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('a saved Detailed deal appears in the Deal Library, identified by mode', async () => {
+    const user = userEvent.setup();
+    mockListDeals.mockResolvedValue([makeDetailedDeal()]);
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+
+    expect(await screen.findByText('Golden Detailed Deal')).toBeTruthy();
+    expect(screen.getByText('Detailed')).toBeTruthy();
+  });
+
+  it('opening a Detailed deal switches to Detailed mode and populates all AcquisitionTerms and DetailedOperatingInputs exactly', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+    expect(screen.getByRole('tab', { name: 'Quick Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect(screen.getByRole('tab', { name: 'Detailed Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+    expect(screen.getByLabelText(/^Hold Period/)).toHaveProperty('value', '5');
+    expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '6.5');
+    expect(screen.getByLabelText(/^LTV/)).toHaveProperty('value', '60');
+    expect(screen.getByLabelText(/^Interest Rate/)).toHaveProperty('value', '5');
+    expect(screen.getByLabelText(/^Amortization/)).toHaveProperty('value', '30');
+    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '2');
+    expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '1');
+    expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '2.5');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '50000');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', '800000');
+    expect(screen.getByLabelText(/^Other Income/)).toHaveProperty('value', '20000');
+    expect(screen.getByLabelText(/^Vacancy & Credit Loss/)).toHaveProperty('value', '5');
+    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', '60000');
+    expect(screen.getByLabelText(/^Insurance/)).toHaveProperty('value', '20000');
+    expect(screen.getByLabelText(/^Utilities/)).toHaveProperty('value', '25000');
+    expect(screen.getByLabelText(/^Repairs & Maintenance/)).toHaveProperty('value', '20000');
+    expect(screen.getByLabelText(/^Other Operating Expenses/)).toHaveProperty('value', '16000');
+    expect(screen.getByLabelText(/^Management Fee/)).toHaveProperty('value', '5');
+    expect(screen.getByLabelText(/^Revenue Growth/)).toHaveProperty('value', '3');
+    expect(screen.getByLabelText(/^Expense Growth/)).toHaveProperty('value', '3');
+    expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', 'Golden Detailed Deal');
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('an opened Detailed deal with an explicit zero value renders it as 0, not blank', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal({
+      terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, acquisition_cost_pct: 0 },
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '0');
+  });
+
+  it('editing an AcquisitionTerms field marks a saved Detailed deal dirty', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+      target: { value: '11000000' },
+    });
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+  });
+
+  it('editing a DetailedOperatingInputs field marks a saved Detailed deal dirty', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    fireEvent.change(screen.getByLabelText(/^Gross Potential Rent/), {
+      target: { value: '850000' },
+    });
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+  });
+
+  it('saving an edited Detailed deal clears the dirty state', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUpdateDetailedDeal.mockResolvedValue({
+      ...deal,
+      terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 11_000_000 },
+    });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+      target: { value: '11000000' },
+    });
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+    expect(mockUpdateDetailedDeal).toHaveBeenCalledWith(
+      deal.id,
+      deal.name,
+      { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 11_000_000 },
+      GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
+    );
+  });
+
+  it('Analyze does not mark a saved Detailed deal dirty', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('Generate AI Analysis does not mark a saved Detailed deal dirty', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('Detailed Excel upload does not mark a saved Detailed deal dirty before approval', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedExcel.mockResolvedValue(
+      makeDetailedExcelIntakeReport({
+        terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 12_000_000 },
+      }),
+    );
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '12000000');
+    });
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('Cancel Excel Review preserves the Saved state', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedExcel.mockResolvedValue(
+      makeDetailedExcelIntakeReport({
+        terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 12_000_000 },
+      }),
+    );
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '12000000');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+  });
+
+  it('approving a Detailed Excel review with different values marks the saved deal dirty', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedExcel.mockResolvedValue(
+      makeDetailedExcelIntakeReport({
+        terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 12_000_000 },
+      }),
+    );
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '12000000');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '12000000');
+  });
+
+  it('Duplicate preserves operating mode and all 22 Detailed assumptions', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockDuplicateDeal.mockResolvedValue(
+      makeDetailedDeal({ id: 'detailed-deal-2', name: 'Golden Detailed Deal (Copy)' }),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await screen.findByText('Golden Detailed Deal');
+    await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+
+    await waitFor(() => expect(mockDuplicateDeal).toHaveBeenCalledWith(deal.id));
+  });
+
+  it('Delete works for a Detailed deal', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await screen.findByText('Golden Detailed Deal');
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(mockDeleteDeal).toHaveBeenCalledWith(deal.id));
+    confirmSpy.mockRestore();
+  });
+
+  it('deleting the currently open Detailed deal resets the workspace', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(mockDeleteDeal).toHaveBeenCalledWith(deal.id));
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '');
+    expect(screen.getByText('Unsaved deal')).toBeTruthy();
+    confirmSpy.mockRestore();
+  });
+});
+
+describe('Cross-mode persistence safety (Gate 11)', () => {
+  it('opening a Detailed deal after a Quick deal was open leaves no Quick assumptions/results attached to the Detailed workspace', async () => {
+    const user = userEvent.setup();
+    const quickDeal = makeDeal();
+    const detailedDeal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([quickDeal, detailedDeal]);
+    mockGetDeal.mockImplementation(async (id: string) =>
+      id === quickDeal.id ? quickDeal : detailedDeal,
+    );
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    const quickRow = (await screen.findByText(quickDeal.name)).closest('li');
+    if (!quickRow) throw new Error('Quick deal row not found');
+    await user.click(within(quickRow).getByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Key Returns')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    const detailedRow = (await screen.findByText(detailedDeal.name)).closest('li');
+    if (!detailedRow) throw new Error('Detailed deal row not found');
+    await user.click(within(detailedRow).getByRole('button', { name: 'Open' }));
+
+    expect(screen.getByRole('tab', { name: 'Detailed Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.queryByText('Key Returns')).toBeNull();
+    expect(screen.getByText(/Enter assumptions and click/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+  });
+
+  it('opening a Quick deal after a Detailed deal was open leaves no Detailed assumptions/results attached to the Quick workspace', async () => {
+    const user = userEvent.setup();
+    const quickDeal = makeDeal();
+    const detailedDeal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([quickDeal, detailedDeal]);
+    mockGetDeal.mockImplementation(async (id: string) =>
+      id === quickDeal.id ? quickDeal : detailedDeal,
+    );
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    const detailedRow = (await screen.findByText(detailedDeal.name)).closest('li');
+    if (!detailedRow) throw new Error('Detailed deal row not found');
+    await user.click(within(detailedRow).getByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Operating Statement')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    const quickRow = (await screen.findByText(quickDeal.name)).closest('li');
+    if (!quickRow) throw new Error('Quick deal row not found');
+    await user.click(within(quickRow).getByRole('button', { name: 'Open' }));
+
+    expect(screen.getByRole('tab', { name: 'Quick Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.queryByText('Operating Statement')).toBeNull();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.purchasePrice,
+    );
+  });
+});
+
+describe('Detailed OM ingestion workflow (Gate 12)', () => {
+  /** Uploads the default Detailed OM fixture and waits for the review
+   * panel's fields to render -- never waits on the live
+   * `DetailedAssumptionsForm`, which this upload must not touch. */
+  async function uploadDetailedOm(user: ReturnType<typeof userEvent.setup>) {
+    render(<App />);
+    mockUploadDetailedOm.mockResolvedValue(makeDetailedExtractionResult());
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+
+    await waitFor(() => {
+      expect(screen.getByText('Potential Base Rent: $800,000', { exact: false })).toBeTruthy();
+    });
+  }
+
+  function omFieldCard(label: string): HTMLElement {
+    // A heading-role query, not a plain text query: the OM review card's
+    // label is an `<h4>` (a real heading), while the live
+    // `DetailedAssumptionsForm` shows the identical label text as a plain
+    // `<span>` -- scoping to the heading role is what disambiguates them.
+    const heading = screen.getByRole('heading', { name: label });
+    const card = heading.closest('.om-field-card');
+    if (!card) {
+      throw new Error(`No .om-field-card ancestor found for label ${label}`);
+    }
+    return card as HTMLElement;
+  }
+
+  it('exposes OM upload in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.getByLabelText('Upload OM (PDF)')).toBeTruthy();
+  });
+
+  it('does not mutate active Detailed assumptions on upload', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+    );
+  });
+
+  it('extracted Detailed fields appear in review with evidence', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    const card = omFieldCard('Gross Potential Rent');
+    expect(within(card).getByText('800000')).toBeTruthy();
+    expect(within(card).getByText('Stated')).toBeTruthy();
+    expect(within(card).getByText(/Potential Base Rent: \$800,000/)).toBeTruthy();
+    expect(within(card).getByText(/Page 31/)).toBeTruthy();
+  });
+
+  it('missing fields remain visibly unresolved, never a fabricated zero', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    const card = omFieldCard('Insurance');
+    expect(within(card).getByText('Missing')).toBeTruthy();
+    expect(within(card).getByText('Not found in OM.')).toBeTruthy();
+  });
+
+  it('extracted values are editable before approval', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    const card = omFieldCard('Property Taxes');
+    await user.click(within(card).getByRole('button', { name: 'Edit' }));
+    const input = within(card).getByLabelText('Edit Property Taxes');
+    await user.clear(input);
+    await user.type(input, '65000');
+    await user.click(within(card).getByRole('button', { name: 'Save' }));
+
+    expect(within(card).getByText('Approved')).toBeTruthy();
+  });
+
+  it('Approve loads only the explicitly approved Detailed assumptions', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    await user.click(
+      within(omFieldCard('Purchase Price')).getByRole('button', { name: 'Approve' }),
+    );
+    await user.click(
+      within(omFieldCard('Gross Potential Rent')).getByRole('button', { name: 'Approve' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', '800000');
+    // Not approved -- stays blank, never defaulted.
+    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', '');
+  });
+
+  it('explicit zero survives review and approval', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    await user.click(
+      within(omFieldCard('Property Taxes')).getByRole('button', { name: 'Approve' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', '0');
+  });
+
+  it('Approve never automatically calls Analyze', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    await user.click(
+      within(omFieldCard('Purchase Price')).getByRole('button', { name: 'Approve' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+  });
+
+  it('Cancel Review leaves active Detailed assumptions unchanged', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    await user.click(
+      within(omFieldCard('Purchase Price')).getByRole('button', { name: 'Approve' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
+
+    expect(screen.queryByText('Potential Base Rent: $800,000', { exact: false })).toBeNull();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+    );
+  });
+});
+
+describe('Detailed OM saved-deal safety (Gate 12)', () => {
+  it('a saved Detailed deal remains clean while an OM upload is pending review', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedOm.mockResolvedValue(makeDetailedExtractionResult());
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Potential Base Rent: $800,000', { exact: false })).toBeTruthy();
+    });
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('Cancel Review preserves the Saved state', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedOm.mockResolvedValue(makeDetailedExtractionResult());
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Potential Base Rent: $800,000', { exact: false })).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+  });
+
+  it('Approve with a changed value marks the saved deal dirty, and Save returns it to Saved', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedOm.mockResolvedValue(
+      makeDetailedExtractionResult({
+        purchase_price: {
+          field_id: 'purchase_price',
+          candidates: [
+            {
+              value: '12000000',
+              status: 'stated',
+              provenance: { page: 1, anchor: 'paragraph:0', snippet: 'Purchase Price: $12,000,000' },
+            },
+          ],
+        },
+      }),
+    );
+    mockUpdateDetailedDeal.mockResolvedValue({
+      ...deal,
+      terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 12_000_000 },
+    });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Purchase Price: $12,000,000', { exact: false })).toBeTruthy();
+    });
+
+    const card = screen.getByRole('heading', { name: 'Purchase Price' }).closest('.om-field-card');
+    if (!card) throw new Error('Purchase Price card not found');
+    await user.click(within(card as HTMLElement).getByRole('button', { name: 'Approve' }));
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+  });
+});
+
+describe('Cross-mode OM safety (Gate 12)', () => {
+  it('Quick OM upload calls uploadOm, never uploadDetailedOm', async () => {
+    const user = userEvent.setup();
+    mockUploadOm.mockResolvedValue(makeExtractionResult());
+    render(<App />);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+
+    await waitFor(() => expect(mockUploadOm).toHaveBeenCalledTimes(1));
+    expect(mockUploadDetailedOm).not.toHaveBeenCalled();
+  });
+
+  it('Detailed OM upload calls uploadDetailedOm, never uploadOm', async () => {
+    const user = userEvent.setup();
+    mockUploadDetailedOm.mockResolvedValue(makeDetailedExtractionResult());
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+
+    await waitFor(() => expect(mockUploadDetailedOm).toHaveBeenCalledTimes(1));
+    expect(mockUploadOm).not.toHaveBeenCalled();
+  });
+
+  it('a Detailed OM review pending in the background does not appear after switching to Quick mode', async () => {
+    const user = userEvent.setup();
+    mockUploadDetailedOm.mockResolvedValue(makeDetailedExtractionResult());
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Potential Base Rent: $800,000', { exact: false })).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+
+    expect(screen.queryByText('Potential Base Rent: $800,000', { exact: false })).toBeNull();
+    expect(screen.queryByText('Gross Potential Rent')).toBeNull();
+  });
+
+  it('a Quick OM review pending in the background does not appear after switching to Detailed mode', async () => {
+    const user = userEvent.setup();
+    mockUploadOm.mockResolvedValue(makeExtractionResult());
+    render(<App />);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Purchase Price: $48,000,000', { exact: false })).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.queryByText('Purchase Price: $48,000,000', { exact: false })).toBeNull();
+  });
+
+  it('opening a Detailed deal from the library never shows a pending Quick OM review in the Detailed workspace', async () => {
+    const user = userEvent.setup();
+    const detailedDeal = makeDetailedDeal();
+    mockUploadOm.mockResolvedValue(makeExtractionResult());
+    mockListDeals.mockResolvedValue([detailedDeal]);
+    mockGetDeal.mockResolvedValue(detailedDeal);
+    render(<App />);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Purchase Price: $48,000,000', { exact: false })).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect(screen.getByRole('tab', { name: 'Detailed Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.queryByText('Purchase Price: $48,000,000', { exact: false })).toBeNull();
   });
 });

@@ -2,16 +2,24 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   analyzeAcquisition,
+  analyzeDetailedAcquisition,
   ApiError,
   createDeal,
+  createDetailedDeal,
   deleteDeal,
   duplicateDeal,
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
+  fetchDetailedAIAnalysis,
+  fetchDetailedBreakEvenAnalysis,
+  fetchDetailedSensitivityPresets,
   fetchSensitivityPresets,
   getDeal,
   listDeals,
   updateDeal,
+  updateDetailedDeal,
+  uploadDetailedExcel,
+  uploadDetailedOm,
   uploadExcel,
   uploadOm,
 } from './api';
@@ -21,15 +29,27 @@ import { BreakEvenPanel } from './components/BreakEvenPanel';
 import { DealBar } from './components/DealBar';
 import type { SaveStatus } from './components/DealBar';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
+import { DetailedAssumptionsForm } from './components/DetailedAssumptionsForm';
+import { DetailedExcelReviewPanel } from './components/DetailedExcelReviewPanel';
+import { DetailedOmReviewPanel } from './components/DetailedOmReviewPanel';
 import { ExcelReviewPanel } from './components/ExcelReviewPanel';
 import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
+import { OperatingStatementTable } from './components/OperatingStatementTable';
 import { ResultsPanel } from './components/ResultsPanel';
 import { SensitivityPanel } from './components/SensitivityPanel';
 import {
+  BLANK_DETAILED_FORM_VALUES,
   BLANK_FORM_VALUES,
   buildAcquisitionRequest,
+  buildAcquisitionTermsRequest,
+  buildApprovedDetailedOperatingFormValues,
+  buildApprovedDetailedTermsFormValues,
   buildApprovedFormValues,
+  buildDetailedFormValuesFromExcelIntakeReport,
+  buildDetailedOperatingFormValuesFromRequest,
+  buildDetailedOperatingInputsRequest,
+  buildDetailedTermsFormValuesFromRequest,
   buildFormValuesFromAcquisitionInputs,
   buildFormValuesFromExcelIntakeReport,
   DEFAULT_TARGET_EQUITY_MULTIPLE,
@@ -44,16 +64,700 @@ import type {
   AcquisitionFormValues,
   AcquisitionRequest,
   AcquisitionResults,
+  AcquisitionTermsFormValues,
+  AcquisitionTermsRequest,
   AIAnalysis,
   Deal,
+  DetailedAcquisitionResults,
+  DetailedExtractionResult,
+  DetailedFormValues,
+  DetailedOperatingFieldId,
+  DetailedOperatingFormValues,
+  DetailedOperatingInputsRequest,
+  DetailedTermsFieldId,
   ExtractionResult,
+  OperatingMode,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
+  StandardDetailedBreakEvenAnalysis,
+  StandardDetailedSensitivityPresets,
   StandardSensitivityPresets,
   V2FieldId,
 } from './types';
 
 export default function App() {
+  // Detailed Operating Model V2.1 Gate 6: Quick/Detailed mode toggle.
+  // Detailed mode is a self-contained workspace with its own form and
+  // result state below -- it never reads or writes any Quick-mode state
+  // (`values`, `results`, `sensitivity`, `breakEven`, `aiAnalysis`, the
+  // deal library, etc.), so switching modes can never regress or corrupt
+  // Quick's existing behavior. Persistence (Gate 11), sensitivity/break-even
+  // UI (Gate 14, reusing `SensitivityPanel`/`BreakEvenPanel`, generalized to
+  // accept either mode's contract shape), and the AI Analyst (Gate 9,
+  // reusing `AiAnalystPanel`) are all wired below, over Detailed's own
+  // independent state -- driven by the deterministic Detailed context/
+  // analysis the backend already builds. Detailed's "Generate AI Analysis"
+  // request intentionally keeps using the same fixed default hurdle targets
+  // Quick mode starts with (`DEFAULT_TARGET_LEVERED_IRR_PERCENT` etc.)
+  // rather than the break-even panel's own edited targets -- Gate 14 is a
+  // wiring-only gate that explicitly excludes AI changes.
+  const [operatingMode, setOperatingMode] = useState<OperatingMode>('quick');
+
+  const [detailedValues, setDetailedValues] = useState<DetailedFormValues>(
+    BLANK_DETAILED_FORM_VALUES,
+  );
+  const [detailedResults, setDetailedResults] = useState<DetailedAcquisitionResults | null>(
+    null,
+  );
+  const [isDetailedSubmitting, setIsDetailedSubmitting] = useState(false);
+  const [detailedError, setDetailedError] = useState<string | null>(null);
+
+  // Detailed Operating Model V2.1 Gate 14: Detailed sensitivity/break-even,
+  // mirroring Quick's `sensitivity`/`breakEven` state shape exactly, over
+  // Detailed's own independent state (never Quick's). `lastDetailedRequest`
+  // stores the `terms`/`detailedOperatingInputs` pair just analyzed --
+  // the Detailed counterpart of Quick's `lastRequest` -- so a break-even
+  // target edit can re-run the search without re-deriving the request.
+  const [detailedSensitivity, setDetailedSensitivity] =
+    useState<StandardDetailedSensitivityPresets | null>(null);
+  const [isDetailedSensitivityLoading, setIsDetailedSensitivityLoading] = useState(false);
+  const [detailedSensitivityError, setDetailedSensitivityError] = useState<string | null>(null);
+  const [lastDetailedRequest, setLastDetailedRequest] = useState<{
+    terms: AcquisitionTermsRequest;
+    detailedOperatingInputs: DetailedOperatingInputsRequest;
+  } | null>(null);
+  const [detailedTargetLeveredIrrPercent, setDetailedTargetLeveredIrrPercent] = useState(
+    DEFAULT_TARGET_LEVERED_IRR_PERCENT,
+  );
+  const [detailedTargetEquityMultiple, setDetailedTargetEquityMultiple] = useState(
+    DEFAULT_TARGET_EQUITY_MULTIPLE,
+  );
+  const [detailedTargetHeadlineDscr, setDetailedTargetHeadlineDscr] = useState(
+    DEFAULT_TARGET_HEADLINE_DSCR,
+  );
+  const [detailedReturnHurdleMetric, setDetailedReturnHurdleMetric] =
+    useState<ReturnHurdleMetric>('levered_irr');
+  const [detailedBreakEven, setDetailedBreakEven] =
+    useState<StandardDetailedBreakEvenAnalysis | null>(null);
+  const [isDetailedBreakEvenLoading, setIsDetailedBreakEvenLoading] = useState(false);
+  const [detailedBreakEvenError, setDetailedBreakEvenError] = useState<string | null>(null);
+
+  const [detailedAiAnalysis, setDetailedAiAnalysis] = useState<AIAnalysis | null>(null);
+  const [isDetailedAiAnalysisLoading, setIsDetailedAiAnalysisLoading] = useState(false);
+  const [detailedAiAnalysisError, setDetailedAiAnalysisError] = useState<string | null>(null);
+
+  function clearDetailedAiAnalysis() {
+    setDetailedAiAnalysis(null);
+    setDetailedAiAnalysisError(null);
+  }
+
+  /** Detailed counterpart of `resetDownstreamAnalysisState`: clears
+   * everything derived from a Detailed analyze call (results, sensitivity,
+   * break-even, AI output) without touching `detailedValues` itself. Never
+   * touches any Quick-mode state. */
+  function resetDetailedDownstreamAnalysisState() {
+    setDetailedResults(null);
+    setDetailedError(null);
+    setDetailedSensitivity(null);
+    setDetailedSensitivityError(null);
+    setLastDetailedRequest(null);
+    setDetailedBreakEven(null);
+    setDetailedBreakEvenError(null);
+    clearDetailedAiAnalysis();
+  }
+
+  // Detailed Operating Model V2.1 Gate 10: Detailed Excel ingestion.
+  // Mirrors Quick's `excelReview` state/handlers exactly (same
+  // upload -> temporary review -> explicit approve/cancel control
+  // philosophy), over `DetailedFormValues` instead of
+  // `AcquisitionFormValues`. A successful upload never touches
+  // `detailedValues` -- only `handleApproveDetailedExcelReview` does. A
+  // second upload replaces `detailedExcelReview` wholesale, never merges.
+  const [isUploadingDetailedExcel, setIsUploadingDetailedExcel] = useState(false);
+  const [detailedExcelUploadError, setDetailedExcelUploadError] = useState<string | null>(
+    null,
+  );
+  const [detailedExcelUploadSuccessMessage, setDetailedExcelUploadSuccessMessage] = useState<
+    string | null
+  >(null);
+
+  interface DetailedExcelReviewState {
+    fileName: string;
+    values: DetailedFormValues;
+  }
+  const [detailedExcelReview, setDetailedExcelReview] =
+    useState<DetailedExcelReviewState | null>(null);
+  const [detailedExcelReviewError, setDetailedExcelReviewError] = useState<string | null>(
+    null,
+  );
+
+  async function handleUploadDetailedExcel(file: File) {
+    setIsUploadingDetailedExcel(true);
+    setDetailedExcelUploadError(null);
+    setDetailedExcelUploadSuccessMessage(null);
+    setDetailedExcelReviewError(null);
+    try {
+      const report = await uploadDetailedExcel(file);
+      setDetailedExcelReview({
+        fileName: file.name,
+        values: buildDetailedFormValuesFromExcelIntakeReport(report),
+      });
+      setDetailedExcelUploadSuccessMessage(
+        'Workbook parsed successfully. Review the imported assumptions below before loading ' +
+          'them into the deal.',
+      );
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedExcelUploadError(apiError.message);
+      } else {
+        setDetailedExcelUploadError('An unexpected error occurred while parsing the workbook.');
+      }
+    } finally {
+      setIsUploadingDetailedExcel(false);
+    }
+  }
+
+  function handleDetailedExcelReviewTermsFieldChange(
+    key: keyof AcquisitionTermsFormValues,
+    value: string,
+  ) {
+    setDetailedExcelReview((previous) =>
+      previous
+        ? { ...previous, values: { ...previous.values, terms: { ...previous.values.terms, [key]: value } } }
+        : previous,
+    );
+    setDetailedExcelReviewError(null);
+  }
+
+  function handleDetailedExcelReviewOperatingFieldChange(
+    key: keyof DetailedOperatingFormValues,
+    value: string,
+  ) {
+    setDetailedExcelReview((previous) =>
+      previous
+        ? {
+            ...previous,
+            values: { ...previous.values, operating: { ...previous.values.operating, [key]: value } },
+          }
+        : previous,
+    );
+    setDetailedExcelReviewError(null);
+  }
+
+  /** Validates and converts the review state using the exact same
+   * `buildAcquisitionTermsRequest`/`buildDetailedOperatingInputsRequest`
+   * conversion `handleDetailedSubmit` already uses -- no duplicate
+   * financial validation lives here. Only on success does this touch
+   * `detailedValues`; upload and editing never do. Never auto-runs
+   * Analyze. */
+  function handleApproveDetailedExcelReview() {
+    if (!detailedExcelReview) {
+      return;
+    }
+    let termsRequest;
+    let operatingRequest;
+    try {
+      termsRequest = buildAcquisitionTermsRequest(detailedExcelReview.values.terms);
+      operatingRequest = buildDetailedOperatingInputsRequest(
+        detailedExcelReview.values.operating,
+      );
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setDetailedExcelReviewError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+    setDetailedValues({
+      terms: buildDetailedTermsFormValuesFromRequest(termsRequest),
+      operating: buildDetailedOperatingFormValuesFromRequest(operatingRequest),
+    });
+    setDetailedResults(null);
+    setDetailedError(null);
+    clearDetailedAiAnalysis();
+    setDetailedExcelReview(null);
+    setDetailedExcelReviewError(null);
+    setDetailedExcelUploadSuccessMessage(
+      'Detailed assumptions approved and loaded. Review the deal assumptions, then click ' +
+        'Analyze Deal.',
+    );
+  }
+
+  /** Discards the pending Detailed Excel review without touching
+   * `detailedValues`, leaving it exactly as it was before the upload. */
+  function handleCancelDetailedExcelReview() {
+    setDetailedExcelReview(null);
+    setDetailedExcelReviewError(null);
+    setDetailedExcelUploadSuccessMessage(null);
+  }
+
+  // Detailed Operating Model V2.1 Gate 12: Detailed OM ingestion. Mirrors
+  // Quick's ocrExtraction/handleUploadOm/handleFinishOmReview exactly (same
+  // upload -> per-field review -> explicit approve/reject/finish control
+  // philosophy), over DetailedExtractionResult/DetailedFormValues instead.
+  // A successful upload never touches `detailedValues` -- only
+  // `handleFinishDetailedOmReview` does, and only for the fields the
+  // analyst explicitly approved. Unlike Quick's OM panel, Detailed's also
+  // gets an explicit Cancel (`handleCancelDetailedOmReview`) -- Gate 12
+  // requires a saved Detailed deal to survive an OM upload untouched until
+  // an explicit approve/cancel decision, the same guarantee Gate 10's
+  // Excel review already gives Detailed mode.
+  const [detailedOcrExtraction, setDetailedOcrExtraction] =
+    useState<DetailedExtractionResult | null>(null);
+  const [isDetailedExtracting, setIsDetailedExtracting] = useState(false);
+  const [detailedExtractionError, setDetailedExtractionError] = useState<string | null>(null);
+
+  async function handleUploadDetailedOm(file: File) {
+    setIsDetailedExtracting(true);
+    setDetailedExtractionError(null);
+    setDetailedOcrExtraction(null);
+    try {
+      const extraction = await uploadDetailedOm(file);
+      setDetailedOcrExtraction(extraction);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedExtractionError(apiError.message);
+      } else {
+        setDetailedExtractionError('An unexpected error occurred while extracting the OM.');
+      }
+    } finally {
+      setIsDetailedExtracting(false);
+    }
+  }
+
+  /** Merges only the explicitly analyst-approved Detailed OM fields into
+   * `detailedValues` -- an unapproved/rejected/missing field is left
+   * exactly as it was, never defaulted to zero or blanked. Never calls
+   * `/analyze`. */
+  function handleFinishDetailedOmReview(
+    approvedValues: Partial<Record<DetailedTermsFieldId | DetailedOperatingFieldId, string>>,
+  ) {
+    const termsValues = buildApprovedDetailedTermsFormValues(approvedValues);
+    const operatingValues = buildApprovedDetailedOperatingFormValues(approvedValues);
+    if (Object.keys(termsValues).length === 0 && Object.keys(operatingValues).length === 0) {
+      return;
+    }
+    setDetailedValues((previous) => ({
+      terms: { ...previous.terms, ...termsValues },
+      operating: { ...previous.operating, ...operatingValues },
+    }));
+    setDetailedResults(null);
+    setDetailedError(null);
+    clearDetailedAiAnalysis();
+    clearSaveDetailedDealError();
+  }
+
+  /** Discards the pending Detailed OM extraction without touching
+   * `detailedValues`, leaving it exactly as it was before the upload. */
+  function handleCancelDetailedOmReview() {
+    setDetailedOcrExtraction(null);
+    setDetailedExtractionError(null);
+  }
+
+  // ===========================================================================
+  // Detailed Operating Model V2.1 Gate 11 -- Detailed deal persistence.
+  //
+  // Mirrors Quick's Deal Bar / dirty-tracking state below exactly (same
+  // shapes, same single-snapshot-comparison philosophy), over
+  // `DetailedFormValues` instead of `AcquisitionFormValues` and the
+  // dedicated `createDetailedDeal`/`updateDetailedDeal` endpoints -- never a
+  // fabricated `AcquisitionInputs` for a Detailed deal. `view` and
+  // `savedDeals`/`isDealsLoading`/`dealsError` (declared with Quick's
+  // persistence state further below) are shared across both modes: there is
+  // one Deal Library listing both Quick and Detailed deals together, not
+  // two independent libraries. `handleOpenDeal`/`handleDeleteDeal` (also
+  // below) dispatch by `deal.operating_mode` and are the only functions
+  // that touch both this state and Quick's.
+  // ===========================================================================
+
+  const [detailedDealName, setDetailedDealName] = useState('');
+  const [currentDetailedDealId, setCurrentDetailedDealId] = useState<string | null>(null);
+  const [isSavingDetailedDeal, setIsSavingDetailedDeal] = useState(false);
+  const [saveDetailedDealError, setSaveDetailedDealError] = useState<string | null>(null);
+  const [lastDetailedSavedAt, setLastDetailedSavedAt] = useState<string | null>(null);
+
+  interface DetailedDealSnapshot {
+    dealName: string;
+    values: DetailedFormValues;
+  }
+  const BLANK_DETAILED_SNAPSHOT: DetailedDealSnapshot = {
+    dealName: '',
+    values: BLANK_DETAILED_FORM_VALUES,
+  };
+  const [detailedSavedSnapshot, setDetailedSavedSnapshot] =
+    useState<DetailedDealSnapshot>(BLANK_DETAILED_SNAPSHOT);
+
+  function isSameDetailedSnapshot(a: DetailedDealSnapshot, b: DetailedDealSnapshot): boolean {
+    if (a.dealName !== b.dealName) {
+      return false;
+    }
+    const termsKeys = Object.keys(a.values.terms) as (keyof AcquisitionTermsFormValues)[];
+    if (!termsKeys.every((key) => a.values.terms[key] === b.values.terms[key])) {
+      return false;
+    }
+    const operatingKeys = Object.keys(a.values.operating) as (keyof DetailedOperatingFormValues)[];
+    return operatingKeys.every((key) => a.values.operating[key] === b.values.operating[key]);
+  }
+
+  const isDetailedDirty = !isSameDetailedSnapshot(
+    { dealName: detailedDealName, values: detailedValues },
+    detailedSavedSnapshot,
+  );
+  const detailedSaveStatus: SaveStatus =
+    currentDetailedDealId === null
+      ? 'unsaved-deal'
+      : isDetailedDirty
+        ? 'unsaved-changes'
+        : 'saved';
+
+  /** Prompts before a Detailed New Deal / Open Deal action would discard
+   * unsaved Detailed work; mirrors `confirmDiscardIfDirty` exactly, over
+   * `isDetailedDirty`. */
+  function confirmDiscardIfDetailedDirty(): boolean {
+    if (!isDetailedDirty) {
+      return true;
+    }
+    return window.confirm('You have unsaved changes that will be lost. Continue?');
+  }
+
+  function clearSaveDetailedDealError() {
+    setSaveDetailedDealError(null);
+  }
+
+  function clearDetailedIntakeFeedback() {
+    setDetailedExcelUploadSuccessMessage(null);
+    setDetailedExcelUploadError(null);
+    setDetailedExcelReview(null);
+    setDetailedExcelReviewError(null);
+    setDetailedOcrExtraction(null);
+    setDetailedExtractionError(null);
+  }
+
+  function handleDetailedDealNameChange(value: string) {
+    setDetailedDealName(value);
+  }
+
+  /** Shared by Detailed New Deal and by deleting the currently-open
+   * Detailed deal: both end in the same blank, never-saved Detailed
+   * workspace state. Never touches any Quick-mode state. */
+  function resetToBlankDetailedDeal() {
+    setDetailedValues(BLANK_DETAILED_FORM_VALUES);
+    setDetailedDealName('');
+    setCurrentDetailedDealId(null);
+    setLastDetailedSavedAt(null);
+    setDetailedSavedSnapshot(BLANK_DETAILED_SNAPSHOT);
+    resetDetailedDownstreamAnalysisState();
+    clearSaveDetailedDealError();
+    clearDetailedIntakeFeedback();
+  }
+
+  /** Persists exactly the 22 assumptions already converged onto
+   * `detailedValues` via `buildAcquisitionTermsRequest`/
+   * `buildDetailedOperatingInputsRequest` -- the same conversion
+   * `handleDetailedSubmit` already uses. Never persists `detailedResults`,
+   * AI output, or any other calculated value; never calls `/analyze`. */
+  async function handleSaveDetailedDeal() {
+    let terms;
+    let detailedOperatingInputs;
+    try {
+      terms = buildAcquisitionTermsRequest(detailedValues.terms);
+      detailedOperatingInputs = buildDetailedOperatingInputsRequest(detailedValues.operating);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setSaveDetailedDealError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    const name = detailedDealName.trim() || 'Untitled Deal';
+
+    setIsSavingDetailedDeal(true);
+    setSaveDetailedDealError(null);
+    try {
+      const deal = currentDetailedDealId
+        ? await updateDetailedDeal(currentDetailedDealId, name, terms, detailedOperatingInputs)
+        : await createDetailedDeal(name, terms, detailedOperatingInputs);
+      setCurrentDetailedDealId(deal.id);
+      setDetailedDealName(deal.name);
+      setLastDetailedSavedAt(deal.updated_at);
+      setDetailedSavedSnapshot({ dealName: deal.name, values: detailedValues });
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setSaveDetailedDealError(apiError.message);
+      } else {
+        setSaveDetailedDealError('An unexpected error occurred while saving the deal.');
+      }
+    } finally {
+      setIsSavingDetailedDeal(false);
+    }
+  }
+
+  /** Smallest consistent interaction with the existing single-toggle UI:
+   * New Deal in Detailed mode preserves the currently selected mode (it is
+   * the Detailed workspace's own New Deal button, rendered only while
+   * Detailed mode is active) rather than offering a separate mode choice --
+   * no navigation redesign. Preserves Quick's own `handleNewDeal` exactly. */
+  function handleNewDetailedDeal() {
+    if (!confirmDiscardIfDetailedDirty()) {
+      return;
+    }
+    resetToBlankDetailedDeal();
+    setView('workspace');
+  }
+
+  function handleDetailedTermsFieldChange(
+    key: keyof AcquisitionTermsFormValues,
+    value: string,
+  ) {
+    setDetailedValues((previous) => ({
+      ...previous,
+      terms: { ...previous.terms, [key]: value },
+    }));
+    resetDetailedDownstreamAnalysisState();
+  }
+
+  function handleDetailedOperatingFieldChange(
+    key: keyof DetailedOperatingFormValues,
+    value: string,
+  ) {
+    setDetailedValues((previous) => ({
+      ...previous,
+      operating: { ...previous.operating, [key]: value },
+    }));
+    resetDetailedDownstreamAnalysisState();
+  }
+
+  /** Detailed Operating Model V2.1 Gate 14: the Detailed counterpart of
+   * `runBreakEven`, over `terms`/`detailedOperatingInputs` instead of a
+   * single `AcquisitionRequest`, delegating to
+   * `fetchDetailedBreakEvenAnalysis` -- no threshold search of its own. */
+  async function runDetailedBreakEven(
+    terms: AcquisitionTermsRequest,
+    detailedOperatingInputs: DetailedOperatingInputsRequest,
+    leveredIrrPercentInput: string,
+    equityMultipleInput: string,
+    headlineDscrInput: string,
+    metric: ReturnHurdleMetric,
+  ) {
+    let targetLeveredIrr: number;
+    let targetEquityMultipleValue: number;
+    let targetHeadlineDscrValue: number;
+    try {
+      targetLeveredIrr = parsePercent('Target Levered IRR', leveredIrrPercentInput);
+      targetEquityMultipleValue = parseNumber('Target Equity Multiple', equityMultipleInput);
+      targetHeadlineDscrValue = parseNumber('Target Year 1 DSCR', headlineDscrInput);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setDetailedBreakEven(null);
+        setDetailedBreakEvenError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    setIsDetailedBreakEvenLoading(true);
+    setDetailedBreakEvenError(null);
+    try {
+      const analysis = await fetchDetailedBreakEvenAnalysis(
+        terms,
+        detailedOperatingInputs,
+        targetLeveredIrr,
+        targetEquityMultipleValue,
+        targetHeadlineDscrValue,
+        metric,
+      );
+      setDetailedBreakEven(analysis);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedBreakEvenError(apiError.message);
+      } else {
+        setDetailedBreakEvenError(
+          'An unexpected error occurred while calculating break-even results.',
+        );
+      }
+    } finally {
+      setIsDetailedBreakEvenLoading(false);
+    }
+  }
+
+  function handleDetailedTargetLeveredIrrChange(value: string) {
+    setDetailedTargetLeveredIrrPercent(value);
+    if (lastDetailedRequest) {
+      void runDetailedBreakEven(
+        lastDetailedRequest.terms,
+        lastDetailedRequest.detailedOperatingInputs,
+        value,
+        detailedTargetEquityMultiple,
+        detailedTargetHeadlineDscr,
+        detailedReturnHurdleMetric,
+      );
+    }
+  }
+
+  function handleDetailedTargetEquityMultipleChange(value: string) {
+    setDetailedTargetEquityMultiple(value);
+    if (lastDetailedRequest) {
+      void runDetailedBreakEven(
+        lastDetailedRequest.terms,
+        lastDetailedRequest.detailedOperatingInputs,
+        detailedTargetLeveredIrrPercent,
+        value,
+        detailedTargetHeadlineDscr,
+        detailedReturnHurdleMetric,
+      );
+    }
+  }
+
+  function handleDetailedTargetHeadlineDscrChange(value: string) {
+    setDetailedTargetHeadlineDscr(value);
+    if (lastDetailedRequest) {
+      void runDetailedBreakEven(
+        lastDetailedRequest.terms,
+        lastDetailedRequest.detailedOperatingInputs,
+        detailedTargetLeveredIrrPercent,
+        detailedTargetEquityMultiple,
+        value,
+        detailedReturnHurdleMetric,
+      );
+    }
+  }
+
+  function handleDetailedReturnHurdleMetricChange(metric: ReturnHurdleMetric) {
+    setDetailedReturnHurdleMetric(metric);
+    if (lastDetailedRequest) {
+      void runDetailedBreakEven(
+        lastDetailedRequest.terms,
+        lastDetailedRequest.detailedOperatingInputs,
+        detailedTargetLeveredIrrPercent,
+        detailedTargetEquityMultiple,
+        detailedTargetHeadlineDscr,
+        metric,
+      );
+    }
+  }
+
+  async function handleDetailedSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    resetDetailedDownstreamAnalysisState();
+
+    let terms;
+    let detailedOperatingInputs;
+    try {
+      terms = buildAcquisitionTermsRequest(detailedValues.terms);
+      detailedOperatingInputs = buildDetailedOperatingInputsRequest(detailedValues.operating);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setDetailedError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    setIsDetailedSubmitting(true);
+    try {
+      const nextResults = await analyzeDetailedAcquisition(terms, detailedOperatingInputs);
+      setDetailedResults(nextResults);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedError(apiError.message);
+      } else {
+        setDetailedError('An unexpected error occurred while analyzing the deal.');
+      }
+      setIsDetailedSubmitting(false);
+      return;
+    }
+    setIsDetailedSubmitting(false);
+    setLastDetailedRequest({ terms, detailedOperatingInputs });
+
+    setIsDetailedSensitivityLoading(true);
+    try {
+      const presets = await fetchDetailedSensitivityPresets(terms, detailedOperatingInputs);
+      setDetailedSensitivity(presets);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedSensitivityError(apiError.message);
+      } else {
+        setDetailedSensitivityError('An unexpected error occurred while calculating sensitivity.');
+      }
+    } finally {
+      setIsDetailedSensitivityLoading(false);
+    }
+
+    await runDetailedBreakEven(
+      terms,
+      detailedOperatingInputs,
+      detailedTargetLeveredIrrPercent,
+      detailedTargetEquityMultiple,
+      detailedTargetHeadlineDscr,
+      detailedReturnHurdleMetric,
+    );
+  }
+
+  /**
+   * Detailed Operating Model V2.1 Gate 9: generates an AI Analyst
+   * interpretation of the current Detailed deal, sending the same
+   * `terms`/`detailedOperatingInputs` just analyzed (never re-derived or
+   * re-typed) plus the fixed default hurdle targets. Gate 14 added a
+   * break-even panel with its own independently-edited targets
+   * (`detailedTargetLeveredIrrPercent` etc.), but this call intentionally
+   * keeps using the original fixed defaults, unchanged -- Gate 14 is a
+   * wiring-only gate that explicitly excludes AI changes, so the AI
+   * Analyst's own target-sourcing behavior is left exactly as Gate 9 built
+   * it. Mirrors `handleGenerateAiAnalysis`'s shape exactly, over Detailed's
+   * own independent state.
+   */
+  async function handleGenerateDetailedAiAnalysis() {
+    if (!detailedResults) {
+      return;
+    }
+
+    let terms;
+    let detailedOperatingInputs;
+    let targetLeveredIrr: number;
+    let targetEquityMultipleValue: number;
+    let targetHeadlineDscrValue: number;
+    try {
+      terms = buildAcquisitionTermsRequest(detailedValues.terms);
+      detailedOperatingInputs = buildDetailedOperatingInputsRequest(detailedValues.operating);
+      targetLeveredIrr = parsePercent('Target Levered IRR', DEFAULT_TARGET_LEVERED_IRR_PERCENT);
+      targetEquityMultipleValue = parseNumber(
+        'Target Equity Multiple',
+        DEFAULT_TARGET_EQUITY_MULTIPLE,
+      );
+      targetHeadlineDscrValue = parseNumber('Target Year 1 DSCR', DEFAULT_TARGET_HEADLINE_DSCR);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setDetailedAiAnalysis(null);
+        setDetailedAiAnalysisError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    setIsDetailedAiAnalysisLoading(true);
+    setDetailedAiAnalysisError(null);
+    try {
+      const analysis = await fetchDetailedAIAnalysis(
+        terms,
+        detailedOperatingInputs,
+        targetLeveredIrr,
+        targetEquityMultipleValue,
+        targetHeadlineDscrValue,
+        'levered_irr',
+      );
+      setDetailedAiAnalysis(analysis);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedAiAnalysisError(apiError.message);
+      } else {
+        setDetailedAiAnalysisError('An unexpected error occurred while generating the AI analysis.');
+      }
+    } finally {
+      setIsDetailedAiAnalysisLoading(false);
+    }
+  }
+
   const [values, setValues] = useState<AcquisitionFormValues>(BLANK_FORM_VALUES);
   const [results, setResults] = useState<AcquisitionResults | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -396,13 +1100,65 @@ export default function App() {
     setView('workspace');
   }
 
+  /**
+   * Detailed Operating Model V2.1 Gate 11: dispatches by `deal.operating_mode`
+   * -- a Quick deal populates `values`/`savedSnapshot` and switches to Quick
+   * mode; a Detailed deal populates `detailedValues`/`detailedSavedSnapshot`
+   * and switches to Detailed mode, never the other. Only the target mode's
+   * own state is touched (its stale review/results/AI state is cleared, and
+   * its own discard guard applies before replacing same-mode unsaved work);
+   * the other mode's currently-open deal, if any, is left completely
+   * untouched in the background -- exactly like switching the Underwriting
+   * Mode tab already preserves each mode's state independently (Gate 6), so
+   * opening a deal of one mode can never lose or leak the other mode's
+   * assumptions/results.
+   */
   async function handleOpenDeal(deal: Deal) {
+    if (deal.operating_mode === 'detailed') {
+      if (!confirmDiscardIfDetailedDirty()) {
+        return;
+      }
+      setDealsError(null);
+      try {
+        const fullDeal = await getDeal(deal.id);
+        if (fullDeal.terms === null || fullDeal.detailed_operating_inputs === null) {
+          throw new Error('Detailed deal is missing terms/detailed_operating_inputs.');
+        }
+        const openedValues: DetailedFormValues = {
+          terms: buildDetailedTermsFormValuesFromRequest(fullDeal.terms),
+          operating: buildDetailedOperatingFormValuesFromRequest(
+            fullDeal.detailed_operating_inputs,
+          ),
+        };
+        setDetailedValues(openedValues);
+        setDetailedDealName(fullDeal.name);
+        setCurrentDetailedDealId(fullDeal.id);
+        setLastDetailedSavedAt(fullDeal.updated_at);
+        setDetailedSavedSnapshot({ dealName: fullDeal.name, values: openedValues });
+        resetDetailedDownstreamAnalysisState();
+        clearSaveDetailedDealError();
+        clearDetailedIntakeFeedback();
+        setOperatingMode('detailed');
+        setView('workspace');
+      } catch (apiError) {
+        if (apiError instanceof ApiError) {
+          setDealsError(apiError.message);
+        } else {
+          setDealsError('An unexpected error occurred while opening the deal.');
+        }
+      }
+      return;
+    }
+
     if (!confirmDiscardIfDirty()) {
       return;
     }
     setDealsError(null);
     try {
       const fullDeal = await getDeal(deal.id);
+      if (fullDeal.inputs === null) {
+        throw new Error('Quick deal is missing inputs.');
+      }
       const openedValues = buildFormValuesFromAcquisitionInputs(fullDeal.inputs);
       setValues(openedValues);
       setDealName(fullDeal.name);
@@ -412,6 +1168,7 @@ export default function App() {
       resetDownstreamAnalysisState();
       clearSaveDealError();
       clearIntakeFeedback();
+      setOperatingMode('quick');
       setView('workspace');
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -452,16 +1209,22 @@ export default function App() {
 
   /** Confirmation happens in `DealLibraryPanel` itself (window.confirm)
    * before `onDelete` is ever called -- by the time this runs, the analyst
-   * has already agreed. If the deleted deal is the one currently open, the
-   * workspace is reset to a blank, never-saved deal rather than left
-   * pointing at an id that no longer exists (a later Save would otherwise
-   * 404 against a deleted id). */
+   * has already agreed. If the deleted deal is the one currently open --
+   * checked against both `currentDealId` and `currentDetailedDealId`,
+   * exactly one of which can ever match a given id -- that mode's workspace
+   * is reset to a blank, never-saved deal rather than left pointing at an
+   * id that no longer exists (a later Save would otherwise 404 against a
+   * deleted id). Deleting a deal never changes which mode is currently
+   * selected; only that mode's own state resets. */
   async function handleDeleteDeal(deal: Deal) {
     setDealsError(null);
     try {
       await deleteDeal(deal.id);
       if (currentDealId === deal.id) {
         resetToBlankDeal();
+      }
+      if (currentDetailedDealId === deal.id) {
+        resetToBlankDetailedDeal();
       }
       await loadSavedDeals();
     } catch (apiError) {
@@ -691,6 +1454,35 @@ export default function App() {
       </header>
 
       <main className="app-main">
+        <div className="operating-mode-toggle" role="tablist" aria-label="Underwriting Mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={operatingMode === 'quick'}
+            className={
+              operatingMode === 'quick'
+                ? 'mode-toggle-button mode-toggle-button-active'
+                : 'mode-toggle-button'
+            }
+            onClick={() => setOperatingMode('quick')}
+          >
+            Quick Underwrite
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={operatingMode === 'detailed'}
+            className={
+              operatingMode === 'detailed'
+                ? 'mode-toggle-button mode-toggle-button-active'
+                : 'mode-toggle-button'
+            }
+            onClick={() => setOperatingMode('detailed')}
+          >
+            Detailed Underwrite
+          </button>
+        </div>
+
         {view === 'library' ? (
           <DealLibraryPanel
             deals={savedDeals}
@@ -701,6 +1493,116 @@ export default function App() {
             onDelete={(deal) => void handleDeleteDeal(deal)}
             onClose={handleCloseLibrary}
           />
+        ) : operatingMode === 'detailed' ? (
+          <>
+            <DealBar
+              dealName={detailedDealName}
+              onDealNameChange={handleDetailedDealNameChange}
+              isSavedDeal={currentDetailedDealId !== null}
+              isSaving={isSavingDetailedDeal}
+              error={saveDetailedDealError}
+              saveStatus={detailedSaveStatus}
+              lastSavedAt={lastDetailedSavedAt}
+              onSaveDeal={() => void handleSaveDetailedDeal()}
+              onOpenLibrary={handleOpenLibrary}
+              onNewDeal={handleNewDetailedDeal}
+            />
+
+            <div className="intake-section">
+              <h2 className="section-heading">Deal Intake</h2>
+              <div className="intake-grid">
+                <ExcelUploadPanel
+                  isLoading={isUploadingDetailedExcel}
+                  error={detailedExcelUploadError}
+                  successMessage={detailedExcelUploadSuccessMessage}
+                  onUpload={(file) => void handleUploadDetailedExcel(file)}
+                />
+
+                <DetailedOmReviewPanel
+                  extraction={detailedOcrExtraction}
+                  isLoading={isDetailedExtracting}
+                  error={detailedExtractionError}
+                  onUpload={(file) => void handleUploadDetailedOm(file)}
+                  onFinishReview={handleFinishDetailedOmReview}
+                  onCancel={handleCancelDetailedOmReview}
+                />
+              </div>
+
+              {detailedExcelReview && (
+                <DetailedExcelReviewPanel
+                  fileName={detailedExcelReview.fileName}
+                  termsValues={detailedExcelReview.values.terms}
+                  operatingValues={detailedExcelReview.values.operating}
+                  error={detailedExcelReviewError}
+                  onTermsFieldChange={handleDetailedExcelReviewTermsFieldChange}
+                  onOperatingFieldChange={handleDetailedExcelReviewOperatingFieldChange}
+                  onApprove={handleApproveDetailedExcelReview}
+                  onCancel={handleCancelDetailedExcelReview}
+                />
+              )}
+            </div>
+
+            <DetailedAssumptionsForm
+              termsValues={detailedValues.terms}
+              operatingValues={detailedValues.operating}
+              onTermsFieldChange={handleDetailedTermsFieldChange}
+              onOperatingFieldChange={handleDetailedOperatingFieldChange}
+              onSubmit={(event) => void handleDetailedSubmit(event)}
+              isSubmitting={isDetailedSubmitting}
+            />
+
+            <div className="results-column">
+              {detailedError && <div className="error-banner">{detailedError}</div>}
+
+              {!detailedResults && !detailedError && (
+                <div className="empty-state">
+                  Enter assumptions and click <strong>Analyze Deal</strong> to see results.
+                </div>
+              )}
+
+              {detailedResults && <ResultsPanel results={detailedResults.results} />}
+
+              {detailedResults && (
+                <OperatingStatementTable
+                  operatingProjection={detailedResults.operating_projection}
+                  results={detailedResults.results}
+                />
+              )}
+
+              {detailedResults && (
+                <SensitivityPanel
+                  presets={detailedSensitivity}
+                  isLoading={isDetailedSensitivityLoading}
+                  error={detailedSensitivityError}
+                />
+              )}
+
+              {detailedResults && (
+                <BreakEvenPanel
+                  analysis={detailedBreakEven}
+                  isLoading={isDetailedBreakEvenLoading}
+                  error={detailedBreakEvenError}
+                  targetLeveredIrrPercent={detailedTargetLeveredIrrPercent}
+                  targetEquityMultiple={detailedTargetEquityMultiple}
+                  targetHeadlineDscr={detailedTargetHeadlineDscr}
+                  returnHurdleMetric={detailedReturnHurdleMetric}
+                  onTargetLeveredIrrChange={handleDetailedTargetLeveredIrrChange}
+                  onTargetEquityMultipleChange={handleDetailedTargetEquityMultipleChange}
+                  onTargetHeadlineDscrChange={handleDetailedTargetHeadlineDscrChange}
+                  onReturnHurdleMetricChange={handleDetailedReturnHurdleMetricChange}
+                />
+              )}
+
+              {detailedResults && (
+                <AiAnalystPanel
+                  analysis={detailedAiAnalysis}
+                  isLoading={isDetailedAiAnalysisLoading}
+                  error={detailedAiAnalysisError}
+                  onGenerate={() => void handleGenerateDetailedAiAnalysis()}
+                />
+              )}
+            </div>
+          </>
         ) : (
           <>
             <DealBar

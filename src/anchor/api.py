@@ -29,32 +29,59 @@ from .ai import (
     AIConfigurationError,
     AIProviderError,
     generate_ai_analysis,
+    generate_detailed_ai_analysis,
 )
 from .analysis import (
     InvalidBreakEvenTargetError,
     ReturnHurdleMetric,
     StandardBreakEvenAnalysis,
+    StandardDetailedBreakEvenAnalysis,
+    StandardDetailedSensitivityPresets,
     StandardSensitivityPresets,
     TwoWaySensitivityResult,
     UnknownAssumptionError,
     UnknownMetricError,
     build_standard_break_even_analysis,
+    build_standard_detailed_break_even_analysis,
+    build_standard_detailed_presets,
     build_standard_presets,
+    run_detailed_two_way_sensitivity,
     run_two_way_sensitivity,
 )
-from .contracts import AcquisitionInputs
+from .contracts import (
+    AcquisitionInputs,
+    AcquisitionTerms,
+    DetailedOperatingInputs,
+    OperatingMode,
+)
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError
-from .engine import AcquisitionResults, analyze_acquisition
+from .engine import (
+    AcquisitionResults,
+    DetailedAcquisitionResults,
+    analyze_acquisition,
+    analyze_detailed_acquisition_with_projection,
+)
+from .detailed_excel_reader import (
+    DetailedExcelIntakeReport,
+    read_detailed_excel_intake_from_bytes,
+)
 from .env import load_repo_env
 from .excel_reader import ExcelIntakeReport, read_acquisition_inputs_from_bytes_with_report
 from .ingestion import (
+    DetailedExtractionResult,
     ExtractionConfigurationError,
     ExtractionProviderError,
     ExtractionResult,
+    extract_detailed_om,
     extract_om,
 )
-from .validation import InputValidationError, validate_acquisition_inputs
+from .validation import (
+    InputValidationError,
+    validate_acquisition_inputs,
+    validate_acquisition_terms,
+    validate_detailed_operating_inputs,
+)
 
 # Load repo-local .env (if present) before any request can resolve OpenAI /
 # Azure DI credentials via os.environ -- see anchor.env for precedence rules.
@@ -74,12 +101,28 @@ app = FastAPI(title="Anchor API")
 _INGESTION_PATH = "/ingestion/om"
 _MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB
 _MAX_UPLOAD_PAGES = 75
+
+# Detailed Operating Model V2.1 Gate 12: a separate path (Option B, mirroring
+# Gate 10's identical Excel-ingestion choice) rather than an optional/
+# discriminated extension of the existing Quick endpoint -- the two result
+# contracts and field sets differ enough that overloading _INGESTION_PATH
+# would risk the existing, frozen Quick endpoint's behavior for no benefit.
+_DETAILED_INGESTION_PATH = "/ingestion/om/detailed"
 _PDF_PARSE_TIMEOUT_SECONDS = 5  # KTD11 -- bounds the local pypdf page-count parse.
 _PDF_SIGNATURE = b"%PDF-"
 
 _EXCEL_INGESTION_PATH = "/ingestion/excel"
 _MAX_EXCEL_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB -- a structured input workbook is small.
 _XLSX_SIGNATURE = b"PK\x03\x04"  # .xlsx is a zip archive (OOXML).
+
+# Detailed Operating Model V2.1 Gate 10 -- a separate path (Option B, see the
+# route below) rather than an optional/discriminated extension of the
+# existing Quick endpoint: the two contracts, field sets, and error
+# vocabularies differ enough that overloading _EXCEL_INGESTION_PATH would
+# risk the existing, frozen Quick endpoint's behavior for no benefit -- a
+# Detailed upload is never ambiguous about which endpoint it belongs to
+# (the frontend's Detailed workspace calls this path exclusively).
+_DETAILED_EXCEL_INGESTION_PATH = "/ingestion/excel/detailed"
 
 
 class _IngestionUploadSizeGuard:
@@ -126,7 +169,9 @@ app.add_middleware(
     _IngestionUploadSizeGuard,
     limits={
         _INGESTION_PATH: _MAX_UPLOAD_BYTES,
+        _DETAILED_INGESTION_PATH: _MAX_UPLOAD_BYTES,
         _EXCEL_INGESTION_PATH: _MAX_EXCEL_UPLOAD_BYTES,
+        _DETAILED_EXCEL_INGESTION_PATH: _MAX_EXCEL_UPLOAD_BYTES,
     },
 )
 
@@ -160,8 +205,85 @@ def _validation_error_detail(error: InputValidationError) -> list[dict[str, Any]
     ]
 
 
-@app.post("/analyze", response_model=AcquisitionResults)
-def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults:
+def _analyze_detailed(payload: dict[str, Any]) -> DetailedAcquisitionResults:
+    """Detailed Operating Model V2.1 Gate 5 (mode routing) / Gate 4
+    (response shape): the 'detailed' operating_mode branch of ``/analyze``.
+    Validates 'terms' and 'detailed_operating_inputs' with the same shared
+    validators every other consumer uses, then delegates to
+    ``analyze_detailed_acquisition_with_projection`` -- no financial math or
+    validation rule of its own. Returns the richer
+    ``DetailedAcquisitionResults`` envelope (operating projection +
+    acquisition results) so a Detailed-mode frontend can render the
+    institutional operating statement without a second round trip."""
+
+    raw_terms = payload.get("terms")
+    if not isinstance(raw_terms, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A 'detailed' operating_mode request must include a 'terms' object.",
+        )
+    raw_detailed_inputs = payload.get("detailed_operating_inputs")
+    if not isinstance(raw_detailed_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "A 'detailed' operating_mode request must include a "
+                "'detailed_operating_inputs' object."
+            ),
+        )
+
+    try:
+        terms = validate_acquisition_terms(raw_terms)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    try:
+        detailed_inputs = validate_detailed_operating_inputs(raw_detailed_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    return analyze_detailed_acquisition_with_projection(terms, detailed_inputs)
+
+
+@app.post("/analyze", response_model=AcquisitionResults | DetailedAcquisitionResults)
+def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults | DetailedAcquisitionResults:
+    """Detailed Operating Model V2.1 Gate 5: gains an optional
+    ``operating_mode`` discriminator (``"quick"`` default / ``"detailed"``).
+    A ``"quick"``/absent ``operating_mode`` request is unaffected -- the
+    remaining payload is validated and analyzed exactly as before this
+    gate; ``operating_mode`` itself is popped first so it is never seen by
+    ``validate_acquisition_inputs`` as an unknown Field ID, and the
+    response is a bare ``AcquisitionResults``, byte-for-byte the same shape
+    as before this gate. A ``"detailed"`` request is delegated to
+    ``_analyze_detailed`` and receives the richer
+    ``DetailedAcquisitionResults`` envelope (Gate 4) -- every
+    ``AcquisitionResults`` field is still present, nested under ``results``,
+    plus ``operating_projection`` for the institutional operating statement.
+    """
+
+    payload = dict(payload)
+    operating_mode_raw = payload.pop("operating_mode", OperatingMode.QUICK.value)
+    try:
+        operating_mode = OperatingMode(operating_mode_raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "operating_mode must be one of "
+                f"{[member.value for member in OperatingMode]}; "
+                f"got {operating_mode_raw!r}."
+            ),
+        ) from None
+
+    if operating_mode is OperatingMode.DETAILED:
+        return _analyze_detailed(payload)
+
     try:
         inputs = validate_acquisition_inputs(payload)
     except InputValidationError as error:
@@ -180,11 +302,72 @@ def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults:
 # ``validate_acquisition_inputs`` used by ``/analyze``, then delegate all
 # sensitivity computation to ``anchor.analysis.sensitivity``. Neither
 # endpoint performs financial or sensitivity math itself.
+#
+# Detailed Operating Model V2.1 Gate 14: both endpoints gain the same
+# ``operating_mode`` discriminator ``/analyze`` and ``/ai/analysis`` already
+# have (Gate 5/9). A ``"quick"``/absent request is completely unaffected --
+# ``operating_mode`` is popped first, exactly as those endpoints do, so the
+# remaining payload is validated and computed exactly as before this gate.
+# A ``"detailed"`` request delegates to ``run_detailed_two_way_sensitivity``/
+# ``build_standard_detailed_presets`` -- the same Gate 8 functions the
+# Detailed AI Analyst already calls -- no sensitivity math of its own.
 # =============================================================================
+
+
+def _sensitivity_detailed(payload: dict[str, Any]) -> TwoWaySensitivityResult:
+    terms = _require_deal_terms(payload)
+    detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+
+    missing_fields = [
+        field
+        for field in (
+            "row_assumption",
+            "row_values",
+            "column_assumption",
+            "column_values",
+            "metric",
+        )
+        if field not in payload
+    ]
+    if missing_fields:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Missing required field(s): {', '.join(missing_fields)}.",
+        )
+
+    try:
+        return run_detailed_two_way_sensitivity(
+            terms,
+            detailed_operating_inputs,
+            row_assumption=payload["row_assumption"],
+            row_values=payload["row_values"],
+            column_assumption=payload["column_assumption"],
+            column_values=payload["column_values"],
+            metric=payload["metric"],
+        )
+    except (UnknownAssumptionError, UnknownMetricError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
 
 
 @app.post("/sensitivity", response_model=TwoWaySensitivityResult)
 def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    if operating_mode is OperatingMode.DETAILED:
+        return _sensitivity_detailed(payload)
+
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
         raise HTTPException(
@@ -241,10 +424,27 @@ def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
         ) from None
 
 
-@app.post("/sensitivity/presets", response_model=StandardSensitivityPresets)
+def _sensitivity_presets_detailed(
+    payload: dict[str, Any]
+) -> StandardDetailedSensitivityPresets:
+    terms = _require_deal_terms(payload)
+    detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    return build_standard_detailed_presets(terms, detailed_operating_inputs)
+
+
+@app.post(
+    "/sensitivity/presets",
+    response_model=StandardSensitivityPresets | StandardDetailedSensitivityPresets,
+)
 def sensitivity_presets(
     payload: dict[str, Any] = Body(...),
-) -> StandardSensitivityPresets:
+) -> StandardSensitivityPresets | StandardDetailedSensitivityPresets:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    if operating_mode is OperatingMode.DETAILED:
+        return _sensitivity_presets_detailed(payload)
+
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
         raise HTTPException(
@@ -268,6 +468,13 @@ def sensitivity_presets(
 #
 # Delegates all break-even solving to ``anchor.analysis.break_even``;
 # this endpoint performs no financial math and no threshold search itself.
+#
+# Detailed Operating Model V2.1 Gate 14: gains the same ``operating_mode``
+# discriminator ``/analyze``, ``/ai/analysis``, and ``/sensitivity`` already
+# have. A "quick"/absent request is completely unaffected. A "detailed"
+# request delegates to ``build_standard_detailed_break_even_analysis`` --
+# the same Gate 8 function the Detailed AI Analyst already calls -- no
+# break-even search of its own.
 # =============================================================================
 
 
@@ -281,8 +488,44 @@ def _numeric_target(payload: dict[str, Any], field: str) -> float:
     return float(value)
 
 
-@app.post("/break-even", response_model=StandardBreakEvenAnalysis)
-def break_even(payload: dict[str, Any] = Body(...)) -> StandardBreakEvenAnalysis:
+def _break_even_detailed(payload: dict[str, Any]) -> StandardDetailedBreakEvenAnalysis:
+    terms = _require_deal_terms(payload)
+    detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    (
+        target_levered_irr,
+        target_headline_dscr,
+        target_equity_multiple,
+        return_hurdle_metric,
+    ) = _require_ai_hurdle_targets(payload)
+
+    try:
+        return build_standard_detailed_break_even_analysis(
+            terms,
+            detailed_operating_inputs,
+            target_levered_irr=target_levered_irr,
+            target_headline_dscr=target_headline_dscr,
+            target_equity_multiple=target_equity_multiple,
+            return_hurdle_metric=return_hurdle_metric,
+        )
+    except InvalidBreakEvenTargetError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+
+
+@app.post(
+    "/break-even",
+    response_model=StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis,
+)
+def break_even(
+    payload: dict[str, Any] = Body(...),
+) -> StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    if operating_mode is OperatingMode.DETAILED:
+        return _break_even_detailed(payload)
+
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
         raise HTTPException(
@@ -341,32 +584,17 @@ def break_even(payload: dict[str, Any] = Body(...)) -> StandardBreakEvenAnalysis
 
 
 # =============================================================================
-# Phase 9A -- AI Analyst
+# Phase 9A / Detailed Operating Model V2.1 Gate 9 -- AI Analyst
 #
 # Delegates all context assembly and the provider call to
-# ``anchor.ai.generate_ai_analysis``; this endpoint performs no
-# financial math, sensitivity math, break-even search, or OpenAI call of
-# its own.
+# ``anchor.ai.generate_ai_analysis``/``generate_detailed_ai_analysis``; this
+# endpoint performs no financial math, sensitivity math, break-even search,
+# or OpenAI call of its own. Gains the same ``operating_mode`` discriminator
+# as ``/analyze`` (Gate 5) -- a "quick"/absent request is unaffected.
 # =============================================================================
 
 
-@app.post("/ai/analysis", response_model=AIAnalysis)
-def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
-    raw_inputs = payload.get("inputs")
-    if not isinstance(raw_inputs, dict):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Request body must include an 'inputs' object.",
-        )
-
-    try:
-        inputs = validate_acquisition_inputs(raw_inputs)
-    except InputValidationError as error:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=_validation_error_detail(error),
-        ) from None
-
+def _require_ai_hurdle_targets(payload: dict[str, Any]) -> tuple[float, float, float, ReturnHurdleMetric]:
     missing_fields = [
         field
         for field in ("target_levered_irr", "target_headline_dscr", "target_equity_multiple")
@@ -394,6 +622,90 @@ def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
                 f"got {return_hurdle_metric_raw!r}."
             ),
         ) from None
+
+    return target_levered_irr, target_headline_dscr, target_equity_multiple, return_hurdle_metric
+
+
+def _ai_analysis_detailed(payload: dict[str, Any]) -> AIAnalysis:
+    """Detailed Operating Model V2.1 Gate 9: the 'detailed' operating_mode
+    branch of ``/ai/analysis``. Validates 'terms' and
+    'detailed_operating_inputs' with the same shared validators every other
+    Detailed consumer uses, then delegates to
+    ``generate_detailed_ai_analysis`` -- no financial math, context
+    assembly, or OpenAI call of its own."""
+
+    terms = _require_deal_terms(payload)
+    detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    (
+        target_levered_irr,
+        target_headline_dscr,
+        target_equity_multiple,
+        return_hurdle_metric,
+    ) = _require_ai_hurdle_targets(payload)
+
+    try:
+        return generate_detailed_ai_analysis(
+            terms,
+            detailed_operating_inputs,
+            target_levered_irr=target_levered_irr,
+            target_equity_multiple=target_equity_multiple,
+            target_headline_dscr=target_headline_dscr,
+            return_hurdle_metric=return_hurdle_metric,
+        )
+    except InvalidBreakEvenTargetError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except AIConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from None
+    except AIProviderError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+        ) from None
+
+
+@app.post("/ai/analysis", response_model=AIAnalysis)
+def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
+    payload = dict(payload)
+    operating_mode_raw = payload.pop("operating_mode", OperatingMode.QUICK.value)
+    try:
+        operating_mode = OperatingMode(operating_mode_raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "operating_mode must be one of "
+                f"{[member.value for member in OperatingMode]}; "
+                f"got {operating_mode_raw!r}."
+            ),
+        ) from None
+
+    if operating_mode is OperatingMode.DETAILED:
+        return _ai_analysis_detailed(payload)
+
+    raw_inputs = payload.get("inputs")
+    if not isinstance(raw_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must include an 'inputs' object.",
+        )
+
+    try:
+        inputs = validate_acquisition_inputs(raw_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    (
+        target_levered_irr,
+        target_headline_dscr,
+        target_equity_multiple,
+        return_hurdle_metric,
+    ) = _require_ai_hurdle_targets(payload)
 
     try:
         return generate_ai_analysis(
@@ -528,6 +840,39 @@ def ingest_om(file: UploadFile = File(...)) -> ExtractionResult:
 
 
 # =============================================================================
+# Detailed Operating Model V2.1 Gate 12 -- Detailed OM ingestion.
+#
+# A dedicated path (Option B) reusing the exact same upload-guard helpers
+# (content-type/signature/size/page-count) as the Quick route above, but
+# delegating to ``extract_detailed_om`` -- the Detailed counterpart
+# extraction/classification pipeline, distinct from Quick's. Returns
+# proposed Detailed field candidates only -- never an ``OperatingProjection``
+# or ``DetailedAcquisitionResults``; a provider failure maps to the same
+# status codes as the Quick route (503 not configured, 502 provider error).
+# =============================================================================
+
+
+@app.post(_DETAILED_INGESTION_PATH, response_model=DetailedExtractionResult)
+def ingest_detailed_om(file: UploadFile = File(...)) -> DetailedExtractionResult:
+    _validate_content_type(file)
+
+    pdf_bytes = _read_upload_bytes(file, max_bytes=_MAX_UPLOAD_BYTES)
+    _validate_pdf_signature(pdf_bytes)
+    _validate_page_count(pdf_bytes)
+
+    try:
+        return extract_detailed_om(pdf_bytes)
+    except ExtractionConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from None
+    except ExtractionProviderError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+        ) from None
+
+
+# =============================================================================
 # Phase 10B -- Excel ingestion (web upload)
 #
 # Reuses the exact same deterministic workbook reader the CLI has always
@@ -574,19 +919,57 @@ def ingest_excel(file: UploadFile = File(...)) -> ExcelIntakeReport:
 
 
 # =============================================================================
-# Persistence Phase A/C -- Deal Library backend foundation
+# Detailed Operating Model V2.1 Gate 10 -- Detailed Excel ingestion.
+#
+# A dedicated path (Option B) reusing the exact same upload-guard helpers
+# (filename/signature/size) as the Quick route above, but delegating to
+# ``read_detailed_excel_intake_from_bytes`` -- ``anchor.detailed_excel_reader``'s
+# own deterministic parsing/validation path, distinct from Quick's. Returns
+# proposed ``AcquisitionTerms``/``DetailedOperatingInputs`` only -- never an
+# ``OperatingProjection`` or ``DetailedAcquisitionResults``; a wrong-mode
+# workbook (Quick uploaded here, or this workbook uploaded to
+# ``ingest_excel``) is a schema-mismatch ``InputValidationError``, handled
+# identically to any other ingestion issue below.
+# =============================================================================
+
+
+@app.post(_DETAILED_EXCEL_INGESTION_PATH, response_model=DetailedExcelIntakeReport)
+def ingest_detailed_excel(file: UploadFile = File(...)) -> DetailedExcelIntakeReport:
+    _validate_xlsx_filename(file)
+
+    workbook_bytes = _read_upload_bytes(file, max_bytes=_MAX_EXCEL_UPLOAD_BYTES)
+    _validate_xlsx_signature(workbook_bytes)
+
+    try:
+        return read_detailed_excel_intake_from_bytes(workbook_bytes)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+
+# =============================================================================
+# Persistence Phase A/C / Detailed Operating Model V2.1 Gate 5b -- Deal
+# Library backend foundation
 #
 # Delegates all storage to ``anchor.deals`` (a thin SQLite adapter -- see
 # ``anchor/deals/store.py``). Every create/update route validates the
-# submitted ``inputs`` with the exact same ``validate_acquisition_inputs``
-# used by ``/analyze`` *before* it ever reaches the store, so a saved deal
-# can never hold a value that would fail validation on reopen. Duplicate
-# (Phase C) copies only ``AcquisitionInputs`` via ``anchor.deals`` --
-# already-validated data reused as-is -- and delete removes a row with no
+# submitted assumptions with the exact same shared validators ``/analyze``
+# uses *before* they ever reach the store, so a saved deal can never hold a
+# value that would fail validation on reopen. Duplicate (Phase C) copies
+# only already-validated assumptions via ``anchor.deals`` -- reused as-is --
+# and delete removes a row (or row pair, for a Detailed deal) with no
 # soft-delete/history. This module performs no financial calculation and
-# never calls ``analyze_acquisition`` -- reanalyzing a reopened or
-# duplicated deal is the existing, unmodified ``/analyze`` endpoint, driven
-# by the client the same way a manually typed deal is.
+# never calls ``analyze_acquisition``/``analyze_detailed_acquisition`` --
+# reanalyzing a reopened or duplicated deal is the existing, unmodified
+# ``/analyze`` endpoint, driven by the client the same way a manually typed
+# deal is.
+#
+# ``operating_mode`` (mirroring ``/analyze``'s discriminator exactly): a
+# ``"quick"``/absent request sends ``inputs`` and is completely unaffected
+# by this gate; a ``"detailed"`` request sends ``terms`` and
+# ``detailed_operating_inputs`` instead.
 # =============================================================================
 
 
@@ -598,6 +981,21 @@ def _require_deal_name(payload: dict[str, Any]) -> str:
             detail="A non-empty 'name' is required.",
         )
     return name.strip()
+
+
+def _require_operating_mode(payload: dict[str, Any]) -> OperatingMode:
+    raw_operating_mode = payload.get("operating_mode", OperatingMode.QUICK.value)
+    try:
+        return OperatingMode(raw_operating_mode)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "operating_mode must be one of "
+                f"{[member.value for member in OperatingMode]}; "
+                f"got {raw_operating_mode!r}."
+            ),
+        ) from None
 
 
 def _require_deal_inputs(payload: dict[str, Any]) -> AcquisitionInputs:
@@ -616,9 +1014,53 @@ def _require_deal_inputs(payload: dict[str, Any]) -> AcquisitionInputs:
         ) from None
 
 
+def _require_deal_terms(payload: dict[str, Any]) -> AcquisitionTerms:
+    raw_terms = payload.get("terms")
+    if not isinstance(raw_terms, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A 'detailed' operating_mode request must include a 'terms' object.",
+        )
+    try:
+        return validate_acquisition_terms(raw_terms)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+
+def _require_deal_detailed_operating_inputs(
+    payload: dict[str, Any]
+) -> DetailedOperatingInputs:
+    raw_detailed_inputs = payload.get("detailed_operating_inputs")
+    if not isinstance(raw_detailed_inputs, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "A 'detailed' operating_mode request must include a "
+                "'detailed_operating_inputs' object."
+            ),
+        )
+    try:
+        return validate_detailed_operating_inputs(raw_detailed_inputs)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+
 @app.post("/deals", response_model=Deal)
 def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
     name = _require_deal_name(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    if operating_mode is OperatingMode.DETAILED:
+        terms = _require_deal_terms(payload)
+        detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+        return deals_store.create_detailed_deal(name, terms, detailed_inputs)
+
     inputs = _require_deal_inputs(payload)
     return deals_store.create_deal(name, inputs)
 
@@ -641,8 +1083,17 @@ def get_deal(deal_id: str) -> Deal:
 @app.put("/deals/{deal_id}", response_model=Deal)
 def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
     name = _require_deal_name(payload)
-    inputs = _require_deal_inputs(payload)
+    operating_mode = _require_operating_mode(payload)
+
     try:
+        if operating_mode is OperatingMode.DETAILED:
+            terms = _require_deal_terms(payload)
+            detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+            return deals_store.update_detailed_deal(
+                deal_id, name, terms, detailed_inputs
+            )
+
+        inputs = _require_deal_inputs(payload)
         return deals_store.update_deal(deal_id, name, inputs)
     except DealNotFoundError as error:
         raise HTTPException(

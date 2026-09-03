@@ -27,12 +27,16 @@ import json
 import os
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from .contracts import (
     ACQUISITION_FIELD_IDS,
     DEAL_CONTEXT_FIELD_IDS,
+    DETAILED_OPERATING_FIELD_IDS,
+    DETAILED_TERMS_FIELD_IDS,
     DealContext,
+    DetailedExtractionResult,
     EvidenceStatus,
     ExtractionCandidate,
     ExtractionConfigurationError,
@@ -50,10 +54,28 @@ _API_KEY_ENV_VAR = "OPENAI_API_KEY"
 _ALL_FIELD_IDS: tuple[str, ...] = (*ACQUISITION_FIELD_IDS, *DEAL_CONTEXT_FIELD_IDS)
 _MODEL_STATUS_VALUES = ("stated", "interpreted")
 
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _FieldDomain:
+    """Detailed Operating Model V2.1 Gate 12: the field-set-specific
+    verification config every extraction domain (Quick, Detailed) supplies
+    to the shared, otherwise field-agnostic verification/conflict/dedup
+    core below -- which fields are purely numeric (KTD12), which of those
+    are percent/rate-scale (eligible for the OM-narrative x100 equivalence,
+    e.g. "5.5%" verifying a proposed "0.055"), and which single field (if
+    any) accepts either a numeric or a text match. Introduced so that core
+    exactly once, for the Detailed domain, rather than duplicating it
+    verbatim over a second field set."""
+
+    numeric_field_ids: frozenset[str]
+    percent_scale_field_ids: frozenset[str]
+    hybrid_field_id: str | None = None
+
+
 # KTD12: the 9 numeric AcquisitionInputs fields, plus year_built -- every
 # other field (deal-context text fields) is verified as text.
-_NUMERIC_FIELD_IDS = frozenset({*ACQUISITION_FIELD_IDS, "year_built"})
-_HYBRID_FIELD_ID = "unit_count_or_building_area"
+_QUICK_NUMERIC_FIELD_IDS = frozenset({*ACQUISITION_FIELD_IDS, "year_built"})
+_QUICK_HYBRID_FIELD_ID = "unit_count_or_building_area"
 
 # Percentage/rate-oriented fields where OM narrative text commonly states a
 # percentage (e.g. "5.5%") while AcquisitionInputs stores the equivalent
@@ -63,8 +85,42 @@ _HYBRID_FIELD_ID = "unit_count_or_building_area"
 # year_built, and the hybrid unit_count_or_building_area) never get this
 # equivalence: 30 must never verify a cited 3000, and 2026 must never
 # verify a cited 20.26.
-_PERCENT_SCALE_FIELD_IDS = frozenset(
+_QUICK_PERCENT_SCALE_FIELD_IDS = frozenset(
     {"occupancy", "noi_growth", "exit_cap_rate", "ltv", "interest_rate"}
+)
+
+_QUICK_DOMAIN = _FieldDomain(
+    numeric_field_ids=_QUICK_NUMERIC_FIELD_IDS,
+    percent_scale_field_ids=_QUICK_PERCENT_SCALE_FIELD_IDS,
+    hybrid_field_id=_QUICK_HYBRID_FIELD_ID,
+)
+
+# Detailed Operating Model V2.1 Gate 12: every one of the 22 Detailed
+# fields is numeric -- there is no hybrid (numeric-or-text) Detailed field,
+# matching Detailed's own field set having no deal-context-style field at
+# all. Percent-scale fields are exactly the rate/pct-shaped ones among the
+# 22 (mirrors _QUICK_PERCENT_SCALE_FIELD_IDS's role one-for-one, over the
+# Detailed field names).
+_DETAILED_ALL_FIELD_IDS: tuple[str, ...] = (*DETAILED_TERMS_FIELD_IDS, *DETAILED_OPERATING_FIELD_IDS)
+_DETAILED_NUMERIC_FIELD_IDS = frozenset(_DETAILED_ALL_FIELD_IDS)
+_DETAILED_PERCENT_SCALE_FIELD_IDS = frozenset(
+    {
+        "exit_cap_rate",
+        "ltv",
+        "interest_rate",
+        "acquisition_cost_pct",
+        "financing_fee_pct",
+        "disposition_cost_pct",
+        "vacancy_credit_loss_pct",
+        "management_fee_pct",
+        "revenue_growth",
+        "expense_growth",
+    }
+)
+_DETAILED_DOMAIN = _FieldDomain(
+    numeric_field_ids=_DETAILED_NUMERIC_FIELD_IDS,
+    percent_scale_field_ids=_DETAILED_PERCENT_SCALE_FIELD_IDS,
+    hybrid_field_id=None,
 )
 
 
@@ -81,17 +137,22 @@ def _candidate_schema() -> dict[str, Any]:
     }
 
 
-def _build_json_schema() -> dict[str, Any]:
+def _build_json_schema(field_ids: tuple[str, ...]) -> dict[str, Any]:
     candidate_array = {"type": "array", "items": _candidate_schema()}
     return {
         "type": "object",
-        "properties": {field_id: candidate_array for field_id in _ALL_FIELD_IDS},
-        "required": list(_ALL_FIELD_IDS),
+        "properties": {field_id: candidate_array for field_id in field_ids},
+        "required": list(field_ids),
         "additionalProperties": False,
     }
 
 
-CLASSIFICATION_JSON_SCHEMA: dict[str, Any] = _build_json_schema()
+CLASSIFICATION_JSON_SCHEMA: dict[str, Any] = _build_json_schema(_ALL_FIELD_IDS)
+
+# Detailed Operating Model V2.1 Gate 12: the Detailed counterpart schema,
+# built the same way, over the 22 Detailed field ids -- no deal-context
+# fields (out of this gate's target-field scope).
+DETAILED_CLASSIFICATION_JSON_SCHEMA: dict[str, Any] = _build_json_schema(_DETAILED_ALL_FIELD_IDS)
 
 
 def _resolve_model(model: str | None) -> str:
@@ -177,17 +238,19 @@ def _isclose(a: float, b: float) -> bool:
     return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
 
 
-def _numeric_match(field_id: str, value_number: float, snippet_number: float) -> bool:
+def _numeric_match(
+    domain: _FieldDomain, field_id: str, value_number: float, snippet_number: float
+) -> bool:
     """Literal numeric comparison (KTD12) -- same magnitude always
     verifies. Percent-vs-fraction equivalence (e.g. "5.5%" verifying a
-    proposed "0.055") is applied only for ``_PERCENT_SCALE_FIELD_IDS`` --
-    an absolute-magnitude field must match at the same scale, subject only
-    to ordinary formatting normalization (commas, currency symbols, etc.,
-    already stripped by ``_parse_numeric``)."""
+    proposed "0.055") is applied only for ``domain.percent_scale_field_ids``
+    -- an absolute-magnitude field must match at the same scale, subject
+    only to ordinary formatting normalization (commas, currency symbols,
+    etc., already stripped by ``_parse_numeric``)."""
 
     if _isclose(value_number, snippet_number):
         return True
-    if field_id not in _PERCENT_SCALE_FIELD_IDS:
+    if field_id not in domain.percent_scale_field_ids:
         return False
     return _isclose(value_number * 100, snippet_number) or _isclose(
         value_number, snippet_number * 100
@@ -198,19 +261,23 @@ def _normalize_text(text: str) -> str:
     return " ".join(text.strip().lower().split())
 
 
-def _value_supported_by_snippet(field_id: str, value: str, snippet: str) -> bool:
-    if field_id in _NUMERIC_FIELD_IDS:
+def _value_supported_by_snippet(
+    domain: _FieldDomain, field_id: str, value: str, snippet: str
+) -> bool:
+    if field_id in domain.numeric_field_ids:
         value_number = _parse_numeric(value)
         if value_number is None:
             return False
         return any(
-            _numeric_match(field_id, value_number, token) for token in _numeric_tokens(snippet)
+            _numeric_match(domain, field_id, value_number, token)
+            for token in _numeric_tokens(snippet)
         )
 
-    if field_id == _HYBRID_FIELD_ID:
+    if field_id == domain.hybrid_field_id:
         value_number = _parse_numeric(value)
         if value_number is not None and any(
-            _numeric_match(field_id, value_number, token) for token in _numeric_tokens(snippet)
+            _numeric_match(domain, field_id, value_number, token)
+            for token in _numeric_tokens(snippet)
         ):
             return True
         return _normalize_text(value) in _normalize_text(snippet)
@@ -219,7 +286,10 @@ def _value_supported_by_snippet(field_id: str, value: str, snippet: str) -> bool
 
 
 def _parse_candidate(
-    field_id: str, raw_candidate: Any, anchors_by_id: Mapping[str, Any]
+    domain: _FieldDomain,
+    field_id: str,
+    raw_candidate: Any,
+    anchors_by_id: Mapping[str, Any],
 ) -> ExtractionCandidate:
     if not isinstance(raw_candidate, Mapping):
         raise ExtractionProviderError(
@@ -248,7 +318,7 @@ def _parse_candidate(
         return ExtractionCandidate(value=value, status=EvidenceStatus.UNVERIFIABLE, provenance=None)
 
     provenance = Provenance(page=anchor.page, anchor=anchor.anchor, snippet=anchor.text)
-    if not _value_supported_by_snippet(field_id, value, anchor.text):
+    if not _value_supported_by_snippet(domain, field_id, value, anchor.text):
         # R6/AE4: the anchor exists but its text does not support the value.
         return ExtractionCandidate(
             value=value, status=EvidenceStatus.UNVERIFIABLE, provenance=provenance
@@ -259,7 +329,7 @@ def _parse_candidate(
 
 
 def _resolve_conflicts(
-    field_id: str, candidates: tuple[ExtractionCandidate, ...]
+    domain: _FieldDomain, field_id: str, candidates: tuple[ExtractionCandidate, ...]
 ) -> tuple[ExtractionCandidate, ...]:
     """R8: when two or more verified (stated/interpreted) candidates for one
     field propose differing values, every verified candidate is relabeled
@@ -281,7 +351,7 @@ def _resolve_conflicts(
     if not verified:
         return candidates
     reference_value = verified[0].value
-    if all(_values_equivalent(field_id, reference_value, c.value) for c in verified):
+    if all(_values_equivalent(domain, field_id, reference_value, c.value) for c in verified):
         return candidates
 
     resolved: list[ExtractionCandidate] = []
@@ -299,17 +369,17 @@ def _resolve_conflicts(
     return tuple(resolved)
 
 
-def _values_equivalent(field_id: str, value_a: str, value_b: str) -> bool:
+def _values_equivalent(domain: _FieldDomain, field_id: str, value_a: str, value_b: str) -> bool:
     """Same normalized proposed value for one field -- the same numeric
     comparison (including the percent-scale equivalence) already used to
     verify a candidate against its snippet (KTD12), or normalized text
     equality for text fields."""
 
-    if field_id in _NUMERIC_FIELD_IDS or field_id == _HYBRID_FIELD_ID:
+    if field_id in domain.numeric_field_ids or field_id == domain.hybrid_field_id:
         number_a = _parse_numeric(value_a)
         number_b = _parse_numeric(value_b)
         if number_a is not None and number_b is not None:
-            return _numeric_match(field_id, number_a, number_b)
+            return _numeric_match(domain, field_id, number_a, number_b)
     return _normalize_text(value_a) == _normalize_text(value_b)
 
 
@@ -331,7 +401,7 @@ def _is_redundant_evidence(a: ExtractionCandidate, b: ExtractionCandidate) -> bo
 
 
 def _deduplicate_candidates(
-    field_id: str, candidates: tuple[ExtractionCandidate, ...]
+    domain: _FieldDomain, field_id: str, candidates: tuple[ExtractionCandidate, ...]
 ) -> tuple[ExtractionCandidate, ...]:
     """Collapses a candidate that is a deterministic duplicate of one
     already kept for this field: the same normalized proposed value, the
@@ -344,7 +414,7 @@ def _deduplicate_candidates(
     for candidate in candidates:
         if any(
             candidate.status == existing.status
-            and _values_equivalent(field_id, candidate.value, existing.value)
+            and _values_equivalent(domain, field_id, candidate.value, existing.value)
             and _is_redundant_evidence(candidate, existing)
             for existing in kept
         ):
@@ -354,7 +424,10 @@ def _deduplicate_candidates(
 
 
 def _parse_field(
-    field_id: str, raw: Mapping[str, Any], anchors_by_id: Mapping[str, Any]
+    domain: _FieldDomain,
+    field_id: str,
+    raw: Mapping[str, Any],
+    anchors_by_id: Mapping[str, Any],
 ) -> FieldCandidates:
     raw_candidates = raw.get(field_id)
     if not isinstance(raw_candidates, list):
@@ -362,16 +435,20 @@ def _parse_field(
             f"Classifier response field {field_id!r} must be a list of candidates."
         )
     candidates = tuple(
-        _parse_candidate(field_id, raw_candidate, anchors_by_id) for raw_candidate in raw_candidates
+        _parse_candidate(domain, field_id, raw_candidate, anchors_by_id)
+        for raw_candidate in raw_candidates
     )
-    resolved = _resolve_conflicts(field_id, candidates)
-    return FieldCandidates(field_id=field_id, candidates=_deduplicate_candidates(field_id, resolved))
+    resolved = _resolve_conflicts(domain, field_id, candidates)
+    return FieldCandidates(
+        field_id=field_id, candidates=_deduplicate_candidates(domain, field_id, resolved)
+    )
 
 
 def _parse_classification(raw: Mapping[str, Any], document: StructuredDocument) -> ExtractionResult:
     anchors_by_id = {anchor.anchor: anchor for anchor in document.anchors}
     fields = {
-        field_id: _parse_field(field_id, raw, anchors_by_id) for field_id in _ALL_FIELD_IDS
+        field_id: _parse_field(_QUICK_DOMAIN, field_id, raw, anchors_by_id)
+        for field_id in _ALL_FIELD_IDS
     }
 
     deal_context = DealContext(
@@ -381,6 +458,23 @@ def _parse_classification(raw: Mapping[str, Any], document: StructuredDocument) 
         **{field_id: fields[field_id] for field_id in ACQUISITION_FIELD_IDS},
         deal_context=deal_context,
     )
+
+
+def _parse_detailed_classification(
+    raw: Mapping[str, Any], document: StructuredDocument
+) -> DetailedExtractionResult:
+    """Detailed Operating Model V2.1 Gate 12: the Detailed counterpart to
+    ``_parse_classification`` -- identical verification/conflict/dedup
+    pipeline (``_DETAILED_DOMAIN``), assembled into ``DetailedExtractionResult``
+    instead (no nested ``deal_context`` -- Detailed OM ingestion proposes
+    underwriting assumptions only)."""
+
+    anchors_by_id = {anchor.anchor: anchor for anchor in document.anchors}
+    fields = {
+        field_id: _parse_field(_DETAILED_DOMAIN, field_id, raw, anchors_by_id)
+        for field_id in _DETAILED_ALL_FIELD_IDS
+    }
+    return DetailedExtractionResult(**fields)
 
 
 class GPTClassifierProvider:
@@ -407,13 +501,19 @@ class GPTClassifierProvider:
         self._client = OpenAI(api_key=api_key)
         return self._client
 
-    def classify(
-        self, *, system_prompt: str, user_prompt: str, document: StructuredDocument
-    ) -> ExtractionResult:
-        """Call the Responses API once with strict structured output, then
-        deterministically verify every candidate's citation against
-        ``document`` (KTD12) before returning the assembled
-        ``ExtractionResult``."""
+    def _request_raw_classification(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema: dict[str, Any],
+        schema_name: str,
+    ) -> dict[str, Any]:
+        """Calls the Responses API once with strict structured output and
+        returns the parsed JSON object -- the one piece of provider-calling
+        logic ``classify``/``classify_detailed`` share. Performs no
+        field-specific parsing or verification of its own; that stays in
+        ``_parse_classification``/``_parse_detailed_classification``."""
 
         client = self._get_client()
 
@@ -428,8 +528,8 @@ class GPTClassifierProvider:
                 text={
                     "format": {
                         "type": "json_schema",
-                        "name": "om_classification",
-                        "schema": CLASSIFICATION_JSON_SCHEMA,
+                        "name": schema_name,
+                        "schema": json_schema,
                         "strict": True,
                     }
                 },
@@ -453,4 +553,36 @@ class GPTClassifierProvider:
         if not isinstance(raw, dict):
             raise ExtractionProviderError("The OM classifier response was not a JSON object.")
 
+        return raw
+
+    def classify(
+        self, *, system_prompt: str, user_prompt: str, document: StructuredDocument
+    ) -> ExtractionResult:
+        """Call the Responses API once with strict structured output, then
+        deterministically verify every candidate's citation against
+        ``document`` (KTD12) before returning the assembled
+        ``ExtractionResult``."""
+
+        raw = self._request_raw_classification(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            json_schema=CLASSIFICATION_JSON_SCHEMA,
+            schema_name="om_classification",
+        )
         return _parse_classification(raw, document)
+
+    def classify_detailed(
+        self, *, system_prompt: str, user_prompt: str, document: StructuredDocument
+    ) -> DetailedExtractionResult:
+        """Detailed Operating Model V2.1 Gate 12: the Detailed counterpart
+        to ``classify`` -- same provider call machinery and the same
+        KTD12 deterministic verification pass, over the Detailed field set
+        and schema, returning ``DetailedExtractionResult`` instead."""
+
+        raw = self._request_raw_classification(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            json_schema=DETAILED_CLASSIFICATION_JSON_SCHEMA,
+            schema_name="detailed_om_classification",
+        )
+        return _parse_detailed_classification(raw, document)

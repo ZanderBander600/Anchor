@@ -150,6 +150,121 @@ export interface AcquisitionResults {
   min_dscr: number | null;
 }
 
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 6 -- Detailed Underwrite mode.
+//
+// Mirrors ``OperatingMode``/``AcquisitionTerms``/``DetailedOperatingInputs``/
+// ``DetailedAcquisitionResults`` in ``src/anchor/contracts.py`` and
+// ``src/anchor/engine/contracts.py``. Detailed mode never sends or receives
+// ``current_noi``/``noi_growth``/``occupancy`` -- those three fields simply
+// have no counterpart on any type below, matching the backend engine's
+// Gate 3/4 resolution exactly.
+// =============================================================================
+
+/** Mirrors ``OperatingMode`` in ``src/anchor/contracts.py``. */
+export type OperatingMode = 'quick' | 'detailed';
+
+export interface AcquisitionTermsFormValues {
+  purchasePrice: string;
+  holdPeriod: string;
+  exitCapRate: string;
+  ltv: string;
+  interestRate: string;
+  amortization: string;
+  acquisitionCostPct: string;
+  financingFeePct: string;
+  dispositionCostPct: string;
+  annualCapexReserve: string;
+  ioPeriod: string;
+}
+
+/** Mirrors ``AcquisitionTerms`` in ``src/anchor/contracts.py`` -- the 11
+ * acquisition/debt/exit fields shared by both modes. */
+export interface AcquisitionTermsRequest {
+  purchase_price: number;
+  hold_period: number;
+  exit_cap_rate: number;
+  ltv: number;
+  interest_rate: number;
+  amortization: number;
+  acquisition_cost_pct: number;
+  financing_fee_pct: number;
+  disposition_cost_pct: number;
+  annual_capex_reserve: number;
+  io_period: number;
+}
+
+export interface DetailedOperatingFormValues {
+  grossPotentialRent: string;
+  otherIncome: string;
+  vacancyCreditLossPct: string;
+  propertyTaxes: string;
+  insurance: string;
+  utilities: string;
+  repairsMaintenance: string;
+  otherOperatingExpenses: string;
+  managementFeePct: string;
+  revenueGrowth: string;
+  expenseGrowth: string;
+}
+
+/** Mirrors ``DetailedOperatingInputs`` in ``src/anchor/contracts.py``. */
+export interface DetailedOperatingInputsRequest {
+  gross_potential_rent: number;
+  other_income: number;
+  vacancy_credit_loss_pct: number;
+  property_taxes: number;
+  insurance: number;
+  utilities: number;
+  repairs_maintenance: number;
+  other_operating_expenses: number;
+  management_fee_pct: number;
+  revenue_growth: number;
+  expense_growth: number;
+}
+
+/** The Detailed workspace's combined form state -- the acquisition/debt
+ * terms plus the Operating Model section, kept as two nested groups (rather
+ * than one flat 22-field object) so each half's own blank/default/conversion
+ * helpers can stay as narrow as ``AcquisitionFormValues``'s already are. */
+export interface DetailedFormValues {
+  terms: AcquisitionTermsFormValues;
+  operating: DetailedOperatingFormValues;
+}
+
+/** Mirrors ``OperatingProjection`` in ``src/anchor/engine/contracts.py`` --
+ * the full Detailed revenue/vacancy/EGI/expense-line/NOI schedule. Every
+ * ``_by_year`` field has length ``hold_period`` (Years 1..H); ``exit_noi``
+ * is the single Year H+1 scalar. Every value here is engine-computed -- the
+ * frontend never recalculates any of it, exactly like ``AcquisitionResults``. */
+export interface OperatingProjection {
+  gross_potential_rent_by_year: number[];
+  other_income_by_year: number[];
+  vacancy_credit_loss_by_year: number[];
+  effective_gross_income_by_year: number[];
+  property_taxes_by_year: number[];
+  insurance_by_year: number[];
+  utilities_by_year: number[];
+  repairs_maintenance_by_year: number[];
+  other_operating_expenses_by_year: number[];
+  management_fee_by_year: number[];
+  total_operating_expenses_by_year: number[];
+  noi_by_year: number[];
+  exit_noi: number;
+  going_in_cap_rate: number;
+}
+
+/** Mirrors ``DetailedAcquisitionResults`` in ``src/anchor/engine/contracts.py``
+ * -- the response shape ``POST /analyze`` returns for a ``"detailed"``
+ * ``operating_mode`` request (Gate 4). ``results`` is the exact same
+ * ``AcquisitionResults`` shape a Quick request returns; ``operating_projection``
+ * is the additional Detailed-only schedule the institutional operating
+ * statement renders from. */
+export interface DetailedAcquisitionResults {
+  operating_projection: OperatingProjection;
+  results: AcquisitionResults;
+}
+
 /** Mirrors ``ExcelIntakeReport`` in ``src/anchor/excel_reader.py`` --
  * Underwriting V2 Gate 5's ``POST /ingestion/excel`` response shape.
  * ``defaulted_v2_field_ids`` names exactly which V2 Field IDs were absent
@@ -162,14 +277,113 @@ export interface ExcelIntakeReport {
   defaulted_v2_field_ids: V2FieldId[];
 }
 
-/** Mirrors ``Deal`` in ``src/anchor/deals/contracts.py``. ``inputs`` is the
- * exact ``AcquisitionRequest`` shape ``/analyze`` already accepts -- a
- * saved deal carries no derived/result data of its own; reopening it means
- * resubmitting ``inputs`` to the existing ``/analyze`` endpoint. */
+/** Mirrors ``DetailedExcelIntakeReport`` in
+ * ``src/anchor/detailed_excel_reader.py`` -- Detailed Operating Model V2.1
+ * Gate 10's ``POST /ingestion/excel/detailed`` response shape. Unlike
+ * ``ExcelIntakeReport``, there is no defaulted-field concept: every
+ * Detailed Field ID is always required, so a successful response always
+ * carries all 22 values. Never an ``OperatingProjection`` or
+ * ``DetailedAcquisitionResults`` -- Excel ingestion parses proposed
+ * assumptions only. */
+export interface DetailedExcelIntakeReport {
+  terms: AcquisitionTermsRequest;
+  detailed_operating_inputs: DetailedOperatingInputsRequest;
+  anchor_schema: string;
+  schema_version: string;
+}
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 12 -- Detailed OM ingestion.
+//
+// Mirrors ``ACQUISITION_FIELD_IDS``/``ExtractionResult`` above, over the
+// Detailed field set instead. ``DETAILED_TERMS_FIELD_IDS``/
+// ``DETAILED_OPERATING_FIELD_IDS`` mirror
+// ``anchor.ingestion.contracts.DETAILED_TERMS_FIELD_IDS``/
+// ``DETAILED_OPERATING_FIELD_IDS``.
+// =============================================================================
+
+export const DETAILED_TERMS_FIELD_IDS = [
+  'purchase_price',
+  'hold_period',
+  'exit_cap_rate',
+  'ltv',
+  'interest_rate',
+  'amortization',
+  'acquisition_cost_pct',
+  'financing_fee_pct',
+  'disposition_cost_pct',
+  'annual_capex_reserve',
+  'io_period',
+] as const;
+
+export type DetailedTermsFieldId = (typeof DETAILED_TERMS_FIELD_IDS)[number];
+
+export const DETAILED_OPERATING_FIELD_IDS = [
+  'gross_potential_rent',
+  'other_income',
+  'vacancy_credit_loss_pct',
+  'property_taxes',
+  'insurance',
+  'utilities',
+  'repairs_maintenance',
+  'other_operating_expenses',
+  'management_fee_pct',
+  'revenue_growth',
+  'expense_growth',
+] as const;
+
+export type DetailedOperatingFieldId = (typeof DETAILED_OPERATING_FIELD_IDS)[number];
+
+/** Mirrors ``DetailedExtractionResult`` in
+ * ``src/anchor/ingestion/contracts.py`` -- Gate 12's
+ * ``POST /ingestion/om/detailed`` response shape: candidates for the
+ * eleven ``AcquisitionTerms`` fields plus the eleven
+ * ``DetailedOperatingInputs`` fields a document may support. No
+ * ``deal_context`` (out of this gate's target-field scope) and no
+ * ``current_noi``/``occupancy``/``noi_growth`` -- there is no field here
+ * an analyst could even attempt to approve one into. */
+export interface DetailedExtractionResult {
+  purchase_price: FieldCandidates;
+  hold_period: FieldCandidates;
+  exit_cap_rate: FieldCandidates;
+  ltv: FieldCandidates;
+  interest_rate: FieldCandidates;
+  amortization: FieldCandidates;
+  acquisition_cost_pct: FieldCandidates;
+  financing_fee_pct: FieldCandidates;
+  disposition_cost_pct: FieldCandidates;
+  annual_capex_reserve: FieldCandidates;
+  io_period: FieldCandidates;
+  gross_potential_rent: FieldCandidates;
+  other_income: FieldCandidates;
+  vacancy_credit_loss_pct: FieldCandidates;
+  property_taxes: FieldCandidates;
+  insurance: FieldCandidates;
+  utilities: FieldCandidates;
+  repairs_maintenance: FieldCandidates;
+  other_operating_expenses: FieldCandidates;
+  management_fee_pct: FieldCandidates;
+  revenue_growth: FieldCandidates;
+  expense_growth: FieldCandidates;
+}
+
+/** Mirrors ``Deal`` in ``src/anchor/deals/contracts.py``. A saved deal
+ * carries no derived/result data of its own -- reopening it means
+ * resubmitting its assumptions to the existing ``/analyze`` endpoint.
+ *
+ * Detailed Operating Model V2.1 Gate 11: one deal is either ``QUICK``
+ * (``inputs`` populated, ``terms``/``detailed_operating_inputs`` both
+ * ``null``) or ``DETAILED`` (``terms``/``detailed_operating_inputs``
+ * populated, ``inputs`` ``null``) -- never a fabricated
+ * ``current_noi``/``noi_growth``/``occupancy`` on a Detailed deal, matching
+ * the backend ``Deal`` dataclass's own invariant exactly. */
 export interface Deal {
   id: string;
   name: string;
-  inputs: AcquisitionRequest;
+  operating_mode: OperatingMode;
+  inputs: AcquisitionRequest | null;
+  terms: AcquisitionTermsRequest | null;
+  detailed_operating_inputs: DetailedOperatingInputsRequest | null;
   created_at: string;
   updated_at: string;
 }
@@ -198,6 +412,16 @@ export interface TwoWaySensitivityResult {
 /** Mirrors ``StandardSensitivityPresets`` in ``src/anchor/analysis/contracts.py``. */
 export interface StandardSensitivityPresets {
   exit_cap_noi_growth: TwoWaySensitivityResult;
+  purchase_price_exit_cap: TwoWaySensitivityResult;
+  interest_rate_ltv: TwoWaySensitivityResult;
+  interest_rate_ltv_dscr: TwoWaySensitivityResult;
+}
+
+/** Detailed Operating Model V2.1 Gate 14: mirrors
+ * ``StandardDetailedSensitivityPresets`` in
+ * ``src/anchor/analysis/contracts.py``. No ``exit_cap_noi_growth`` member --
+ * ``noi_growth`` has no ``AcquisitionTerms`` counterpart. */
+export interface StandardDetailedSensitivityPresets {
   purchase_price_exit_cap: TwoWaySensitivityResult;
   interest_rate_ltv: TwoWaySensitivityResult;
   interest_rate_ltv_dscr: TwoWaySensitivityResult;
@@ -241,6 +465,18 @@ export interface StandardBreakEvenAnalysis {
   min_noi_growth: BreakEvenResult;
   max_interest_rate: BreakEvenResult;
   min_current_noi: BreakEvenResult;
+}
+
+/** Detailed Operating Model V2.1 Gate 14: mirrors
+ * ``StandardDetailedBreakEvenAnalysis`` in
+ * ``src/anchor/analysis/contracts.py``. ``min_noi_growth``/
+ * ``min_current_noi`` have no Detailed equivalent -- neither ``noi_growth``
+ * nor ``current_noi`` exists on ``AcquisitionTerms``/
+ * ``DetailedOperatingInputs``. */
+export interface StandardDetailedBreakEvenAnalysis {
+  max_purchase_price: BreakEvenResult;
+  max_exit_cap_rate: BreakEvenResult;
+  max_interest_rate: BreakEvenResult;
 }
 
 /** Mirrors ``AIAnalysis`` in ``src/anchor/ai/contracts.py`` -- the AI

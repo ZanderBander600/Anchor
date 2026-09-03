@@ -1,23 +1,29 @@
-"""Phase 9A deterministic presentation layer for the AI Analyst prompt.
+"""Phase 9A / Detailed Operating Model V2.1 Gate 9 deterministic
+presentation layer for the AI Analyst prompt.
 
 This module performs no financial calculation. It only reformats values
-already produced by the frozen Phase 2/7/8 engine and analysis layers into
-human-readable strings ($/K/M currency, percentages, "x" multiples), and
-labels a metric's relationship to an already-supplied hurdle target using
-the same ``>=``-style comparison ``analysis/break_even.py`` itself already
-uses to decide a qualifying value (see ``_meets_hurdle`` there). No number
-here is derived, estimated, or algebraically combined with another -- every
-formatted value is read unchanged from one field of ``AnalysisContext``,
-and every hurdle label is a plain three-way comparison (above/at/below)
-between two already-trusted numbers.
+already produced by the frozen Phase 2/7/8 engine and analysis layers (and,
+for Detailed Underwrite, the Detailed Operating Model V2.1 Gate 2/8 engine
+and analysis layers) into human-readable strings ($/K/M currency,
+percentages, "x" multiples), and labels a metric's relationship to an
+already-supplied hurdle target using the same ``>=``-style comparison
+``analysis/break_even.py`` itself already uses to decide a qualifying value
+(see ``_meets_hurdle`` there). No number here is derived, estimated, or
+algebraically combined with another -- every formatted value is read
+unchanged from one field of ``AnalysisContext``, and every hurdle label is
+a plain three-way comparison (above/at/below) between two already-trusted
+numbers.
 
 ``build_presentation_payload`` is the only entry point ``anchor.ai.
 prompts`` needs: it turns one ``AnalysisContext`` into a fully
 JSON-serializable, presentation-formatted evidence payload for the model
--facing user prompt. The raw ``AnalysisContext`` (and therefore every raw
-decimal) remains available unchanged wherever else it is needed -- this
-module only changes what the model is shown, never what Anchor stores
-or computes.
+-facing user prompt, branching only on ``context.operating_mode`` to decide
+*which* already-computed fields to include (Quick's ``base_inputs`` vs.
+Detailed's ``base_terms``/``base_detailed_operating_inputs``/
+``operating_projection``) -- never introducing a new calculation for either
+mode. The raw ``AnalysisContext`` (and therefore every raw decimal) remains
+available unchanged wherever else it is needed -- this module only changes
+what the model is shown, never what Anchor stores or computes.
 """
 
 from __future__ import annotations
@@ -25,8 +31,13 @@ from __future__ import annotations
 from typing import Any
 
 from ..analysis.contracts import BreakEvenResult, BreakEvenStatus, TwoWaySensitivityResult
-from ..contracts import AcquisitionInputs
-from ..engine.contracts import AcquisitionResults
+from ..contracts import (
+    AcquisitionInputs,
+    AcquisitionTerms,
+    DetailedOperatingInputs,
+    OperatingMode,
+)
+from ..engine.contracts import AcquisitionResults, OperatingProjection
 from .contracts import AnalysisContext
 
 # =============================================================================
@@ -49,6 +60,15 @@ _PERCENT_FIELDS: frozenset[str] = frozenset(
         "acquisition_cost_pct",
         "financing_fee_pct",
         "disposition_cost_pct",
+        # Detailed Operating Model V2.1 Gate 9: vacancy_credit_loss_pct is a
+        # percentage of Gross Potential Rent; management_fee_pct is a
+        # percentage of Effective Gross Income; revenue_growth/
+        # expense_growth are the Detailed model's two independent annual
+        # growth rates (never a single blended noi_growth in this path).
+        "vacancy_credit_loss_pct",
+        "management_fee_pct",
+        "revenue_growth",
+        "expense_growth",
     }
 )
 _MULTIPLE_FIELDS: frozenset[str] = frozenset(
@@ -82,6 +102,30 @@ _CURRENCY_FIELDS: frozenset[str] = frozenset(
         "disposition_costs",
         "capex_by_year",
         "annual_capex_reserve",
+        # Detailed Operating Model V2.1 Gate 9: AcquisitionTerms carries no
+        # new currency field beyond the ones already listed above (it is a
+        # strict subset of AcquisitionInputs' field names). DetailedOperatingInputs'
+        # dollar assumptions:
+        "gross_potential_rent",
+        "other_income",
+        "property_taxes",
+        "insurance",
+        "utilities",
+        "repairs_maintenance",
+        "other_operating_expenses",
+        # OperatingProjection's dollar schedules -- each already computed
+        # by build_detailed_operating_projection, never re-derived here:
+        "gross_potential_rent_by_year",
+        "other_income_by_year",
+        "vacancy_credit_loss_by_year",
+        "effective_gross_income_by_year",
+        "property_taxes_by_year",
+        "insurance_by_year",
+        "utilities_by_year",
+        "repairs_maintenance_by_year",
+        "other_operating_expenses_by_year",
+        "management_fee_by_year",
+        "total_operating_expenses_by_year",
     }
 )
 _YEAR_FIELDS: frozenset[str] = frozenset(
@@ -95,20 +139,23 @@ _YEAR_FIELDS: frozenset[str] = frozenset(
 )
 
 # =============================================================================
-# Deliberate-omission allowlist (Gate 8 architecture guardrail)
+# Deliberate-omission allowlist (Gate 8 architecture guardrail, extended by
+# Detailed Operating Model V2.1 Gate 9 for the three new Detailed contracts)
 #
-# A future ``AcquisitionInputs``/``AcquisitionResults`` field that is *not*
-# supposed to reach the AI Analyst belongs here, named and reasoned about
-# explicitly. ``tests/test_ai_presentation.py`` fails loudly if any field of
-# either dataclass is missing from both ``_format_inputs``/``_format_results``
-# and this allowlist -- so a field can only ever go unseen by the model on
-# purpose, never by accident (e.g. someone adding a field to the dataclass
-# without remembering this presentation layer exists). Empty today: every
-# current field of both dataclasses is presented.
+# A future field on any of these five dataclasses that is *not* supposed to
+# reach the AI Analyst belongs in the matching allowlist, named and reasoned
+# about explicitly. The corresponding reflection test fails loudly if any
+# field is missing from both its formatter function and its allowlist -- so
+# a field can only ever go unseen by the model on purpose, never by
+# accident. Empty today: every current field of all five dataclasses is
+# presented.
 # =============================================================================
 
 INTENTIONALLY_EXCLUDED_INPUT_FIELDS: frozenset[str] = frozenset()
 INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset()
+INTENTIONALLY_EXCLUDED_TERMS_FIELDS: frozenset[str] = frozenset()
+INTENTIONALLY_EXCLUDED_DETAILED_OPERATING_FIELDS: frozenset[str] = frozenset()
+INTENTIONALLY_EXCLUDED_OPERATING_PROJECTION_FIELDS: frozenset[str] = frozenset()
 
 # A hurdle-relevant metric maps to the ``AnalysisContext`` attribute holding
 # its user-supplied hurdle target. Only these three metrics have a hurdle in
@@ -167,7 +214,8 @@ def format_multiple(value: float, *, decimals: int = 2) -> str:
 
 def format_metric_value(field_name: str, value: float | int | None) -> str:
     """Format one raw value per the presentation convention for
-    ``field_name`` (an ``AcquisitionInputs``/``AcquisitionResults``
+    ``field_name`` (an ``AcquisitionInputs``/``AcquisitionResults``/
+    ``AcquisitionTerms``/``DetailedOperatingInputs``/``OperatingProjection``
     field name, or a sensitivity/break-even assumption or metric name).
 
     Returns ``"N/A"`` for a legitimately absent metric (e.g. ``headline_dscr``
@@ -314,6 +362,131 @@ def _format_inputs(inputs: AcquisitionInputs) -> dict[str, Any]:
     }
 
 
+def _format_terms(terms: AcquisitionTerms) -> dict[str, Any]:
+    """Detailed Operating Model V2.1 Gate 9: the 11 acquisition/debt/exit
+    assumptions shared by both modes -- the Detailed counterpart of the
+    Quick-only fields ``_format_inputs`` presents. No ``current_noi``/
+    ``occupancy``/``noi_growth`` entry exists here -- ``AcquisitionTerms``
+    has no such field."""
+
+    return {
+        "purchase_price": format_metric_value("purchase_price", terms.purchase_price),
+        "hold_period": format_metric_value("hold_period", terms.hold_period),
+        "exit_cap_rate": format_metric_value("exit_cap_rate", terms.exit_cap_rate),
+        "ltv": format_metric_value("ltv", terms.ltv),
+        "interest_rate": format_metric_value("interest_rate", terms.interest_rate),
+        "amortization": format_metric_value("amortization", terms.amortization),
+        "acquisition_cost_pct": format_metric_value(
+            "acquisition_cost_pct", terms.acquisition_cost_pct
+        ),
+        "financing_fee_pct": format_metric_value(
+            "financing_fee_pct", terms.financing_fee_pct
+        ),
+        "disposition_cost_pct": format_metric_value(
+            "disposition_cost_pct", terms.disposition_cost_pct
+        ),
+        "annual_capex_reserve": format_metric_value(
+            "annual_capex_reserve", terms.annual_capex_reserve
+        ),
+        "io_period": format_metric_value("io_period", terms.io_period),
+    }
+
+
+def _format_detailed_operating_inputs(
+    detailed_operating_inputs: DetailedOperatingInputs,
+) -> dict[str, Any]:
+    """Detailed Operating Model V2.1 Gate 9: the 11 Year-1 revenue/expense/
+    growth assumptions that produce the Detailed operating projection --
+    presented as underwriting assumptions, exactly as supplied, never as
+    market evidence (see SYSTEM_PROMPT's data-gap discipline rule)."""
+
+    return {
+        "gross_potential_rent": format_metric_value(
+            "gross_potential_rent", detailed_operating_inputs.gross_potential_rent
+        ),
+        "other_income": format_metric_value(
+            "other_income", detailed_operating_inputs.other_income
+        ),
+        "vacancy_credit_loss_pct": format_metric_value(
+            "vacancy_credit_loss_pct", detailed_operating_inputs.vacancy_credit_loss_pct
+        ),
+        "property_taxes": format_metric_value(
+            "property_taxes", detailed_operating_inputs.property_taxes
+        ),
+        "insurance": format_metric_value("insurance", detailed_operating_inputs.insurance),
+        "utilities": format_metric_value("utilities", detailed_operating_inputs.utilities),
+        "repairs_maintenance": format_metric_value(
+            "repairs_maintenance", detailed_operating_inputs.repairs_maintenance
+        ),
+        "other_operating_expenses": format_metric_value(
+            "other_operating_expenses", detailed_operating_inputs.other_operating_expenses
+        ),
+        "management_fee_pct": format_metric_value(
+            "management_fee_pct", detailed_operating_inputs.management_fee_pct
+        ),
+        "revenue_growth": format_metric_value(
+            "revenue_growth", detailed_operating_inputs.revenue_growth
+        ),
+        "expense_growth": format_metric_value(
+            "expense_growth", detailed_operating_inputs.expense_growth
+        ),
+    }
+
+
+def _format_operating_projection(operating_projection: OperatingProjection) -> dict[str, Any]:
+    """Detailed Operating Model V2.1 Gate 9: the full deterministic
+    Detailed operating schedule -- every value already computed by
+    ``build_detailed_operating_projection``, never re-derived here. NOI
+    (``noi_by_year``/``exit_noi``) is presented from this authoritative
+    schedule, not assumed, distinguishing it from Quick's directly-supplied
+    ``current_noi``/``noi_growth`` (see SYSTEM_PROMPT's NOI-terminology
+    rule)."""
+
+    return {
+        "gross_potential_rent_by_year": _format_tuple(
+            "gross_potential_rent_by_year", operating_projection.gross_potential_rent_by_year
+        ),
+        "other_income_by_year": _format_tuple(
+            "other_income_by_year", operating_projection.other_income_by_year
+        ),
+        "vacancy_credit_loss_by_year": _format_tuple(
+            "vacancy_credit_loss_by_year", operating_projection.vacancy_credit_loss_by_year
+        ),
+        "effective_gross_income_by_year": _format_tuple(
+            "effective_gross_income_by_year",
+            operating_projection.effective_gross_income_by_year,
+        ),
+        "property_taxes_by_year": _format_tuple(
+            "property_taxes_by_year", operating_projection.property_taxes_by_year
+        ),
+        "insurance_by_year": _format_tuple(
+            "insurance_by_year", operating_projection.insurance_by_year
+        ),
+        "utilities_by_year": _format_tuple(
+            "utilities_by_year", operating_projection.utilities_by_year
+        ),
+        "repairs_maintenance_by_year": _format_tuple(
+            "repairs_maintenance_by_year", operating_projection.repairs_maintenance_by_year
+        ),
+        "other_operating_expenses_by_year": _format_tuple(
+            "other_operating_expenses_by_year",
+            operating_projection.other_operating_expenses_by_year,
+        ),
+        "management_fee_by_year": _format_tuple(
+            "management_fee_by_year", operating_projection.management_fee_by_year
+        ),
+        "total_operating_expenses_by_year": _format_tuple(
+            "total_operating_expenses_by_year",
+            operating_projection.total_operating_expenses_by_year,
+        ),
+        "noi_by_year": _format_tuple("noi_by_year", operating_projection.noi_by_year),
+        "exit_noi": format_metric_value("exit_noi", operating_projection.exit_noi),
+        "going_in_cap_rate": format_metric_value(
+            "going_in_cap_rate", operating_projection.going_in_cap_rate
+        ),
+    }
+
+
 def _format_results(results: AcquisitionResults) -> dict[str, Any]:
     return {
         "going_in_cap_rate": format_metric_value("going_in_cap_rate", results.going_in_cap_rate),
@@ -351,7 +524,8 @@ def _format_hurdle_evaluation(context: AnalysisContext) -> dict[str, str]:
     """The primary, deterministic above/at/below labels for the three
     headline hurdle-relevant metrics against their user-supplied targets --
     exactly the comparison the model must defer to instead of judging a
-    hurdle relationship from a raw number itself."""
+    hurdle relationship from a raw number itself. Reads ``context.results``
+    only, which is present and identically shaped for both modes."""
 
     return {
         "levered_irr_vs_target": format_hurdle_relationship(
@@ -442,6 +616,74 @@ def _format_break_even_result(result: BreakEvenResult) -> dict[str, Any]:
 # =============================================================================
 
 
+def _format_quick_sensitivities(context: AnalysisContext) -> dict[str, Any]:
+    sensitivities = context.sensitivities
+    return {
+        "exit_cap_noi_growth": _format_two_way(
+            sensitivities.exit_cap_noi_growth,
+            target=_resolve_target_for_metric(context, sensitivities.exit_cap_noi_growth.metric),
+        ),
+        "purchase_price_exit_cap": _format_two_way(
+            sensitivities.purchase_price_exit_cap,
+            target=_resolve_target_for_metric(
+                context, sensitivities.purchase_price_exit_cap.metric
+            ),
+        ),
+        "interest_rate_ltv": _format_two_way(
+            sensitivities.interest_rate_ltv,
+            target=_resolve_target_for_metric(context, sensitivities.interest_rate_ltv.metric),
+        ),
+        "interest_rate_ltv_dscr": _format_two_way(
+            sensitivities.interest_rate_ltv_dscr,
+            target=_resolve_target_for_metric(
+                context, sensitivities.interest_rate_ltv_dscr.metric
+            ),
+        ),
+    }
+
+
+def _format_detailed_sensitivities(context: AnalysisContext) -> dict[str, Any]:
+    sensitivities = context.sensitivities
+    return {
+        "purchase_price_exit_cap": _format_two_way(
+            sensitivities.purchase_price_exit_cap,
+            target=_resolve_target_for_metric(
+                context, sensitivities.purchase_price_exit_cap.metric
+            ),
+        ),
+        "interest_rate_ltv": _format_two_way(
+            sensitivities.interest_rate_ltv,
+            target=_resolve_target_for_metric(context, sensitivities.interest_rate_ltv.metric),
+        ),
+        "interest_rate_ltv_dscr": _format_two_way(
+            sensitivities.interest_rate_ltv_dscr,
+            target=_resolve_target_for_metric(
+                context, sensitivities.interest_rate_ltv_dscr.metric
+            ),
+        ),
+    }
+
+
+def _format_quick_break_even(context: AnalysisContext) -> dict[str, Any]:
+    break_even = context.break_even
+    return {
+        "max_purchase_price": _format_break_even_result(break_even.max_purchase_price),
+        "max_exit_cap_rate": _format_break_even_result(break_even.max_exit_cap_rate),
+        "min_noi_growth": _format_break_even_result(break_even.min_noi_growth),
+        "max_interest_rate": _format_break_even_result(break_even.max_interest_rate),
+        "min_current_noi": _format_break_even_result(break_even.min_current_noi),
+    }
+
+
+def _format_detailed_break_even(context: AnalysisContext) -> dict[str, Any]:
+    break_even = context.break_even
+    return {
+        "max_purchase_price": _format_break_even_result(break_even.max_purchase_price),
+        "max_exit_cap_rate": _format_break_even_result(break_even.max_exit_cap_rate),
+        "max_interest_rate": _format_break_even_result(break_even.max_interest_rate),
+    }
+
+
 def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
     """Return the complete presentation-formatted, JSON-serializable
     evidence payload for ``context`` -- currency in $/K/M, rates/IRRs as
@@ -450,13 +692,24 @@ def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
     target. Every value is read from ``context`` unchanged; only its string
     presentation and (for hurdle-relevant metrics) an already-computed
     above/at/below label are added here.
+
+    Branches only on ``context.operating_mode`` to decide which
+    already-computed base-assumption fields to include: Quick's
+    ``base_inputs`` (the fourteen ``AcquisitionInputs`` fields), or
+    Detailed's ``base_terms`` (the eleven shared ``AcquisitionTerms``
+    fields) + ``base_detailed_operating_inputs`` (the eleven
+    ``DetailedOperatingInputs`` fields) + ``operating_projection`` (the
+    full Detailed schedule). ``base_results``, ``hurdle_targets``, and
+    ``hurdle_evaluation`` are identical in shape for both modes -- they are
+    never mode-specific. Detailed's ``sensitivities``/``break_even``
+    sections have three members instead of Quick's four/five (no Detailed
+    counterpart exists for ``exit_cap_noi_growth``/``min_noi_growth``/
+    ``min_current_noi`` -- see ``StandardDetailedSensitivityPresets``/
+    ``StandardDetailedBreakEvenAnalysis``).
     """
 
-    sensitivities = context.sensitivities
-    break_even = context.break_even
-
-    return {
-        "base_inputs": _format_inputs(context.inputs),
+    payload: dict[str, Any] = {
+        "operating_mode": context.operating_mode.value,
         "base_results": _format_results(context.results),
         "hurdle_targets": {
             "target_levered_irr": format_metric_value("levered_irr", context.target_levered_irr),
@@ -469,35 +722,25 @@ def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
             "return_hurdle_metric": context.return_hurdle_metric.value,
         },
         "hurdle_evaluation": _format_hurdle_evaluation(context),
-        "sensitivities": {
-            "exit_cap_noi_growth": _format_two_way(
-                sensitivities.exit_cap_noi_growth,
-                target=_resolve_target_for_metric(
-                    context, sensitivities.exit_cap_noi_growth.metric
-                ),
-            ),
-            "purchase_price_exit_cap": _format_two_way(
-                sensitivities.purchase_price_exit_cap,
-                target=_resolve_target_for_metric(
-                    context, sensitivities.purchase_price_exit_cap.metric
-                ),
-            ),
-            "interest_rate_ltv": _format_two_way(
-                sensitivities.interest_rate_ltv,
-                target=_resolve_target_for_metric(context, sensitivities.interest_rate_ltv.metric),
-            ),
-            "interest_rate_ltv_dscr": _format_two_way(
-                sensitivities.interest_rate_ltv_dscr,
-                target=_resolve_target_for_metric(
-                    context, sensitivities.interest_rate_ltv_dscr.metric
-                ),
-            ),
-        },
-        "break_even": {
-            "max_purchase_price": _format_break_even_result(break_even.max_purchase_price),
-            "max_exit_cap_rate": _format_break_even_result(break_even.max_exit_cap_rate),
-            "min_noi_growth": _format_break_even_result(break_even.min_noi_growth),
-            "max_interest_rate": _format_break_even_result(break_even.max_interest_rate),
-            "min_current_noi": _format_break_even_result(break_even.min_current_noi),
-        },
     }
+
+    if context.operating_mode is OperatingMode.QUICK:
+        assert context.inputs is not None
+        payload["base_inputs"] = _format_inputs(context.inputs)
+        payload["sensitivities"] = _format_quick_sensitivities(context)
+        payload["break_even"] = _format_quick_break_even(context)
+    else:
+        assert context.terms is not None
+        assert context.detailed_operating_inputs is not None
+        assert context.operating_projection is not None
+        payload["base_terms"] = _format_terms(context.terms)
+        payload["base_detailed_operating_inputs"] = _format_detailed_operating_inputs(
+            context.detailed_operating_inputs
+        )
+        payload["operating_projection"] = _format_operating_projection(
+            context.operating_projection
+        )
+        payload["sensitivities"] = _format_detailed_sensitivities(context)
+        payload["break_even"] = _format_detailed_break_even(context)
+
+    return payload

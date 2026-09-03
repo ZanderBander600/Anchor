@@ -29,15 +29,24 @@ from collections.abc import Callable, Mapping
 from enum import StrEnum
 from math import isfinite
 
-from ..contracts import AcquisitionInputs
-from ..engine import AcquisitionResults, analyze_acquisition
-from ..validation import InputValidationError, validate_acquisition_inputs
+from ..contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs
+from ..engine import (
+    AcquisitionResults,
+    analyze_acquisition,
+    analyze_detailed_acquisition_with_projection,
+)
+from ..validation import (
+    InputValidationError,
+    validate_acquisition_inputs,
+    validate_acquisition_terms,
+)
 from .contracts import (
     BreakEvenResult,
     BreakEvenStatus,
     BreakEvenType,
     ReturnHurdleMetric,
     StandardBreakEvenAnalysis,
+    StandardDetailedBreakEvenAnalysis,
 )
 
 # =============================================================================
@@ -672,5 +681,388 @@ def build_standard_break_even_analysis(
         ),
         min_current_noi=solve_min_current_noi(
             inputs, target_headline_dscr=target_headline_dscr
+        ),
+    )
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 8 -- Detailed break-even
+#
+# Only the three questions that are structurally meaningful for a Detailed
+# deal: Maximum Purchase Price, Maximum Exit Cap Rate (both AcquisitionTerms
+# fields), and Maximum Interest Rate (also an AcquisitionTerms field).
+# Minimum NOI Growth and Minimum Current NOI have no Detailed counterpart --
+# neither noi_growth nor current_noi exists on AcquisitionTerms/
+# DetailedOperatingInputs (Gate 3/4's resolution) -- so no Detailed version
+# of either is added. Every candidate preserves detailed_operating_inputs
+# completely unchanged, mirroring sensitivity.py's Detailed extension and
+# the same Gate 9A-generalizing pattern: dataclasses.replace on the complete
+# AcquisitionTerms contract, never a partial reconstruction.
+# =============================================================================
+
+
+def _build_detailed_scenario_terms(
+    base: AcquisitionTerms, changes: Mapping[str, float]
+) -> AcquisitionTerms:
+    """Detailed counterpart to ``_build_scenario_inputs``. ``base`` is never
+    mutated -- it is frozen. Still routed through
+    ``validate_acquisition_terms`` -- domain validation is never
+    reimplemented here."""
+
+    candidate = dataclasses.replace(base, **changes)
+    return validate_acquisition_terms(dataclasses.asdict(candidate))
+
+
+def _evaluate_detailed_candidate(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    assumption: str,
+    metric: str,
+    candidate_value: float,
+) -> float | None:
+    """Build one validated candidate ``AcquisitionTerms`` scenario, call
+    ``analyze_detailed_acquisition_with_projection`` exactly once, and read
+    off ``metric``. ``detailed_operating_inputs`` is passed through
+    unchanged -- never varied, never dropped. Never converts a legitimately
+    ``None`` metric to zero, infinity, or any fabricated value."""
+
+    scenario_terms = _build_detailed_scenario_terms(terms, {assumption: candidate_value})
+    scenario_results = analyze_detailed_acquisition_with_projection(
+        scenario_terms, detailed_operating_inputs
+    ).results
+    return _extract_metric(scenario_results, metric)
+
+
+def _resolve_undefined_favorable_endpoint_detailed(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    assumption: str,
+    metric: str,
+    undefined_value: float,
+    other_value: float,
+    other_metric: float | None,
+    tolerance: float,
+    max_iterations: int,
+) -> tuple[float, float] | tuple[None, None]:
+    """Detailed counterpart to ``_resolve_undefined_favorable_endpoint``
+    (Gate 9G) -- identical bisection-to-first-defined-point logic, evaluated
+    via ``_evaluate_detailed_candidate`` instead."""
+
+    if other_metric is None:
+        return None, None
+
+    still_undefined_value = undefined_value
+    defined_value, defined_metric = other_value, other_metric
+
+    for _ in range(max_iterations):
+        if abs(defined_value - still_undefined_value) <= tolerance:
+            break
+        midpoint = (still_undefined_value + defined_value) / 2
+        midpoint_metric = _evaluate_detailed_candidate(
+            terms,
+            detailed_operating_inputs,
+            assumption=assumption,
+            metric=metric,
+            candidate_value=midpoint,
+        )
+        if midpoint_metric is None:
+            still_undefined_value = midpoint
+        else:
+            defined_value, defined_metric = midpoint, midpoint_metric
+
+    return defined_value, defined_metric
+
+
+def solve_detailed_break_even_threshold(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    assumption: str,
+    metric: str,
+    target: float,
+    direction: BreakEvenDirection,
+    lower_bound: float,
+    upper_bound: float,
+) -> tuple[float | None, float | None, BreakEvenStatus]:
+    """Detailed counterpart to ``solve_break_even_threshold`` -- the
+    identical bounded bisection-style threshold search, evaluated via
+    ``_evaluate_detailed_candidate``/``_resolve_undefined_favorable_endpoint_detailed``
+    instead. ``detailed_operating_inputs`` is passed through unchanged to
+    every evaluation.
+
+    Raises ``InvalidBreakEvenBoundsError`` if ``lower_bound`` is not
+    strictly less than ``upper_bound``, or if either bound is outside the
+    shared ``AcquisitionTerms`` domain for ``assumption``.
+    """
+
+    if not (lower_bound < upper_bound):
+        raise InvalidBreakEvenBoundsError(
+            f"lower_search_bound must be strictly less than upper_search_bound "
+            f"for {assumption!r}; got lower={lower_bound!r}, upper={upper_bound!r}."
+        )
+
+    try:
+        metric_at_lower = _evaluate_detailed_candidate(
+            terms,
+            detailed_operating_inputs,
+            assumption=assumption,
+            metric=metric,
+            candidate_value=lower_bound,
+        )
+    except InputValidationError as error:
+        raise InvalidBreakEvenBoundsError(
+            f"lower_search_bound {lower_bound!r} is not a valid {assumption!r} value: {error}"
+        ) from error
+
+    try:
+        metric_at_upper = _evaluate_detailed_candidate(
+            terms,
+            detailed_operating_inputs,
+            assumption=assumption,
+            metric=metric,
+            candidate_value=upper_bound,
+        )
+    except InputValidationError as error:
+        raise InvalidBreakEvenBoundsError(
+            f"upper_search_bound {upper_bound!r} is not a valid {assumption!r} value: {error}"
+        ) from error
+
+    if direction is BreakEvenDirection.MAXIMUM:
+        favorable_value, favorable_metric = lower_bound, metric_at_lower
+        unfavorable_value, unfavorable_metric = upper_bound, metric_at_upper
+    else:
+        favorable_value, favorable_metric = upper_bound, metric_at_upper
+        unfavorable_value, unfavorable_metric = lower_bound, metric_at_lower
+
+    tolerance = _ASSUMPTION_TOLERANCES[assumption]
+
+    if favorable_metric is None:
+        favorable_value, favorable_metric = _resolve_undefined_favorable_endpoint_detailed(
+            terms,
+            detailed_operating_inputs,
+            assumption=assumption,
+            metric=metric,
+            undefined_value=favorable_value,
+            other_value=unfavorable_value,
+            other_metric=unfavorable_metric,
+            tolerance=tolerance,
+            max_iterations=_MAX_ITERATIONS,
+        )
+
+    if not _meets_hurdle(favorable_metric, target):
+        return None, None, BreakEvenStatus.NO_SOLUTION_IN_RANGE
+
+    if _meets_hurdle(unfavorable_metric, target):
+        return unfavorable_value, unfavorable_metric, BreakEvenStatus.SOLVED
+
+    qualifying_value, qualifying_metric = favorable_value, favorable_metric
+    failing_value = unfavorable_value
+
+    for _ in range(_MAX_ITERATIONS):
+        if abs(failing_value - qualifying_value) <= tolerance:
+            break
+        midpoint = (qualifying_value + failing_value) / 2
+        midpoint_metric = _evaluate_detailed_candidate(
+            terms,
+            detailed_operating_inputs,
+            assumption=assumption,
+            metric=metric,
+            candidate_value=midpoint,
+        )
+        if _meets_hurdle(midpoint_metric, target):
+            qualifying_value, qualifying_metric = midpoint, midpoint_metric
+        else:
+            failing_value = midpoint
+
+    return qualifying_value, qualifying_metric, BreakEvenStatus.SOLVED
+
+
+def _build_detailed_break_even_result(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    break_even_type: BreakEvenType,
+    assumption: str,
+    metric: str,
+    target: float,
+    direction: BreakEvenDirection,
+    lower_bound: float,
+    upper_bound: float,
+) -> BreakEvenResult:
+    baseline_assumption_value = getattr(terms, assumption)
+    baseline_metric_value = _extract_metric(
+        analyze_detailed_acquisition_with_projection(
+            terms, detailed_operating_inputs
+        ).results,
+        metric,
+    )
+
+    solved_assumption_value, solved_metric_value, status = solve_detailed_break_even_threshold(
+        terms,
+        detailed_operating_inputs,
+        assumption=assumption,
+        metric=metric,
+        target=target,
+        direction=direction,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+    )
+
+    return BreakEvenResult(
+        break_even_type=break_even_type,
+        assumption=assumption,
+        metric=metric,
+        target_metric_value=target,
+        baseline_assumption_value=baseline_assumption_value,
+        baseline_metric_value=baseline_metric_value,
+        solved_assumption_value=solved_assumption_value,
+        solved_metric_value=solved_metric_value,
+        lower_search_bound=lower_bound,
+        upper_search_bound=upper_bound,
+        status=status,
+    )
+
+
+def solve_detailed_max_purchase_price(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    target_levered_irr: float | None = None,
+    target_equity_multiple: float | None = None,
+    lower_bound: float | None = None,
+    upper_bound: float | None = None,
+) -> BreakEvenResult:
+    """Detailed counterpart to ``solve_max_purchase_price`` -- default
+    search bounds (50%-150% of the baseline purchase price) computed the
+    same way, over ``terms.purchase_price``."""
+
+    metric, target = _resolve_return_hurdle(
+        target_levered_irr=target_levered_irr, target_equity_multiple=target_equity_multiple
+    )
+    default_lower, default_upper = terms.purchase_price * 0.5, terms.purchase_price * 1.5
+    lo, hi = _resolve_bounds(lower_bound, upper_bound, (default_lower, default_upper))
+    return _build_detailed_break_even_result(
+        terms,
+        detailed_operating_inputs,
+        break_even_type=BreakEvenType.MAX_PURCHASE_PRICE,
+        assumption="purchase_price",
+        metric=metric,
+        target=target,
+        direction=BreakEvenDirection.MAXIMUM,
+        lower_bound=lo,
+        upper_bound=hi,
+    )
+
+
+def solve_detailed_max_exit_cap_rate(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    target_levered_irr: float | None = None,
+    target_equity_multiple: float | None = None,
+    lower_bound: float | None = None,
+    upper_bound: float | None = None,
+) -> BreakEvenResult:
+    """Detailed counterpart to ``solve_max_exit_cap_rate`` -- default
+    search bounds (``max(0.005, baseline - 3pp)`` through ``baseline +
+    5pp``) computed the same way, over ``terms.exit_cap_rate``."""
+
+    metric, target = _resolve_return_hurdle(
+        target_levered_irr=target_levered_irr, target_equity_multiple=target_equity_multiple
+    )
+    default_lower = max(0.005, terms.exit_cap_rate - 0.03)
+    default_upper = terms.exit_cap_rate + 0.05
+    lo, hi = _resolve_bounds(lower_bound, upper_bound, (default_lower, default_upper))
+    return _build_detailed_break_even_result(
+        terms,
+        detailed_operating_inputs,
+        break_even_type=BreakEvenType.MAX_EXIT_CAP_RATE,
+        assumption="exit_cap_rate",
+        metric=metric,
+        target=target,
+        direction=BreakEvenDirection.MAXIMUM,
+        lower_bound=lo,
+        upper_bound=hi,
+    )
+
+
+def solve_detailed_max_interest_rate(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    target_headline_dscr: float,
+    lower_bound: float | None = None,
+    upper_bound: float | None = None,
+) -> BreakEvenResult:
+    """Detailed counterpart to ``solve_max_interest_rate`` -- default
+    search bounds (``0.0`` through ``max(0.20, baseline + 10pp)``) computed
+    the same way, over ``terms.interest_rate``."""
+
+    _validate_target_headline_dscr(target_headline_dscr)
+    default_lower, default_upper = 0.0, max(0.20, terms.interest_rate + 0.10)
+    lo, hi = _resolve_bounds(lower_bound, upper_bound, (default_lower, default_upper))
+    return _build_detailed_break_even_result(
+        terms,
+        detailed_operating_inputs,
+        break_even_type=BreakEvenType.MAX_INTEREST_RATE,
+        assumption="interest_rate",
+        metric="headline_dscr",
+        target=target_headline_dscr,
+        direction=BreakEvenDirection.MAXIMUM,
+        lower_bound=lo,
+        upper_bound=hi,
+    )
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 9 (AI Analyst) -- standard Detailed
+# break-even bundle, mirroring build_standard_break_even_analysis so the AI
+# context can receive "the already-authoritative Detailed ... break-even
+# outputs where the existing Quick AI path receives those analyses".
+# Composes only the already-built, already-tested solve_detailed_max_*
+# functions -- no new break-even target.
+# =============================================================================
+
+
+def build_standard_detailed_break_even_analysis(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    target_levered_irr: float,
+    target_headline_dscr: float,
+    target_equity_multiple: float | None = None,
+    return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
+) -> StandardDetailedBreakEvenAnalysis:
+    """Run the three standard Detailed break-even questions for one base
+    ``AcquisitionTerms``/``DetailedOperatingInputs`` pair, each using its
+    documented default search range -- the Detailed counterpart of
+    ``build_standard_break_even_analysis``. ``min_noi_growth``/
+    ``min_current_noi`` have no Detailed equivalent (see
+    ``StandardDetailedBreakEvenAnalysis``), so this bundle has three members
+    instead of five."""
+
+    if return_hurdle_metric is ReturnHurdleMetric.EQUITY_MULTIPLE:
+        if target_equity_multiple is None:
+            raise InvalidBreakEvenTargetError(
+                "target_equity_multiple is required when return_hurdle_metric "
+                "is 'equity_multiple'."
+            )
+        return_hurdle_kwargs: dict[str, float] = {
+            "target_equity_multiple": target_equity_multiple
+        }
+    else:
+        return_hurdle_kwargs = {"target_levered_irr": target_levered_irr}
+
+    return StandardDetailedBreakEvenAnalysis(
+        max_purchase_price=solve_detailed_max_purchase_price(
+            terms, detailed_operating_inputs, **return_hurdle_kwargs
+        ),
+        max_exit_cap_rate=solve_detailed_max_exit_cap_rate(
+            terms, detailed_operating_inputs, **return_hurdle_kwargs
+        ),
+        max_interest_rate=solve_detailed_max_interest_rate(
+            terms, detailed_operating_inputs, target_headline_dscr=target_headline_dscr
         ),
     )

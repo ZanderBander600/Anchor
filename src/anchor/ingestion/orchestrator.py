@@ -13,9 +13,14 @@ local call argument for the duration of this function.
 from __future__ import annotations
 
 from .classifier_provider import GPTClassifierProvider
-from .contracts import ExtractionResult
+from .contracts import DetailedExtractionResult, ExtractionResult
 from .di_provider import AzureDocumentIntelligenceProvider
-from .prompts import build_system_prompt, build_user_prompt
+from .prompts import (
+    build_detailed_system_prompt,
+    build_detailed_user_prompt,
+    build_system_prompt,
+    build_user_prompt,
+)
 
 
 def extract_om(
@@ -49,5 +54,36 @@ def extract_om(
     user_prompt = build_user_prompt(document)
 
     return active_classifier_provider.classify(
+        system_prompt=system_prompt, user_prompt=user_prompt, document=document
+    )
+
+
+def extract_detailed_om(
+    pdf_bytes: bytes,
+    *,
+    di_provider: AzureDocumentIntelligenceProvider | None = None,
+    classifier_provider: GPTClassifierProvider | None = None,
+) -> DetailedExtractionResult:
+    """Detailed Operating Model V2.1 Gate 12: the Detailed counterpart to
+    ``extract_om`` -- identical sequencing (Azure DI exactly once, then the
+    GPT classifier exactly once with only the resulting ``StructuredDocument``,
+    never ``pdf_bytes`` itself) and the same default/injectable provider
+    pattern, over the Detailed prompts/schema and returning
+    ``DetailedExtractionResult`` instead. Reuses
+    ``AzureDocumentIntelligenceProvider`` completely unchanged -- Azure DI's
+    layout extraction has no notion of Quick or Detailed fields at all.
+    """
+
+    active_di_provider = di_provider if di_provider is not None else AzureDocumentIntelligenceProvider()
+    active_classifier_provider = (
+        classifier_provider if classifier_provider is not None else GPTClassifierProvider()
+    )
+
+    document = active_di_provider.analyze(pdf_bytes)
+
+    system_prompt = build_detailed_system_prompt()
+    user_prompt = build_detailed_user_prompt(document)
+
+    return active_classifier_provider.classify_detailed(
         system_prompt=system_prompt, user_prompt=user_prompt, document=document
     )

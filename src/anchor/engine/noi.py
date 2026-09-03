@@ -87,3 +87,16 @@ def forecast_noi(inputs: AcquisitionInputs) -> NoiForecast:
         exit_noi=exit_noi,
         going_in_cap_rate=going_in_cap_rate,
     )
+
+
+def build_quick_operating_projection(inputs: AcquisitionInputs) -> NoiForecast:
+    """Detailed Operating Model V2.1 Gate 3 -- Quick Underwrite's operating-
+    projection producer, named symmetrically with
+    ``engine.operating_projection.build_detailed_operating_projection``.
+
+    A thin, behavior-preserving wrapper around ``forecast_noi``: performs no
+    calculation of its own. ``forecast_noi`` itself is unchanged and remains
+    directly callable wherever it already was.
+    """
+
+    return forecast_noi(inputs)

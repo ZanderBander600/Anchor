@@ -21,6 +21,7 @@ from .validation import (
     _normalize_field_value,
     validate_acquisition_inputs,
 )
+from .workbook_schema import DETAILED_SCHEMA, _is_blank, read_workbook_schema
 
 _INPUTS_SHEET = "Inputs"
 _HEADERS = ("Field ID", "Input", "Value", "Unit")
@@ -104,6 +105,28 @@ def _read_acquisition_inputs_from_source(
         raise _workbook_open_error(identifier) from None
 
     try:
+        # Detailed Operating Model V2.1 Gate 10: a workbook that explicitly
+        # declares itself Detailed must never be silently reinterpreted as
+        # Quick by field-name coincidence (missing current_noi/occupancy/
+        # noi_growth would otherwise just look like three more missing
+        # fields). A workbook with no ``Meta`` sheet, or one declaring
+        # itself Quick, is unaffected -- this is the only new check Quick's
+        # reader gains.
+        schema = read_workbook_schema(workbook)
+        if schema.anchor_schema == DETAILED_SCHEMA:
+            raise InputValidationError(
+                (
+                    InputIssue(
+                        category=IssueCategory.SCHEMA_MISMATCH,
+                        message=(
+                            "This workbook uses the Detailed Underwrite schema. "
+                            "Switch to Detailed Underwrite or upload a Quick "
+                            "Underwrite workbook."
+                        ),
+                    ),
+                )
+            )
+
         if _INPUTS_SHEET not in workbook.sheetnames:
             raise InputValidationError(
                 (
@@ -278,10 +301,6 @@ def _last_content_row(worksheet: Any) -> int:
         ),
         default=1,
     )
-
-
-def _is_blank(value: object) -> bool:
-    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _malformed_field_id_issue(row_number: int, detail: str) -> InputIssue:
