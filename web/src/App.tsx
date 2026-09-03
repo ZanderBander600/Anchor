@@ -14,6 +14,7 @@ import {
   getDeal,
   listDeals,
   updateDeal,
+  uploadDetailedExcel,
   uploadExcel,
   uploadOm,
 } from './api';
@@ -24,6 +25,7 @@ import { DealBar } from './components/DealBar';
 import type { SaveStatus } from './components/DealBar';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
 import { DetailedAssumptionsForm } from './components/DetailedAssumptionsForm';
+import { DetailedExcelReviewPanel } from './components/DetailedExcelReviewPanel';
 import { ExcelReviewPanel } from './components/ExcelReviewPanel';
 import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
@@ -36,7 +38,10 @@ import {
   buildAcquisitionRequest,
   buildAcquisitionTermsRequest,
   buildApprovedFormValues,
+  buildDetailedFormValuesFromExcelIntakeReport,
+  buildDetailedOperatingFormValuesFromRequest,
   buildDetailedOperatingInputsRequest,
+  buildDetailedTermsFormValuesFromRequest,
   buildFormValuesFromAcquisitionInputs,
   buildFormValuesFromExcelIntakeReport,
   DEFAULT_TARGET_EQUITY_MULTIPLE,
@@ -98,6 +103,131 @@ export default function App() {
   function clearDetailedAiAnalysis() {
     setDetailedAiAnalysis(null);
     setDetailedAiAnalysisError(null);
+  }
+
+  // Detailed Operating Model V2.1 Gate 10: Detailed Excel ingestion.
+  // Mirrors Quick's `excelReview` state/handlers exactly (same
+  // upload -> temporary review -> explicit approve/cancel control
+  // philosophy), over `DetailedFormValues` instead of
+  // `AcquisitionFormValues`. A successful upload never touches
+  // `detailedValues` -- only `handleApproveDetailedExcelReview` does. A
+  // second upload replaces `detailedExcelReview` wholesale, never merges.
+  const [isUploadingDetailedExcel, setIsUploadingDetailedExcel] = useState(false);
+  const [detailedExcelUploadError, setDetailedExcelUploadError] = useState<string | null>(
+    null,
+  );
+  const [detailedExcelUploadSuccessMessage, setDetailedExcelUploadSuccessMessage] = useState<
+    string | null
+  >(null);
+
+  interface DetailedExcelReviewState {
+    fileName: string;
+    values: DetailedFormValues;
+  }
+  const [detailedExcelReview, setDetailedExcelReview] =
+    useState<DetailedExcelReviewState | null>(null);
+  const [detailedExcelReviewError, setDetailedExcelReviewError] = useState<string | null>(
+    null,
+  );
+
+  async function handleUploadDetailedExcel(file: File) {
+    setIsUploadingDetailedExcel(true);
+    setDetailedExcelUploadError(null);
+    setDetailedExcelUploadSuccessMessage(null);
+    setDetailedExcelReviewError(null);
+    try {
+      const report = await uploadDetailedExcel(file);
+      setDetailedExcelReview({
+        fileName: file.name,
+        values: buildDetailedFormValuesFromExcelIntakeReport(report),
+      });
+      setDetailedExcelUploadSuccessMessage(
+        'Workbook parsed successfully. Review the imported assumptions below before loading ' +
+          'them into the deal.',
+      );
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedExcelUploadError(apiError.message);
+      } else {
+        setDetailedExcelUploadError('An unexpected error occurred while parsing the workbook.');
+      }
+    } finally {
+      setIsUploadingDetailedExcel(false);
+    }
+  }
+
+  function handleDetailedExcelReviewTermsFieldChange(
+    key: keyof AcquisitionTermsFormValues,
+    value: string,
+  ) {
+    setDetailedExcelReview((previous) =>
+      previous
+        ? { ...previous, values: { ...previous.values, terms: { ...previous.values.terms, [key]: value } } }
+        : previous,
+    );
+    setDetailedExcelReviewError(null);
+  }
+
+  function handleDetailedExcelReviewOperatingFieldChange(
+    key: keyof DetailedOperatingFormValues,
+    value: string,
+  ) {
+    setDetailedExcelReview((previous) =>
+      previous
+        ? {
+            ...previous,
+            values: { ...previous.values, operating: { ...previous.values.operating, [key]: value } },
+          }
+        : previous,
+    );
+    setDetailedExcelReviewError(null);
+  }
+
+  /** Validates and converts the review state using the exact same
+   * `buildAcquisitionTermsRequest`/`buildDetailedOperatingInputsRequest`
+   * conversion `handleDetailedSubmit` already uses -- no duplicate
+   * financial validation lives here. Only on success does this touch
+   * `detailedValues`; upload and editing never do. Never auto-runs
+   * Analyze. */
+  function handleApproveDetailedExcelReview() {
+    if (!detailedExcelReview) {
+      return;
+    }
+    let termsRequest;
+    let operatingRequest;
+    try {
+      termsRequest = buildAcquisitionTermsRequest(detailedExcelReview.values.terms);
+      operatingRequest = buildDetailedOperatingInputsRequest(
+        detailedExcelReview.values.operating,
+      );
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setDetailedExcelReviewError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+    setDetailedValues({
+      terms: buildDetailedTermsFormValuesFromRequest(termsRequest),
+      operating: buildDetailedOperatingFormValuesFromRequest(operatingRequest),
+    });
+    setDetailedResults(null);
+    setDetailedError(null);
+    clearDetailedAiAnalysis();
+    setDetailedExcelReview(null);
+    setDetailedExcelReviewError(null);
+    setDetailedExcelUploadSuccessMessage(
+      'Detailed assumptions approved and loaded. Review the deal assumptions, then click ' +
+        'Analyze Deal.',
+    );
+  }
+
+  /** Discards the pending Detailed Excel review without touching
+   * `detailedValues`, leaving it exactly as it was before the upload. */
+  function handleCancelDetailedExcelReview() {
+    setDetailedExcelReview(null);
+    setDetailedExcelReviewError(null);
+    setDetailedExcelUploadSuccessMessage(null);
   }
 
   function handleDetailedTermsFieldChange(
@@ -888,6 +1018,31 @@ export default function App() {
 
         {operatingMode === 'detailed' ? (
           <>
+            <div className="intake-section">
+              <h2 className="section-heading">Deal Intake</h2>
+              <div className="intake-grid">
+                <ExcelUploadPanel
+                  isLoading={isUploadingDetailedExcel}
+                  error={detailedExcelUploadError}
+                  successMessage={detailedExcelUploadSuccessMessage}
+                  onUpload={(file) => void handleUploadDetailedExcel(file)}
+                />
+              </div>
+
+              {detailedExcelReview && (
+                <DetailedExcelReviewPanel
+                  fileName={detailedExcelReview.fileName}
+                  termsValues={detailedExcelReview.values.terms}
+                  operatingValues={detailedExcelReview.values.operating}
+                  error={detailedExcelReviewError}
+                  onTermsFieldChange={handleDetailedExcelReviewTermsFieldChange}
+                  onOperatingFieldChange={handleDetailedExcelReviewOperatingFieldChange}
+                  onApprove={handleApproveDetailedExcelReview}
+                  onCancel={handleCancelDetailedExcelReview}
+                />
+              )}
+            </div>
+
             <DetailedAssumptionsForm
               termsValues={detailedValues.terms}
               operatingValues={detailedValues.operating}

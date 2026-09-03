@@ -16,10 +16,12 @@ import {
   getDeal,
   listDeals,
   updateDeal,
+  uploadDetailedExcel,
   uploadExcel,
   uploadOm,
 } from './api';
 import {
+  BLANK_DETAILED_FORM_VALUES,
   BLANK_FORM_VALUES,
   buildAcquisitionRequest,
   DEFAULT_FORM_VALUES,
@@ -33,6 +35,7 @@ import type {
   BreakEvenResult,
   Deal,
   DetailedAcquisitionResults,
+  DetailedExcelIntakeReport,
   ExcelIntakeReport,
   ExtractionResult,
   FieldCandidates,
@@ -53,6 +56,7 @@ vi.mock('./api', async () => {
     fetchDetailedAIAnalysis: vi.fn(),
     uploadOm: vi.fn(),
     uploadExcel: vi.fn(),
+    uploadDetailedExcel: vi.fn(),
     createDeal: vi.fn(),
     updateDeal: vi.fn(),
     getDeal: vi.fn(),
@@ -70,6 +74,7 @@ const mockFetchAIAnalysis = vi.mocked(fetchAIAnalysis);
 const mockFetchDetailedAIAnalysis = vi.mocked(fetchDetailedAIAnalysis);
 const mockUploadOm = vi.mocked(uploadOm);
 const mockUploadExcel = vi.mocked(uploadExcel);
+const mockUploadDetailedExcel = vi.mocked(uploadDetailedExcel);
 const mockCreateDeal = vi.mocked(createDeal);
 const mockDuplicateDeal = vi.mocked(duplicateDeal);
 const mockDeleteDeal = vi.mocked(deleteDeal);
@@ -314,6 +319,46 @@ function makeExcelIntakeReport(
   };
 }
 
+/** Detailed Operating Model V2.1 Gate 10 -- the Detailed golden case,
+ * shaped as a `POST /ingestion/excel/detailed` response
+ * (`DetailedExcelIntakeReport`). Every field is always present -- there is
+ * no defaulted-field concept for Detailed. */
+function makeDetailedExcelIntakeReport(
+  overrides: Partial<DetailedExcelIntakeReport> = {},
+): DetailedExcelIntakeReport {
+  return {
+    terms: {
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    },
+    detailed_operating_inputs: {
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    },
+    anchor_schema: 'detailed_acquisition',
+    schema_version: '2.1',
+    ...overrides,
+  };
+}
+
 /** A Promise plus its resolvers, for controlling in-flight request timing in tests. */
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -457,6 +502,7 @@ beforeEach(() => {
   mockFetchDetailedAIAnalysis.mockResolvedValue(makeAiAnalysis());
   mockUploadOm.mockReset();
   mockUploadExcel.mockReset();
+  mockUploadDetailedExcel.mockReset();
   mockCreateDeal.mockReset();
   mockUpdateDeal.mockReset();
   mockGetDeal.mockReset();
@@ -2979,5 +3025,288 @@ describe('AI Analyst in Detailed mode (Gate 9)', () => {
     });
 
     expect(screen.queryByText('Five-year hold with moderate leverage.')).toBeNull();
+  });
+});
+
+describe('Detailed Excel ingestion workflow (Gate 10)', () => {
+  /** Switches to Detailed mode, uploads the golden Detailed workbook, and
+   * waits for the Detailed Excel Ingestion Review panel to appear -- never
+   * waits on the live `DetailedAssumptionsForm`, which this upload must not
+   * touch. */
+  async function uploadDetailedWorkbook(user: ReturnType<typeof userEvent.setup>) {
+    render(<App />);
+    mockUploadDetailedExcel.mockResolvedValue(makeDetailedExcelIntakeReport());
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '10000000');
+    });
+  }
+
+  it('exposes Excel upload in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.getByLabelText('Upload Anchor Workbook (.xlsx)')).toBeTruthy();
+  });
+
+  it('does not immediately populate active Detailed assumptions after upload', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+    );
+  });
+
+  it('creates a temporary Detailed Excel review with all 22 imported values', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    expect(screen.getByLabelText('Detailed Excel Review Purchase Price')).toHaveProperty(
+      'value',
+      '10000000',
+    );
+    expect(screen.getByLabelText('Detailed Excel Review Hold Period')).toHaveProperty(
+      'value',
+      '5',
+    );
+    expect(screen.getByLabelText('Detailed Excel Review Exit Cap Rate')).toHaveProperty(
+      'value',
+      '6.5',
+    );
+    expect(screen.getByLabelText('Detailed Excel Review Gross Potential Rent')).toHaveProperty(
+      'value',
+      '800000',
+    );
+    expect(
+      screen.getByLabelText('Detailed Excel Review Vacancy & Credit Loss'),
+    ).toHaveProperty('value', '5');
+    expect(screen.getByLabelText('Detailed Excel Review Management Fee')).toHaveProperty(
+      'value',
+      '5',
+    );
+  });
+
+  it('AcquisitionTerms review fields are editable', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    fireEvent.change(screen.getByLabelText('Detailed Excel Review Purchase Price'), {
+      target: { value: '11000000' },
+    });
+
+    expect(screen.getByLabelText('Detailed Excel Review Purchase Price')).toHaveProperty(
+      'value',
+      '11000000',
+    );
+  });
+
+  it('DetailedOperatingInputs review fields are editable', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    fireEvent.change(screen.getByLabelText('Detailed Excel Review Gross Potential Rent'), {
+      target: { value: '850000' },
+    });
+
+    expect(
+      screen.getByLabelText('Detailed Excel Review Gross Potential Rent'),
+    ).toHaveProperty('value', '850000');
+  });
+
+  it('Approve & Load Assumptions populates all Detailed assumptions', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', '800000');
+    expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
+    expect(screen.getByLabelText(/^Expense Growth/)).toHaveProperty('value', '3');
+  });
+
+  it('Approve & Load Assumptions never automatically calls Analyze', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+  });
+
+  it('Cancel Review discards the pending review and leaves active Detailed assumptions unchanged', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
+
+    expect(screen.queryByLabelText('Detailed Excel Review Purchase Price')).toBeNull();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+    );
+  });
+
+  it('a saved Quick deal is completely unaffected by a Detailed Excel upload, approval, or cancel', async () => {
+    const user = userEvent.setup();
+    mockCreateDeal.mockResolvedValue(makeDeal());
+    render(<App />);
+    fillGoldenDeal();
+    await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+    await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+
+    mockUploadDetailedExcel.mockResolvedValue(makeDetailedExcelIntakeReport());
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '10000000');
+    });
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+
+    expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '111 Main St');
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Update Deal' })).toBeTruthy();
+    expect(mockUpdateDeal).not.toHaveBeenCalled();
+  });
+
+  it('shows a clear error in Detailed mode when a Quick workbook is uploaded', async () => {
+    const user = userEvent.setup();
+    mockUploadDetailedExcel.mockRejectedValue(
+      new ApiError(
+        'This workbook uses the Quick Underwrite schema. Switch to Quick Underwrite or ' +
+          'upload a Detailed Underwrite workbook.',
+      ),
+    );
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['PK'], 'anchor_input_v2.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    expect(
+      await screen.findByText(/uses the Quick Underwrite schema/),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText('Detailed Excel Review Purchase Price')).toBeNull();
+  });
+
+  it('Quick mode Excel upload never calls uploadDetailedExcel, and Detailed mode never calls uploadExcel', async () => {
+    const user = userEvent.setup();
+    mockUploadExcel.mockResolvedValue(makeExcelIntakeReport());
+    mockUploadDetailedExcel.mockResolvedValue(makeDetailedExcelIntakeReport());
+    render(<App />);
+
+    const quickFile = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), quickFile);
+    await waitFor(() => expect(mockUploadExcel).toHaveBeenCalledTimes(1));
+    expect(mockUploadDetailedExcel).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const detailedFile = new File(['PK'], 'anchor_detailed_input_v2_1.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), detailedFile);
+    await waitFor(() => expect(mockUploadDetailedExcel).toHaveBeenCalledTimes(1));
+    expect(mockUploadExcel).toHaveBeenCalledTimes(1);
+  });
+
+  it('uploading a second Detailed workbook replaces the pending review cleanly rather than merging', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedWorkbook(user);
+
+    mockUploadDetailedExcel.mockResolvedValue(
+      makeDetailedExcelIntakeReport({
+        terms: {
+          ...makeDetailedExcelIntakeReport().terms,
+          purchase_price: 12_000_000,
+        },
+      }),
+    );
+    const secondFile = new File(['PK'], 'second_workbook.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), secondFile);
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Detailed Excel Review Purchase Price'),
+      ).toHaveProperty('value', '12000000');
+    });
+    // Only one review panel's worth of fields -- never two merged copies.
+    expect(screen.getAllByLabelText('Detailed Excel Review Purchase Price')).toHaveLength(1);
+  });
+
+  it('a new/unopened Detailed deal remains blank until Excel approval', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+    );
+  });
+
+  it('the golden Detailed workbook can be approved and then passed into the existing Detailed analysis request path', async () => {
+    const user = userEvent.setup();
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    await uploadDetailedWorkbook(user);
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+    const [terms, detailedOperatingInputs] = mockAnalyzeDetailed.mock.calls[0];
+    expect(terms).toEqual({
+      purchase_price: 10_000_000,
+      hold_period: 5,
+      exit_cap_rate: 0.065,
+      ltv: 0.6,
+      interest_rate: 0.05,
+      amortization: 30,
+      acquisition_cost_pct: 0.02,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.025,
+      annual_capex_reserve: 50_000,
+      io_period: 2,
+    });
+    expect(detailedOperatingInputs).toEqual({
+      gross_potential_rent: 800_000,
+      other_income: 20_000,
+      vacancy_credit_loss_pct: 0.05,
+      property_taxes: 60_000,
+      insurance: 20_000,
+      utilities: 25_000,
+      repairs_maintenance: 20_000,
+      other_operating_expenses: 16_000,
+      management_fee_pct: 0.05,
+      revenue_growth: 0.03,
+      expense_growth: 0.03,
+    });
   });
 });

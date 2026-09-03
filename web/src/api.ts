@@ -5,6 +5,7 @@ import type {
   AIAnalysis,
   Deal,
   DetailedAcquisitionResults,
+  DetailedExcelIntakeReport,
   DetailedOperatingInputsRequest,
   ExcelIntakeReport,
   ExtractionResult,
@@ -443,6 +444,57 @@ export async function uploadExcel(file: File): Promise<ExcelIntakeReport> {
   }
 
   return (await response.json()) as ExcelIntakeReport;
+}
+
+/**
+ * Detailed Operating Model V2.1 Gate 10: uploads a Detailed Anchor Excel
+ * workbook to the FastAPI ``POST /ingestion/excel/detailed`` endpoint as
+ * multipart form data and returns the parsed ``AcquisitionTerms``/
+ * ``DetailedOperatingInputs`` plus the workbook's declared schema/version
+ * (``DetailedExcelIntakeReport``). Performs no workbook parsing, financial
+ * validation, or workbook-schema classification of its own -- the backend
+ * Detailed Excel reader is authoritative, including rejecting a Quick
+ * workbook uploaded here with the same 422 issue-list shape
+ * ``analyzeDetailedAcquisition`` already handles. Mirrors ``uploadExcel``
+ * exactly, over the separate Detailed endpoint (Gate 10's Option B).
+ */
+export async function uploadDetailedExcel(file: File): Promise<DetailedExcelIntakeReport> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/ingestion/excel/detailed`, {
+      method: 'POST',
+      body: formData,
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  if (response.status === 422) {
+    const body = await response.json().catch(() => null);
+    const issues: ValidationIssue[] = Array.isArray(body?.detail) ? body.detail : [];
+    const message =
+      issues.length > 0
+        ? issues.map((issue) => issue.message).join(' ')
+        : 'The uploaded workbook failed validation.';
+    throw new ApiError(message, issues);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string'
+        ? body.detail
+        : `The Excel upload was rejected (HTTP ${response.status}).`;
+    throw new ApiError(message);
+  }
+
+  return (await response.json()) as DetailedExcelIntakeReport;
 }
 
 // =============================================================================

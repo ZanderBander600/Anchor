@@ -4,6 +4,7 @@ import type {
   AcquisitionRequest,
   AcquisitionTermsFormValues,
   AcquisitionTermsRequest,
+  DetailedExcelIntakeReport,
   DetailedFormValues,
   DetailedOperatingFormValues,
   DetailedOperatingInputsRequest,
@@ -373,7 +374,7 @@ export function buildApprovedFormValues(
  * introduced by the `* 100` percent-scale conversion below (e.g. so
  * `0.1 * 100` never renders as `"10.000000000000002"`). Real acquisition
  * inputs never need more than a handful of decimal places. */
-function formatDisplayNumber(value: number): string {
+export function formatDisplayNumber(value: number): string {
   return String(Math.round(value * 1e6) / 1e6);
 }
 
@@ -605,6 +606,68 @@ export interface OperatingFieldConfig {
 export interface OperatingFieldGroup {
   title: string;
   fields: OperatingFieldConfig[];
+}
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 10 -- Detailed Excel ingestion
+// (`POST /ingestion/excel/detailed`) review-state -> `DetailedFormValues`
+// handoff. Mirrors `buildFormValuesFromAcquisitionInputs`/
+// `buildFormValuesFromExcelIntakeReport` above: the backend Detailed Excel
+// endpoint always returns a fully validated, complete pair of
+// `AcquisitionTermsRequest`/`DetailedOperatingInputsRequest` (there is no
+// defaulted-field concept for Detailed -- every one of the 22 fields is
+// always required), so this is a plain, always-complete numeric
+// conversion, never a partial/candidate result.
+// =============================================================================
+
+export function buildDetailedTermsFormValuesFromRequest(
+  terms: AcquisitionTermsRequest,
+): AcquisitionTermsFormValues {
+  return {
+    purchasePrice: formatDisplayNumber(terms.purchase_price),
+    holdPeriod: formatDisplayNumber(terms.hold_period),
+    exitCapRate: formatDisplayNumber(terms.exit_cap_rate * 100),
+    ltv: formatDisplayNumber(terms.ltv * 100),
+    interestRate: formatDisplayNumber(terms.interest_rate * 100),
+    amortization: formatDisplayNumber(terms.amortization),
+    acquisitionCostPct: formatDisplayNumber(terms.acquisition_cost_pct * 100),
+    financingFeePct: formatDisplayNumber(terms.financing_fee_pct * 100),
+    dispositionCostPct: formatDisplayNumber(terms.disposition_cost_pct * 100),
+    annualCapexReserve: formatDisplayNumber(terms.annual_capex_reserve),
+    ioPeriod: formatDisplayNumber(terms.io_period),
+  };
+}
+
+export function buildDetailedOperatingFormValuesFromRequest(
+  inputs: DetailedOperatingInputsRequest,
+): DetailedOperatingFormValues {
+  return {
+    grossPotentialRent: formatDisplayNumber(inputs.gross_potential_rent),
+    otherIncome: formatDisplayNumber(inputs.other_income),
+    vacancyCreditLossPct: formatDisplayNumber(inputs.vacancy_credit_loss_pct * 100),
+    propertyTaxes: formatDisplayNumber(inputs.property_taxes),
+    insurance: formatDisplayNumber(inputs.insurance),
+    utilities: formatDisplayNumber(inputs.utilities),
+    repairsMaintenance: formatDisplayNumber(inputs.repairs_maintenance),
+    otherOperatingExpenses: formatDisplayNumber(inputs.other_operating_expenses),
+    managementFeePct: formatDisplayNumber(inputs.management_fee_pct * 100),
+    revenueGrowth: formatDisplayNumber(inputs.revenue_growth * 100),
+    expenseGrowth: formatDisplayNumber(inputs.expense_growth * 100),
+  };
+}
+
+/** Converts a `POST /ingestion/excel/detailed` response
+ * (`DetailedExcelIntakeReport`) into `DetailedFormValues` for the Detailed
+ * Excel review state. Every field is always populated -- unlike Quick's
+ * `buildFormValuesFromExcelIntakeReport`, there is no defaulted-field set
+ * to blank out. */
+export function buildDetailedFormValuesFromExcelIntakeReport(
+  report: DetailedExcelIntakeReport,
+): DetailedFormValues {
+  return {
+    terms: buildDetailedTermsFormValuesFromRequest(report.terms),
+    operating: buildDetailedOperatingFormValuesFromRequest(report.detailed_operating_inputs),
+  };
 }
 
 /** The 11 DetailedOperatingInputs assumptions grouped for display, per

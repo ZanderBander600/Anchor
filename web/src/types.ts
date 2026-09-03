@@ -277,6 +277,21 @@ export interface ExcelIntakeReport {
   defaulted_v2_field_ids: V2FieldId[];
 }
 
+/** Mirrors ``DetailedExcelIntakeReport`` in
+ * ``src/anchor/detailed_excel_reader.py`` -- Detailed Operating Model V2.1
+ * Gate 10's ``POST /ingestion/excel/detailed`` response shape. Unlike
+ * ``ExcelIntakeReport``, there is no defaulted-field concept: every
+ * Detailed Field ID is always required, so a successful response always
+ * carries all 22 values. Never an ``OperatingProjection`` or
+ * ``DetailedAcquisitionResults`` -- Excel ingestion parses proposed
+ * assumptions only. */
+export interface DetailedExcelIntakeReport {
+  terms: AcquisitionTermsRequest;
+  detailed_operating_inputs: DetailedOperatingInputsRequest;
+  anchor_schema: string;
+  schema_version: string;
+}
+
 /** Mirrors ``Deal`` in ``src/anchor/deals/contracts.py``. ``inputs`` is the
  * exact ``AcquisitionRequest`` shape ``/analyze`` already accepts -- a
  * saved deal carries no derived/result data of its own; reopening it means
