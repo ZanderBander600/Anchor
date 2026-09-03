@@ -656,6 +656,12 @@ function detailedResultsFixture(): DetailedAcquisitionResults {
       dscr_by_year: [2.0, 2.06, 1.64688, 1.69629, 1.74718],
       headline_dscr: 2.0,
       min_dscr: 1.64688,
+      levered_cash_on_cash_by_year: [0.058685, 0.062911, 0.046955, 0.051438, 0.056055],
+      unlevered_cash_yield_by_year: [0.053922, 0.055686, 0.057504, 0.059376, 0.061304],
+      cumulative_operating_distributions_by_year: [
+        250_000, 518_000, 718_028.43, 937_153.06, 1_175_946.78,
+      ],
+      year_1_debt_yield: 0.1,
     },
   };
 }

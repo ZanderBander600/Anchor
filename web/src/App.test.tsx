@@ -443,6 +443,14 @@ function makeResults(overrides: Partial<AcquisitionResults> = {}): AcquisitionRe
     dscr_by_year: [1.1608, 1.19567, 1.23154, 1.26849, 1.30654],
     headline_dscr: 1.1608,
     min_dscr: 1.1608,
+    levered_cash_on_cash_by_year: [
+      0.0197946, 0.0240803, 0.0284946, 0.0330413, 0.0377244,
+    ],
+    unlevered_cash_yield_by_year: [0.05, 0.0515, 0.053045, 0.0546364, 0.0562754],
+    cumulative_operating_distributions_by_year: [
+      346405.56, 767811.12, 1266466.68, 1844689.75, 2504867.33,
+    ],
+    year_1_debt_yield: 0.0769231,
     ...overrides,
   };
 }
@@ -474,6 +482,18 @@ function makeV2GoldenResults(overrides: Partial<AcquisitionResults> = {}): Acqui
     dscr_by_year: [2.0, 2.06, 1.6468847293681788, 1.696291271249224, 1.7471800093867011],
     headline_dscr: 2.0,
     min_dscr: 1.6468847293681788,
+    levered_cash_on_cash_by_year: [
+      0.05868544600938967, 0.06291079812206572, 0.0469550308524084,
+      0.05143770690874642, 0.05605486324677459,
+    ],
+    unlevered_cash_yield_by_year: [
+      0.05392156862745098, 0.05568627450980392, 0.05750392156862745,
+      0.05937609803921568, 0.061304439803921564,
+    ],
+    cumulative_operating_distributions_by_year: [
+      250000, 518000, 718028.4314312598, 937153.0628625196, 1175946.7802937794,
+    ],
+    year_1_debt_yield: 0.1,
     ...overrides,
   });
 }
@@ -877,6 +897,31 @@ describe('App workflow', () => {
     expect(screen.getByText('Min 1.65x')).toBeTruthy();
   });
 
+  it('shows the Owner Returns headline (Year 1 Levered CoC, Year 1 Debt Yield, Cumulative Operating Distributions) in Quick mode', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeV2GoldenResults());
+    render(<App />);
+    fillV2GoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('Owner Returns')).toBeTruthy();
+    expect(screen.getByText('Year 1 Levered CoC')).toBeTruthy();
+    // "5.87%"/"10.00%" appear both in the headline card and in the Owner
+    // Return Schedule's Year 1 row -- assert at least one match rather
+    // than assuming a single occurrence.
+    expect(screen.getAllByText('5.87%').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Year 1 Debt Yield')).toBeTruthy();
+    expect(screen.getAllByText('10.00%').length).toBeGreaterThanOrEqual(1);
+    // "Cumulative Operating Distributions" labels both the headline card
+    // and the schedule table's column header -- assert at least one match
+    // rather than assuming uniqueness.
+    expect(
+      screen.getAllByText('Cumulative Operating Distributions').length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('$1,175,947').length).toBeGreaterThanOrEqual(1);
+  });
+
   it('shows the annual CapEx series in the year-by-year table', async () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeV2GoldenResults());
@@ -988,6 +1033,8 @@ describe('App workflow', () => {
         dscr_by_year: [null, null, null, null, null],
         headline_dscr: null,
         min_dscr: null,
+        levered_cash_on_cash_by_year: [null, null, null, null, null],
+        year_1_debt_yield: null,
       }),
     );
     render(<App />);
@@ -997,6 +1044,9 @@ describe('App workflow', () => {
 
     const naValues = await screen.findAllByText('N/A');
     expect(naValues.length).toBeGreaterThanOrEqual(4);
+    // Owner Returns headline (Year 1 Levered CoC, Year 1 Debt Yield) and
+    // every Owner Return Schedule row's Levered CoC cell -- never 0.00%.
+    expect(screen.queryByText('0.00%')).toBeNull();
   });
 
   it('converts percentage inputs to decimals exactly once when submitting', async () => {
@@ -3071,6 +3121,28 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
     expect(await screen.findByText('Operating Statement')).toBeTruthy();
     expect(screen.getByText('Key Returns')).toBeTruthy();
     expect(screen.getAllByText('$600,000').length).toBeGreaterThan(0);
+  });
+
+  it('shows the Owner Returns headline in Detailed mode, identical to Quick for equivalent economics', async () => {
+    const user = userEvent.setup();
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    fillDetailedGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('Owner Returns')).toBeTruthy();
+    expect(screen.getByText('Year 1 Levered CoC')).toBeTruthy();
+    expect(screen.getAllByText('5.87%').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Year 1 Debt Yield')).toBeTruthy();
+    expect(screen.getAllByText('10.00%').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('$1,175,947').length).toBeGreaterThanOrEqual(1);
+
+    // Same three headline figures the Quick-mode V2.1 golden case test
+    // above asserts -- proving Quick and Detailed present the shared
+    // AcquisitionResults fields identically for economically equivalent
+    // deals, per Sprint A charter Section 7.
   });
 
   it('surfaces a Detailed validation error without touching Quick-mode state', async () => {

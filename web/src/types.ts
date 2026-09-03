@@ -123,8 +123,14 @@ export interface ExtractionResult {
 /** Mirrors ``AcquisitionResults`` in ``src/anchor/engine/contracts.py``,
  * including the Underwriting V2 Gate 2/3/4 fields (``acquisition_costs``,
  * ``financing_fee``, ``capex_by_year``, ``disposition_costs``,
- * ``min_dscr``). Every value here is engine-computed -- the frontend never
- * recalculates any of it. */
+ * ``min_dscr``) and the Owner Return Metrics V3 Gate A2 fields
+ * (``levered_cash_on_cash_by_year``, ``unlevered_cash_yield_by_year``,
+ * ``cumulative_operating_distributions_by_year``, ``year_1_debt_yield``).
+ * Every value here is engine-computed -- the frontend never recalculates
+ * any of it. The four Owner Return Metrics fields already exclude sale/
+ * refinance proceeds at every year (including the final hold year) and use
+ * ``null`` (never ``0``) wherever their denominator is exactly zero -- both
+ * are backend-authoritative, never a frontend concern. */
 export interface AcquisitionResults {
   going_in_cap_rate: number;
   loan_amount: number;
@@ -148,6 +154,10 @@ export interface AcquisitionResults {
   dscr_by_year: (number | null)[];
   headline_dscr: number | null;
   min_dscr: number | null;
+  levered_cash_on_cash_by_year: (number | null)[];
+  unlevered_cash_yield_by_year: (number | null)[];
+  cumulative_operating_distributions_by_year: number[];
+  year_1_debt_yield: number | null;
 }
 
 // =============================================================================
