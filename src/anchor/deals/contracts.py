@@ -54,6 +54,14 @@ class Deal:
     ``inputs`` is ``None`` -- a Detailed deal never has an
     ``AcquisitionInputs`` instance, matching the engine-layer resolution
     (Gate 3) exactly.
+
+    ``deal_context`` (Gate A4) is optional, user-authored free text
+    describing the investment strategy/business plan -- never an
+    ``AcquisitionInputs``/``AcquisitionTerms``/``DetailedOperatingInputs``
+    field, never read by the deterministic engine, and identical in shape
+    for both modes. ``None`` for a legacy deal saved before this field
+    existed, or any deal saved with it left blank -- never a fabricated
+    default string.
     """
 
     id: str
@@ -62,6 +70,7 @@ class Deal:
     inputs: AcquisitionInputs | None
     terms: AcquisitionTerms | None
     detailed_operating_inputs: DetailedOperatingInputs | None
+    deal_context: str | None
     created_at: datetime
     updated_at: datetime
 

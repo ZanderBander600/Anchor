@@ -394,6 +394,11 @@ export interface Deal {
   inputs: AcquisitionRequest | null;
   terms: AcquisitionTermsRequest | null;
   detailed_operating_inputs: DetailedOperatingInputsRequest | null;
+  /** Owner Return Metrics V3 Gate A4: optional, user-authored free text
+   * describing the investment strategy/business plan -- never an
+   * underwriting input, `null` when no context was supplied (including
+   * every deal saved before this field existed). */
+  deal_context: string | null;
   created_at: string;
   updated_at: string;
 }

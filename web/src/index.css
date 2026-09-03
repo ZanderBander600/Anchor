@@ -380,6 +380,20 @@ body {
   pointer-events: none;
 }
 
+/* Owner Return Metrics V3 Gate A4 -- Deal Context: visually secondary to
+   the underwriting assumptions (smaller title, muted card), a modest
+   default height, free-text sans font rather than the numeric-field mono. */
+.deal-context-field {
+  padding: 0.75rem 1rem;
+}
+
+.deal-context-textarea {
+  font-family: var(--font-sans);
+  resize: vertical;
+  min-height: 3.6rem;
+  line-height: 1.4;
+}
+
 .field-affix-left {
   left: 0.65rem;
 }

@@ -324,6 +324,7 @@ export async function fetchAIAnalysis(
   targetEquityMultiple: number,
   targetHeadlineDscr: number,
   returnHurdleMetric: ReturnHurdleMetric,
+  dealContext?: string | null,
 ): Promise<AIAnalysis> {
   let response: Response;
   try {
@@ -336,6 +337,7 @@ export async function fetchAIAnalysis(
         target_equity_multiple: targetEquityMultiple,
         target_headline_dscr: targetHeadlineDscr,
         return_hurdle_metric: returnHurdleMetric,
+        deal_context: dealContext ?? null,
       }),
     });
   } catch {
@@ -393,6 +395,7 @@ export async function fetchDetailedAIAnalysis(
   targetEquityMultiple: number,
   targetHeadlineDscr: number,
   returnHurdleMetric: ReturnHurdleMetric,
+  dealContext?: string | null,
 ): Promise<AIAnalysis> {
   let response: Response;
   try {
@@ -407,6 +410,7 @@ export async function fetchDetailedAIAnalysis(
         target_equity_multiple: targetEquityMultiple,
         target_headline_dscr: targetHeadlineDscr,
         return_hurdle_metric: returnHurdleMetric,
+        deal_context: dealContext ?? null,
       }),
     });
   } catch {
@@ -688,13 +692,17 @@ async function _handleDealResponse(response: Response, failureMessage: string): 
 
 /** POSTs a new deal (name + the fourteen assumptions) to ``/deals``. Used for a
  * deal that has never been saved -- ``currentDealId`` is still ``null``. */
-export async function createDeal(name: string, inputs: AcquisitionRequest): Promise<Deal> {
+export async function createDeal(
+  name: string,
+  inputs: AcquisitionRequest,
+  dealContext?: string | null,
+): Promise<Deal> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/deals`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, inputs }),
+      body: JSON.stringify({ name, inputs, deal_context: dealContext ?? null }),
     });
   } catch {
     throw new ApiError(
@@ -711,13 +719,14 @@ export async function updateDeal(
   dealId: string,
   name: string,
   inputs: AcquisitionRequest,
+  dealContext?: string | null,
 ): Promise<Deal> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/deals/${encodeURIComponent(dealId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, inputs }),
+      body: JSON.stringify({ name, inputs, deal_context: dealContext ?? null }),
     });
   } catch {
     throw new ApiError(
@@ -742,6 +751,7 @@ export async function createDetailedDeal(
   name: string,
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
+  dealContext?: string | null,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -753,6 +763,7 @@ export async function createDetailedDeal(
         operating_mode: 'detailed',
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
+        deal_context: dealContext ?? null,
       }),
     });
   } catch {
@@ -772,6 +783,7 @@ export async function updateDetailedDeal(
   name: string,
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
+  dealContext?: string | null,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -783,6 +795,7 @@ export async function updateDetailedDeal(
         operating_mode: 'detailed',
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
+        deal_context: dealContext ?? null,
       }),
     });
   } catch {

@@ -57,6 +57,15 @@ class AnalysisContext:
     directly (rather than flattening/re-deriving their fields) guarantees
     the AI Analyst always sees the exact same raw decimals the
     deterministic engine and analysis layers produced.
+
+    ``deal_context`` (Owner Return Metrics V3 Gate A4) is the optional,
+    user-authored free text from the active ``Deal`` (``anchor.deals.
+    contracts``), threaded in separately from every deterministic field
+    above -- it is never an ``AcquisitionInputs``/``AcquisitionTerms``/
+    ``DetailedOperatingInputs`` field and never read by the engine or
+    analysis layers that produced ``results``/``sensitivities``/
+    ``break_even``. ``None`` when no context was supplied, identical in
+    shape for both modes.
     """
 
     operating_mode: OperatingMode
@@ -71,6 +80,7 @@ class AnalysisContext:
     target_equity_multiple: float
     target_headline_dscr: float
     return_hurdle_metric: ReturnHurdleMetric
+    deal_context: str | None
 
     def __post_init__(self) -> None:
         if self.operating_mode is OperatingMode.QUICK:

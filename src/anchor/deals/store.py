@@ -96,7 +96,15 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # by ``_connect`` itself, exactly like ``deals``. ``_migrate`` only needs to
 # record that this connection has now seen a version-2-aware store; the
 # actual DDL is idempotent regardless of ``PRAGMA user_version``.
-_SCHEMA_VERSION = 2
+#
+# Owner Return Metrics V3 Gate A4: schema version 3 adds one nullable
+# ``deal_context TEXT`` column to both ``deals`` and ``detailed_deals`` (no
+# ``NOT NULL``, no ``DEFAULT`` literal needed -- SQLite backfills every
+# existing row's new column with ``NULL``, which is exactly the "no context"
+# state a legacy deal should have; never a fabricated default string).
+# ``detailed_operating_inputs`` needs no equivalent column: Deal Context is
+# deal-level metadata, not a per-mode assumption set.
+_SCHEMA_VERSION = 3
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS deals (
@@ -116,6 +124,7 @@ CREATE TABLE IF NOT EXISTS deals (
     disposition_cost_pct  REAL NOT NULL DEFAULT 0.0,
     annual_capex_reserve  REAL NOT NULL DEFAULT 0.0,
     io_period             INTEGER NOT NULL DEFAULT 0,
+    deal_context          TEXT,
     created_at            TEXT NOT NULL,
     updated_at            TEXT NOT NULL
 )
@@ -140,6 +149,7 @@ CREATE TABLE IF NOT EXISTS detailed_deals (
     disposition_cost_pct  REAL NOT NULL,
     annual_capex_reserve  REAL NOT NULL,
     io_period             INTEGER NOT NULL,
+    deal_context          TEXT,
     created_at            TEXT NOT NULL,
     updated_at            TEXT NOT NULL
 )
@@ -250,6 +260,16 @@ def _migrate(connection: sqlite3.Connection) -> None:
     needed. This function's only remaining job for that step is recording
     the version number.
 
+    The version-3 (Owner Return Metrics V3 Gate A4) step adds one nullable
+    ``deal_context TEXT`` column to *both* ``deals`` and ``detailed_deals``.
+    Both use the same column-presence check as the version-2 ``deals``
+    columns above (a brand-new database's ``CREATE TABLE`` already declares
+    it, so the ``ALTER`` is a no-op there; only a database that predates
+    this gate is missing it and gets it added). No ``NOT NULL``/``DEFAULT``
+    is specified -- SQLite backfills every existing row's new column with
+    ``NULL``, exactly the "no context supplied" state a legacy deal should
+    have.
+
     Safe to call on every connection, in any state: a database already at
     ``_SCHEMA_VERSION`` returns immediately at the top.
     """
@@ -258,15 +278,23 @@ def _migrate(connection: sqlite3.Connection) -> None:
     if current_version >= _SCHEMA_VERSION:
         return
 
-    existing_columns = {
+    existing_deal_columns = {
         row["name"] for row in connection.execute("PRAGMA table_info(deals)")
     }
     for column_name, column_type, default_literal in _V2_MIGRATION_COLUMNS:
-        if column_name not in existing_columns:
+        if column_name not in existing_deal_columns:
             connection.execute(
                 f"ALTER TABLE deals ADD COLUMN {column_name} {column_type} "
                 f"NOT NULL DEFAULT {default_literal}"
             )
+    if "deal_context" not in existing_deal_columns:
+        connection.execute("ALTER TABLE deals ADD COLUMN deal_context TEXT")
+
+    existing_detailed_deal_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(detailed_deals)")
+    }
+    if "deal_context" not in existing_detailed_deal_columns:
+        connection.execute("ALTER TABLE detailed_deals ADD COLUMN deal_context TEXT")
 
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -339,6 +367,7 @@ def _row_to_deal(row: sqlite3.Row) -> Deal:
         inputs=inputs,
         terms=None,
         detailed_operating_inputs=None,
+        deal_context=row["deal_context"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
@@ -380,6 +409,7 @@ def _row_to_detailed_deal(
         inputs=None,
         terms=terms,
         detailed_operating_inputs=detailed_operating_inputs,
+        deal_context=deal_row["deal_context"],
         created_at=datetime.fromisoformat(deal_row["created_at"]),
         updated_at=datetime.fromisoformat(deal_row["updated_at"]),
     )
@@ -411,6 +441,7 @@ def create_deal(
     name: str,
     inputs: AcquisitionInputs,
     *,
+    deal_context: str | None = None,
     db_path: Path | None = None,
 ) -> Deal:
     """Insert a new Quick deal and return it as stored. ``inputs`` must
@@ -418,7 +449,11 @@ def create_deal(
     no validation of its own; the caller (the API layer, matching every
     other endpoint) is responsible for having called
     ``validate_acquisition_inputs`` first. Unchanged by Detailed Operating
-    Model V2.1 -- inserts into ``deals`` only."""
+    Model V2.1 -- inserts into ``deals`` only.
+
+    ``deal_context`` (Gate A4) is optional, user-authored free text -- never
+    validated as a financial input, since it isn't one. Defaults to
+    ``None`` (no context supplied), never a fabricated default string."""
 
     deal_id = uuid.uuid4().hex
     now = _utc_now_iso()
@@ -426,10 +461,11 @@ def create_deal(
     with _connect(db_path) as connection:
         connection.execute(
             f"""
-            INSERT INTO deals (id, name, {", ".join(_INPUT_COLUMNS)}, created_at, updated_at)
-            VALUES (?, ?, {", ".join("?" for _ in _INPUT_COLUMNS)}, ?, ?)
+            INSERT INTO deals
+                (id, name, {", ".join(_INPUT_COLUMNS)}, deal_context, created_at, updated_at)
+            VALUES (?, ?, {", ".join("?" for _ in _INPUT_COLUMNS)}, ?, ?, ?)
             """,
-            (deal_id, name, *_input_values(inputs), now, now),
+            (deal_id, name, *_input_values(inputs), deal_context, now, now),
         )
 
     return get_deal(deal_id, db_path=db_path)
@@ -440,14 +476,16 @@ def update_deal(
     name: str,
     inputs: AcquisitionInputs,
     *,
+    deal_context: str | None = None,
     db_path: Path | None = None,
 ) -> Deal:
-    """Overwrite ``deal_id``'s name and inputs, bump ``updated_at``, and
-    return the updated Quick deal. Raises ``DealNotFoundError`` if it
-    doesn't exist in ``deals`` -- unchanged by Detailed Operating Model
-    V2.1, including for a ``deal_id`` that belongs to a Detailed deal (that
-    id is never a row in ``deals``, so this correctly reports it as not
-    found rather than silently succeeding against the wrong table)."""
+    """Overwrite ``deal_id``'s name, inputs, and Deal Context (Gate A4),
+    bump ``updated_at``, and return the updated Quick deal. Raises
+    ``DealNotFoundError`` if it doesn't exist in ``deals`` -- unchanged by
+    Detailed Operating Model V2.1, including for a ``deal_id`` that belongs
+    to a Detailed deal (that id is never a row in ``deals``, so this
+    correctly reports it as not found rather than silently succeeding
+    against the wrong table)."""
 
     now = _utc_now_iso()
 
@@ -455,10 +493,11 @@ def update_deal(
         cursor = connection.execute(
             f"""
             UPDATE deals
-            SET name = ?, {", ".join(f"{column} = ?" for column in _INPUT_COLUMNS)}, updated_at = ?
+            SET name = ?, {", ".join(f"{column} = ?" for column in _INPUT_COLUMNS)},
+                deal_context = ?, updated_at = ?
             WHERE id = ?
             """,
-            (name, *_input_values(inputs), now, deal_id),
+            (name, *_input_values(inputs), deal_context, now, deal_id),
         )
         if cursor.rowcount == 0:
             raise DealNotFoundError(deal_id)
@@ -476,6 +515,7 @@ def create_detailed_deal(
     terms: AcquisitionTerms,
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
+    deal_context: str | None = None,
     db_path: Path | None = None,
 ) -> Deal:
     """Insert a new Detailed deal and return it as stored. ``terms`` and
@@ -483,7 +523,10 @@ def create_detailed_deal(
     same no-revalidation contract as ``create_deal``. Writes both the
     ``detailed_deals`` row and its 1:1 ``detailed_operating_inputs`` row in
     the same connection/transaction -- never one without the other. Never
-    creates or touches a row in ``deals``."""
+    creates or touches a row in ``deals``.
+
+    ``deal_context`` (Gate A4) mirrors ``create_deal``'s parameter exactly
+    -- optional, user-authored, never validated as a financial input."""
 
     deal_id = uuid.uuid4().hex
     now = _utc_now_iso()
@@ -492,10 +535,10 @@ def create_detailed_deal(
         connection.execute(
             f"""
             INSERT INTO detailed_deals
-                (id, name, {", ".join(_TERMS_COLUMNS)}, created_at, updated_at)
-            VALUES (?, ?, {", ".join("?" for _ in _TERMS_COLUMNS)}, ?, ?)
+                (id, name, {", ".join(_TERMS_COLUMNS)}, deal_context, created_at, updated_at)
+            VALUES (?, ?, {", ".join("?" for _ in _TERMS_COLUMNS)}, ?, ?, ?)
             """,
-            (deal_id, name, *_terms_values(terms), now, now),
+            (deal_id, name, *_terms_values(terms), deal_context, now, now),
         )
         connection.execute(
             f"""
@@ -515,11 +558,13 @@ def update_detailed_deal(
     terms: AcquisitionTerms,
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
+    deal_context: str | None = None,
     db_path: Path | None = None,
 ) -> Deal:
-    """Overwrite ``deal_id``'s name, terms, and detailed operating inputs,
-    bump ``updated_at``, and return the updated Detailed deal. Raises
-    ``DealNotFoundError`` if it doesn't exist in ``detailed_deals``."""
+    """Overwrite ``deal_id``'s name, terms, detailed operating inputs, and
+    Deal Context (Gate A4), bump ``updated_at``, and return the updated
+    Detailed deal. Raises ``DealNotFoundError`` if it doesn't exist in
+    ``detailed_deals``."""
 
     now = _utc_now_iso()
 
@@ -527,10 +572,11 @@ def update_detailed_deal(
         cursor = connection.execute(
             f"""
             UPDATE detailed_deals
-            SET name = ?, {", ".join(f"{column} = ?" for column in _TERMS_COLUMNS)}, updated_at = ?
+            SET name = ?, {", ".join(f"{column} = ?" for column in _TERMS_COLUMNS)},
+                deal_context = ?, updated_at = ?
             WHERE id = ?
             """,
-            (name, *_terms_values(terms), now, deal_id),
+            (name, *_terms_values(terms), deal_context, now, deal_id),
         )
         if cursor.rowcount == 0:
             raise DealNotFoundError(deal_id)
@@ -646,17 +692,24 @@ def duplicate_deal(
     ``AcquisitionResults``). Reuses ``get_deal``/``create_deal``/
     ``create_detailed_deal`` rather than a bespoke SQL copy, so the new deal
     is generated by the exact same id/timestamp logic as any other created
-    deal, with no separate path to keep in sync."""
+    deal, with no separate path to keep in sync. Preserves ``deal_context``
+    (Gate A4) exactly, including ``None``, like every other field."""
 
     original = get_deal(deal_id, db_path=db_path)
     new_name = name if name else f"{original.name} (Copy)"
 
     if original.operating_mode is OperatingMode.QUICK:
         assert original.inputs is not None
-        return create_deal(new_name, original.inputs, db_path=db_path)
+        return create_deal(
+            new_name, original.inputs, deal_context=original.deal_context, db_path=db_path
+        )
 
     assert original.terms is not None
     assert original.detailed_operating_inputs is not None
     return create_detailed_deal(
-        new_name, original.terms, original.detailed_operating_inputs, db_path=db_path
+        new_name,
+        original.terms,
+        original.detailed_operating_inputs,
+        deal_context=original.deal_context,
+        db_path=db_path,
     )

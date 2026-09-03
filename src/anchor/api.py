@@ -636,6 +636,7 @@ def _ai_analysis_detailed(payload: dict[str, Any]) -> AIAnalysis:
 
     terms = _require_deal_terms(payload)
     detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    deal_context = _optional_deal_context(payload)
     (
         target_levered_irr,
         target_headline_dscr,
@@ -651,6 +652,7 @@ def _ai_analysis_detailed(payload: dict[str, Any]) -> AIAnalysis:
             target_equity_multiple=target_equity_multiple,
             target_headline_dscr=target_headline_dscr,
             return_hurdle_metric=return_hurdle_metric,
+            deal_context=deal_context,
         )
     except InvalidBreakEvenTargetError as error:
         raise HTTPException(
@@ -700,6 +702,7 @@ def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
             detail=_validation_error_detail(error),
         ) from None
 
+    deal_context = _optional_deal_context(payload)
     (
         target_levered_irr,
         target_headline_dscr,
@@ -714,6 +717,7 @@ def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
             target_equity_multiple=target_equity_multiple,
             target_headline_dscr=target_headline_dscr,
             return_hurdle_metric=return_hurdle_metric,
+            deal_context=deal_context,
         )
     except InvalidBreakEvenTargetError as error:
         raise HTTPException(
@@ -983,6 +987,27 @@ def _require_deal_name(payload: dict[str, Any]) -> str:
     return name.strip()
 
 
+def _optional_deal_context(payload: dict[str, Any]) -> str | None:
+    """Owner Return Metrics V3 Gate A4: ``deal_context`` is optional,
+    user-authored free text -- never a financial input, so never routed
+    through any validator. Absent, ``None``, or whitespace-only all
+    normalize to ``None`` (no fabricated default string, and a blank
+    textarea never persists as an empty-but-present value); any other
+    non-string value is rejected the same way every other malformed field
+    already is."""
+
+    raw_deal_context = payload.get("deal_context")
+    if raw_deal_context is None:
+        return None
+    if not isinstance(raw_deal_context, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="'deal_context' must be a string when provided.",
+        )
+    stripped = raw_deal_context.strip()
+    return stripped if stripped else None
+
+
 def _require_operating_mode(payload: dict[str, Any]) -> OperatingMode:
     raw_operating_mode = payload.get("operating_mode", OperatingMode.QUICK.value)
     try:
@@ -1055,14 +1080,17 @@ def _require_deal_detailed_operating_inputs(
 def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
     name = _require_deal_name(payload)
     operating_mode = _require_operating_mode(payload)
+    deal_context = _optional_deal_context(payload)
 
     if operating_mode is OperatingMode.DETAILED:
         terms = _require_deal_terms(payload)
         detailed_inputs = _require_deal_detailed_operating_inputs(payload)
-        return deals_store.create_detailed_deal(name, terms, detailed_inputs)
+        return deals_store.create_detailed_deal(
+            name, terms, detailed_inputs, deal_context=deal_context
+        )
 
     inputs = _require_deal_inputs(payload)
-    return deals_store.create_deal(name, inputs)
+    return deals_store.create_deal(name, inputs, deal_context=deal_context)
 
 
 @app.get("/deals", response_model=list[Deal])
@@ -1084,17 +1112,18 @@ def get_deal(deal_id: str) -> Deal:
 def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
     name = _require_deal_name(payload)
     operating_mode = _require_operating_mode(payload)
+    deal_context = _optional_deal_context(payload)
 
     try:
         if operating_mode is OperatingMode.DETAILED:
             terms = _require_deal_terms(payload)
             detailed_inputs = _require_deal_detailed_operating_inputs(payload)
             return deals_store.update_detailed_deal(
-                deal_id, name, terms, detailed_inputs
+                deal_id, name, terms, detailed_inputs, deal_context=deal_context
             )
 
         inputs = _require_deal_inputs(payload)
-        return deals_store.update_deal(deal_id, name, inputs)
+        return deals_store.update_deal(deal_id, name, inputs, deal_context=deal_context)
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)

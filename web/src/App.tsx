@@ -27,6 +27,7 @@ import { AiAnalystPanel } from './components/AiAnalystPanel';
 import { AssumptionsForm } from './components/AssumptionsForm';
 import { BreakEvenPanel } from './components/BreakEvenPanel';
 import { DealBar } from './components/DealBar';
+import { DealContextField } from './components/DealContextField';
 import type { SaveStatus } from './components/DealBar';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
 import { DetailedAssumptionsForm } from './components/DetailedAssumptionsForm';
@@ -375,20 +376,27 @@ export default function App() {
   const [isSavingDetailedDeal, setIsSavingDetailedDeal] = useState(false);
   const [saveDetailedDealError, setSaveDetailedDealError] = useState<string | null>(null);
   const [lastDetailedSavedAt, setLastDetailedSavedAt] = useState<string | null>(null);
+  // Owner Return Metrics V3 Gate A4: optional, user-authored deal metadata,
+  // included in the dirty-tracking snapshot below exactly like `dealName`
+  // and `values` -- editing it marks the deal dirty and Save persists it,
+  // with zero separate plumbing.
+  const [detailedDealContext, setDetailedDealContext] = useState('');
 
   interface DetailedDealSnapshot {
     dealName: string;
     values: DetailedFormValues;
+    dealContext: string;
   }
   const BLANK_DETAILED_SNAPSHOT: DetailedDealSnapshot = {
     dealName: '',
     values: BLANK_DETAILED_FORM_VALUES,
+    dealContext: '',
   };
   const [detailedSavedSnapshot, setDetailedSavedSnapshot] =
     useState<DetailedDealSnapshot>(BLANK_DETAILED_SNAPSHOT);
 
   function isSameDetailedSnapshot(a: DetailedDealSnapshot, b: DetailedDealSnapshot): boolean {
-    if (a.dealName !== b.dealName) {
+    if (a.dealName !== b.dealName || a.dealContext !== b.dealContext) {
       return false;
     }
     const termsKeys = Object.keys(a.values.terms) as (keyof AcquisitionTermsFormValues)[];
@@ -400,7 +408,7 @@ export default function App() {
   }
 
   const isDetailedDirty = !isSameDetailedSnapshot(
-    { dealName: detailedDealName, values: detailedValues },
+    { dealName: detailedDealName, values: detailedValues, dealContext: detailedDealContext },
     detailedSavedSnapshot,
   );
   const detailedSaveStatus: SaveStatus =
@@ -437,12 +445,26 @@ export default function App() {
     setDetailedDealName(value);
   }
 
+  /** Owner Return Metrics V3 Gate A4: editing Deal Context marks the deal
+   * dirty (via the snapshot comparison above) exactly like editing any
+   * assumption, but deliberately does NOT call
+   * `resetDetailedDownstreamAnalysisState()` -- deterministic
+   * `detailedResults`/`detailedSensitivity`/`detailedBreakEven` remain
+   * valid, since Deal Context is not a financial input. Only the AI
+   * Analyst output is cleared: it interpreted the *previous* Deal Context
+   * (or none), so it is now stale. AI is never automatically re-run. */
+  function handleDetailedDealContextChange(value: string) {
+    setDetailedDealContext(value);
+    clearDetailedAiAnalysis();
+  }
+
   /** Shared by Detailed New Deal and by deleting the currently-open
    * Detailed deal: both end in the same blank, never-saved Detailed
    * workspace state. Never touches any Quick-mode state. */
   function resetToBlankDetailedDeal() {
     setDetailedValues(BLANK_DETAILED_FORM_VALUES);
     setDetailedDealName('');
+    setDetailedDealContext('');
     setCurrentDetailedDealId(null);
     setLastDetailedSavedAt(null);
     setDetailedSavedSnapshot(BLANK_DETAILED_SNAPSHOT);
@@ -472,16 +494,29 @@ export default function App() {
 
     const name = detailedDealName.trim() || 'Untitled Deal';
 
+    const dealContext = detailedDealContext.trim() || null;
+
     setIsSavingDetailedDeal(true);
     setSaveDetailedDealError(null);
     try {
       const deal = currentDetailedDealId
-        ? await updateDetailedDeal(currentDetailedDealId, name, terms, detailedOperatingInputs)
-        : await createDetailedDeal(name, terms, detailedOperatingInputs);
+        ? await updateDetailedDeal(
+            currentDetailedDealId,
+            name,
+            terms,
+            detailedOperatingInputs,
+            dealContext,
+          )
+        : await createDetailedDeal(name, terms, detailedOperatingInputs, dealContext);
       setCurrentDetailedDealId(deal.id);
       setDetailedDealName(deal.name);
+      setDetailedDealContext(deal.deal_context ?? '');
       setLastDetailedSavedAt(deal.updated_at);
-      setDetailedSavedSnapshot({ dealName: deal.name, values: detailedValues });
+      setDetailedSavedSnapshot({
+        dealName: deal.name,
+        values: detailedValues,
+        dealContext: deal.deal_context ?? '',
+      });
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setSaveDetailedDealError(apiError.message);
@@ -745,6 +780,7 @@ export default function App() {
         targetEquityMultipleValue,
         targetHeadlineDscrValue,
         'levered_irr',
+        detailedDealContext.trim() || null,
       );
       setDetailedAiAnalysis(analysis);
     } catch (apiError) {
@@ -815,35 +851,43 @@ export default function App() {
   const [isSavingDeal, setIsSavingDeal] = useState(false);
   const [saveDealError, setSaveDealError] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  // Owner Return Metrics V3 Gate A4: mirrors detailedDealContext exactly.
+  const [dealContext, setDealContext] = useState('');
 
   const [savedDeals, setSavedDeals] = useState<Deal[]>([]);
   const [isDealsLoading, setIsDealsLoading] = useState(false);
   const [dealsError, setDealsError] = useState<string | null>(null);
 
   // Phase C -- unsaved-changes tracking. `savedSnapshot` is the
-  // {dealName, values} pair as of the last successful Save or Open (or the
-  // blank starting point). Dirty-ness is a single deterministic comparison
-  // against it -- deliberately not a scattered set of manual "mark dirty"
-  // calls sprinkled through every handler, so it can never drift out of
-  // sync with a handler someone forgets to update. Analyze/sensitivity/
-  // break-even/AI-analyst never touch this snapshot, so they can never
-  // affect dirty state, by construction rather than by remembering not to.
+  // {dealName, values, dealContext} pair as of the last successful Save or
+  // Open (or the blank starting point). Dirty-ness is a single
+  // deterministic comparison against it -- deliberately not a scattered
+  // set of manual "mark dirty" calls sprinkled through every handler, so
+  // it can never drift out of sync with a handler someone forgets to
+  // update. Analyze/sensitivity/break-even/AI-analyst never touch this
+  // snapshot, so they can never affect dirty state, by construction rather
+  // than by remembering not to.
   interface DealSnapshot {
     dealName: string;
     values: AcquisitionFormValues;
+    dealContext: string;
   }
-  const BLANK_SNAPSHOT: DealSnapshot = { dealName: '', values: BLANK_FORM_VALUES };
+  const BLANK_SNAPSHOT: DealSnapshot = {
+    dealName: '',
+    values: BLANK_FORM_VALUES,
+    dealContext: '',
+  };
   const [savedSnapshot, setSavedSnapshot] = useState<DealSnapshot>(BLANK_SNAPSHOT);
 
   function isSameSnapshot(a: DealSnapshot, b: DealSnapshot): boolean {
-    if (a.dealName !== b.dealName) {
+    if (a.dealName !== b.dealName || a.dealContext !== b.dealContext) {
       return false;
     }
     const fieldKeys = Object.keys(a.values) as (keyof AcquisitionFormValues)[];
     return fieldKeys.every((key) => a.values[key] === b.values[key]);
   }
 
-  const isDirty = !isSameSnapshot({ dealName, values }, savedSnapshot);
+  const isDirty = !isSameSnapshot({ dealName, values, dealContext }, savedSnapshot);
   const saveStatus: SaveStatus =
     currentDealId === null ? 'unsaved-deal' : isDirty ? 'unsaved-changes' : 'saved';
 
@@ -1026,11 +1070,23 @@ export default function App() {
     setDealName(value);
   }
 
+  /** Owner Return Metrics V3 Gate A4: mirrors
+   * `handleDetailedDealContextChange` exactly -- marks the deal dirty via
+   * the snapshot comparison, but deliberately does not touch
+   * `results`/`sensitivity`/`breakEven` (Deal Context is not a financial
+   * input, so those stay valid). Only the now-stale AI Analyst output is
+   * cleared; AI is never automatically re-run. */
+  function handleDealContextChange(value: string) {
+    setDealContext(value);
+    clearAiAnalysis();
+  }
+
   /** Shared by New Deal and by deleting the currently-open deal: both end
    * in the same blank, never-saved workspace state. */
   function resetToBlankDeal() {
     setValues(BLANK_FORM_VALUES);
     setDealName('');
+    setDealContext('');
     setCurrentDealId(null);
     setLastSavedAt(null);
     setSavedSnapshot(BLANK_SNAPSHOT);
@@ -1052,17 +1108,19 @@ export default function App() {
     }
 
     const name = dealName.trim() || 'Untitled Deal';
+    const dealContextToSave = dealContext.trim() || null;
 
     setIsSavingDeal(true);
     setSaveDealError(null);
     try {
       const deal = currentDealId
-        ? await updateDeal(currentDealId, name, request)
-        : await createDeal(name, request);
+        ? await updateDeal(currentDealId, name, request, dealContextToSave)
+        : await createDeal(name, request, dealContextToSave);
       setCurrentDealId(deal.id);
       setDealName(deal.name);
+      setDealContext(deal.deal_context ?? '');
       setLastSavedAt(deal.updated_at);
-      setSavedSnapshot({ dealName: deal.name, values });
+      setSavedSnapshot({ dealName: deal.name, values, dealContext: deal.deal_context ?? '' });
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setSaveDealError(apiError.message);
@@ -1132,9 +1190,14 @@ export default function App() {
         };
         setDetailedValues(openedValues);
         setDetailedDealName(fullDeal.name);
+        setDetailedDealContext(fullDeal.deal_context ?? '');
         setCurrentDetailedDealId(fullDeal.id);
         setLastDetailedSavedAt(fullDeal.updated_at);
-        setDetailedSavedSnapshot({ dealName: fullDeal.name, values: openedValues });
+        setDetailedSavedSnapshot({
+          dealName: fullDeal.name,
+          values: openedValues,
+          dealContext: fullDeal.deal_context ?? '',
+        });
         resetDetailedDownstreamAnalysisState();
         clearSaveDetailedDealError();
         clearDetailedIntakeFeedback();
@@ -1162,9 +1225,14 @@ export default function App() {
       const openedValues = buildFormValuesFromAcquisitionInputs(fullDeal.inputs);
       setValues(openedValues);
       setDealName(fullDeal.name);
+      setDealContext(fullDeal.deal_context ?? '');
       setCurrentDealId(fullDeal.id);
       setLastSavedAt(fullDeal.updated_at);
-      setSavedSnapshot({ dealName: fullDeal.name, values: openedValues });
+      setSavedSnapshot({
+        dealName: fullDeal.name,
+        values: openedValues,
+        dealContext: fullDeal.deal_context ?? '',
+      });
       resetDownstreamAnalysisState();
       clearSaveDealError();
       clearIntakeFeedback();
@@ -1366,6 +1434,7 @@ export default function App() {
         targetEquityMultipleValue,
         targetHeadlineDscrValue,
         returnHurdleMetric,
+        dealContext.trim() || null,
       );
       setAiAnalysis(analysis);
     } catch (apiError) {
@@ -1508,6 +1577,11 @@ export default function App() {
               onNewDeal={handleNewDetailedDeal}
             />
 
+            <DealContextField
+              value={detailedDealContext}
+              onChange={handleDetailedDealContextChange}
+            />
+
             <div className="intake-section">
               <h2 className="section-heading">Deal Intake</h2>
               <div className="intake-grid">
@@ -1617,6 +1691,8 @@ export default function App() {
               onOpenLibrary={handleOpenLibrary}
               onNewDeal={handleNewDeal}
             />
+
+            <DealContextField value={dealContext} onChange={handleDealContextChange} />
 
             <div className="intake-section">
               <h2 className="section-heading">Deal Intake</h2>

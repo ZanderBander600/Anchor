@@ -274,6 +274,7 @@ function dealFixture(overrides: Partial<Deal> = {}): Deal {
     inputs: GOLDEN_INPUTS,
     terms: null,
     detailed_operating_inputs: null,
+    deal_context: null,
     created_at: '2026-09-03T12:00:00+00:00',
     updated_at: '2026-09-03T12:00:00+00:00',
     ...overrides,
@@ -314,6 +315,7 @@ function detailedDealFixture(overrides: Partial<Deal> = {}): Deal {
       revenue_growth: 0.03,
       expense_growth: 0.03,
     },
+    deal_context: null,
     created_at: '2026-09-03T12:00:00+00:00',
     updated_at: '2026-09-03T12:00:00+00:00',
     ...overrides,
@@ -332,7 +334,11 @@ describe('createDeal', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain('/deals');
     expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body)).toEqual({ name: '111 Main St', inputs: GOLDEN_INPUTS });
+    expect(JSON.parse(init.body)).toEqual({
+      name: '111 Main St',
+      inputs: GOLDEN_INPUTS,
+      deal_context: null,
+    });
   });
 
   it('surfaces a 422 validation failure with the issue-list shape', async () => {
@@ -374,7 +380,11 @@ describe('updateDeal', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain('/deals/deal-1');
     expect(init.method).toBe('PUT');
-    expect(JSON.parse(init.body)).toEqual({ name: 'Renamed Deal', inputs: GOLDEN_INPUTS });
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'Renamed Deal',
+      inputs: GOLDEN_INPUTS,
+      deal_context: null,
+    });
   });
 
   it('surfaces a 404 for an unknown deal id', async () => {
@@ -410,6 +420,7 @@ describe('createDetailedDeal', () => {
       operating_mode: 'detailed',
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      deal_context: null,
     });
   });
 
@@ -468,6 +479,7 @@ describe('updateDetailedDeal', () => {
       operating_mode: 'detailed',
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      deal_context: null,
     });
   });
 
@@ -773,6 +785,7 @@ describe('fetchDetailedAIAnalysis', () => {
       target_equity_multiple: 1.5,
       target_headline_dscr: 1.2,
       return_hurdle_metric: 'levered_irr',
+      deal_context: null,
     });
   });
 
