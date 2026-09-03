@@ -52,6 +52,10 @@ ACQUISITION_RESULTS_FIELDS = (
     ("dscr_by_year", tuple[float | None, ...]),
     ("headline_dscr", float | None),
     ("min_dscr", float | None),
+    ("levered_cash_on_cash_by_year", tuple[float | None, ...]),
+    ("unlevered_cash_yield_by_year", tuple[float | None, ...]),
+    ("cumulative_operating_distributions_by_year", tuple[float, ...]),
+    ("year_1_debt_yield", float | None),
 )
 
 

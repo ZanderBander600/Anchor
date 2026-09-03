@@ -11,13 +11,24 @@ Excel ``IRR``/``XIRR``, Newton-Raphson, secant method, or any other
 general-purpose solver) is used anywhere in this module. The same frozen
 bracket-and-bisection IRR procedure is applied identically to the unlevered
 and levered cash-flow series.
+
+Owner Return Metrics V3 Gate A2
+(``docs/owner_return_metrics_v3_financial_conventions.md``) adds annual
+Levered Cash-on-Cash Return, annual Unlevered Cash Yield, Cumulative
+Operating Distributions, and Year 1 Debt Yield -- same non-negotiable rule:
+pure functions over already-assembled ``noi_by_year``/``capex_by_year``/
+``annual_debt_service``/capital-stack values, no NOI or debt calculation of
+their own, and no reconstruction of terminal cash flow -- these metrics are
+built directly from the same NOI/CapEx/debt-service series the existing
+recurring-flow formulas already consume, never by subtracting sale proceeds
+back out of ``levered_cash_flows``/``unlevered_cash_flows``.
 """
 
 from __future__ import annotations
 
 from math import isfinite
 
-from .contracts import ReturnMetrics, ensure_finite
+from .contracts import OwnerReturnMetrics, ReturnMetrics, ensure_finite
 
 
 # =============================================================================
@@ -267,4 +278,200 @@ def calculate_return_metrics(
         equity_multiple=equity_multiple,
         unlevered_irr=unlevered_irr,
         levered_irr=levered_irr,
+    )
+
+
+# =============================================================================
+# Owner Return Metrics V3 Gate A2
+# =============================================================================
+
+
+def calculate_recurring_levered_cash_flows(
+    *,
+    noi_by_year: tuple[float, ...],
+    capex_by_year: tuple[float, ...],
+    annual_debt_service: tuple[float, ...],
+) -> tuple[float, ...]:
+    """Return ``(RLCF_1, .., RLCF_H)``: ``RLCF_y = NOI_y - CapEx_y - ADS_y``
+    for every hold year, including the final one.
+
+    Unlike ``calculate_levered_cash_flows`` (``acquisition.py``), this
+    series never adds ``net_sale_proceeds`` to its final entry -- there is
+    no terminal-year special case here at all, by construction. Never
+    floored at zero; CapEx or debt service exceeding NOI in a year produces
+    a negative entry, reported as-is.
+    """
+
+    return tuple(
+        ensure_finite(
+            f"recurring_levered_cash_flows[{year}]",
+            noi_by_year[year] - capex_by_year[year] - annual_debt_service[year],
+        )
+        for year in range(len(noi_by_year))
+    )
+
+
+def calculate_recurring_unlevered_cash_flows(
+    *, noi_by_year: tuple[float, ...], capex_by_year: tuple[float, ...]
+) -> tuple[float, ...]:
+    """Return ``(RUCF_1, .., RUCF_H)``: ``RUCF_y = NOI_y - CapEx_y`` for
+    every hold year, including the final one -- no ``exit_value`` or
+    ``disposition_costs`` term, ever. Never floored at zero."""
+
+    return tuple(
+        ensure_finite(
+            f"recurring_unlevered_cash_flows[{year}]",
+            noi_by_year[year] - capex_by_year[year],
+        )
+        for year in range(len(noi_by_year))
+    )
+
+
+def calculate_unlevered_acquisition_basis(
+    *, purchase_price: float, acquisition_costs: float
+) -> float:
+    """``Total Unlevered Acquisition Basis = Purchase Price + Acquisition
+    Costs``. ``financing_fee`` is deliberately excluded: it is purely
+    debt-related (``= loan_amount * financing_fee_pct``, always ``0`` when
+    ``loan_amount`` is ``0``), and this is an unlevered basis."""
+
+    return ensure_finite(
+        "unlevered_acquisition_basis", purchase_price + acquisition_costs
+    )
+
+
+def calculate_levered_cash_on_cash_by_year(
+    *, recurring_levered_cash_flows: tuple[float, ...], initial_equity: float
+) -> tuple[float | None, ...]:
+    """Return ``(CoC_1, .., CoC_H)``: ``CoC_y = RLCF_y / Initial Equity``.
+
+    ``Initial Equity`` is fixed across the hold (computed once, never
+    recomputed per year). When it is exactly ``0.0``, every year is
+    ``None`` -- undefined, the same zero-denominator convention
+    ``calculate_equity_multiple`` above already uses (``None``, never
+    ``inf``). A negative ``RLCF_y`` produces a negative ``CoC_y``; never
+    floored at zero.
+    """
+
+    if initial_equity == 0.0:
+        return tuple(None for _ in recurring_levered_cash_flows)
+
+    return tuple(
+        ensure_finite(
+            f"levered_cash_on_cash_by_year[{year}]", cash_flow / initial_equity
+        )
+        for year, cash_flow in enumerate(recurring_levered_cash_flows)
+    )
+
+
+def calculate_unlevered_cash_yield_by_year(
+    *,
+    recurring_unlevered_cash_flows: tuple[float, ...],
+    unlevered_acquisition_basis: float,
+) -> tuple[float | None, ...]:
+    """Return ``(Yield_1, .., Yield_H)``: ``Yield_y = RUCF_y /
+    Total Unlevered Acquisition Basis``, fixed across the hold. ``None``
+    for every year when the basis is exactly ``0.0``; never floored at
+    zero for a negative ``RUCF_y``."""
+
+    if unlevered_acquisition_basis == 0.0:
+        return tuple(None for _ in recurring_unlevered_cash_flows)
+
+    return tuple(
+        ensure_finite(
+            f"unlevered_cash_yield_by_year[{year}]",
+            cash_flow / unlevered_acquisition_basis,
+        )
+        for year, cash_flow in enumerate(recurring_unlevered_cash_flows)
+    )
+
+
+def calculate_cumulative_operating_distributions_by_year(
+    *, recurring_levered_cash_flows: tuple[float, ...]
+) -> tuple[float, ...]:
+    """Return the running sum of ``recurring_levered_cash_flows`` through
+    each year: ``Cum_y = RLCF_1 + .. + RLCF_y``. A negative ``RLCF_y``
+    reduces the running total -- never floored at zero, and sale/refinance
+    proceeds are never added at any year, including the last."""
+
+    cumulative_by_year: list[float] = []
+    running_total = 0.0
+    for year, cash_flow in enumerate(recurring_levered_cash_flows):
+        running_total += cash_flow
+        cumulative_by_year.append(
+            ensure_finite(
+                f"cumulative_operating_distributions_by_year[{year}]",
+                running_total,
+            )
+        )
+    return tuple(cumulative_by_year)
+
+
+def calculate_year_1_debt_yield(
+    *, year_1_noi: float, loan_amount: float
+) -> float | None:
+    """``Year 1 Debt Yield = Year 1 NOI / Original Loan Amount``. ``None``
+    when ``loan_amount`` is exactly ``0.0`` (all-cash). No annual schedule
+    is computed here -- the current ``DebtSchedule`` contract exposes only
+    the original and final loan balance, never a per-year balance, so an
+    annual Debt Yield schedule is deferred rather than approximated."""
+
+    if loan_amount == 0.0:
+        return None
+
+    return ensure_finite("year_1_debt_yield", year_1_noi / loan_amount)
+
+
+def calculate_owner_return_metrics(
+    *,
+    noi_by_year: tuple[float, ...],
+    capex_by_year: tuple[float, ...],
+    annual_debt_service: tuple[float, ...],
+    purchase_price: float,
+    acquisition_costs: float,
+    initial_equity: float,
+    loan_amount: float,
+) -> OwnerReturnMetrics:
+    """Compute the Owner Return Metrics V3 Gate A2 result from
+    already-assembled capital-stack and cash-flow inputs -- identical for
+    Quick and Detailed Underwrite, since every parameter here is already
+    mode-agnostic (``AcquisitionTerms``/``CapitalStack``/``DebtSchedule``
+    fields, plus the shared ``noi_by_year``/``capex_by_year``)."""
+
+    recurring_levered_cash_flows = calculate_recurring_levered_cash_flows(
+        noi_by_year=noi_by_year,
+        capex_by_year=capex_by_year,
+        annual_debt_service=annual_debt_service,
+    )
+    recurring_unlevered_cash_flows = calculate_recurring_unlevered_cash_flows(
+        noi_by_year=noi_by_year, capex_by_year=capex_by_year
+    )
+    unlevered_acquisition_basis = calculate_unlevered_acquisition_basis(
+        purchase_price=purchase_price, acquisition_costs=acquisition_costs
+    )
+
+    levered_cash_on_cash_by_year = calculate_levered_cash_on_cash_by_year(
+        recurring_levered_cash_flows=recurring_levered_cash_flows,
+        initial_equity=initial_equity,
+    )
+    unlevered_cash_yield_by_year = calculate_unlevered_cash_yield_by_year(
+        recurring_unlevered_cash_flows=recurring_unlevered_cash_flows,
+        unlevered_acquisition_basis=unlevered_acquisition_basis,
+    )
+    cumulative_operating_distributions_by_year = (
+        calculate_cumulative_operating_distributions_by_year(
+            recurring_levered_cash_flows=recurring_levered_cash_flows
+        )
+    )
+    year_1_debt_yield = calculate_year_1_debt_yield(
+        year_1_noi=noi_by_year[0], loan_amount=loan_amount
+    )
+
+    return OwnerReturnMetrics(
+        levered_cash_on_cash_by_year=levered_cash_on_cash_by_year,
+        unlevered_cash_yield_by_year=unlevered_cash_yield_by_year,
+        cumulative_operating_distributions_by_year=(
+            cumulative_operating_distributions_by_year
+        ),
+        year_1_debt_yield=year_1_debt_yield,
     )

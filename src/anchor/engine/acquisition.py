@@ -27,7 +27,7 @@ from .contracts import (
 from .debt import calculate_capital_stack, calculate_debt_schedule
 from .noi import build_quick_operating_projection, forecast_noi
 from .operating_projection import build_detailed_operating_projection
-from .returns import calculate_return_metrics
+from .returns import calculate_owner_return_metrics, calculate_return_metrics
 
 
 def calculate_exit_value(*, exit_noi: float, exit_cap_rate: float) -> float:
@@ -304,6 +304,15 @@ def analyze_acquisition_from_operating_projection(
         unlevered_cash_flows=unlevered_cash_flows,
         levered_cash_flows=levered_cash_flows,
     )
+    owner_return_metrics = calculate_owner_return_metrics(
+        noi_by_year=operating_projection.noi_by_year,
+        capex_by_year=capex_by_year,
+        annual_debt_service=debt_schedule.annual_debt_service,
+        purchase_price=terms.purchase_price,
+        acquisition_costs=capital_stack.acquisition_costs,
+        initial_equity=capital_stack.initial_equity,
+        loan_amount=capital_stack.loan_amount,
+    )
 
     return AcquisitionResults(
         going_in_cap_rate=operating_projection.going_in_cap_rate,
@@ -328,6 +337,12 @@ def analyze_acquisition_from_operating_projection(
         dscr_by_year=return_metrics.dscr_by_year,
         headline_dscr=return_metrics.headline_dscr,
         min_dscr=return_metrics.min_dscr,
+        levered_cash_on_cash_by_year=owner_return_metrics.levered_cash_on_cash_by_year,
+        unlevered_cash_yield_by_year=owner_return_metrics.unlevered_cash_yield_by_year,
+        cumulative_operating_distributions_by_year=(
+            owner_return_metrics.cumulative_operating_distributions_by_year
+        ),
+        year_1_debt_yield=owner_return_metrics.year_1_debt_yield,
     )
 
 

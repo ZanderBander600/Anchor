@@ -127,6 +127,12 @@ def test_build_report_only_formats_precomputed_engine_values() -> None:
         dscr_by_year=results.dscr_by_year,
         headline_dscr=results.headline_dscr,
         min_dscr=results.min_dscr,
+        levered_cash_on_cash_by_year=results.levered_cash_on_cash_by_year,
+        unlevered_cash_yield_by_year=results.unlevered_cash_yield_by_year,
+        cumulative_operating_distributions_by_year=(
+            results.cumulative_operating_distributions_by_year
+        ),
+        year_1_debt_yield=results.year_1_debt_yield,
     )
 
     report = build_report(inputs, mutated)

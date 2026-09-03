@@ -407,11 +407,21 @@ def test_every_acquisition_results_field_is_presented_or_deliberately_excluded()
     )
 
 
-def test_intentional_exclusion_allowlists_are_currently_empty() -> None:
-    """Documents the current state: every existing field of both dataclasses
-    is presented today. If this ever legitimately changes, update the
-    allowlist in presentation.py (with a comment explaining why) rather than
-    this test."""
+def test_intentional_exclusion_allowlists_are_currently_empty_or_documented() -> None:
+    """Documents the current state: every ``AcquisitionInputs`` field is
+    presented today (allowlist empty). ``AcquisitionResults`` has four
+    deliberate Owner Return Metrics V3 Gate A2 exclusions (values fully
+    computed and authoritative on the result; deliberate AI presentation is
+    deferred to a later gate) -- if either allowlist's membership ever
+    legitimately changes further, update the allowlist in presentation.py
+    (with a comment explaining why) rather than this test."""
 
     assert INTENTIONALLY_EXCLUDED_INPUT_FIELDS == frozenset()
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset(
+        {
+            "levered_cash_on_cash_by_year",
+            "unlevered_cash_yield_by_year",
+            "cumulative_operating_distributions_by_year",
+            "year_1_debt_yield",
+        }
+    )

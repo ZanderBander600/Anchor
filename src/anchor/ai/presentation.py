@@ -147,12 +147,28 @@ _YEAR_FIELDS: frozenset[str] = frozenset(
 # about explicitly. The corresponding reflection test fails loudly if any
 # field is missing from both its formatter function and its allowlist -- so
 # a field can only ever go unseen by the model on purpose, never by
-# accident. Empty today: every current field of all five dataclasses is
-# presented.
+# accident.
+#
+# Owner Return Metrics V3 Gate A2 adds the first four entries to
+# INTENTIONALLY_EXCLUDED_RESULT_FIELDS: ``levered_cash_on_cash_by_year``,
+# ``unlevered_cash_yield_by_year``, ``cumulative_operating_distributions_by_year``,
+# and ``year_1_debt_yield`` are deliberately not yet shown to the AI Analyst.
+# The values are fully computed and authoritative on ``AcquisitionResults``
+# (nothing here withholds them from any other consumer); Gate A2's charter is
+# explicit that deliberate AI presentation/interpretation of these metrics is
+# out of scope and belongs in a later gate (A3+). Every other field of all
+# five dataclasses remains presented.
 # =============================================================================
 
 INTENTIONALLY_EXCLUDED_INPUT_FIELDS: frozenset[str] = frozenset()
-INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset()
+INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset(
+    {
+        "levered_cash_on_cash_by_year",
+        "unlevered_cash_yield_by_year",
+        "cumulative_operating_distributions_by_year",
+        "year_1_debt_yield",
+    }
+)
 INTENTIONALLY_EXCLUDED_TERMS_FIELDS: frozenset[str] = frozenset()
 INTENTIONALLY_EXCLUDED_DETAILED_OPERATING_FIELDS: frozenset[str] = frozenset()
 INTENTIONALLY_EXCLUDED_OPERATING_PROJECTION_FIELDS: frozenset[str] = frozenset()
