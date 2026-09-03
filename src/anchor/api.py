@@ -57,6 +57,10 @@ from .engine import (
     analyze_acquisition,
     analyze_detailed_acquisition_with_projection,
 )
+from .detailed_excel_reader import (
+    DetailedExcelIntakeReport,
+    read_detailed_excel_intake_from_bytes,
+)
 from .env import load_repo_env
 from .excel_reader import ExcelIntakeReport, read_acquisition_inputs_from_bytes_with_report
 from .ingestion import (
@@ -96,6 +100,15 @@ _PDF_SIGNATURE = b"%PDF-"
 _EXCEL_INGESTION_PATH = "/ingestion/excel"
 _MAX_EXCEL_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB -- a structured input workbook is small.
 _XLSX_SIGNATURE = b"PK\x03\x04"  # .xlsx is a zip archive (OOXML).
+
+# Detailed Operating Model V2.1 Gate 10 -- a separate path (Option B, see the
+# route below) rather than an optional/discriminated extension of the
+# existing Quick endpoint: the two contracts, field sets, and error
+# vocabularies differ enough that overloading _EXCEL_INGESTION_PATH would
+# risk the existing, frozen Quick endpoint's behavior for no benefit -- a
+# Detailed upload is never ambiguous about which endpoint it belongs to
+# (the frontend's Detailed workspace calls this path exclusively).
+_DETAILED_EXCEL_INGESTION_PATH = "/ingestion/excel/detailed"
 
 
 class _IngestionUploadSizeGuard:
@@ -143,6 +156,7 @@ app.add_middleware(
     limits={
         _INGESTION_PATH: _MAX_UPLOAD_BYTES,
         _EXCEL_INGESTION_PATH: _MAX_EXCEL_UPLOAD_BYTES,
+        _DETAILED_EXCEL_INGESTION_PATH: _MAX_EXCEL_UPLOAD_BYTES,
     },
 )
 
@@ -728,6 +742,37 @@ def ingest_excel(file: UploadFile = File(...)) -> ExcelIntakeReport:
 
     try:
         return read_acquisition_inputs_from_bytes_with_report(workbook_bytes)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 10 -- Detailed Excel ingestion.
+#
+# A dedicated path (Option B) reusing the exact same upload-guard helpers
+# (filename/signature/size) as the Quick route above, but delegating to
+# ``read_detailed_excel_intake_from_bytes`` -- ``anchor.detailed_excel_reader``'s
+# own deterministic parsing/validation path, distinct from Quick's. Returns
+# proposed ``AcquisitionTerms``/``DetailedOperatingInputs`` only -- never an
+# ``OperatingProjection`` or ``DetailedAcquisitionResults``; a wrong-mode
+# workbook (Quick uploaded here, or this workbook uploaded to
+# ``ingest_excel``) is a schema-mismatch ``InputValidationError``, handled
+# identically to any other ingestion issue below.
+# =============================================================================
+
+
+@app.post(_DETAILED_EXCEL_INGESTION_PATH, response_model=DetailedExcelIntakeReport)
+def ingest_detailed_excel(file: UploadFile = File(...)) -> DetailedExcelIntakeReport:
+    _validate_xlsx_filename(file)
+
+    workbook_bytes = _read_upload_bytes(file, max_bytes=_MAX_EXCEL_UPLOAD_BYTES)
+    _validate_xlsx_signature(workbook_bytes)
+
+    try:
+        return read_detailed_excel_intake_from_bytes(workbook_bytes)
     except InputValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

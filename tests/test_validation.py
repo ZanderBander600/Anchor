@@ -413,6 +413,11 @@ def test_validation_error_preserves_issue_tuple_and_user_readable_order() -> Non
 
 
 def test_issue_categories_cover_every_frozen_phase_one_condition() -> None:
+    # The original fourteen frozen Phase 1 categories remain, unchanged and
+    # in order; Detailed Operating Model V2.1 Gate 10 appends three more
+    # (workbook schema/version metadata, shared by the Quick and Detailed
+    # Excel readers) -- an additive extension, not a revision, of this
+    # frozen set.
     assert tuple(IssueCategory.__members__) == (
         "WORKBOOK_OPEN",
         "MISSING_SHEET",
@@ -428,6 +433,9 @@ def test_issue_categories_cover_every_frozen_phase_one_condition() -> None:
         "NON_WHOLE_NUMBER_HOLD_PERIOD",
         "NON_WHOLE_NUMBER_AMORTIZATION",
         "NON_WHOLE_NUMBER_IO_PERIOD",
+        "SCHEMA_MISMATCH",
+        "UNSUPPORTED_SCHEMA",
+        "UNSUPPORTED_SCHEMA_VERSION",
     )
 
 

@@ -99,6 +99,17 @@ class IssueCategory(StrEnum):
     NON_WHOLE_NUMBER_HOLD_PERIOD = "non_whole_number_hold_period"
     NON_WHOLE_NUMBER_AMORTIZATION = "non_whole_number_amortization"
     NON_WHOLE_NUMBER_IO_PERIOD = "non_whole_number_io_period"
+    # Detailed Operating Model V2.1 Gate 10 -- explicit workbook schema/
+    # version metadata (``anchor.workbook_schema``). SCHEMA_MISMATCH is a
+    # Quick workbook uploaded through the Detailed path or vice versa;
+    # UNSUPPORTED_SCHEMA is an ``anchor_schema`` value neither reader
+    # recognizes; UNSUPPORTED_SCHEMA_VERSION is a recognized Detailed schema
+    # at a ``schema_version`` this Anchor version does not parse. All three
+    # are terminal, single-issue errors raised before any field-level
+    # parsing, exactly like WORKBOOK_OPEN/MISSING_SHEET/MALFORMED_TABLE.
+    SCHEMA_MISMATCH = "schema_mismatch"
+    UNSUPPORTED_SCHEMA = "unsupported_schema"
+    UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

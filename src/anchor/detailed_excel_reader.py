@@ -1,127 +1,149 @@
-"""Canonical Excel ingestion for Anchor acquisition inputs."""
+"""Detailed Operating Model V2.1 Gate 10 -- Excel ingestion for Detailed
+Underwrite.
+
+Parallels ``excel_reader.py``'s structure and rigor exactly (same ``Inputs``
+worksheet/table shape, same deterministic error contract via
+``InputIssue``/``InputValidationError``, same reuse of the shared
+``_normalize_field_value``-family domain rules and the authoritative
+``validate_acquisition_terms``/``validate_detailed_operating_inputs``
+constructors) over the Detailed workbook's own field set: the eleven
+``AcquisitionTerms`` fields plus the eleven ``DetailedOperatingInputs``
+fields, twenty-two Field IDs total, every one of them required -- there is
+no legacy Detailed workbook and therefore no optional/defaulted field here.
+
+This module never calculates NOI, acquisition results, or any other
+financial output -- it produces proposed assumptions only. It is a distinct
+reader/contract from Quick's, not a variant of it: a Detailed workbook is
+identified by its own explicit ``anchor_schema``/``schema_version`` metadata
+(``anchor.workbook_schema``), never by which Field IDs happen to be present.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from io import BytesIO
 from numbers import Real
-from os import PathLike, fsdecode, fspath
+from os import PathLike
 from typing import Any
 
 from openpyxl import load_workbook
 
-from .contracts import AcquisitionInputs
+from .contracts import AcquisitionTerms, DetailedOperatingInputs
+from .excel_reader import (
+    _last_content_row,
+    _malformed_field_id_issue,
+    _validate_header,
+    _workbook_identifier,
+    _workbook_open_error,
+)
 from .validation import (
-    ALL_FIELD_IDS,
-    FIELD_IDS,
-    V2_FIELD_IDS,
+    DETAILED_FIELD_IDS,
+    TERMS_FIELD_IDS,
     InputIssue,
     InputValidationError,
     IssueCategory,
+    _normalize_detailed_field_value,
     _normalize_field_value,
-    validate_acquisition_inputs,
+    validate_acquisition_terms,
+    validate_detailed_operating_inputs,
 )
-from .workbook_schema import DETAILED_SCHEMA, _is_blank, read_workbook_schema
+from .workbook_schema import (
+    DETAILED_SCHEMA,
+    QUICK_SCHEMA,
+    SUPPORTED_DETAILED_SCHEMA_VERSION,
+    _is_blank,
+    read_workbook_schema,
+)
 
 _INPUTS_SHEET = "Inputs"
-_HEADERS = ("Field ID", "Input", "Value", "Unit")
 _TEXT_CELL_TYPES = frozenset({"s", "inlineStr"})
+
+#: Every Detailed Field ID, in canonical display order (AcquisitionTerms
+#: first, then DetailedOperatingInputs) -- drives duplicate/missing
+#: detection and value-issue ordering, mirroring ``ALL_FIELD_IDS``'s role
+#: in the Quick reader.
+_DETAILED_WORKBOOK_FIELD_IDS = TERMS_FIELD_IDS + DETAILED_FIELD_IDS
+_TERMS_FIELD_ID_SET = frozenset(TERMS_FIELD_IDS)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class ExcelIntakeReport:
-    """Underwriting V2 Gate 5: the smallest explicit contract for Excel
-    intake metadata beyond ``AcquisitionInputs`` itself.
+class DetailedExcelIntakeReport:
+    """The Detailed counterpart to ``ExcelIntakeReport``: proposed
+    assumptions only, plus the workbook's own declared schema/version --
+    never an ``OperatingProjection``, ``AcquisitionResults``, or any other
+    calculated value. Every field on both contracts is always present --
+    unlike Quick's ``defaulted_v2_field_ids``, there is no optional Detailed
+    field to report as defaulted."""
 
-    ``defaulted_v2_field_ids`` names exactly which of the five optional V2
-    Field IDs (``V2_FIELD_IDS``) were absent from the workbook and therefore
-    took their neutral dataclass default, in canonical field order. This is
-    intake UX metadata only -- not a general provenance system, and
-    deliberately not folded into ``AcquisitionInputs`` itself, which stays
-    the same deterministic, provenance-free contract the engine consumes.
-    """
-
-    inputs: AcquisitionInputs
-    defaulted_v2_field_ids: tuple[str, ...]
+    terms: AcquisitionTerms
+    detailed_operating_inputs: DetailedOperatingInputs
+    anchor_schema: str
+    schema_version: str
 
 
-def read_acquisition_inputs(
+def read_detailed_excel_intake(
     workbook_path: str | PathLike[str],
-) -> AcquisitionInputs:
-    """Read one canonical ``.xlsx`` workbook file into validated acquisition
-    inputs.
-
-    All workbook and ingestion failures are translated into an ordered
-    :class:`InputValidationError` collection. Formulas are intentionally loaded
-    as formulas so a cached result can never be mistaken for a literal value.
-    """
-
-    return read_acquisition_inputs_with_report(workbook_path).inputs
-
-
-def read_acquisition_inputs_from_bytes(data: bytes) -> AcquisitionInputs:
-    """Read one canonical ``.xlsx`` workbook held entirely in memory (e.g. an
-    HTTP upload) into validated acquisition inputs.
-
-    Delegates to the exact same parsing and validation path as
-    :func:`read_acquisition_inputs` -- the only difference is the in-memory
-    source and the identifier used in error messages. There is no filename to
-    extension-check here; a caller that needs to reject a non-``.xlsx``
-    upload before this point (e.g. by filename or content signature) does so
-    at its own layer.
-    """
-
-    return read_acquisition_inputs_from_bytes_with_report(data).inputs
-
-
-def read_acquisition_inputs_with_report(
-    workbook_path: str | PathLike[str],
-) -> ExcelIntakeReport:
-    """Like :func:`read_acquisition_inputs`, but also returns which V2 Field
-    IDs were absent from the workbook and therefore defaulted (Underwriting
-    V2 Gate 5)."""
+) -> DetailedExcelIntakeReport:
+    """Read one canonical Detailed ``.xlsx`` workbook file into validated
+    ``AcquisitionTerms`` + ``DetailedOperatingInputs``, plus its declared
+    schema/version."""
 
     identifier = _workbook_identifier(workbook_path)
     if not identifier.casefold().endswith(".xlsx"):
         raise _workbook_open_error(identifier)
-    return _read_acquisition_inputs_from_source(workbook_path, identifier)
+    return _read_detailed_excel_intake_from_source(workbook_path, identifier)
 
 
-def read_acquisition_inputs_from_bytes_with_report(data: bytes) -> ExcelIntakeReport:
-    """Like :func:`read_acquisition_inputs_from_bytes`, but also returns
-    which V2 Field IDs were absent from the workbook and therefore defaulted
-    (Underwriting V2 Gate 5)."""
+def read_detailed_excel_intake_from_bytes(data: bytes) -> DetailedExcelIntakeReport:
+    """Like :func:`read_detailed_excel_intake`, but for an in-memory
+    workbook (e.g. an HTTP upload)."""
 
-    return _read_acquisition_inputs_from_source(BytesIO(data), "<uploaded workbook>")
+    return _read_detailed_excel_intake_from_source(BytesIO(data), "<uploaded workbook>")
 
 
-def _read_acquisition_inputs_from_source(
+def _schema_mismatch(message: str) -> InputValidationError:
+    return InputValidationError(
+        (InputIssue(category=IssueCategory.SCHEMA_MISMATCH, message=message),)
+    )
+
+
+def _read_detailed_excel_intake_from_source(
     source: str | PathLike[str] | BytesIO,
     identifier: str,
-) -> ExcelIntakeReport:
+) -> DetailedExcelIntakeReport:
     try:
         workbook = load_workbook(source, data_only=False)
     except Exception:
         raise _workbook_open_error(identifier) from None
 
     try:
-        # Detailed Operating Model V2.1 Gate 10: a workbook that explicitly
-        # declares itself Detailed must never be silently reinterpreted as
-        # Quick by field-name coincidence (missing current_noi/occupancy/
-        # noi_growth would otherwise just look like three more missing
-        # fields). A workbook with no ``Meta`` sheet, or one declaring
-        # itself Quick, is unaffected -- this is the only new check Quick's
-        # reader gains.
+        # Gate 10 wrong-workbook protection: a Detailed workbook always
+        # declares itself explicitly. Absent metadata, or an explicit Quick
+        # declaration, means this is a Quick workbook (legacy schema-less
+        # Quick workbooks carry no ``Meta`` sheet at all) -- never flattened
+        # into Detailed assumptions by coincidental field overlap (both
+        # modes share eleven ``AcquisitionTerms``-shaped Field IDs).
         schema = read_workbook_schema(workbook)
-        if schema.anchor_schema == DETAILED_SCHEMA:
+        if schema.anchor_schema is None or schema.anchor_schema == QUICK_SCHEMA:
+            raise _schema_mismatch(
+                "This workbook uses the Quick Underwrite schema. Switch to "
+                "Quick Underwrite or upload a Detailed Underwrite workbook."
+            )
+        if schema.anchor_schema != DETAILED_SCHEMA:
+            raise _schema_mismatch(
+                f"Unsupported workbook schema {schema.anchor_schema!r} for "
+                "Detailed Underwrite ingestion."
+            )
+        if schema.schema_version != SUPPORTED_DETAILED_SCHEMA_VERSION:
             raise InputValidationError(
                 (
                     InputIssue(
-                        category=IssueCategory.SCHEMA_MISMATCH,
+                        category=IssueCategory.UNSUPPORTED_SCHEMA_VERSION,
                         message=(
-                            "This workbook uses the Detailed Underwrite schema. "
-                            "Switch to Detailed Underwrite or upload a Quick "
-                            "Underwrite workbook."
+                            f"Unsupported Detailed workbook schema_version "
+                            f"{schema.schema_version!r}. This version of Anchor "
+                            f"supports schema_version "
+                            f"{SUPPORTED_DETAILED_SCHEMA_VERSION!r}."
                         ),
                     ),
                 )
@@ -147,7 +169,7 @@ def _read_acquisition_inputs_from_source(
 
         row_issues: list[InputIssue] = []
         records: dict[str, list[tuple[int, Any]]] = {
-            field_id: [] for field_id in ALL_FIELD_IDS
+            field_id: [] for field_id in _DETAILED_WORKBOOK_FIELD_IDS
         }
 
         for row_number in range(2, _last_content_row(worksheet) + 1):
@@ -202,12 +224,20 @@ def _read_acquisition_inputs_from_source(
         if issues:
             raise InputValidationError(issues)
 
-        inputs = validate_acquisition_inputs(normalized)
-        defaulted_v2_field_ids = tuple(
-            field_id for field_id in V2_FIELD_IDS if not records[field_id]
-        )
-        return ExcelIntakeReport(
-            inputs=inputs, defaulted_v2_field_ids=defaulted_v2_field_ids
+        terms_values = {field_id: normalized[field_id] for field_id in TERMS_FIELD_IDS}
+        detailed_values = {
+            field_id: normalized[field_id] for field_id in DETAILED_FIELD_IDS
+        }
+        terms = validate_acquisition_terms(terms_values)
+        detailed_operating_inputs = validate_detailed_operating_inputs(detailed_values)
+
+        assert schema.anchor_schema is not None
+        assert schema.schema_version is not None
+        return DetailedExcelIntakeReport(
+            terms=terms,
+            detailed_operating_inputs=detailed_operating_inputs,
+            anchor_schema=schema.anchor_schema,
+            schema_version=schema.schema_version,
         )
     except InputValidationError:
         raise
@@ -220,101 +250,9 @@ def _read_acquisition_inputs_from_source(
             pass
 
 
-def _workbook_open_error(identifier: str) -> InputValidationError:
-    return InputValidationError(
-        (
-            InputIssue(
-                category=IssueCategory.WORKBOOK_OPEN,
-                message=f"Workbook could not be opened: {identifier}.",
-            ),
-        )
-    )
-
-
-def _workbook_identifier(workbook_path: object) -> str:
-    try:
-        identifier = fspath(workbook_path)
-        return fsdecode(identifier)
-    except Exception:
-        try:
-            return repr(workbook_path)
-        except Exception:
-            return "<workbook>"
-
-
-def _validate_header(worksheet: Any) -> InputIssue | None:
-    merged_ranges = sorted(
-        worksheet.merged_cells.ranges,
-        key=lambda merged_range: (
-            merged_range.min_row,
-            merged_range.min_col,
-            merged_range.max_row,
-            merged_range.max_col,
-        ),
-    )
-    for merged_range in merged_ranges:
-        if (
-            merged_range.min_row <= 1 <= merged_range.max_row
-            and merged_range.min_col <= 4
-            and merged_range.max_col >= 1
-        ):
-            return InputIssue(
-                category=IssueCategory.MALFORMED_TABLE,
-                message=(
-                    f"Malformed {_INPUTS_SHEET} header: merged range "
-                    f"{merged_range.coord} intersects A1:D1; expected exactly "
-                    f"{_HEADERS!r}."
-                ),
-                row=1,
-                cell=merged_range.coord,
-            )
-
-    actual = tuple(worksheet.cell(row=1, column=column).value for column in range(1, 5))
-    if actual == _HEADERS:
-        return None
-
-    first_mismatch = next(
-        column
-        for column, (actual_value, expected_value) in enumerate(
-            zip(actual, _HEADERS, strict=True), start=1
-        )
-        if actual_value != expected_value
-    )
-    coordinate = worksheet.cell(row=1, column=first_mismatch).coordinate
-    return InputIssue(
-        category=IssueCategory.MALFORMED_TABLE,
-        message=(
-            f"Malformed {_INPUTS_SHEET} header at {coordinate}: expected "
-            f"A1:D1 to equal {_HEADERS!r}, found {actual!r}."
-        ),
-        row=1,
-        cell=coordinate,
-    )
-
-
-def _last_content_row(worksheet: Any) -> int:
-    return max(
-        (
-            cell.row
-            for cell in worksheet._cells.values()
-            if cell.row >= 2 and 1 <= cell.column <= 4 and cell.value is not None
-        ),
-        default=1,
-    )
-
-
-def _malformed_field_id_issue(row_number: int, detail: str) -> InputIssue:
-    return InputIssue(
-        category=IssueCategory.MALFORMED_TABLE,
-        message=f"Malformed row {row_number}: {detail} at {_INPUTS_SHEET}!A{row_number}.",
-        row=row_number,
-        cell=f"A{row_number}",
-    )
-
-
 def _duplicate_issues(records: dict[str, list[tuple[int, Any]]]) -> list[InputIssue]:
     issues: list[InputIssue] = []
-    for field_id in ALL_FIELD_IDS:
+    for field_id in _DETAILED_WORKBOOK_FIELD_IDS:
         occurrences = records[field_id]
         if len(occurrences) <= 1:
             continue
@@ -337,7 +275,7 @@ def _missing_issues(records: dict[str, list[tuple[int, Any]]]) -> list[InputIssu
             message=f"Missing required Field ID '{field_id}'.",
             field_id=field_id,
         )
-        for field_id in FIELD_IDS
+        for field_id in _DETAILED_WORKBOOK_FIELD_IDS
         if not records[field_id]
     ]
 
@@ -348,7 +286,7 @@ def _normalize_unique_values(
     issues: list[InputIssue] = []
     normalized: dict[str, float | int] = {}
 
-    for field_id in ALL_FIELD_IDS:
+    for field_id in _DETAILED_WORKBOOK_FIELD_IDS:
         occurrences = records[field_id]
         if len(occurrences) != 1:
             continue
@@ -412,7 +350,12 @@ def _normalize_unique_values(
             )
             continue
 
-        normalized_value, issue = _normalize_field_value(field_id, raw_value)
+        normalize = (
+            _normalize_field_value
+            if field_id in _TERMS_FIELD_ID_SET
+            else _normalize_detailed_field_value
+        )
+        normalized_value, issue = normalize(field_id, raw_value)
         if issue is not None:
             issues.append(
                 replace(
