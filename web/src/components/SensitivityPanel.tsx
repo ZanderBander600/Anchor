@@ -1,5 +1,10 @@
 import { useState } from 'react';
-import type { SensitivityMetric, StandardSensitivityPresets, TwoWaySensitivityResult } from '../types';
+import type {
+  SensitivityMetric,
+  StandardDetailedSensitivityPresets,
+  StandardSensitivityPresets,
+  TwoWaySensitivityResult,
+} from '../types';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
 
 const ASSUMPTION_LABELS: Record<string, string> = {
@@ -80,14 +85,20 @@ function SensitivityMatrix({ result }: SensitivityMatrixProps) {
 
 type TabKey = 'exit_cap_noi_growth' | 'purchase_price_exit_cap' | 'interest_rate_ltv';
 
-const TABS: { key: TabKey; label: string }[] = [
+const ALL_TABS: { key: TabKey; label: string }[] = [
   { key: 'exit_cap_noi_growth', label: 'Exit Cap × NOI Growth' },
   { key: 'purchase_price_exit_cap', label: 'Purchase Price × Exit Cap' },
   { key: 'interest_rate_ltv', label: 'Interest Rate × LTV' },
 ];
 
 interface SensitivityPanelProps {
-  presets: StandardSensitivityPresets | null;
+  /** Detailed Operating Model V2.1 Gate 14: also accepts
+   * ``StandardDetailedSensitivityPresets``, which has no
+   * ``exit_cap_noi_growth`` member (``noi_growth`` has no
+   * ``AcquisitionTerms`` counterpart) -- the tab list below is derived from
+   * whichever shape is actually passed, never hardcoded to Quick's three
+   * tabs. */
+  presets: StandardSensitivityPresets | StandardDetailedSensitivityPresets | null;
   isLoading: boolean;
   error: string | null;
 }
@@ -100,6 +111,11 @@ export function SensitivityPanel({ presets, isLoading, error }: SensitivityPanel
     return null;
   }
 
+  const availableTabs = presets ? ALL_TABS.filter((tab) => tab.key in presets) : ALL_TABS;
+  const effectiveActiveTab = availableTabs.some((tab) => tab.key === activeTab)
+    ? activeTab
+    : availableTabs[0]?.key;
+
   return (
     <section className="card sensitivity-panel">
       <h3 className="card-title">Sensitivity Analysis</h3>
@@ -110,13 +126,15 @@ export function SensitivityPanel({ presets, isLoading, error }: SensitivityPanel
       {presets && (
         <>
           <div className="sensitivity-tabs" role="tablist">
-            {TABS.map((tab) => (
+            {availableTabs.map((tab) => (
               <button
                 key={tab.key}
                 type="button"
                 role="tab"
-                aria-selected={activeTab === tab.key}
-                className={activeTab === tab.key ? 'sensitivity-tab active' : 'sensitivity-tab'}
+                aria-selected={effectiveActiveTab === tab.key}
+                className={
+                  effectiveActiveTab === tab.key ? 'sensitivity-tab active' : 'sensitivity-tab'
+                }
                 onClick={() => setActiveTab(tab.key)}
               >
                 {tab.label}
@@ -124,15 +142,15 @@ export function SensitivityPanel({ presets, isLoading, error }: SensitivityPanel
             ))}
           </div>
 
-          {activeTab === 'exit_cap_noi_growth' && (
+          {effectiveActiveTab === 'exit_cap_noi_growth' && 'exit_cap_noi_growth' in presets && (
             <SensitivityMatrix result={presets.exit_cap_noi_growth} />
           )}
 
-          {activeTab === 'purchase_price_exit_cap' && (
+          {effectiveActiveTab === 'purchase_price_exit_cap' && (
             <SensitivityMatrix result={presets.purchase_price_exit_cap} />
           )}
 
-          {activeTab === 'interest_rate_ltv' && (
+          {effectiveActiveTab === 'interest_rate_ltv' && (
             <>
               <div className="sensitivity-metric-toggle">
                 <button

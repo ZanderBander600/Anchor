@@ -12,6 +12,8 @@ import type {
   ExtractionResult,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
+  StandardDetailedBreakEvenAnalysis,
+  StandardDetailedSensitivityPresets,
   StandardSensitivityPresets,
   ValidationIssue,
 } from './types';
@@ -156,6 +158,53 @@ export async function fetchSensitivityPresets(
 }
 
 /**
+ * Detailed Operating Model V2.1 Gate 14: POSTs an ``operating_mode:
+ * "detailed"`` request (``terms`` + ``detailed_operating_inputs``) to the
+ * same FastAPI ``/sensitivity/presets`` endpoint and returns the raw
+ * ``StandardDetailedSensitivityPresets`` JSON. Performs no sensitivity
+ * calculation of its own -- the backend analysis layer is authoritative,
+ * exactly like ``fetchSensitivityPresets``.
+ */
+export async function fetchDetailedSensitivityPresets(
+  terms: AcquisitionTermsRequest,
+  detailedOperatingInputs: DetailedOperatingInputsRequest,
+): Promise<StandardDetailedSensitivityPresets> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/sensitivity/presets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operating_mode: 'detailed',
+        terms,
+        detailed_operating_inputs: detailedOperatingInputs,
+      }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  if (response.status === 422) {
+    const body = await response.json().catch(() => null);
+    const issues: ValidationIssue[] = Array.isArray(body?.detail) ? body.detail : [];
+    const message =
+      issues.length > 0
+        ? issues.map((issue) => issue.message).join(' ')
+        : 'The submitted assumptions failed sensitivity validation.';
+    throw new ApiError(message, issues);
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`The sensitivity request failed (HTTP ${response.status}).`);
+  }
+
+  return (await response.json()) as StandardDetailedSensitivityPresets;
+}
+
+/**
  * POSTs an acquisition input set, the three hurdle targets, and the
  * selected return-hurdle metric to the FastAPI ``/break-even`` endpoint and
  * returns the raw ``StandardBreakEvenAnalysis`` JSON. Performs no threshold
@@ -203,6 +252,62 @@ export async function fetchBreakEvenAnalysis(
   }
 
   return (await response.json()) as StandardBreakEvenAnalysis;
+}
+
+/**
+ * Detailed Operating Model V2.1 Gate 14: POSTs an ``operating_mode:
+ * "detailed"`` request (``terms`` + ``detailed_operating_inputs``), the
+ * three hurdle targets, and the selected return-hurdle metric to the same
+ * FastAPI ``/break-even`` endpoint and returns the raw
+ * ``StandardDetailedBreakEvenAnalysis`` JSON. Performs no threshold search
+ * of its own -- the backend analysis layer is authoritative, exactly like
+ * ``fetchBreakEvenAnalysis``.
+ */
+export async function fetchDetailedBreakEvenAnalysis(
+  terms: AcquisitionTermsRequest,
+  detailedOperatingInputs: DetailedOperatingInputsRequest,
+  targetLeveredIrr: number,
+  targetEquityMultiple: number,
+  targetHeadlineDscr: number,
+  returnHurdleMetric: ReturnHurdleMetric,
+): Promise<StandardDetailedBreakEvenAnalysis> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/break-even`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operating_mode: 'detailed',
+        terms,
+        detailed_operating_inputs: detailedOperatingInputs,
+        target_levered_irr: targetLeveredIrr,
+        target_equity_multiple: targetEquityMultiple,
+        target_headline_dscr: targetHeadlineDscr,
+        return_hurdle_metric: returnHurdleMetric,
+      }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  if (response.status === 422) {
+    const body = await response.json().catch(() => null);
+    const issues: ValidationIssue[] = Array.isArray(body?.detail) ? body.detail : [];
+    const message =
+      issues.length > 0
+        ? issues.map((issue) => issue.message).join(' ')
+        : 'The submitted break-even request failed validation.';
+    throw new ApiError(message, issues);
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`The break-even request failed (HTTP ${response.status}).`);
+  }
+
+  return (await response.json()) as StandardDetailedBreakEvenAnalysis;
 }
 
 /**

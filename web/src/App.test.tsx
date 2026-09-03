@@ -13,6 +13,8 @@ import {
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchDetailedAIAnalysis,
+  fetchDetailedBreakEvenAnalysis,
+  fetchDetailedSensitivityPresets,
   fetchSensitivityPresets,
   getDeal,
   listDeals,
@@ -44,6 +46,8 @@ import type {
   ExtractionResult,
   FieldCandidates,
   StandardBreakEvenAnalysis,
+  StandardDetailedBreakEvenAnalysis,
+  StandardDetailedSensitivityPresets,
   StandardSensitivityPresets,
   TwoWaySensitivityResult,
 } from './types';
@@ -56,6 +60,8 @@ vi.mock('./api', async () => {
     analyzeDetailedAcquisition: vi.fn(),
     fetchSensitivityPresets: vi.fn(),
     fetchBreakEvenAnalysis: vi.fn(),
+    fetchDetailedSensitivityPresets: vi.fn(),
+    fetchDetailedBreakEvenAnalysis: vi.fn(),
     fetchAIAnalysis: vi.fn(),
     fetchDetailedAIAnalysis: vi.fn(),
     uploadOm: vi.fn(),
@@ -77,6 +83,8 @@ const mockAnalyze = vi.mocked(analyzeAcquisition);
 const mockAnalyzeDetailed = vi.mocked(analyzeDetailedAcquisition);
 const mockFetchSensitivityPresets = vi.mocked(fetchSensitivityPresets);
 const mockFetchBreakEvenAnalysis = vi.mocked(fetchBreakEvenAnalysis);
+const mockFetchDetailedSensitivityPresets = vi.mocked(fetchDetailedSensitivityPresets);
+const mockFetchDetailedBreakEvenAnalysis = vi.mocked(fetchDetailedBreakEvenAnalysis);
 const mockFetchAIAnalysis = vi.mocked(fetchAIAnalysis);
 const mockFetchDetailedAIAnalysis = vi.mocked(fetchDetailedAIAnalysis);
 const mockUploadOm = vi.mocked(uploadOm);
@@ -243,6 +251,62 @@ function makeSensitivityPresets(
   };
 }
 
+/** Detailed Operating Model V2.1 Gate 14: the Detailed counterpart of
+ * `makeSensitivityPresets` -- no `exit_cap_noi_growth` member, deliberately
+ * distinct baseline/matrix values (0.09/0.5x territory) so Detailed
+ * sensitivity text queries never collide with Quick's own mocked
+ * sensitivity values in a cross-mode test. */
+function makeDetailedSensitivityPresets(
+  overrides: Partial<StandardDetailedSensitivityPresets> = {},
+): StandardDetailedSensitivityPresets {
+  return {
+    // Every cell is distinct and outside Quick's default matrix's 41%-64%
+    // range -- the [2][2] (baseline) cell is the only one that renders
+    // "9.00%", so a text query for it can never collide with a neighbor.
+    purchase_price_exit_cap: makeSensitivityMatrix({
+      row_assumption: 'purchase_price',
+      column_assumption: 'exit_cap_rate',
+      baseline_row_value: 10_000_000,
+      baseline_column_value: 0.065,
+      baseline_metric_value: 0.09,
+      row_values: [9_000_000, 9_500_000, 10_000_000, 10_500_000, 11_000_000],
+      column_values: [0.055, 0.06, 0.065, 0.07, 0.075],
+      matrix: [
+        [0.05, 0.06, 0.07, 0.08, 0.081],
+        [0.082, 0.083, 0.084, 0.085, 0.086],
+        [0.087, 0.088, 0.09, 0.091, 0.092],
+        [0.093, 0.094, 0.095, 0.096, 0.097],
+        [0.098, 0.099, 0.1, 0.101, 0.102],
+      ],
+    }),
+    interest_rate_ltv: makeSensitivityMatrix({
+      row_assumption: 'interest_rate',
+      column_assumption: 'ltv',
+      baseline_metric_value: 0.09,
+    }),
+    // Same idea for the DSCR variant -- [2][2] is the only cell rendering
+    // "2.00x".
+    interest_rate_ltv_dscr: makeSensitivityMatrix({
+      row_assumption: 'interest_rate',
+      column_assumption: 'ltv',
+      metric: 'headline_dscr',
+      baseline_row_value: 0.05,
+      baseline_column_value: 0.6,
+      baseline_metric_value: 2.0,
+      row_values: [0.03, 0.04, 0.05, 0.06, 0.07],
+      column_values: [0.5, 0.55, 0.6, 0.65, 0.7],
+      matrix: [
+        [1.5, 1.6, 1.7, 1.8, 1.9],
+        [1.91, 1.92, 1.93, 1.94, 1.95],
+        [1.96, 1.97, 2.0, 1.98, 1.99],
+        [2.01, 2.02, 2.03, 2.04, 2.05],
+        [2.06, 2.07, 2.08, 2.09, 2.1],
+      ],
+    }),
+    ...overrides,
+  };
+}
+
 function makeBreakEvenResult(overrides: Partial<BreakEvenResult> = {}): BreakEvenResult {
   return {
     break_even_type: 'max_purchase_price',
@@ -304,6 +368,46 @@ function makeBreakEvenAnalysis(
       solved_metric_value: 1.2001,
       lower_search_bound: 1_250_000,
       upper_search_bound: 3_750_000,
+    }),
+    ...overrides,
+  };
+}
+
+/** Detailed Operating Model V2.1 Gate 14: the Detailed counterpart of
+ * `makeBreakEvenAnalysis` -- no `min_noi_growth`/`min_current_noi` members
+ * (neither `noi_growth` nor `current_noi` exists on `AcquisitionTerms`/
+ * `DetailedOperatingInputs`), over the Detailed golden case's own
+ * assumption values. */
+function makeDetailedBreakEvenAnalysis(
+  overrides: Partial<StandardDetailedBreakEvenAnalysis> = {},
+): StandardDetailedBreakEvenAnalysis {
+  return {
+    max_purchase_price: makeBreakEvenResult({
+      baseline_assumption_value: 10_000_000,
+      // Deliberately not one of the sensitivity mock's purchase_price row
+      // values (9.0M/9.5M/10.0M/10.5M/11.0M) -- both panels render at once,
+      // and a shared exact-dollar figure would make text queries ambiguous.
+      solved_assumption_value: 9_487_500,
+    }),
+    max_exit_cap_rate: makeBreakEvenResult({
+      break_even_type: 'max_exit_cap_rate',
+      assumption: 'exit_cap_rate',
+      baseline_assumption_value: 0.065,
+      solved_assumption_value: 0.071,
+      lower_search_bound: 0.035,
+      upper_search_bound: 0.115,
+    }),
+    max_interest_rate: makeBreakEvenResult({
+      break_even_type: 'max_interest_rate',
+      assumption: 'interest_rate',
+      metric: 'headline_dscr',
+      target_metric_value: 1.25,
+      baseline_assumption_value: 0.05,
+      baseline_metric_value: 2.0,
+      solved_assumption_value: 0.0712,
+      solved_metric_value: 1.2501,
+      lower_search_bound: 0.0,
+      upper_search_bound: 0.2,
     }),
     ...overrides,
   };
@@ -567,6 +671,10 @@ beforeEach(() => {
   mockFetchSensitivityPresets.mockResolvedValue(makeSensitivityPresets());
   mockFetchBreakEvenAnalysis.mockReset();
   mockFetchBreakEvenAnalysis.mockResolvedValue(makeBreakEvenAnalysis());
+  mockFetchDetailedSensitivityPresets.mockReset();
+  mockFetchDetailedSensitivityPresets.mockResolvedValue(makeDetailedSensitivityPresets());
+  mockFetchDetailedBreakEvenAnalysis.mockReset();
+  mockFetchDetailedBreakEvenAnalysis.mockResolvedValue(makeDetailedBreakEvenAnalysis());
   mockFetchAIAnalysis.mockReset();
   mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysis());
   mockFetchDetailedAIAnalysis.mockReset();
@@ -3151,6 +3259,226 @@ describe('AI Analyst in Detailed mode (Gate 9)', () => {
     });
 
     expect(screen.queryByText('Five-year hold with moderate leverage.')).toBeNull();
+  });
+});
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 14 -- Detailed sensitivity/break-even
+// API/UI wiring
+// =============================================================================
+
+const DETAILED_GOLDEN_TERMS_REQUEST = {
+  purchase_price: 10_000_000,
+  hold_period: 5,
+  exit_cap_rate: 0.065,
+  ltv: 0.6,
+  interest_rate: 0.05,
+  amortization: 30,
+  acquisition_cost_pct: 0.02,
+  financing_fee_pct: 0.01,
+  disposition_cost_pct: 0.025,
+  annual_capex_reserve: 50_000,
+  io_period: 2,
+};
+
+const DETAILED_GOLDEN_OPERATING_REQUEST = {
+  gross_potential_rent: 800_000,
+  other_income: 20_000,
+  vacancy_credit_loss_pct: 0.05,
+  property_taxes: 60_000,
+  insurance: 20_000,
+  utilities: 25_000,
+  repairs_maintenance: 20_000,
+  other_operating_expenses: 16_000,
+  management_fee_pct: 0.05,
+  revenue_growth: 0.03,
+  expense_growth: 0.03,
+};
+
+describe('Detailed sensitivity + break-even (Gate 14)', () => {
+  it('1. Detailed results expose Sensitivity', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
+    // The Detailed-only preset bundle has no exit_cap_noi_growth member --
+    // that tab must never appear for a Detailed result.
+    expect(screen.queryByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Purchase Price × Exit Cap' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Interest Rate × LTV' })).toBeTruthy();
+  });
+
+  it('2. Detailed results expose Break-Even', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    expect(await screen.findByText('Break-Even Analysis')).toBeTruthy();
+    expect(screen.getByText('Maximum Purchase Price')).toBeTruthy();
+    expect(screen.getByText('Maximum Exit Cap')).toBeTruthy();
+    expect(screen.getByText('Maximum Interest Rate')).toBeTruthy();
+    // The Detailed-only bundle has no min_noi_growth/min_current_noi
+    // members -- neither card may appear for a Detailed result.
+    expect(screen.queryByText('Minimum NOI Growth')).toBeNull();
+    expect(screen.queryByText('Minimum Current NOI')).toBeNull();
+  });
+
+  it('3. Detailed sensitivity request uses Detailed inputs', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await waitFor(() => expect(mockFetchDetailedSensitivityPresets).toHaveBeenCalledTimes(1));
+    expect(mockFetchSensitivityPresets).not.toHaveBeenCalled();
+    const [terms, detailedOperatingInputs] = mockFetchDetailedSensitivityPresets.mock.calls[0];
+    expect(terms).toEqual(DETAILED_GOLDEN_TERMS_REQUEST);
+    expect(detailedOperatingInputs).toEqual(DETAILED_GOLDEN_OPERATING_REQUEST);
+  });
+
+  it('4. Detailed break-even request uses Detailed inputs', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await waitFor(() => expect(mockFetchDetailedBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockFetchBreakEvenAnalysis).not.toHaveBeenCalled();
+    const [terms, detailedOperatingInputs, targetIrr, targetEquityMultiple, targetDscr, metric] =
+      mockFetchDetailedBreakEvenAnalysis.mock.calls[0];
+    expect(terms).toEqual(DETAILED_GOLDEN_TERMS_REQUEST);
+    expect(detailedOperatingInputs).toEqual(DETAILED_GOLDEN_OPERATING_REQUEST);
+    expect(targetIrr).toBeCloseTo(0.1);
+    expect(targetEquityMultiple).toBeCloseTo(1.5);
+    expect(targetDscr).toBeCloseTo(1.2);
+    expect(metric).toBe('levered_irr');
+  });
+
+  it('5. Quick sensitivity remains unchanged (regression)', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1));
+    expect(mockFetchDetailedSensitivityPresets).not.toHaveBeenCalled();
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledWith(mockAnalyze.mock.calls[0][0]);
+    // Quick's own preset bundle still has its exit_cap_noi_growth tab.
+    expect(await screen.findByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeTruthy();
+  });
+
+  it('6. Quick break-even remains unchanged (regression)', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockFetchDetailedBreakEvenAnalysis).not.toHaveBeenCalled();
+    // Quick's own bundle still has its min_noi_growth/min_current_noi cards.
+    expect(await screen.findByText('Minimum NOI Growth')).toBeTruthy();
+    expect(screen.getByText('Minimum Current NOI')).toBeTruthy();
+  });
+
+  it('7. Detailed sensitivity/break-even requests never fabricate current_noi/noi_growth/occupancy', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await waitFor(() => expect(mockFetchDetailedSensitivityPresets).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockFetchDetailedBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    const sensitivityArgs = mockFetchDetailedSensitivityPresets.mock.calls[0];
+    const breakEvenArgs = mockFetchDetailedBreakEvenAnalysis.mock.calls[0].slice(0, 2);
+    const serialized = JSON.stringify({ sensitivityArgs, breakEvenArgs });
+    expect(serialized).not.toContain('current_noi');
+    expect(serialized).not.toContain('"noi_growth"');
+    expect(serialized).not.toContain('"occupancy"');
+  });
+
+  it('8. switching modes does not leak sensitivity/break-even state', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+
+    // Quick first -- its default mocked matrix (41%-64%) never contains 9.00%.
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Sensitivity Analysis');
+    expect(screen.getAllByText(/^50\.00%/).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/^9\.00%/)).toHaveLength(0);
+
+    // Switch to Detailed -- no results yet, so no sensitivity/break-even at all.
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    expect(screen.queryByText('Sensitivity Analysis')).toBeNull();
+    expect(screen.queryByText('Break-Even Analysis')).toBeNull();
+
+    // Analyze Detailed -- its own distinctive baseline (9.00%, unique to its
+    // mocked matrix), never Quick's 50.00%.
+    await analyzeDetailedGoldenDeal(user);
+    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
+    expect(screen.getAllByText(/^9\.00%/).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/^50\.00%/)).toHaveLength(0);
+
+    // Switch back to Quick -- its original sensitivity is still there, untouched.
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
+    expect(screen.getAllByText(/^50\.00%/).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/^9\.00%/)).toHaveLength(0);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
+    expect(mockFetchDetailedSensitivityPresets).toHaveBeenCalledTimes(1);
+  });
+
+  it('9. sensitivity result renders correctly in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await screen.findByText('Sensitivity Analysis');
+
+    // Default tab falls back to purchase_price_exit_cap (Detailed has no
+    // exit_cap_noi_growth) -- its mocked baseline cell is the only one in
+    // the grid rendering "9.00%", rendered raw, never recomputed.
+    expect(screen.getAllByText(/^9\.00%/).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('tab', { name: 'Interest Rate × LTV' }));
+    // The DSCR variant's mocked baseline (2.00x) renders once that tab/metric is selected.
+    await user.click(screen.getByRole('button', { name: 'Year 1 DSCR' }));
+    await waitFor(() => expect(screen.getAllByText(/^2\.00x/).length).toBeGreaterThan(0));
+  });
+
+  it('10. break-even result renders correctly in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await screen.findByText('Break-Even Analysis');
+
+    // Solved values come straight from the mock (max_purchase_price:
+    // 9,500,000 / max_exit_cap_rate: 0.071 / max_interest_rate: 0.0712),
+    // rendered by the same formatCurrency/formatPercent helpers Quick uses
+    // -- never recomputed.
+    expect(screen.getByText('$9,487,500')).toBeTruthy();
+    expect(screen.getByText('7.10%')).toBeTruthy();
+    expect(screen.getByText('7.12%')).toBeTruthy();
+  });
+
+  it('11. no formulas are introduced into frontend code -- rendered values are a byte-identical pass-through of the mocked response', async () => {
+    const user = userEvent.setup();
+    // A deliberately unrealistic, distinctive value that could not arise
+    // from any plausible client-side recomputation of the golden inputs --
+    // if this exact figure renders, the component only formatted it.
+    mockFetchDetailedBreakEvenAnalysis.mockResolvedValue(
+      makeDetailedBreakEvenAnalysis({
+        max_purchase_price: makeBreakEvenResult({
+          solved_assumption_value: 12_345_678,
+        }),
+      }),
+    );
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    expect(await screen.findByText('$12,345,678')).toBeTruthy();
   });
 });
 

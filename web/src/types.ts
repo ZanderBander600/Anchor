@@ -417,6 +417,16 @@ export interface StandardSensitivityPresets {
   interest_rate_ltv_dscr: TwoWaySensitivityResult;
 }
 
+/** Detailed Operating Model V2.1 Gate 14: mirrors
+ * ``StandardDetailedSensitivityPresets`` in
+ * ``src/anchor/analysis/contracts.py``. No ``exit_cap_noi_growth`` member --
+ * ``noi_growth`` has no ``AcquisitionTerms`` counterpart. */
+export interface StandardDetailedSensitivityPresets {
+  purchase_price_exit_cap: TwoWaySensitivityResult;
+  interest_rate_ltv: TwoWaySensitivityResult;
+  interest_rate_ltv_dscr: TwoWaySensitivityResult;
+}
+
 export type BreakEvenType =
   | 'max_purchase_price'
   | 'max_exit_cap_rate'
@@ -455,6 +465,18 @@ export interface StandardBreakEvenAnalysis {
   min_noi_growth: BreakEvenResult;
   max_interest_rate: BreakEvenResult;
   min_current_noi: BreakEvenResult;
+}
+
+/** Detailed Operating Model V2.1 Gate 14: mirrors
+ * ``StandardDetailedBreakEvenAnalysis`` in
+ * ``src/anchor/analysis/contracts.py``. ``min_noi_growth``/
+ * ``min_current_noi`` have no Detailed equivalent -- neither ``noi_growth``
+ * nor ``current_noi`` exists on ``AcquisitionTerms``/
+ * ``DetailedOperatingInputs``. */
+export interface StandardDetailedBreakEvenAnalysis {
+  max_purchase_price: BreakEvenResult;
+  max_exit_cap_rate: BreakEvenResult;
+  max_interest_rate: BreakEvenResult;
 }
 
 /** Mirrors ``AIAnalysis`` in ``src/anchor/ai/contracts.py`` -- the AI

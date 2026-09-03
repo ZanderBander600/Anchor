@@ -35,12 +35,17 @@ from .analysis import (
     InvalidBreakEvenTargetError,
     ReturnHurdleMetric,
     StandardBreakEvenAnalysis,
+    StandardDetailedBreakEvenAnalysis,
+    StandardDetailedSensitivityPresets,
     StandardSensitivityPresets,
     TwoWaySensitivityResult,
     UnknownAssumptionError,
     UnknownMetricError,
     build_standard_break_even_analysis,
+    build_standard_detailed_break_even_analysis,
+    build_standard_detailed_presets,
     build_standard_presets,
+    run_detailed_two_way_sensitivity,
     run_two_way_sensitivity,
 )
 from .contracts import (
@@ -297,11 +302,72 @@ def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults | Detaile
 # ``validate_acquisition_inputs`` used by ``/analyze``, then delegate all
 # sensitivity computation to ``anchor.analysis.sensitivity``. Neither
 # endpoint performs financial or sensitivity math itself.
+#
+# Detailed Operating Model V2.1 Gate 14: both endpoints gain the same
+# ``operating_mode`` discriminator ``/analyze`` and ``/ai/analysis`` already
+# have (Gate 5/9). A ``"quick"``/absent request is completely unaffected --
+# ``operating_mode`` is popped first, exactly as those endpoints do, so the
+# remaining payload is validated and computed exactly as before this gate.
+# A ``"detailed"`` request delegates to ``run_detailed_two_way_sensitivity``/
+# ``build_standard_detailed_presets`` -- the same Gate 8 functions the
+# Detailed AI Analyst already calls -- no sensitivity math of its own.
 # =============================================================================
+
+
+def _sensitivity_detailed(payload: dict[str, Any]) -> TwoWaySensitivityResult:
+    terms = _require_deal_terms(payload)
+    detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+
+    missing_fields = [
+        field
+        for field in (
+            "row_assumption",
+            "row_values",
+            "column_assumption",
+            "column_values",
+            "metric",
+        )
+        if field not in payload
+    ]
+    if missing_fields:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Missing required field(s): {', '.join(missing_fields)}.",
+        )
+
+    try:
+        return run_detailed_two_way_sensitivity(
+            terms,
+            detailed_operating_inputs,
+            row_assumption=payload["row_assumption"],
+            row_values=payload["row_values"],
+            column_assumption=payload["column_assumption"],
+            column_values=payload["column_values"],
+            metric=payload["metric"],
+        )
+    except (UnknownAssumptionError, UnknownMetricError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
 
 
 @app.post("/sensitivity", response_model=TwoWaySensitivityResult)
 def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    if operating_mode is OperatingMode.DETAILED:
+        return _sensitivity_detailed(payload)
+
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
         raise HTTPException(
@@ -358,10 +424,27 @@ def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
         ) from None
 
 
-@app.post("/sensitivity/presets", response_model=StandardSensitivityPresets)
+def _sensitivity_presets_detailed(
+    payload: dict[str, Any]
+) -> StandardDetailedSensitivityPresets:
+    terms = _require_deal_terms(payload)
+    detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    return build_standard_detailed_presets(terms, detailed_operating_inputs)
+
+
+@app.post(
+    "/sensitivity/presets",
+    response_model=StandardSensitivityPresets | StandardDetailedSensitivityPresets,
+)
 def sensitivity_presets(
     payload: dict[str, Any] = Body(...),
-) -> StandardSensitivityPresets:
+) -> StandardSensitivityPresets | StandardDetailedSensitivityPresets:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    if operating_mode is OperatingMode.DETAILED:
+        return _sensitivity_presets_detailed(payload)
+
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
         raise HTTPException(
@@ -385,6 +468,13 @@ def sensitivity_presets(
 #
 # Delegates all break-even solving to ``anchor.analysis.break_even``;
 # this endpoint performs no financial math and no threshold search itself.
+#
+# Detailed Operating Model V2.1 Gate 14: gains the same ``operating_mode``
+# discriminator ``/analyze``, ``/ai/analysis``, and ``/sensitivity`` already
+# have. A "quick"/absent request is completely unaffected. A "detailed"
+# request delegates to ``build_standard_detailed_break_even_analysis`` --
+# the same Gate 8 function the Detailed AI Analyst already calls -- no
+# break-even search of its own.
 # =============================================================================
 
 
@@ -398,8 +488,44 @@ def _numeric_target(payload: dict[str, Any], field: str) -> float:
     return float(value)
 
 
-@app.post("/break-even", response_model=StandardBreakEvenAnalysis)
-def break_even(payload: dict[str, Any] = Body(...)) -> StandardBreakEvenAnalysis:
+def _break_even_detailed(payload: dict[str, Any]) -> StandardDetailedBreakEvenAnalysis:
+    terms = _require_deal_terms(payload)
+    detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    (
+        target_levered_irr,
+        target_headline_dscr,
+        target_equity_multiple,
+        return_hurdle_metric,
+    ) = _require_ai_hurdle_targets(payload)
+
+    try:
+        return build_standard_detailed_break_even_analysis(
+            terms,
+            detailed_operating_inputs,
+            target_levered_irr=target_levered_irr,
+            target_headline_dscr=target_headline_dscr,
+            target_equity_multiple=target_equity_multiple,
+            return_hurdle_metric=return_hurdle_metric,
+        )
+    except InvalidBreakEvenTargetError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+
+
+@app.post(
+    "/break-even",
+    response_model=StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis,
+)
+def break_even(
+    payload: dict[str, Any] = Body(...),
+) -> StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    if operating_mode is OperatingMode.DETAILED:
+        return _break_even_detailed(payload)
+
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
         raise HTTPException(

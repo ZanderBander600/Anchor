@@ -11,6 +11,8 @@ import {
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
   fetchDetailedAIAnalysis,
+  fetchDetailedBreakEvenAnalysis,
+  fetchDetailedSensitivityPresets,
   fetchSensitivityPresets,
   getDeal,
   listDeals,
@@ -63,6 +65,7 @@ import type {
   AcquisitionRequest,
   AcquisitionResults,
   AcquisitionTermsFormValues,
+  AcquisitionTermsRequest,
   AIAnalysis,
   Deal,
   DetailedAcquisitionResults,
@@ -70,11 +73,14 @@ import type {
   DetailedFormValues,
   DetailedOperatingFieldId,
   DetailedOperatingFormValues,
+  DetailedOperatingInputsRequest,
   DetailedTermsFieldId,
   ExtractionResult,
   OperatingMode,
   ReturnHurdleMetric,
   StandardBreakEvenAnalysis,
+  StandardDetailedBreakEvenAnalysis,
+  StandardDetailedSensitivityPresets,
   StandardSensitivityPresets,
   V2FieldId,
 } from './types';
@@ -85,15 +91,16 @@ export default function App() {
   // result state below -- it never reads or writes any Quick-mode state
   // (`values`, `results`, `sensitivity`, `breakEven`, `aiAnalysis`, the
   // deal library, etc.), so switching modes can never regress or corrupt
-  // Quick's existing behavior. Persistence and sensitivity/break-even
-  // *UI* are not yet wired for Detailed mode -- deferred to a later gate;
-  // the AI Analyst (Gate 9) is wired below, reusing the same
-  // `AiAnalystPanel` component Quick mode uses, driven by the deterministic
-  // Detailed context the backend already builds. Detailed mode has no
-  // break-even UI of its own yet, so its "Generate AI Analysis" request
-  // uses the same fixed default hurdle targets Quick mode starts with
-  // (`DEFAULT_TARGET_LEVERED_IRR_PERCENT` etc.) -- never a Quick-only value
-  // fabricated for this mode.
+  // Quick's existing behavior. Persistence (Gate 11), sensitivity/break-even
+  // UI (Gate 14, reusing `SensitivityPanel`/`BreakEvenPanel`, generalized to
+  // accept either mode's contract shape), and the AI Analyst (Gate 9,
+  // reusing `AiAnalystPanel`) are all wired below, over Detailed's own
+  // independent state -- driven by the deterministic Detailed context/
+  // analysis the backend already builds. Detailed's "Generate AI Analysis"
+  // request intentionally keeps using the same fixed default hurdle targets
+  // Quick mode starts with (`DEFAULT_TARGET_LEVERED_IRR_PERCENT` etc.)
+  // rather than the break-even panel's own edited targets -- Gate 14 is a
+  // wiring-only gate that explicitly excludes AI changes.
   const [operatingMode, setOperatingMode] = useState<OperatingMode>('quick');
 
   const [detailedValues, setDetailedValues] = useState<DetailedFormValues>(
@@ -105,6 +112,36 @@ export default function App() {
   const [isDetailedSubmitting, setIsDetailedSubmitting] = useState(false);
   const [detailedError, setDetailedError] = useState<string | null>(null);
 
+  // Detailed Operating Model V2.1 Gate 14: Detailed sensitivity/break-even,
+  // mirroring Quick's `sensitivity`/`breakEven` state shape exactly, over
+  // Detailed's own independent state (never Quick's). `lastDetailedRequest`
+  // stores the `terms`/`detailedOperatingInputs` pair just analyzed --
+  // the Detailed counterpart of Quick's `lastRequest` -- so a break-even
+  // target edit can re-run the search without re-deriving the request.
+  const [detailedSensitivity, setDetailedSensitivity] =
+    useState<StandardDetailedSensitivityPresets | null>(null);
+  const [isDetailedSensitivityLoading, setIsDetailedSensitivityLoading] = useState(false);
+  const [detailedSensitivityError, setDetailedSensitivityError] = useState<string | null>(null);
+  const [lastDetailedRequest, setLastDetailedRequest] = useState<{
+    terms: AcquisitionTermsRequest;
+    detailedOperatingInputs: DetailedOperatingInputsRequest;
+  } | null>(null);
+  const [detailedTargetLeveredIrrPercent, setDetailedTargetLeveredIrrPercent] = useState(
+    DEFAULT_TARGET_LEVERED_IRR_PERCENT,
+  );
+  const [detailedTargetEquityMultiple, setDetailedTargetEquityMultiple] = useState(
+    DEFAULT_TARGET_EQUITY_MULTIPLE,
+  );
+  const [detailedTargetHeadlineDscr, setDetailedTargetHeadlineDscr] = useState(
+    DEFAULT_TARGET_HEADLINE_DSCR,
+  );
+  const [detailedReturnHurdleMetric, setDetailedReturnHurdleMetric] =
+    useState<ReturnHurdleMetric>('levered_irr');
+  const [detailedBreakEven, setDetailedBreakEven] =
+    useState<StandardDetailedBreakEvenAnalysis | null>(null);
+  const [isDetailedBreakEvenLoading, setIsDetailedBreakEvenLoading] = useState(false);
+  const [detailedBreakEvenError, setDetailedBreakEvenError] = useState<string | null>(null);
+
   const [detailedAiAnalysis, setDetailedAiAnalysis] = useState<AIAnalysis | null>(null);
   const [isDetailedAiAnalysisLoading, setIsDetailedAiAnalysisLoading] = useState(false);
   const [detailedAiAnalysisError, setDetailedAiAnalysisError] = useState<string | null>(null);
@@ -112,6 +149,21 @@ export default function App() {
   function clearDetailedAiAnalysis() {
     setDetailedAiAnalysis(null);
     setDetailedAiAnalysisError(null);
+  }
+
+  /** Detailed counterpart of `resetDownstreamAnalysisState`: clears
+   * everything derived from a Detailed analyze call (results, sensitivity,
+   * break-even, AI output) without touching `detailedValues` itself. Never
+   * touches any Quick-mode state. */
+  function resetDetailedDownstreamAnalysisState() {
+    setDetailedResults(null);
+    setDetailedError(null);
+    setDetailedSensitivity(null);
+    setDetailedSensitivityError(null);
+    setLastDetailedRequest(null);
+    setDetailedBreakEven(null);
+    setDetailedBreakEvenError(null);
+    clearDetailedAiAnalysis();
   }
 
   // Detailed Operating Model V2.1 Gate 10: Detailed Excel ingestion.
@@ -394,9 +446,7 @@ export default function App() {
     setCurrentDetailedDealId(null);
     setLastDetailedSavedAt(null);
     setDetailedSavedSnapshot(BLANK_DETAILED_SNAPSHOT);
-    setDetailedResults(null);
-    setDetailedError(null);
-    clearDetailedAiAnalysis();
+    resetDetailedDownstreamAnalysisState();
     clearSaveDetailedDealError();
     clearDetailedIntakeFeedback();
   }
@@ -464,9 +514,7 @@ export default function App() {
       ...previous,
       terms: { ...previous.terms, [key]: value },
     }));
-    setDetailedResults(null);
-    setDetailedError(null);
-    clearDetailedAiAnalysis();
+    resetDetailedDownstreamAnalysisState();
   }
 
   function handleDetailedOperatingFieldChange(
@@ -477,16 +525,121 @@ export default function App() {
       ...previous,
       operating: { ...previous.operating, [key]: value },
     }));
-    setDetailedResults(null);
-    setDetailedError(null);
-    clearDetailedAiAnalysis();
+    resetDetailedDownstreamAnalysisState();
+  }
+
+  /** Detailed Operating Model V2.1 Gate 14: the Detailed counterpart of
+   * `runBreakEven`, over `terms`/`detailedOperatingInputs` instead of a
+   * single `AcquisitionRequest`, delegating to
+   * `fetchDetailedBreakEvenAnalysis` -- no threshold search of its own. */
+  async function runDetailedBreakEven(
+    terms: AcquisitionTermsRequest,
+    detailedOperatingInputs: DetailedOperatingInputsRequest,
+    leveredIrrPercentInput: string,
+    equityMultipleInput: string,
+    headlineDscrInput: string,
+    metric: ReturnHurdleMetric,
+  ) {
+    let targetLeveredIrr: number;
+    let targetEquityMultipleValue: number;
+    let targetHeadlineDscrValue: number;
+    try {
+      targetLeveredIrr = parsePercent('Target Levered IRR', leveredIrrPercentInput);
+      targetEquityMultipleValue = parseNumber('Target Equity Multiple', equityMultipleInput);
+      targetHeadlineDscrValue = parseNumber('Target Year 1 DSCR', headlineDscrInput);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setDetailedBreakEven(null);
+        setDetailedBreakEvenError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    setIsDetailedBreakEvenLoading(true);
+    setDetailedBreakEvenError(null);
+    try {
+      const analysis = await fetchDetailedBreakEvenAnalysis(
+        terms,
+        detailedOperatingInputs,
+        targetLeveredIrr,
+        targetEquityMultipleValue,
+        targetHeadlineDscrValue,
+        metric,
+      );
+      setDetailedBreakEven(analysis);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedBreakEvenError(apiError.message);
+      } else {
+        setDetailedBreakEvenError(
+          'An unexpected error occurred while calculating break-even results.',
+        );
+      }
+    } finally {
+      setIsDetailedBreakEvenLoading(false);
+    }
+  }
+
+  function handleDetailedTargetLeveredIrrChange(value: string) {
+    setDetailedTargetLeveredIrrPercent(value);
+    if (lastDetailedRequest) {
+      void runDetailedBreakEven(
+        lastDetailedRequest.terms,
+        lastDetailedRequest.detailedOperatingInputs,
+        value,
+        detailedTargetEquityMultiple,
+        detailedTargetHeadlineDscr,
+        detailedReturnHurdleMetric,
+      );
+    }
+  }
+
+  function handleDetailedTargetEquityMultipleChange(value: string) {
+    setDetailedTargetEquityMultiple(value);
+    if (lastDetailedRequest) {
+      void runDetailedBreakEven(
+        lastDetailedRequest.terms,
+        lastDetailedRequest.detailedOperatingInputs,
+        detailedTargetLeveredIrrPercent,
+        value,
+        detailedTargetHeadlineDscr,
+        detailedReturnHurdleMetric,
+      );
+    }
+  }
+
+  function handleDetailedTargetHeadlineDscrChange(value: string) {
+    setDetailedTargetHeadlineDscr(value);
+    if (lastDetailedRequest) {
+      void runDetailedBreakEven(
+        lastDetailedRequest.terms,
+        lastDetailedRequest.detailedOperatingInputs,
+        detailedTargetLeveredIrrPercent,
+        detailedTargetEquityMultiple,
+        value,
+        detailedReturnHurdleMetric,
+      );
+    }
+  }
+
+  function handleDetailedReturnHurdleMetricChange(metric: ReturnHurdleMetric) {
+    setDetailedReturnHurdleMetric(metric);
+    if (lastDetailedRequest) {
+      void runDetailedBreakEven(
+        lastDetailedRequest.terms,
+        lastDetailedRequest.detailedOperatingInputs,
+        detailedTargetLeveredIrrPercent,
+        detailedTargetEquityMultiple,
+        detailedTargetHeadlineDscr,
+        metric,
+      );
+    }
   }
 
   async function handleDetailedSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setDetailedResults(null);
-    setDetailedError(null);
-    clearDetailedAiAnalysis();
+    resetDetailedDownstreamAnalysisState();
 
     let terms;
     let detailedOperatingInputs;
@@ -511,19 +664,48 @@ export default function App() {
       } else {
         setDetailedError('An unexpected error occurred while analyzing the deal.');
       }
-    } finally {
       setIsDetailedSubmitting(false);
+      return;
     }
+    setIsDetailedSubmitting(false);
+    setLastDetailedRequest({ terms, detailedOperatingInputs });
+
+    setIsDetailedSensitivityLoading(true);
+    try {
+      const presets = await fetchDetailedSensitivityPresets(terms, detailedOperatingInputs);
+      setDetailedSensitivity(presets);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedSensitivityError(apiError.message);
+      } else {
+        setDetailedSensitivityError('An unexpected error occurred while calculating sensitivity.');
+      }
+    } finally {
+      setIsDetailedSensitivityLoading(false);
+    }
+
+    await runDetailedBreakEven(
+      terms,
+      detailedOperatingInputs,
+      detailedTargetLeveredIrrPercent,
+      detailedTargetEquityMultiple,
+      detailedTargetHeadlineDscr,
+      detailedReturnHurdleMetric,
+    );
   }
 
   /**
    * Detailed Operating Model V2.1 Gate 9: generates an AI Analyst
    * interpretation of the current Detailed deal, sending the same
    * `terms`/`detailedOperatingInputs` just analyzed (never re-derived or
-   * re-typed) plus the fixed default hurdle targets -- Detailed mode has
-   * no break-even UI of its own yet to source analyst-edited targets from.
-   * Mirrors `handleGenerateAiAnalysis`'s shape exactly, over Detailed's own
-   * independent state.
+   * re-typed) plus the fixed default hurdle targets. Gate 14 added a
+   * break-even panel with its own independently-edited targets
+   * (`detailedTargetLeveredIrrPercent` etc.), but this call intentionally
+   * keeps using the original fixed defaults, unchanged -- Gate 14 is a
+   * wiring-only gate that explicitly excludes AI changes, so the AI
+   * Analyst's own target-sourcing behavior is left exactly as Gate 9 built
+   * it. Mirrors `handleGenerateAiAnalysis`'s shape exactly, over Detailed's
+   * own independent state.
    */
   async function handleGenerateDetailedAiAnalysis() {
     if (!detailedResults) {
@@ -953,9 +1135,7 @@ export default function App() {
         setCurrentDetailedDealId(fullDeal.id);
         setLastDetailedSavedAt(fullDeal.updated_at);
         setDetailedSavedSnapshot({ dealName: fullDeal.name, values: openedValues });
-        setDetailedResults(null);
-        setDetailedError(null);
-        clearDetailedAiAnalysis();
+        resetDetailedDownstreamAnalysisState();
         clearSaveDetailedDealError();
         clearDetailedIntakeFeedback();
         setOperatingMode('detailed');
@@ -1386,6 +1566,30 @@ export default function App() {
                 <OperatingStatementTable
                   operatingProjection={detailedResults.operating_projection}
                   results={detailedResults.results}
+                />
+              )}
+
+              {detailedResults && (
+                <SensitivityPanel
+                  presets={detailedSensitivity}
+                  isLoading={isDetailedSensitivityLoading}
+                  error={detailedSensitivityError}
+                />
+              )}
+
+              {detailedResults && (
+                <BreakEvenPanel
+                  analysis={detailedBreakEven}
+                  isLoading={isDetailedBreakEvenLoading}
+                  error={detailedBreakEvenError}
+                  targetLeveredIrrPercent={detailedTargetLeveredIrrPercent}
+                  targetEquityMultiple={detailedTargetEquityMultiple}
+                  targetHeadlineDscr={detailedTargetHeadlineDscr}
+                  returnHurdleMetric={detailedReturnHurdleMetric}
+                  onTargetLeveredIrrChange={handleDetailedTargetLeveredIrrChange}
+                  onTargetEquityMultipleChange={handleDetailedTargetEquityMultipleChange}
+                  onTargetHeadlineDscrChange={handleDetailedTargetHeadlineDscrChange}
+                  onReturnHurdleMetricChange={handleDetailedReturnHurdleMetricChange}
                 />
               )}
 
