@@ -31,13 +31,24 @@ _INGESTION_DIR = Path(di_provider_module.__file__).parent
 
 
 def _imported_module_names(source_file: Path) -> list[str]:
+    """Every *absolute* module name a file imports (``import anchor.engine``
+    / ``from anchor.engine import X``). Deliberately does not attempt to
+    resolve a relative import (``from .contracts import X``) to an absolute
+    dotted path -- every module in this codebase reaches a sibling
+    top-level package (``anchor.engine``, ``anchor.analysis``, ``anchor.ai``)
+    via an absolute import, never a relative one, so resolving only
+    absolute imports is sufficient for every guardrail below and avoids
+    silently mislabeling a same-package relative import (e.g.
+    ``anchor/ingestion/orchestrator.py``'s ``from .contracts import X``) as
+    a cross-package one."""
+
     tree = ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
     names: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            if node.module:
+            if node.module and not node.level:
                 names.append(node.module)
     return names
 
@@ -113,6 +124,25 @@ def test_ingestion_package_does_not_import_ai_package() -> None:
         names = _imported_module_names(source_file)
         assert not any("anchor.ai" in name for name in names), (
             f"{source_file} must not import anchor.ai"
+        )
+
+
+def test_ingestion_package_does_not_import_engine_or_analysis() -> None:
+    """Detailed Operating Model V2.1 Gate 12: the reverse direction of
+    ``test_engine_package_does_not_import_ingestion_package``/
+    ``test_analysis_package_does_not_import_ingestion_package`` above --
+    OM ingestion (Quick or Detailed) never imports the deterministic
+    engine or analysis packages either. Ingestion proposes candidate
+    values only; it must have no way to reach NOI, debt, returns,
+    sensitivity, or break-even calculation code even transitively."""
+
+    for source_file in _INGESTION_DIR.glob("*.py"):
+        names = _imported_module_names(source_file)
+        assert not any(name.startswith("anchor.engine") for name in names), (
+            f"{source_file} must not import anchor.engine"
+        )
+        assert not any(name.startswith("anchor.analysis") for name in names), (
+            f"{source_file} must not import anchor.analysis"
         )
 
 

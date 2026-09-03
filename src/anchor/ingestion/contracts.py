@@ -47,6 +47,43 @@ DEAL_CONTEXT_FIELD_IDS: tuple[str, ...] = (
     "year_built",
 )
 
+# Detailed Operating Model V2.1 Gate 12: the eleven AcquisitionTerms Field
+# IDs an OM may support (anchor.contracts.AcquisitionTerms /
+# anchor.validation.TERMS_FIELD_IDS), and the eleven DetailedOperatingInputs
+# Field IDs (anchor.validation.DETAILED_FIELD_IDS). Duplicated here rather
+# than imported, for the same self-containment reason ACQUISITION_FIELD_IDS
+# is duplicated above. Deliberately excludes current_noi/occupancy/
+# noi_growth -- Detailed OM ingestion never proposes a value for a field
+# the Detailed engine doesn't consume (see docs/detailed_operating_model_v2_1_architecture.md
+# Section 4's current_noi/occupancy/noi_growth resolution).
+DETAILED_TERMS_FIELD_IDS: tuple[str, ...] = (
+    "purchase_price",
+    "hold_period",
+    "exit_cap_rate",
+    "ltv",
+    "interest_rate",
+    "amortization",
+    "acquisition_cost_pct",
+    "financing_fee_pct",
+    "disposition_cost_pct",
+    "annual_capex_reserve",
+    "io_period",
+)
+
+DETAILED_OPERATING_FIELD_IDS: tuple[str, ...] = (
+    "gross_potential_rent",
+    "other_income",
+    "vacancy_credit_loss_pct",
+    "property_taxes",
+    "insurance",
+    "utilities",
+    "repairs_maintenance",
+    "other_operating_expenses",
+    "management_fee_pct",
+    "revenue_growth",
+    "expense_growth",
+)
+
 
 class EvidenceStatus(StrEnum):
     """Exactly the five R5 evidence states -- no other member is valid."""
@@ -149,6 +186,56 @@ class ExtractionResult:
     interest_rate: FieldCandidates
     amortization: FieldCandidates
     deal_context: DealContext
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DetailedExtractionResult:
+    """Detailed Operating Model V2.1 Gate 12: one assembled extraction
+    outcome for one uploaded OM under Detailed Underwrite -- candidates for
+    the eleven ``AcquisitionTerms`` fields plus the eleven
+    ``DetailedOperatingInputs`` fields a document may support, twenty-two
+    ``FieldCandidates`` total. A distinct contract from ``ExtractionResult``,
+    not a merged/optional-everything superset of it -- mirrors the same
+    non-overlapping-contract choice ``DetailedExcelIntakeReport`` already
+    made relative to ``ExcelIntakeReport`` (Gate 10).
+
+    Deliberately carries no ``current_noi``/``occupancy``/``noi_growth``
+    field: Detailed Underwrite economics never consume them (see Section 4
+    of ``docs/detailed_operating_model_v2_1_architecture.md``), so this
+    contract offers no field an analyst could even attempt to approve one
+    into. Deliberately carries no ``deal_context`` either -- out of this
+    gate's stated target-field scope; a Detailed OM upload proposes
+    underwriting assumptions only.
+
+    Every field here is a ``FieldCandidates`` -- zero candidates means
+    missing (never a fabricated zero), one or more means a genuine,
+    provenance-verified proposal, exactly like ``ExtractionResult``. Never
+    an ``OperatingProjection``, ``AcquisitionResults``, or any other
+    calculated value -- OM ingestion parses proposed assumptions only.
+    """
+
+    purchase_price: FieldCandidates
+    hold_period: FieldCandidates
+    exit_cap_rate: FieldCandidates
+    ltv: FieldCandidates
+    interest_rate: FieldCandidates
+    amortization: FieldCandidates
+    acquisition_cost_pct: FieldCandidates
+    financing_fee_pct: FieldCandidates
+    disposition_cost_pct: FieldCandidates
+    annual_capex_reserve: FieldCandidates
+    io_period: FieldCandidates
+    gross_potential_rent: FieldCandidates
+    other_income: FieldCandidates
+    vacancy_credit_loss_pct: FieldCandidates
+    property_taxes: FieldCandidates
+    insurance: FieldCandidates
+    utilities: FieldCandidates
+    repairs_maintenance: FieldCandidates
+    other_operating_expenses: FieldCandidates
+    management_fee_pct: FieldCandidates
+    revenue_growth: FieldCandidates
+    expense_growth: FieldCandidates
 
 
 class ExtractionError(RuntimeError):

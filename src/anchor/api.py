@@ -64,9 +64,11 @@ from .detailed_excel_reader import (
 from .env import load_repo_env
 from .excel_reader import ExcelIntakeReport, read_acquisition_inputs_from_bytes_with_report
 from .ingestion import (
+    DetailedExtractionResult,
     ExtractionConfigurationError,
     ExtractionProviderError,
     ExtractionResult,
+    extract_detailed_om,
     extract_om,
 )
 from .validation import (
@@ -94,6 +96,13 @@ app = FastAPI(title="Anchor API")
 _INGESTION_PATH = "/ingestion/om"
 _MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB
 _MAX_UPLOAD_PAGES = 75
+
+# Detailed Operating Model V2.1 Gate 12: a separate path (Option B, mirroring
+# Gate 10's identical Excel-ingestion choice) rather than an optional/
+# discriminated extension of the existing Quick endpoint -- the two result
+# contracts and field sets differ enough that overloading _INGESTION_PATH
+# would risk the existing, frozen Quick endpoint's behavior for no benefit.
+_DETAILED_INGESTION_PATH = "/ingestion/om/detailed"
 _PDF_PARSE_TIMEOUT_SECONDS = 5  # KTD11 -- bounds the local pypdf page-count parse.
 _PDF_SIGNATURE = b"%PDF-"
 
@@ -155,6 +164,7 @@ app.add_middleware(
     _IngestionUploadSizeGuard,
     limits={
         _INGESTION_PATH: _MAX_UPLOAD_BYTES,
+        _DETAILED_INGESTION_PATH: _MAX_UPLOAD_BYTES,
         _EXCEL_INGESTION_PATH: _MAX_EXCEL_UPLOAD_BYTES,
         _DETAILED_EXCEL_INGESTION_PATH: _MAX_EXCEL_UPLOAD_BYTES,
     },
@@ -693,6 +703,39 @@ def ingest_om(file: UploadFile = File(...)) -> ExtractionResult:
 
     try:
         return extract_om(pdf_bytes)
+    except ExtractionConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from None
+    except ExtractionProviderError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+        ) from None
+
+
+# =============================================================================
+# Detailed Operating Model V2.1 Gate 12 -- Detailed OM ingestion.
+#
+# A dedicated path (Option B) reusing the exact same upload-guard helpers
+# (content-type/signature/size/page-count) as the Quick route above, but
+# delegating to ``extract_detailed_om`` -- the Detailed counterpart
+# extraction/classification pipeline, distinct from Quick's. Returns
+# proposed Detailed field candidates only -- never an ``OperatingProjection``
+# or ``DetailedAcquisitionResults``; a provider failure maps to the same
+# status codes as the Quick route (503 not configured, 502 provider error).
+# =============================================================================
+
+
+@app.post(_DETAILED_INGESTION_PATH, response_model=DetailedExtractionResult)
+def ingest_detailed_om(file: UploadFile = File(...)) -> DetailedExtractionResult:
+    _validate_content_type(file)
+
+    pdf_bytes = _read_upload_bytes(file, max_bytes=_MAX_UPLOAD_BYTES)
+    _validate_pdf_signature(pdf_bytes)
+    _validate_page_count(pdf_bytes)
+
+    try:
+        return extract_detailed_om(pdf_bytes)
     except ExtractionConfigurationError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
