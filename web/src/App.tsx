@@ -17,6 +17,7 @@ import {
   updateDeal,
   updateDetailedDeal,
   uploadDetailedExcel,
+  uploadDetailedOm,
   uploadExcel,
   uploadOm,
 } from './api';
@@ -28,6 +29,7 @@ import type { SaveStatus } from './components/DealBar';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
 import { DetailedAssumptionsForm } from './components/DetailedAssumptionsForm';
 import { DetailedExcelReviewPanel } from './components/DetailedExcelReviewPanel';
+import { DetailedOmReviewPanel } from './components/DetailedOmReviewPanel';
 import { ExcelReviewPanel } from './components/ExcelReviewPanel';
 import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
@@ -39,6 +41,8 @@ import {
   BLANK_FORM_VALUES,
   buildAcquisitionRequest,
   buildAcquisitionTermsRequest,
+  buildApprovedDetailedOperatingFormValues,
+  buildApprovedDetailedTermsFormValues,
   buildApprovedFormValues,
   buildDetailedFormValuesFromExcelIntakeReport,
   buildDetailedOperatingFormValuesFromRequest,
@@ -62,8 +66,11 @@ import type {
   AIAnalysis,
   Deal,
   DetailedAcquisitionResults,
+  DetailedExtractionResult,
   DetailedFormValues,
+  DetailedOperatingFieldId,
   DetailedOperatingFormValues,
+  DetailedTermsFieldId,
   ExtractionResult,
   OperatingMode,
   ReturnHurdleMetric,
@@ -232,6 +239,69 @@ export default function App() {
     setDetailedExcelUploadSuccessMessage(null);
   }
 
+  // Detailed Operating Model V2.1 Gate 12: Detailed OM ingestion. Mirrors
+  // Quick's ocrExtraction/handleUploadOm/handleFinishOmReview exactly (same
+  // upload -> per-field review -> explicit approve/reject/finish control
+  // philosophy), over DetailedExtractionResult/DetailedFormValues instead.
+  // A successful upload never touches `detailedValues` -- only
+  // `handleFinishDetailedOmReview` does, and only for the fields the
+  // analyst explicitly approved. Unlike Quick's OM panel, Detailed's also
+  // gets an explicit Cancel (`handleCancelDetailedOmReview`) -- Gate 12
+  // requires a saved Detailed deal to survive an OM upload untouched until
+  // an explicit approve/cancel decision, the same guarantee Gate 10's
+  // Excel review already gives Detailed mode.
+  const [detailedOcrExtraction, setDetailedOcrExtraction] =
+    useState<DetailedExtractionResult | null>(null);
+  const [isDetailedExtracting, setIsDetailedExtracting] = useState(false);
+  const [detailedExtractionError, setDetailedExtractionError] = useState<string | null>(null);
+
+  async function handleUploadDetailedOm(file: File) {
+    setIsDetailedExtracting(true);
+    setDetailedExtractionError(null);
+    setDetailedOcrExtraction(null);
+    try {
+      const extraction = await uploadDetailedOm(file);
+      setDetailedOcrExtraction(extraction);
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDetailedExtractionError(apiError.message);
+      } else {
+        setDetailedExtractionError('An unexpected error occurred while extracting the OM.');
+      }
+    } finally {
+      setIsDetailedExtracting(false);
+    }
+  }
+
+  /** Merges only the explicitly analyst-approved Detailed OM fields into
+   * `detailedValues` -- an unapproved/rejected/missing field is left
+   * exactly as it was, never defaulted to zero or blanked. Never calls
+   * `/analyze`. */
+  function handleFinishDetailedOmReview(
+    approvedValues: Partial<Record<DetailedTermsFieldId | DetailedOperatingFieldId, string>>,
+  ) {
+    const termsValues = buildApprovedDetailedTermsFormValues(approvedValues);
+    const operatingValues = buildApprovedDetailedOperatingFormValues(approvedValues);
+    if (Object.keys(termsValues).length === 0 && Object.keys(operatingValues).length === 0) {
+      return;
+    }
+    setDetailedValues((previous) => ({
+      terms: { ...previous.terms, ...termsValues },
+      operating: { ...previous.operating, ...operatingValues },
+    }));
+    setDetailedResults(null);
+    setDetailedError(null);
+    clearDetailedAiAnalysis();
+    clearSaveDetailedDealError();
+  }
+
+  /** Discards the pending Detailed OM extraction without touching
+   * `detailedValues`, leaving it exactly as it was before the upload. */
+  function handleCancelDetailedOmReview() {
+    setDetailedOcrExtraction(null);
+    setDetailedExtractionError(null);
+  }
+
   // ===========================================================================
   // Detailed Operating Model V2.1 Gate 11 -- Detailed deal persistence.
   //
@@ -307,6 +377,8 @@ export default function App() {
     setDetailedExcelUploadError(null);
     setDetailedExcelReview(null);
     setDetailedExcelReviewError(null);
+    setDetailedOcrExtraction(null);
+    setDetailedExtractionError(null);
   }
 
   function handleDetailedDealNameChange(value: string) {
@@ -1264,6 +1336,15 @@ export default function App() {
                   error={detailedExcelUploadError}
                   successMessage={detailedExcelUploadSuccessMessage}
                   onUpload={(file) => void handleUploadDetailedExcel(file)}
+                />
+
+                <DetailedOmReviewPanel
+                  extraction={detailedOcrExtraction}
+                  isLoading={isDetailedExtracting}
+                  error={detailedExtractionError}
+                  onUpload={(file) => void handleUploadDetailedOm(file)}
+                  onFinishReview={handleFinishDetailedOmReview}
+                  onCancel={handleCancelDetailedOmReview}
                 />
               </div>
 

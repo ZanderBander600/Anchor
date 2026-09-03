@@ -19,6 +19,7 @@ import {
   updateDeal,
   updateDetailedDeal,
   uploadDetailedExcel,
+  uploadDetailedOm,
   uploadExcel,
   uploadOm,
 } from './api';
@@ -38,6 +39,7 @@ import type {
   Deal,
   DetailedAcquisitionResults,
   DetailedExcelIntakeReport,
+  DetailedExtractionResult,
   ExcelIntakeReport,
   ExtractionResult,
   FieldCandidates,
@@ -57,6 +59,7 @@ vi.mock('./api', async () => {
     fetchAIAnalysis: vi.fn(),
     fetchDetailedAIAnalysis: vi.fn(),
     uploadOm: vi.fn(),
+    uploadDetailedOm: vi.fn(),
     uploadExcel: vi.fn(),
     uploadDetailedExcel: vi.fn(),
     createDeal: vi.fn(),
@@ -77,6 +80,7 @@ const mockFetchBreakEvenAnalysis = vi.mocked(fetchBreakEvenAnalysis);
 const mockFetchAIAnalysis = vi.mocked(fetchAIAnalysis);
 const mockFetchDetailedAIAnalysis = vi.mocked(fetchDetailedAIAnalysis);
 const mockUploadOm = vi.mocked(uploadOm);
+const mockUploadDetailedOm = vi.mocked(uploadDetailedOm);
 const mockUploadExcel = vi.mocked(uploadExcel);
 const mockUploadDetailedExcel = vi.mocked(uploadDetailedExcel);
 const mockCreateDeal = vi.mocked(createDeal);
@@ -128,6 +132,67 @@ function makeExtractionResult(overrides: Partial<ExtractionResult> = {}): Extrac
       unit_count_or_building_area: missingField('unit_count_or_building_area'),
       year_built: missingField('year_built'),
     },
+    ...overrides,
+  };
+  return base;
+}
+
+/** Detailed Operating Model V2.1 Gate 12 -- a Detailed OM extraction
+ * fixture: purchase_price and gross_potential_rent stated with evidence,
+ * every other Detailed field missing (never a fabricated zero). */
+function makeDetailedExtractionResult(
+  overrides: Partial<DetailedExtractionResult> = {},
+): DetailedExtractionResult {
+  const base: DetailedExtractionResult = {
+    purchase_price: {
+      field_id: 'purchase_price',
+      candidates: [
+        {
+          value: '10000000',
+          status: 'stated',
+          provenance: { page: 1, anchor: 'paragraph:0', snippet: 'Purchase Price: $10,000,000' },
+        },
+      ],
+    },
+    hold_period: missingField('hold_period'),
+    exit_cap_rate: missingField('exit_cap_rate'),
+    ltv: missingField('ltv'),
+    interest_rate: missingField('interest_rate'),
+    amortization: missingField('amortization'),
+    acquisition_cost_pct: missingField('acquisition_cost_pct'),
+    financing_fee_pct: missingField('financing_fee_pct'),
+    disposition_cost_pct: missingField('disposition_cost_pct'),
+    annual_capex_reserve: missingField('annual_capex_reserve'),
+    io_period: missingField('io_period'),
+    gross_potential_rent: {
+      field_id: 'gross_potential_rent',
+      candidates: [
+        {
+          value: '800000',
+          status: 'stated',
+          provenance: { page: 31, anchor: 'paragraph:1', snippet: 'Potential Base Rent: $800,000' },
+        },
+      ],
+    },
+    other_income: missingField('other_income'),
+    vacancy_credit_loss_pct: missingField('vacancy_credit_loss_pct'),
+    property_taxes: {
+      field_id: 'property_taxes',
+      candidates: [
+        {
+          value: '0',
+          status: 'stated',
+          provenance: { page: 32, anchor: 'paragraph:2', snippet: 'Real Estate Taxes: $0' },
+        },
+      ],
+    },
+    insurance: missingField('insurance'),
+    utilities: missingField('utilities'),
+    repairs_maintenance: missingField('repairs_maintenance'),
+    other_operating_expenses: missingField('other_operating_expenses'),
+    management_fee_pct: missingField('management_fee_pct'),
+    revenue_growth: missingField('revenue_growth'),
+    expense_growth: missingField('expense_growth'),
     ...overrides,
   };
   return base;
@@ -507,6 +572,7 @@ beforeEach(() => {
   mockFetchDetailedAIAnalysis.mockReset();
   mockFetchDetailedAIAnalysis.mockResolvedValue(makeAiAnalysis());
   mockUploadOm.mockReset();
+  mockUploadDetailedOm.mockReset();
   mockUploadExcel.mockReset();
   mockUploadDetailedExcel.mockReset();
   mockCreateDeal.mockReset();
@@ -3776,5 +3842,323 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
       'value',
       DEFAULT_FORM_VALUES.purchasePrice,
     );
+  });
+});
+
+describe('Detailed OM ingestion workflow (Gate 12)', () => {
+  /** Uploads the default Detailed OM fixture and waits for the review
+   * panel's fields to render -- never waits on the live
+   * `DetailedAssumptionsForm`, which this upload must not touch. */
+  async function uploadDetailedOm(user: ReturnType<typeof userEvent.setup>) {
+    render(<App />);
+    mockUploadDetailedOm.mockResolvedValue(makeDetailedExtractionResult());
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+
+    await waitFor(() => {
+      expect(screen.getByText('Potential Base Rent: $800,000', { exact: false })).toBeTruthy();
+    });
+  }
+
+  function omFieldCard(label: string): HTMLElement {
+    // A heading-role query, not a plain text query: the OM review card's
+    // label is an `<h4>` (a real heading), while the live
+    // `DetailedAssumptionsForm` shows the identical label text as a plain
+    // `<span>` -- scoping to the heading role is what disambiguates them.
+    const heading = screen.getByRole('heading', { name: label });
+    const card = heading.closest('.om-field-card');
+    if (!card) {
+      throw new Error(`No .om-field-card ancestor found for label ${label}`);
+    }
+    return card as HTMLElement;
+  }
+
+  it('exposes OM upload in Detailed mode', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.getByLabelText('Upload OM (PDF)')).toBeTruthy();
+  });
+
+  it('does not mutate active Detailed assumptions on upload', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+    );
+  });
+
+  it('extracted Detailed fields appear in review with evidence', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    const card = omFieldCard('Gross Potential Rent');
+    expect(within(card).getByText('800000')).toBeTruthy();
+    expect(within(card).getByText('Stated')).toBeTruthy();
+    expect(within(card).getByText(/Potential Base Rent: \$800,000/)).toBeTruthy();
+    expect(within(card).getByText(/Page 31/)).toBeTruthy();
+  });
+
+  it('missing fields remain visibly unresolved, never a fabricated zero', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    const card = omFieldCard('Insurance');
+    expect(within(card).getByText('Missing')).toBeTruthy();
+    expect(within(card).getByText('Not found in OM.')).toBeTruthy();
+  });
+
+  it('extracted values are editable before approval', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    const card = omFieldCard('Property Taxes');
+    await user.click(within(card).getByRole('button', { name: 'Edit' }));
+    const input = within(card).getByLabelText('Edit Property Taxes');
+    await user.clear(input);
+    await user.type(input, '65000');
+    await user.click(within(card).getByRole('button', { name: 'Save' }));
+
+    expect(within(card).getByText('Approved')).toBeTruthy();
+  });
+
+  it('Approve loads only the explicitly approved Detailed assumptions', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    await user.click(
+      within(omFieldCard('Purchase Price')).getByRole('button', { name: 'Approve' }),
+    );
+    await user.click(
+      within(omFieldCard('Gross Potential Rent')).getByRole('button', { name: 'Approve' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', '800000');
+    // Not approved -- stays blank, never defaulted.
+    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', '');
+  });
+
+  it('explicit zero survives review and approval', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    await user.click(
+      within(omFieldCard('Property Taxes')).getByRole('button', { name: 'Approve' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', '0');
+  });
+
+  it('Approve never automatically calls Analyze', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    await user.click(
+      within(omFieldCard('Purchase Price')).getByRole('button', { name: 'Approve' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+  });
+
+  it('Cancel Review leaves active Detailed assumptions unchanged', async () => {
+    const user = userEvent.setup();
+    await uploadDetailedOm(user);
+
+    await user.click(
+      within(omFieldCard('Purchase Price')).getByRole('button', { name: 'Approve' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
+
+    expect(screen.queryByText('Potential Base Rent: $800,000', { exact: false })).toBeNull();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+    );
+  });
+});
+
+describe('Detailed OM saved-deal safety (Gate 12)', () => {
+  it('a saved Detailed deal remains clean while an OM upload is pending review', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedOm.mockResolvedValue(makeDetailedExtractionResult());
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Potential Base Rent: $800,000', { exact: false })).toBeTruthy();
+    });
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('Cancel Review preserves the Saved state', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedOm.mockResolvedValue(makeDetailedExtractionResult());
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Potential Base Rent: $800,000', { exact: false })).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
+
+    expect(screen.getByText(/^Saved/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+  });
+
+  it('Approve with a changed value marks the saved deal dirty, and Save returns it to Saved', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockUploadDetailedOm.mockResolvedValue(
+      makeDetailedExtractionResult({
+        purchase_price: {
+          field_id: 'purchase_price',
+          candidates: [
+            {
+              value: '12000000',
+              status: 'stated',
+              provenance: { page: 1, anchor: 'paragraph:0', snippet: 'Purchase Price: $12,000,000' },
+            },
+          ],
+        },
+      }),
+    );
+    mockUpdateDetailedDeal.mockResolvedValue({
+      ...deal,
+      terms: { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 12_000_000 },
+    });
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Purchase Price: $12,000,000', { exact: false })).toBeTruthy();
+    });
+
+    const card = screen.getByRole('heading', { name: 'Purchase Price' }).closest('.om-field-card');
+    if (!card) throw new Error('Purchase Price card not found');
+    await user.click(within(card as HTMLElement).getByRole('button', { name: 'Approve' }));
+    await user.click(screen.getByRole('button', { name: 'Use approved values' }));
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+  });
+});
+
+describe('Cross-mode OM safety (Gate 12)', () => {
+  it('Quick OM upload calls uploadOm, never uploadDetailedOm', async () => {
+    const user = userEvent.setup();
+    mockUploadOm.mockResolvedValue(makeExtractionResult());
+    render(<App />);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+
+    await waitFor(() => expect(mockUploadOm).toHaveBeenCalledTimes(1));
+    expect(mockUploadDetailedOm).not.toHaveBeenCalled();
+  });
+
+  it('Detailed OM upload calls uploadDetailedOm, never uploadOm', async () => {
+    const user = userEvent.setup();
+    mockUploadDetailedOm.mockResolvedValue(makeDetailedExtractionResult());
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+
+    await waitFor(() => expect(mockUploadDetailedOm).toHaveBeenCalledTimes(1));
+    expect(mockUploadOm).not.toHaveBeenCalled();
+  });
+
+  it('a Detailed OM review pending in the background does not appear after switching to Quick mode', async () => {
+    const user = userEvent.setup();
+    mockUploadDetailedOm.mockResolvedValue(makeDetailedExtractionResult());
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Potential Base Rent: $800,000', { exact: false })).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+
+    expect(screen.queryByText('Potential Base Rent: $800,000', { exact: false })).toBeNull();
+    expect(screen.queryByText('Gross Potential Rent')).toBeNull();
+  });
+
+  it('a Quick OM review pending in the background does not appear after switching to Detailed mode', async () => {
+    const user = userEvent.setup();
+    mockUploadOm.mockResolvedValue(makeExtractionResult());
+    render(<App />);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Purchase Price: $48,000,000', { exact: false })).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+
+    expect(screen.queryByText('Purchase Price: $48,000,000', { exact: false })).toBeNull();
+  });
+
+  it('opening a Detailed deal from the library never shows a pending Quick OM review in the Detailed workspace', async () => {
+    const user = userEvent.setup();
+    const detailedDeal = makeDetailedDeal();
+    mockUploadOm.mockResolvedValue(makeExtractionResult());
+    mockListDeals.mockResolvedValue([detailedDeal]);
+    mockGetDeal.mockResolvedValue(detailedDeal);
+    render(<App />);
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await waitFor(() => {
+      expect(screen.getByText('Purchase Price: $48,000,000', { exact: false })).toBeTruthy();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect(screen.getByRole('tab', { name: 'Detailed Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+    expect(screen.queryByText('Purchase Price: $48,000,000', { exact: false })).toBeNull();
   });
 });

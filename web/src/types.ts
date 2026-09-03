@@ -292,6 +292,81 @@ export interface DetailedExcelIntakeReport {
   schema_version: string;
 }
 
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 12 -- Detailed OM ingestion.
+//
+// Mirrors ``ACQUISITION_FIELD_IDS``/``ExtractionResult`` above, over the
+// Detailed field set instead. ``DETAILED_TERMS_FIELD_IDS``/
+// ``DETAILED_OPERATING_FIELD_IDS`` mirror
+// ``anchor.ingestion.contracts.DETAILED_TERMS_FIELD_IDS``/
+// ``DETAILED_OPERATING_FIELD_IDS``.
+// =============================================================================
+
+export const DETAILED_TERMS_FIELD_IDS = [
+  'purchase_price',
+  'hold_period',
+  'exit_cap_rate',
+  'ltv',
+  'interest_rate',
+  'amortization',
+  'acquisition_cost_pct',
+  'financing_fee_pct',
+  'disposition_cost_pct',
+  'annual_capex_reserve',
+  'io_period',
+] as const;
+
+export type DetailedTermsFieldId = (typeof DETAILED_TERMS_FIELD_IDS)[number];
+
+export const DETAILED_OPERATING_FIELD_IDS = [
+  'gross_potential_rent',
+  'other_income',
+  'vacancy_credit_loss_pct',
+  'property_taxes',
+  'insurance',
+  'utilities',
+  'repairs_maintenance',
+  'other_operating_expenses',
+  'management_fee_pct',
+  'revenue_growth',
+  'expense_growth',
+] as const;
+
+export type DetailedOperatingFieldId = (typeof DETAILED_OPERATING_FIELD_IDS)[number];
+
+/** Mirrors ``DetailedExtractionResult`` in
+ * ``src/anchor/ingestion/contracts.py`` -- Gate 12's
+ * ``POST /ingestion/om/detailed`` response shape: candidates for the
+ * eleven ``AcquisitionTerms`` fields plus the eleven
+ * ``DetailedOperatingInputs`` fields a document may support. No
+ * ``deal_context`` (out of this gate's target-field scope) and no
+ * ``current_noi``/``occupancy``/``noi_growth`` -- there is no field here
+ * an analyst could even attempt to approve one into. */
+export interface DetailedExtractionResult {
+  purchase_price: FieldCandidates;
+  hold_period: FieldCandidates;
+  exit_cap_rate: FieldCandidates;
+  ltv: FieldCandidates;
+  interest_rate: FieldCandidates;
+  amortization: FieldCandidates;
+  acquisition_cost_pct: FieldCandidates;
+  financing_fee_pct: FieldCandidates;
+  disposition_cost_pct: FieldCandidates;
+  annual_capex_reserve: FieldCandidates;
+  io_period: FieldCandidates;
+  gross_potential_rent: FieldCandidates;
+  other_income: FieldCandidates;
+  vacancy_credit_loss_pct: FieldCandidates;
+  property_taxes: FieldCandidates;
+  insurance: FieldCandidates;
+  utilities: FieldCandidates;
+  repairs_maintenance: FieldCandidates;
+  other_operating_expenses: FieldCandidates;
+  management_fee_pct: FieldCandidates;
+  revenue_growth: FieldCandidates;
+  expense_growth: FieldCandidates;
+}
+
 /** Mirrors ``Deal`` in ``src/anchor/deals/contracts.py``. A saved deal
  * carries no derived/result data of its own -- reopening it means
  * resubmitting its assumptions to the existing ``/analyze`` endpoint.

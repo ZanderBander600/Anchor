@@ -6,12 +6,19 @@ import type {
   AcquisitionTermsRequest,
   DetailedExcelIntakeReport,
   DetailedFormValues,
+  DetailedOperatingFieldId,
   DetailedOperatingFormValues,
   DetailedOperatingInputsRequest,
+  DetailedTermsFieldId,
   ExcelIntakeReport,
   V2FieldId,
 } from './types';
-import { ACQUISITION_FIELD_IDS, V2_FIELD_IDS } from './types';
+import {
+  ACQUISITION_FIELD_IDS,
+  DETAILED_OPERATING_FIELD_IDS,
+  DETAILED_TERMS_FIELD_IDS,
+  V2_FIELD_IDS,
+} from './types';
 
 /**
  * Raised for client-side presence/parsing problems only. Domain rules
@@ -310,6 +317,19 @@ function parseCandidateNumber(raw: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+/** Shared by `candidateValueToFormValue`/`detailedCandidateValueToFormValue`:
+ * a literal "%" sign, or a magnitude too large to plausibly be a decimal
+ * fraction, means the value is already percent-scale; otherwise treat it as
+ * the decimal-fraction equivalent and scale up to match the form. */
+function scaleCandidateNumber(rawValue: string, number: number, isPercentScale: boolean): string {
+  if (!isPercentScale) {
+    return String(number);
+  }
+  const isAlreadyPercentScale = rawValue.includes('%') || Math.abs(number) > 1;
+  const percentValue = isAlreadyPercentScale ? number : number * 100;
+  return String(percentValue);
+}
+
 /**
  * Converts one acquisition-field candidate's raw value string to the plain
  * numeric string `AcquisitionFormValues`/`AssumptionsForm` expects. Returns
@@ -322,15 +342,7 @@ export function candidateValueToFormValue(fieldId: AcquisitionFieldId, rawValue:
   if (number === null) {
     return null;
   }
-  if (!PERCENT_SCALE_FIELD_IDS.has(fieldId)) {
-    return String(number);
-  }
-  // A literal "%" sign, or a magnitude too large to plausibly be a decimal
-  // fraction, means the value is already percent-scale; otherwise treat it
-  // as the decimal-fraction equivalent and scale up to match the form.
-  const isAlreadyPercentScale = rawValue.includes('%') || Math.abs(number) > 1;
-  const percentValue = isAlreadyPercentScale ? number : number * 100;
-  return String(percentValue);
+  return scaleCandidateNumber(rawValue, number, PERCENT_SCALE_FIELD_IDS.has(fieldId));
 }
 
 /**
@@ -701,3 +713,147 @@ export const DETAILED_OPERATING_FIELD_GROUPS: OperatingFieldGroup[] = [
     ],
   },
 ];
+
+// =============================================================================
+// Detailed Operating Model V2.1 Gate 12 -- Detailed OM ingestion candidate
+// values -> DetailedFormValues handoff. Mirrors the Quick OM conversion
+// section above exactly in shape (same parse/scale helpers reused, never a
+// duplicated financial rule), over the Detailed field set instead.
+// =============================================================================
+
+/** Human-readable label for each of the 22 Detailed OM target fields, for
+ * display in the Detailed OM review UI. */
+export const DETAILED_OM_FIELD_LABELS: Record<DetailedTermsFieldId | DetailedOperatingFieldId, string> = {
+  purchase_price: 'Purchase Price',
+  hold_period: 'Hold Period',
+  exit_cap_rate: 'Exit Cap Rate',
+  ltv: 'LTV',
+  interest_rate: 'Interest Rate',
+  amortization: 'Amortization',
+  acquisition_cost_pct: 'Acquisition Costs',
+  financing_fee_pct: 'Financing Fee',
+  disposition_cost_pct: 'Disposition Costs',
+  annual_capex_reserve: 'Annual CapEx Reserve',
+  io_period: 'Interest-Only Period',
+  gross_potential_rent: 'Gross Potential Rent',
+  other_income: 'Other Income',
+  vacancy_credit_loss_pct: 'Vacancy & Credit Loss',
+  property_taxes: 'Property Taxes',
+  insurance: 'Insurance',
+  utilities: 'Utilities',
+  repairs_maintenance: 'Repairs & Maintenance',
+  other_operating_expenses: 'Other Operating Expenses',
+  management_fee_pct: 'Management Fee',
+  revenue_growth: 'Revenue Growth',
+  expense_growth: 'Expense Growth',
+};
+
+export const DETAILED_TERMS_FIELD_TO_FORM_KEY: Record<
+  DetailedTermsFieldId,
+  keyof AcquisitionTermsFormValues
+> = {
+  purchase_price: 'purchasePrice',
+  hold_period: 'holdPeriod',
+  exit_cap_rate: 'exitCapRate',
+  ltv: 'ltv',
+  interest_rate: 'interestRate',
+  amortization: 'amortization',
+  acquisition_cost_pct: 'acquisitionCostPct',
+  financing_fee_pct: 'financingFeePct',
+  disposition_cost_pct: 'dispositionCostPct',
+  annual_capex_reserve: 'annualCapexReserve',
+  io_period: 'ioPeriod',
+};
+
+export const DETAILED_OPERATING_FIELD_TO_FORM_KEY: Record<
+  DetailedOperatingFieldId,
+  keyof DetailedOperatingFormValues
+> = {
+  gross_potential_rent: 'grossPotentialRent',
+  other_income: 'otherIncome',
+  vacancy_credit_loss_pct: 'vacancyCreditLossPct',
+  property_taxes: 'propertyTaxes',
+  insurance: 'insurance',
+  utilities: 'utilities',
+  repairs_maintenance: 'repairsMaintenance',
+  other_operating_expenses: 'otherOperatingExpenses',
+  management_fee_pct: 'managementFeePct',
+  revenue_growth: 'revenueGrowth',
+  expense_growth: 'expenseGrowth',
+};
+
+/** Fields whose natural unit is a percentage/ratio, over the Detailed
+ * field set -- mirrors `_DETAILED_PERCENT_SCALE_FIELD_IDS` in
+ * `src/anchor/ingestion/classifier_provider.py`. */
+const DETAILED_OM_PERCENT_SCALE_FIELD_IDS: ReadonlySet<DetailedTermsFieldId | DetailedOperatingFieldId> =
+  new Set([
+    'exit_cap_rate',
+    'ltv',
+    'interest_rate',
+    'acquisition_cost_pct',
+    'financing_fee_pct',
+    'disposition_cost_pct',
+    'vacancy_credit_loss_pct',
+    'management_fee_pct',
+    'revenue_growth',
+    'expense_growth',
+  ]);
+
+/** Converts one Detailed OM candidate's raw value string to the plain
+ * numeric string `DetailedAssumptionsForm` expects. Returns `null` if the
+ * value can't be parsed as a number. Mirrors `candidateValueToFormValue`
+ * exactly, over the Detailed percent-scale field set. */
+export function detailedCandidateValueToFormValue(
+  fieldId: DetailedTermsFieldId | DetailedOperatingFieldId,
+  rawValue: string,
+): string | null {
+  const number = parseCandidateNumber(rawValue);
+  if (number === null) {
+    return null;
+  }
+  return scaleCandidateNumber(rawValue, number, DETAILED_OM_PERCENT_SCALE_FIELD_IDS.has(fieldId));
+}
+
+/** Builds the `AcquisitionTermsFormValues` subset for a set of
+ * analyst-approved Detailed OM candidate values. Mirrors
+ * `buildApprovedFormValues` exactly, over `AcquisitionTermsFieldId`s only
+ * -- the Detailed Operating Inputs half is built separately by
+ * `buildApprovedDetailedOperatingFormValues` below, since
+ * `DetailedFormValues` keeps the two as nested, independently-blank groups
+ * (see `types.ts`). */
+export function buildApprovedDetailedTermsFormValues(
+  approvedValues: Partial<Record<DetailedTermsFieldId, string>>,
+): Partial<AcquisitionTermsFormValues> {
+  const result: Partial<AcquisitionTermsFormValues> = {};
+  for (const fieldId of DETAILED_TERMS_FIELD_IDS) {
+    const rawValue = approvedValues[fieldId];
+    if (rawValue === undefined) {
+      continue;
+    }
+    const formValue = detailedCandidateValueToFormValue(fieldId, rawValue);
+    if (formValue !== null) {
+      result[DETAILED_TERMS_FIELD_TO_FORM_KEY[fieldId]] = formValue;
+    }
+  }
+  return result;
+}
+
+/** Builds the `DetailedOperatingFormValues` subset for a set of
+ * analyst-approved Detailed OM candidate values. See
+ * `buildApprovedDetailedTermsFormValues` above. */
+export function buildApprovedDetailedOperatingFormValues(
+  approvedValues: Partial<Record<DetailedOperatingFieldId, string>>,
+): Partial<DetailedOperatingFormValues> {
+  const result: Partial<DetailedOperatingFormValues> = {};
+  for (const fieldId of DETAILED_OPERATING_FIELD_IDS) {
+    const rawValue = approvedValues[fieldId];
+    if (rawValue === undefined) {
+      continue;
+    }
+    const formValue = detailedCandidateValueToFormValue(fieldId, rawValue);
+    if (formValue !== null) {
+      result[DETAILED_OPERATING_FIELD_TO_FORM_KEY[fieldId]] = formValue;
+    }
+  }
+  return result;
+}

@@ -6,6 +6,7 @@ import type {
   Deal,
   DetailedAcquisitionResults,
   DetailedExcelIntakeReport,
+  DetailedExtractionResult,
   DetailedOperatingInputsRequest,
   ExcelIntakeReport,
   ExtractionResult,
@@ -391,6 +392,57 @@ export async function uploadOm(file: File): Promise<ExtractionResult> {
   }
 
   return (await response.json()) as ExtractionResult;
+}
+
+/**
+ * Detailed Operating Model V2.1 Gate 12: uploads an Offering Memorandum
+ * PDF to the FastAPI ``POST /ingestion/om/detailed`` endpoint as multipart
+ * form data and returns the raw ``DetailedExtractionResult`` JSON. Mirrors
+ * ``uploadOm`` exactly, over the separate Detailed endpoint (Gate 12's
+ * Option B) -- performs no extraction, classification, or financial
+ * calculation of its own, and never talks to Azure/OpenAI directly.
+ */
+export async function uploadDetailedOm(file: File): Promise<DetailedExtractionResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/ingestion/om/detailed`, {
+      method: 'POST',
+      body: formData,
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  if (response.status === 503) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string' ? body.detail : 'The OM ingestion service is not configured.';
+    throw new ApiError(message);
+  }
+
+  if (response.status === 502) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string' ? body.detail : 'The OM extraction request failed.';
+    throw new ApiError(message);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string'
+        ? body.detail
+        : `The OM upload was rejected (HTTP ${response.status}).`;
+    throw new ApiError(message);
+  }
+
+  return (await response.json()) as DetailedExtractionResult;
 }
 
 /**
