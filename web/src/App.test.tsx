@@ -681,6 +681,32 @@ function fillV2GoldenDeal() {
   });
 }
 
+/**
+ * Sprint B Gate B5 test-specificity helpers.
+ *
+ * The One-Page Owner Summary and the full `ResultsPanel` legitimately show
+ * several of the same authoritative figures, so a bare
+ * `getAllByText(...).length >= 1` -- the mechanical conversion Gate B3
+ * applied -- no longer distinguishes the two surfaces. Where a test is
+ * actually about one of them, scope the query to that panel's own root
+ * instead.
+ */
+function ownerSummary(): HTMLElement {
+  const panel = document.querySelector('.owner-summary-panel');
+  if (panel === null) {
+    throw new Error('No Owner Summary is rendered.');
+  }
+  return panel as HTMLElement;
+}
+
+function fullResults(): HTMLElement {
+  const panel = document.querySelector('.results-panel');
+  if (panel === null) {
+    throw new Error('No full Results panel is rendered.');
+  }
+  return panel as HTMLElement;
+}
+
 function makeAiAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
   return {
     executive_summary: 'Five-year hold with moderate leverage.',
@@ -913,8 +939,13 @@ describe('App workflow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
-    expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('1.44x').length).toBeGreaterThanOrEqual(1);
+    // Both surfaces show the headline figures, and each is asserted in its
+    // own panel rather than "somewhere on the page" (Gate B5).
+    await screen.findAllByText('7.91%');
+    expect(within(ownerSummary()).getByText('7.91%')).toBeTruthy();
+    expect(within(ownerSummary()).getByText('1.44x')).toBeTruthy();
+    expect(within(fullResults()).getByText('7.91%')).toBeTruthy();
+    expect(within(fullResults()).getByText('1.44x')).toBeTruthy();
   });
 
   it('renders the V2 golden case: transaction costs, CapEx, and Year 1 vs. Minimum DSCR distinctly (Gate 6)', async () => {
@@ -925,16 +956,20 @@ describe('App workflow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
-    expect((await screen.findAllByText('7.38%')).length).toBeGreaterThanOrEqual(1); // Levered IRR
-    expect(screen.getAllByText('1.38x').length).toBeGreaterThanOrEqual(1); // Equity Multiple
-    expect(screen.getByText('$200,000')).toBeTruthy(); // Acquisition Costs
-    expect(screen.getByText('$60,000')).toBeTruthy(); // Financing Fee
-    expect(screen.getByText('$267,525')).toBeTruthy(); // Disposition Costs
+    await screen.findAllByText('7.38%');
+    // This test is about the full ResultsPanel's own rendering of the V2
+    // golden case -- scoped there, not merely "somewhere on the page."
+    const results = fullResults();
+    expect(within(results).getByText('7.38%')).toBeTruthy(); // Levered IRR
+    expect(within(results).getByText('1.38x')).toBeTruthy(); // Equity Multiple
+    expect(within(results).getByText('$200,000')).toBeTruthy(); // Acquisition Costs
+    expect(within(results).getByText('$60,000')).toBeTruthy(); // Financing Fee
+    expect(within(results).getByText('$267,525')).toBeTruthy(); // Disposition Costs
 
     // Year 1 DSCR (headline strip) and Minimum DSCR render as visibly
     // distinct values -- never computed in the frontend, only rendered.
-    expect(screen.getAllByText('2.00x').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Min 1.65x')).toBeTruthy();
+    expect(within(results).getAllByText('2.00x').length).toBeGreaterThanOrEqual(1);
+    expect(within(results).getByText('Min 1.65x')).toBeTruthy();
   });
 
   it('shows the Owner Returns headline (Year 1 Levered CoC, Year 1 Debt Yield, Cumulative Operating Distributions) in Quick mode', async () => {
@@ -945,21 +980,23 @@ describe('App workflow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
-    expect((await screen.findAllByText('Owner Returns')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Year 1 Levered CoC').length).toBeGreaterThanOrEqual(1);
-    // "5.87%"/"10.00%" appear both in the headline card and in the Owner
-    // Return Schedule's Year 1 row -- assert at least one match rather
-    // than assuming a single occurrence.
-    expect(screen.getAllByText('5.87%').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Year 1 Debt Yield').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('10.00%').length).toBeGreaterThanOrEqual(1);
-    // "Cumulative Operating Distributions" labels both the headline card
-    // and the schedule table's column header -- assert at least one match
-    // rather than assuming uniqueness.
+    await screen.findAllByText('Owner Returns');
+    // Gate B5: this test is about the full ResultsPanel's own Owner Returns
+    // headline strip, so it is scoped there -- the Owner Summary now shows
+    // the same three figures and would otherwise satisfy it by accident.
+    // Within ResultsPanel, "5.87%"/"10.00%"/"Cumulative Operating
+    // Distributions" still legitimately appear both in the headline card
+    // and in the Owner Return Schedule below it.
+    const results = fullResults();
+    expect(within(results).getByText('Owner Returns')).toBeTruthy();
+    expect(within(results).getByText('Year 1 Levered CoC')).toBeTruthy();
+    expect(within(results).getAllByText('5.87%').length).toBeGreaterThanOrEqual(1);
+    expect(within(results).getByText('Year 1 Debt Yield')).toBeTruthy();
+    expect(within(results).getAllByText('10.00%').length).toBeGreaterThanOrEqual(1);
     expect(
-      screen.getAllByText('Cumulative Operating Distributions').length,
+      within(results).getAllByText('Cumulative Operating Distributions').length,
     ).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('$1,175,947').length).toBeGreaterThanOrEqual(1);
+    expect(within(results).getAllByText('$1,175,947').length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows the annual CapEx series in the year-by-year table', async () => {
@@ -5383,10 +5420,13 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' });
 
     // ResultsPanel's own headline section and detail cards are unaffected.
-    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Property')).toBeTruthy();
-    expect(screen.getByText('Capitalization')).toBeTruthy();
-    expect(screen.getByText('Exit')).toBeTruthy();
+    // Gate B5: scoped to the ResultsPanel root, so the Owner Summary's own
+    // "Key Returns" heading can never satisfy this assertion for it.
+    const results = fullResults();
+    expect(within(results).getByText('Key Returns')).toBeTruthy();
+    expect(within(results).getByText('Property')).toBeTruthy();
+    expect(within(results).getByText('Capitalization')).toBeTruthy();
+    expect(within(results).getByText('Exit')).toBeTruthy();
   });
 });
 

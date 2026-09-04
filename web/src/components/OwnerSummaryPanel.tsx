@@ -62,10 +62,10 @@ function formatBreakEvenSolvedValue(
 }
 
 /**
- * Sprint B Gate B4 -- the AI Deal Story block. Deliberately the last
- * section of the summary and visually subordinate to every deterministic
- * metric above it: a muted, explicitly labeled "AI Interpretation" panel,
- * never a `.stat-card`, never a headline. It renders only what the backend
+ * Sprint B Gate B4 -- the AI Deal Story block, positioned by Gate B5
+ * directly beneath the Key Returns metrics it interprets. Visually
+ * subordinate to every deterministic metric: a muted, explicitly labeled
+ * "AI Interpretation" panel, never a `.stat-card`, never a headline. It renders only what the backend
  * `DealStory` contract already contains -- no slicing, no re-ranking, no
  * truncation (the max-2 caps are enforced in `anchor.ai.contracts`), and
  * absolutely no financial calculation.
@@ -184,28 +184,49 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
             caption={`Minimum DSCR: ${formatMultiple(keyReturns.minDscr)}`}
           />
         </div>
+        {/* Sprint B Gate B5 density pass: the Tier 2 strip now carries only
+            the two supporting figures that appear nowhere else on the page.
+            Year 1 Debt Yield moved to Debt / Risk + Owner Returns (its two
+            genuinely different readings -- lender credit metric vs. owner
+            recurring yield) and Year 1 NOI to Investment Snapshot +
+            Operating Story; both previously appeared three times, which
+            added no information. */}
         <div className="owner-summary-supporting-rows">
           <InfoRow label="Unlevered IRR" value={formatPercent(keyReturns.unleveredIrr)} />
-          <InfoRow label="Year 1 Debt Yield" value={formatPercent(ownerReturns.yearOneDebtYield)} />
           <InfoRow
             label="Cumulative Operating Distributions"
             value={formatCurrency(ownerReturns.cumulativeOperatingDistributionsThroughHold)}
           />
-          <InfoRow label="Year 1 NOI" value={formatCurrency(operatingStory.yearOneNoi)} />
         </div>
       </section>
 
+      {/* Gate B5 hierarchy pass: the Deal Story sits immediately under the
+          hero metrics it interprets, not at the very bottom of the page.
+          At the bottom (its Gate B4 position) the AI Investment View fell
+          roughly 1,400px down at 1440px wide -- well outside the ten-second
+          read the summary exists to serve. It stays visually subordinate
+          here: muted surface, explicit "AI Interpretation" badge, body
+          type, and never a `stat-card`. */}
+      {dealStory !== null && <DealStorySection dealStory={dealStory} />}
+
       <div className="owner-summary-two-col">
+        {/* Gate B5: Investment Snapshot carries the asset/price/exit story
+            (restoring Year 1 NOI and Going-In Cap Rate, which the B1 spec
+            Section 4.C specifies and Gate B2 already plumbs but Gate B3
+            never rendered). The leverage terms it previously repeated --
+            LTV, Interest Rate, IO Period -- now appear once, in Debt /
+            Risk, beside the Loan Amount and coverage metrics that give them
+            meaning. */}
         <section className="card">
           <h3 className="card-title">Investment Snapshot</h3>
           <InfoRow label="Purchase Price" value={formatCurrency(investmentSnapshot.purchasePrice)} />
+          <InfoRow label="Year 1 NOI" value={formatCurrency(investmentSnapshot.yearOneNoi)} />
+          <InfoRow
+            label="Going-In Cap Rate"
+            value={formatPercent(investmentSnapshot.goingInCapRate)}
+          />
           <InfoRow label="Hold Period" value={`${investmentSnapshot.holdPeriod} years`} />
           <InfoRow label="Exit Cap Rate" value={formatPercent(investmentSnapshot.exitCapRate)} />
-          <InfoRow label="LTV" value={formatPercent(investmentSnapshot.ltv)} />
-          <InfoRow label="Interest Rate" value={formatPercent(investmentSnapshot.interestRate)} />
-          {investmentSnapshot.ioPeriod > 0 && (
-            <InfoRow label="IO Period" value={`${investmentSnapshot.ioPeriod} years`} />
-          )}
         </section>
 
         <section className="card">
@@ -272,8 +293,6 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
           />
         </section>
       )}
-
-      {dealStory !== null && <DealStorySection dealStory={dealStory} />}
     </div>
   );
 }

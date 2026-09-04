@@ -21,6 +21,13 @@ afterEach(() => {
 // reused unmodified by its own `makeDetailedResults` for the Detailed test
 // path too) -- the same authoritative numbers Gate B3's spec cites for
 // "golden display" verification. Never reproduced via a TypeScript formula.
+//
+// Gate B5 fixture coherence: the assumption fixtures carry exit_cap_rate
+// 6.5%, matching `docs/underwriting_v2_golden_case.md` and the app's own
+// `V2_GOLDEN_FORM_VALUES` -- the results below are the engine's output for
+// exactly those assumptions (verified against the engine directly during
+// B5). Gate B3 had left 5.5% here, so the summary displayed an exit cap
+// rate that did not correspond to the results shown beside it.
 // =============================================================================
 
 const GOLDEN_RESULTS: AcquisitionResults = {
@@ -66,7 +73,7 @@ const GOLDEN_INPUTS: AcquisitionRequest = {
   occupancy: 0.95,
   noi_growth: 0.03,
   hold_period: 5,
-  exit_cap_rate: 0.055,
+  exit_cap_rate: 0.065,
   ltv: 0.6,
   interest_rate: 0.05,
   amortization: 30,
@@ -80,7 +87,7 @@ const GOLDEN_INPUTS: AcquisitionRequest = {
 const GOLDEN_TERMS: AcquisitionTermsRequest = {
   purchase_price: 10_000_000,
   hold_period: 5,
-  exit_cap_rate: 0.055,
+  exit_cap_rate: 0.065,
   ltv: 0.6,
   interest_rate: 0.05,
   amortization: 30,
@@ -149,7 +156,7 @@ const GOLDEN_BREAK_EVEN: StandardBreakEvenAnalysis = {
     assumption: 'exit_cap_rate',
     metric: 'levered_irr',
     target_metric_value: 0.1,
-    baseline_assumption_value: 0.055,
+    baseline_assumption_value: 0.065,
     baseline_metric_value: 0.0738,
     solved_assumption_value: null,
     solved_metric_value: null,
@@ -224,25 +231,64 @@ describe('OwnerSummaryPanel rendering', () => {
 // 4-6, 27. Hero metrics + supporting metrics + golden display values.
 // =============================================================================
 
+/** Sprint B Gate B5 -- scope a query to one named summary section rather
+ * than the whole page. Several figures legitimately appear in two sections
+ * (a hero reading and a detail reading); a page-wide `getAllByText(...)`
+ * cannot tell which section actually holds one. */
+function section(title: string): HTMLElement {
+  const heading = screen.getByText(title);
+  const owningSection = heading.closest('section');
+  if (owningSection === null) {
+    throw new Error(`No section found for heading ${title}.`);
+  }
+  return owningSection as HTMLElement;
+}
+
 describe('golden display values (Underwriting V2 golden case)', () => {
   beforeEach(() => {
     render(<OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} />);
   });
 
   it('renders the four hero metrics with the DSCR headline+minimum caption pattern', () => {
-    expect(screen.getByText('7.38%')).toBeTruthy(); // Levered IRR
-    expect(screen.getByText('1.38x')).toBeTruthy(); // Equity Multiple
-    // Year 1 Levered CoC appears twice by design (hero card + Owner Returns row).
-    expect(screen.getAllByText('5.87%').length).toBe(2);
-    expect(screen.getAllByText('2.00x').length).toBeGreaterThan(0); // Year 1 DSCR
-    expect(screen.getByText('Minimum DSCR: 1.65x')).toBeTruthy();
+    const keyReturns = section('Key Returns');
+    expect(within(keyReturns).getByText('7.38%')).toBeTruthy(); // Levered IRR
+    expect(within(keyReturns).getByText('1.38x')).toBeTruthy(); // Equity Multiple
+    expect(within(keyReturns).getByText('5.87%')).toBeTruthy(); // Year 1 Levered CoC
+    expect(within(keyReturns).getByText('2.00x')).toBeTruthy(); // Year 1 DSCR
+    expect(within(keyReturns).getByText('Minimum DSCR: 1.65x')).toBeTruthy();
   });
 
-  it('renders the supporting metrics', () => {
-    expect(screen.getByText('6.14%')).toBeTruthy(); // Unlevered IRR
-    expect(screen.getAllByText('10.00%').length).toBeGreaterThan(0); // Year 1 Debt Yield
-    expect(screen.getAllByText('$1,175,947').length).toBeGreaterThan(0); // Cumulative Distributions
-    expect(screen.getAllByText('$600,000').length).toBeGreaterThan(0); // Year 1 NOI
+  it('renders the two Tier 2 supporting figures inside Key Returns', () => {
+    const keyReturns = section('Key Returns');
+    expect(within(keyReturns).getByText('6.14%')).toBeTruthy(); // Unlevered IRR
+    expect(within(keyReturns).getByText('$1,175,947')).toBeTruthy(); // Cumulative Distributions
+    // Gate B5 density pass: Year 1 Debt Yield and Year 1 NOI each appeared
+    // three times across the page and no longer sit in this strip.
+    expect(within(keyReturns).queryByText('Year 1 Debt Yield')).toBeNull();
+    expect(within(keyReturns).queryByText('Year 1 NOI')).toBeNull();
+  });
+
+  it('renders the asset/price/exit story in Investment Snapshot, and no leverage terms', () => {
+    const snapshot = section('Investment Snapshot');
+    expect(within(snapshot).getByText('$10,000,000')).toBeTruthy(); // Purchase Price
+    expect(within(snapshot).getByText('$600,000')).toBeTruthy(); // Year 1 NOI
+    expect(within(snapshot).getByText('6.00%')).toBeTruthy(); // Going-In Cap Rate
+    expect(within(snapshot).getByText('5 years')).toBeTruthy(); // Hold Period
+    expect(within(snapshot).getByText('6.50%')).toBeTruthy(); // Exit Cap Rate
+    // The leverage terms now live once, in Debt / Risk.
+    expect(within(snapshot).queryByText('LTV')).toBeNull();
+    expect(within(snapshot).queryByText('Interest Rate')).toBeNull();
+    expect(within(snapshot).queryByText('IO Period')).toBeNull();
+  });
+
+  it('renders the complete debt story in Debt / Risk', () => {
+    const debtRisk = section('Debt / Risk');
+    expect(within(debtRisk).getByText('$6,000,000')).toBeTruthy(); // Loan Amount
+    expect(within(debtRisk).getByText('60.00%')).toBeTruthy(); // LTV
+    expect(within(debtRisk).getByText('5.00%')).toBeTruthy(); // Interest Rate
+    expect(within(debtRisk).getByText('2 years')).toBeTruthy(); // IO Period
+    expect(within(debtRisk).getByText('1.65x')).toBeTruthy(); // Minimum DSCR
+    expect(within(debtRisk).getByText('10.00%')).toBeTruthy(); // Year 1 Debt Yield
   });
 
   it('gives the four hero cards more visual weight than the supporting rows (distinct DOM roles)', () => {
@@ -253,6 +299,149 @@ describe('golden display values (Underwriting V2 golden case)', () => {
     const infoValues = document.querySelectorAll('.info-value');
     expect(heroValues.length).toBe(4);
     expect(infoValues.length).toBeGreaterThan(0);
+  });
+});
+
+// =============================================================================
+// Sprint B Gate B5 -- repetition budget.
+//
+// The summary is a 30-60 second read, so a metric may appear twice only
+// when the two readings genuinely differ (a hero figure and its detail row;
+// an owner's recurring yield and a lender's credit metric). Three or more
+// occurrences of one label added no information and is now a regression.
+// =============================================================================
+
+const REPEATABLE_LABELS = [
+  'Purchase Price',
+  'Year 1 NOI',
+  'Going-In Cap Rate',
+  'Hold Period',
+  'Exit Cap Rate',
+  'Loan Amount',
+  'LTV',
+  'Interest Rate',
+  'IO Period',
+  'Minimum DSCR',
+  'Year 1 Debt Yield',
+  'Year 1 Levered CoC',
+  'Cumulative Operating Distributions',
+  'Unlevered IRR',
+  'Levered IRR',
+  'Equity Multiple',
+  'Year 1 DSCR',
+];
+
+const FULL_DEAL_STORY = {
+  investment_view: 'A concise owner view.',
+  key_strengths: ['One.'],
+  key_risks: ['Two.'],
+  model_gap: 'Not modeled.',
+};
+
+function labelCount(label: string): number {
+  return screen.queryAllByText(label).length;
+}
+
+describe('repetition budget', () => {
+  it('shows no metric label more than twice, with every optional section present', () => {
+    render(
+      <OwnerSummaryPanel
+        data={buildOwnerSummaryData(quickSource({ breakEven: GOLDEN_BREAK_EVEN }))}
+        dealStory={FULL_DEAL_STORY}
+      />,
+    );
+
+    const overBudget = REPEATABLE_LABELS.filter((label) => labelCount(label) > 2);
+    expect(overBudget).toEqual([]);
+  });
+
+  it('applies the same repetition budget in Detailed mode', () => {
+    render(
+      <OwnerSummaryPanel
+        data={buildOwnerSummaryData(detailedSource({ breakEven: null }))}
+        dealStory={FULL_DEAL_STORY}
+      />,
+    );
+
+    const overBudget = REPEATABLE_LABELS.filter((label) => labelCount(label) > 2);
+    expect(overBudget).toEqual([]);
+  });
+
+  it('shows Year 1 Debt Yield exactly twice: once as an owner return, once as a debt metric', () => {
+    render(<OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} />);
+
+    expect(labelCount('Year 1 Debt Yield')).toBe(2);
+    expect(within(section('Owner Returns')).getByText('Year 1 Debt Yield')).toBeTruthy();
+    expect(within(section('Debt / Risk')).getByText('Year 1 Debt Yield')).toBeTruthy();
+  });
+
+  it('shows Year 1 NOI exactly twice: once as an acquisition metric, once as an operating metric', () => {
+    render(<OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} />);
+
+    expect(labelCount('Year 1 NOI')).toBe(2);
+    expect(within(section('Investment Snapshot')).getByText('Year 1 NOI')).toBeTruthy();
+    expect(within(section('Operating Story')).getByText('Year 1 NOI')).toBeTruthy();
+  });
+
+  it('shows each leverage term exactly once', () => {
+    render(<OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} />);
+
+    expect(labelCount('LTV')).toBe(1);
+    expect(labelCount('Interest Rate')).toBe(1);
+    expect(labelCount('IO Period')).toBe(1);
+    expect(labelCount('Loan Amount')).toBe(1);
+  });
+});
+
+// =============================================================================
+// Sprint B Gate B5 -- the ten-second test. Every figure an owner must find
+// at a glance is present in the Owner Summary itself, at the frozen
+// Underwriting V2 golden values, in a compact section count.
+// =============================================================================
+
+describe('ten-second test', () => {
+  it('surfaces every ten-second figure in the summary', () => {
+    render(
+      <OwnerSummaryPanel
+        data={buildOwnerSummaryData(
+          detailedSource({ dealContext: 'Long-term hold, income first.' }),
+        )}
+        dealStory={{
+          investment_view: 'Coverage carries the stated income thesis.',
+          key_strengths: ['Strong coverage.'],
+          key_risks: ['Return below hurdle.'],
+          model_gap: null,
+        }}
+      />,
+    );
+
+    expect(within(section('Investment Snapshot')).getByText('$10,000,000')).toBeTruthy();
+    const keyReturns = section('Key Returns');
+    expect(within(keyReturns).getByText('7.38%')).toBeTruthy();
+    expect(within(keyReturns).getByText('1.38x')).toBeTruthy();
+    expect(within(keyReturns).getByText('5.87%')).toBeTruthy();
+    expect(within(keyReturns).getByText('Minimum DSCR: 1.65x')).toBeTruthy();
+    expect(within(keyReturns).getByText('$1,175,947')).toBeTruthy();
+    expect(screen.getByText('The Play')).toBeTruthy();
+    expect(screen.getByText('Long-term hold, income first.')).toBeTruthy();
+    expect(screen.getByText('Coverage carries the stated income thesis.')).toBeTruthy();
+  });
+
+  it('never renders more than eight sections at once', () => {
+    render(
+      <OwnerSummaryPanel
+        data={buildOwnerSummaryData(
+          quickSource({ dealContext: 'Stated strategy.', breakEven: GOLDEN_BREAK_EVEN }),
+        )}
+        dealStory={FULL_DEAL_STORY}
+      />,
+    );
+
+    // The Play, Key Returns, Investment Snapshot, Debt / Risk, Operating
+    // Story, Owner Returns, Break-Even Highlights, Deal Story -- eight, the
+    // maximum the summary can ever show at once.
+    const panel = document.querySelector('.owner-summary-panel') as HTMLElement;
+    expect(panel.querySelectorAll('section').length).toBe(8);
   });
 });
 
@@ -554,13 +743,16 @@ describe('AI Deal Story (Gate B4)', () => {
     expect(document.querySelectorAll('.stat-value-primary').length).toBe(4);
   });
 
-  it('places the Deal Story after every deterministic section', () => {
+  it('places the Deal Story below the hero metrics it interprets, never above them', () => {
+    // Gate B5 hierarchy: the Deal Story sits immediately under Key Returns
+    // -- close enough to be part of the ten-second read, always after the
+    // authoritative headline metrics, never before them.
     const data = buildOwnerSummaryData(quickSource({ breakEven: GOLDEN_BREAK_EVEN }));
     render(<OwnerSummaryPanel data={data} dealStory={makeDealStory()} />);
 
     const text = document.body.textContent ?? '';
     expect(text.indexOf('Deal Story')).toBeGreaterThan(text.indexOf('Key Returns'));
-    expect(text.indexOf('Deal Story')).toBeGreaterThan(text.indexOf('Break-Even Highlights'));
+    expect(text.indexOf('Deal Story')).toBeLessThan(text.indexOf('Investment Snapshot'));
   });
 
   // 8-9. Quick and Detailed render the identical Deal Story contract.
