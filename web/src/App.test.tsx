@@ -911,8 +911,8 @@ describe('App workflow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
-    expect(await screen.findByText('7.91%')).toBeTruthy();
-    expect(screen.getByText('1.44x')).toBeTruthy();
+    expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('1.44x').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders the V2 golden case: transaction costs, CapEx, and Year 1 vs. Minimum DSCR distinctly (Gate 6)', async () => {
@@ -923,8 +923,8 @@ describe('App workflow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
-    expect(await screen.findByText('7.38%')).toBeTruthy(); // Levered IRR
-    expect(screen.getByText('1.38x')).toBeTruthy(); // Equity Multiple
+    expect((await screen.findAllByText('7.38%')).length).toBeGreaterThanOrEqual(1); // Levered IRR
+    expect(screen.getAllByText('1.38x').length).toBeGreaterThanOrEqual(1); // Equity Multiple
     expect(screen.getByText('$200,000')).toBeTruthy(); // Acquisition Costs
     expect(screen.getByText('$60,000')).toBeTruthy(); // Financing Fee
     expect(screen.getByText('$267,525')).toBeTruthy(); // Disposition Costs
@@ -943,13 +943,13 @@ describe('App workflow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
-    expect(await screen.findByText('Owner Returns')).toBeTruthy();
-    expect(screen.getByText('Year 1 Levered CoC')).toBeTruthy();
+    expect((await screen.findAllByText('Owner Returns')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Year 1 Levered CoC').length).toBeGreaterThanOrEqual(1);
     // "5.87%"/"10.00%" appear both in the headline card and in the Owner
     // Return Schedule's Year 1 row -- assert at least one match rather
     // than assuming a single occurrence.
     expect(screen.getAllByText('5.87%').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Year 1 Debt Yield')).toBeTruthy();
+    expect(screen.getAllByText('Year 1 Debt Yield').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('10.00%').length).toBeGreaterThanOrEqual(1);
     // "Cumulative Operating Distributions" labels both the headline card
     // and the schedule table's column header -- assert at least one match
@@ -967,7 +967,7 @@ describe('App workflow', () => {
     fillV2GoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    await screen.findByText('7.38%');
+    await screen.findAllByText('7.38%');
 
     expect(screen.getAllByText('$50,000').length).toBeGreaterThanOrEqual(1);
   });
@@ -979,7 +979,7 @@ describe('App workflow', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('7.91%')).toBeTruthy();
+    expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     await user.type(screen.getByLabelText(/^Current NOI/), '1');
 
@@ -996,7 +996,7 @@ describe('App workflow', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('7.91%')).toBeTruthy();
+    expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     const second = deferred<AcquisitionResults>();
     mockAnalyze.mockReturnValueOnce(second.promise);
@@ -1006,7 +1006,7 @@ describe('App workflow', () => {
     expect(screen.queryByText('7.91%')).toBeNull();
 
     second.resolve(makeResults({ levered_irr: 0.09 }));
-    expect(await screen.findByText('9.00%')).toBeTruthy();
+    expect((await screen.findAllByText('9.00%')).length).toBeGreaterThanOrEqual(1);
   });
 
   it('does not display stale results and shows an error banner after a failed analysis', async () => {
@@ -1016,7 +1016,7 @@ describe('App workflow', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('7.91%')).toBeTruthy();
+    expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     mockAnalyze.mockRejectedValueOnce(new ApiError('The backend rejected the request.'));
 
@@ -1052,12 +1052,12 @@ describe('App workflow', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('7.91%')).toBeTruthy();
+    expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     mockAnalyze.mockResolvedValueOnce(makeResults({ levered_irr: 0.12 }));
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
-    expect(await screen.findByText('12.00%')).toBeTruthy();
+    expect((await screen.findAllByText('12.00%')).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('7.91%')).toBeNull();
   });
 
@@ -1167,7 +1167,7 @@ describe('Sensitivity analysis workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
     expect(await screen.findByText('The sensitivity request failed.')).toBeTruthy();
-    expect(screen.getByText('7.91%')).toBeTruthy();
+    expect(screen.getAllByText('7.91%').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('Exit Cap × NOI Growth')).toBeNull();
   });
 });
@@ -1366,7 +1366,7 @@ describe('Break-even analysis workflow', () => {
     expect(mockAnalyze).toHaveBeenCalledTimes(1);
     expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
 
-    expect(await screen.findByText('$44,120,000')).toBeTruthy();
+    expect((await screen.findAllByText('$44,120,000')).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('for 1.50x Equity Multiple').length).toBe(3);
     expect(screen.queryByText('for 10.00% Levered IRR')).toBeNull();
 
@@ -1424,7 +1424,7 @@ describe('Break-even analysis workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
     expect(await screen.findByText('The break-even request failed.')).toBeTruthy();
-    expect(screen.getByText('7.91%')).toBeTruthy();
+    expect(screen.getAllByText('7.91%').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Sensitivity Analysis')).toBeTruthy();
     expect(screen.queryByText('Maximum Purchase Price')).toBeNull();
   });
@@ -1548,7 +1548,7 @@ describe('AI Analyst workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
 
     expect(await screen.findByText('OPENAI_API_KEY is not configured.')).toBeTruthy();
-    expect(screen.getByText('7.91%')).toBeTruthy();
+    expect(screen.getAllByText('7.91%').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Break-Even Analysis')).toBeTruthy();
     expect(screen.getByText('Sensitivity Analysis')).toBeTruthy();
   });
@@ -1758,7 +1758,7 @@ describe('OM ingestion workflow', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('7.91%')).toBeTruthy();
+    expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     mockUploadOm.mockResolvedValue(makeExtractionResult());
     const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
@@ -2094,7 +2094,7 @@ describe('Excel ingestion workflow', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('7.91%')).toBeTruthy();
+    expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     mockUploadExcel.mockResolvedValue(makeExcelIntakeReport());
     const file = new File(['PK'], 'anchor_input.xlsx', {
@@ -2108,7 +2108,7 @@ describe('Excel ingestion workflow', () => {
       );
     });
     // Upload alone must not touch Analyze state.
-    expect(screen.getByText('7.91%')).toBeTruthy();
+    expect(screen.getAllByText('7.91%').length).toBeGreaterThanOrEqual(1);
 
     await completeBlankedV2ReviewFields(user);
     await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
@@ -2409,7 +2409,7 @@ describe('Deal persistence workflow', () => {
     render(<App />);
     fillGoldenDeal();
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('7.91%')).toBeTruthy();
+    expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
@@ -2853,7 +2853,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       fillGoldenDeal();
 
       await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-      await screen.findByText('7.91%');
+      await screen.findAllByText('7.91%');
 
       expect(screen.getByText('Unsaved deal')).toBeTruthy();
       expect(screen.queryByText(/^Saved/)).toBeNull();
@@ -2875,7 +2875,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       expect(screen.getByText('Unsaved changes')).toBeTruthy();
 
       await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-      await screen.findByText('7.91%');
+      await screen.findAllByText('7.91%');
 
       expect(screen.getByText('Unsaved changes')).toBeTruthy();
     });
@@ -3169,7 +3169,7 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
     });
 
     expect(await screen.findByText('Operating Statement')).toBeTruthy();
-    expect(screen.getByText('Key Returns')).toBeTruthy();
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('$600,000').length).toBeGreaterThan(0);
   });
 
@@ -3182,10 +3182,10 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
     fillDetailedGoldenDeal();
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
 
-    expect(await screen.findByText('Owner Returns')).toBeTruthy();
-    expect(screen.getByText('Year 1 Levered CoC')).toBeTruthy();
+    expect((await screen.findAllByText('Owner Returns')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Year 1 Levered CoC').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('5.87%').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Year 1 Debt Yield')).toBeTruthy();
+    expect(screen.getAllByText('Year 1 Debt Yield').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('10.00%').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('$1,175,947').length).toBeGreaterThanOrEqual(1);
 
@@ -3249,7 +3249,7 @@ describe('AI Analyst in Detailed mode (Gate 9)', () => {
     render(<App />);
     fillGoldenDeal();
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    await screen.findByText('Key Returns');
+    await screen.findAllByText('Key Returns');
 
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
 
@@ -3278,7 +3278,7 @@ describe('AI Analyst in Detailed mode (Gate 9)', () => {
     // Quick first.
     fillGoldenDeal();
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    await screen.findByText('Key Returns');
+    await screen.findAllByText('Key Returns');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
     await waitFor(() => expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1));
     const [quickInputsArg] = mockFetchAIAnalysis.mock.calls[0];
@@ -3580,9 +3580,9 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     // 9,500,000 / max_exit_cap_rate: 0.071 / max_interest_rate: 0.0712),
     // rendered by the same formatCurrency/formatPercent helpers Quick uses
     // -- never recomputed.
-    expect(screen.getByText('$9,487,500')).toBeTruthy();
-    expect(screen.getByText('7.10%')).toBeTruthy();
-    expect(screen.getByText('7.12%')).toBeTruthy();
+    expect(screen.getAllByText('$9,487,500').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('7.10%').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('7.12%').length).toBeGreaterThanOrEqual(1);
   });
 
   it('11. no formulas are introduced into frontend code -- rendered values are a byte-identical pass-through of the mocked response', async () => {
@@ -3600,7 +3600,7 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     render(<App />);
     await analyzeDetailedGoldenDeal(user);
 
-    expect(await screen.findByText('$12,345,678')).toBeTruthy();
+    expect((await screen.findAllByText('$12,345,678')).length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -4244,7 +4244,7 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
     await screen.findByText(/^Saved/);
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('Key Returns')).toBeTruthy();
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     const detailedRow = (await screen.findByText(detailedDeal.name)).closest('li');
@@ -4758,14 +4758,14 @@ describe('Deal Context (Gate A4)', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
 
     fireEvent.change(screen.getByLabelText('Deal Context'), {
       target: { value: 'Prioritize income over IRR.' },
     });
 
-    expect(screen.getByText('Key Returns')).toBeTruthy();
-    expect(screen.getByText('Owner Returns')).toBeTruthy();
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Owner Returns').length).toBeGreaterThanOrEqual(1);
   });
 
   it('editing Deal Context after generating AI analysis clears the stale AI output', async () => {
@@ -4786,7 +4786,7 @@ describe('Deal Context (Gate A4)', () => {
     expect(screen.queryByText('Investment View')).toBeNull();
     expect(screen.getByRole('button', { name: 'Generate AI Analysis' })).toBeTruthy();
     // Deterministic results remain -- only the stale AI output was cleared.
-    expect(screen.getByText('Key Returns')).toBeTruthy();
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
   });
 
   it('an empty Deal Context is valid -- Save sends null, not an error', async () => {
@@ -4837,7 +4837,7 @@ describe('Deal Context (Gate A4)', () => {
     });
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    await screen.findByText('Key Returns');
+    await screen.findAllByText('Key Returns');
 
     expect(screen.getByLabelText('Deal Context')).toHaveProperty(
       'value',
@@ -4866,7 +4866,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await screen.findByText(/^Saved/);
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
     await waitFor(() =>
       expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
         'deal-a',
@@ -4885,7 +4885,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
 
-    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
     // Restored from the cache, not a fresh network call.
     expect(mockAnalyze).toHaveBeenCalledTimes(1);
   });
@@ -4908,7 +4908,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     expect(await screen.findByText('Operating Statement')).toBeTruthy();
-    expect(screen.getByText('Key Returns')).toBeTruthy();
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
     await waitFor(() =>
       expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
         'detailed-a',
@@ -4929,7 +4929,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     // Operating statement AND Owner Return Metrics both restore -- the
     // complete result surface, not just headline cards.
     expect(await screen.findByText('Operating Statement')).toBeTruthy();
-    expect(screen.getByText('Owner Returns')).toBeTruthy();
+    expect(screen.getAllByText('Owner Returns').length).toBeGreaterThanOrEqual(1);
     expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1);
   });
 
@@ -5022,7 +5022,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
-    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Investment View')).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
@@ -5078,14 +5078,14 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
-    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Investment View')).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Deal Context'), {
       target: { value: 'Updated strategy.' },
     });
 
-    expect(screen.getByText('Key Returns')).toBeTruthy();
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('Investment View')).toBeNull();
   });
 
@@ -5135,7 +5135,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
 
     expect(mockCreateDeal).not.toHaveBeenCalled();
     expect(mockUpdateDeal).not.toHaveBeenCalled();
@@ -5185,7 +5185,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
-    expect(await screen.findByText('Key Returns')).toBeTruthy();
+    expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
 
     await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
 
@@ -5195,7 +5195,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     ).toBeTruthy();
 
     await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
-    expect(screen.getByText('Key Returns')).toBeTruthy();
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
   });
 
   it('Duplicate is a pure backend passthrough -- the frontend performs no snapshot handling of its own', async () => {
@@ -5236,5 +5236,154 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     expect(await screen.findByText('Deal A')).toBeTruthy();
     expect(screen.getByText('Deal B')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Open' }).length).toBe(2);
+  });
+});
+
+// =============================================================================
+// Sprint B Gate B3 -- One-Page Owner Summary (App integration)
+//
+// `OwnerSummaryPanel` itself is fully covered in isolation by
+// `components/OwnerSummaryPanel.test.tsx` (rendering, formatting, edge
+// cases). These tests only prove the App.tsx wiring: it appears at the
+// right time, in the right place, survives restoration, and respects the
+// existing dirty-state/invalidation rules -- exactly like every other
+// results panel already does, with no new logic of its own.
+// =============================================================================
+
+describe('One-Page Owner Summary (Gate B3)', () => {
+  it('renders after a successful Quick analysis', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+  });
+
+  it('renders after a successful Detailed analysis', async () => {
+    const user = userEvent.setup();
+    mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    fillDetailedGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+
+    expect(await screen.findByText('Detailed Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+  });
+
+  it('renders above the existing ResultsPanel content, never replacing it', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' });
+
+    // "Property" is a ResultsPanel-only card heading -- Owner Summary has
+    // no section with this name -- so its presence proves ResultsPanel
+    // still renders in full underneath the summary.
+    const ownerSummaryBadge = screen.getByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' });
+    const resultsPanelHeading = screen.getByText('Property');
+    expect(resultsPanelHeading).toBeTruthy();
+
+    // DOCUMENT_POSITION_FOLLOWING (4): resultsPanelHeading comes AFTER the
+    // Owner Summary badge in document order -- i.e. Owner Summary renders
+    // first, above the existing results stack, per the approved B1
+    // navigation model.
+    // eslint-disable-next-line no-bitwise
+    expect(
+      ownerSummaryBadge.compareDocumentPosition(resultsPanelHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('renders immediately for a restored Quick snapshot, with no Analyze click', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({ id: 'deal-1', analysis_snapshot: makeResults() });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect(await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('renders immediately for a restored Detailed snapshot, with no Analyze click', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal({ id: 'detailed-1', analysis_snapshot: makeDetailedResults() });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect(await screen.findByText('Detailed Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+  });
+
+  it('disappears when a financial-assumption edit clears the deterministic result', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    expect(await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+      target: { value: '60000000' },
+    });
+
+    expect(screen.queryByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeNull();
+  });
+
+  it('a Deal-Context-only edit leaves the summary rendered and updates THE PLAY immediately', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      id: 'deal-1',
+      deal_context: 'Original strategy.',
+      analysis_snapshot: makeResults(),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    expect(await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    expect(screen.getByText('Original strategy.', { selector: '.owner-summary-play-text' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Deal Context'), {
+      target: { value: 'Updated strategy.' },
+    });
+
+    expect(screen.getByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    expect(screen.getByText('Updated strategy.', { selector: '.owner-summary-play-text' })).toBeTruthy();
+    expect(
+      screen.queryByText('Original strategy.', { selector: '.owner-summary-play-text' }),
+    ).toBeNull();
+  });
+
+  it('leaves the existing ResultsPanel content intact alongside the summary', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' });
+
+    // ResultsPanel's own headline section and detail cards are unaffected.
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Property')).toBeTruthy();
+    expect(screen.getByText('Capitalization')).toBeTruthy();
+    expect(screen.getByText('Exit')).toBeTruthy();
   });
 });
