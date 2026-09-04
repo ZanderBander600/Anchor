@@ -90,6 +90,10 @@ def test_context_carries_every_acquisition_results_field() -> None:
         "dscr_by_year",
         "headline_dscr",
         "min_dscr",
+        "levered_cash_on_cash_by_year",
+        "unlevered_cash_yield_by_year",
+        "cumulative_operating_distributions_by_year",
+        "year_1_debt_yield",
     }
 
 

@@ -170,12 +170,45 @@ class ReturnMetrics:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class OwnerReturnMetrics:
+    """Owner Return Metrics V3 Gate A2
+    (``docs/owner_return_metrics_v3_financial_conventions.md``) -- annual
+    Levered Cash-on-Cash Return, annual Unlevered Cash Yield, the
+    Cumulative Operating Distributions dollar schedule, and Year 1 Debt
+    Yield. Every series here is derived from recurring (operating-only)
+    cash flow -- sale proceeds, refinance proceeds, and other terminal
+    liquidation proceeds are excluded from every entry, including the
+    final hold year.
+
+    A narrow intermediate result, mirroring ``ReturnMetrics`` above: not
+    itself part of ``AcquisitionResults`` (its four fields are flattened
+    directly onto ``AcquisitionResults``, matching how ``ReturnMetrics``'s
+    fields are flattened there rather than nested), used only to keep
+    ``calculate_owner_return_metrics`` (``returns.py``) a single
+    well-typed return value.
+    """
+
+    levered_cash_on_cash_by_year: tuple[float | None, ...]
+    unlevered_cash_yield_by_year: tuple[float | None, ...]
+    cumulative_operating_distributions_by_year: tuple[float, ...]
+    year_1_debt_yield: float | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AcquisitionResults:
     """The Phase 2 public output contract, plus the three Underwriting V2
     Gate 2 transaction-cost fields (``acquisition_costs``,
     ``financing_fee``, ``disposition_costs``), the Gate 3 ``capex_by_year``
-    series, and the Gate 4 ``min_dscr``
-    (``docs/underwriting_v2_financial_conventions.md``).
+    series, the Gate 4 ``min_dscr``
+    (``docs/underwriting_v2_financial_conventions.md``), and the Owner
+    Return Metrics V3 Gate A2 fields
+    (``docs/owner_return_metrics_v3_financial_conventions.md``):
+    ``levered_cash_on_cash_by_year``, ``unlevered_cash_yield_by_year``,
+    ``cumulative_operating_distributions_by_year``, and
+    ``year_1_debt_yield``. Identical for Quick and Detailed -- computed
+    once in ``analyze_acquisition_from_operating_projection`` from fields
+    already on this same result, never a second mode-specific
+    calculation.
 
     Exact V1 field set and order frozen by the "Phase 2 Output Contract"
     and "Frozen Phase 2 Decisions" sections of
@@ -211,6 +244,10 @@ class AcquisitionResults:
     dscr_by_year: tuple[float | None, ...]
     headline_dscr: float | None
     min_dscr: float | None
+    levered_cash_on_cash_by_year: tuple[float | None, ...]
+    unlevered_cash_yield_by_year: tuple[float | None, ...]
+    cumulative_operating_distributions_by_year: tuple[float, ...]
+    year_1_debt_yield: float | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

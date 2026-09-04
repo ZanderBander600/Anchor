@@ -48,6 +48,7 @@ def build_analysis_context(
     target_equity_multiple: float,
     target_headline_dscr: float,
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
+    deal_context: str | None = None,
 ) -> AnalysisContext:
     """Assemble one deterministic ``AnalysisContext`` for ``inputs`` (Quick
     Underwrite) -- unchanged behavior since Phase 9A, now explicitly
@@ -85,6 +86,7 @@ def build_analysis_context(
         target_equity_multiple=target_equity_multiple,
         target_headline_dscr=target_headline_dscr,
         return_hurdle_metric=return_hurdle_metric,
+        deal_context=deal_context,
     )
 
 
@@ -96,6 +98,7 @@ def build_detailed_analysis_context(
     target_equity_multiple: float,
     target_headline_dscr: float,
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
+    deal_context: str | None = None,
 ) -> AnalysisContext:
     """Assemble one deterministic ``AnalysisContext`` for ``terms`` +
     ``detailed_operating_inputs`` (Detailed Underwrite), Detailed Operating
@@ -138,6 +141,7 @@ def build_detailed_analysis_context(
         target_equity_multiple=target_equity_multiple,
         target_headline_dscr=target_headline_dscr,
         return_hurdle_metric=return_hurdle_metric,
+        deal_context=deal_context,
     )
 
 
@@ -166,11 +170,12 @@ def generate_ai_analysis(
     target_equity_multiple: float,
     target_headline_dscr: float,
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
+    deal_context: str | None = None,
     provider: OpenAIAnalystProvider | None = None,
 ) -> AIAnalysis:
     """Build the deterministic Quick context for ``inputs`` and return one
     AI Analyst interpretation of it -- unchanged public signature/behavior
-    since Phase 9A."""
+    since Phase 9A, plus the optional Gate A4 ``deal_context`` passthrough."""
 
     context = build_analysis_context(
         inputs,
@@ -178,6 +183,7 @@ def generate_ai_analysis(
         target_equity_multiple=target_equity_multiple,
         target_headline_dscr=target_headline_dscr,
         return_hurdle_metric=return_hurdle_metric,
+        deal_context=deal_context,
     )
     return _generate_from_context(context, provider=provider)
 
@@ -190,11 +196,13 @@ def generate_detailed_ai_analysis(
     target_equity_multiple: float,
     target_headline_dscr: float,
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
+    deal_context: str | None = None,
     provider: OpenAIAnalystProvider | None = None,
 ) -> AIAnalysis:
     """Build the deterministic Detailed context for ``terms`` +
     ``detailed_operating_inputs`` and return one AI Analyst interpretation
-    of it (Detailed Operating Model V2.1 Gate 9)."""
+    of it (Detailed Operating Model V2.1 Gate 9), plus the optional Gate A4
+    ``deal_context`` passthrough."""
 
     context = build_detailed_analysis_context(
         terms,
@@ -203,5 +211,6 @@ def generate_detailed_ai_analysis(
         target_equity_multiple=target_equity_multiple,
         target_headline_dscr=target_headline_dscr,
         return_hurdle_metric=return_hurdle_metric,
+        deal_context=deal_context,
     )
     return _generate_from_context(context, provider=provider)

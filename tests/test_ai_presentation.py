@@ -408,10 +408,13 @@ def test_every_acquisition_results_field_is_presented_or_deliberately_excluded()
 
 
 def test_intentional_exclusion_allowlists_are_currently_empty() -> None:
-    """Documents the current state: every existing field of both dataclasses
-    is presented today. If this ever legitimately changes, update the
-    allowlist in presentation.py (with a comment explaining why) rather than
-    this test."""
+    """Documents the current state: every field of both dataclasses is
+    presented today. Owner Return Metrics V3 Gate A2 temporarily excluded
+    four ``AcquisitionResults`` fields pending a dedicated presentation
+    gate; Gate A4 removed that exclusion (Deal Context makes them
+    especially useful to interpret) -- the allowlist is empty again. If
+    this ever legitimately changes, update the allowlist in presentation.py
+    (with a comment explaining why) rather than this test."""
 
     assert INTENTIONALLY_EXCLUDED_INPUT_FIELDS == frozenset()
     assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()

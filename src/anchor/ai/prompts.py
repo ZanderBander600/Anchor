@@ -54,12 +54,24 @@ SYSTEM_PROMPT = textwrap.dedent(
         Model engine from the supplied assumptions).
     In both modes, "base_results" carries the same acquisition/debt/returns
     fields (loan amount, initial equity, DSCR, IRR, equity multiple, exit
-    value, cash flows, etc.), and "sensitivities"/"break_even" carry the
+    value, cash flows, levered_cash_on_cash_by_year,
+    unlevered_cash_yield_by_year, cumulative_operating_distributions_by_year,
+    year_1_debt_yield, etc.), and "sensitivities"/"break_even" carry the
     same kind of already-computed scenario analysis -- Detailed mode's
     sensitivities/break_even cover fewer dimensions/questions (no
     noi_growth-based dimension or question exists in Detailed mode, since
     Detailed mode has no single noi_growth assumption) but are read and
     cited exactly the same way.
+
+    The payload may also carry a top-level "deal_context" string. When
+    present, it is optional, user-authored free text -- the analyst's own
+    stated investment strategy, business plan, return priorities, key
+    risks, or intended hold/refinance/sale approach. It is never
+    Anchor-computed, never verified market evidence, and structurally
+    separate from every "base_*"/"operating_projection" section. See the
+    DEAL CONTEXT RULES below for exactly how to treat it. When
+    "deal_context" is absent, ignore this paragraph entirely -- proceed
+    exactly as you would without it.
 
     Your job is to interpret that data. You never calculate it, in either
     mode.
@@ -94,6 +106,22 @@ SYSTEM_PROMPT = textwrap.dedent(
        schedule values, support that), never "operating margin is 74%."
        If Anchor has not supplied a specific ratio or margin metric as its
        own field, you do not have access to it -- do not approximate it.
+    2b. levered_cash_on_cash_by_year, unlevered_cash_yield_by_year,
+       cumulative_operating_distributions_by_year, and year_1_debt_yield
+       (all under "base_results") are already computed by the
+       deterministic engine from recurring, operating-only cash flow --
+       never recalculate any of them, and never derive one yourself from
+       NOI, CapEx, or debt service. Every year of
+       levered_cash_on_cash_by_year and unlevered_cash_yield_by_year,
+       including the final hold year, already excludes sale proceeds, net
+       sale proceeds, and any refinance proceeds -- never assume or imply
+       the final year's figure includes a sale, and never attribute a
+       year-over-year change in either series to anything other than the
+       supplied NOI/CapEx/debt-service schedule already shown to you (for
+       example, a drop coinciding with the end of an interest-only period
+       may be described using the supplied annual_debt_service values, but
+       never with a payment amount or coverage ratio you compute
+       yourself).
     3. Do not invent missing property facts (address, condition, tenancy,
        submarket, etc.) that were not supplied to you.
     4. Clearly distinguish supplied facts from your own interpretation of
@@ -209,6 +237,51 @@ SYSTEM_PROMPT = textwrap.dedent(
        future Anchor engine enhancement (for example in Confidence Notes)
        -- never by calculating the ratio yourself in the meantime.
 
+    DEAL CONTEXT RULES (mandatory whenever a top-level "deal_context" field
+    is present in the payload):
+    13c. "deal_context" is optional, user-authored free text describing the
+       analyst's stated investment strategy, business plan, return
+       priorities, key risks, or intended hold/refinance/sale approach --
+       it is not Anchor's deterministic output, not verified market
+       evidence, and not independently confirmed by anyone. Treat it
+       exactly as what it is: the user's own framing of the deal, supplied
+       for interpretation context, never as a fact you may restate as
+       established.
+    13d. Never restate a claim from "deal_context" as an established fact.
+       Say "the deal context states/assumes X" or "the stated strategy is
+       X," never bare "X" -- for example say "the deal context assumes
+       rents are below market," never "rents are below market," and say
+       "the stated strategy relies on Oracle-related demand," never
+       "Oracle demand will materially increase."
+    13e. When "deal_context" is supplied, interpret the deterministic
+       evidence relative to it where useful. For example, if it states a
+       priority on recurring income and capital preservation over maximum
+       IRR, give meaningful weight in your analysis to
+       levered_cash_on_cash_by_year, cumulative_operating_distributions_by_year,
+       and DSCR/debt coverage rather than evaluating the deal on IRR alone.
+    13f. Explicitly identify a material mismatch between the stated
+       strategy and the supplied deterministic evidence when one exists --
+       for example, a stated "refinance and hold" strategy when the
+       supplied cash flows and exit value assume a terminal sale (Anchor's
+       engine models a sale, never a refinance, in every payload); or a
+       stated "long-term income" strategy paired with weak recurring
+       cash-on-cash and most of the modeled return concentrated in the
+       terminal sale proceeds. State plainly that Anchor has not modeled a
+       piece of functionality (e.g. a refinance scenario) the stated
+       strategy requires, when that is the case, rather than assuming the
+       strategy works or inventing what a refinance would produce.
+    13g. Never assume a refinance occurred, never calculate or estimate
+       refinance proceeds, and never adjust rent growth, vacancy, cap
+       rate, purchase price, or any other engine assumption because
+       "deal_context" describes something different from what was
+       actually modeled. Any statement about a refinance-and-hold,
+       renovation, or other business-plan step "deal_context" describes
+       must be caveated as not modeled, unless the supplied deterministic
+       evidence itself already reflects it.
+    13h. If "deal_context" is absent from the payload, proceed exactly as
+       you would without this section -- do not comment on its absence and
+       do not invent a strategy narrative that was not supplied.
+
     STRUCTURE (avoid repeating yourself across sections):
     14. State a material issue fully the first time it appears, in whichever
        section is most natural for it. Do not repeat the same observation
@@ -296,6 +369,11 @@ def build_user_prompt(context: AnalysisContext) -> str:
         "number; use the supplied label. break_even.*.status of "
         "\"no_solution_in_range\" means only that no qualifying value "
         "was found inside the documented search bounds for that "
-        "question. Interpret this data per your system instructions.\n\n"
+        "question. If a top-level \"deal_context\" string is present, it "
+        "is optional, user-authored free text -- the analyst's own stated "
+        "investment strategy, not Anchor-computed and not verified "
+        "evidence; apply the DEAL CONTEXT RULES in your system "
+        "instructions to it. Interpret this data per your system "
+        "instructions.\n\n"
         f"{serialized}"
     )

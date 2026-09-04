@@ -81,6 +81,7 @@ def _make_context(**overrides: object) -> AnalysisContext:
         "target_equity_multiple": 1.50,
         "target_headline_dscr": 1.20,
         "return_hurdle_metric": ReturnHurdleMetric.LEVERED_IRR,
+        "deal_context": None,
     }
     values.update(overrides)
     return AnalysisContext(**values)  # type: ignore[arg-type]
@@ -146,6 +147,7 @@ def test_analysis_context_has_exact_fields_and_keyword_only_shape() -> None:
         "target_equity_multiple",
         "target_headline_dscr",
         "return_hurdle_metric",
+        "deal_context",
     )
     assert all(field.kw_only for field in contract_fields)
 

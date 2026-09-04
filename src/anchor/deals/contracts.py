@@ -11,10 +11,22 @@ saved deal's assumptions are always the exact same validated shape the
 engine already consumes -- never a parallel representation that could drift
 from it.
 
-A ``Deal`` never carries a stored ``AcquisitionResults``. Reopening a deal
-means resubmitting its assumptions to the existing, unmodified engine entry
-point (``analyze_acquisition`` or ``analyze_detailed_acquisition``) -- the
-engine remains the sole authority for every derived number.
+Owner Return Metrics V3 Gate A6: a ``Deal`` may also carry
+``analysis_snapshot``/``ai_snapshot`` -- a CACHE of the last successful
+deterministic analysis / AI Analyst output for these exact assumptions (and,
+for ``ai_snapshot``, this exact ``deal_context``), never a new source of
+truth. Reopening a deal still means the assumptions remain resubmittable to
+the existing, unmodified engine entry point (``analyze_acquisition`` or
+``analyze_detailed_acquisition``) at any time -- the engine remains the sole
+authority for every derived number; the snapshot only lets the UI show the
+*last* such result immediately, without forcing a re-run. ``anchor.deals``
+still never imports an ``anchor.engine`` *calculation* module (``acquisition``/
+``debt``/``noi``/``returns``/``operating_projection``) and performs no
+calculation of its own here -- ``AcquisitionResults``/``DetailedAcquisitionResults``
+(from ``anchor.engine.contracts``) and ``AIAnalysis`` (from ``anchor.ai.
+contracts``) are imported purely as pre-existing, calculation-free *result
+shapes* to type what this module stores, exactly as ``anchor.ai.contracts``
+already imports ``anchor.engine.contracts`` for the same reason.
 
 One domain-level ``Deal`` shape represents both operating modes, per
 ``operating_mode``: a ``QUICK`` deal has ``inputs`` populated and ``terms``/
@@ -23,7 +35,9 @@ One domain-level ``Deal`` shape represents both operating modes, per
 never a fabricated ``AcquisitionInputs`` with a placeholder ``current_noi``/
 ``noi_growth``/``occupancy``. See ``docs/detailed_operating_model_v2_1_architecture.md``
 Section 4 and Section 6 for the resolution this mirrors at the persistence
-layer.
+layer. ``analysis_snapshot`` mirrors this same split: ``AcquisitionResults``
+for a ``QUICK`` deal, ``DetailedAcquisitionResults`` (operating projection +
+results) for a ``DETAILED`` deal.
 """
 
 from __future__ import annotations
@@ -31,12 +45,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from ..ai.contracts import AIAnalysis
 from ..contracts import (
     AcquisitionInputs,
     AcquisitionTerms,
     DetailedOperatingInputs,
     OperatingMode,
 )
+from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -54,6 +70,25 @@ class Deal:
     ``inputs`` is ``None`` -- a Detailed deal never has an
     ``AcquisitionInputs`` instance, matching the engine-layer resolution
     (Gate 3) exactly.
+
+    ``deal_context`` (Gate A4) is optional, user-authored free text
+    describing the investment strategy/business plan -- never an
+    ``AcquisitionInputs``/``AcquisitionTerms``/``DetailedOperatingInputs``
+    field, never read by the deterministic engine, and identical in shape
+    for both modes. ``None`` for a legacy deal saved before this field
+    existed, or any deal saved with it left blank -- never a fabricated
+    default string.
+
+    ``analysis_snapshot``/``ai_snapshot`` (Gate A6) are optional cached
+    results, always either ``None`` or already verified (by the store layer
+    that produced this ``Deal``) to correspond to this exact ``inputs``/
+    ``terms``+``detailed_operating_inputs`` (and, for ``ai_snapshot``, this
+    exact ``deal_context``) -- a ``Deal`` never carries a snapshot known to
+    be stale. ``None`` means either no analysis/AI has ever been run for
+    this deal, or a previously-cached one was invalidated by an assumption/
+    context change, or a stored snapshot could not be decoded (a corrupt or
+    schema-incompatible cached artifact is always treated as absent, never
+    surfaced or allowed to block opening the deal).
     """
 
     id: str
@@ -62,6 +97,9 @@ class Deal:
     inputs: AcquisitionInputs | None
     terms: AcquisitionTerms | None
     detailed_operating_inputs: DetailedOperatingInputs | None
+    deal_context: str | None
+    analysis_snapshot: AcquisitionResults | DetailedAcquisitionResults | None
+    ai_snapshot: AIAnalysis | None
     created_at: datetime
     updated_at: datetime
 
@@ -74,6 +112,13 @@ class Deal:
                     "A QUICK Deal must not have 'terms' or "
                     "'detailed_operating_inputs' populated."
                 )
+            if self.analysis_snapshot is not None and not isinstance(
+                self.analysis_snapshot, AcquisitionResults
+            ):
+                raise ValueError(
+                    "A QUICK Deal's 'analysis_snapshot' must be an "
+                    "AcquisitionResults instance, or None."
+                )
         else:
             if self.terms is None or self.detailed_operating_inputs is None:
                 raise ValueError(
@@ -82,6 +127,13 @@ class Deal:
                 )
             if self.inputs is not None:
                 raise ValueError("A DETAILED Deal must not have 'inputs' populated.")
+            if self.analysis_snapshot is not None and not isinstance(
+                self.analysis_snapshot, DetailedAcquisitionResults
+            ):
+                raise ValueError(
+                    "A DETAILED Deal's 'analysis_snapshot' must be a "
+                    "DetailedAcquisitionResults instance, or None."
+                )
 
 
 class DealNotFoundError(LookupError):

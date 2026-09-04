@@ -50,6 +50,10 @@ const RESULTS: AcquisitionResults = {
   dscr_by_year: [2.0, 2.06, 1.65],
   headline_dscr: 2.0,
   min_dscr: 1.65,
+  levered_cash_on_cash_by_year: [0.0587, 0.0629, 0.047],
+  unlevered_cash_yield_by_year: [0.0539, 0.0557, 0.0575],
+  cumulative_operating_distributions_by_year: [250_000, 518_000, 718_028.43],
+  year_1_debt_yield: 0.1,
 };
 
 function rowByLabel(label: string): HTMLTableRowElement {

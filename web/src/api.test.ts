@@ -6,10 +6,14 @@ import {
   createDetailedDeal,
   deleteDeal,
   duplicateDeal,
+  fetchDealFingerprint,
   fetchDetailedAIAnalysis,
+  fetchDetailedDealFingerprint,
   getDeal,
   listDeals,
   updateDeal,
+  updateDealAiSnapshot,
+  updateDealAnalysisSnapshot,
   updateDetailedDeal,
   uploadExcel,
   uploadOm,
@@ -274,6 +278,9 @@ function dealFixture(overrides: Partial<Deal> = {}): Deal {
     inputs: GOLDEN_INPUTS,
     terms: null,
     detailed_operating_inputs: null,
+    deal_context: null,
+    analysis_snapshot: null,
+    ai_snapshot: null,
     created_at: '2026-09-03T12:00:00+00:00',
     updated_at: '2026-09-03T12:00:00+00:00',
     ...overrides,
@@ -314,6 +321,9 @@ function detailedDealFixture(overrides: Partial<Deal> = {}): Deal {
       revenue_growth: 0.03,
       expense_growth: 0.03,
     },
+    deal_context: null,
+    analysis_snapshot: null,
+    ai_snapshot: null,
     created_at: '2026-09-03T12:00:00+00:00',
     updated_at: '2026-09-03T12:00:00+00:00',
     ...overrides,
@@ -332,7 +342,11 @@ describe('createDeal', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain('/deals');
     expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body)).toEqual({ name: '111 Main St', inputs: GOLDEN_INPUTS });
+    expect(JSON.parse(init.body)).toEqual({
+      name: '111 Main St',
+      inputs: GOLDEN_INPUTS,
+      deal_context: null,
+    });
   });
 
   it('surfaces a 422 validation failure with the issue-list shape', async () => {
@@ -374,7 +388,11 @@ describe('updateDeal', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain('/deals/deal-1');
     expect(init.method).toBe('PUT');
-    expect(JSON.parse(init.body)).toEqual({ name: 'Renamed Deal', inputs: GOLDEN_INPUTS });
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'Renamed Deal',
+      inputs: GOLDEN_INPUTS,
+      deal_context: null,
+    });
   });
 
   it('surfaces a 404 for an unknown deal id', async () => {
@@ -410,6 +428,7 @@ describe('createDetailedDeal', () => {
       operating_mode: 'detailed',
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      deal_context: null,
     });
   });
 
@@ -468,6 +487,7 @@ describe('updateDetailedDeal', () => {
       operating_mode: 'detailed',
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      deal_context: null,
     });
   });
 
@@ -478,6 +498,133 @@ describe('updateDetailedDeal', () => {
     await expect(
       updateDetailedDeal('missing', 'Deal', GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
     ).rejects.toThrow(/could not be found/);
+  });
+});
+
+// =============================================================================
+// Owner Return Metrics V3 Gate A7 -- snapshot provenance hardening
+// =============================================================================
+
+describe('fetchDealFingerprint', () => {
+  it('POSTs the assumptions and Deal Context to /deals/fingerprint and returns both fingerprints', async () => {
+    const fingerprints = {
+      financial_input_fingerprint: 'financial-fp',
+      ai_context_fingerprint: 'ai-fp',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, fingerprints));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchDealFingerprint(GOLDEN_INPUTS, 'Strategy.');
+
+    expect(result).toEqual(fingerprints);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/fingerprint');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      operating_mode: 'quick',
+      inputs: GOLDEN_INPUTS,
+      deal_context: 'Strategy.',
+    });
+  });
+
+  it('sends deal_context as null when omitted', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { financial_input_fingerprint: 'a', ai_context_fingerprint: 'b' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchDealFingerprint(GOLDEN_INPUTS);
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body).deal_context).toBeNull();
+  });
+
+  it('throws an ApiError on a network failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchDealFingerprint(GOLDEN_INPUTS)).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('fetchDetailedDealFingerprint', () => {
+  it('POSTs the terms, detailed operating inputs, and Deal Context to /deals/fingerprint', async () => {
+    const fingerprints = {
+      financial_input_fingerprint: 'financial-fp',
+      ai_context_fingerprint: 'ai-fp',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, fingerprints));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchDetailedDealFingerprint(
+      GOLDEN_TERMS,
+      GOLDEN_DETAILED_OPERATING_INPUTS,
+      'Strategy.',
+    );
+
+    expect(result).toEqual(fingerprints);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/fingerprint');
+    expect(JSON.parse(init.body)).toEqual({
+      operating_mode: 'detailed',
+      terms: GOLDEN_TERMS,
+      detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      deal_context: 'Strategy.',
+    });
+  });
+});
+
+describe('updateDealAnalysisSnapshot', () => {
+  it('PUTs the analysis snapshot and financial_input_fingerprint to /deals/{id}/analysis-snapshot', async () => {
+    const deal = dealFixture({ analysis_snapshot: { irr: 0.12 } as unknown as Deal['analysis_snapshot'] });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
+    vi.stubGlobal('fetch', fetchMock);
+    const snapshot = { irr: 0.12 } as unknown as Parameters<typeof updateDealAnalysisSnapshot>[1];
+
+    const result = await updateDealAnalysisSnapshot('deal-1', snapshot, 'financial-fp');
+
+    expect(result).toEqual(deal);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/deal-1/analysis-snapshot');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({
+      analysis_snapshot: snapshot,
+      financial_input_fingerprint: 'financial-fp',
+    });
+  });
+
+  it('surfaces a 422 when the backend rejects a mismatched fingerprint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(422, { detail: 'financial_input_fingerprint does not match' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const snapshot = { irr: 0.12 } as unknown as Parameters<typeof updateDealAnalysisSnapshot>[1];
+
+    await expect(
+      updateDealAnalysisSnapshot('deal-1', snapshot, 'stale-fp'),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('updateDealAiSnapshot', () => {
+  it('PUTs the AI snapshot and ai_context_fingerprint to /deals/{id}/ai-snapshot', async () => {
+    const deal = dealFixture();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
+    vi.stubGlobal('fetch', fetchMock);
+    const snapshot = { executive_summary: 'Summary.' } as unknown as Parameters<
+      typeof updateDealAiSnapshot
+    >[1];
+
+    const result = await updateDealAiSnapshot('deal-1', snapshot, 'ai-fp');
+
+    expect(result).toEqual(deal);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/deal-1/ai-snapshot');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({
+      ai_snapshot: snapshot,
+      ai_context_fingerprint: 'ai-fp',
+    });
   });
 });
 
@@ -656,6 +803,12 @@ function detailedResultsFixture(): DetailedAcquisitionResults {
       dscr_by_year: [2.0, 2.06, 1.64688, 1.69629, 1.74718],
       headline_dscr: 2.0,
       min_dscr: 1.64688,
+      levered_cash_on_cash_by_year: [0.058685, 0.062911, 0.046955, 0.051438, 0.056055],
+      unlevered_cash_yield_by_year: [0.053922, 0.055686, 0.057504, 0.059376, 0.061304],
+      cumulative_operating_distributions_by_year: [
+        250_000, 518_000, 718_028.43, 937_153.06, 1_175_946.78,
+      ],
+      year_1_debt_yield: 0.1,
     },
   };
 }
@@ -767,6 +920,7 @@ describe('fetchDetailedAIAnalysis', () => {
       target_equity_multiple: 1.5,
       target_headline_dscr: 1.2,
       return_hurdle_metric: 'levered_irr',
+      deal_context: null,
     });
   });
 

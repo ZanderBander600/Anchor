@@ -1,6 +1,7 @@
 import type { AcquisitionResults } from '../types';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
 import { CashFlowTable } from './CashFlowTable';
+import { OwnerReturnSchedule } from './OwnerReturnSchedule';
 
 interface StatProps {
   label: string;
@@ -54,6 +55,25 @@ export function ResultsPanel({ results }: ResultsPanelProps) {
         </div>
       </section>
 
+      <section className="headline-stats">
+        <h3 className="card-title">Owner Returns</h3>
+        <div className="stat-grid">
+          <StatCard
+            label="Year 1 Levered CoC"
+            value={formatPercent(results.levered_cash_on_cash_by_year[0])}
+          />
+          <StatCard label="Year 1 Debt Yield" value={formatPercent(results.year_1_debt_yield)} />
+          <StatCard
+            label="Cumulative Operating Distributions"
+            value={formatCurrency(
+              results.cumulative_operating_distributions_by_year[
+                results.cumulative_operating_distributions_by_year.length - 1
+              ],
+            )}
+          />
+        </div>
+      </section>
+
       <div className="card-row">
         <section className="card">
           <h3 className="card-title">Property</h3>
@@ -87,6 +107,7 @@ export function ResultsPanel({ results }: ResultsPanelProps) {
       </div>
 
       <CashFlowTable results={results} />
+      <OwnerReturnSchedule results={results} />
     </div>
   );
 }

@@ -69,6 +69,12 @@ _PERCENT_FIELDS: frozenset[str] = frozenset(
         "management_fee_pct",
         "revenue_growth",
         "expense_growth",
+        # Owner Return Metrics V3 Gate A4: levered_cash_on_cash_by_year and
+        # unlevered_cash_yield_by_year are both decimal-fraction yields,
+        # formatted identically to every other percent field above.
+        "levered_cash_on_cash_by_year",
+        "unlevered_cash_yield_by_year",
+        "year_1_debt_yield",
     }
 )
 _MULTIPLE_FIELDS: frozenset[str] = frozenset(
@@ -126,6 +132,9 @@ _CURRENCY_FIELDS: frozenset[str] = frozenset(
         "other_operating_expenses_by_year",
         "management_fee_by_year",
         "total_operating_expenses_by_year",
+        # Owner Return Metrics V3 Gate A4: a dollar schedule, formatted
+        # identically to noi_by_year/capex_by_year above.
+        "cumulative_operating_distributions_by_year",
     }
 )
 _YEAR_FIELDS: frozenset[str] = frozenset(
@@ -147,8 +156,17 @@ _YEAR_FIELDS: frozenset[str] = frozenset(
 # about explicitly. The corresponding reflection test fails loudly if any
 # field is missing from both its formatter function and its allowlist -- so
 # a field can only ever go unseen by the model on purpose, never by
-# accident. Empty today: every current field of all five dataclasses is
-# presented.
+# accident.
+#
+# Owner Return Metrics V3 Gate A2 added four entries to
+# INTENTIONALLY_EXCLUDED_RESULT_FIELDS (``levered_cash_on_cash_by_year``,
+# ``unlevered_cash_yield_by_year``, ``cumulative_operating_distributions_by_year``,
+# ``year_1_debt_yield``), deliberately withheld from the AI Analyst pending a
+# dedicated presentation gate. Gate A4 removes all four: they are now
+# formatted and presented like every other ``AcquisitionResults`` field (see
+# ``_format_results`` below) -- Deal Context makes them especially useful to
+# interpret, per Gate A4's charter. The allowlist is empty again; every
+# field of all five dataclasses is presented.
 # =============================================================================
 
 INTENTIONALLY_EXCLUDED_INPUT_FIELDS: frozenset[str] = frozenset()
@@ -517,6 +535,19 @@ def _format_results(results: AcquisitionResults) -> dict[str, Any]:
         "dscr_by_year": _format_tuple("headline_dscr", results.dscr_by_year),
         "headline_dscr": format_metric_value("headline_dscr", results.headline_dscr),
         "min_dscr": format_metric_value("min_dscr", results.min_dscr),
+        "levered_cash_on_cash_by_year": _format_tuple(
+            "levered_cash_on_cash_by_year", results.levered_cash_on_cash_by_year
+        ),
+        "unlevered_cash_yield_by_year": _format_tuple(
+            "unlevered_cash_yield_by_year", results.unlevered_cash_yield_by_year
+        ),
+        "cumulative_operating_distributions_by_year": _format_tuple(
+            "cumulative_operating_distributions_by_year",
+            results.cumulative_operating_distributions_by_year,
+        ),
+        "year_1_debt_yield": format_metric_value(
+            "year_1_debt_yield", results.year_1_debt_yield
+        ),
     }
 
 
@@ -706,6 +737,20 @@ def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
     counterpart exists for ``exit_cap_noi_growth``/``min_noi_growth``/
     ``min_current_noi`` -- see ``StandardDetailedSensitivityPresets``/
     ``StandardDetailedBreakEvenAnalysis``).
+
+    Owner Return Metrics V3 Gate A4: a top-level ``"deal_context"`` string
+    is included only when ``context.deal_context`` is non-``None`` and
+    non-blank after stripping -- an all-whitespace value is treated as "no
+    context supplied," same as ``None``, so a blank textarea never produces
+    a spurious payload key. This is the one payload field that is not
+    engine/analysis output: it is the user's own stated investment
+    strategy, read and included verbatim, never reformatted or
+    interpreted here (interpretation is the model's job, governed by
+    ``SYSTEM_PROMPT``'s Deal Context rules). Deliberately placed as its own
+    top-level section, never merged into ``base_inputs``/``base_terms``/
+    ``base_results``, so the payload shape itself keeps user-authored
+    context visually and structurally distinct from authoritative
+    deterministic data.
     """
 
     payload: dict[str, Any] = {
@@ -723,6 +768,9 @@ def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
         },
         "hurdle_evaluation": _format_hurdle_evaluation(context),
     }
+
+    if context.deal_context is not None and context.deal_context.strip():
+        payload["deal_context"] = context.deal_context.strip()
 
     if context.operating_mode is OperatingMode.QUICK:
         assert context.inputs is not None

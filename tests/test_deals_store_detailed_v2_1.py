@@ -146,7 +146,8 @@ def _raw_user_version(db_path: Path) -> int:
 
 
 # =============================================================================
-# The ``deals`` table is structurally untouched by this gate
+# The ``deals`` table is structurally untouched by this gate (Gate 5b),
+# plus Owner Return Metrics V3 Gate A4's one later, deliberate addition
 # =============================================================================
 
 _QUICK_ONLY_COLUMNS = frozenset(
@@ -167,6 +168,18 @@ _QUICK_ONLY_COLUMNS = frozenset(
         "disposition_cost_pct",
         "annual_capex_reserve",
         "io_period",
+        # Owner Return Metrics V3 Gate A4: one nullable deal-metadata column,
+        # added after this test module was written for Gate 5b.
+        "deal_context",
+        # Owner Return Metrics V3 Gate A6: six nullable cached-snapshot
+        # columns, added later still -- the only other legitimate additions
+        # to this otherwise-frozen list since Gate 5b.
+        "analysis_snapshot",
+        "analysis_snapshot_schema_version",
+        "analysis_snapshot_fingerprint",
+        "ai_snapshot",
+        "ai_snapshot_schema_version",
+        "ai_snapshot_fingerprint",
         "created_at",
         "updated_at",
     )
@@ -176,9 +189,13 @@ _QUICK_ONLY_COLUMNS = frozenset(
 def test_fresh_database_deals_table_schema_is_exactly_the_pre_gate_5b_shape(
     db_path: Path,
 ) -> None:
-    """No column added to, removed from, or altered on ``deals`` by this
-    gate -- confirms the 'structurally untouched' requirement directly
-    against the live schema, not just by absence of a diff."""
+    """No column added to, removed from, or altered on ``deals`` by Gate 5b
+    itself -- confirms the 'structurally untouched by Gate 5b' requirement
+    directly against the live schema, not just by absence of a diff. The one
+    column present beyond the original fourteen Quick assumptions
+    (``deal_context``) was added later, deliberately, by Owner Return
+    Metrics V3 Gate A4 -- see that column's comment in ``_QUICK_ONLY_COLUMNS``
+    above."""
 
     create_deal("Deal", QUICK_INPUTS, db_path=db_path)
 
@@ -284,7 +301,9 @@ def test_existing_quick_database_migrates_without_modifying_quick_rows(
     assert deal.created_at.isoformat() == "2020-01-01T00:00:00+00:00"
     assert deal.updated_at.isoformat() == "2020-01-01T00:00:00+00:00"
 
-    # Schema itself is unchanged -- no column added, none removed.
+    # Schema matches the current authoritative shape exactly -- the
+    # original fourteen Quick columns unchanged, plus Gate A4's later
+    # deal_context addition backfilled to NULL by the migration.
     assert _raw_column_names(db_path, "deals") == _QUICK_ONLY_COLUMNS
     assert _raw_user_version(db_path) == _SCHEMA_VERSION
 
