@@ -1838,6 +1838,7 @@ export default function App() {
                     results: detailedResults.results,
                     breakEven: detailedBreakEven,
                   })}
+                  dealStory={detailedAiAnalysis?.deal_story ?? null}
                 />
               )}
 
@@ -1959,6 +1960,7 @@ export default function App() {
                     results,
                     breakEven,
                   })}
+                  dealStory={aiAnalysis?.deal_story ?? null}
                 />
               )}
 

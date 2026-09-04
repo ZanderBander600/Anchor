@@ -43,6 +43,7 @@ import type {
   AIAnalysis,
   BreakEvenResult,
   Deal,
+  DealStory,
   DetailedAcquisitionResults,
   DetailedExcelIntakeReport,
   DetailedExtractionResult,
@@ -692,6 +693,7 @@ function makeAiAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
     break_even_analysis: 'Maximum purchase price break-even was found within the tested range.',
     questions_to_investigate: ['What is the in-place rent roll composition?'],
     confidence_notes: ['No tenant credit data was supplied.'],
+    deal_story: null,
     ...overrides,
   };
 }
@@ -5385,5 +5387,272 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     expect(screen.getByText('Property')).toBeTruthy();
     expect(screen.getByText('Capitalization')).toBeTruthy();
     expect(screen.getByText('Exit')).toBeTruthy();
+  });
+});
+
+// =============================================================================
+// Sprint B Gate B4 -- AI Deal Story inside the One-Page Owner Summary.
+//
+// The Deal Story rides the existing single "Generate AI Analysis" workflow
+// and the existing `ai_snapshot` persistence path: no second button, no
+// second request, no second cached artifact. These tests exercise that end
+// to end at the App level.
+// =============================================================================
+
+const B4_DEAL_STORY: DealStory = {
+  investment_view:
+    'Coverage and recurring distributions support the stated income focus, but the modeled levered IRR sits below the supplied hurdle.',
+  key_strengths: ['Year 1 DSCR is labeled above its supplied target.'],
+  key_risks: ['Levered IRR is labeled below its supplied target.'],
+  model_gap: null,
+};
+
+function makeAiAnalysisWithStory(overrides: Partial<DealStory> = {}): AIAnalysis {
+  return makeAiAnalysis({ deal_story: { ...B4_DEAL_STORY, ...overrides } });
+}
+
+describe('AI Deal Story workflow (Gate B4)', () => {
+  it('the deterministic Owner Summary renders fully before any AI is generated', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findAllByText('Key Returns');
+
+    expect(screen.queryByText('Deal Story')).toBeNull();
+    expect(screen.queryByText('AI Interpretation')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Generate AI Analysis' })).toBeTruthy();
+  });
+
+  it('one Generate AI Analysis click produces both the full report and the Deal Story', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysisWithStory());
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findAllByText('Key Returns');
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    // The concise owner surface...
+    expect(await screen.findByText('Deal Story')).toBeTruthy();
+    expect(screen.getByText('AI Interpretation')).toBeTruthy();
+    // ...and the unchanged full AI Analyst report, from the same one call.
+    expect(screen.getByText('Executive Summary')).toBeTruthy();
+    expect(screen.getByText('Five-year hold with moderate leverage.')).toBeTruthy();
+    expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it('introduces no second AI-generation control anywhere in the workspace', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysisWithStory());
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findAllByText('Key Returns');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Deal Story');
+
+    expect(screen.getAllByRole('button', { name: 'Generate AI Analysis' }).length).toBe(1);
+    expect(screen.queryByRole('button', { name: /Deal Story/i })).toBeNull();
+  });
+
+  it('renders the Deal Story in Detailed mode through the same workflow', async () => {
+    const user = userEvent.setup();
+    mockFetchDetailedAIAnalysis.mockResolvedValue(makeAiAnalysisWithStory());
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    expect(await screen.findByText('Deal Story')).toBeTruthy();
+    expect(screen.getByText('AI Interpretation')).toBeTruthy();
+    expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole('button', { name: 'Generate AI Analysis' }).length).toBe(1);
+  });
+
+  it('renders a Model Gap when the AI reports one', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchAIAnalysis.mockResolvedValue(
+      makeAiAnalysisWithStory({
+        model_gap:
+          'The stated refinance-and-hold strategy is not modeled in Anchor deterministic cash flows.',
+      }),
+    );
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findAllByText('Key Returns');
+
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    expect(await screen.findByText('Model Gap')).toBeTruthy();
+    expect(screen.getByText(/not modeled in Anchor deterministic cash flows/)).toBeTruthy();
+  });
+
+  it('restores the Deal Story from a reopened deal AI snapshot', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      id: 'deal-1',
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysisWithStory(),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Deal Story')).toBeTruthy();
+    // Restored, never regenerated.
+    expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('restores the Deal Story from a reopened Detailed deal AI snapshot', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal({
+      id: 'detailed-1',
+      analysis_snapshot: makeDetailedResults(),
+      ai_snapshot: makeAiAnalysisWithStory(),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Deal Story')).toBeTruthy();
+    expect(mockFetchDetailedAIAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('shows no Deal Story for a restored legacy AI snapshot that predates Gate B4', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      id: 'deal-1',
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysis({ deal_story: null }),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+
+    // The full report still restores; only the Deal Story is absent.
+    expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Investment View')).toBeTruthy();
+    expect(screen.queryByText('Deal Story')).toBeNull();
+  });
+
+  it('a financial edit removes the Deal Story along with the deterministic summary', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      id: 'deal-1',
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysisWithStory(),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    expect(await screen.findByText('Deal Story')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
+      target: { value: '60000000' },
+    });
+
+    expect(screen.queryByText('Deal Story')).toBeNull();
+    expect(screen.queryByText('Key Returns')).toBeNull();
+    expect(screen.queryByText('Investment View')).toBeNull();
+  });
+
+  it('a Deal Context edit removes the Deal Story but preserves the deterministic summary', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      id: 'deal-1',
+      deal_context: 'Original strategy.',
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysisWithStory(),
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    expect(await screen.findByText('Deal Story')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Deal Context'), {
+      target: { value: 'Updated strategy.' },
+    });
+
+    expect(screen.queryByText('Deal Story')).toBeNull();
+    // The deterministic summary is untouched -- Deal Context is not a
+    // financial input -- and THE PLAY reflects the new text.
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
+    const play = screen.getByText('The Play').closest('section') as HTMLElement;
+    expect(within(play).getByText('Updated strategy.')).toBeTruthy();
+    // No automatic AI rerun.
+    expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('keeps the full AI Analyst report available alongside the Deal Story', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysisWithStory());
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await screen.findAllByText('Key Returns');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Deal Story');
+
+    expect(screen.getByText('Anchor AI Analyst')).toBeTruthy();
+    for (const section of [
+      'Executive Summary',
+      'Return Drivers',
+      'Downside Analysis',
+      'Capital Structure',
+      'Break-Even Interpretation',
+      'Questions to Investigate',
+      'Confidence / Data Gaps',
+    ]) {
+      expect(screen.getByText(section)).toBeTruthy();
+    }
+  });
+
+  it('persists the Deal Story through the existing AI snapshot endpoint only', async () => {
+    const user = userEvent.setup();
+    const analysis = makeAiAnalysisWithStory();
+    const deal = makeDeal({ id: 'deal-1', analysis_snapshot: makeResults() });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockFetchAIAnalysis.mockResolvedValue(analysis);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findAllByText('Key Returns');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Deal Story');
+
+    // One snapshot write, carrying the whole AIAnalysis (Deal Story nested
+    // inside it) -- never a separate Deal Story persistence call.
+    await waitFor(() =>
+      expect(mockUpdateDealAiSnapshot).toHaveBeenCalledWith('deal-1', analysis, 'fp-ai'),
+    );
+    expect(mockUpdateDealAiSnapshot).toHaveBeenCalledTimes(1);
   });
 });

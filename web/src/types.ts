@@ -511,9 +511,33 @@ export interface StandardDetailedBreakEvenAnalysis {
   max_interest_rate: BreakEvenResult;
 }
 
+/** Mirrors ``DealStory`` in ``src/anchor/ai/contracts.py`` (Sprint B Gate
+ * B4) -- the concise, owner-level AI interpretation rendered inside the
+ * One-Page Owner Summary, produced by the same single `/ai/analysis`
+ * response that produces the full report below. Interpretation only: like
+ * `AIAnalysis`, it never carries a newly calculated financial metric.
+ *
+ * `key_strengths`/`key_risks` are capped at 2 entries each by the backend
+ * contract (the provider trims a longer model response before the contract
+ * is constructed), so the frontend renders whatever it is given and never
+ * slices, truncates, or re-ranks the list itself. `model_gap` is `null`
+ * whenever no material strategy/model mismatch exists -- never a
+ * manufactured placeholder sentence. */
+export interface DealStory {
+  investment_view: string;
+  key_strengths: string[];
+  key_risks: string[];
+  model_gap: string | null;
+}
+
 /** Mirrors ``AIAnalysis`` in ``src/anchor/ai/contracts.py`` -- the AI
  * Analyst's structured, interpretation-only output. Never carries a newly
- * calculated financial metric. */
+ * calculated financial metric.
+ *
+ * `deal_story` is `null` only for an AI snapshot persisted before Gate B4
+ * existed: such a snapshot still restores its full report and simply shows
+ * no Deal Story until the analyst regenerates. A freshly generated
+ * analysis always carries one. */
 export interface AIAnalysis {
   executive_summary: string;
   investment_view: string;
@@ -525,4 +549,5 @@ export interface AIAnalysis {
   break_even_analysis: string;
   questions_to_investigate: string[];
   confidence_notes: string[];
+  deal_story: DealStory | null;
 }

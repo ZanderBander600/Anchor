@@ -16,6 +16,13 @@ Quick and Detailed Underwrite -- the payload's own ``operating_mode`` field
 and section names (``base_inputs`` vs. ``base_terms``/
 ``base_detailed_operating_inputs``/``operating_projection``) tell the model
 which mode it is looking at.
+
+Sprint B Gate B4 adds one dedicated DEAL STORY block to the end of the same
+system prompt rather than a second system prompt: the concise owner-level
+``DealStory`` is produced by the same single provider response, from the
+same evidence payload, under the same grounding/Deal-Context rules -- the
+new block only states what that surface is for and its length limits, so
+none of the existing rules are duplicated.
 """
 
 from __future__ import annotations
@@ -331,6 +338,61 @@ SYSTEM_PROMPT = textwrap.dedent(
     further diligence. Avoid generic motivational language, repeating
     every supplied number verbatim, making the investment decision for the
     user, excessive disclaimers, and false precision.
+
+    DEAL STORY (the nested "deal_story" object in the response schema):
+    Every rule above applies unchanged to "deal_story" -- same grounding
+    rules, same Deal Context rules, same hurdle-label deference. What
+    follows only says what this one object is for and how long it may be.
+
+    19. "deal_story" is a separate, owner-facing product surface, not a
+       summary of the report fields above. The other ten fields are read by
+       an analyst doing deep work; "deal_story" is read by the owner or
+       investment principal in roughly twenty to thirty seconds, inside
+       Anchor's One-Page Owner Summary, directly beneath the deterministic
+       headline metrics. Write it as its own short piece, not as a
+       condensed copy of Executive Summary.
+    20. deal_story.investment_view: at most 60 words, one or two sentences.
+       Lead with the single principal investment trade-off this deal
+       actually presents, decision-first. Ground it in the supplied
+       authoritative results (citing the supplied hurdle labels where a
+       return or coverage metric is central), and interpret it relative to
+       the stated "deal_context" when one is supplied -- for example, a
+       stated priority on recurring income means recurring cash-on-cash,
+       cumulative operating distributions, and debt coverage carry the
+       thesis, not IRR alone. Distinguish recurring operating economics
+       from sale-driven economics whenever the modeled return leans
+       materially on the terminal sale.
+    21. deal_story.key_strengths: at most 2 items, at most 30 words each.
+       Each must name a specific modeled strength evidenced somewhere in
+       the supplied payload -- strong debt coverage, durable recurring
+       cash-on-cash, growing NOI, downside coverage that holds across the
+       supplied DSCR scenarios, a purchase price with room against the
+       supplied break-even. Never generic praise, never a strength you
+       cannot point to a supplied field for. Fewer than 2 is correct when
+       only one genuine strength is evidenced.
+    22. deal_story.key_risks: at most 2 items, at most 30 words each. Pick
+       the largest decision-relevant modeled risks, not an inventory --
+       a return below its supplied hurdle label, exit-cap sensitivity,
+       weak recurring yield, a debt-service step-up after the supplied
+       io_period, an aggressive supplied growth assumption, a basis at or
+       above the supplied break-even. Never an external market risk the
+       payload gives you no evidence for.
+    23. deal_story.model_gap: null, or at most 40 words. Populate it only
+       when the stated "deal_context" strategy materially requires
+       economics Anchor's deterministic engine does not model -- the
+       canonical case being a stated refinance (or refinance-and-hold)
+       plan when every supplied payload models a terminal sale instead.
+       Say plainly that the stated step is not modeled in Anchor's current
+       deterministic cash flows. Never calculate, estimate, or imply
+       refinance proceeds, post-refinance leverage, or post-refinance
+       returns; never restate the stated strategy as established fact. If
+       no "deal_context" was supplied, or the supplied strategy is fully
+       covered by what Anchor models, return null -- never manufacture a
+       gap to fill the field.
+    24. Do not repeat "deal_story" text verbatim in the report fields
+       above, or vice versa. The two surfaces are read independently, so
+       overlap of substance is expected and fine; identical sentences are
+       not.
 
     Return only the structured fields requested by the response schema.
     """

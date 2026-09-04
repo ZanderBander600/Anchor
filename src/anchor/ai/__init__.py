@@ -31,7 +31,7 @@ from .analyst import (
     generate_ai_analysis,
     generate_detailed_ai_analysis,
 )
-from .contracts import AIAnalysis, AnalysisContext
+from .contracts import AIAnalysis, AnalysisContext, DealStory
 from .provider import (
     DEFAULT_MODEL,
     AIConfigurationError,
@@ -42,6 +42,7 @@ from .provider import (
 __all__ = [
     "AIAnalysis",
     "AnalysisContext",
+    "DealStory",
     "AIConfigurationError",
     "AIProviderError",
     "OpenAIAnalystProvider",

@@ -1,4 +1,4 @@
-import type { BreakEvenMetric, BreakEvenResult } from '../types';
+import type { BreakEvenMetric, BreakEvenResult, DealStory } from '../types';
 import type { OwnerSummaryData } from '../ownerSummary';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
 
@@ -61,8 +61,79 @@ function formatBreakEvenSolvedValue(
   return formatSolvedValue(result.solved_assumption_value);
 }
 
+/**
+ * Sprint B Gate B4 -- the AI Deal Story block. Deliberately the last
+ * section of the summary and visually subordinate to every deterministic
+ * metric above it: a muted, explicitly labeled "AI Interpretation" panel,
+ * never a `.stat-card`, never a headline. It renders only what the backend
+ * `DealStory` contract already contains -- no slicing, no re-ranking, no
+ * truncation (the max-2 caps are enforced in `anchor.ai.contracts`), and
+ * absolutely no financial calculation.
+ *
+ * Renders nothing at all when `dealStory` is `null` (no AI generated yet,
+ * or a restored pre-B4 snapshot): the deterministic Owner Summary above
+ * stands on its own, and the existing "Generate AI Analysis" action in
+ * `AiAnalystPanel` remains the single, unduplicated way to produce one.
+ */
+function DealStorySection({ dealStory }: { dealStory: DealStory }) {
+  const { investment_view, key_strengths, key_risks, model_gap } = dealStory;
+
+  return (
+    <section className="card owner-summary-story" aria-label="AI Interpretation">
+      <div className="owner-summary-story-header">
+        <h3 className="card-title">Deal Story</h3>
+        <span className="owner-summary-story-badge">AI Interpretation</span>
+      </div>
+
+      <p className="owner-summary-story-view">{investment_view}</p>
+
+      {(key_strengths.length > 0 || key_risks.length > 0) && (
+        <div className="owner-summary-story-columns">
+          {key_strengths.length > 0 && (
+            <div className="owner-summary-story-column">
+              <h4 className="owner-summary-story-subtitle">Strengths</h4>
+              <ul className="owner-summary-story-list">
+                {key_strengths.map((item, index) => (
+                  <li key={index}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {key_risks.length > 0 && (
+            <div className="owner-summary-story-column">
+              <h4 className="owner-summary-story-subtitle">Risks</h4>
+              <ul className="owner-summary-story-list">
+                {key_risks.map((item, index) => (
+                  <li key={index}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {model_gap !== null && (
+        <div className="owner-summary-story-gap">
+          <h4 className="owner-summary-story-subtitle">Model Gap</h4>
+          <p className="owner-summary-story-gap-text">{model_gap}</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export interface OwnerSummaryPanelProps {
   data: OwnerSummaryData;
+  /** The concise AI interpretation for this exact deal state, or `null`
+   * when none has been generated (or a restored snapshot predates Gate
+   * B4). Supplied as its own prop rather than folded into
+   * `OwnerSummaryData` on purpose: `OwnerSummaryData` is the deterministic
+   * view-model, and keeping AI output structurally outside it makes the
+   * deterministic/AI boundary visible in this component's own signature.
+   * It also means the Deal Story invalidates exactly when the AI analysis
+   * does -- the caller passes `aiAnalysis?.deal_story ?? null`, so every
+   * existing `clearAiAnalysis()` path clears the Deal Story for free. */
+  dealStory?: DealStory | null;
 }
 
 /**
@@ -78,7 +149,7 @@ export interface OwnerSummaryPanelProps {
  * mode-specific branch anywhere below is Operating Story's growth fields,
  * which `data.operatingStory` itself already discriminates.
  */
-export function OwnerSummaryPanel({ data }: OwnerSummaryPanelProps) {
+export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelProps) {
   const { identity, dealContext, keyReturns, ownerReturns, investmentSnapshot, debtRisk, operatingStory, breakEvenHighlights } =
     data;
 
@@ -201,6 +272,8 @@ export function OwnerSummaryPanel({ data }: OwnerSummaryPanelProps) {
           />
         </section>
       )}
+
+      {dealStory !== null && <DealStorySection dealStory={dealStory} />}
     </div>
   );
 }

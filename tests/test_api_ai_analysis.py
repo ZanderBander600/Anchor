@@ -18,7 +18,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from anchor.ai.contracts import AIAnalysis
+from anchor.ai.contracts import AIAnalysis, DealStory
 from anchor.ai.provider import AIConfigurationError, AIProviderError
 from anchor.api import app
 from anchor.contracts import AcquisitionInputs
@@ -65,6 +65,12 @@ VALID_ANALYSIS = AIAnalysis(
     break_even_analysis="Break-even.",
     questions_to_investigate=("Question one.",),
     confidence_notes=("Note one.",),
+    deal_story=DealStory(
+        investment_view="Owner view.",
+        key_strengths=("Story strength.",),
+        key_risks=("Story risk.",),
+        model_gap="Refinance is not modeled.",
+    ),
 )
 
 
@@ -113,9 +119,27 @@ def test_ai_analysis_returns_the_structured_ai_analysis_shape(client: TestClient
         "break_even_analysis",
         "questions_to_investigate",
         "confidence_notes",
+        "deal_story",
     }
     assert body["executive_summary"] == "Summary."
     assert body["strengths"] == ["Strength one."]
+
+
+def test_ai_analysis_response_nests_the_deal_story(client: TestClient) -> None:
+    """Sprint B Gate B4: one ``/ai/analysis`` response carries both the full
+    report and the concise Owner Summary Deal Story -- the frontend never
+    makes (and the user never pays for) a second AI request."""
+
+    with patch("anchor.api.generate_ai_analysis", return_value=VALID_ANALYSIS):
+        response = client.post("/ai/analysis", json=GENERIC_REQUEST)
+
+    deal_story = response.json()["deal_story"]
+    assert deal_story == {
+        "investment_view": "Owner view.",
+        "key_strengths": ["Story strength."],
+        "key_risks": ["Story risk."],
+        "model_gap": "Refinance is not modeled.",
+    }
 
 
 def test_ai_analysis_provider_invoked_exactly_once(client: TestClient) -> None:

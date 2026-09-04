@@ -7,6 +7,7 @@ import type {
   AcquisitionRequest,
   AcquisitionResults,
   AcquisitionTermsRequest,
+  DealStory,
   DetailedOperatingInputsRequest,
   StandardBreakEvenAnalysis,
 } from '../types';
@@ -440,5 +441,163 @@ describe('architecture guardrail: no financial formulas in the component', () =>
 
     expect(executable).not.toMatch(/[*/]/);
     expect(executable).not.toMatch(/\+/);
+  });
+});
+
+// =============================================================================
+// Sprint B Gate B4 -- AI Deal Story inside the Owner Summary.
+// =============================================================================
+
+function makeDealStory(overrides: Partial<DealStory> = {}): DealStory {
+  return {
+    investment_view:
+      'Coverage and recurring distributions support the stated income focus, but the modeled levered IRR sits below the supplied hurdle.',
+    key_strengths: ['Year 1 DSCR is labeled above its supplied target.'],
+    key_risks: ['Levered IRR is labeled below its supplied target.'],
+    model_gap: null,
+    ...overrides,
+  };
+}
+
+describe('AI Deal Story (Gate B4)', () => {
+  // 1. Owner Summary renders with no Deal Story.
+  it('renders the full deterministic summary with no Deal Story at all', () => {
+    render(<OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} />);
+
+    expect(screen.getByText('111 Main St')).toBeTruthy();
+    expect(screen.getByText('7.38%')).toBeTruthy();
+    expect(screen.queryByText('Deal Story')).toBeNull();
+    expect(screen.queryByText('AI Interpretation')).toBeNull();
+  });
+
+  it('renders no empty AI placeholder box when the Deal Story is absent', () => {
+    render(<OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} dealStory={null} />);
+
+    expect(screen.queryByLabelText('AI Interpretation')).toBeNull();
+    expect(screen.queryByText(/not yet generated/i)).toBeNull();
+    expect(document.querySelectorAll('.owner-summary-story').length).toBe(0);
+  });
+
+  // 2. Investment View renders when present.
+  it('renders the Deal Story investment view when present', () => {
+    render(
+      <OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} dealStory={makeDealStory()} />,
+    );
+
+    expect(screen.getByText('Deal Story')).toBeTruthy();
+    expect(screen.getByText(/Coverage and recurring distributions support/)).toBeTruthy();
+  });
+
+  // 3-4. Maximum 2 strengths / 2 risks render.
+  it('renders up to two strengths and two risks, each as its own entry', () => {
+    const story = makeDealStory({
+      key_strengths: ['Strength one.', 'Strength two.'],
+      key_risks: ['Risk one.', 'Risk two.'],
+    });
+    render(
+      <OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} dealStory={story} />,
+    );
+
+    const storySection = screen.getByLabelText('AI Interpretation');
+    const strengths = within(storySection).getByText('Strengths').closest('div');
+    const risks = within(storySection).getByText('Risks').closest('div');
+    expect(within(strengths as HTMLElement).getAllByRole('listitem').length).toBe(2);
+    expect(within(risks as HTMLElement).getAllByRole('listitem').length).toBe(2);
+    expect(screen.getByText('Strength two.')).toBeTruthy();
+    expect(screen.getByText('Risk two.')).toBeTruthy();
+  });
+
+  it('omits an empty strengths or risks column rather than rendering a bare heading', () => {
+    const story = makeDealStory({ key_strengths: [], key_risks: ['Only a risk.'] });
+    render(<OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} dealStory={story} />);
+
+    expect(screen.queryByText('Strengths')).toBeNull();
+    expect(screen.getByText('Risks')).toBeTruthy();
+  });
+
+  // 5. Model Gap renders when present.
+  it('renders the Model Gap when present', () => {
+    const story = makeDealStory({
+      model_gap:
+        "The stated refinance-and-hold strategy is not modeled in Anchor's current deterministic cash flows.",
+    });
+    render(<OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} dealStory={story} />);
+
+    expect(screen.getByText('Model Gap')).toBeTruthy();
+    expect(screen.getByText(/not modeled in Anchor's current deterministic cash flows/)).toBeTruthy();
+  });
+
+  // 6. Model Gap omitted when null.
+  it('omits the Model Gap section entirely when null', () => {
+    render(
+      <OwnerSummaryPanel
+        data={buildOwnerSummaryData(quickSource())}
+        dealStory={makeDealStory({ model_gap: null })}
+      />,
+    );
+
+    expect(screen.queryByText('Model Gap')).toBeNull();
+  });
+
+  // 7. AI content is visually distinguished from the deterministic metrics.
+  it('labels the Deal Story as AI Interpretation and never as a deterministic result', () => {
+    render(
+      <OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} dealStory={makeDealStory()} />,
+    );
+
+    expect(screen.getByText('AI Interpretation')).toBeTruthy();
+    const storySection = screen.getByLabelText('AI Interpretation');
+    // The AI block never borrows the hero-metric card treatment.
+    expect(storySection.querySelectorAll('.stat-card').length).toBe(0);
+    expect(storySection.querySelectorAll('.stat-value-primary').length).toBe(0);
+    // ...and the four deterministic hero cards keep theirs.
+    expect(document.querySelectorAll('.stat-value-primary').length).toBe(4);
+  });
+
+  it('places the Deal Story after every deterministic section', () => {
+    const data = buildOwnerSummaryData(quickSource({ breakEven: GOLDEN_BREAK_EVEN }));
+    render(<OwnerSummaryPanel data={data} dealStory={makeDealStory()} />);
+
+    const text = document.body.textContent ?? '';
+    expect(text.indexOf('Deal Story')).toBeGreaterThan(text.indexOf('Key Returns'));
+    expect(text.indexOf('Deal Story')).toBeGreaterThan(text.indexOf('Break-Even Highlights'));
+  });
+
+  // 8-9. Quick and Detailed render the identical Deal Story contract.
+  it('renders the Deal Story for a Quick summary', () => {
+    render(
+      <OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} dealStory={makeDealStory()} />,
+    );
+
+    expect(screen.getByText('Quick Underwrite')).toBeTruthy();
+    expect(screen.getByText('Deal Story')).toBeTruthy();
+  });
+
+  it('renders the Deal Story for a Detailed summary, identically', () => {
+    render(
+      <OwnerSummaryPanel
+        data={buildOwnerSummaryData(detailedSource())}
+        dealStory={makeDealStory()}
+      />,
+    );
+
+    expect(screen.getByText('Detailed Underwrite')).toBeTruthy();
+    expect(screen.getByText('Deal Story')).toBeTruthy();
+    expect(screen.getByText(/Coverage and recurring distributions support/)).toBeTruthy();
+  });
+
+  it('renders exactly what the contract supplies -- never slicing or re-ranking it', () => {
+    const story = makeDealStory({
+      key_strengths: ['First supplied strength.', 'Second supplied strength.'],
+    });
+    render(<OwnerSummaryPanel data={buildOwnerSummaryData(quickSource())} dealStory={story} />);
+
+    const items = within(
+      screen.getByText('Strengths').closest('div') as HTMLElement,
+    ).getAllByRole('listitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      'First supplied strength.',
+      'Second supplied strength.',
+    ]);
   });
 });
