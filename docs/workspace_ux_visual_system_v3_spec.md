@@ -644,6 +644,29 @@ Sprint C, Gates C1–C2 will **not**:
 Legacy panel internals stay as they are. They will look less refined than the
 shell until C3–C5. That is expected and acceptable.
 
+### 18.1 Shell-fit adjustments actually required (recorded during C2)
+
+Two legacy layouts were built for the pre-Sprint-C two-column page and broke
+badly in a full-width workspace. Both are CSS-only, scoped under
+`.workspace-body`, and change no markup, field, label, order, validation or
+value:
+
+- **Assumptions forms.** `.assumptions-form` was a sticky, internally-scrolling
+  320px column. In the full-width workspace it produced one enormous
+  single-file column of ~1130px-wide inputs holding one- and two-digit
+  numbers, which alone made Underwrite scroll for pages. The shell now drops
+  the sticky/max-height/overflow treatment inside the workspace and lays
+  `.assumptions-group-fields` out as `repeat(auto-fill, minmax(224px, 1fr))`.
+  Measured effect at 1440px: Detailed Underwrite fell from ~14 screens to
+  5.3, most of which is now the temporary Detailed Results section.
+- **Deal name.** A fixed `ch` width truncated real deal names at every width
+  (to "No…" at 1024px). The name input now flexes to the room the header
+  actually has, and below 1280px the header actions move to their own row so
+  the name keeps a full line.
+
+C3 restructures these forms properly; this is the minimum needed for C2's
+shell to be honest about what it looks like.
+
 ## 19. Deferred scope
 
 - **C3** — Underwrite redesign: Acquisition / Operations / Debt / Exit

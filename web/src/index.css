@@ -26,6 +26,71 @@
     sans-serif;
   --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 
+  /* =====================================================================
+     Sprint C Gate C1/C2 -- Workspace UX & Visual System V3 tokens.
+     docs/workspace_ux_visual_system_v3_spec.md sections 7, 9, 10.
+     The --color-* tokens above are retained: legacy panel internals still
+     use them, and C5 converges the two sets.
+     ===================================================================== */
+
+  /* Navigation (dark chrome) */
+  --nav-bg: #0d1a2d;
+  --nav-bg-elevated: #132339;
+  --nav-text: #e6ebf2;
+  --nav-text-muted: #8a9ab0;
+  --nav-hover: rgba(255, 255, 255, 0.06);
+  --nav-active: #1b2f4d;
+  --nav-active-text: #ffffff;
+  --nav-accent: #4d8df0;
+  --nav-border: rgba(255, 255, 255, 0.08);
+
+  /* Workspace (light) */
+  --app-bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-muted: #f9fafb;
+  --border: #e3e7ed;
+  --border-strong: #cbd2dc;
+  --text: #111826;
+  --text-secondary: #4a5568;
+  --text-muted: #77808f;
+
+  /* Accent and semantics */
+  --accent: #1d5fd0;
+  --accent-hover: #174ead;
+  --accent-soft: #eef4fd;
+  --accent-border: #c7dbf7;
+  --success: #1f7a3f;
+  --success-soft: #e6f4ec;
+  --warning: #8a5a06;
+  --warning-soft: #fdf1da;
+  --danger: #a72b2b;
+  --danger-soft: #fbeaea;
+  --focus-ring: 0 0 0 3px rgba(29, 95, 208, 0.28);
+  --focus-ring-dark: 0 0 0 3px rgba(120, 170, 255, 0.42);
+
+  /* Spacing scale (4px base) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* Radius and shadow */
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+
+  /* Layout */
+  --sidebar-width: 236px;
+  --sidebar-width-narrow: 200px;
+  --sidebar-width-rail: 64px;
+  --workspace-max: 1360px;
+
   color-scheme: light;
 }
 
@@ -35,7 +100,7 @@
 
 body {
   margin: 0;
-  background: var(--color-bg);
+  background: var(--app-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 14px;
@@ -47,107 +112,46 @@ body {
   min-height: 100vh;
 }
 
+/* =========================================================================
+   Sprint C Gate C2 -- application shell.
+
+   The old single-column page (brand strip, then one long stack of every
+   panel Anchor has) is replaced by a fixed navigation frame plus a single
+   scrolling workspace region: only the workspace scrolls, so no workspace
+   can require scrolling through another workspace's content.
+   ========================================================================= */
+
 .app-shell {
   display: flex;
-  flex-direction: column;
   min-height: 100vh;
-}
-
-.app-header {
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
-  padding: 1rem 2rem;
-}
-
-.app-header-brand {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  max-width: 1400px;
-  margin: 0 auto;
-}
-
-.app-header-logo {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-
-.app-header h1 {
-  margin: 0;
-  font-size: 1.3rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: var(--color-accent);
-}
-
-.app-header p {
-  margin: 0.1rem 0 0;
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
+  height: 100vh;
 }
 
 .app-main {
   flex: 1;
-  display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 1.5rem;
-  align-items: start;
-  padding: 1.5rem 2rem 3rem;
-  max-width: 1400px;
-  width: 100%;
-  margin: 0 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--app-bg);
 }
 
-@media (max-width: 900px) {
-  .app-main {
-    grid-template-columns: 1fr;
-  }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .intake-section {
-  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-}
-
-/* Detailed Operating Model V2.1 Gate 6 -- Quick/Detailed mode toggle */
-.operating-mode-toggle {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 0.5rem;
-  border-bottom: 1px solid var(--color-border);
-  padding-bottom: 0.75rem;
-}
-
-.mode-toggle-button {
-  appearance: none;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-control);
-  padding: 0.5rem 1rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--color-text-muted);
-  cursor: pointer;
-}
-
-.mode-toggle-button:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-}
-
-.mode-toggle-button-active {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  color: #fff;
-}
-
-.mode-toggle-button-active:hover {
-  color: #fff;
+  gap: var(--sp-3);
 }
 
 .section-heading {
@@ -1446,66 +1450,12 @@ body {
 }
 
 /* =========================================================================
-   Persistence Phase B -- Deal Bar and Deal Library
+   Persistence Phase B -- Deal Library
+   (The Deal Bar was retired in Sprint C Gate C2; its responsibilities moved
+   to the deal header and the global sidebar.)
    ========================================================================= */
 
-.deal-bar {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.deal-bar-row {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.deal-bar-identity {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.85rem;
-  flex-wrap: wrap;
-}
-
-.deal-name-field {
-  flex: 1 1 260px;
-  max-width: 420px;
-}
-
-.deal-bar-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.save-status {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.4rem 0.75rem;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.save-status-unsaved-deal,
-.save-status-unsaved-changes {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
-}
-
-.save-status-saved {
-  background: var(--color-positive-bg);
-  color: var(--color-positive);
-}
-
 .deal-library-panel {
-  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -1589,4 +1539,824 @@ body {
 .deal-library-delete-button:hover:not(:disabled) {
   border-color: var(--color-negative);
   color: var(--color-negative);
+}
+
+/* =========================================================================
+   Sprint C Gate C2 -- Workspace UX & Visual System V3
+   docs/workspace_ux_visual_system_v3_spec.md
+
+   Frame is dark, work is light. Hierarchy comes from type scale, weight and
+   spacing -- not from shadows or decorative color. Nothing here calculates
+   anything; this file only styles the shell that existing panels sit inside.
+   ========================================================================= */
+
+/* -------------------------------------------------------------------------
+   Global sidebar
+   ------------------------------------------------------------------------- */
+
+.app-sidebar {
+  flex: 0 0 var(--sidebar-width);
+  width: var(--sidebar-width);
+  background: var(--nav-bg);
+  color: var(--nav-text);
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-4) var(--sp-3) var(--sp-3);
+  gap: var(--sp-5);
+  overflow: hidden;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) 0;
+  min-width: 0;
+}
+
+.sidebar-brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-word {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--nav-active-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-nav-item {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 34px;
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nav-text);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0.15, 1),
+    color 150ms cubic-bezier(0.2, 0, 0.15, 1);
+}
+
+.sidebar-nav-item:hover:not(.sidebar-nav-item-disabled) {
+  background: var(--nav-hover);
+}
+
+.sidebar-nav-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-dark);
+}
+
+.sidebar-nav-item-active {
+  background: var(--nav-active);
+  border-left-color: var(--nav-accent);
+  color: var(--nav-active-text);
+  font-weight: 550;
+}
+
+.sidebar-nav-item-disabled {
+  color: var(--nav-text-muted);
+  cursor: default;
+  opacity: 0.65;
+}
+
+.nav-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: currentColor;
+  opacity: 0.85;
+}
+
+.sidebar-nav-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Recent Deals ---------------------------------------------------------- */
+
+.sidebar-deals {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--nav-border);
+}
+
+.sidebar-section-label {
+  margin: 0;
+  padding: 0 var(--sp-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--nav-text-muted);
+}
+
+.sidebar-deals-status {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-3);
+  font-size: 12.5px;
+  color: var(--nav-text-muted);
+}
+
+.sidebar-deal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.sidebar-deal-row {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nav-text);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0.15, 1);
+}
+
+.sidebar-deal-row:hover {
+  background: var(--nav-hover);
+}
+
+.sidebar-deal-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-dark);
+}
+
+.sidebar-deal-row-active {
+  background: var(--nav-active);
+  border-left-color: var(--nav-accent);
+}
+
+.nav-icon-deal {
+  opacity: 0.5;
+}
+
+.sidebar-deal-row-active .nav-icon-deal {
+  opacity: 1;
+  fill: var(--nav-accent);
+}
+
+.sidebar-deal-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.sidebar-deal-name {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-deal-row-active .sidebar-deal-name {
+  color: var(--nav-active-text);
+  font-weight: 550;
+}
+
+.sidebar-deal-meta {
+  font-size: 11.5px;
+  color: var(--nav-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-footer {
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--nav-border);
+}
+
+/* -------------------------------------------------------------------------
+   Deal header
+   ------------------------------------------------------------------------- */
+
+.deal-header {
+  flex-shrink: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: var(--sp-3) var(--sp-6);
+}
+
+.deal-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  max-width: var(--workspace-max);
+  margin: 0 auto;
+  min-height: 40px;
+}
+
+.deal-header-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  flex: 1 1 340px;
+}
+
+/* The name takes the room the row actually has, rather than a fixed
+   character count that truncates a real deal name at every width. */
+.deal-header-name-field {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The deal title reads as a title until you interact with it -- no input
+   chrome at rest, full affordance on hover and focus. */
+.deal-header-name-input {
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.011em;
+  text-overflow: ellipsis;
+  transition: border-color 150ms cubic-bezier(0.2, 0, 0.15, 1),
+    background-color 150ms cubic-bezier(0.2, 0, 0.15, 1);
+}
+
+.deal-header-name-input:hover {
+  border-color: var(--border);
+}
+
+.deal-header-name-input:focus {
+  outline: none;
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.deal-header-name-input::placeholder {
+  color: var(--text-muted);
+  font-weight: 550;
+}
+
+/* Operating mode ------------------------------------------------------- */
+
+.mode-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  flex-shrink: 0;
+}
+
+.mode-switch-tab {
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: var(--sp-1) var(--sp-3);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0.15, 1),
+    color 150ms cubic-bezier(0.2, 0, 0.15, 1);
+}
+
+.mode-switch-tab:hover {
+  color: var(--text);
+}
+
+.mode-switch-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.mode-switch-tab-active {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Header actions -------------------------------------------------------- */
+
+.deal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
+.save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.save-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.save-status-unsaved-deal,
+.save-status-unsaved-changes {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.save-status-saved {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.icon-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0.15, 1);
+}
+
+.icon-button:hover {
+  background: var(--surface-muted);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.icon-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.icon-button svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.deal-header-menu {
+  position: relative;
+}
+
+.deal-header-menu-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 200px;
+  padding: var(--sp-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.deal-header-menu-item {
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: var(--sp-2) var(--sp-3);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.deal-header-menu-item:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+.deal-header-menu-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.deal-header-menu-item:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.deal-header-menu-item-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.deal-header-menu-note {
+  margin: var(--sp-1) var(--sp-3) var(--sp-2);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: normal;
+}
+
+.deal-header-error {
+  max-width: var(--workspace-max);
+  margin: var(--sp-3) auto 0;
+}
+
+.btn-analyze {
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+}
+
+/* -------------------------------------------------------------------------
+   Workspace navigation
+   ------------------------------------------------------------------------- */
+
+.workspace-nav {
+  flex-shrink: 0;
+  display: flex;
+  gap: var(--sp-5);
+  padding: 0 var(--sp-6);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.workspace-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.workspace-tab {
+  appearance: none;
+  position: relative;
+  border: 0;
+  background: transparent;
+  padding: 0 2px;
+  height: 38px;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 550;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 150ms cubic-bezier(0.2, 0, 0.15, 1);
+}
+
+.workspace-tab::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: transparent;
+  border-radius: 2px 2px 0 0;
+  transition: background-color 180ms cubic-bezier(0.2, 0, 0.15, 1);
+}
+
+.workspace-tab:hover {
+  color: var(--text);
+}
+
+.workspace-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+.workspace-tab-active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.workspace-tab-active::after {
+  background: var(--accent);
+}
+
+/* -------------------------------------------------------------------------
+   Workspace content region -- the only part of the app that scrolls
+   ------------------------------------------------------------------------- */
+
+.workspace-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--sp-6) var(--sp-6) var(--sp-10);
+}
+
+.workspace-error {
+  max-width: var(--workspace-max);
+  margin: 0 auto var(--sp-4);
+}
+
+.workspace-panel {
+  max-width: var(--workspace-max);
+  margin: 0 auto;
+}
+
+.workspace-panel-head {
+  margin-bottom: var(--sp-5);
+}
+
+.workspace-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 620;
+  letter-spacing: -0.008em;
+  color: var(--text);
+}
+
+.workspace-subtitle {
+  margin: 3px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.workspace-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-width: 0;
+}
+
+/* Sprint C Gate C2 temporary home for the full engine output
+   (spec section 4.6). Set apart from the assumptions above it so the two
+   read as input and output, not as one undifferentiated stack. */
+.detailed-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-6);
+  border-top: 1px solid var(--border-strong);
+}
+
+.detailed-results-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.section-caption {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.library-view {
+  max-width: var(--workspace-max);
+  margin: 0 auto;
+  padding: var(--sp-6);
+  width: 100%;
+}
+
+/* -------------------------------------------------------------------------
+   Shell-level refinements to shared primitives
+   ------------------------------------------------------------------------- */
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.field-input:focus-visible {
+  outline: none;
+}
+
+/* Financial figures read as figures: aligned, comparable, scannable. */
+.stat-value,
+.info-value,
+.sensitivity-table td,
+.sensitivity-table th,
+.cash-flow-table td,
+.operating-statement-table td,
+.owner-return-schedule td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------------------
+   Responsive (spec section 13). Desktop first; the shell must not overflow
+   horizontally at any width.
+   ------------------------------------------------------------------------- */
+
+@media (max-width: 1279px) {
+  .app-sidebar {
+    flex-basis: var(--sidebar-width-narrow);
+    width: var(--sidebar-width-narrow);
+  }
+
+  .workspace-scroll,
+  .deal-header,
+  .workspace-nav {
+    padding-left: var(--sp-5);
+    padding-right: var(--sp-5);
+  }
+
+  .deal-header-row {
+    align-items: flex-start;
+  }
+
+  .deal-header-identity {
+    flex: 1 1 100%;
+  }
+
+  .deal-header-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 1023px) {
+  /* Collapse to an icon rail. Labels are hidden, so each row keeps its own
+     accessible name; the Recent Deals list is unusable at this width and is
+     hidden rather than truncated into meaninglessness -- the Deal Library
+     view remains one click away. */
+  .app-sidebar {
+    flex-basis: var(--sidebar-width-rail);
+    width: var(--sidebar-width-rail);
+    padding-left: var(--sp-2);
+    padding-right: var(--sp-2);
+    align-items: center;
+  }
+
+  .sidebar-nav-label,
+  .sidebar-brand-word,
+  .sidebar-section-label,
+  .sidebar-deals-status,
+  .sidebar-deal-list {
+    display: none;
+  }
+
+  .sidebar-deals {
+    flex: 1;
+    border-top: 1px solid var(--nav-border);
+  }
+
+  .sidebar-nav-item {
+    justify-content: center;
+    padding: 0;
+    border-left-width: 0;
+  }
+
+  .sidebar-brand {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .deal-header-row {
+    align-items: flex-start;
+  }
+
+  .deal-header-identity {
+    flex: 1 1 100%;
+  }
+
+  .deal-header-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .intake-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-scroll,
+  .deal-header,
+  .workspace-nav {
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
+  }
+
+  .workspace-nav {
+    gap: var(--sp-4);
+  }
+}
+
+@media (max-width: 767px) {
+  .deal-header-identity {
+    flex-wrap: wrap;
+  }
+
+  .deal-header-name-field {
+    flex: 1 1 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Sprint C Gate C2 -- shell-fit adjustments for legacy panels.
+
+   These panels were laid out for the pre-Sprint-C two-column page, where the
+   assumptions form lived in a 320px sticky column. In the full-width
+   workspace that produced one enormous single-file column of inputs. This
+   is layout only: no field, label, order, validation or value changes -- the
+   forms' own markup is untouched, and C3 redesigns them properly.
+   ------------------------------------------------------------------------- */
+
+.workspace-body .assumptions-form {
+  position: static;
+  max-height: none;
+  overflow: visible;
+}
+
+.workspace-body .field-grid {
+  overflow-y: visible;
+  flex: initial;
+  padding-right: 0;
+  margin-right: 0;
+  gap: var(--sp-6);
+}
+
+/* Assumptions read as a dense grid of figures rather than a stack of
+   full-width text inputs. */
+.workspace-body .assumptions-group-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(224px, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+  align-items: start;
+}
+
+.workspace-body .intake-grid {
+  gap: var(--sp-5);
+}
+
+/* The submit button belongs to the form, not to the full workspace width. */
+.workspace-body .analyze-button {
+  width: auto;
+  align-self: flex-start;
+  min-width: 180px;
+}
+
+@media (max-width: 1023px) {
+  .workspace-body .assumptions-group-fields {
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  }
 }
