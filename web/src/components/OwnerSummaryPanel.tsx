@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { BreakEvenMetric, BreakEvenResult, DealStory } from '../types';
 import type { OwnerSummaryData } from '../ownerSummary';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
@@ -8,16 +9,27 @@ interface StatCardProps {
   caption?: string;
 }
 
-/** Mirrors `ResultsPanel`'s own `StatCard` exactly (same classes, same
- * shape) -- deliberately not imported from there, since `ResultsPanel` does
- * not export it; duplicating one tiny presentational helper is simpler and
- * safer than exporting a private component across files for one reuse. */
+/** Sprint C Gate C4: the owner-facing hero metric. A light card with a
+ * subtle label and a strong numeral -- no heavy top rule, no grey container,
+ * no nesting. Presentation only; the value arrives already formatted. */
 function StatCard({ label, value, caption }: StatCardProps) {
   return (
-    <div className="stat-card stat-card-primary">
-      <span className="stat-label">{label}</span>
-      <span className="stat-value stat-value-primary">{value}</span>
-      {caption && <span className="stat-caption">{caption}</span>}
+    <div className="metric-card">
+      <span className="metric-card-label">{label}</span>
+      <span className="metric-card-value">{value}</span>
+      {caption && <span className="metric-card-caption">{caption}</span>}
+    </div>
+  );
+}
+
+/** A compact owner-level figure used where a full card would be too loud --
+ * the break-even highlights and the supporting return strip. */
+function MiniMetric({ label, value, caption }: StatCardProps) {
+  return (
+    <div className="mini-metric">
+      <span className="mini-metric-label">{label}</span>
+      <span className="mini-metric-value">{value}</span>
+      {caption && <span className="mini-metric-caption">{caption}</span>}
     </div>
   );
 }
@@ -153,6 +165,12 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
   const { identity, dealContext, keyReturns, ownerReturns, investmentSnapshot, debtRisk, operatingStory, breakEvenHighlights } =
     data;
 
+  // Sprint C Gate C4: The Play is clamped to a couple of lines so a long
+  // business plan cannot push the owner story below the fold. Local
+  // presentation state only -- it touches no deal, analysis or AI state.
+  const [isPlayExpanded, setIsPlayExpanded] = useState(false);
+  const isPlayLong = dealContext !== null && dealContext.length > 170;
+
   return (
     <div className="owner-summary-panel">
       <header className="owner-summary-header">
@@ -163,15 +181,33 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
       </header>
 
       {dealContext !== null && (
-        <section className="card owner-summary-play">
-          <h3 className="card-title">The Play</h3>
-          <p className="owner-summary-play-text">{dealContext}</p>
+        <section className="owner-summary-play">
+          <span className="owner-summary-play-label">The Play</span>
+          <p
+            className={
+              isPlayLong && !isPlayExpanded
+                ? 'owner-summary-play-text owner-summary-play-text-clamped'
+                : 'owner-summary-play-text'
+            }
+          >
+            {dealContext}
+          </p>
+          {isPlayLong && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              aria-expanded={isPlayExpanded}
+              onClick={() => setIsPlayExpanded((open) => !open)}
+            >
+              {isPlayExpanded ? 'Less' : 'More'}
+            </button>
+          )}
         </section>
       )}
 
-      <section className="headline-stats">
-        <h3 className="card-title">Key Returns</h3>
-        <div className="stat-grid">
+      <section className="owner-summary-returns" aria-label="Key Returns">
+        <h3 className="section-heading">Key Returns</h3>
+        <div className="metric-row">
           <StatCard label="Levered IRR" value={formatPercent(keyReturns.leveredIrr)} />
           <StatCard label="Equity Multiple" value={formatMultiple(keyReturns.equityMultiple)} />
           <StatCard
@@ -184,13 +220,8 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
             caption={`Minimum DSCR: ${formatMultiple(keyReturns.minDscr)}`}
           />
         </div>
-        {/* Sprint B Gate B5 density pass: the Tier 2 strip now carries only
-            the two supporting figures that appear nowhere else on the page.
-            Year 1 Debt Yield moved to Debt / Risk + Owner Returns (its two
-            genuinely different readings -- lender credit metric vs. owner
-            recurring yield) and Year 1 NOI to Investment Snapshot +
-            Operating Story; both previously appeared three times, which
-            added no information. */}
+        {/* Sprint B Gate B5 density pass, kept: the supporting strip carries
+            only the two figures that appear nowhere else on the page. */}
         <div className="owner-summary-supporting-rows">
           <InfoRow label="Unlevered IRR" value={formatPercent(keyReturns.unleveredIrr)} />
           <InfoRow
@@ -200,24 +231,16 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
         </div>
       </section>
 
-      {/* Gate B5 hierarchy pass: the Deal Story sits immediately under the
-          hero metrics it interprets, not at the very bottom of the page.
-          At the bottom (its Gate B4 position) the AI Investment View fell
-          roughly 1,400px down at 1440px wide -- well outside the ten-second
-          read the summary exists to serve. It stays visually subordinate
-          here: muted surface, explicit "AI Interpretation" badge, body
-          type, and never a `stat-card`. */}
+      {/* Gate B5 hierarchy pass, kept: the Deal Story sits immediately under
+          the hero metrics it interprets, visually subordinate to every
+          deterministic figure. */}
       {dealStory !== null && <DealStorySection dealStory={dealStory} />}
 
-      <div className="owner-summary-two-col">
-        {/* Gate B5: Investment Snapshot carries the asset/price/exit story
-            (restoring Year 1 NOI and Going-In Cap Rate, which the B1 spec
-            Section 4.C specifies and Gate B2 already plumbs but Gate B3
-            never rendered). The leverage terms it previously repeated --
-            LTV, Interest Rate, IO Period -- now appear once, in Debt /
-            Risk, beside the Loan Amount and coverage metrics that give them
-            meaning. */}
-        <section className="card">
+      {/* Sprint C Gate C4: the four supporting panels sit in one compact row
+          rather than two stacked two-column rows, which is most of what kept
+          Overview above one viewport. Identical fields and values. */}
+      <div className="owner-summary-grid">
+        <section className="card owner-summary-card">
           <h3 className="card-title">Investment Snapshot</h3>
           <InfoRow label="Purchase Price" value={formatCurrency(investmentSnapshot.purchasePrice)} />
           <InfoRow label="Year 1 NOI" value={formatCurrency(investmentSnapshot.yearOneNoi)} />
@@ -229,7 +252,7 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
           <InfoRow label="Exit Cap Rate" value={formatPercent(investmentSnapshot.exitCapRate)} />
         </section>
 
-        <section className="card">
+        <section className="card owner-summary-card">
           <h3 className="card-title">Debt / Risk</h3>
           <InfoRow label="Loan Amount" value={formatCurrency(debtRisk.loanAmount)} />
           <InfoRow label="LTV" value={formatPercent(debtRisk.ltv)} />
@@ -240,10 +263,8 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
           <InfoRow label="Minimum DSCR" value={formatMultiple(debtRisk.minDscr)} />
           <InfoRow label="Year 1 Debt Yield" value={formatPercent(debtRisk.yearOneDebtYield)} />
         </section>
-      </div>
 
-      <div className="owner-summary-two-col">
-        <section className="card">
+        <section className="card owner-summary-card">
           <h3 className="card-title">Operating Story</h3>
           <InfoRow label="Year 1 NOI" value={formatCurrency(operatingStory.yearOneNoi)} />
           {investmentSnapshot.holdPeriod > 1 && (
@@ -262,7 +283,7 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
           )}
         </section>
 
-        <section className="card">
+        <section className="card owner-summary-card">
           <h3 className="card-title">Owner Returns</h3>
           <InfoRow
             label="Year 1 Levered CoC"
@@ -276,21 +297,29 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
         </section>
       </div>
 
+      {/* Sprint C Gate C4: three compact owner-level figures instead of a
+          full-width table-style block. Same three break-evens, same
+          formatters, same "no solution within tested range" honesty. */}
       {breakEvenHighlights !== null && (
-        <section className="card">
-          <h3 className="card-title">Break-Even Highlights</h3>
-          <InfoRow
-            label={`Max Purchase Price (${BREAK_EVEN_METRIC_LABEL[breakEvenHighlights.maxPurchasePrice.metric]})`}
-            value={formatBreakEvenSolvedValue(breakEvenHighlights.maxPurchasePrice, formatCurrency)}
-          />
-          <InfoRow
-            label={`Max Exit Cap Rate (${BREAK_EVEN_METRIC_LABEL[breakEvenHighlights.maxExitCapRate.metric]})`}
-            value={formatBreakEvenSolvedValue(breakEvenHighlights.maxExitCapRate, formatPercent)}
-          />
-          <InfoRow
-            label={`Max Interest Rate (${BREAK_EVEN_METRIC_LABEL[breakEvenHighlights.maxInterestRate.metric]})`}
-            value={formatBreakEvenSolvedValue(breakEvenHighlights.maxInterestRate, formatPercent)}
-          />
+        <section className="owner-summary-breakeven" aria-label="Break-Even Highlights">
+          <h3 className="section-heading">Break-Even Highlights</h3>
+          <div className="mini-metric-row">
+            <MiniMetric
+              label="Max Purchase Price"
+              value={formatBreakEvenSolvedValue(breakEvenHighlights.maxPurchasePrice, formatCurrency)}
+              caption={BREAK_EVEN_METRIC_LABEL[breakEvenHighlights.maxPurchasePrice.metric]}
+            />
+            <MiniMetric
+              label="Max Exit Cap Rate"
+              value={formatBreakEvenSolvedValue(breakEvenHighlights.maxExitCapRate, formatPercent)}
+              caption={BREAK_EVEN_METRIC_LABEL[breakEvenHighlights.maxExitCapRate.metric]}
+            />
+            <MiniMetric
+              label="Max Interest Rate"
+              value={formatBreakEvenSolvedValue(breakEvenHighlights.maxInterestRate, formatPercent)}
+              caption={BREAK_EVEN_METRIC_LABEL[breakEvenHighlights.maxInterestRate.metric]}
+            />
+          </div>
         </section>
       )}
     </div>

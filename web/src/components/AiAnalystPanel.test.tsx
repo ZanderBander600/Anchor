@@ -62,16 +62,24 @@ describe('AiAnalystPanel', () => {
       <AiAnalystPanel analysis={makeAnalysis()} isLoading={false} error={null} onGenerate={vi.fn()} />,
     );
 
-    expect(screen.getByText('Investment View')).toBeTruthy();
-    expect(screen.getByText('Executive Summary')).toBeTruthy();
-    expect(screen.getByText('Key Strengths')).toBeTruthy();
-    expect(screen.getByText('Key Risks')).toBeTruthy();
-    expect(screen.getByText('Return Drivers')).toBeTruthy();
-    expect(screen.getByText('Downside Analysis')).toBeTruthy();
-    expect(screen.getByText('Capital Structure')).toBeTruthy();
-    expect(screen.getByText('Break-Even Interpretation')).toBeTruthy();
-    expect(screen.getByText('Questions to Investigate')).toBeTruthy();
-    expect(screen.getByText('Confidence / Data Gaps')).toBeTruthy();
+    // Sprint C Gate C4 gave the report a section list, so each title now
+    // appears both as a nav item and as the section's own heading. These
+    // assert the headings -- the report content itself.
+    const headings = Array.from(document.querySelectorAll('.ai-analyst-section-title')).map(
+      (node) => node.textContent,
+    );
+    expect(headings).toEqual([
+      'Investment View',
+      'Executive Summary',
+      'Key Strengths',
+      'Key Risks',
+      'Return Drivers',
+      'Downside Analysis',
+      'Capital Structure',
+      'Break-Even Interpretation',
+      'Questions to Investigate',
+      'Confidence / Data Gaps',
+    ]);
 
     expect(
       screen.getByText('Levered IRR clears the target hurdle at baseline.'),

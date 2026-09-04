@@ -758,6 +758,32 @@ async function goToOperatingStatement(user: ReturnType<typeof userEvent.setup>) 
   await user.click(screen.getByRole('tab', { name: 'Operating Statement' }));
 }
 
+/** The Return Sensitivity panel's own heading, or null when no sensitivity
+ * output is rendered. Scoped to the panel because Gate C4's Risk sub-nav
+ * carries an item of the same name. */
+function sensitivityHeading(): HTMLElement | null {
+  const nodes = Array.from(document.querySelectorAll('.sensitivity-panel .card-title'));
+  return (nodes.find((n) => n.textContent === 'Return Sensitivity') as HTMLElement) ?? null;
+}
+
+/** The Return Sensitivity panel itself, for value assertions that must not
+ * pick up the Debt Sensitivity matrices -- Gate C4 mounts both. */
+function returnSensitivityPanel(): HTMLElement {
+  const panel = sensitivityHeading()?.closest('.sensitivity-panel');
+  if (!panel) {
+    throw new Error('No Return Sensitivity panel is rendered.');
+  }
+  return panel as HTMLElement;
+}
+
+/** One AI report section's own heading, or null when no report is rendered.
+ * Scoped to the report body because Gate C4's section list carries items of
+ * the same names. */
+function aiSectionHeading(title: string): HTMLElement | null {
+  const nodes = Array.from(document.querySelectorAll('.ai-analyst-section-title'));
+  return (nodes.find((n) => n.textContent === title) as HTMLElement) ?? null;
+}
+
 function makeAiAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
   return {
     executive_summary: 'Five-year hold with moderate leverage.',
@@ -1219,11 +1245,11 @@ describe('Sensitivity analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    expect(screen.queryByText('Sensitivity Analysis')).toBeNull();
+    expect(sensitivityHeading()).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
-    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
+    await waitFor(() => expect(sensitivityHeading()).not.toBeNull());
     expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
   });
 
@@ -1234,7 +1260,7 @@ describe('Sensitivity analysis workflow', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
-    await screen.findByText('Sensitivity Analysis');
+    await waitFor(() => expect(sensitivityHeading()).not.toBeNull());
 
     expect(mockFetchSensitivityPresets).toHaveBeenCalledWith(mockAnalyze.mock.calls[0][0]);
   });
@@ -1246,11 +1272,11 @@ describe('Sensitivity analysis workflow', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
-    await screen.findByText('Sensitivity Analysis');
+    await waitFor(() => expect(sensitivityHeading()).not.toBeNull());
 
     await user.type(screen.getByLabelText(/^Current NOI/), '1');
 
-    expect(screen.queryByText('Sensitivity Analysis')).toBeNull();
+    expect(sensitivityHeading()).toBeNull();
   });
 
   it('does not corrupt the successful base results when the sensitivity request fails', async () => {
@@ -1418,6 +1444,7 @@ describe('Break-even analysis workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Break-Even Analysis');
     await goTo(user, 'Risk');
+    await user.click(screen.getByRole('tab', { name: 'Break-Even' }));
     expect(screen.getAllByText('for 10.00% Levered IRR').length).toBe(3);
 
     mockFetchBreakEvenAnalysis.mockResolvedValueOnce(
@@ -1524,7 +1551,7 @@ describe('Break-even analysis workflow', () => {
 
     expect(await screen.findByText('The break-even request failed.')).toBeTruthy();
     expect(screen.getAllByText('7.91%').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Sensitivity Analysis')).toBeTruthy();
+    expect(sensitivityHeading()).not.toBeNull();
     expect(screen.queryByText('Maximum Purchase Price')).toBeNull();
   });
 
@@ -1585,7 +1612,7 @@ describe('AI Analyst workflow', () => {
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
 
-    expect(await screen.findByText('Investment View')).toBeTruthy();
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
     expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
     expect(mockFetchAIAnalysis).toHaveBeenCalledWith(
       mockAnalyze.mock.calls[0][0],
@@ -1653,7 +1680,7 @@ describe('AI Analyst workflow', () => {
     expect(await screen.findByText('OPENAI_API_KEY is not configured.')).toBeTruthy();
     expect(screen.getAllByText('7.91%').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Break-Even Analysis')).toBeTruthy();
-    expect(screen.getByText('Sensitivity Analysis')).toBeTruthy();
+    expect(sensitivityHeading()).not.toBeNull();
   });
 
   it('clears AI output when a base assumption is edited', async () => {
@@ -1666,12 +1693,12 @@ describe('AI Analyst workflow', () => {
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
-    await screen.findByText('Investment View');
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
 
     await user.type(screen.getByLabelText(/^Current NOI/), '1');
 
     expect(screen.queryByText('Anchor AI Analyst')).toBeNull();
-    expect(screen.queryByText('Investment View')).toBeNull();
+    expect(aiSectionHeading('Investment View')).toBeNull();
   });
 
   it('clears AI output when a break-even hurdle changes', async () => {
@@ -1684,14 +1711,14 @@ describe('AI Analyst workflow', () => {
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
-    await screen.findByText('Investment View');
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
 
     const irrInput = screen.getByLabelText(/^Target Levered IRR/);
     await user.clear(irrInput);
     await user.type(irrInput, '12');
 
     await waitFor(() => {
-      expect(screen.queryByText('Investment View')).toBeNull();
+      expect(aiSectionHeading('Investment View')).toBeNull();
     });
     // The AI section itself remains -- only its prior output is cleared,
     // and no new AI request is spent automatically (still just the one
@@ -1736,9 +1763,9 @@ describe('AI Analyst workflow', () => {
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
-    await screen.findByText('Investment View');
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
 
-    expect(document.body.innerHTML).not.toMatch(/sk-[A-Za-z0-9]/);
+    expect(document.body.innerHTML).not.toMatch(/sk-[A-Za-z0-9]{12,}/);
     expect(document.body.innerHTML.toLowerCase()).not.toContain('openai_api_key');
   });
 });
@@ -3586,12 +3613,13 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     render(<App />);
     await analyzeDetailedGoldenDeal(user);
 
-    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
+    await waitFor(() => expect(sensitivityHeading()).not.toBeNull());
     await goTo(user, 'Risk');
     // The Detailed-only preset bundle has no exit_cap_noi_growth member --
     // that tab must never appear for a Detailed result.
     expect(screen.queryByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeNull();
     expect(screen.getByRole('tab', { name: 'Purchase Price × Exit Cap' })).toBeTruthy();
+    await user.click(screen.getByRole('tab', { name: 'Debt Sensitivity' }));
     expect(screen.getByRole('tab', { name: 'Interest Rate × LTV' })).toBeTruthy();
   });
 
@@ -3693,27 +3721,27 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     // Quick first -- its default mocked matrix (41%-64%) never contains 9.00%.
     fillGoldenDeal();
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
-    await screen.findByText('Sensitivity Analysis');
-    expect(screen.getAllByText(/^50\.00%/).length).toBeGreaterThan(0);
-    expect(screen.queryAllByText(/^9\.00%/)).toHaveLength(0);
+    await waitFor(() => expect(sensitivityHeading()).not.toBeNull());
+    expect(within(returnSensitivityPanel()).getAllByText(/^50\.00%/).length).toBeGreaterThan(0);
+    expect(within(returnSensitivityPanel()).queryAllByText(/^9\.00%/)).toHaveLength(0);
 
     // Switch to Detailed -- no results yet, so no sensitivity/break-even at all.
     await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
-    expect(screen.queryByText('Sensitivity Analysis')).toBeNull();
+    expect(sensitivityHeading()).toBeNull();
     expect(screen.queryByText('Break-Even Analysis')).toBeNull();
 
     // Analyze Detailed -- its own distinctive baseline (9.00%, unique to its
     // mocked matrix), never Quick's 50.00%.
     await analyzeDetailedGoldenDeal(user);
-    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
-    expect(screen.getAllByText(/^9\.00%/).length).toBeGreaterThan(0);
-    expect(screen.queryAllByText(/^50\.00%/)).toHaveLength(0);
+    await waitFor(() => expect(sensitivityHeading()).not.toBeNull());
+    expect(within(returnSensitivityPanel()).getAllByText(/^9\.00%/).length).toBeGreaterThan(0);
+    expect(within(returnSensitivityPanel()).queryAllByText(/^50\.00%/)).toHaveLength(0);
 
     // Switch back to Quick -- its original sensitivity is still there, untouched.
     await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
-    expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
-    expect(screen.getAllByText(/^50\.00%/).length).toBeGreaterThan(0);
-    expect(screen.queryAllByText(/^9\.00%/)).toHaveLength(0);
+    await waitFor(() => expect(sensitivityHeading()).not.toBeNull());
+    expect(within(returnSensitivityPanel()).getAllByText(/^50\.00%/).length).toBeGreaterThan(0);
+    expect(within(returnSensitivityPanel()).queryAllByText(/^9\.00%/)).toHaveLength(0);
     expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
     expect(mockFetchDetailedSensitivityPresets).toHaveBeenCalledTimes(1);
   });
@@ -3722,7 +3750,7 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     const user = userEvent.setup();
     render(<App />);
     await analyzeDetailedGoldenDeal(user);
-    await screen.findByText('Sensitivity Analysis');
+    await waitFor(() => expect(sensitivityHeading()).not.toBeNull());
     await goTo(user, 'Risk');
 
     // Default tab falls back to purchase_price_exit_cap (Detailed has no
@@ -3730,6 +3758,7 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     // the grid rendering "9.00%", rendered raw, never recomputed.
     expect(screen.getAllByText(/^9\.00%/).length).toBeGreaterThan(0);
 
+    await user.click(screen.getByRole('tab', { name: 'Debt Sensitivity' }));
     await user.click(screen.getByRole('tab', { name: 'Interest Rate × LTV' }));
     // The DSCR variant's mocked baseline (2.00x) renders once that tab/metric is selected.
     await user.click(screen.getByRole('button', { name: 'Year 1 DSCR' }));
@@ -4965,13 +4994,13 @@ describe('Deal Context (Gate A4)', () => {
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
-    expect(await screen.findByText('Investment View')).toBeTruthy();
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
 
     fireEvent.change(screen.getByLabelText('Deal Context'), {
       target: { value: 'Now a refinance-and-hold strategy.' },
     });
 
-    expect(screen.queryByText('Investment View')).toBeNull();
+    expect(aiSectionHeading('Investment View')).toBeNull();
     expect(screen.getByRole('button', { name: 'Generate AI Analysis' })).toBeTruthy();
     // Deterministic results remain -- only the stale AI output was cleared.
     expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
@@ -5139,7 +5168,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
-    expect(await screen.findByText('Investment View')).toBeTruthy();
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
     await waitFor(() =>
       expect(mockUpdateDealAiSnapshot).toHaveBeenCalledWith('deal-a', makeAiAnalysis(), 'fp-ai'),
     );
@@ -5147,7 +5176,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     mockGetDeal.mockResolvedValueOnce(dealB);
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[1]);
-    expect(screen.queryByText('Investment View')).toBeNull();
+    expect(aiSectionHeading('Investment View')).toBeNull();
 
     mockGetDeal.mockResolvedValueOnce({
       ...dealA,
@@ -5157,7 +5186,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
 
-    expect(await screen.findByText('Investment View')).toBeTruthy();
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
     expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
   });
 
@@ -5178,7 +5207,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
-    expect(await screen.findByText('Investment View')).toBeTruthy();
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
     await waitFor(() =>
       expect(mockUpdateDealAiSnapshot).toHaveBeenCalledWith('detailed-a', makeAiAnalysis(), 'fp-ai'),
     );
@@ -5186,7 +5215,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     mockGetDeal.mockResolvedValueOnce(dealB);
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[1]);
-    expect(screen.queryByText('Investment View')).toBeNull();
+    expect(aiSectionHeading('Investment View')).toBeNull();
 
     mockGetDeal.mockResolvedValueOnce({
       ...dealA,
@@ -5196,7 +5225,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
 
-    expect(await screen.findByText('Investment View')).toBeTruthy();
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
     expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1);
   });
 
@@ -5214,14 +5243,14 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
     expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Investment View')).toBeTruthy();
+    expect(aiSectionHeading('Investment View')).not.toBeNull();
 
     fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
       target: { value: '60000000' },
     });
 
     expect(screen.queryByText('Key Returns')).toBeNull();
-    expect(screen.queryByText('Investment View')).toBeNull();
+    expect(aiSectionHeading('Investment View')).toBeNull();
   });
 
   it('saving a changed financial assumption never re-attaches the now-stale analysis/AI snapshot', async () => {
@@ -5270,14 +5299,14 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
     expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Investment View')).toBeTruthy();
+    expect(aiSectionHeading('Investment View')).not.toBeNull();
 
     fireEvent.change(screen.getByLabelText('Deal Context'), {
       target: { value: 'Updated strategy.' },
     });
 
     expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText('Investment View')).toBeNull();
+    expect(aiSectionHeading('Investment View')).toBeNull();
   });
 
   it('saving a Deal-Context-only edit preserves the analysis snapshot and clears the AI snapshot', async () => {
@@ -5345,7 +5374,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
-    await screen.findByText('Investment View');
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
 
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
@@ -5636,7 +5665,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     expect(await screen.findByText('Deal Story')).toBeTruthy();
     expect(screen.getByText('AI Interpretation')).toBeTruthy();
     // ...and the unchanged full AI Analyst report, from the same one call.
-    expect(screen.getByText('Executive Summary')).toBeTruthy();
+    expect(aiSectionHeading('Executive Summary')).not.toBeNull();
     expect(screen.getByText('Five-year hold with moderate leverage.')).toBeTruthy();
     expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
   });
@@ -5748,7 +5777,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
 
     // The full report still restores; only the Deal Story is absent.
     expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Investment View')).toBeTruthy();
+    expect(aiSectionHeading('Investment View')).not.toBeNull();
     expect(screen.queryByText('Deal Story')).toBeNull();
   });
 
@@ -5773,7 +5802,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
 
     expect(screen.queryByText('Deal Story')).toBeNull();
     expect(screen.queryByText('Key Returns')).toBeNull();
-    expect(screen.queryByText('Investment View')).toBeNull();
+    expect(aiSectionHeading('Investment View')).toBeNull();
   });
 
   it('a Deal Context edit removes the Deal Story but preserves the deterministic summary', async () => {
@@ -5819,6 +5848,8 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     await screen.findByText('Deal Story');
 
     expect(screen.getByText('Anchor AI Analyst')).toBeTruthy();
+    // Gate C4 gave the report a section list, so each title appears as both
+    // a nav item and the section's own heading -- assert the headings.
     for (const section of [
       'Executive Summary',
       'Return Drivers',
@@ -5828,7 +5859,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
       'Questions to Investigate',
       'Confidence / Data Gaps',
     ]) {
-      expect(screen.getByText(section)).toBeTruthy();
+      expect(aiSectionHeading(section)).not.toBeNull();
     }
   });
 
@@ -6186,10 +6217,10 @@ describe('Sprint C Gate C2 -- app shell', () => {
 
     await goTo(user, 'Risk');
 
-    expect(within(panel('risk')).getByText('Sensitivity Analysis')).toBeTruthy();
+    expect(sensitivityHeading()).not.toBeNull();
     expect(within(panel('risk')).getByText('Break-Even Analysis')).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeTruthy();
-    expect(within(panel('underwrite')).queryByText('Sensitivity Analysis')).toBeNull();
+    expect(within(panel('underwrite')).queryByRole('heading', { name: 'Return Sensitivity' })).toBeNull();
   });
 
   it('24. the full AI Analyst is the AI Analyst workspace, not Overview', async () => {
@@ -6334,7 +6365,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     // Sensitivity/break-even are not persisted -- C2 changes no persistence
     // and fabricates nothing.
     expect(within(panel('risk')).getByText(/Run/)).toBeTruthy();
-    expect(within(panel('risk')).queryByText('Sensitivity Analysis')).toBeNull();
+    expect(within(panel('risk')).queryByRole('heading', { name: 'Return Sensitivity' })).toBeNull();
   });
 
   it('31. a financial edit still invalidates the analysis, seen from Overview', async () => {
@@ -6365,7 +6396,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
 
     // Deterministic output survives; the now-stale AI interpretation does not.
     expect(panel('overview').querySelector('.owner-summary-panel')).toBeTruthy();
-    expect(within(panel('risk')).getByText('Sensitivity Analysis')).toBeTruthy();
+    expect(sensitivityHeading()).not.toBeNull();
     expect(screen.queryByText('Five-year hold with moderate leverage.')).toBeNull();
   });
 
@@ -6915,7 +6946,7 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
 
     // Deterministic output survives; the stale AI interpretation does not.
     expect(panel('overview').querySelector('.owner-summary-panel')).toBeTruthy();
-    expect(within(panel('risk')).getByText('Sensitivity Analysis')).toBeTruthy();
+    expect(sensitivityHeading()).not.toBeNull();
     expect(screen.queryByText('Five-year hold with moderate leverage.')).toBeNull();
     expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
   });
@@ -7131,5 +7162,491 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
     debtTab.focus();
     await user.keyboard('{Enter}');
     expect(activeUnderwriteTab()).toBe('Debt');
+  });
+});
+
+// ===========================================================================
+// Sprint C Gate C4 -- Overview / Risk / AI Analyst / Documents redesign.
+//
+// The same navigation-over-scrolling philosophy applied to the four
+// remaining workspaces: compact Overview, Risk split into three peer views,
+// an AI report with a section list, and Documents split by source.
+// ===========================================================================
+
+function riskViewPanel(id: string): HTMLElement {
+  const node = document.getElementById(`risk-panel-${id}`);
+  if (node === null) {
+    throw new Error(`No ${id} risk panel is rendered.`);
+  }
+  return node as HTMLElement;
+}
+
+function documentsViewPanel(id: string): HTMLElement {
+  const node = document.getElementById(`documents-panel-${id}`);
+  if (node === null) {
+    throw new Error(`No ${id} documents panel is rendered.`);
+  }
+  return node as HTMLElement;
+}
+
+function aiSectionPanel(id: string): HTMLElement {
+  const node = document.getElementById(`ai-section-panel-${id}`);
+  if (node === null) {
+    throw new Error(`No ${id} AI section panel is rendered.`);
+  }
+  return node as HTMLElement;
+}
+
+async function openRiskView(user: ReturnType<typeof userEvent.setup>, label: string) {
+  await goTo(user, 'Risk');
+  await user.click(
+    within(document.querySelector('[aria-label="Risk views"]') as HTMLElement).getByRole('tab', {
+      name: label,
+    }),
+  );
+}
+
+describe('Sprint C Gate C4 -- Overview', () => {
+  it('renders the compact owner story: The Play, Key Returns, supporting panels', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'Overview');
+
+    const overview = within(panel('overview'));
+    expect(overview.getByText('Key Returns')).toBeTruthy();
+    expect(overview.getByText('Investment Snapshot')).toBeTruthy();
+    expect(overview.getByText('Debt / Risk')).toBeTruthy();
+    expect(overview.getByText('Operating Story')).toBeTruthy();
+    // Four hero metric cards, in the light Gate C4 treatment.
+    expect(panel('overview').querySelectorAll('.metric-card').length).toBe(4);
+  });
+
+  it('shows The Play in body type, clamped, with an expander for long context', async () => {
+    const user = userEvent.setup();
+    const longPlay =
+      'Acquire a functional, well-located industrial asset at a basis below replacement cost ' +
+      'with mark-to-market upside through lease-up, rent growth, and operational efficiency in ' +
+      'an institutional-quality, supply-constrained submarket with durable tenant demand.';
+    const deal = makeDeal({ analysis_snapshot: makeResults(), deal_context: longPlay });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(activeWorkspace()).toBe('Overview'));
+
+    const play = panel('overview').querySelector('.owner-summary-play-text') as HTMLElement;
+    expect(play.textContent).toBe(longPlay);
+    expect(play.className).toContain('owner-summary-play-text-clamped');
+    // Not the old long italic pull-quote.
+    expect(within(panel('overview')).getByText('The Play')).toBeTruthy();
+
+    await user.click(within(panel('overview')).getByRole('button', { name: 'More' }));
+    expect(
+      (panel('overview').querySelector('.owner-summary-play-text') as HTMLElement).className,
+    ).not.toContain('clamped');
+  });
+
+  it('renders the Deal Story on Overview when AI has produced one', async () => {
+    const user = userEvent.setup();
+    mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysisWithStory());
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Deal Story');
+
+    await goTo(user, 'Overview');
+    expect(within(panel('overview')).getByText('Deal Story')).toBeTruthy();
+    expect(within(panel('overview')).getByText('AI Interpretation')).toBeTruthy();
+    // The full report stays in its own workspace, never duplicated here.
+    expect(panel('overview').querySelector('.ai-analyst-panel')).toBeNull();
+  });
+
+  it('renders break-even highlights as three compact metrics, not a table block', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'Overview');
+
+    const highlights = panel('overview').querySelector(
+      '[aria-label="Break-Even Highlights"]',
+    ) as HTMLElement;
+    expect(highlights).toBeTruthy();
+    expect(highlights.querySelectorAll('.mini-metric').length).toBe(3);
+    expect(within(highlights).getByText('Max Purchase Price')).toBeTruthy();
+    expect(within(highlights).getByText('Max Exit Cap Rate')).toBeTruthy();
+    expect(within(highlights).getByText('Max Interest Rate')).toBeTruthy();
+  });
+
+  it('still never stacks the full results surfaces under the Owner Summary', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await goTo(user, 'Overview');
+
+    expect(panel('overview').querySelector('.results-panel')).toBeNull();
+    expect(panel('overview').querySelector('.sensitivity-panel')).toBeNull();
+    expect(panel('overview').querySelector('.break-even-panel')).toBeNull();
+    expect(panel('overview').contains(operatingStatement())).toBe(false);
+  });
+
+  it('renders a restored deal’s Overview from its snapshot, without re-analyzing', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal({ analysis_snapshot: makeDetailedResults() });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('Golden Detailed Deal'));
+    await waitFor(() => expect(activeWorkspace()).toBe('Overview'));
+
+    expect(panel('overview').querySelectorAll('.metric-card').length).toBe(4);
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+  });
+});
+
+describe('Sprint C Gate C4 -- Risk', () => {
+  it('splits Risk into three peer views, showing one at a time', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'Risk');
+
+    const nav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
+    for (const label of ['Return Sensitivity', 'Debt Sensitivity', 'Break-Even']) {
+      expect(nav.getByRole('tab', { name: label })).toBeTruthy();
+    }
+
+    const cases: [string, string][] = [
+      ['Return Sensitivity', 'returns'],
+      ['Debt Sensitivity', 'debt'],
+      ['Break-Even', 'break-even'],
+    ];
+    for (const [label, id] of cases) {
+      await user.click(nav.getByRole('tab', { name: label }));
+      expect(riskViewPanel(id).hasAttribute('hidden')).toBe(false);
+      for (const [, other] of cases.filter(([l]) => l !== label)) {
+        expect(riskViewPanel(other).hasAttribute('hidden')).toBe(true);
+      }
+    }
+  });
+
+  it('shows the return sensitivity matrices in the Returns view', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await openRiskView(user, 'Return Sensitivity');
+
+    const returns = within(riskViewPanel('returns'));
+    expect(returns.getByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeTruthy();
+    expect(returns.getByRole('tab', { name: 'Purchase Price × Exit Cap' })).toBeTruthy();
+    // The debt matrix is not stacked underneath it.
+    expect(returns.queryByRole('tab', { name: 'Interest Rate × LTV' })).toBeNull();
+  });
+
+  it('shows the interest-rate/LTV matrix in the Debt view', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await openRiskView(user, 'Debt Sensitivity');
+
+    const debt = within(riskViewPanel('debt'));
+    expect(debt.getByRole('tab', { name: 'Interest Rate × LTV' })).toBeTruthy();
+    expect(debt.queryByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeNull();
+  });
+
+  it('shows break-even controls and results in the Break-Even view', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await openRiskView(user, 'Break-Even');
+
+    const breakEven = within(riskViewPanel('break-even'));
+    expect(breakEven.getByText('Break-Even Analysis')).toBeTruthy();
+    expect(breakEven.getByLabelText(/Target Levered IRR/)).toBeTruthy();
+  });
+
+  it('reports one sensitivity failure once, not once per view', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    mockFetchSensitivityPresets.mockRejectedValue(new ApiError('The sensitivity request failed.'));
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+
+    await waitFor(() =>
+      expect(within(panel('risk')).getAllByText('The sensitivity request failed.')).toHaveLength(1),
+    );
+  });
+
+  it('keeps the honest refresh state for a reopened deal, with no fabricated matrices', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({ analysis_snapshot: makeResults() });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(activeWorkspace()).toBe('Overview'));
+    await goTo(user, 'Risk');
+
+    expect(within(panel('risk')).getByText(/Run/)).toBeTruthy();
+    expect(document.querySelector('[aria-label="Risk views"]')).toBeNull();
+    expect(sensitivityHeading()).toBeNull();
+  });
+
+  it('preserves risk data across workspace navigation', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await openRiskView(user, 'Debt Sensitivity');
+    const calls = mockFetchSensitivityPresets.mock.calls.length;
+
+    await goTo(user, 'Documents');
+    await goTo(user, 'Risk');
+
+    expect(riskViewPanel('debt').hasAttribute('hidden')).toBe(false);
+    expect(within(riskViewPanel('debt')).getByRole('tab', { name: 'Interest Rate × LTV' })).toBeTruthy();
+    expect(mockFetchSensitivityPresets.mock.calls.length).toBe(calls);
+  });
+});
+
+describe('Sprint C Gate C4 -- AI Analyst', () => {
+  it('gives the report a section list and shows one section at a time', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
+
+    const nav = within(document.querySelector('[aria-label="AI report sections"]') as HTMLElement);
+    expect(nav.getByRole('tab', { name: 'Investment View' })).toBeTruthy();
+    expect(nav.getByRole('tab', { name: 'Risks' })).toBeTruthy();
+    expect(nav.getByRole('tab', { name: 'Questions to Investigate' })).toBeTruthy();
+
+    expect(aiSectionPanel('investment-view').hasAttribute('hidden')).toBe(false);
+    expect(aiSectionPanel('questions').hasAttribute('hidden')).toBe(true);
+  });
+
+  it('reaches Risks and Questions in one click each, without scrolling the report', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
+
+    const nav = within(document.querySelector('[aria-label="AI report sections"]') as HTMLElement);
+
+    await user.click(nav.getByRole('tab', { name: 'Risks' }));
+    expect(aiSectionPanel('risks').hasAttribute('hidden')).toBe(false);
+    expect(aiSectionPanel('investment-view').hasAttribute('hidden')).toBe(true);
+
+    await user.click(nav.getByRole('tab', { name: 'Questions to Investigate' }));
+    expect(aiSectionPanel('questions').hasAttribute('hidden')).toBe(false);
+
+    await user.click(nav.getByRole('tab', { name: 'Confidence / Data Gaps' }));
+    expect(aiSectionPanel('confidence').hasAttribute('hidden')).toBe(false);
+  });
+
+  it('keeps every existing report field reachable, using only contract fields', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
+
+    for (const heading of [
+      'Investment View',
+      'Executive Summary',
+      'Key Strengths',
+      'Key Risks',
+      'Return Drivers',
+      'Downside Analysis',
+      'Capital Structure',
+      'Break-Even Interpretation',
+      'Questions to Investigate',
+      'Confidence / Data Gaps',
+    ]) {
+      expect(aiSectionHeading(heading)).not.toBeNull();
+    }
+  });
+
+  it('navigating sections never triggers another AI request', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
+
+    const nav = within(document.querySelector('[aria-label="AI report sections"]') as HTMLElement);
+    for (const label of ['Risks', 'Return Drivers', 'Downside Analysis', 'Investment View']) {
+      await user.click(nav.getByRole('tab', { name: label }));
+    }
+
+    expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders a restored AI snapshot through the same section list', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({ analysis_snapshot: makeResults(), ai_snapshot: makeAiAnalysis() });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(mockGetDeal).toHaveBeenCalled());
+    await goTo(user, 'AI Analyst');
+
+    expect(aiSectionHeading('Investment View')).not.toBeNull();
+    expect(document.querySelector('[aria-label="AI report sections"]')).toBeTruthy();
+    expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Generate action and its stale-output behavior', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
+
+    await goTo(user, 'Underwrite');
+    fireEvent.change(screen.getByLabelText(/^Exit Cap Rate/), { target: { value: '6.75' } });
+
+    // The stale report is cleared, and nothing regenerates on its own.
+    expect(aiSectionHeading('Investment View')).toBeNull();
+    expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Sprint C Gate C4 -- Documents', () => {
+  it('splits Documents by source, showing one source at a time', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Documents');
+
+    const nav = within(document.querySelector('[aria-label="Document sources"]') as HTMLElement);
+    expect(nav.getByRole('tab', { name: 'Offering Memorandum' })).toBeTruthy();
+    expect(nav.getByRole('tab', { name: 'Excel Workbook' })).toBeTruthy();
+
+    expect(documentsViewPanel('om').hasAttribute('hidden')).toBe(false);
+    expect(documentsViewPanel('excel').hasAttribute('hidden')).toBe(true);
+
+    await user.click(nav.getByRole('tab', { name: 'Excel Workbook' }));
+    expect(documentsViewPanel('excel').hasAttribute('hidden')).toBe(false);
+    expect(documentsViewPanel('om').hasAttribute('hidden')).toBe(true);
+  });
+
+  it('keeps the OM upload and its analyst review together in one flow', async () => {
+    const user = userEvent.setup();
+    mockUploadOm.mockResolvedValue(makeExtractionResult());
+    render(<App />);
+    await goTo(user, 'Documents');
+
+    const om = within(documentsViewPanel('om'));
+    expect(om.getByLabelText('Upload OM (PDF)')).toBeTruthy();
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(om.getByLabelText('Upload OM (PDF)'), file);
+
+    expect(await screen.findByRole('heading', { name: 'Purchase Price' })).toBeTruthy();
+    expect(documentsViewPanel('om').hasAttribute('hidden')).toBe(false);
+  });
+
+  it('keeps the Excel upload and its proposed-values review together', async () => {
+    const user = userEvent.setup();
+    mockUploadExcel.mockResolvedValue(makeExcelIntakeReport());
+    render(<App />);
+    await goTo(user, 'Documents');
+    await user.click(screen.getByRole('tab', { name: 'Excel Workbook' }));
+
+    const excel = within(documentsViewPanel('excel'));
+    const file = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(excel.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    expect(await screen.findByLabelText('Excel Review Purchase Price')).toHaveProperty(
+      'value',
+      '48000000',
+    );
+    expect(documentsViewPanel('excel').hasAttribute('hidden')).toBe(false);
+  });
+
+  it('an upload puts the analyst on that source’s own tab', async () => {
+    const user = userEvent.setup();
+    mockUploadExcel.mockResolvedValue(makeExcelIntakeReport());
+    render(<App />);
+    await goTo(user, 'Documents');
+    // Start on the OM tab, upload a workbook, land on the workbook's tab.
+    expect(documentsViewPanel('om').hasAttribute('hidden')).toBe(false);
+
+    const file = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+
+    await waitFor(() => expect(documentsViewPanel('excel').hasAttribute('hidden')).toBe(false));
+  });
+
+  it('preserves an in-progress OM review across workspace navigation', async () => {
+    const user = userEvent.setup();
+    mockUploadOm.mockResolvedValue(makeExtractionResult());
+    render(<App />);
+    await goTo(user, 'Documents');
+
+    const file = new File(['%PDF-1.4'], 'om.pdf', { type: 'application/pdf' });
+    await user.upload(screen.getByLabelText('Upload OM (PDF)'), file);
+    await screen.findByRole('heading', { name: 'Purchase Price' });
+
+    const card = screen
+      .getByRole('heading', { name: 'Purchase Price' })
+      .closest('.om-field-card') as HTMLElement;
+    await user.click(within(card).getByRole('button', { name: 'Approve' }));
+    const approvedMarkup = card.innerHTML;
+
+    await goTo(user, 'Underwrite');
+    await goTo(user, 'Risk');
+    await goTo(user, 'Documents');
+
+    const cardAfter = screen
+      .getByRole('heading', { name: 'Purchase Price' })
+      .closest('.om-field-card') as HTMLElement;
+    expect(cardAfter.innerHTML).toBe(approvedMarkup);
+  });
+
+  it('leaves approval behavior unchanged', async () => {
+    const user = userEvent.setup();
+    mockUploadExcel.mockResolvedValue(makeExcelIntakeReport());
+    render(<App />);
+    await goTo(user, 'Documents');
+
+    const file = new File(['PK'], 'anchor_input.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    await user.upload(screen.getByLabelText('Upload Anchor Workbook (.xlsx)'), file);
+    await screen.findByLabelText('Excel Review Purchase Price');
+    for (const field of [
+      'Acquisition Costs',
+      'Financing Fee',
+      'Disposition Costs',
+      'Annual CapEx Reserve',
+      'Interest-Only Period',
+    ]) {
+      await user.type(screen.getByLabelText(`Excel Review ${field}`), '0');
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
+
+    // Approval still loads the assumptions and never runs Analyze itself.
+    await waitFor(() => expect(activeWorkspace()).toBe('Underwrite'));
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    expect(mockAnalyze).not.toHaveBeenCalled();
   });
 });

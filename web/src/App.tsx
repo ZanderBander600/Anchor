@@ -43,6 +43,7 @@ import { OwnerReturnSchedule } from './components/OwnerReturnSchedule';
 import { OwnerSummaryPanel } from './components/OwnerSummaryPanel';
 import { ResultsSummaryPanel } from './components/ResultsSummaryPanel';
 import { SensitivityPanel } from './components/SensitivityPanel';
+import { SubNav } from './components/SubNav';
 import { UnderwriteWorkspace } from './components/UnderwriteWorkspace';
 import { WorkspaceNav } from './components/WorkspaceNav';
 import { WorkspacePanel } from './components/WorkspacePanel';
@@ -50,6 +51,24 @@ import { buildOwnerSummaryData } from './ownerSummary';
 import { buildDetailedSections, buildQuickSections } from './underwrite';
 import type { ResultsViewId, UnderwriteTabId } from './underwrite';
 import type { WorkspaceId } from './workspaces';
+
+/** Sprint C Gate C4: the Risk workspace's internal views. */
+const RISK_VIEWS = [
+  { id: 'returns', label: 'Return Sensitivity' },
+  { id: 'debt', label: 'Debt Sensitivity' },
+  { id: 'break-even', label: 'Break-Even' },
+];
+
+/** Documents is split by SOURCE TYPE rather than upload/review because
+ * that is how the existing components are actually shaped: the OM panel
+ * owns upload AND per-field analyst review as one unit, while the Excel
+ * flow is an upload panel plus a separate review panel. Splitting by
+ * upload/review would require changing OmReviewPanel's behavior, which
+ * this gate explicitly forbids. Each tab is one source's complete flow. */
+const DOCUMENT_VIEWS = [
+  { id: 'om', label: 'Offering Memorandum' },
+  { id: 'excel', label: 'Excel Workbook' },
+];
 import {
   BLANK_DETAILED_FORM_VALUES,
   BLANK_FORM_VALUES,
@@ -154,6 +173,12 @@ export default function App() {
   const [operationsView, setOperationsView] = useState('revenue');
   const [resultsView, setResultsView] = useState<ResultsViewId>('summary');
 
+  // Sprint C Gate C4: internal navigation for the Risk and Documents
+  // workspaces. Navigation state only -- never persisted, never part of the
+  // dirty snapshot, never touching financial, analysis or AI state.
+  const [riskView, setRiskView] = useState<'returns' | 'debt' | 'break-even'>('returns');
+  const [documentsView, setDocumentsView] = useState<'om' | 'excel'>('om');
+
   const [detailedValues, setDetailedValues] = useState<DetailedFormValues>(
     BLANK_DETAILED_FORM_VALUES,
   );
@@ -249,6 +274,7 @@ export default function App() {
     setDetailedExcelReviewError(null);
     try {
       const report = await uploadDetailedExcel(file);
+      setDocumentsView('excel');
       setDetailedExcelReview({
         fileName: file.name,
         values: buildDetailedFormValuesFromExcelIntakeReport(report),
@@ -366,6 +392,7 @@ export default function App() {
     setDetailedOcrExtraction(null);
     try {
       const extraction = await uploadDetailedOm(file);
+      setDocumentsView('om');
       setDetailedOcrExtraction(extraction);
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -1082,6 +1109,7 @@ export default function App() {
     setOcrExtraction(null);
     try {
       const extraction = await uploadOm(file);
+      setDocumentsView('om');
       setOcrExtraction(extraction);
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -1123,6 +1151,7 @@ export default function App() {
     setExcelReviewError(null);
     try {
       const report = await uploadExcel(file);
+      setDocumentsView('excel');
       setExcelReview({
         fileName: file.name,
         values: buildFormValuesFromExcelIntakeReport(report),
@@ -1958,43 +1987,87 @@ export default function App() {
       >
         {!detailedResults ? (
           <div className="empty-state">Analyze the deal to view risk analysis.</div>
+        ) : !detailedSensitivity &&
+            !isDetailedSensitivityLoading &&
+            !detailedSensitivityError &&
+            !detailedBreakEven &&
+            !isDetailedBreakEvenLoading &&
+            !detailedBreakEvenError ? (
+          <div className="empty-state">
+            Run <strong>Analyze</strong> to refresh Risk outputs for this deal.
+          </div>
         ) : (
-          <>
-            {/* Sensitivity and break-even are not persisted with a saved deal
-             * (spec open question 2), so a reopened deal restores its analysis
-             * snapshot but not these. Say so honestly rather than fabricating
-             * values -- C2 changes no persistence. */}
-            {!detailedSensitivity &&
-              !isDetailedSensitivityLoading &&
-              !detailedSensitivityError &&
-              !detailedBreakEven &&
-              !isDetailedBreakEvenLoading &&
-              !detailedBreakEvenError && (
-                <div className="empty-state">
-                  Run <strong>Analyze</strong> to refresh Risk outputs for this deal.
-                </div>
-              )}
-
-            <SensitivityPanel
-              presets={detailedSensitivity}
-              isLoading={isDetailedSensitivityLoading}
-              error={detailedSensitivityError}
+          <div className="risk-workspace">
+            {/* Sprint C Gate C4: return sensitivity, debt sensitivity and
+             * break-even are peer views rather than one long stack. Each
+             * renders the existing authoritative outputs unchanged. Both
+             * sensitivity views come from ONE sensitivity request, so its
+             * loading and error state lives here once rather than being
+             * duplicated into each view. */}
+            {detailedSensitivityError && <div className="error-banner">{detailedSensitivityError}</div>}
+            {isDetailedSensitivityLoading && (
+              <div className="sensitivity-status">Calculating sensitivity…</div>
+            )}
+            <SubNav
+              items={RISK_VIEWS}
+              active={riskView}
+              onSelect={(id) => setRiskView(id as 'returns' | 'debt' | 'break-even')}
+              label="Risk views"
+              idFor={(id) => `risk-tab-${id}`}
+              controlsFor={(id) => `risk-panel-${id}`}
             />
 
-            <BreakEvenPanel
-              analysis={detailedBreakEven}
-              isLoading={isDetailedBreakEvenLoading}
-              error={detailedBreakEvenError}
-              targetLeveredIrrPercent={detailedTargetLeveredIrrPercent}
-              targetEquityMultiple={detailedTargetEquityMultiple}
-              targetHeadlineDscr={detailedTargetHeadlineDscr}
-              returnHurdleMetric={detailedReturnHurdleMetric}
-              onTargetLeveredIrrChange={handleDetailedTargetLeveredIrrChange}
-              onTargetEquityMultipleChange={handleDetailedTargetEquityMultipleChange}
-              onTargetHeadlineDscrChange={handleDetailedTargetHeadlineDscrChange}
-              onReturnHurdleMetricChange={handleDetailedReturnHurdleMetricChange}
-            />
-          </>
+            <div
+              id="risk-panel-returns"
+              role="tabpanel"
+              aria-labelledby="risk-tab-returns"
+              hidden={riskView !== 'returns'}
+            >
+              <SensitivityPanel
+                presets={detailedSensitivity}
+                isLoading={false}
+                error={null}
+                only={['exit_cap_noi_growth', 'purchase_price_exit_cap']}
+                title="Return Sensitivity"
+              />
+            </div>
+
+            <div
+              id="risk-panel-debt"
+              role="tabpanel"
+              aria-labelledby="risk-tab-debt"
+              hidden={riskView !== 'debt'}
+            >
+              <SensitivityPanel
+                presets={detailedSensitivity}
+                isLoading={false}
+                error={null}
+                only={['interest_rate_ltv']}
+                title="Debt Sensitivity"
+              />
+            </div>
+
+            <div
+              id="risk-panel-break-even"
+              role="tabpanel"
+              aria-labelledby="risk-tab-break-even"
+              hidden={riskView !== 'break-even'}
+            >
+              <BreakEvenPanel
+                analysis={detailedBreakEven}
+                isLoading={isDetailedBreakEvenLoading}
+                error={detailedBreakEvenError}
+                targetLeveredIrrPercent={detailedTargetLeveredIrrPercent}
+                targetEquityMultiple={detailedTargetEquityMultiple}
+                targetHeadlineDscr={detailedTargetHeadlineDscr}
+                returnHurdleMetric={detailedReturnHurdleMetric}
+                onTargetLeveredIrrChange={handleDetailedTargetLeveredIrrChange}
+                onTargetEquityMultipleChange={handleDetailedTargetEquityMultipleChange}
+                onTargetHeadlineDscrChange={handleDetailedTargetHeadlineDscrChange}
+                onReturnHurdleMetricChange={handleDetailedReturnHurdleMetricChange}
+              />
+            </div>
+          </div>
         )}
       </WorkspacePanel>
 
@@ -2025,36 +2098,61 @@ export default function App() {
         title="Documents"
         subtitle="Upload an offering memorandum or workbook, then review what was extracted."
       >
-        <div className="intake-grid">
-          <ExcelUploadPanel
-            isLoading={isUploadingDetailedExcel}
-            error={detailedExcelUploadError}
-            successMessage={detailedExcelUploadSuccessMessage}
-            onUpload={(file) => void handleUploadDetailedExcel(file)}
+        <div className="documents-workspace">
+          <SubNav
+            items={DOCUMENT_VIEWS}
+            active={documentsView}
+            onSelect={(id) => setDocumentsView(id as 'om' | 'excel')}
+            label="Document sources"
+            idFor={(id) => `documents-tab-${id}`}
+            controlsFor={(id) => `documents-panel-${id}`}
           />
 
-          <DetailedOmReviewPanel
-            extraction={detailedOcrExtraction}
-            isLoading={isDetailedExtracting}
-            error={detailedExtractionError}
-            onUpload={(file) => void handleUploadDetailedOm(file)}
-            onFinishReview={handleFinishDetailedOmReview}
-            onCancel={handleCancelDetailedOmReview}
-          />
+          <div
+            id="documents-panel-om"
+            role="tabpanel"
+            aria-labelledby="documents-tab-om"
+            hidden={documentsView !== 'om'}
+            className="documents-view"
+          >
+            <DetailedOmReviewPanel
+              extraction={detailedOcrExtraction}
+              isLoading={isDetailedExtracting}
+              error={detailedExtractionError}
+              onUpload={(file) => void handleUploadDetailedOm(file)}
+              onFinishReview={handleFinishDetailedOmReview}
+              onCancel={handleCancelDetailedOmReview}
+            />
+          </div>
+
+          <div
+            id="documents-panel-excel"
+            role="tabpanel"
+            aria-labelledby="documents-tab-excel"
+            hidden={documentsView !== 'excel'}
+            className="documents-view"
+          >
+            <ExcelUploadPanel
+              isLoading={isUploadingDetailedExcel}
+              error={detailedExcelUploadError}
+              successMessage={detailedExcelUploadSuccessMessage}
+              onUpload={(file) => void handleUploadDetailedExcel(file)}
+            />
+
+            {detailedExcelReview && (
+              <DetailedExcelReviewPanel
+                fileName={detailedExcelReview.fileName}
+                termsValues={detailedExcelReview.values.terms}
+                operatingValues={detailedExcelReview.values.operating}
+                error={detailedExcelReviewError}
+                onTermsFieldChange={handleDetailedExcelReviewTermsFieldChange}
+                onOperatingFieldChange={handleDetailedExcelReviewOperatingFieldChange}
+                onApprove={handleApproveDetailedExcelReview}
+                onCancel={handleCancelDetailedExcelReview}
+              />
+            )}
+          </div>
         </div>
-
-        {detailedExcelReview && (
-          <DetailedExcelReviewPanel
-            fileName={detailedExcelReview.fileName}
-            termsValues={detailedExcelReview.values.terms}
-            operatingValues={detailedExcelReview.values.operating}
-            error={detailedExcelReviewError}
-            onTermsFieldChange={handleDetailedExcelReviewTermsFieldChange}
-            onOperatingFieldChange={handleDetailedExcelReviewOperatingFieldChange}
-            onApprove={handleApproveDetailedExcelReview}
-            onCancel={handleCancelDetailedExcelReview}
-          />
-        )}
       </WorkspacePanel>
     </>
   );
@@ -2125,39 +2223,87 @@ export default function App() {
       >
         {!results ? (
           <div className="empty-state">Analyze the deal to view risk analysis.</div>
+        ) : !sensitivity &&
+            !isSensitivityLoading &&
+            !sensitivityError &&
+            !breakEven &&
+            !isBreakEvenLoading &&
+            !breakEvenError ? (
+          <div className="empty-state">
+            Run <strong>Analyze</strong> to refresh Risk outputs for this deal.
+          </div>
         ) : (
-          <>
-            {!sensitivity &&
-              !isSensitivityLoading &&
-              !sensitivityError &&
-              !breakEven &&
-              !isBreakEvenLoading &&
-              !breakEvenError && (
-                <div className="empty-state">
-                  Run <strong>Analyze</strong> to refresh Risk outputs for this deal.
-                </div>
-              )}
-
-            <SensitivityPanel
-              presets={sensitivity}
-              isLoading={isSensitivityLoading}
-              error={sensitivityError}
+          <div className="risk-workspace">
+            {/* Sprint C Gate C4: return sensitivity, debt sensitivity and
+             * break-even are peer views rather than one long stack. Each
+             * renders the existing authoritative outputs unchanged. Both
+             * sensitivity views come from ONE sensitivity request, so its
+             * loading and error state lives here once rather than being
+             * duplicated into each view. */}
+            {sensitivityError && <div className="error-banner">{sensitivityError}</div>}
+            {isSensitivityLoading && (
+              <div className="sensitivity-status">Calculating sensitivity…</div>
+            )}
+            <SubNav
+              items={RISK_VIEWS}
+              active={riskView}
+              onSelect={(id) => setRiskView(id as 'returns' | 'debt' | 'break-even')}
+              label="Risk views"
+              idFor={(id) => `risk-tab-${id}`}
+              controlsFor={(id) => `risk-panel-${id}`}
             />
 
-            <BreakEvenPanel
-              analysis={breakEven}
-              isLoading={isBreakEvenLoading}
-              error={breakEvenError}
-              targetLeveredIrrPercent={targetLeveredIrrPercent}
-              targetEquityMultiple={targetEquityMultiple}
-              targetHeadlineDscr={targetHeadlineDscr}
-              returnHurdleMetric={returnHurdleMetric}
-              onTargetLeveredIrrChange={handleTargetLeveredIrrChange}
-              onTargetEquityMultipleChange={handleTargetEquityMultipleChange}
-              onTargetHeadlineDscrChange={handleTargetHeadlineDscrChange}
-              onReturnHurdleMetricChange={handleReturnHurdleMetricChange}
-            />
-          </>
+            <div
+              id="risk-panel-returns"
+              role="tabpanel"
+              aria-labelledby="risk-tab-returns"
+              hidden={riskView !== 'returns'}
+            >
+              <SensitivityPanel
+                presets={sensitivity}
+                isLoading={false}
+                error={null}
+                only={['exit_cap_noi_growth', 'purchase_price_exit_cap']}
+                title="Return Sensitivity"
+              />
+            </div>
+
+            <div
+              id="risk-panel-debt"
+              role="tabpanel"
+              aria-labelledby="risk-tab-debt"
+              hidden={riskView !== 'debt'}
+            >
+              <SensitivityPanel
+                presets={sensitivity}
+                isLoading={false}
+                error={null}
+                only={['interest_rate_ltv']}
+                title="Debt Sensitivity"
+              />
+            </div>
+
+            <div
+              id="risk-panel-break-even"
+              role="tabpanel"
+              aria-labelledby="risk-tab-break-even"
+              hidden={riskView !== 'break-even'}
+            >
+              <BreakEvenPanel
+                analysis={breakEven}
+                isLoading={isBreakEvenLoading}
+                error={breakEvenError}
+                targetLeveredIrrPercent={targetLeveredIrrPercent}
+                targetEquityMultiple={targetEquityMultiple}
+                targetHeadlineDscr={targetHeadlineDscr}
+                returnHurdleMetric={returnHurdleMetric}
+                onTargetLeveredIrrChange={handleTargetLeveredIrrChange}
+                onTargetEquityMultipleChange={handleTargetEquityMultipleChange}
+                onTargetHeadlineDscrChange={handleTargetHeadlineDscrChange}
+                onReturnHurdleMetricChange={handleReturnHurdleMetricChange}
+              />
+            </div>
+          </div>
         )}
       </WorkspacePanel>
 
@@ -2188,34 +2334,59 @@ export default function App() {
         title="Documents"
         subtitle="Upload an offering memorandum or workbook, then review what was extracted."
       >
-        <div className="intake-grid">
-          <ExcelUploadPanel
-            isLoading={isUploadingExcel}
-            error={excelUploadError}
-            successMessage={excelUploadSuccessMessage}
-            onUpload={(file) => void handleUploadExcel(file)}
+        <div className="documents-workspace">
+          <SubNav
+            items={DOCUMENT_VIEWS}
+            active={documentsView}
+            onSelect={(id) => setDocumentsView(id as 'om' | 'excel')}
+            label="Document sources"
+            idFor={(id) => `documents-tab-${id}`}
+            controlsFor={(id) => `documents-panel-${id}`}
           />
 
-          <OmReviewPanel
-            extraction={ocrExtraction}
-            isLoading={isExtracting}
-            error={extractionError}
-            onUpload={(file) => void handleUploadOm(file)}
-            onFinishReview={handleFinishOmReview}
-          />
+          <div
+            id="documents-panel-om"
+            role="tabpanel"
+            aria-labelledby="documents-tab-om"
+            hidden={documentsView !== 'om'}
+            className="documents-view"
+          >
+            <OmReviewPanel
+              extraction={ocrExtraction}
+              isLoading={isExtracting}
+              error={extractionError}
+              onUpload={(file) => void handleUploadOm(file)}
+              onFinishReview={handleFinishOmReview}
+            />
+          </div>
+
+          <div
+            id="documents-panel-excel"
+            role="tabpanel"
+            aria-labelledby="documents-tab-excel"
+            hidden={documentsView !== 'excel'}
+            className="documents-view"
+          >
+            <ExcelUploadPanel
+              isLoading={isUploadingExcel}
+              error={excelUploadError}
+              successMessage={excelUploadSuccessMessage}
+              onUpload={(file) => void handleUploadExcel(file)}
+            />
+
+            {excelReview && (
+              <ExcelReviewPanel
+                fileName={excelReview.fileName}
+                values={excelReview.values}
+                requiredV2FieldIds={excelReview.requiredV2FieldIds}
+                error={excelReviewError}
+                onFieldChange={handleExcelReviewFieldChange}
+                onApprove={handleApproveExcelReview}
+                onCancel={handleCancelExcelReview}
+              />
+            )}
+          </div>
         </div>
-
-        {excelReview && (
-          <ExcelReviewPanel
-            fileName={excelReview.fileName}
-            values={excelReview.values}
-            requiredV2FieldIds={excelReview.requiredV2FieldIds}
-            error={excelReviewError}
-            onFieldChange={handleExcelReviewFieldChange}
-            onApprove={handleApproveExcelReview}
-            onCancel={handleCancelExcelReview}
-          />
-        )}
       </WorkspacePanel>
     </>
   );
