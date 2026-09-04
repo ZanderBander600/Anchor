@@ -6,10 +6,14 @@ import {
   createDetailedDeal,
   deleteDeal,
   duplicateDeal,
+  fetchDealFingerprint,
   fetchDetailedAIAnalysis,
+  fetchDetailedDealFingerprint,
   getDeal,
   listDeals,
   updateDeal,
+  updateDealAiSnapshot,
+  updateDealAnalysisSnapshot,
   updateDetailedDeal,
   uploadExcel,
   uploadOm,
@@ -342,8 +346,6 @@ describe('createDeal', () => {
       name: '111 Main St',
       inputs: GOLDEN_INPUTS,
       deal_context: null,
-      analysis_snapshot: null,
-      ai_snapshot: null,
     });
   });
 
@@ -390,8 +392,6 @@ describe('updateDeal', () => {
       name: 'Renamed Deal',
       inputs: GOLDEN_INPUTS,
       deal_context: null,
-      analysis_snapshot: null,
-      ai_snapshot: null,
     });
   });
 
@@ -429,8 +429,6 @@ describe('createDetailedDeal', () => {
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
       deal_context: null,
-      analysis_snapshot: null,
-      ai_snapshot: null,
     });
   });
 
@@ -490,8 +488,6 @@ describe('updateDetailedDeal', () => {
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
       deal_context: null,
-      analysis_snapshot: null,
-      ai_snapshot: null,
     });
   });
 
@@ -502,6 +498,133 @@ describe('updateDetailedDeal', () => {
     await expect(
       updateDetailedDeal('missing', 'Deal', GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
     ).rejects.toThrow(/could not be found/);
+  });
+});
+
+// =============================================================================
+// Owner Return Metrics V3 Gate A7 -- snapshot provenance hardening
+// =============================================================================
+
+describe('fetchDealFingerprint', () => {
+  it('POSTs the assumptions and Deal Context to /deals/fingerprint and returns both fingerprints', async () => {
+    const fingerprints = {
+      financial_input_fingerprint: 'financial-fp',
+      ai_context_fingerprint: 'ai-fp',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, fingerprints));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchDealFingerprint(GOLDEN_INPUTS, 'Strategy.');
+
+    expect(result).toEqual(fingerprints);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/fingerprint');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      operating_mode: 'quick',
+      inputs: GOLDEN_INPUTS,
+      deal_context: 'Strategy.',
+    });
+  });
+
+  it('sends deal_context as null when omitted', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { financial_input_fingerprint: 'a', ai_context_fingerprint: 'b' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchDealFingerprint(GOLDEN_INPUTS);
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body).deal_context).toBeNull();
+  });
+
+  it('throws an ApiError on a network failure', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchDealFingerprint(GOLDEN_INPUTS)).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('fetchDetailedDealFingerprint', () => {
+  it('POSTs the terms, detailed operating inputs, and Deal Context to /deals/fingerprint', async () => {
+    const fingerprints = {
+      financial_input_fingerprint: 'financial-fp',
+      ai_context_fingerprint: 'ai-fp',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, fingerprints));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchDetailedDealFingerprint(
+      GOLDEN_TERMS,
+      GOLDEN_DETAILED_OPERATING_INPUTS,
+      'Strategy.',
+    );
+
+    expect(result).toEqual(fingerprints);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/fingerprint');
+    expect(JSON.parse(init.body)).toEqual({
+      operating_mode: 'detailed',
+      terms: GOLDEN_TERMS,
+      detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      deal_context: 'Strategy.',
+    });
+  });
+});
+
+describe('updateDealAnalysisSnapshot', () => {
+  it('PUTs the analysis snapshot and financial_input_fingerprint to /deals/{id}/analysis-snapshot', async () => {
+    const deal = dealFixture({ analysis_snapshot: { irr: 0.12 } as unknown as Deal['analysis_snapshot'] });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
+    vi.stubGlobal('fetch', fetchMock);
+    const snapshot = { irr: 0.12 } as unknown as Parameters<typeof updateDealAnalysisSnapshot>[1];
+
+    const result = await updateDealAnalysisSnapshot('deal-1', snapshot, 'financial-fp');
+
+    expect(result).toEqual(deal);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/deal-1/analysis-snapshot');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({
+      analysis_snapshot: snapshot,
+      financial_input_fingerprint: 'financial-fp',
+    });
+  });
+
+  it('surfaces a 422 when the backend rejects a mismatched fingerprint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(422, { detail: 'financial_input_fingerprint does not match' }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const snapshot = { irr: 0.12 } as unknown as Parameters<typeof updateDealAnalysisSnapshot>[1];
+
+    await expect(
+      updateDealAnalysisSnapshot('deal-1', snapshot, 'stale-fp'),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('updateDealAiSnapshot', () => {
+  it('PUTs the AI snapshot and ai_context_fingerprint to /deals/{id}/ai-snapshot', async () => {
+    const deal = dealFixture();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
+    vi.stubGlobal('fetch', fetchMock);
+    const snapshot = { executive_summary: 'Summary.' } as unknown as Parameters<
+      typeof updateDealAiSnapshot
+    >[1];
+
+    const result = await updateDealAiSnapshot('deal-1', snapshot, 'ai-fp');
+
+    expect(result).toEqual(deal);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/deals/deal-1/ai-snapshot');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body)).toEqual({
+      ai_snapshot: snapshot,
+      ai_context_fingerprint: 'ai-fp',
+    });
   });
 });
 

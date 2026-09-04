@@ -18,6 +18,7 @@ and its numeric-representation rationale.
 from __future__ import annotations
 
 from .contracts import Deal, DealNotFoundError
+from .fingerprint import fingerprint_ai, fingerprint_detailed_inputs, fingerprint_quick_inputs
 from .store import (
     SnapshotValidationError,
     create_deal,
@@ -41,6 +42,9 @@ __all__ = [
     "create_detailed_deal",
     "delete_deal",
     "duplicate_deal",
+    "fingerprint_ai",
+    "fingerprint_detailed_inputs",
+    "fingerprint_quick_inputs",
     "get_deal",
     "get_db_path",
     "list_deals",

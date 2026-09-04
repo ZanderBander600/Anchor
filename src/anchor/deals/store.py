@@ -74,20 +74,48 @@ fingerprint freshly recomputed from the row's own current assumptions/
 context; any mismatch, or any JSON/shape decoding failure, makes the
 snapshot silently absent (``None``) rather than ever surfacing stale or
 malformed cached data -- see ``_decode_analysis_snapshot``/
-``_decode_ai_snapshot``. ``create_deal``/``update_deal``/
-``create_detailed_deal``/``update_detailed_deal`` accept optional
-``analysis_snapshot``/``ai_snapshot`` dicts (already-computed
-``AcquisitionResults``/``DetailedAcquisitionResults``/``AIAnalysis``
-shapes, serialized once by the API layer's own ``dataclasses.asdict``) and
-persist or clear them exactly as given -- omitting one on an update clears
-it, never silently preserves a now-possibly-stale value. Two additional
-functions, ``update_analysis_snapshot``/``update_ai_snapshot``, update only
-their one snapshot column (recomputing its fingerprint from the row's
-*already-stored* assumptions/context) without touching name, assumptions,
-Deal Context, the other snapshot, or ``updated_at`` -- the write path for
-the "silent background cache refresh after a successful Analyze/Generate AI
-Analysis on an already-saved deal" flow, which must never mark the deal
-dirty or bump its save timestamp.
+``_decode_ai_snapshot``.
+
+Owner Return Metrics V3 Gate A7 -- snapshot provenance hardening
+==================================================================
+Gate A6's ``create_deal``/``update_deal``/``create_detailed_deal``/
+``update_detailed_deal`` originally accepted optional ``analysis_snapshot``/
+``ai_snapshot`` dicts in the same write as fresh assumptions, trusting them
+at face value and pairing them with a fingerprint freshly computed from
+*those same, possibly-just-changed* assumptions -- a caller that submitted
+new assumptions alongside a snapshot computed under different (stale)
+assumptions would have that stale snapshot incorrectly relabeled as valid
+for the new ones. The existing frontend never did this, but the invariant
+must not depend on frontend behavior.
+
+Gate A7 closes this structurally: none of those four functions accept a
+snapshot parameter at all any more -- a generic assumptions write can never
+be paired with an unverified derived-results payload in the same call, full
+stop. ``update_deal``/``update_detailed_deal`` also no longer touch the six
+snapshot columns in any way (neither writing nor explicitly clearing) --
+preservation and invalidation both now fall out for free from the
+unchanged read-time fingerprint check described above, whether assumptions
+changed (stale snapshot's old fingerprint stops matching) or only Deal
+Context changed (the AI snapshot's fingerprint stops matching; the analysis
+snapshot's, which never depended on Deal Context, still matches).
+
+``update_analysis_snapshot``/``update_ai_snapshot`` remain the only two
+functions that ever write a snapshot column, and are now the *sole*
+provenance-validated path any snapshot ever persists through -- including
+the "first Save of an unsaved, already-analyzed deal" flow (create the deal,
+then attach its current valid snapshot(s) through these) and
+``duplicate_deal``'s copy. Each now *requires* the caller to supply the
+fingerprint the snapshot was actually produced under (``financial_input_
+fingerprint``/``ai_context_fingerprint`` -- an opaque token obtained from
+``POST /deals/fingerprint``, computed by ``anchor.deals.fingerprint``, the
+same canonical algorithm ``_decode_snapshot`` itself uses; the frontend
+never computes it) and independently recomputes the fingerprint the deal's
+CURRENTLY STORED assumptions/context actually demand; a mismatch raises
+``SnapshotValidationError`` and persists nothing -- the caller's token only
+ever *unlocks* a write this function's own recomputation already agrees
+with, it can never override it. This requires no schema/migration change:
+the six columns and their meaning are unchanged from Gate A6, only the
+write-time enforcement is new.
 
 Database path
 =============
@@ -105,7 +133,6 @@ exist_ok=True)``) before every connection, so a fresh checkout with no
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 import os
 import sqlite3
@@ -120,6 +147,7 @@ from ..ai.contracts import AIAnalysis
 from ..contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs, OperatingMode
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults, OperatingProjection
 from .contracts import Deal, DealNotFoundError
+from .fingerprint import fingerprint_ai, fingerprint_detailed_inputs, fingerprint_quick_inputs
 
 _DEFAULT_DB_PATH = Path("data/anchor.db")
 
@@ -411,53 +439,6 @@ def _encode_snapshot(value: AcquisitionResults | DetailedAcquisitionResults | AI
     return json.dumps(dataclasses.asdict(value))
 
 
-def _fingerprint_json(value: dict[str, Any]) -> str:
-    """A stable sha256 fingerprint of a JSON-serializable dict: canonical
-    (sorted-key, no whitespace) serialization first, so semantically
-    identical input always fingerprints identically regardless of field
-    insertion order."""
-
-    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _fingerprint_quick_inputs(inputs: AcquisitionInputs) -> str:
-    """The authoritative financial-input fingerprint for a Quick deal --
-    every ``AcquisitionInputs`` field, nothing else. Deliberately excludes
-    ``deal_context`` (Gate A4): Deal Context never affects deterministic
-    calculation, so it never affects analysis-snapshot validity."""
-
-    return _fingerprint_json(dataclasses.asdict(inputs))
-
-
-def _fingerprint_detailed_inputs(
-    terms: AcquisitionTerms, detailed_operating_inputs: DetailedOperatingInputs
-) -> str:
-    """The authoritative financial-input fingerprint for a Detailed deal --
-    every ``AcquisitionTerms`` and ``DetailedOperatingInputs`` field (the
-    complete deterministic-engine input set for Detailed Underwrite),
-    nothing else. Excludes ``deal_context`` for the same reason as the
-    Quick fingerprint above."""
-
-    return _fingerprint_json(
-        {
-            "terms": dataclasses.asdict(terms),
-            "detailed_operating_inputs": dataclasses.asdict(detailed_operating_inputs),
-        }
-    )
-
-
-def _fingerprint_ai(*, analysis_fingerprint: str, deal_context: str | None) -> str:
-    """The AI-snapshot fingerprint: a function of the deterministic
-    analysis fingerprint (so any financial-assumption change invalidates
-    the AI snapshot too, transitively -- no separate check needed) plus
-    ``deal_context`` itself (so an AI result is invalidated the moment the
-    stated strategy it interpreted changes), per Gate A4/A6's AI staleness
-    rules."""
-
-    return _fingerprint_json({"analysis_fingerprint": analysis_fingerprint, "deal_context": deal_context})
-
-
 def _decode_snapshot(
     *,
     raw_json: str | None,
@@ -486,49 +467,26 @@ def _decode_snapshot(
         return None
 
 
-_SnapshotColumns = tuple[
-    str | None, int | None, str | None, str | None, int | None, str | None
-]
+def _validate_provenance(
+    *, provided_fingerprint: str, expected_fingerprint: str, label: str
+) -> None:
+    """Owner Return Metrics V3 Gate A7 -- the single provenance gate every
+    snapshot write must pass through. ``expected_fingerprint`` is always
+    computed by the caller from the deal's own currently-*stored*
+    assumptions/context (never from the caller-supplied payload, and never
+    from values this same call might also be changing) -- see
+    ``update_analysis_snapshot``/``update_ai_snapshot`` below, the only two
+    functions in this module that ever write a snapshot column. Raises
+    ``SnapshotValidationError`` (never silently substitutes the expected
+    fingerprint for the provided one, and never persists anything) if they
+    disagree, which is exactly the "assumptions changed out from under this
+    snapshot" case Gate A7 closes."""
 
-
-def _prepare_snapshot_columns(
-    *,
-    analysis_fingerprint: str,
-    deal_context: str | None,
-    analysis_snapshot: dict[str, Any] | None,
-    ai_snapshot: dict[str, Any] | None,
-    analysis_decoder: Any,
-) -> _SnapshotColumns:
-    """Validate and JSON-encode the two optional, caller-supplied snapshot
-    dicts into the six column values every ``INSERT``/``UPDATE`` below
-    writes. ``analysis_fingerprint`` is always computed by the caller from
-    the *same* ``inputs``/``terms``+``detailed_operating_inputs`` this call
-    is otherwise writing, so it is correct by construction for this row.
-    Raises ``SnapshotValidationError`` if either supplied dict is
-    malformed -- unlike ``_decode_snapshot`` (read path), a write validates
-    strictly, since this is fresh input from the same request, not
-    previously-trusted stored data. Passing ``None`` for either clears it:
-    there is no implicit "leave the existing value alone" -- a caller that
-    wants to keep a still-valid snapshot must pass it again explicitly
-    (mirrors ``deal_context`` -- see ``update_deal``)."""
-
-    if analysis_snapshot is None:
-        analysis_json, analysis_version, analysis_fp = None, None, None
-    else:
-        decoded_analysis = analysis_decoder(analysis_snapshot)
-        analysis_json = _encode_snapshot(decoded_analysis)
-        analysis_version = _ANALYSIS_SNAPSHOT_SCHEMA_VERSION
-        analysis_fp = analysis_fingerprint
-
-    if ai_snapshot is None:
-        ai_json, ai_version, ai_fp = None, None, None
-    else:
-        decoded_ai = _ai_snapshot_from_dict(ai_snapshot)
-        ai_json = _encode_snapshot(decoded_ai)
-        ai_version = _AI_SNAPSHOT_SCHEMA_VERSION
-        ai_fp = _fingerprint_ai(analysis_fingerprint=analysis_fingerprint, deal_context=deal_context)
-
-    return (analysis_json, analysis_version, analysis_fp, ai_json, ai_version, ai_fp)
+    if provided_fingerprint != expected_fingerprint:
+        raise SnapshotValidationError(
+            f"{label} does not match the deal's current stored assumptions/context -- "
+            "refusing to persist a snapshot whose provenance does not match."
+        )
 
 
 def _migrate(connection: sqlite3.Connection) -> None:
@@ -718,7 +676,7 @@ def _row_to_deal(row: sqlite3.Row, *, include_snapshots: bool = True) -> Deal:
         analysis_snapshot = None
         ai_snapshot = None
     else:
-        analysis_fingerprint = _fingerprint_quick_inputs(inputs)
+        analysis_fingerprint = fingerprint_quick_inputs(inputs)
         analysis_snapshot = _decode_snapshot(
             raw_json=row["analysis_snapshot"],
             stored_schema_version=row["analysis_snapshot_schema_version"],
@@ -732,7 +690,7 @@ def _row_to_deal(row: sqlite3.Row, *, include_snapshots: bool = True) -> Deal:
             stored_schema_version=row["ai_snapshot_schema_version"],
             current_schema_version=_AI_SNAPSHOT_SCHEMA_VERSION,
             stored_fingerprint=row["ai_snapshot_fingerprint"],
-            expected_fingerprint=_fingerprint_ai(
+            expected_fingerprint=fingerprint_ai(
                 analysis_fingerprint=analysis_fingerprint, deal_context=deal_context
             ),
             decoder=_ai_snapshot_from_dict,
@@ -764,7 +722,7 @@ def _row_to_detailed_deal(
         analysis_snapshot = None
         ai_snapshot = None
     else:
-        analysis_fingerprint = _fingerprint_detailed_inputs(terms, detailed_operating_inputs)
+        analysis_fingerprint = fingerprint_detailed_inputs(terms, detailed_operating_inputs)
         analysis_snapshot = _decode_snapshot(
             raw_json=deal_row["analysis_snapshot"],
             stored_schema_version=deal_row["analysis_snapshot_schema_version"],
@@ -778,7 +736,7 @@ def _row_to_detailed_deal(
             stored_schema_version=deal_row["ai_snapshot_schema_version"],
             current_schema_version=_AI_SNAPSHOT_SCHEMA_VERSION,
             stored_fingerprint=deal_row["ai_snapshot_fingerprint"],
-            expected_fingerprint=_fingerprint_ai(
+            expected_fingerprint=fingerprint_ai(
                 analysis_fingerprint=analysis_fingerprint, deal_context=deal_context
             ),
             decoder=_ai_snapshot_from_dict,
@@ -820,23 +778,11 @@ def _detailed_operating_values(
 # =============================================================================
 
 
-_SNAPSHOT_INSERT_COLUMNS = (
-    "analysis_snapshot",
-    "analysis_snapshot_schema_version",
-    "analysis_snapshot_fingerprint",
-    "ai_snapshot",
-    "ai_snapshot_schema_version",
-    "ai_snapshot_fingerprint",
-)
-
-
 def create_deal(
     name: str,
     inputs: AcquisitionInputs,
     *,
     deal_context: str | None = None,
-    analysis_snapshot: dict[str, Any] | None = None,
-    ai_snapshot: dict[str, Any] | None = None,
     db_path: Path | None = None,
 ) -> Deal:
     """Insert a new Quick deal and return it as stored. ``inputs`` must
@@ -850,35 +796,30 @@ def create_deal(
     validated as a financial input, since it isn't one. Defaults to
     ``None`` (no context supplied), never a fabricated default string.
 
-    ``analysis_snapshot``/``ai_snapshot`` (Gate A6) are optional, already-
-    computed ``AcquisitionResults``/``AIAnalysis`` shapes (as plain dicts --
-    the API layer's ``dataclasses.asdict`` output), persisted as the deal's
-    initial cached snapshot -- e.g. when the analyst's first Save follows a
-    successful Analyze/Generate AI Analysis on a brand-new, not-yet-saved
-    deal. Raises ``SnapshotValidationError`` if either is present but
-    malformed."""
+    Owner Return Metrics V3 Gate A7: this function never accepts a snapshot.
+    A brand-new row always starts with no cached analysis/AI (the six
+    snapshot columns default to SQL ``NULL``, exactly "no snapshot yet") --
+    a generic assumptions write is never also trusted to carry an arbitrary,
+    unverified derived-results payload alongside it (the Gate A6 trust
+    boundary this gate closes). To persist a deal's *current, valid*
+    analysis/AI immediately after creating it (the "first Save of an
+    unsaved, already-analyzed deal" flow), call ``update_analysis_snapshot``/
+    ``update_ai_snapshot`` against the id this function returns -- both are
+    independently provenance-validated against this row's own just-stored
+    ``inputs``, so a mismatched snapshot is rejected exactly as it would be
+    on any other deal."""
 
     deal_id = uuid.uuid4().hex
     now = _utc_now_iso()
-    analysis_fingerprint = _fingerprint_quick_inputs(inputs)
-    snapshot_columns = _prepare_snapshot_columns(
-        analysis_fingerprint=analysis_fingerprint,
-        deal_context=deal_context,
-        analysis_snapshot=analysis_snapshot,
-        ai_snapshot=ai_snapshot,
-        analysis_decoder=_quick_analysis_snapshot_from_dict,
-    )
 
     with _connect(db_path) as connection:
         connection.execute(
             f"""
             INSERT INTO deals
-                (id, name, {", ".join(_INPUT_COLUMNS)}, deal_context,
-                 {", ".join(_SNAPSHOT_INSERT_COLUMNS)}, created_at, updated_at)
-            VALUES (?, ?, {", ".join("?" for _ in _INPUT_COLUMNS)}, ?,
-                    {", ".join("?" for _ in _SNAPSHOT_INSERT_COLUMNS)}, ?, ?)
+                (id, name, {", ".join(_INPUT_COLUMNS)}, deal_context, created_at, updated_at)
+            VALUES (?, ?, {", ".join("?" for _ in _INPUT_COLUMNS)}, ?, ?, ?)
             """,
-            (deal_id, name, *_input_values(inputs), deal_context, *snapshot_columns, now, now),
+            (deal_id, name, *_input_values(inputs), deal_context, now, now),
         )
 
     return get_deal(deal_id, db_path=db_path)
@@ -890,8 +831,6 @@ def update_deal(
     inputs: AcquisitionInputs,
     *,
     deal_context: str | None = None,
-    analysis_snapshot: dict[str, Any] | None = None,
-    ai_snapshot: dict[str, Any] | None = None,
     db_path: Path | None = None,
 ) -> Deal:
     """Overwrite ``deal_id``'s name, inputs, and Deal Context (Gate A4),
@@ -902,25 +841,23 @@ def update_deal(
     correctly reports it as not found rather than silently succeeding
     against the wrong table).
 
-    ``analysis_snapshot``/``ai_snapshot`` (Gate A6) are written exactly as
-    given -- ``None`` clears the corresponding cached snapshot, it is never
-    implicitly preserved from the deal's prior state. This is the primary
-    invalidation mechanism: a caller that changed ``inputs`` and has no
-    fresh matching analysis simply omits ``analysis_snapshot`` (leaving it
-    ``None``), which clears any now-stale cached one; a caller preserving a
-    still-valid one (e.g. a Deal-Context-only edit, per Gate A4) passes the
-    same snapshot it already has. Raises ``SnapshotValidationError`` if
-    either supplied snapshot is malformed."""
+    Owner Return Metrics V3 Gate A7: this function never touches the six
+    snapshot columns at all -- neither writing a caller-supplied value nor
+    explicitly clearing one. That is deliberate, and is what closes the
+    Gate A6 trust boundary: this call's fresh ``inputs``/``deal_context``
+    can never be paired, in the same write, with an unverified snapshot the
+    caller merely *claims* corresponds to them. Instead, invalidation and
+    preservation both fall out for free from ``get_deal``'s existing
+    read-time fingerprint check (unchanged by this gate): if ``inputs``
+    changed, whatever snapshot was already stored no longer fingerprint-
+    matches the new ``inputs`` and is silently treated as absent on the next
+    read; if only ``deal_context`` changed, the analysis snapshot's
+    fingerprint (which never depends on Deal Context) still matches and is
+    preserved, while the AI snapshot's fingerprint (which does depend on
+    Deal Context) no longer matches and is treated as absent -- exactly the
+    Gate A4 invalidation rules, with zero explicit clearing logic here."""
 
     now = _utc_now_iso()
-    analysis_fingerprint = _fingerprint_quick_inputs(inputs)
-    snapshot_columns = _prepare_snapshot_columns(
-        analysis_fingerprint=analysis_fingerprint,
-        deal_context=deal_context,
-        analysis_snapshot=analysis_snapshot,
-        ai_snapshot=ai_snapshot,
-        analysis_decoder=_quick_analysis_snapshot_from_dict,
-    )
 
     with _connect(db_path) as connection:
         cursor = connection.execute(
@@ -928,11 +865,10 @@ def update_deal(
             UPDATE deals
             SET name = ?, {", ".join(f"{column} = ?" for column in _INPUT_COLUMNS)},
                 deal_context = ?,
-                {", ".join(f"{column} = ?" for column in _SNAPSHOT_INSERT_COLUMNS)},
                 updated_at = ?
             WHERE id = ?
             """,
-            (name, *_input_values(inputs), deal_context, *snapshot_columns, now, deal_id),
+            (name, *_input_values(inputs), deal_context, now, deal_id),
         )
         if cursor.rowcount == 0:
             raise DealNotFoundError(deal_id)
@@ -951,8 +887,6 @@ def create_detailed_deal(
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
     deal_context: str | None = None,
-    analysis_snapshot: dict[str, Any] | None = None,
-    ai_snapshot: dict[str, Any] | None = None,
     db_path: Path | None = None,
 ) -> Deal:
     """Insert a new Detailed deal and return it as stored. ``terms`` and
@@ -964,32 +898,21 @@ def create_detailed_deal(
 
     ``deal_context`` (Gate A4) mirrors ``create_deal``'s parameter exactly
     -- optional, user-authored, never validated as a financial input.
-    ``analysis_snapshot``/``ai_snapshot`` (Gate A6) mirror ``create_deal``'s
-    parameters exactly, except ``analysis_snapshot`` here is a
-    ``DetailedAcquisitionResults`` shape (operating projection + results),
-    not a bare ``AcquisitionResults``."""
+
+    Owner Return Metrics V3 Gate A7: mirrors ``create_deal``'s
+    no-snapshot-parameter contract exactly -- see its docstring."""
 
     deal_id = uuid.uuid4().hex
     now = _utc_now_iso()
-    analysis_fingerprint = _fingerprint_detailed_inputs(terms, detailed_operating_inputs)
-    snapshot_columns = _prepare_snapshot_columns(
-        analysis_fingerprint=analysis_fingerprint,
-        deal_context=deal_context,
-        analysis_snapshot=analysis_snapshot,
-        ai_snapshot=ai_snapshot,
-        analysis_decoder=_detailed_analysis_snapshot_from_dict,
-    )
 
     with _connect(db_path) as connection:
         connection.execute(
             f"""
             INSERT INTO detailed_deals
-                (id, name, {", ".join(_TERMS_COLUMNS)}, deal_context,
-                 {", ".join(_SNAPSHOT_INSERT_COLUMNS)}, created_at, updated_at)
-            VALUES (?, ?, {", ".join("?" for _ in _TERMS_COLUMNS)}, ?,
-                    {", ".join("?" for _ in _SNAPSHOT_INSERT_COLUMNS)}, ?, ?)
+                (id, name, {", ".join(_TERMS_COLUMNS)}, deal_context, created_at, updated_at)
+            VALUES (?, ?, {", ".join("?" for _ in _TERMS_COLUMNS)}, ?, ?, ?)
             """,
-            (deal_id, name, *_terms_values(terms), deal_context, *snapshot_columns, now, now),
+            (deal_id, name, *_terms_values(terms), deal_context, now, now),
         )
         connection.execute(
             f"""
@@ -1010,8 +933,6 @@ def update_detailed_deal(
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
     deal_context: str | None = None,
-    analysis_snapshot: dict[str, Any] | None = None,
-    ai_snapshot: dict[str, Any] | None = None,
     db_path: Path | None = None,
 ) -> Deal:
     """Overwrite ``deal_id``'s name, terms, detailed operating inputs, and
@@ -1019,18 +940,10 @@ def update_detailed_deal(
     Detailed deal. Raises ``DealNotFoundError`` if it doesn't exist in
     ``detailed_deals``.
 
-    ``analysis_snapshot``/``ai_snapshot`` (Gate A6) follow ``update_deal``'s
-    exact clear-unless-repassed semantics -- see its docstring."""
+    Owner Return Metrics V3 Gate A7: mirrors ``update_deal``'s
+    never-touches-snapshot-columns contract exactly -- see its docstring."""
 
     now = _utc_now_iso()
-    analysis_fingerprint = _fingerprint_detailed_inputs(terms, detailed_operating_inputs)
-    snapshot_columns = _prepare_snapshot_columns(
-        analysis_fingerprint=analysis_fingerprint,
-        deal_context=deal_context,
-        analysis_snapshot=analysis_snapshot,
-        ai_snapshot=ai_snapshot,
-        analysis_decoder=_detailed_analysis_snapshot_from_dict,
-    )
 
     with _connect(db_path) as connection:
         cursor = connection.execute(
@@ -1038,11 +951,10 @@ def update_detailed_deal(
             UPDATE detailed_deals
             SET name = ?, {", ".join(f"{column} = ?" for column in _TERMS_COLUMNS)},
                 deal_context = ?,
-                {", ".join(f"{column} = ?" for column in _SNAPSHOT_INSERT_COLUMNS)},
                 updated_at = ?
             WHERE id = ?
             """,
-            (name, *_terms_values(terms), deal_context, *snapshot_columns, now, deal_id),
+            (name, *_terms_values(terms), deal_context, now, deal_id),
         )
         if cursor.rowcount == 0:
             raise DealNotFoundError(deal_id)
@@ -1169,72 +1081,114 @@ def duplicate_deal(
     keep in sync. Preserves ``deal_context`` (Gate A4) exactly, including
     ``None``, like every other field.
 
-    Owner Return Metrics V3 Gate A6: also copies ``analysis_snapshot``/
+    Owner Return Metrics V3 Gate A6/A7: also copies ``analysis_snapshot``/
     ``ai_snapshot`` when the original has a valid one -- both are
     mathematically/contextually still valid for the copy, since the copy's
     assumptions and Deal Context start out byte-identical to the
-    original's, so ``create_deal``/``create_detailed_deal`` will recompute
-    the exact same fingerprint and accept them. The very first edit to the
-    copy's assumptions or Deal Context invalidates its (independent) copy
-    exactly like any other change -- see ``update_deal``."""
+    original's. Rather than trusting that verbatim (the Gate A6 combined-
+    write path Gate A7 closes everywhere else), the copy is created with no
+    snapshot at all and then, if the original had a valid one, attached
+    through the same provenance-validated ``update_analysis_snapshot``/
+    ``update_ai_snapshot`` path every other snapshot write now goes
+    through -- passing the fingerprint recomputed from ``original``'s own
+    ``inputs``/``terms``+``detailed_operating_inputs`` (and, for AI,
+    ``deal_context``) as the provenance token. Because ``original``'s
+    snapshot only ever decoded successfully (non-``None`` on a ``Deal``) by
+    already fingerprint-matching those exact values (see ``_decode_snapshot``),
+    and the new row's assumptions/context are byte-identical copies of them,
+    this recomputed fingerprint is guaranteed to match the new row too -- the
+    copy always succeeds, never spuriously rejected. The very first edit to
+    the copy's assumptions or Deal Context invalidates its (independent)
+    copy exactly like any other change -- see ``update_deal``."""
 
     original = get_deal(deal_id, db_path=db_path)
     new_name = name if name else f"{original.name} (Copy)"
-    analysis_snapshot = (
-        dataclasses.asdict(original.analysis_snapshot)
-        if original.analysis_snapshot is not None
-        else None
-    )
-    ai_snapshot = dataclasses.asdict(original.ai_snapshot) if original.ai_snapshot is not None else None
 
     if original.operating_mode is OperatingMode.QUICK:
         assert original.inputs is not None
-        return create_deal(
+        new_deal = create_deal(
+            new_name, original.inputs, deal_context=original.deal_context, db_path=db_path
+        )
+        analysis_fingerprint = fingerprint_quick_inputs(original.inputs)
+    else:
+        assert original.terms is not None
+        assert original.detailed_operating_inputs is not None
+        new_deal = create_detailed_deal(
             new_name,
-            original.inputs,
+            original.terms,
+            original.detailed_operating_inputs,
             deal_context=original.deal_context,
-            analysis_snapshot=analysis_snapshot,
-            ai_snapshot=ai_snapshot,
+            db_path=db_path,
+        )
+        analysis_fingerprint = fingerprint_detailed_inputs(
+            original.terms, original.detailed_operating_inputs
+        )
+
+    if original.analysis_snapshot is not None:
+        new_deal = update_analysis_snapshot(
+            new_deal.id,
+            dataclasses.asdict(original.analysis_snapshot),
+            financial_input_fingerprint=analysis_fingerprint,
             db_path=db_path,
         )
 
-    assert original.terms is not None
-    assert original.detailed_operating_inputs is not None
-    return create_detailed_deal(
-        new_name,
-        original.terms,
-        original.detailed_operating_inputs,
-        analysis_snapshot=analysis_snapshot,
-        ai_snapshot=ai_snapshot,
-        deal_context=original.deal_context,
-        db_path=db_path,
-    )
+    if original.ai_snapshot is not None:
+        new_deal = update_ai_snapshot(
+            new_deal.id,
+            dataclasses.asdict(original.ai_snapshot),
+            ai_context_fingerprint=fingerprint_ai(
+                analysis_fingerprint=analysis_fingerprint, deal_context=original.deal_context
+            ),
+            db_path=db_path,
+        )
+
+    return new_deal
 
 
 # =============================================================================
-# Owner Return Metrics V3 Gate A6 -- silent background cache refresh
+# Owner Return Metrics V3 Gate A6 / Gate A7 -- provenance-validated snapshot
+# writes
 #
-# The write path for "Analyze/Generate AI Analysis succeeded on an
-# already-saved deal": each function below updates *only* its one snapshot
-# column (recomputing its fingerprint from the row's already-stored
-# assumptions/context, never from any caller-supplied value), leaving
-# name, assumptions, Deal Context, the *other* snapshot, and ``updated_at``
-# completely untouched. This is what makes the auto-cache-refresh
-# non-dirtying and Save-independent: the API layer calls these only when
-# the deal is already saved and not dirty (current form state matches the
-# persisted assumptions/context exactly), so the fingerprint recomputed
-# here from the row's stored assumptions is guaranteed to be the one the
-# fresh result was actually computed against.
+# The ONLY two functions in this module that ever write to a snapshot
+# column. Each updates *only* its one snapshot column, leaving name,
+# assumptions, Deal Context, the *other* snapshot, and ``updated_at``
+# completely untouched -- unchanged from Gate A6.
+#
+# Gate A7: each also now REQUIRES the caller to supply the provenance
+# fingerprint the snapshot was actually produced under (obtained from
+# ``POST /deals/fingerprint`` at the moment the analysis/AI ran -- see
+# ``anchor.api``), and independently recomputes the fingerprint the deal's
+# CURRENTLY STORED assumptions/context actually demand. The two must match
+# exactly, or the write is rejected (``SnapshotValidationError``) and
+# nothing is persisted. This is what makes both endpoints safe to call for
+# every snapshot write this module ever performs -- the silent background
+# cache refresh (an already-saved, not-dirty deal), the deliberate
+# provenance-validated first-Save-of-an-unsaved-deal path, and
+# ``duplicate_deal``'s copy -- without ever trusting a caller-supplied
+# fingerprint at face value: the caller's token only ever *unlocks* a write
+# that this function's own fingerprint recomputation already agrees with;
+# it can never override it.
 # =============================================================================
 
 
 def update_analysis_snapshot(
-    deal_id: str, analysis_snapshot: dict[str, Any], *, db_path: Path | None = None
+    deal_id: str,
+    analysis_snapshot: dict[str, Any],
+    *,
+    financial_input_fingerprint: str,
+    db_path: Path | None = None,
 ) -> Deal:
     """Update only ``deal_id``'s cached deterministic-analysis snapshot.
+
+    ``financial_input_fingerprint`` must equal the canonical fingerprint of
+    ``deal_id``'s own currently-stored ``inputs`` (Quick) or ``terms``+
+    ``detailed_operating_inputs`` (Detailed) -- i.e. it must originate from
+    the same assumptions that are actually stored for this deal right now,
+    not from any other assumption set the caller might have on hand.
+    Raises ``SnapshotValidationError`` (persisting nothing) if it does not,
+    or if ``analysis_snapshot`` is malformed for that deal's operating mode.
     Raises ``DealNotFoundError`` if ``deal_id`` doesn't exist in either
-    table; raises ``SnapshotValidationError`` if ``analysis_snapshot`` is
-    malformed for that deal's operating mode."""
+    table."""
 
     # ``get_deal`` (below) opens its own connection -- it must run only
     # after this ``with`` block has exited and committed, never nested
@@ -1245,7 +1199,12 @@ def update_analysis_snapshot(
     with _connect(db_path) as connection:
         quick_row = connection.execute("SELECT * FROM deals WHERE id = ?", (deal_id,)).fetchone()
         if quick_row is not None:
-            fingerprint = _fingerprint_quick_inputs(_inputs_from_row(quick_row))
+            expected_fingerprint = fingerprint_quick_inputs(_inputs_from_row(quick_row))
+            _validate_provenance(
+                provided_fingerprint=financial_input_fingerprint,
+                expected_fingerprint=expected_fingerprint,
+                label="analysis_snapshot's financial_input_fingerprint",
+            )
             encoded = _encode_snapshot(_quick_analysis_snapshot_from_dict(analysis_snapshot))
             connection.execute(
                 """
@@ -1254,7 +1213,7 @@ def update_analysis_snapshot(
                     analysis_snapshot_fingerprint = ?
                 WHERE id = ?
                 """,
-                (encoded, _ANALYSIS_SNAPSHOT_SCHEMA_VERSION, fingerprint, deal_id),
+                (encoded, _ANALYSIS_SNAPSHOT_SCHEMA_VERSION, expected_fingerprint, deal_id),
             )
         else:
             detailed_row = connection.execute(
@@ -1268,8 +1227,13 @@ def update_analysis_snapshot(
             if operating_row is None:
                 raise DealNotFoundError(deal_id)
 
-            fingerprint = _fingerprint_detailed_inputs(
+            expected_fingerprint = fingerprint_detailed_inputs(
                 _terms_from_row(detailed_row), _detailed_operating_inputs_from_row(operating_row)
+            )
+            _validate_provenance(
+                provided_fingerprint=financial_input_fingerprint,
+                expected_fingerprint=expected_fingerprint,
+                label="analysis_snapshot's financial_input_fingerprint",
             )
             encoded = _encode_snapshot(_detailed_analysis_snapshot_from_dict(analysis_snapshot))
             connection.execute(
@@ -1279,18 +1243,28 @@ def update_analysis_snapshot(
                     analysis_snapshot_fingerprint = ?
                 WHERE id = ?
                 """,
-                (encoded, _ANALYSIS_SNAPSHOT_SCHEMA_VERSION, fingerprint, deal_id),
+                (encoded, _ANALYSIS_SNAPSHOT_SCHEMA_VERSION, expected_fingerprint, deal_id),
             )
 
     return get_deal(deal_id, db_path=db_path)
 
 
 def update_ai_snapshot(
-    deal_id: str, ai_snapshot: dict[str, Any], *, db_path: Path | None = None
+    deal_id: str,
+    ai_snapshot: dict[str, Any],
+    *,
+    ai_context_fingerprint: str,
+    db_path: Path | None = None,
 ) -> Deal:
-    """Update only ``deal_id``'s cached AI Analyst snapshot. Raises
-    ``DealNotFoundError`` if ``deal_id`` doesn't exist in either table;
-    raises ``SnapshotValidationError`` if ``ai_snapshot`` is malformed."""
+    """Update only ``deal_id``'s cached AI Analyst snapshot.
+
+    ``ai_context_fingerprint`` must equal the canonical AI-context
+    fingerprint derived from ``deal_id``'s own currently-stored financial
+    assumptions AND currently-stored ``deal_context`` -- i.e. it must
+    originate from the same assumptions+context this deal actually has
+    right now. Raises ``SnapshotValidationError`` (persisting nothing) if it
+    does not, or if ``ai_snapshot`` is malformed. Raises
+    ``DealNotFoundError`` if ``deal_id`` doesn't exist in either table."""
 
     encoded = _encode_snapshot(_ai_snapshot_from_dict(ai_snapshot))
 
@@ -1299,9 +1273,14 @@ def update_ai_snapshot(
     with _connect(db_path) as connection:
         quick_row = connection.execute("SELECT * FROM deals WHERE id = ?", (deal_id,)).fetchone()
         if quick_row is not None:
-            analysis_fingerprint = _fingerprint_quick_inputs(_inputs_from_row(quick_row))
-            fingerprint = _fingerprint_ai(
+            analysis_fingerprint = fingerprint_quick_inputs(_inputs_from_row(quick_row))
+            expected_fingerprint = fingerprint_ai(
                 analysis_fingerprint=analysis_fingerprint, deal_context=quick_row["deal_context"]
+            )
+            _validate_provenance(
+                provided_fingerprint=ai_context_fingerprint,
+                expected_fingerprint=expected_fingerprint,
+                label="ai_snapshot's ai_context_fingerprint",
             )
             connection.execute(
                 """
@@ -1309,7 +1288,7 @@ def update_ai_snapshot(
                 SET ai_snapshot = ?, ai_snapshot_schema_version = ?, ai_snapshot_fingerprint = ?
                 WHERE id = ?
                 """,
-                (encoded, _AI_SNAPSHOT_SCHEMA_VERSION, fingerprint, deal_id),
+                (encoded, _AI_SNAPSHOT_SCHEMA_VERSION, expected_fingerprint, deal_id),
             )
         else:
             detailed_row = connection.execute(
@@ -1323,11 +1302,16 @@ def update_ai_snapshot(
             if operating_row is None:
                 raise DealNotFoundError(deal_id)
 
-            analysis_fingerprint = _fingerprint_detailed_inputs(
+            analysis_fingerprint = fingerprint_detailed_inputs(
                 _terms_from_row(detailed_row), _detailed_operating_inputs_from_row(operating_row)
             )
-            fingerprint = _fingerprint_ai(
+            expected_fingerprint = fingerprint_ai(
                 analysis_fingerprint=analysis_fingerprint, deal_context=detailed_row["deal_context"]
+            )
+            _validate_provenance(
+                provided_fingerprint=ai_context_fingerprint,
+                expected_fingerprint=expected_fingerprint,
+                label="ai_snapshot's ai_context_fingerprint",
             )
             connection.execute(
                 """
@@ -1335,7 +1319,7 @@ def update_ai_snapshot(
                 SET ai_snapshot = ?, ai_snapshot_schema_version = ?, ai_snapshot_fingerprint = ?
                 WHERE id = ?
                 """,
-                (encoded, _AI_SNAPSHOT_SCHEMA_VERSION, fingerprint, deal_id),
+                (encoded, _AI_SNAPSHOT_SCHEMA_VERSION, expected_fingerprint, deal_id),
             )
 
     return get_deal(deal_id, db_path=db_path)

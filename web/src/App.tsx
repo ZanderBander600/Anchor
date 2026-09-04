@@ -10,8 +10,10 @@ import {
   duplicateDeal,
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
+  fetchDealFingerprint,
   fetchDetailedAIAnalysis,
   fetchDetailedBreakEvenAnalysis,
+  fetchDetailedDealFingerprint,
   fetchDetailedSensitivityPresets,
   fetchSensitivityPresets,
   getDeal,
@@ -515,26 +517,12 @@ export default function App() {
     setIsSavingDetailedDeal(true);
     setSaveDetailedDealError(null);
     try {
-      // Owner Return Metrics V3 Gate A6: mirrors handleSaveDeal's snapshot
-      // passthrough exactly -- see its comment.
+      // Owner Return Metrics V3 Gate A7: mirrors handleSaveDeal's
+      // provenance-validated snapshot-attachment flow exactly -- see its
+      // comment.
       const deal = currentDetailedDealId
-        ? await updateDetailedDeal(
-            currentDetailedDealId,
-            name,
-            terms,
-            detailedOperatingInputs,
-            dealContext,
-            detailedResults,
-            detailedAiAnalysis,
-          )
-        : await createDetailedDeal(
-            name,
-            terms,
-            detailedOperatingInputs,
-            dealContext,
-            detailedResults,
-            detailedAiAnalysis,
-          );
+        ? await updateDetailedDeal(currentDetailedDealId, name, terms, detailedOperatingInputs, dealContext)
+        : await createDetailedDeal(name, terms, detailedOperatingInputs, dealContext);
       setCurrentDetailedDealId(deal.id);
       setDetailedDealName(deal.name);
       setDetailedDealContext(deal.deal_context ?? '');
@@ -544,6 +532,22 @@ export default function App() {
         values: detailedValues,
         dealContext: deal.deal_context ?? '',
       });
+
+      if (detailedResults !== null) {
+        const fingerprint = await fetchDetailedDealFingerprint(
+          terms,
+          detailedOperatingInputs,
+          dealContext,
+        );
+        await updateDealAnalysisSnapshot(
+          deal.id,
+          detailedResults,
+          fingerprint.financial_input_fingerprint,
+        );
+        if (detailedAiAnalysis !== null) {
+          await updateDealAiSnapshot(deal.id, detailedAiAnalysis, fingerprint.ai_context_fingerprint);
+        }
+      }
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setSaveDetailedDealError(apiError.message);
@@ -731,13 +735,29 @@ export default function App() {
       // saved would violate the "snapshot always matches saved assumptions"
       // invariant.
       if (currentDetailedDealId !== null && !isDetailedDirty) {
-        void updateDealAnalysisSnapshot(currentDetailedDealId, nextResults)
-          .then(() => clearSaveDetailedDealError())
-          .catch(() => {
+        // Owner Return Metrics V3 Gate A7: the provenance token is fetched
+        // fresh from the exact `terms`/`detailedOperatingInputs`/Deal
+        // Context just analyzed, never cached across calls -- the backend
+        // remains the sole authority on what a valid fingerprint is.
+        void (async () => {
+          try {
+            const fingerprint = await fetchDetailedDealFingerprint(
+              terms,
+              detailedOperatingInputs,
+              detailedDealContext.trim() || null,
+            );
+            await updateDealAnalysisSnapshot(
+              currentDetailedDealId,
+              nextResults,
+              fingerprint.financial_input_fingerprint,
+            );
+            clearSaveDetailedDealError();
+          } catch {
             setSaveDetailedDealError(
               'Could not save the latest analysis automatically. Results are shown but may not persist if you reload.',
             );
-          });
+          }
+        })();
       }
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -829,16 +849,30 @@ export default function App() {
         detailedDealContext.trim() || null,
       );
       setDetailedAiAnalysis(analysis);
-      // Owner Return Metrics V3 Gate A6: mirrors handleGenerateAiAnalysis's
-      // silent background AI-snapshot cache refresh exactly.
+      // Owner Return Metrics V3 Gate A6/A7: mirrors handleGenerateAiAnalysis's
+      // silent background AI-snapshot cache refresh exactly, now fetching
+      // the provenance token fresh from the exact terms/context this AI
+      // output was just generated under.
       if (currentDetailedDealId !== null && !isDetailedDirty) {
-        void updateDealAiSnapshot(currentDetailedDealId, analysis)
-          .then(() => clearSaveDetailedDealError())
-          .catch(() => {
+        void (async () => {
+          try {
+            const fingerprint = await fetchDetailedDealFingerprint(
+              terms,
+              detailedOperatingInputs,
+              detailedDealContext.trim() || null,
+            );
+            await updateDealAiSnapshot(
+              currentDetailedDealId,
+              analysis,
+              fingerprint.ai_context_fingerprint,
+            );
+            clearSaveDetailedDealError();
+          } catch {
             setSaveDetailedDealError(
               'Could not save the latest AI analysis automatically. It is shown but may not persist if you reload.',
             );
-          });
+          }
+        })();
       }
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -1170,23 +1204,39 @@ export default function App() {
     setIsSavingDeal(true);
     setSaveDealError(null);
     try {
-      // Owner Return Metrics V3 Gate A6: `results`/`aiAnalysis` are always
-      // either null or already valid for the current `values`/`dealContext`
-      // by construction (any assumption edit clears both via
-      // resetDownstreamAnalysisState; a Deal-Context-only edit clears only
-      // aiAnalysis, via clearAiAnalysis) -- so echoing them back here,
-      // whatever they currently are, is always correct: it persists a
-      // current valid snapshot on first Save, preserves one across a
-      // Deal-Context-only Save, and (via createDeal/updateDeal's own
-      // clear-unless-repassed contract) clears one that's no longer valid.
+      // Owner Return Metrics V3 Gate A7: this route persists assumptions/
+      // Deal Context only -- it never accepts a snapshot in the same write
+      // (a stale snapshot can never be relabeled as valid for freshly-
+      // submitted assumptions). Deal-level state is updated immediately on
+      // success, before any snapshot is attached, so a subsequent Save
+      // retry can never create a second deal even if the snapshot-
+      // attachment step below fails.
       const deal = currentDealId
-        ? await updateDeal(currentDealId, name, request, dealContextToSave, results, aiAnalysis)
-        : await createDeal(name, request, dealContextToSave, results, aiAnalysis);
+        ? await updateDeal(currentDealId, name, request, dealContextToSave)
+        : await createDeal(name, request, dealContextToSave);
       setCurrentDealId(deal.id);
       setDealName(deal.name);
       setDealContext(deal.deal_context ?? '');
       setLastSavedAt(deal.updated_at);
       setSavedSnapshot({ dealName: deal.name, values, dealContext: deal.deal_context ?? '' });
+
+      // `results`/`aiAnalysis` are always either null or already valid for
+      // the current `values`/`dealContext` by construction (any assumption
+      // edit clears both via resetDownstreamAnalysisState; a Deal-Context-
+      // only edit clears only aiAnalysis, via clearAiAnalysis) -- so
+      // attaching them here, through the provenance-validated dedicated
+      // endpoints whenever non-null, is always correct: it persists a
+      // current valid snapshot on first Save, and is a harmless re-attach
+      // (identical fingerprint) across a Deal-Context-only Save, where the
+      // analysis snapshot was already preserved automatically by the
+      // backend's own read-time fingerprint check.
+      if (results !== null) {
+        const fingerprint = await fetchDealFingerprint(request, dealContextToSave);
+        await updateDealAnalysisSnapshot(deal.id, results, fingerprint.financial_input_fingerprint);
+        if (aiAnalysis !== null) {
+          await updateDealAiSnapshot(deal.id, aiAnalysis, fingerprint.ai_context_fingerprint);
+        }
+      }
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setSaveDealError(apiError.message);
@@ -1539,19 +1589,25 @@ export default function App() {
         dealContext.trim() || null,
       );
       setAiAnalysis(analysis);
-      // Owner Return Metrics V3 Gate A6: silently refresh the persisted AI
-      // snapshot for an already-saved, not-dirty deal -- mirrors the
-      // analysis-snapshot auto-cache in handleSubmit exactly. Skipped for
-      // a new unsaved deal or one with unsaved assumption/context edits,
-      // for the same "never cache against never-saved state" reason.
+      // Owner Return Metrics V3 Gate A6/A7: silently refresh the persisted
+      // AI snapshot for an already-saved, not-dirty deal -- mirrors the
+      // analysis-snapshot auto-cache in handleSubmit exactly, now fetching
+      // the provenance token fresh from the exact assumptions/context this
+      // AI output was just generated under. Skipped for a new unsaved deal
+      // or one with unsaved assumption/context edits, for the same "never
+      // cache against never-saved state" reason.
       if (currentDealId !== null && !isDirty) {
-        void updateDealAiSnapshot(currentDealId, analysis)
-          .then(() => clearSaveDealError())
-          .catch(() => {
+        void (async () => {
+          try {
+            const fingerprint = await fetchDealFingerprint(lastRequest, dealContext.trim() || null);
+            await updateDealAiSnapshot(currentDealId, analysis, fingerprint.ai_context_fingerprint);
+            clearSaveDealError();
+          } catch {
             setSaveDealError(
               'Could not save the latest AI analysis automatically. It is shown but may not persist if you reload.',
             );
-          });
+          }
+        })();
       }
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -1591,16 +1647,24 @@ export default function App() {
     try {
       const nextResults = await analyzeAcquisition(request);
       setResults(nextResults);
-      // Owner Return Metrics V3 Gate A6: mirrors handleDetailedSubmit's
+      // Owner Return Metrics V3 Gate A6/A7: mirrors handleDetailedSubmit's
       // silent background cache refresh exactly -- see its comment.
       if (currentDealId !== null && !isDirty) {
-        void updateDealAnalysisSnapshot(currentDealId, nextResults)
-          .then(() => clearSaveDealError())
-          .catch(() => {
+        void (async () => {
+          try {
+            const fingerprint = await fetchDealFingerprint(request, dealContext.trim() || null);
+            await updateDealAnalysisSnapshot(
+              currentDealId,
+              nextResults,
+              fingerprint.financial_input_fingerprint,
+            );
+            clearSaveDealError();
+          } catch {
             setSaveDealError(
               'Could not save the latest analysis automatically. Results are shown but may not persist if you reload.',
             );
-          });
+          }
+        })();
       }
     } catch (apiError) {
       if (apiError instanceof ApiError) {

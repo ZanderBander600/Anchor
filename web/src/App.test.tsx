@@ -12,8 +12,10 @@ import {
   duplicateDeal,
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
+  fetchDealFingerprint,
   fetchDetailedAIAnalysis,
   fetchDetailedBreakEvenAnalysis,
+  fetchDetailedDealFingerprint,
   fetchDetailedSensitivityPresets,
   fetchSensitivityPresets,
   getDeal,
@@ -74,6 +76,8 @@ vi.mock('./api', async () => {
     updateDeal: vi.fn(),
     createDetailedDeal: vi.fn(),
     updateDetailedDeal: vi.fn(),
+    fetchDealFingerprint: vi.fn(),
+    fetchDetailedDealFingerprint: vi.fn(),
     updateDealAnalysisSnapshot: vi.fn(),
     updateDealAiSnapshot: vi.fn(),
     getDeal: vi.fn(),
@@ -105,6 +109,8 @@ const mockGetDeal = vi.mocked(getDeal);
 const mockListDeals = vi.mocked(listDeals);
 const mockUpdateDealAnalysisSnapshot = vi.mocked(updateDealAnalysisSnapshot);
 const mockUpdateDealAiSnapshot = vi.mocked(updateDealAiSnapshot);
+const mockFetchDealFingerprint = vi.mocked(fetchDealFingerprint);
+const mockFetchDetailedDealFingerprint = vi.mocked(fetchDetailedDealFingerprint);
 
 function missingField(field_id: string): FieldCandidates {
   return { field_id, candidates: [] };
@@ -728,6 +734,22 @@ beforeEach(() => {
   mockUpdateDealAnalysisSnapshot.mockResolvedValue(makeDeal());
   mockUpdateDealAiSnapshot.mockReset();
   mockUpdateDealAiSnapshot.mockResolvedValue(makeDeal());
+  // Owner Return Metrics V3 Gate A7: the provenance-lookup calls
+  // handleSubmit/handleDetailedSubmit/handleGenerateAiAnalysis/
+  // handleGenerateDetailedAiAnalysis/handleSaveDeal/handleSaveDetailedDeal
+  // now make before attaching a snapshot -- default to a resolved fixed
+  // fingerprint pair so those calls never throw in a test that doesn't
+  // care about the exact fingerprint value threaded through.
+  mockFetchDealFingerprint.mockReset();
+  mockFetchDealFingerprint.mockResolvedValue({
+    financial_input_fingerprint: 'fp-financial',
+    ai_context_fingerprint: 'fp-ai',
+  });
+  mockFetchDetailedDealFingerprint.mockReset();
+  mockFetchDetailedDealFingerprint.mockResolvedValue({
+    financial_input_fingerprint: 'fp-financial',
+    ai_context_fingerprint: 'fp-ai',
+  });
   // Default every test to an accepted confirmation so the Phase C
   // unsaved-changes guard and the Deal Library's delete confirmation don't
   // block tests that aren't specifically exercising cancellation -- those
@@ -2276,13 +2298,7 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith(
-      '111 Main St',
-      GOLDEN_DEAL_REQUEST,
-      null,
-      null,
-      null,
-    );
+    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
     expect(mockUpdateDeal).not.toHaveBeenCalled();
     expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
     expect(await screen.findByText(/^Saved/)).toBeTruthy();
@@ -2303,14 +2319,7 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Update Deal' }));
 
     await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
-    expect(mockUpdateDeal).toHaveBeenCalledWith(
-      'deal-1',
-      '111 Main St',
-      GOLDEN_DEAL_REQUEST,
-      null,
-      null,
-      null,
-    );
+    expect(mockUpdateDeal).toHaveBeenCalledWith('deal-1', '111 Main St', GOLDEN_DEAL_REQUEST, null);
     expect(mockCreateDeal).not.toHaveBeenCalled();
   });
 
@@ -2450,8 +2459,6 @@ describe('Deal persistence workflow', () => {
         purchase_price: 60_000_000,
       },
       null,
-      null,
-      null,
     );
   });
 
@@ -2512,13 +2519,7 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith(
-      '111 Main St',
-      GOLDEN_DEAL_REQUEST,
-      null,
-      null,
-      null,
-    );
+    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
   });
 });
 
@@ -3903,8 +3904,6 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
       GOLDEN_DETAILED_TERMS_REQUEST,
       GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
       null,
-      null,
-      null,
     );
     expect(mockUpdateDetailedDeal).not.toHaveBeenCalled();
     expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
@@ -4042,8 +4041,6 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
       deal.name,
       { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 11_000_000 },
       GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
-      null,
-      null,
       null,
     );
   });
@@ -4680,13 +4677,7 @@ describe('Deal Context (Gate A4)', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith(
-      '111 Main St',
-      GOLDEN_DEAL_REQUEST,
-      'Value-add play.',
-      null,
-      null,
-    );
+    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, 'Value-add play.');
   });
 
   it('reopening a deal restores its exact Deal Context', async () => {
@@ -4808,13 +4799,7 @@ describe('Deal Context (Gate A4)', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith(
-      '111 Main St',
-      GOLDEN_DEAL_REQUEST,
-      null,
-      null,
-      null,
-    );
+    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
     expect(screen.queryByText(/error/i)).toBeNull();
   });
 
@@ -4883,7 +4868,11 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
     expect(await screen.findByText('Key Returns')).toBeTruthy();
     await waitFor(() =>
-      expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith('deal-a', makeResults()),
+      expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
+        'deal-a',
+        makeResults(),
+        'fp-financial',
+      ),
     );
 
     mockGetDeal.mockResolvedValueOnce(dealB);
@@ -4924,6 +4913,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
       expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
         'detailed-a',
         makeDetailedResults(),
+        'fp-financial',
       ),
     );
 
@@ -4961,7 +4951,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
     expect(await screen.findByText('Investment View')).toBeTruthy();
     await waitFor(() =>
-      expect(mockUpdateDealAiSnapshot).toHaveBeenCalledWith('deal-a', makeAiAnalysis()),
+      expect(mockUpdateDealAiSnapshot).toHaveBeenCalledWith('deal-a', makeAiAnalysis(), 'fp-ai'),
     );
 
     mockGetDeal.mockResolvedValueOnce(dealB);
@@ -4999,7 +4989,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
     expect(await screen.findByText('Investment View')).toBeTruthy();
     await waitFor(() =>
-      expect(mockUpdateDealAiSnapshot).toHaveBeenCalledWith('detailed-a', makeAiAnalysis()),
+      expect(mockUpdateDealAiSnapshot).toHaveBeenCalledWith('detailed-a', makeAiAnalysis(), 'fp-ai'),
     );
 
     mockGetDeal.mockResolvedValueOnce(dealB);
@@ -5043,7 +5033,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     expect(screen.queryByText('Investment View')).toBeNull();
   });
 
-  it('saving a changed financial assumption sends a null analysis/AI snapshot, clearing the stale cache', async () => {
+  it('saving a changed financial assumption never re-attaches the now-stale analysis/AI snapshot', async () => {
     const user = userEvent.setup();
     const deal = makeDeal({
       id: 'deal-1',
@@ -5063,10 +5053,15 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Update Deal' }));
 
+    // Owner Return Metrics V3 Gate A7: `updateDeal` never carries a
+    // snapshot at all -- the financial edit already cleared `results`/
+    // `aiAnalysis` to null in frontend state, so handleSaveDeal has nothing
+    // to attach through the dedicated snapshot endpoints. The now-stale
+    // server-side cache is invalidated for free by the backend's own
+    // read-time fingerprint check against the newly-saved assumptions.
     await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
-    const call = mockUpdateDeal.mock.calls[0];
-    expect(call[4]).toBeNull(); // analysisSnapshot
-    expect(call[5]).toBeNull(); // aiSnapshot
+    expect(mockUpdateDealAnalysisSnapshot).not.toHaveBeenCalled();
+    expect(mockUpdateDealAiSnapshot).not.toHaveBeenCalled();
   });
 
   it('editing Deal Context on a snapshot-restored deal preserves the result and clears the AI', async () => {
@@ -5115,11 +5110,22 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Update Deal' }));
 
+    // Owner Return Metrics V3 Gate A7: `updateDeal` no longer carries a
+    // snapshot -- it is called with just the assumptions/Deal Context, and
+    // the still-valid analysis is preserved by re-attaching it through the
+    // provenance-validated dedicated endpoint. The cleared AI (frontend
+    // state already nulled it on the context edit) is never re-attached.
     await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
-    const [, , , dealContextArg, analysisSnapshotArg, aiSnapshotArg] = mockUpdateDeal.mock.calls[0];
+    const [, , , dealContextArg] = mockUpdateDeal.mock.calls[0];
     expect(dealContextArg).toBe('Updated strategy.');
-    expect(analysisSnapshotArg).toEqual(makeResults()); // preserved
-    expect(aiSnapshotArg).toBeNull(); // cleared
+    await waitFor(() =>
+      expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
+        'deal-1',
+        makeResults(),
+        'fp-financial',
+      ),
+    );
+    expect(mockUpdateDealAiSnapshot).not.toHaveBeenCalled();
   });
 
   it('analyzing a brand-new unsaved deal never silently creates a database row', async () => {
@@ -5152,10 +5158,22 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
+    // Owner Return Metrics V3 Gate A7: `createDeal` persists assumptions
+    // only; the current valid analysis/AI are then attached through the
+    // provenance-validated dedicated endpoints against the newly-created
+    // deal's id.
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    const [, , , analysisSnapshotArg, aiSnapshotArg] = mockCreateDeal.mock.calls[0];
-    expect(analysisSnapshotArg).toEqual(makeResults());
-    expect(aiSnapshotArg).toEqual(makeAiAnalysis());
+    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
+    await waitFor(() =>
+      expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
+        'deal-1',
+        makeResults(),
+        'fp-financial',
+      ),
+    );
+    await waitFor(() =>
+      expect(mockUpdateDealAiSnapshot).toHaveBeenCalledWith('deal-1', makeAiAnalysis(), 'fp-ai'),
+    );
   });
 
   it('Quick and Detailed snapshots never cross-contaminate when switching modes', async () => {

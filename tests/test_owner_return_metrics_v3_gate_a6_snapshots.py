@@ -24,6 +24,12 @@ from anchor.ai.contracts import AIAnalysis
 from anchor.contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs
 from anchor.deals import DealNotFoundError, SnapshotValidationError
 from anchor.deals import store as deals_store
+from anchor.deals.contracts import Deal
+from anchor.deals.fingerprint import (
+    fingerprint_ai,
+    fingerprint_detailed_inputs,
+    fingerprint_quick_inputs,
+)
 from anchor.engine.acquisition import (
     analyze_acquisition,
     analyze_detailed_acquisition_with_projection,
@@ -112,12 +118,90 @@ def db_path(tmp_path: Path) -> Path:
 
 
 # =============================================================================
+# Owner Return Metrics V3 Gate A7: ``create_deal``/``create_detailed_deal``
+# no longer accept a snapshot at all (see their docstrings) -- every
+# snapshot in this file is now attached, after creation, through the same
+# provenance-validated ``update_analysis_snapshot``/``update_ai_snapshot``
+# path a real Save/background-cache-refresh goes through. These two
+# fixtures model exactly the "first Save of an unsaved, already-analyzed
+# deal" flow (Gate A7 Section 5): create the deal, then persist its valid
+# snapshot(s) by supplying the *correct* provenance fingerprint (computed
+# the same way ``anchor.api``'s ``POST /deals/fingerprint`` computes it) --
+# never a stale or mismatched one. Gate A7's rejection behavior for a
+# genuinely *mismatched* fingerprint is exercised separately, below.
+# =============================================================================
+
+
+def _create_deal_with_snapshots(
+    name: str,
+    inputs: AcquisitionInputs,
+    *,
+    deal_context: str | None = None,
+    analysis_snapshot: dict | None = None,
+    ai_snapshot: dict | None = None,
+    db_path: Path,
+) -> Deal:
+    deal = deals_store.create_deal(name, inputs, deal_context=deal_context, db_path=db_path)
+    analysis_fingerprint = fingerprint_quick_inputs(inputs)
+    if analysis_snapshot is not None:
+        deal = deals_store.update_analysis_snapshot(
+            deal.id,
+            analysis_snapshot,
+            financial_input_fingerprint=analysis_fingerprint,
+            db_path=db_path,
+        )
+    if ai_snapshot is not None:
+        deal = deals_store.update_ai_snapshot(
+            deal.id,
+            ai_snapshot,
+            ai_context_fingerprint=fingerprint_ai(
+                analysis_fingerprint=analysis_fingerprint, deal_context=deal_context
+            ),
+            db_path=db_path,
+        )
+    return deal
+
+
+def _create_detailed_deal_with_snapshots(
+    name: str,
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    deal_context: str | None = None,
+    analysis_snapshot: dict | None = None,
+    ai_snapshot: dict | None = None,
+    db_path: Path,
+) -> Deal:
+    deal = deals_store.create_detailed_deal(
+        name, terms, detailed_operating_inputs, deal_context=deal_context, db_path=db_path
+    )
+    analysis_fingerprint = fingerprint_detailed_inputs(terms, detailed_operating_inputs)
+    if analysis_snapshot is not None:
+        deal = deals_store.update_analysis_snapshot(
+            deal.id,
+            analysis_snapshot,
+            financial_input_fingerprint=analysis_fingerprint,
+            db_path=db_path,
+        )
+    if ai_snapshot is not None:
+        deal = deals_store.update_ai_snapshot(
+            deal.id,
+            ai_snapshot,
+            ai_context_fingerprint=fingerprint_ai(
+                analysis_fingerprint=analysis_fingerprint, deal_context=deal_context
+            ),
+            db_path=db_path,
+        )
+    return deal
+
+
+# =============================================================================
 # 1-4. Analysis/AI snapshots persist for both modes
 # =============================================================================
 
 
 def test_quick_analysis_snapshot_persists(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, analysis_snapshot=QUICK_RESULTS_DICT, db_path=db_path
     )
 
@@ -127,7 +211,7 @@ def test_quick_analysis_snapshot_persists(db_path: Path) -> None:
 
 
 def test_detailed_analysis_snapshot_persists(db_path: Path) -> None:
-    deal = deals_store.create_detailed_deal(
+    deal = _create_detailed_deal_with_snapshots(
         "Deal",
         DETAILED_TERMS,
         DETAILED_OPERATING_INPUTS,
@@ -148,7 +232,7 @@ def test_detailed_analysis_snapshot_persists(db_path: Path) -> None:
 
 
 def test_quick_ai_snapshot_persists(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, ai_snapshot=AI_ANALYSIS_DICT, db_path=db_path
     )
 
@@ -158,7 +242,7 @@ def test_quick_ai_snapshot_persists(db_path: Path) -> None:
 
 
 def test_detailed_ai_snapshot_persists(db_path: Path) -> None:
-    deal = deals_store.create_detailed_deal(
+    deal = _create_detailed_deal_with_snapshots(
         "Deal",
         DETAILED_TERMS,
         DETAILED_OPERATING_INPUTS,
@@ -180,7 +264,7 @@ def test_detailed_ai_snapshot_persists(db_path: Path) -> None:
 
 
 def test_restart_preserves_both_snapshots(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal",
         QUICK_INPUTS,
         analysis_snapshot=QUICK_RESULTS_DICT,
@@ -342,7 +426,7 @@ def test_migration_from_schema_v3_is_idempotent_and_no_data_fabricated(db_path: 
 
     # Create a new context-bearing deal post-migration and confirm it
     # persists correctly against the now-migrated schema.
-    new_deal = deals_store.create_deal(
+    new_deal = _create_deal_with_snapshots(
         "Post-migration Deal", QUICK_INPUTS, analysis_snapshot=QUICK_RESULTS_DICT, db_path=db_path
     )
     assert deals_store.get_deal(new_deal.id, db_path=db_path).analysis_snapshot == QUICK_RESULTS
@@ -354,7 +438,7 @@ def test_migration_from_schema_v3_is_idempotent_and_no_data_fabricated(db_path: 
 
 
 def test_malformed_stored_analysis_snapshot_does_not_block_deal_open(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, analysis_snapshot=QUICK_RESULTS_DICT, db_path=db_path
     )
 
@@ -377,7 +461,7 @@ def test_malformed_stored_analysis_snapshot_does_not_block_deal_open(db_path: Pa
 def test_unsupported_analysis_snapshot_schema_version_does_not_block_deal_open(
     db_path: Path,
 ) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, analysis_snapshot=QUICK_RESULTS_DICT, db_path=db_path
     )
 
@@ -403,7 +487,7 @@ def test_fingerprint_mismatch_on_stored_snapshot_is_treated_as_absent(db_path: P
     anticipate), the snapshot is never surfaced -- read-time validation
     catches it independent of how it happened."""
 
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, analysis_snapshot=QUICK_RESULTS_DICT, db_path=db_path
     )
 
@@ -433,7 +517,7 @@ def test_create_deal_rejects_malformed_analysis_snapshot() -> None:
 
 
 def test_financial_assumption_update_invalidates_old_analysis_snapshot(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, analysis_snapshot=QUICK_RESULTS_DICT, db_path=db_path
     )
     assert deal.analysis_snapshot is not None
@@ -445,7 +529,7 @@ def test_financial_assumption_update_invalidates_old_analysis_snapshot(db_path: 
 
 
 def test_financial_assumption_update_invalidates_old_ai_snapshot(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, ai_snapshot=AI_ANALYSIS_DICT, db_path=db_path
     )
     assert deal.ai_snapshot is not None
@@ -457,7 +541,7 @@ def test_financial_assumption_update_invalidates_old_ai_snapshot(db_path: Path) 
 
 
 def test_deal_context_only_update_preserves_deterministic_snapshot(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal",
         QUICK_INPUTS,
         deal_context="Original strategy.",
@@ -465,16 +549,13 @@ def test_deal_context_only_update_preserves_deterministic_snapshot(db_path: Path
         db_path=db_path,
     )
 
-    # Same assumptions, new context, re-passing the still-valid analysis
-    # snapshot -- exactly what the frontend's Save flow does after a
-    # Deal-Context-only edit (Gate A4 architecture).
+    # Owner Return Metrics V3 Gate A7: ``update_deal`` no longer accepts (or
+    # touches) a snapshot at all -- same assumptions, new context. The
+    # still-valid analysis snapshot is preserved for free by the unchanged
+    # read-time fingerprint check (it never depended on Deal Context), with
+    # zero explicit re-passing required.
     updated = deals_store.update_deal(
-        deal.id,
-        "Deal",
-        QUICK_INPUTS,
-        deal_context="Updated strategy.",
-        analysis_snapshot=QUICK_RESULTS_DICT,
-        db_path=db_path,
+        deal.id, "Deal", QUICK_INPUTS, deal_context="Updated strategy.", db_path=db_path
     )
 
     assert updated.analysis_snapshot == QUICK_RESULTS
@@ -482,7 +563,7 @@ def test_deal_context_only_update_preserves_deterministic_snapshot(db_path: Path
 
 
 def test_deal_context_only_update_invalidates_old_ai_snapshot(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal",
         QUICK_INPUTS,
         deal_context="Original strategy.",
@@ -491,9 +572,10 @@ def test_deal_context_only_update_invalidates_old_ai_snapshot(db_path: Path) -> 
     )
     assert deal.ai_snapshot is not None
 
-    # The frontend clears its own AI state on a Deal Context edit (Gate A4)
-    # and therefore omits ai_snapshot on the following Save -- the primary
-    # invalidation mechanism.
+    # Owner Return Metrics V3 Gate A7: ``update_deal`` never touches
+    # ``ai_snapshot`` at all -- invalidation happens for free at read time,
+    # since the AI snapshot's stored fingerprint was computed against the
+    # OLD Deal Context and no longer matches the new one.
     updated = deals_store.update_deal(
         deal.id, "Deal", QUICK_INPUTS, deal_context="Updated strategy.", db_path=db_path
     )
@@ -507,7 +589,7 @@ def test_ai_snapshot_fingerprint_depends_on_deal_context_defensively(db_path: Pa
     computed against a *different* Deal Context than the row currently
     has, read-time validation catches the mismatch."""
 
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, deal_context="Context A.", ai_snapshot=AI_ANALYSIS_DICT, db_path=db_path
     )
 
@@ -549,7 +631,7 @@ def test_running_analysis_alone_creates_no_database_row(db_path: Path) -> None:
 
 
 def test_first_save_persists_both_current_valid_snapshots_together(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal",
         QUICK_INPUTS,
         deal_context="Strategy.",
@@ -570,7 +652,7 @@ def test_first_save_persists_both_current_valid_snapshots_together(db_path: Path
 
 
 def test_duplicate_copies_valid_analysis_snapshot(db_path: Path) -> None:
-    original = deals_store.create_deal(
+    original = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, analysis_snapshot=QUICK_RESULTS_DICT, db_path=db_path
     )
 
@@ -592,7 +674,7 @@ def test_duplicate_copies_ai_snapshot_since_ai_output_is_not_deal_name_specific(
 
     assert "name" not in {field.name for field in dataclasses.fields(AIAnalysis)}
 
-    original = deals_store.create_deal(
+    original = _create_deal_with_snapshots(
         "Deal",
         QUICK_INPUTS,
         deal_context="Strategy.",
@@ -608,7 +690,7 @@ def test_duplicate_copies_ai_snapshot_since_ai_output_is_not_deal_name_specific(
 def test_duplicate_then_editing_the_copy_invalidates_its_own_snapshot_independently(
     db_path: Path,
 ) -> None:
-    original = deals_store.create_deal(
+    original = _create_deal_with_snapshots(
         "Deal",
         QUICK_INPUTS,
         analysis_snapshot=QUICK_RESULTS_DICT,
@@ -637,7 +719,7 @@ def test_duplicate_then_editing_the_copy_invalidates_its_own_snapshot_independen
 
 
 def test_delete_removes_deal_and_its_snapshots(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal",
         QUICK_INPUTS,
         analysis_snapshot=QUICK_RESULTS_DICT,
@@ -723,7 +805,7 @@ def test_analyze_acquisition_signature_has_no_snapshot_or_deal_parameter() -> No
 
 
 def test_reanalysis_replaces_old_cached_analysis_snapshot(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, analysis_snapshot=QUICK_RESULTS_DICT, db_path=db_path
     )
 
@@ -735,12 +817,23 @@ def test_reanalysis_replaces_old_cached_analysis_snapshot(db_path: Path) -> None
     # (current_noi differs only in this fixture's second results object,
     # but the persisted deal's own stored inputs are unchanged -- this
     # models "Analyze produced a fresh AcquisitionResults for the deal's
-    # existing assumptions" by directly exercising the replace path).
-    refreshed = deals_store.update_analysis_snapshot(deal.id, QUICK_RESULTS_DICT, db_path=db_path)
+    # existing assumptions" by directly exercising the replace path). The
+    # correct provenance fingerprint for those unchanged, still-stored
+    # QUICK_INPUTS is supplied each time (Gate A7).
+    quick_inputs_fingerprint = fingerprint_quick_inputs(QUICK_INPUTS)
+    refreshed = deals_store.update_analysis_snapshot(
+        deal.id,
+        QUICK_RESULTS_DICT,
+        financial_input_fingerprint=quick_inputs_fingerprint,
+        db_path=db_path,
+    )
     assert refreshed.analysis_snapshot == QUICK_RESULTS
 
     replaced_again = deals_store.update_analysis_snapshot(
-        deal.id, QUICK_RESULTS_DICT, db_path=db_path
+        deal.id,
+        QUICK_RESULTS_DICT,
+        financial_input_fingerprint=quick_inputs_fingerprint,
+        db_path=db_path,
     )
     assert replaced_again.analysis_snapshot == QUICK_RESULTS
     # Sanity: the mechanism genuinely replaces (not merges/appends) -- a
@@ -749,7 +842,7 @@ def test_reanalysis_replaces_old_cached_analysis_snapshot(db_path: Path) -> None
 
 
 def test_regenerated_ai_replaces_old_cached_ai_snapshot(db_path: Path) -> None:
-    deal = deals_store.create_deal(
+    deal = _create_deal_with_snapshots(
         "Deal", QUICK_INPUTS, ai_snapshot=AI_ANALYSIS_DICT, db_path=db_path
     )
     assert deal.ai_snapshot == AI_ANALYSIS
@@ -757,7 +850,14 @@ def test_regenerated_ai_replaces_old_cached_ai_snapshot(db_path: Path) -> None:
     new_ai = dataclasses.replace(AI_ANALYSIS, executive_summary="A completely new summary.")
     new_ai_dict = _as_json_dict(new_ai)
 
-    refreshed = deals_store.update_ai_snapshot(deal.id, new_ai_dict, db_path=db_path)
+    refreshed = deals_store.update_ai_snapshot(
+        deal.id,
+        new_ai_dict,
+        ai_context_fingerprint=fingerprint_ai(
+            analysis_fingerprint=fingerprint_quick_inputs(QUICK_INPUTS), deal_context=None
+        ),
+        db_path=db_path,
+    )
 
     assert refreshed.ai_snapshot == new_ai
     assert refreshed.ai_snapshot != AI_ANALYSIS
@@ -770,14 +870,14 @@ def test_regenerated_ai_replaces_old_cached_ai_snapshot(db_path: Path) -> None:
 
 
 def test_list_deals_never_includes_snapshot_payloads(db_path: Path) -> None:
-    deals_store.create_deal(
+    _create_deal_with_snapshots(
         "A",
         QUICK_INPUTS,
         analysis_snapshot=QUICK_RESULTS_DICT,
         ai_snapshot=AI_ANALYSIS_DICT,
         db_path=db_path,
     )
-    deals_store.create_detailed_deal(
+    _create_detailed_deal_with_snapshots(
         "B",
         DETAILED_TERMS,
         DETAILED_OPERATING_INPUTS,

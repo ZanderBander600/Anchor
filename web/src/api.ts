@@ -690,14 +690,22 @@ async function _handleDealResponse(response: Response, failureMessage: string): 
   return (await response.json()) as Deal;
 }
 
-/** POSTs a new deal (name + the fourteen assumptions) to ``/deals``. Used for a
- * deal that has never been saved -- ``currentDealId`` is still ``null``. */
+/**
+ * POSTs a new deal (name + the fourteen assumptions) to ``/deals``. Used for
+ * a deal that has never been saved -- ``currentDealId`` is still ``null``.
+ *
+ * Owner Return Metrics V3 Gate A7: this route persists assumptions/Deal
+ * Context only -- it never accepts ``analysis_snapshot``/``ai_snapshot`` (a
+ * generic assumptions write can never be paired with an unverified derived-
+ * results payload in the same call). To persist a *current, valid*
+ * analysis/AI immediately after creating an unsaved, already-analyzed deal,
+ * call ``updateDealAnalysisSnapshot``/``updateDealAiSnapshot`` against the
+ * id this returns -- both are independently provenance-validated.
+ */
 export async function createDeal(
   name: string,
   inputs: AcquisitionRequest,
   dealContext?: string | null,
-  analysisSnapshot?: AcquisitionResults | null,
-  aiSnapshot?: AIAnalysis | null,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -708,8 +716,6 @@ export async function createDeal(
         name,
         inputs,
         deal_context: dealContext ?? null,
-        analysis_snapshot: analysisSnapshot ?? null,
-        ai_snapshot: aiSnapshot ?? null,
       }),
     });
   } catch {
@@ -722,14 +728,20 @@ export async function createDeal(
   return _handleDealResponse(response, 'The deal could not be saved');
 }
 
-/** PUTs an already-saved deal's name and assumptions to ``/deals/{id}``. */
+/**
+ * PUTs an already-saved deal's name and assumptions to ``/deals/{id}``.
+ *
+ * Owner Return Metrics V3 Gate A7: mirrors ``createDeal``'s
+ * never-accepts-a-snapshot contract exactly -- this route never touches the
+ * deal's cached snapshots. Preservation across a Deal-Context-only edit and
+ * invalidation across an assumption edit both happen automatically on the
+ * backend via its unchanged read-time fingerprint check.
+ */
 export async function updateDeal(
   dealId: string,
   name: string,
   inputs: AcquisitionRequest,
   dealContext?: string | null,
-  analysisSnapshot?: AcquisitionResults | null,
-  aiSnapshot?: AIAnalysis | null,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -740,8 +752,6 @@ export async function updateDeal(
         name,
         inputs,
         deal_context: dealContext ?? null,
-        analysis_snapshot: analysisSnapshot ?? null,
-        ai_snapshot: aiSnapshot ?? null,
       }),
     });
   } catch {
@@ -768,8 +778,6 @@ export async function createDetailedDeal(
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
   dealContext?: string | null,
-  analysisSnapshot?: DetailedAcquisitionResults | null,
-  aiSnapshot?: AIAnalysis | null,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -782,8 +790,6 @@ export async function createDetailedDeal(
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
         deal_context: dealContext ?? null,
-        analysis_snapshot: analysisSnapshot ?? null,
-        ai_snapshot: aiSnapshot ?? null,
       }),
     });
   } catch {
@@ -804,8 +810,6 @@ export async function updateDetailedDeal(
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
   dealContext?: string | null,
-  analysisSnapshot?: DetailedAcquisitionResults | null,
-  aiSnapshot?: AIAnalysis | null,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -818,8 +822,6 @@ export async function updateDetailedDeal(
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
         deal_context: dealContext ?? null,
-        analysis_snapshot: analysisSnapshot ?? null,
-        ai_snapshot: aiSnapshot ?? null,
       }),
     });
   } catch {
@@ -833,7 +835,80 @@ export async function updateDetailedDeal(
 }
 
 /**
- * Owner Return Metrics V3 Gate A6 -- silent background cache refresh.
+ * Owner Return Metrics V3 Gate A7 -- the backend-authoritative provenance
+ * lookup. Given the same assumptions (and, for the AI fingerprint, Deal
+ * Context) just analyzed/interpreted, returns the exact canonical
+ * fingerprint(s) the backend will independently recompute at snapshot-write
+ * time. The frontend never computes (or duplicates in TypeScript) this
+ * algorithm itself -- it only ever transports the opaque string this
+ * endpoint returns back to ``updateDealAnalysisSnapshot``/
+ * ``updateDealAiSnapshot`` below.
+ */
+export interface DealFingerprint {
+  financial_input_fingerprint: string;
+  ai_context_fingerprint: string;
+}
+
+export async function fetchDealFingerprint(
+  inputs: AcquisitionRequest,
+  dealContext?: string | null,
+): Promise<DealFingerprint> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals/fingerprint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operating_mode: 'quick',
+        inputs,
+        deal_context: dealContext ?? null,
+      }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+  if (!response.ok) {
+    throw new ApiError(`The deal fingerprint could not be retrieved (HTTP ${response.status}).`);
+  }
+  return (await response.json()) as DealFingerprint;
+}
+
+/** Detailed counterpart of ``fetchDealFingerprint`` -- mirrors it exactly,
+ * over ``terms``/``detailedOperatingInputs`` instead of ``inputs``. */
+export async function fetchDetailedDealFingerprint(
+  terms: AcquisitionTermsRequest,
+  detailedOperatingInputs: DetailedOperatingInputsRequest,
+  dealContext?: string | null,
+): Promise<DealFingerprint> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals/fingerprint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operating_mode: 'detailed',
+        terms,
+        detailed_operating_inputs: detailedOperatingInputs,
+        deal_context: dealContext ?? null,
+      }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+  if (!response.ok) {
+    throw new ApiError(`The deal fingerprint could not be retrieved (HTTP ${response.status}).`);
+  }
+  return (await response.json()) as DealFingerprint;
+}
+
+/**
+ * Owner Return Metrics V3 Gate A6/A7 -- silent background cache refresh.
  * PUTs only the cached deterministic-analysis snapshot to
  * ``/deals/{id}/analysis-snapshot``; never touches name, assumptions, Deal
  * Context, the AI snapshot, or the deal's save timestamp. Used after a
@@ -842,10 +917,18 @@ export async function updateDetailedDeal(
  * modes' callers: pass an ``AcquisitionResults`` for Quick or a
  * ``DetailedAcquisitionResults`` for Detailed, matching whichever mode
  * ``dealId`` actually is.
+ *
+ * Gate A7: also requires ``financialInputFingerprint`` -- the opaque
+ * provenance token obtained from ``fetchDealFingerprint``/
+ * ``fetchDetailedDealFingerprint`` using the exact same assumptions that
+ * produced ``analysisSnapshot``. The backend independently verifies it
+ * against the deal's own currently-stored assumptions and rejects (422) a
+ * mismatch rather than persisting it.
  */
 export async function updateDealAnalysisSnapshot(
   dealId: string,
   analysisSnapshot: AcquisitionResults | DetailedAcquisitionResults,
+  financialInputFingerprint: string,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -854,7 +937,10 @@ export async function updateDealAnalysisSnapshot(
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ analysis_snapshot: analysisSnapshot }),
+        body: JSON.stringify({
+          analysis_snapshot: analysisSnapshot,
+          financial_input_fingerprint: financialInputFingerprint,
+        }),
       },
     );
   } catch {
@@ -868,21 +954,28 @@ export async function updateDealAnalysisSnapshot(
 }
 
 /**
- * Owner Return Metrics V3 Gate A6 -- silent background cache refresh, AI
+ * Owner Return Metrics V3 Gate A6/A7 -- silent background cache refresh, AI
  * counterpart to ``updateDealAnalysisSnapshot`` above. PUTs only the
  * cached AI Analyst snapshot; never touches anything else. Used after a
  * successful Generate AI Analysis on an already-saved, not-dirty deal.
+ *
+ * Gate A7: also requires ``aiContextFingerprint`` -- mirrors
+ * ``updateDealAnalysisSnapshot``'s provenance-token contract exactly.
  */
 export async function updateDealAiSnapshot(
   dealId: string,
   aiSnapshot: AIAnalysis,
+  aiContextFingerprint: string,
 ): Promise<Deal> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/deals/${encodeURIComponent(dealId)}/ai-snapshot`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ai_snapshot: aiSnapshot }),
+      body: JSON.stringify({
+        ai_snapshot: aiSnapshot,
+        ai_context_fingerprint: aiContextFingerprint,
+      }),
     });
   } catch {
     throw new ApiError(

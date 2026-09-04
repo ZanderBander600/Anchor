@@ -12,6 +12,7 @@ sensitivity math of its own.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -56,6 +57,7 @@ from .contracts import (
 )
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError, SnapshotValidationError
+from .deals.fingerprint import fingerprint_ai, fingerprint_detailed_inputs, fingerprint_quick_inputs
 from .engine import (
     AcquisitionResults,
     DetailedAcquisitionResults,
@@ -1008,24 +1010,40 @@ def _optional_deal_context(payload: dict[str, Any]) -> str | None:
     return stripped if stripped else None
 
 
-def _optional_snapshot_dict(payload: dict[str, Any], key: str) -> dict[str, Any] | None:
-    """Owner Return Metrics V3 Gate A6: ``analysis_snapshot``/``ai_snapshot``
-    are optional, already-computed result shapes (the exact JSON a prior
-    ``/analyze``/``/ai/analysis`` response already produced, echoed back
-    unchanged) -- this only checks the coarse shape (present and an object,
-    or absent). Deep validation into the actual ``AcquisitionResults``/
-    ``DetailedAcquisitionResults``/``AIAnalysis`` contract shape happens in
-    the store layer (``SnapshotValidationError``, translated to 422 by the
-    caller), which is the single place that already knows each field's
-    type."""
+def _require_snapshot_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    """Owner Return Metrics V3 Gate A6/A7: ``analysis_snapshot``/
+    ``ai_snapshot`` are already-computed result shapes (the exact JSON a
+    prior ``/analyze``/``/ai/analysis`` response already produced, echoed
+    back unchanged) -- this only checks the coarse shape (present and an
+    object). Deep validation into the actual ``AcquisitionResults``/
+    ``DetailedAcquisitionResults``/``AIAnalysis`` contract shape, and the
+    Gate A7 provenance-fingerprint check, both happen in the store layer
+    (``SnapshotValidationError``, translated to 422 by the caller), which is
+    the single place that already knows each field's type and each deal's
+    currently-stored assumptions/context."""
 
     raw_value = payload.get(key)
-    if raw_value is None:
-        return None
     if not isinstance(raw_value, dict):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"'{key}' must be an object when provided.",
+            detail=f"Request body must include an '{key}' object.",
+        )
+    return raw_value
+
+
+def _require_fingerprint_string(payload: dict[str, Any], key: str) -> str:
+    """Owner Return Metrics V3 Gate A7: the opaque provenance token a
+    dedicated snapshot-write endpoint requires alongside its snapshot --
+    obtained by the frontend from ``POST /deals/fingerprint`` and
+    transported back unmodified. This only checks the coarse shape (present
+    and a non-empty string); the store layer is the sole place that knows
+    what value it must actually equal for a given deal."""
+
+    raw_value = payload.get(key)
+    if not isinstance(raw_value, str) or not raw_value:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Request body must include a non-empty '{key}' string.",
         )
     return raw_value
 
@@ -1104,35 +1122,29 @@ def _require_deal_detailed_operating_inputs(
 
 @app.post("/deals", response_model=Deal)
 def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
+    """Owner Return Metrics V3 Gate A7: this route persists assumptions/
+    Deal Context only -- it never accepts (and silently ignores, if a
+    caller's payload happens to include) ``analysis_snapshot``/
+    ``ai_snapshot``. A brand-new deal is created with no cached snapshot; to
+    persist a *current, valid* analysis/AI for it (the "first Save of an
+    unsaved, already-analyzed deal" flow), call the dedicated,
+    provenance-validated ``PUT /deals/{id}/analysis-snapshot``/
+    ``PUT /deals/{id}/ai-snapshot`` against the id this returns. See
+    ``anchor.deals.store.create_deal``'s docstring."""
+
     name = _require_deal_name(payload)
     operating_mode = _require_operating_mode(payload)
     deal_context = _optional_deal_context(payload)
-    analysis_snapshot = _optional_snapshot_dict(payload, "analysis_snapshot")
-    ai_snapshot = _optional_snapshot_dict(payload, "ai_snapshot")
 
-    try:
-        if operating_mode is OperatingMode.DETAILED:
-            terms = _require_deal_terms(payload)
-            detailed_inputs = _require_deal_detailed_operating_inputs(payload)
-            return deals_store.create_detailed_deal(
-                name,
-                terms,
-                detailed_inputs,
-                deal_context=deal_context,
-                analysis_snapshot=analysis_snapshot,
-                ai_snapshot=ai_snapshot,
-            )
-
-        inputs = _require_deal_inputs(payload)
-        return deals_store.create_deal(
-            name,
-            inputs,
-            deal_context=deal_context,
-            analysis_snapshot=analysis_snapshot,
-            ai_snapshot=ai_snapshot,
+    if operating_mode is OperatingMode.DETAILED:
+        terms = _require_deal_terms(payload)
+        detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+        return deals_store.create_detailed_deal(
+            name, terms, detailed_inputs, deal_context=deal_context
         )
-    except SnapshotValidationError as error:
-        raise _snapshot_validation_error_response(error) from None
+
+    inputs = _require_deal_inputs(payload)
+    return deals_store.create_deal(name, inputs, deal_context=deal_context)
 
 
 @app.get("/deals", response_model=list[Deal])
@@ -1152,41 +1164,34 @@ def get_deal(deal_id: str) -> Deal:
 
 @app.put("/deals/{deal_id}", response_model=Deal)
 def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
+    """Owner Return Metrics V3 Gate A7: mirrors ``create_deal``'s
+    never-accepts-a-snapshot contract exactly -- this route never touches
+    the six cached-snapshot columns at all, so a stale snapshot can never be
+    relabeled as valid for freshly-submitted assumptions in the same write
+    (the Gate A6 trust boundary this gate closes). Preservation of a still-
+    valid analysis snapshot across a Deal-Context-only edit, and
+    invalidation of a now-stale one across an assumption edit, both happen
+    for free via the unchanged read-time fingerprint check -- see
+    ``anchor.deals.store.update_deal``'s docstring."""
+
     name = _require_deal_name(payload)
     operating_mode = _require_operating_mode(payload)
     deal_context = _optional_deal_context(payload)
-    analysis_snapshot = _optional_snapshot_dict(payload, "analysis_snapshot")
-    ai_snapshot = _optional_snapshot_dict(payload, "ai_snapshot")
 
     try:
         if operating_mode is OperatingMode.DETAILED:
             terms = _require_deal_terms(payload)
             detailed_inputs = _require_deal_detailed_operating_inputs(payload)
             return deals_store.update_detailed_deal(
-                deal_id,
-                name,
-                terms,
-                detailed_inputs,
-                deal_context=deal_context,
-                analysis_snapshot=analysis_snapshot,
-                ai_snapshot=ai_snapshot,
+                deal_id, name, terms, detailed_inputs, deal_context=deal_context
             )
 
         inputs = _require_deal_inputs(payload)
-        return deals_store.update_deal(
-            deal_id,
-            name,
-            inputs,
-            deal_context=deal_context,
-            analysis_snapshot=analysis_snapshot,
-            ai_snapshot=ai_snapshot,
-        )
+        return deals_store.update_deal(deal_id, name, inputs, deal_context=deal_context)
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
         ) from None
-    except SnapshotValidationError as error:
-        raise _snapshot_validation_error_response(error) from None
 
 
 @app.delete("/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1216,29 +1221,78 @@ def duplicate_deal(deal_id: str, payload: dict[str, Any] = Body(default={})) -> 
 
 
 # =============================================================================
-# Owner Return Metrics V3 Gate A6 -- silent background cache refresh
+# Owner Return Metrics V3 Gate A7 -- backend-authoritative provenance lookup
+#
+# A pure, side-effect-free companion to ``/analyze``/``/ai/analysis``: given
+# the same assumptions (and, for the AI fingerprint, Deal Context) a caller
+# just analyzed, returns the exact canonical fingerprint(s)
+# ``anchor.deals.store`` will independently recompute for those same values
+# at snapshot-write time. Validates through the identical shared validators
+# ``/analyze`` uses, so the fingerprint returned here is guaranteed to equal
+# what the store computes from the same values once persisted -- never a
+# parallel or approximate computation. This is how the frontend obtains a
+# provenance token to transport back on a snapshot write without ever
+# computing (or duplicating) the fingerprint algorithm itself in
+# TypeScript; the backend remains the sole authority on what a valid
+# fingerprint is.
+# =============================================================================
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class _FingerprintResponse:
+    financial_input_fingerprint: str
+    ai_context_fingerprint: str
+
+
+@app.post("/deals/fingerprint", response_model=_FingerprintResponse)
+def deal_fingerprint(payload: dict[str, Any] = Body(...)) -> _FingerprintResponse:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+    deal_context = _optional_deal_context(payload)
+
+    if operating_mode is OperatingMode.DETAILED:
+        terms = _require_deal_terms(payload)
+        detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+        financial_input_fingerprint = fingerprint_detailed_inputs(terms, detailed_inputs)
+    else:
+        inputs = _require_deal_inputs(payload)
+        financial_input_fingerprint = fingerprint_quick_inputs(inputs)
+
+    ai_context_fingerprint = fingerprint_ai(
+        analysis_fingerprint=financial_input_fingerprint, deal_context=deal_context
+    )
+    return _FingerprintResponse(
+        financial_input_fingerprint=financial_input_fingerprint,
+        ai_context_fingerprint=ai_context_fingerprint,
+    )
+
+
+# =============================================================================
+# Owner Return Metrics V3 Gate A6 / Gate A7 -- provenance-validated snapshot
+# writes
 #
 # Two narrow endpoints, each updating exactly one cached snapshot column
 # and nothing else (never ``name``/assumptions/``deal_context``/the other
 # snapshot/``updated_at``) -- the write path for "Analyze/Generate AI
-# Analysis succeeded on an already-saved deal": the frontend calls these
-# only when the deal is already saved and not dirty, so this never marks
-# the deal dirty, never requires another explicit Save, and never touches
-# financial assumptions or Deal Context. See
+# Analysis succeeded" (background cache refresh on an already-saved, not-
+# dirty deal; the deliberate first-Save-of-an-unsaved-deal path; and
+# ``duplicate_deal``'s copy). Gate A7: each also now requires the caller to
+# supply the provenance fingerprint the snapshot was produced under
+# (obtained from ``POST /deals/fingerprint`` above) -- the store layer
+# independently verifies it against the deal's own currently-stored
+# assumptions/context and rejects the write (422) on any mismatch. See
 # ``anchor.deals.store.update_analysis_snapshot``/``update_ai_snapshot``.
 # =============================================================================
 
 
 @app.put("/deals/{deal_id}/analysis-snapshot", response_model=Deal)
 def update_deal_analysis_snapshot(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
-    raw_snapshot = payload.get("analysis_snapshot")
-    if not isinstance(raw_snapshot, dict):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Request body must include an 'analysis_snapshot' object.",
-        )
+    raw_snapshot = _require_snapshot_dict(payload, "analysis_snapshot")
+    financial_input_fingerprint = _require_fingerprint_string(payload, "financial_input_fingerprint")
     try:
-        return deals_store.update_analysis_snapshot(deal_id, raw_snapshot)
+        return deals_store.update_analysis_snapshot(
+            deal_id, raw_snapshot, financial_input_fingerprint=financial_input_fingerprint
+        )
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
@@ -1249,14 +1303,12 @@ def update_deal_analysis_snapshot(deal_id: str, payload: dict[str, Any] = Body(.
 
 @app.put("/deals/{deal_id}/ai-snapshot", response_model=Deal)
 def update_deal_ai_snapshot(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
-    raw_snapshot = payload.get("ai_snapshot")
-    if not isinstance(raw_snapshot, dict):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Request body must include an 'ai_snapshot' object.",
-        )
+    raw_snapshot = _require_snapshot_dict(payload, "ai_snapshot")
+    ai_context_fingerprint = _require_fingerprint_string(payload, "ai_context_fingerprint")
     try:
-        return deals_store.update_ai_snapshot(deal_id, raw_snapshot)
+        return deals_store.update_ai_snapshot(
+            deal_id, raw_snapshot, ai_context_fingerprint=ai_context_fingerprint
+        )
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
