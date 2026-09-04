@@ -604,6 +604,191 @@ body {
   font-weight: 600;
 }
 
+/* Sprint B Gate B3 -- One-Page Owner Summary. Reuses `.card`/`.card-title`/
+   `.headline-stats`/`.stat-grid`/`.stat-card`/`.info-row` unchanged (see
+   `ResultsPanel`'s identical usage above); the only new rules are the
+   handful this panel genuinely needs that nothing else already provides. */
+.owner-summary-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.owner-summary-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.owner-summary-deal-name {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.owner-summary-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: var(--color-info-bg);
+  color: var(--color-info);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+/* Deal Context, read-only: visually distinct from every authoritative
+   metric card below it -- a quoted, muted block, never a `.stat-card`. */
+.owner-summary-play {
+  background: var(--color-surface-muted);
+}
+
+/* Gate B5 density pass: THE PLAY is a one-to-three-line label + quote, not
+   a data card -- the full `.card-title` rule's rule line and 1.1rem gap
+   spent about a third of the block's height on chrome and pushed the hero
+   metrics down. Same type treatment, compact spacing. */
+.owner-summary-play .card-title {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.owner-summary-play-text {
+  margin: 0;
+  font-style: italic;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The Tier 2 supporting figures sit inside the same Key Returns card as
+   the four hero cards, visually secondary via `.info-row`'s existing
+   smaller/muted styling -- never a fifth hero card. Gate B5 narrowed this
+   strip to Unlevered IRR and Cumulative Operating Distributions: Year 1
+   Debt Yield and Year 1 NOI each appeared three times across the summary,
+   and now appear twice, in the two places that read them differently. */
+.owner-summary-supporting-rows {
+  margin-top: 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--color-divider);
+}
+
+.owner-summary-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.25rem;
+}
+
+@media (max-width: 900px) {
+  .owner-summary-two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Sprint B Gate B4 -- the AI Deal Story. Deliberately quieter than every
+   deterministic section above it: muted surface, no `.stat-card`, no
+   accent color, smaller type than the hero metrics, and an explicit
+   "AI Interpretation" badge so it can never read as an Anchor-computed
+   result. Reuses the existing `.card` shell and the existing color tokens
+   -- no new font, gradient, animation, or decorative graphic. */
+.owner-summary-story {
+  background: var(--color-surface-muted);
+}
+
+.owner-summary-story-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.owner-summary-story-header .card-title {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.owner-summary-story-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.owner-summary-story-view {
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+
+.owner-summary-story-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-divider);
+}
+
+@media (max-width: 900px) {
+  .owner-summary-story-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.owner-summary-story-subtitle {
+  margin: 0 0 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.owner-summary-story-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--color-text);
+}
+
+.owner-summary-story-list li + li {
+  margin-top: 0.3rem;
+}
+
+.owner-summary-story-gap {
+  margin-top: 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-divider);
+}
+
+.owner-summary-story-gap-text {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--color-text);
+}
+
 .table-card {
   overflow: hidden;
 }

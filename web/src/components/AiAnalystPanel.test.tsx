@@ -20,6 +20,7 @@ function makeAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
     break_even_analysis: 'Maximum purchase price break-even was found within the tested range.',
     questions_to_investigate: ['What is the in-place rent roll composition?'],
     confidence_notes: ['No tenant credit data was supplied.'],
+    deal_story: null,
     ...overrides,
   };
 }

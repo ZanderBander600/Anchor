@@ -41,8 +41,10 @@ import { ExcelReviewPanel } from './components/ExcelReviewPanel';
 import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
 import { OperatingStatementTable } from './components/OperatingStatementTable';
+import { OwnerSummaryPanel } from './components/OwnerSummaryPanel';
 import { ResultsPanel } from './components/ResultsPanel';
 import { SensitivityPanel } from './components/SensitivityPanel';
+import { buildOwnerSummaryData } from './ownerSummary';
 import {
   BLANK_DETAILED_FORM_VALUES,
   BLANK_FORM_VALUES,
@@ -1825,6 +1827,21 @@ export default function App() {
                 </div>
               )}
 
+              {detailedResults && lastDetailedRequest && (
+                <OwnerSummaryPanel
+                  data={buildOwnerSummaryData({
+                    operatingMode: 'detailed',
+                    dealName: detailedDealName,
+                    dealContext: detailedDealContext,
+                    terms: lastDetailedRequest.terms,
+                    detailedOperatingInputs: lastDetailedRequest.detailedOperatingInputs,
+                    results: detailedResults.results,
+                    breakEven: detailedBreakEven,
+                  })}
+                  dealStory={detailedAiAnalysis?.deal_story ?? null}
+                />
+              )}
+
               {detailedResults && <ResultsPanel results={detailedResults.results} />}
 
               {detailedResults && (
@@ -1931,6 +1948,20 @@ export default function App() {
                 <div className="empty-state">
                   Enter assumptions and click <strong>Analyze Deal</strong> to see results.
                 </div>
+              )}
+
+              {results && lastRequest && (
+                <OwnerSummaryPanel
+                  data={buildOwnerSummaryData({
+                    operatingMode: 'quick',
+                    dealName,
+                    dealContext,
+                    inputs: lastRequest,
+                    results,
+                    breakEven,
+                  })}
+                  dealStory={aiAnalysis?.deal_story ?? null}
+                />
               )}
 
               {results && <ResultsPanel results={results} />}

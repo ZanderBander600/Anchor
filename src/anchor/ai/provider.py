@@ -6,7 +6,10 @@ here so a different provider/model could be introduced later without
 touching ``anchor.ai.analyst``, ``anchor.ai.prompts``, or any
 financial code. This module performs no financial calculation: it only
 sends two already-built prompt strings to the model and converts the
-model's structured JSON reply into ``AIAnalysis``.
+model's structured JSON reply into ``AIAnalysis`` (including the nested
+Sprint B Gate B4 ``DealStory`` that same single reply carries -- one
+provider call still produces both the full report and the concise owner
+Deal Story).
 """
 
 from __future__ import annotations
@@ -16,16 +19,18 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-from .contracts import AIAnalysis
+from .contracts import AIAnalysis, DealStory
 
 DEFAULT_MODEL = "gpt-5.6-terra"
 _MODEL_ENV_VAR = "ANCHOR_AI_MODEL"
 _API_KEY_ENV_VAR = "OPENAI_API_KEY"
 
-# Field-shape split mirrors ``AIAnalysis`` in ``contracts.py`` exactly --
-# five prose fields, five tuple-of-prose fields. Used to build both the
-# strict Responses API JSON schema and the response parser from one place,
-# so the two can never drift apart.
+# Field-shape split mirrors ``AIAnalysis``'s ten full-report fields in
+# ``contracts.py`` exactly -- five prose fields, five tuple-of-prose
+# fields. Used to build both the strict Responses API JSON schema and the
+# response parser from one place, so the two can never drift apart. The
+# eleventh field, the nested ``deal_story`` object, is declared just below
+# under the same one-declaration-drives-both rule.
 _STRING_FIELDS: tuple[str, ...] = (
     "executive_summary",
     "investment_view",
@@ -42,16 +47,53 @@ _TUPLE_FIELDS: tuple[str, ...] = (
 )
 
 
+# Sprint B Gate B4: the nested ``deal_story`` object -- the concise
+# owner-level ``DealStory`` the same single response carries alongside the
+# ten full-report fields above. Split the same way for the same reason: one
+# declaration drives both the strict schema and the parser.
+_DEAL_STORY_STRING_FIELDS: tuple[str, ...] = ("investment_view",)
+_DEAL_STORY_TUPLE_FIELDS: tuple[str, ...] = ("key_strengths", "key_risks")
+_DEAL_STORY_NULLABLE_STRING_FIELDS: tuple[str, ...] = ("model_gap",)
+_DEAL_STORY_FIELD = "deal_story"
+
+
+def _build_deal_story_json_schema() -> dict[str, Any]:
+    """The nested ``deal_story`` sub-schema. ``model_gap`` is declared
+    ``["string", "null"]`` rather than omitted from ``required``: OpenAI
+    strict structured output requires every property to be listed in
+    ``required``, so an explicitly nullable type is the only way to let the
+    model say "no material model gap exists" without inventing filler."""
+
+    properties: dict[str, Any] = {}
+    for field_name in _DEAL_STORY_STRING_FIELDS:
+        properties[field_name] = {"type": "string"}
+    for field_name in _DEAL_STORY_TUPLE_FIELDS:
+        properties[field_name] = {"type": "array", "items": {"type": "string"}}
+    for field_name in _DEAL_STORY_NULLABLE_STRING_FIELDS:
+        properties[field_name] = {"type": ["string", "null"]}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": [
+            *_DEAL_STORY_STRING_FIELDS,
+            *_DEAL_STORY_TUPLE_FIELDS,
+            *_DEAL_STORY_NULLABLE_STRING_FIELDS,
+        ],
+        "additionalProperties": False,
+    }
+
+
 def _build_json_schema() -> dict[str, Any]:
     properties: dict[str, Any] = {}
     for field_name in _STRING_FIELDS:
         properties[field_name] = {"type": "string"}
     for field_name in _TUPLE_FIELDS:
         properties[field_name] = {"type": "array", "items": {"type": "string"}}
+    properties[_DEAL_STORY_FIELD] = _build_deal_story_json_schema()
     return {
         "type": "object",
         "properties": properties,
-        "required": [*_STRING_FIELDS, *_TUPLE_FIELDS],
+        "required": [*_STRING_FIELDS, *_TUPLE_FIELDS, _DEAL_STORY_FIELD],
         "additionalProperties": False,
     }
 
@@ -117,7 +159,62 @@ def _parse_ai_analysis(raw: Mapping[str, Any]) -> AIAnalysis:
             )
         values[field_name] = tuple(value)
 
+    values[_DEAL_STORY_FIELD] = _parse_deal_story(raw.get(_DEAL_STORY_FIELD))
+
     return AIAnalysis(**values)
+
+
+def _normalize_model_gap(value: Any) -> str | None:
+    """``model_gap`` is nullable by design (Gate B4: never manufacture a
+    gap to fill the field). A model that says "no gap" by returning an
+    empty or whitespace-only string means exactly what ``null`` means, so
+    both normalize to ``None`` -- the Owner Summary then omits the section
+    rather than rendering a blank one."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise AIProviderError(
+            "AI provider response field 'deal_story.model_gap' must be a string or null."
+        )
+    stripped = value.strip()
+    return stripped or None
+
+
+def _parse_deal_story(raw: Any) -> DealStory:
+    """Convert the nested ``deal_story`` object into ``DealStory``.
+
+    ``key_strengths``/``key_risks`` are trimmed to
+    ``DealStory.MAX_STORY_ITEMS`` here rather than rejected: the cap is a
+    presentation invariant the Owner Summary depends on, and a model that
+    returns a third bullet should cost the user a trimmed list, never a
+    failed AI request. The contract itself still enforces the cap, so no
+    other caller can bypass it.
+    """
+
+    if not isinstance(raw, dict):
+        raise AIProviderError("AI provider response field 'deal_story' must be an object.")
+
+    values: dict[str, Any] = {}
+    for field_name in _DEAL_STORY_STRING_FIELDS:
+        value = raw.get(field_name)
+        if not isinstance(value, str):
+            raise AIProviderError(
+                f"AI provider response field 'deal_story.{field_name}' must be a string."
+            )
+        values[field_name] = value
+    for field_name in _DEAL_STORY_TUPLE_FIELDS:
+        value = raw.get(field_name)
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise AIProviderError(
+                f"AI provider response field 'deal_story.{field_name}' "
+                "must be a list of strings."
+            )
+        values[field_name] = tuple(value[: DealStory.MAX_STORY_ITEMS])
+    for field_name in _DEAL_STORY_NULLABLE_STRING_FIELDS:
+        values[field_name] = _normalize_model_gap(raw.get(field_name))
+
+    return DealStory(**values)
 
 
 class OpenAIAnalystProvider:

@@ -7,10 +7,11 @@ frozen/slotted/kw-only shape, exact fields, and immutable tuple collections.
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, fields, is_dataclass
+from typing import get_type_hints
 
 import pytest
 
-from anchor.ai.contracts import AIAnalysis, AnalysisContext
+from anchor.ai.contracts import AIAnalysis, AnalysisContext, DealStory
 from anchor.analysis import (
     ReturnHurdleMetric,
     build_standard_break_even_analysis,
@@ -42,7 +43,26 @@ AI_ANALYSIS_FIELDS = (
     ("break_even_analysis", str),
     ("questions_to_investigate", tuple[str, ...]),
     ("confidence_notes", tuple[str, ...]),
+    ("deal_story", "DealStory | None"),
 )
+
+DEAL_STORY_FIELDS = (
+    ("investment_view", str),
+    ("key_strengths", tuple[str, ...]),
+    ("key_risks", tuple[str, ...]),
+    ("model_gap", "str | None"),
+)
+
+
+def _make_deal_story(**overrides: object) -> DealStory:
+    values: dict[str, object] = {
+        "investment_view": "Owner view.",
+        "key_strengths": ("Story strength.",),
+        "key_risks": ("Story risk.",),
+        "model_gap": None,
+    }
+    values.update(overrides)
+    return DealStory(**values)  # type: ignore[arg-type]
 
 
 def _make_ai_analysis(**overrides: object) -> AIAnalysis:
@@ -57,6 +77,7 @@ def _make_ai_analysis(**overrides: object) -> AIAnalysis:
         "break_even_analysis": "Break-even.",
         "questions_to_investigate": ("Question one.",),
         "confidence_notes": ("Note one.",),
+        "deal_story": _make_deal_story(),
     }
     values.update(overrides)
     return AIAnalysis(**values)  # type: ignore[arg-type]
@@ -123,6 +144,100 @@ def test_ai_analysis_construction_requires_keywords() -> None:
         AIAnalysis(  # type: ignore[misc,call-arg]
             "summary", "view", (), (), (), "downside", "capital", "break-even", (), ()
         )
+
+
+def test_ai_analysis_deal_story_defaults_to_none() -> None:
+    """Sprint B Gate B4: the one defaulted field on the contract. The
+    default exists so a pre-B4 ``ai_snapshot`` (whose stored JSON has no
+    ``deal_story`` key) still decodes into a complete full report -- see
+    ``anchor.deals.store._dataclass_from_json``. A live provider response
+    always supplies one."""
+
+    values = {name: getattr(_make_ai_analysis(), name) for name, _ in AI_ANALYSIS_FIELDS}
+    del values["deal_story"]
+
+    analysis = AIAnalysis(**values)  # type: ignore[arg-type]
+
+    assert analysis.deal_story is None
+
+
+# =============================================================================
+# DealStory (Sprint B Gate B4)
+# =============================================================================
+
+
+def test_deal_story_has_exact_fields_order_and_keyword_only_shape() -> None:
+    contract_fields = fields(DealStory)
+
+    assert is_dataclass(DealStory)
+    assert tuple(field.name for field in contract_fields) == tuple(
+        name for name, _ in DEAL_STORY_FIELDS
+    )
+    assert all(field.kw_only for field in contract_fields)
+    assert DealStory.__slots__ == tuple(name for name, _ in DEAL_STORY_FIELDS)
+
+
+def test_deal_story_is_frozen_and_slotted() -> None:
+    story = _make_deal_story()
+
+    assert not hasattr(story, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        story.investment_view = "changed"  # type: ignore[misc]
+
+
+def test_deal_story_tuple_fields_are_immutable_tuples() -> None:
+    story = _make_deal_story()
+
+    assert isinstance(story.key_strengths, tuple)
+    assert isinstance(story.key_risks, tuple)
+
+
+def test_deal_story_model_gap_is_nullable() -> None:
+    assert _make_deal_story(model_gap=None).model_gap is None
+    assert _make_deal_story(model_gap="Refinance is not modeled.").model_gap == (
+        "Refinance is not modeled."
+    )
+
+
+def test_deal_story_accepts_up_to_two_strengths_and_risks() -> None:
+    story = _make_deal_story(key_strengths=("One.", "Two."), key_risks=("One.", "Two."))
+
+    assert story.key_strengths == ("One.", "Two.")
+    assert story.key_risks == ("One.", "Two.")
+
+
+def test_deal_story_accepts_empty_strengths_and_risks() -> None:
+    """Fewer than the cap is always valid -- the contract sets a maximum,
+    never a quota that would pressure the model into filler."""
+
+    story = _make_deal_story(key_strengths=(), key_risks=())
+
+    assert story.key_strengths == ()
+    assert story.key_risks == ()
+
+
+def test_deal_story_rejects_more_than_two_strengths() -> None:
+    with pytest.raises(ValueError, match="key_strengths"):
+        _make_deal_story(key_strengths=("One.", "Two.", "Three."))
+
+
+def test_deal_story_rejects_more_than_two_risks() -> None:
+    with pytest.raises(ValueError, match="key_risks"):
+        _make_deal_story(key_risks=("One.", "Two.", "Three."))
+
+
+def test_deal_story_max_story_items_is_two_and_not_a_dataclass_field() -> None:
+    assert DealStory.MAX_STORY_ITEMS == 2
+    assert "MAX_STORY_ITEMS" not in {field.name for field in fields(DealStory)}
+
+
+def test_deal_story_carries_no_numeric_field() -> None:
+    """The Deal Story is interpretation only -- like ``AIAnalysis``, it
+    never carries a newly generated financial number."""
+
+    hints = get_type_hints(DealStory)
+    for name, _ in DEAL_STORY_FIELDS:
+        assert hints[name] in (str, str | None, tuple[str, ...])
 
 
 # =============================================================================

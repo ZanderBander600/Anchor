@@ -67,7 +67,15 @@ below for why that stayed unnecessary): a JSON-serialized
 ``DetailedAcquisitionResults``) and ``ai_snapshot`` (an ``AIAnalysis``),
 each paired with its own ``..._schema_version`` (INTEGER) and
 ``..._fingerprint`` (TEXT, a sha256 of the exact assumptions -- and, for
-the AI fingerprint, ``deal_context`` too -- that produced it). A snapshot
+the AI fingerprint, ``deal_context`` too -- that produced it). Sprint B
+Gate B4 adds no column and no schema version: the concise ``DealStory``
+lives *inside* ``AIAnalysis`` (``anchor.ai.contracts``), so it persists,
+restores, invalidates, duplicates, and validates its provenance through
+the existing ``ai_snapshot`` column and the existing
+``ai_context_fingerprint``, with no parallel persistence system. A
+pre-B4 ``ai_snapshot`` JSON simply has no ``deal_story`` key and decodes
+to ``deal_story=None`` (see ``_dataclass_from_json``'s
+default-tolerance), so no stored snapshot is orphaned. A snapshot
 is decoded and returned on ``Deal`` only when its stored schema version
 matches what this build understands *and* its stored fingerprint matches a
 fingerprint freshly recomputed from the row's own current assumptions/
@@ -141,7 +149,8 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, get_origin, get_type_hints
+from types import UnionType
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from ..ai.contracts import AIAnalysis
 from ..contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs, OperatingMode
@@ -362,9 +371,25 @@ class SnapshotValidationError(ValueError):
     silently dropping data the caller explicitly asked to save."""
 
 
+def _unwrap_optional(hint: Any) -> Any:
+    """Return ``T`` for a ``T | None`` hint, and ``hint`` unchanged for
+    anything else (including a genuine multi-member union such as
+    ``AcquisitionResults | DetailedAcquisitionResults | None``, which has no
+    single member to unwrap to). Needed only so an *optional nested
+    dataclass* field -- ``AIAnalysis.deal_story: DealStory | None``, Sprint
+    B Gate B4 -- is reconstructed as its dataclass rather than left as the
+    raw decoded ``dict`` it arrives as."""
+
+    if get_origin(hint) not in (Union, UnionType):
+        return hint
+    non_none = [arg for arg in get_args(hint) if arg is not type(None)]
+    return non_none[0] if len(non_none) == 1 else hint
+
+
 def _coerce_snapshot_value(hint: Any, value: Any) -> Any:
     if value is None:
         return None
+    hint = _unwrap_optional(hint)
     if get_origin(hint) is tuple:
         # A genuine JSON round-trip (the API layer's normal path) always
         # produces a ``list`` here; ``duplicate_deal``'s internal
@@ -408,6 +433,17 @@ def _dataclass_from_json(cls: type, data: Any) -> Any:
     kwargs: dict[str, Any] = {}
     for field in fields:
         if field.name not in data:
+            # A field the contract itself declares a default for is
+            # *optional in the stored JSON* -- this is the one backward-
+            # compatible mechanism by which a snapshot written before that
+            # field existed still decodes (Sprint B Gate B4:
+            # ``AIAnalysis.deal_story``, absent from every pre-B4
+            # ``ai_snapshot``, decodes to ``None``, so a legacy snapshot
+            # restores its full report and simply shows no Deal Story).
+            # Every field without a default remains strictly required.
+            if field.default is not dataclasses.MISSING:
+                kwargs[field.name] = field.default
+                continue
             raise SnapshotValidationError(f"Missing field {field.name!r} for {cls.__name__}.")
         kwargs[field.name] = _coerce_snapshot_value(hints[field.name], data[field.name])
 

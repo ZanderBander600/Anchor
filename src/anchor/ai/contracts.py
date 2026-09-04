@@ -4,16 +4,18 @@ Like ``anchor.engine.contracts`` and ``anchor.analysis.contracts``,
 this module performs no calculation of its own -- it only describes the
 shape of the deterministic context handed to the model
 (``AnalysisContext``) and the structured interpretation handed back
-(``AIAnalysis``). Neither dataclass computes, stores, or derives any
-financial metric; ``AnalysisContext`` only aggregates already-computed
+(``AIAnalysis``, plus the concise owner-level ``DealStory`` nested inside
+it since Sprint B Gate B4). No dataclass here computes, stores, or derives
+any financial metric; ``AnalysisContext`` only aggregates already-computed
 Phase 2/7/8 (and Detailed Operating Model V2.1) result contracts, and
-every ``AIAnalysis`` field is prose the model produced by interpreting
-that context.
+every ``AIAnalysis``/``DealStory`` field is prose the model produced by
+interpreting that context.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 from ..analysis.contracts import (
     ReturnHurdleMetric,
@@ -113,15 +115,71 @@ class AnalysisContext:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class DealStory:
+    """Sprint B Gate B4 -- the concise, owner-level AI interpretation
+    rendered inside the One-Page Owner Summary.
+
+    A deliberately narrow companion to ``AIAnalysis`` (the full AI Analyst
+    report), not a replacement for it and never a frontend truncation of
+    it: the model produces these four fields directly, under their own
+    dedicated prompt instructions and their own length limits, in the same
+    single structured response that produces the full report. Like
+    ``AIAnalysis``, every field here is prose the model wrote by
+    interpreting an already-computed ``AnalysisContext`` -- this contract
+    never carries a newly generated numeric financial metric, and nothing
+    in this module calculates anything.
+
+    ``key_strengths``/``key_risks`` are capped at ``MAX_STORY_ITEMS`` items
+    each -- the cap is a hard contract invariant enforced below, so an
+    over-long list can never reach the Owner Summary (the provider layer
+    trims a chatty model's response to the cap before construction, so the
+    cap is a guarantee rather than a request failure).
+
+    ``model_gap`` is first-class and nullable: it states, in the model's
+    own words, which part of the stated strategy Anchor's deterministic
+    cash flows do not model (the canonical example being a stated
+    refinance-and-hold plan against Anchor's terminal-sale engine). It is
+    ``None`` -- never a manufactured filler sentence -- whenever no
+    material gap exists.
+    """
+
+    MAX_STORY_ITEMS: ClassVar[int] = 2
+
+    investment_view: str
+    key_strengths: tuple[str, ...]
+    key_risks: tuple[str, ...]
+    model_gap: str | None
+
+    def __post_init__(self) -> None:
+        for field_name in ("key_strengths", "key_risks"):
+            value = getattr(self, field_name)
+            if len(value) > self.MAX_STORY_ITEMS:
+                raise ValueError(
+                    f"DealStory.{field_name} may carry at most "
+                    f"{self.MAX_STORY_ITEMS} items; got {len(value)}."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AIAnalysis:
     """The structured investment-analyst interpretation returned by the AI
     provider, suitable for direct frontend rendering.
 
     Every field is prose (or a tuple of prose statements) produced by
     interpreting a supplied ``AnalysisContext`` -- this contract never
-    carries a newly generated numeric financial metric. Field set frozen
-    per the Phase 9A AI Analyst spec, unchanged by Detailed Operating
-    Model V2.1 Gate 9 -- the same report structure applies to both modes.
+    carries a newly generated numeric financial metric. The ten original
+    report fields are frozen per the Phase 9A AI Analyst spec, unchanged by
+    Detailed Operating Model V2.1 Gate 9 -- the same report structure
+    applies to both modes.
+
+    ``deal_story`` (Sprint B Gate B4) is the one addition: the concise,
+    owner-level ``DealStory`` the same single provider response produces
+    alongside the full report, so "Generate AI Analysis" remains one
+    OpenAI call and one persisted ``ai_snapshot`` rather than two of each.
+    It is ``None`` only for an AI snapshot saved before Gate B4 existed --
+    a legacy snapshot still restores its full report unchanged, and simply
+    shows no Deal Story until the analyst regenerates. A live provider
+    response always carries one (the structured-output schema requires it).
     """
 
     executive_summary: str
@@ -134,3 +192,4 @@ class AIAnalysis:
     break_even_analysis: str
     questions_to_investigate: tuple[str, ...]
     confidence_notes: tuple[str, ...]
+    deal_story: DealStory | None = None

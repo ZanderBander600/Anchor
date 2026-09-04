@@ -293,11 +293,32 @@ def test_ai_analyst_delegates_to_the_authoritative_detailed_analysis_entry_point
     mock_break_even.assert_called_once()
 
 
-def test_provider_module_json_schema_never_hardcodes_a_numeric_metric_value() -> None:
-    """The structured-output schema only ever describes string/array-of-
-    string fields -- the AI layer is never asked to return a number."""
+def _assert_schema_is_prose_only(schema: dict) -> None:
+    """Recursive companion to the guardrail below: every leaf in the
+    structured-output schema must be prose (a string, a nullable string, or
+    an array of strings). Nested objects (Sprint B Gate B4's ``deal_story``)
+    are walked, never waved through -- a numeric field could not hide one
+    level down."""
 
-    for field_schema in ai_provider_module.AI_ANALYSIS_JSON_SCHEMA["properties"].values():
-        assert field_schema["type"] in ("string", "array")
-        if field_schema["type"] == "array":
-            assert field_schema["items"]["type"] == "string"
+    declared_type = schema["type"]
+    if declared_type == "object":
+        for nested in schema["properties"].values():
+            _assert_schema_is_prose_only(nested)
+        return
+    if declared_type == "array":
+        assert schema["items"]["type"] == "string"
+        return
+    # A nullable prose field is declared as ``["string", "null"]``; every
+    # other leaf is a plain ``"string"``. No numeric type in either case.
+    if isinstance(declared_type, list):
+        assert set(declared_type) == {"string", "null"}
+        return
+    assert declared_type == "string"
+
+
+def test_provider_module_json_schema_never_hardcodes_a_numeric_metric_value() -> None:
+    """The structured-output schema only ever describes string/nullable-
+    string/array-of-string fields, at every level of nesting -- the AI layer
+    is never asked to return a number."""
+
+    _assert_schema_is_prose_only(ai_provider_module.AI_ANALYSIS_JSON_SCHEMA)
