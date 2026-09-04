@@ -29,7 +29,7 @@ import {
   uploadExcel,
   uploadOm,
 } from './api';
-import { formatPercent } from './format';
+import { formatCurrency, formatPercent } from './format';
 import {
   BLANK_DETAILED_FORM_VALUES,
   BLANK_FORM_VALUES,
@@ -742,6 +742,22 @@ function sidebar(): HTMLElement {
   return nav as HTMLElement;
 }
 
+/** Sprint C Gate C3: the Results sub-nav has a tab labelled "Operating
+ * Statement" alongside the table's own heading of the same name, so queries
+ * about the table scope to the table. */
+function operatingStatement(): HTMLElement | null {
+  const headings = Array.from(document.querySelectorAll('.card-title'));
+  const heading = headings.find((node) => node.textContent === 'Operating Statement');
+  return (heading?.closest('.table-card') as HTMLElement | undefined) ?? null;
+}
+
+/** Navigates to Underwrite -> Results -> Operating Statement. */
+async function goToOperatingStatement(user: ReturnType<typeof userEvent.setup>) {
+  await goTo(user, 'Underwrite');
+  await user.click(screen.getByRole('tab', { name: 'Results' }));
+  await user.click(screen.getByRole('tab', { name: 'Operating Statement' }));
+}
+
 function makeAiAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
   return {
     executive_summary: 'Five-year hold with moderate leverage.',
@@ -857,15 +873,13 @@ describe('App workflow', () => {
     fillV2GoldenDeal();
     await user.clear(screen.getByLabelText(/^Interest-Only Period/));
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('Interest-Only Period is required.')).toBeTruthy();
     expect(mockAnalyze).not.toHaveBeenCalled();
 
     await user.type(screen.getByLabelText(/^Interest-Only Period/), '2');
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
   });
@@ -895,8 +909,7 @@ describe('App workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     expect(mockAnalyze).toHaveBeenCalledWith(
@@ -917,8 +930,7 @@ describe('App workflow', () => {
     await user.clear(screen.getByLabelText(/^Interest-Only Period/));
     await user.type(screen.getByLabelText(/^Interest-Only Period/), '2.5');
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('Interest-Only Period must be a whole number.')).toBeTruthy();
     expect(mockAnalyze).not.toHaveBeenCalled();
@@ -934,8 +946,7 @@ describe('App workflow', () => {
     await user.clear(screen.getByLabelText(/^Interest-Only Period/));
     await user.type(screen.getByLabelText(/^Interest-Only Period/), '10');
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     expect(mockAnalyze).toHaveBeenCalledWith(
@@ -949,8 +960,7 @@ describe('App workflow', () => {
     render(<App />);
     fillV2GoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     expect(mockAnalyze).toHaveBeenCalledWith(
@@ -966,8 +976,7 @@ describe('App workflow', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText(/Purchase Price is required/)).toBeTruthy();
     expect(mockAnalyze).not.toHaveBeenCalled();
@@ -979,8 +988,7 @@ describe('App workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     // Both surfaces show the headline figures, and each is asserted in its
     // own panel rather than "somewhere on the page" (Gate B5).
@@ -997,8 +1005,7 @@ describe('App workflow', () => {
     render(<App />);
     fillV2GoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await screen.findAllByText('7.38%');
     // This test is about the full ResultsPanel's own rendering of the V2
@@ -1022,8 +1029,7 @@ describe('App workflow', () => {
     render(<App />);
     fillV2GoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await screen.findAllByText('Owner Returns');
     // Gate B5: this test is about the full ResultsPanel's own Owner Returns
@@ -1050,8 +1056,7 @@ describe('App workflow', () => {
     render(<App />);
     fillV2GoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findAllByText('7.38%');
 
     expect(screen.getAllByText('$50,000').length).toBeGreaterThanOrEqual(1);
@@ -1063,8 +1068,7 @@ describe('App workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     await user.type(screen.getByLabelText(/^Current NOI/), '1');
@@ -1081,15 +1085,13 @@ describe('App workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     const second = deferred<AcquisitionResults>();
     mockAnalyze.mockReturnValueOnce(second.promise);
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(screen.queryByText('7.91%')).toBeNull();
 
@@ -1103,14 +1105,12 @@ describe('App workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     mockAnalyze.mockRejectedValueOnce(new ApiError('The backend rejected the request.'));
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('The backend rejected the request.')).toBeTruthy();
     expect(screen.queryByText('7.91%')).toBeNull();
@@ -1123,8 +1123,7 @@ describe('App workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('disabled', true);
     expect(screen.getByRole('button', { name: 'Analyzing…' })).toHaveProperty('disabled', true);
@@ -1141,7 +1140,7 @@ describe('App workflow', () => {
     await goTo(user, 'Underwrite');
 
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('disabled', false);
-    expect(screen.getByRole('button', { name: 'Analyze Deal' })).toHaveProperty('disabled', false);
+    expect(screen.getByRole('button', { name: 'Analyze' })).toHaveProperty('disabled', false);
   });
 
   it('replaces the first result with the second successful analysis', async () => {
@@ -1150,13 +1149,11 @@ describe('App workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     mockAnalyze.mockResolvedValueOnce(makeResults({ levered_irr: 0.12 }));
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect((await screen.findAllByText('12.00%')).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('7.91%')).toBeNull();
@@ -1179,8 +1176,7 @@ describe('App workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     const naValues = await screen.findAllByText('N/A');
     expect(naValues.length).toBeGreaterThanOrEqual(4);
@@ -1195,8 +1191,7 @@ describe('App workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(mockAnalyze).toHaveBeenCalledWith({
       purchase_price: 50_000_000,
@@ -1226,8 +1221,7 @@ describe('Sensitivity analysis workflow', () => {
 
     expect(screen.queryByText('Sensitivity Analysis')).toBeNull();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('Sensitivity Analysis')).toBeTruthy();
     expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
@@ -1239,8 +1233,7 @@ describe('Sensitivity analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Sensitivity Analysis');
 
     expect(mockFetchSensitivityPresets).toHaveBeenCalledWith(mockAnalyze.mock.calls[0][0]);
@@ -1252,8 +1245,7 @@ describe('Sensitivity analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Sensitivity Analysis');
 
     await user.type(screen.getByLabelText(/^Current NOI/), '1');
@@ -1270,8 +1262,7 @@ describe('Sensitivity analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('The sensitivity request failed.')).toBeTruthy();
     expect(screen.getAllByText('7.91%').length).toBeGreaterThanOrEqual(1);
@@ -1288,8 +1279,7 @@ describe('Break-even analysis workflow', () => {
 
     expect(screen.queryByText('Break-Even Analysis')).toBeNull();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('Break-Even Analysis')).toBeTruthy();
     expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1);
@@ -1301,8 +1291,7 @@ describe('Break-even analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Break-Even Analysis');
 
     expect(screen.getByLabelText(/^Target Levered IRR/)).toHaveProperty('value', '10.00');
@@ -1321,8 +1310,7 @@ describe('Break-even analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Break-Even Analysis');
 
     expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledWith(
@@ -1340,8 +1328,7 @@ describe('Break-even analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Break-Even Analysis');
     expect(mockAnalyze).toHaveBeenCalledTimes(1);
     expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
@@ -1371,8 +1358,7 @@ describe('Break-even analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Break-Even Analysis');
 
     const initialCallCount = mockFetchBreakEvenAnalysis.mock.calls.length;
@@ -1401,8 +1387,7 @@ describe('Break-even analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Break-Even Analysis');
 
     const initialCallCount = mockFetchBreakEvenAnalysis.mock.calls.length;
@@ -1430,8 +1415,7 @@ describe('Break-even analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Break-Even Analysis');
     await goTo(user, 'Risk');
     expect(screen.getAllByText('for 10.00% Levered IRR').length).toBe(3);
@@ -1506,8 +1490,7 @@ describe('Break-even analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('Not found in tested range')).toBeTruthy();
     expect(screen.queryByText(/impossible/i)).toBeNull();
@@ -1520,8 +1503,7 @@ describe('Break-even analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Break-Even Analysis');
 
     await user.type(screen.getByLabelText(/^Current NOI/), '1');
@@ -1538,8 +1520,7 @@ describe('Break-even analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('The break-even request failed.')).toBeTruthy();
     expect(screen.getAllByText('7.91%').length).toBeGreaterThanOrEqual(1);
@@ -1555,8 +1536,7 @@ describe('Break-even analysis workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText(/Calculating break-even/)).toBeTruthy();
 
@@ -1574,8 +1554,7 @@ describe('AI Analyst workflow', () => {
 
     expect(screen.queryByText('Anchor AI Analyst')).toBeNull();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('Anchor AI Analyst')).toBeTruthy();
     expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
@@ -1587,8 +1566,7 @@ describe('AI Analyst workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await screen.findByText('Break-Even Analysis');
 
@@ -1601,8 +1579,7 @@ describe('AI Analyst workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
 
     await goTo(user, 'AI Analyst');
@@ -1628,8 +1605,7 @@ describe('AI Analyst workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
 
     await goTo(user, 'AI Analyst');
@@ -1648,8 +1624,7 @@ describe('AI Analyst workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -1670,8 +1645,7 @@ describe('AI Analyst workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -1688,8 +1662,7 @@ describe('AI Analyst workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -1707,8 +1680,7 @@ describe('AI Analyst workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -1737,8 +1709,7 @@ describe('AI Analyst workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -1761,8 +1732,7 @@ describe('AI Analyst workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -1900,8 +1870,7 @@ describe('OM ingestion workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     mockUploadOm.mockResolvedValue(makeExtractionResult());
@@ -2158,8 +2127,7 @@ describe('Excel ingestion workflow', () => {
       expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
     });
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     expect(mockAnalyze).toHaveBeenCalledWith(makeAcquisitionRequest());
@@ -2248,8 +2216,7 @@ describe('Excel ingestion workflow', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     mockUploadExcel.mockResolvedValue(makeExcelIntakeReport());
@@ -2573,8 +2540,7 @@ describe('Deal persistence workflow', () => {
     mockGetDeal.mockResolvedValue(deal);
     render(<App />);
     fillGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
@@ -3040,8 +3006,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       render(<App />);
       fillGoldenDeal();
 
-      await goTo(user, 'Underwrite');
-      await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+      await user.click(screen.getByRole('button', { name: 'Analyze' }));
       await screen.findAllByText('7.91%');
 
       expect(screen.getByText('Unsaved deal')).toBeTruthy();
@@ -3063,8 +3028,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       });
       expect(screen.getByText('Unsaved changes')).toBeTruthy();
 
-      await goTo(user, 'Underwrite');
-      await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+      await user.click(screen.getByRole('button', { name: 'Analyze' }));
       await screen.findAllByText('7.91%');
 
       expect(screen.getByText('Unsaved changes')).toBeTruthy();
@@ -3327,8 +3291,7 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
     fillDetailedGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
     const [terms, detailedOperatingInputs] = mockAnalyzeDetailed.mock.calls[0];
@@ -3359,7 +3322,7 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
       expense_growth: 0.03,
     });
 
-    expect(await screen.findByText('Operating Statement')).toBeTruthy();
+    await waitFor(() => expect(operatingStatement()).not.toBeNull());
     expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('$600,000').length).toBeGreaterThan(0);
   });
@@ -3371,8 +3334,7 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
     fillDetailedGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect((await screen.findAllByText('Owner Returns')).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Year 1 Levered CoC').length).toBeGreaterThanOrEqual(1);
@@ -3393,8 +3355,7 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(screen.getByText(/is required/)).toBeTruthy();
     expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
@@ -3415,8 +3376,7 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
     fillDetailedGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(
       await screen.findByText('The submitted assumptions failed validation.'),
@@ -3432,9 +3392,9 @@ async function analyzeDetailedGoldenDeal(user: ReturnType<typeof userEvent.setup
   mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
   await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
   fillDetailedGoldenDeal();
-  await goTo(user, 'Underwrite');
-  await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-  await screen.findByText('Operating Statement');
+  await user.click(screen.getByRole('button', { name: 'Analyze' }));
+  await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalled());
+  await screen.findAllByText('Key Returns');
 }
 
 describe('AI Analyst in Detailed mode (Gate 9)', () => {
@@ -3443,8 +3403,7 @@ describe('AI Analyst in Detailed mode (Gate 9)', () => {
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
     fillGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findAllByText('Key Returns');
 
     await goTo(user, 'AI Analyst');
@@ -3475,8 +3434,7 @@ describe('AI Analyst in Detailed mode (Gate 9)', () => {
 
     // Quick first.
     fillGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findAllByText('Key Returns');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -3687,8 +3645,7 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await waitFor(() => expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1));
     expect(mockFetchDetailedSensitivityPresets).not.toHaveBeenCalled();
@@ -3704,8 +3661,7 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
     expect(mockFetchDetailedBreakEvenAnalysis).not.toHaveBeenCalled();
@@ -3736,8 +3692,7 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
 
     // Quick first -- its default mocked matrix (41%-64%) never contains 9.00%.
     fillGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Sensitivity Analysis');
     expect(screen.getAllByText(/^50\.00%/).length).toBeGreaterThan(0);
     expect(screen.queryAllByText(/^9\.00%/)).toHaveLength(0);
@@ -4071,8 +4026,7 @@ describe('Detailed Excel ingestion workflow (Gate 10)', () => {
 
     await goTo(user, 'Documents');
     await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
     const [terms, detailedOperatingInputs] = mockAnalyzeDetailed.mock.calls[0];
@@ -4274,8 +4228,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
     await user.click(await screen.findByRole('button', { name: 'Open' }));
     await screen.findByText(/^Saved/);
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
 
     expect(screen.getByText(/^Saved/)).toBeTruthy();
@@ -4291,8 +4244,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
     await screen.findByText(/^Saved/);
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
 
     await goTo(user, 'AI Analyst');
@@ -4465,8 +4417,7 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
     if (!quickRow) throw new Error('Quick deal row not found');
     await user.click(within(quickRow).getByRole('button', { name: 'Open' }));
     await screen.findByText(/^Saved/);
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
 
@@ -4504,10 +4455,9 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
     if (!detailedRow) throw new Error('Detailed deal row not found');
     await user.click(within(detailedRow).getByRole('button', { name: 'Open' }));
     await screen.findByText(/^Saved/);
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('Operating Statement')).toBeTruthy();
+    expect(operatingStatement()).not.toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     const quickRow = (await within(dealLibrary()).findByText(quickDeal.name)).closest('li');
@@ -4518,7 +4468,7 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
       'ariaSelected',
       'true',
     );
-    expect(screen.queryByText('Operating Statement')).toBeNull();
+    expect(operatingStatement()).toBeNull();
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
       DEFAULT_FORM_VALUES.purchasePrice,
@@ -4994,8 +4944,7 @@ describe('Deal Context (Gate A4)', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
 
     fireEvent.change(screen.getByLabelText('Deal Context'), {
@@ -5012,8 +4961,7 @@ describe('Deal Context (Gate A4)', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -5077,8 +5025,7 @@ describe('Deal Context (Gate A4)', () => {
       target: { value: 'Strategy typed before analyzing.' },
     });
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findAllByText('Key Returns');
 
     expect(screen.getByLabelText('Deal Context')).toHaveProperty(
@@ -5107,8 +5054,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
     await screen.findByText(/^Saved/);
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
     await waitFor(() =>
       expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
@@ -5149,9 +5095,8 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
       screen.getByRole('tab', { name: 'Detailed Underwrite' }),
     ).toHaveProperty('ariaSelected', 'true');
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
-    expect(await screen.findByText('Operating Statement')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(operatingStatement()).not.toBeNull());
     expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
     await waitFor(() =>
       expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
@@ -5164,7 +5109,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     mockGetDeal.mockResolvedValueOnce(dealB);
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[1]);
-    expect(screen.queryByText('Operating Statement')).toBeNull();
+    expect(operatingStatement()).toBeNull();
 
     mockGetDeal.mockResolvedValueOnce({ ...dealA, analysis_snapshot: makeDetailedResults() });
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
@@ -5172,7 +5117,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
 
     // Operating statement AND Owner Return Metrics both restore -- the
     // complete result surface, not just headline cards.
-    expect(await screen.findByText('Operating Statement')).toBeTruthy();
+    await waitFor(() => expect(operatingStatement()).not.toBeNull());
     expect(screen.getAllByText('Owner Returns').length).toBeGreaterThanOrEqual(1);
     expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1);
   });
@@ -5190,8 +5135,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     mockGetDeal.mockResolvedValueOnce(dealA);
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -5230,8 +5174,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     mockGetDeal.mockResolvedValueOnce(dealA);
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -5382,8 +5325,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
 
     expect(mockCreateDeal).not.toHaveBeenCalled();
@@ -5399,8 +5341,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Anchor AI Analyst');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -5508,8 +5449,7 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
   });
@@ -5521,8 +5461,7 @@ describe('One-Page Owner Summary (Gate B3)', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
     fillDetailedGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     expect(await screen.findByText('Detailed Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
   });
@@ -5533,8 +5472,7 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' });
 
     // "Property" is a ResultsPanel-only card heading -- Owner Summary has
@@ -5588,8 +5526,7 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     mockAnalyze.mockResolvedValue(makeResults());
     render(<App />);
     fillGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect(await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
@@ -5632,8 +5569,7 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' });
 
     // ResultsPanel's own headline section and detail cards are unaffected.
@@ -5675,8 +5611,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findAllByText('Key Returns');
 
     expect(screen.queryByText('Deal Story')).toBeNull();
@@ -5691,8 +5626,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysisWithStory());
     render(<App />);
     fillGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findAllByText('Key Returns');
 
     await goTo(user, 'AI Analyst');
@@ -5713,8 +5647,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysisWithStory());
     render(<App />);
     fillGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findAllByText('Key Returns');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -5750,8 +5683,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     );
     render(<App />);
     fillGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findAllByText('Key Returns');
 
     await goTo(user, 'AI Analyst');
@@ -5880,8 +5812,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     mockFetchAIAnalysis.mockResolvedValue(makeAiAnalysisWithStory());
     render(<App />);
     fillGoldenDeal();
-    await goTo(user, 'Underwrite');
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await screen.findAllByText('Key Returns');
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -6133,7 +6064,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     render(<App />);
     fillGoldenDeal();
 
-    await user.click(screen.getByRole('button', { name: 'Analyze Deal' }));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     const fromForm = mockAnalyze.mock.calls[0][0];
 
@@ -6307,30 +6238,30 @@ describe('Sprint C Gate C2 -- app shell', () => {
     );
   });
 
-  it('27. the full results surfaces remain reachable, in Underwrite (temporary C2 home)', async () => {
+  it('27. the full results surfaces remain reachable, under Underwrite > Results', async () => {
+    // Sprint C Gate C3 replaced C2's stacked "Detailed Results" section with
+    // the Results tab and its own sub-navigation. Nothing was deleted.
     const user = userEvent.setup();
     render(<App />);
     await analyzeQuickGoldenDeal(user);
 
     await goTo(user, 'Underwrite');
+    await user.click(screen.getByRole('tab', { name: 'Results' }));
 
     const underwrite = panel('underwrite');
     expect(underwrite.querySelector('.results-panel')).toBeTruthy();
-    expect(within(underwrite).getByText('Detailed Results')).toBeTruthy();
-    // ResultsPanel still carries the cash-flow table and the owner return
-    // schedule -- nothing was deleted.
     expect(within(underwrite).getByText('Year-by-Year Analysis')).toBeTruthy();
     expect(within(underwrite).getByText('Owner Return Schedule')).toBeTruthy();
   });
 
-  it('27b. Detailed keeps the operating statement in the same temporary home', async () => {
+  it('27b. Detailed adds the operating statement as a fourth Results view', async () => {
     const user = userEvent.setup();
     render(<App />);
     await analyzeDetailedGoldenDeal(user);
 
-    await goTo(user, 'Underwrite');
+    await goToOperatingStatement(user);
 
-    expect(within(panel('underwrite')).getByText('Operating Statement')).toBeTruthy();
+    expect(panel('underwrite').contains(operatingStatement())).toBe(true);
     expect(panel('underwrite').querySelector('.results-panel')).toBeTruthy();
   });
 
@@ -6367,7 +6298,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     );
     expect(panel('overview').querySelector('.owner-summary-panel')).toBeTruthy();
     await goTo(user, 'Underwrite');
-    expect(within(panel('underwrite')).getByText('Operating Statement')).toBeTruthy();
+    expect(panel('underwrite').contains(operatingStatement())).toBe(true);
     expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
   });
 
@@ -6691,5 +6622,514 @@ describe('Sprint C Gate C2 -- app shell', () => {
 
       expect(activeWorkspace()).toBe('Risk');
     });
+  });
+});
+
+// ===========================================================================
+// Sprint C Gate C3 -- Underwrite workspace redesign.
+//
+// Underwrite is now five tabs (Acquisition / Operations / Debt / Exit /
+// Results) with a compact strategy strip and a persistent Live Case rail,
+// rather than one long stack of every assumption followed by every result.
+// ===========================================================================
+
+/** The Underwrite tab currently selected. */
+function activeUnderwriteTab(): string {
+  const nav = document.querySelector('[aria-label="Underwrite sections"]');
+  return nav?.querySelector('[aria-selected="true"]')?.textContent ?? '';
+}
+
+function activeSubTab(label: string): string {
+  const nav = document.querySelector(`[aria-label="${label}"]`);
+  return nav?.querySelector('[aria-selected="true"]')?.textContent ?? '';
+}
+
+/** One Underwrite tab panel, whether or not it is the active one. */
+function underwritePanel(id: string): HTMLElement {
+  const node = document.getElementById(`underwrite-section-panel-${id}`);
+  if (node === null) {
+    throw new Error(`No ${id} Underwrite panel is rendered.`);
+  }
+  return node as HTMLElement;
+}
+
+function resultsPanelFor(id: string): HTMLElement {
+  const node = document.getElementById(`underwrite-results-panel-${id}`);
+  if (node === null) {
+    throw new Error(`No ${id} results panel is rendered.`);
+  }
+  return node as HTMLElement;
+}
+
+function liveCase(): HTMLElement {
+  const node = document.querySelector('.live-case');
+  if (node === null) {
+    throw new Error('No Live Case rail is rendered.');
+  }
+  return node as HTMLElement;
+}
+
+async function openUnderwriteTab(user: ReturnType<typeof userEvent.setup>, label: string) {
+  await goTo(user, 'Underwrite');
+  await user.click(
+    within(document.querySelector('[aria-label="Underwrite sections"]') as HTMLElement).getByRole(
+      'tab',
+      { name: label },
+    ),
+  );
+}
+
+describe('Sprint C Gate C3 -- Underwrite workspace', () => {
+  it('1. renders the five Underwrite tabs, with Acquisition active by default', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Underwrite');
+
+    const nav = within(document.querySelector('[aria-label="Underwrite sections"]') as HTMLElement);
+    for (const label of ['Acquisition', 'Operations', 'Debt', 'Exit', 'Results']) {
+      expect(nav.getByRole('tab', { name: label })).toBeTruthy();
+    }
+    expect(activeUnderwriteTab()).toBe('Acquisition');
+  });
+
+  it('2-5. shows only the active tab’s assumptions, for Detailed', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await goTo(user, 'Underwrite');
+
+    const cases: [string, string, string[]][] = [
+      ['Acquisition', 'acquisition', ['Purchase Price', 'Hold Period', 'Acquisition Costs']],
+      ['Debt', 'debt', ['LTV', 'Interest Rate', 'Amortization', 'Financing Fee']],
+      ['Exit', 'exit', ['Exit Cap Rate', 'Disposition Costs']],
+    ];
+    for (const [label, id, fields] of cases) {
+      await openUnderwriteTab(user, label);
+      expect(activeUnderwriteTab()).toBe(label);
+      expect(underwritePanel(id).hasAttribute('hidden')).toBe(false);
+      for (const field of fields) {
+        expect(within(underwritePanel(id)).getByText(field)).toBeTruthy();
+      }
+      for (const [, otherId] of cases.filter(([other]) => other !== label)) {
+        expect(underwritePanel(otherId).hasAttribute('hidden')).toBe(true);
+      }
+    }
+  });
+
+  it('3. Detailed Operations has Revenue / Expenses / Growth sub-navigation', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await openUnderwriteTab(user, 'Operations');
+
+    const nav = within(document.querySelector('[aria-label="Operations sections"]') as HTMLElement);
+    for (const label of ['Revenue', 'Expenses', 'Growth']) {
+      expect(nav.getByRole('tab', { name: label })).toBeTruthy();
+    }
+    expect(activeSubTab('Operations sections')).toBe('Revenue');
+    expect(within(underwritePanel('operations')).getByText('Gross Potential Rent')).toBeTruthy();
+
+    await user.click(nav.getByRole('tab', { name: 'Expenses' }));
+    expect(activeSubTab('Operations sections')).toBe('Expenses');
+    expect(document.getElementById('underwrite-operations-panel-revenue')?.hasAttribute('hidden')).toBe(
+      true,
+    );
+    expect(
+      document.getElementById('underwrite-operations-panel-expenses')?.hasAttribute('hidden'),
+    ).toBe(false);
+
+    await user.click(nav.getByRole('tab', { name: 'Growth' }));
+    expect(within(underwritePanel('operations')).getByText('Revenue Growth')).toBeTruthy();
+    expect(within(underwritePanel('operations')).getByText('Annual CapEx Reserve')).toBeTruthy();
+  });
+
+  it('7. Quick uses the same five tabs, with its own authoritative inputs', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Underwrite');
+
+    const nav = within(document.querySelector('[aria-label="Underwrite sections"]') as HTMLElement);
+    for (const label of ['Acquisition', 'Operations', 'Debt', 'Exit', 'Results']) {
+      expect(nav.getByRole('tab', { name: label })).toBeTruthy();
+    }
+
+    await openUnderwriteTab(user, 'Operations');
+    expect(within(underwritePanel('operations')).getByText('Current NOI')).toBeTruthy();
+    expect(within(underwritePanel('operations')).getByText('Occupancy')).toBeTruthy();
+    // Quick's four operating inputs do not justify sub-navigation.
+    expect(document.querySelector('[aria-label="Operations sections"]')).toBeNull();
+  });
+
+  it('6, 9, 10, 11. Results has sub-navigation and shows one surface at a time', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await openUnderwriteTab(user, 'Results');
+
+    const nav = within(document.querySelector('[aria-label="Results views"]') as HTMLElement);
+    for (const label of ['Summary', 'Cash Flow', 'Owner Returns', 'Operating Statement']) {
+      expect(nav.getByRole('tab', { name: label })).toBeTruthy();
+    }
+
+    const ids = ['summary', 'cash-flow', 'owner-returns', 'operating-statement'];
+    const labels = ['Summary', 'Cash Flow', 'Owner Returns', 'Operating Statement'];
+    for (let i = 0; i < labels.length; i += 1) {
+      await user.click(nav.getByRole('tab', { name: labels[i] }));
+      expect(resultsPanelFor(ids[i]).hasAttribute('hidden')).toBe(false);
+      for (const other of ids.filter((id) => id !== ids[i])) {
+        expect(resultsPanelFor(other).hasAttribute('hidden')).toBe(true);
+      }
+    }
+  });
+
+  it('11b. Quick Results omits the Operating Statement it has no data for', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await openUnderwriteTab(user, 'Results');
+
+    const nav = within(document.querySelector('[aria-label="Results views"]') as HTMLElement);
+    expect(nav.getByRole('tab', { name: 'Summary' })).toBeTruthy();
+    expect(nav.queryByRole('tab', { name: 'Operating Statement' })).toBeNull();
+    expect(operatingStatement()).toBeNull();
+  });
+
+  it('6b. the Results tab shows a clean empty state before any analysis', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openUnderwriteTab(user, 'Results');
+
+    expect(within(underwritePanel('results')).getByText(/Analyze the deal to see/)).toBeTruthy();
+    expect(document.querySelector('[aria-label="Results views"]')).toBeNull();
+  });
+
+  it('12, 14. Detailed inputs survive switching between every tab', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    fillDetailedGoldenDeal();
+
+    for (const label of ['Operations', 'Debt', 'Exit', 'Results', 'Acquisition']) {
+      await openUnderwriteTab(user, label);
+    }
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      DETAILED_GOLDEN_FORM_VALUES.terms.purchasePrice,
+    );
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty(
+      'value',
+      DETAILED_GOLDEN_FORM_VALUES.operating.grossPotentialRent,
+    );
+    expect(screen.getByLabelText(/^Interest Rate/)).toHaveProperty(
+      'value',
+      DETAILED_GOLDEN_FORM_VALUES.terms.interestRate,
+    );
+  });
+
+  it('13. Quick inputs survive switching between every tab', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    fillGoldenDeal();
+
+    for (const label of ['Debt', 'Exit', 'Operations', 'Results', 'Acquisition']) {
+      await openUnderwriteTab(user, label);
+    }
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.purchasePrice,
+    );
+    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.currentNoi,
+    );
+  });
+
+  it('12b. an in-flight analysis disables inputs on every tab, not just the visible one', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<AcquisitionResults>();
+    mockAnalyze.mockReturnValueOnce(pending.promise);
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('disabled', true);
+    expect(screen.getByLabelText(/^Interest Rate/)).toHaveProperty('disabled', true);
+
+    pending.resolve(makeResults());
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('disabled', false),
+    );
+  });
+
+  it('15. Deal Context shows as a compact strategy strip, not a permanent textarea', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Underwrite');
+
+    const strip = document.querySelector('.strategy-strip') as HTMLElement;
+    expect(strip).toBeTruthy();
+    expect(within(strip).getByText('Strategy')).toBeTruthy();
+    // The editor is present but collapsed until the analyst opens it.
+    const editor = document.querySelector('.strategy-strip-editor') as HTMLElement;
+    expect(editor.hasAttribute('hidden')).toBe(true);
+
+    await user.click(within(strip).getByRole('button', { name: 'Edit' }));
+    expect(editor.hasAttribute('hidden')).toBe(false);
+    expect(within(strip).getByRole('button', { name: 'Done' })).toBeTruthy();
+  });
+
+  it('15b. the strip summarises the saved context and survives collapsing', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Underwrite');
+
+    const strip = document.querySelector('.strategy-strip') as HTMLElement;
+    await user.click(within(strip).getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Deal Context'), {
+      target: { value: 'Core-plus industrial, mark-to-market lease-up.' },
+    });
+    await user.click(within(strip).getByRole('button', { name: 'Done' }));
+
+    expect((strip.querySelector('.strategy-strip-text') as HTMLElement).textContent).toBe(
+      'Core-plus industrial, mark-to-market lease-up.',
+    );
+    expect(screen.getByLabelText('Deal Context')).toHaveProperty(
+      'value',
+      'Core-plus industrial, mark-to-market lease-up.',
+    );
+  });
+
+  it('16, 17, 18. editing context keeps results, invalidates AI, and never re-runs it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await screen.findByText('Five-year hold with moderate leverage.');
+
+    await goTo(user, 'Underwrite');
+    fireEvent.change(screen.getByLabelText('Deal Context'), { target: { value: 'Value-add.' } });
+
+    // Deterministic output survives; the stale AI interpretation does not.
+    expect(panel('overview').querySelector('.owner-summary-panel')).toBeTruthy();
+    expect(within(panel('risk')).getByText('Sensitivity Analysis')).toBeTruthy();
+    expect(screen.queryByText('Five-year hold with moderate leverage.')).toBeNull();
+    expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it('16b. editing context still marks a saved deal dirty', async () => {
+    const user = userEvent.setup();
+    mockCreateDeal.mockResolvedValue(makeDeal());
+    render(<App />);
+    fillGoldenDeal();
+    await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+    await screen.findByText(/^Saved/);
+
+    await goTo(user, 'Underwrite');
+    fireEvent.change(screen.getByLabelText('Deal Context'), { target: { value: 'Strategy.' } });
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+  });
+
+  it('19. the Live Case rail states plainly that there is nothing to show yet', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Underwrite');
+
+    expect(within(liveCase()).getByText('Analyze the deal to populate live metrics.')).toBeTruthy();
+    // No fabricated zeros.
+    expect(within(liveCase()).queryByText('$0')).toBeNull();
+    expect(within(liveCase()).queryByText('0.00%')).toBeNull();
+  });
+
+  it('20. the Live Case rail shows authoritative metrics for the active tab', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+
+    await openUnderwriteTab(user, 'Acquisition');
+    expect(within(liveCase()).getByText('Levered IRR')).toBeTruthy();
+    expect(within(liveCase()).getByText('7.91%')).toBeTruthy();
+    expect(within(liveCase()).getByText('Initial Equity')).toBeTruthy();
+
+    await openUnderwriteTab(user, 'Debt');
+    expect(within(liveCase()).getByText('Loan Amount')).toBeTruthy();
+    expect(within(liveCase()).getByText('Year 1 Debt Yield')).toBeTruthy();
+    expect(within(liveCase()).queryByText('Initial Equity')).toBeNull();
+
+    await openUnderwriteTab(user, 'Exit');
+    expect(within(liveCase()).getByText('Exit Value')).toBeTruthy();
+    expect(within(liveCase()).getByText('Net Sale Proceeds')).toBeTruthy();
+  });
+
+  it('20b. the Live Case rail never triggers an analysis of its own', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    const calls = mockAnalyze.mock.calls.length;
+
+    for (const label of ['Acquisition', 'Operations', 'Debt', 'Exit', 'Results']) {
+      await openUnderwriteTab(user, label);
+    }
+
+    expect(mockAnalyze.mock.calls.length).toBe(calls);
+  });
+
+  it('21. the Live Case rail shows N/A for a metric the engine returned as null', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(
+      makeResults({ levered_irr: null, equity_multiple: null, min_dscr: null }),
+    );
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalled());
+    await openUnderwriteTab(user, 'Acquisition');
+
+    expect(within(liveCase()).getAllByText('N/A').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('22. the Live Case rail preserves the sign of a negative engine value', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults({ levered_irr: -0.0512 }));
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalled());
+    await openUnderwriteTab(user, 'Acquisition');
+
+    expect(within(liveCase()).getByText('-5.12%')).toBeTruthy();
+  });
+
+  it('23, 24. the header owns Analyze; no form-level Analyze button remains', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Underwrite');
+
+    expect(screen.queryByRole('button', { name: 'Analyze Deal' })).toBeNull();
+    const header = within(document.querySelector('.deal-header') as HTMLElement);
+    expect(header.getByRole('button', { name: 'Analyze' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Analyze' })).toHaveLength(1);
+
+    fillGoldenDeal();
+    mockAnalyze.mockResolvedValue(makeResults());
+    await user.click(header.getByRole('button', { name: 'Analyze' }));
+
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+  });
+
+  it('25. the request C3 sends is identical to the pre-C3 golden request', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledWith(GOLDEN_DEAL_REQUEST));
+  });
+
+  it('23b. Analyze is reachable from every Underwrite tab', async () => {
+    const user = userEvent.setup();
+    mockAnalyze.mockResolvedValue(makeResults());
+    render(<App />);
+    fillGoldenDeal();
+    await openUnderwriteTab(user, 'Debt');
+
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+  });
+
+  it('26, 27. a reopened analyzed deal restores its results into the Results tab', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({ analysis_snapshot: makeResults() });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(mockGetDeal).toHaveBeenCalled());
+    await openUnderwriteTab(user, 'Results');
+
+    expect(underwritePanel('results').querySelector('.results-panel')).toBeTruthy();
+    expect(within(liveCase()).getByText('7.91%')).toBeTruthy();
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('28. dirty state still tracks an assumption edited on any tab', async () => {
+    const user = userEvent.setup();
+    mockCreateDeal.mockResolvedValue(makeDeal());
+    render(<App />);
+    fillGoldenDeal();
+    await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+    await screen.findByText(/^Saved/);
+
+    await openUnderwriteTab(user, 'Debt');
+    fireEvent.change(screen.getByLabelText(/^Interest Rate/), { target: { value: '6.75' } });
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+  });
+
+  it('29. the tabbed Underwrite introduces no calculation -- values pass through', async () => {
+    const user = userEvent.setup();
+    const results = makeResults();
+    mockAnalyze.mockResolvedValue(results);
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalled());
+    await openUnderwriteTab(user, 'Results');
+
+    // Every rendered figure is the mocked engine output, formatted only.
+    const summary = resultsPanelFor('summary');
+    expect(within(summary).getAllByText(formatPercent(results.levered_irr)).length).toBeGreaterThan(
+      0,
+    );
+    expect(
+      within(summary).getAllByText(formatCurrency(results.loan_amount)).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('30. Quick and Detailed keep entirely separate tabbed state', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await openUnderwriteTab(user, 'Operations');
+
+    // Detailed Operations shows its own inputs and none of Quick's.
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toBeTruthy();
+    expect(screen.queryByLabelText(/^Current NOI/)).toBeNull();
+
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty(
+      'value',
+      DEFAULT_FORM_VALUES.currentNoi,
+    );
+    expect(screen.queryByLabelText(/^Gross Potential Rent/)).toBeNull();
+    // The selected tab is shared navigation state, so it carries across.
+    expect(activeUnderwriteTab()).toBe('Operations');
+  });
+
+  it('accessibility: Underwrite tabs and panels are wired and keyboard-operable', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Underwrite');
+
+    const nav = within(document.querySelector('[aria-label="Underwrite sections"]') as HTMLElement);
+    const debtTab = nav.getByRole('tab', { name: 'Debt' });
+    expect(debtTab.getAttribute('aria-controls')).toBe(underwritePanel('debt').id);
+    expect(underwritePanel('debt').getAttribute('aria-labelledby')).toBe(debtTab.id);
+
+    debtTab.focus();
+    await user.keyboard('{Enter}');
+    expect(activeUnderwriteTab()).toBe('Debt');
   });
 });

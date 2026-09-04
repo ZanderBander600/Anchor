@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
 import {
   analyzeAcquisition,
   analyzeDetailedAcquisition,
@@ -29,25 +28,27 @@ import {
 } from './api';
 import { AiAnalystPanel } from './components/AiAnalystPanel';
 import { AppSidebar } from './components/AppSidebar';
-import { AssumptionsForm } from './components/AssumptionsForm';
 import { BreakEvenPanel } from './components/BreakEvenPanel';
-import { DealContextField } from './components/DealContextField';
+import { CashFlowTable } from './components/CashFlowTable';
 import { DealHeader } from './components/DealHeader';
 import type { SaveStatus } from './components/DealHeader';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
-import { DetailedAssumptionsForm } from './components/DetailedAssumptionsForm';
 import { DetailedExcelReviewPanel } from './components/DetailedExcelReviewPanel';
 import { DetailedOmReviewPanel } from './components/DetailedOmReviewPanel';
 import { ExcelReviewPanel } from './components/ExcelReviewPanel';
 import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
 import { OperatingStatementTable } from './components/OperatingStatementTable';
+import { OwnerReturnSchedule } from './components/OwnerReturnSchedule';
 import { OwnerSummaryPanel } from './components/OwnerSummaryPanel';
-import { ResultsPanel } from './components/ResultsPanel';
+import { ResultsSummaryPanel } from './components/ResultsSummaryPanel';
 import { SensitivityPanel } from './components/SensitivityPanel';
+import { UnderwriteWorkspace } from './components/UnderwriteWorkspace';
 import { WorkspaceNav } from './components/WorkspaceNav';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { buildOwnerSummaryData } from './ownerSummary';
+import { buildDetailedSections, buildQuickSections } from './underwrite';
+import type { ResultsViewId, UnderwriteTabId } from './underwrite';
 import type { WorkspaceId } from './workspaces';
 import {
   BLANK_DETAILED_FORM_VALUES,
@@ -139,6 +140,19 @@ export default function App() {
   // is never part of the dirty-tracking snapshot, is never persisted, and
   // touches no financial, analysis, or AI state.
   const [workspace, setWorkspace] = useState<WorkspaceId>('underwrite');
+
+  // Sprint C Gate C3: Underwrite's own internal navigation. Like `workspace`
+  // above this is navigation state only -- never part of the dirty-tracking
+  // snapshot, never persisted, and never touching financial, analysis or AI
+  // state. Held here (not inside the workspace component) so switching tabs
+  // re-renders without remounting any input, which is what preserves unsaved
+  // values across tab changes by construction.
+  //
+  // Shared across operating modes for the same reason `workspace` is: a tab
+  // means the same thing in Quick and Detailed.
+  const [underwriteTab, setUnderwriteTab] = useState<UnderwriteTabId>('acquisition');
+  const [operationsView, setOperationsView] = useState('revenue');
+  const [resultsView, setResultsView] = useState<ResultsViewId>('summary');
 
   const [detailedValues, setDetailedValues] = useState<DetailedFormValues>(
     BLANK_DETAILED_FORM_VALUES,
@@ -1789,21 +1803,16 @@ export default function App() {
     );
   }
 
-  /** Form-submit adapters. The assumptions forms keep their own submit
-   * buttons (a form needs one for Enter-key submission); both they and the
-   * header's Analyze button funnel into the same `run*Analyze` function. */
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void runQuickAnalyze();
-  }
-
-  function handleDetailedSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void runDetailedAnalyze();
-  }
-
-  /** The single Analyze entry point for the deal header: dispatches to the
-   * active operating mode's own analysis path, never both. */
+  /** Sprint C Gate C3: the single Analyze entry point. C2 had both a header
+   * Analyze and a form-level "Analyze Deal"; manual review found the
+   * duplication unhelpful, so the persistent deal header -- always visible
+   * from every workspace and every Underwrite tab -- now owns the action
+   * outright. What Analyze DOES is untouched: same validation, same request
+   * construction, same endpoints, same downstream state, same snapshot
+   * provenance.
+   *
+   * Dispatches to the active operating mode's own analysis path, never
+   * both. */
   function handleAnalyzeFromHeader() {
     if (operatingMode === 'detailed') {
       void runDetailedAnalyze();
@@ -1811,6 +1820,7 @@ export default function App() {
     }
     void runQuickAnalyze();
   }
+
   /** Sprint C Gate C2: the deal the sidebar should mark active is whichever
    * one the *currently selected* operating mode has open -- the other mode's
    * open deal stays untouched in the background, exactly as it always has. */
@@ -1861,6 +1871,20 @@ export default function App() {
   // mounted and the inactive ones are `hidden` -- see WorkspacePanel.
   // ===========================================================================
 
+  // Sprint C Gate C3: each mode resolves its OWN assumptions into the shared
+  // tab layout. The layout is shared; the state never is.
+  const detailedSections = buildDetailedSections({
+    termsValues: detailedValues.terms,
+    operatingValues: detailedValues.operating,
+    onTermsFieldChange: handleDetailedTermsFieldChange,
+    onOperatingFieldChange: handleDetailedOperatingFieldChange,
+  });
+
+  const quickSections = buildQuickSections({
+    values,
+    onFieldChange: handleFieldChange,
+  });
+
   const detailedWorkspaces = (
     <>
       <WorkspacePanel
@@ -1893,43 +1917,37 @@ export default function App() {
         id="underwrite"
         active={workspace}
         title="Underwrite"
-        subtitle="Deal context and the assumptions the deterministic engine runs on."
+        subtitle="The assumptions the deterministic engine runs on."
       >
-        <DealContextField
-          value={detailedDealContext}
-          onChange={handleDetailedDealContextChange}
-        />
-
-        <DetailedAssumptionsForm
-          termsValues={detailedValues.terms}
-          operatingValues={detailedValues.operating}
-          onTermsFieldChange={handleDetailedTermsFieldChange}
-          onOperatingFieldChange={handleDetailedOperatingFieldChange}
-          onSubmit={handleDetailedSubmit}
+        <UnderwriteWorkspace
+          operatingMode="detailed"
+          sections={detailedSections}
+          dealContext={detailedDealContext}
+          onDealContextChange={handleDetailedDealContextChange}
           isSubmitting={isDetailedSubmitting}
+          activeTab={underwriteTab}
+          onTabChange={setUnderwriteTab}
+          operationsView={operationsView}
+          onOperationsViewChange={setOperationsView}
+          resultsView={resultsView}
+          onResultsViewChange={setResultsView}
+          results={detailedResults?.results ?? null}
+          resultsViews={
+            detailedResults
+              ? {
+                  summary: <ResultsSummaryPanel results={detailedResults.results} />,
+                  'cash-flow': <CashFlowTable results={detailedResults.results} />,
+                  'owner-returns': <OwnerReturnSchedule results={detailedResults.results} />,
+                  'operating-statement': (
+                    <OperatingStatementTable
+                      operatingProjection={detailedResults.operating_projection}
+                      results={detailedResults.results}
+                    />
+                  ),
+                }
+              : {}
+          }
         />
-
-        {/* Sprint C Gate C2 temporary placement (spec section 4.6): the full
-         * results surfaces no longer stack under the Owner Summary on
-         * Overview, but must stay reachable. They live here, clearly
-         * separated, until C4 decides their final home. */}
-        {detailedResults && (
-          <section className="detailed-results">
-            <div className="detailed-results-head">
-              <h3 className="section-heading">Detailed Results</h3>
-              <p className="section-caption">
-                Full engine output for the assumptions above. Final placement is a C4 decision.
-              </p>
-            </div>
-
-            <ResultsPanel results={detailedResults.results} />
-
-            <OperatingStatementTable
-              operatingProjection={detailedResults.operating_projection}
-              results={detailedResults.results}
-            />
-          </section>
-        )}
       </WorkspacePanel>
 
       <WorkspacePanel
@@ -2072,31 +2090,31 @@ export default function App() {
         id="underwrite"
         active={workspace}
         title="Underwrite"
-        subtitle="Deal context and the assumptions the deterministic engine runs on."
+        subtitle="The assumptions the deterministic engine runs on."
       >
-        <DealContextField value={dealContext} onChange={handleDealContextChange} />
-
-        <AssumptionsForm
-          values={values}
-          onFieldChange={handleFieldChange}
-          onSubmit={handleSubmit}
+        <UnderwriteWorkspace
+          operatingMode="quick"
+          sections={quickSections}
+          dealContext={dealContext}
+          onDealContextChange={handleDealContextChange}
           isSubmitting={isSubmitting}
+          activeTab={underwriteTab}
+          onTabChange={setUnderwriteTab}
+          operationsView={operationsView}
+          onOperationsViewChange={setOperationsView}
+          resultsView={resultsView}
+          onResultsViewChange={setResultsView}
+          results={results}
+          resultsViews={
+            results
+              ? {
+                  summary: <ResultsSummaryPanel results={results} />,
+                  'cash-flow': <CashFlowTable results={results} />,
+                  'owner-returns': <OwnerReturnSchedule results={results} />,
+                }
+              : {}
+          }
         />
-
-        {/* Sprint C Gate C2 temporary placement (spec section 4.6) -- see the
-         * Detailed workspace's note. */}
-        {results && (
-          <section className="detailed-results">
-            <div className="detailed-results-head">
-              <h3 className="section-heading">Detailed Results</h3>
-              <p className="section-caption">
-                Full engine output for the assumptions above. Final placement is a C4 decision.
-              </p>
-            </div>
-
-            <ResultsPanel results={results} />
-          </section>
-        )}
       </WorkspacePanel>
 
       <WorkspacePanel

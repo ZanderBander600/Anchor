@@ -54,8 +54,8 @@ export interface DealHeaderProps {
  * Purely presentational. It performs no validation, no calculation, no dirty
  * computation, and no API call of its own -- `saveStatus` is computed by the
  * caller from its saved-snapshot comparison, and every action delegates to
- * the caller's existing handlers. Analyze runs exactly the same function the
- * assumptions form's own submit button runs.
+ * the caller's existing handlers. Since Sprint C Gate C3 this header is the
+ * app's single home for Analyze.
  *
  * Only fields Anchor's `Deal` contract actually carries are shown. The Sprint
  * C concept image's property photo, city, asset type and building size are
@@ -219,10 +219,11 @@ export function DealHeader({
             {isSaving ? 'Saving…' : isSavedDeal ? 'Update Deal' : 'Save Deal'}
           </button>
 
-          {/* Runs the identical analysis path as the assumptions form's own
-           * "Analyze Deal" submit button -- same validation, same endpoint,
-           * same downstream state. Relocating the action changes nothing
-           * about what it does. */}
+          {/* Sprint C Gate C3: the app's single Analyze action. The
+           * form-level "Analyze Deal" button was removed, so this header --
+           * visible from every workspace and every Underwrite tab -- is the
+           * one place the action lives. What it does is unchanged: same
+           * validation, same endpoints, same downstream state. */}
           <button
             type="button"
             className="btn btn-primary btn-sm btn-analyze"
@@ -230,7 +231,7 @@ export function DealHeader({
             disabled={isAnalyzing}
             aria-busy={isAnalyzing}
           >
-            Analyze
+            {isAnalyzing ? 'Analyzing…' : 'Analyze'}
           </button>
         </div>
       </div>

@@ -73,12 +73,13 @@ describe('DealHeader', () => {
     expect(props.onAnalyze).toHaveBeenCalledTimes(1);
   });
 
-  it('disables Analyze while an analysis is running', () => {
+  it('shows progress and disables Analyze while an analysis is running', () => {
     renderHeader({ isAnalyzing: true });
 
-    const analyze = screen.getByRole('button', { name: 'Analyze' });
+    const analyze = screen.getByRole('button', { name: 'Analyzing…' });
     expect(analyze).toHaveProperty('disabled', true);
     expect(analyze.getAttribute('aria-busy')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Analyze' })).toBeNull();
   });
 
   it('renders the operating mode as a tablist and reports a change', async () => {
