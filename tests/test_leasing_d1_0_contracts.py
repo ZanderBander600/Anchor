@@ -293,26 +293,41 @@ def test_contracts_module_defines_no_calculation() -> None:
     assert functions == [], f"contracts.py must define no functions; found {functions}"
 
 
-def test_package_exposes_no_property_aggregation_entry_point_yet() -> None:
-    """D1.3 owns property aggregation -- multiple leases, occupied and vacant
-    area, the property rent roll, annual totals. None may be reachable yet.
-
-    Month identity moved to the positive assertion at D1.1, and the rent
-    surface at D1.2, as each was delivered.
-    """
+def test_package_exposes_no_d2_or_later_entry_point() -> None:
+    """Month identity, the rent surface and property aggregation were each
+    delivered at D1.1, D1.2 and D1.3 and moved to positive assertions below.
+    What remains absent is everything D2 and later own."""
 
     import anchor.leasing as leasing
 
     for absent in (
+        "MarketLeasingAssumptions",
+        "RolloverEvent",
+        "build_rollover_schedule",
+        "MonthlyPropertyProjection",
+        "AnnualOperatingProjection",
+        "build_lease_level_operating_projection",
+    ):
+        assert not hasattr(leasing, absent), (
+            f"{absent} belongs to a later gate and must not exist yet"
+        )
+
+
+def test_package_exposes_the_d1_3_aggregation_surface() -> None:
+    """The D1.3 deliverable: one canonical monthly property rent roll, plus
+    the annual derivations taken from it."""
+
+    import anchor.leasing as leasing
+
+    for present in (
         "PropertyRentRollSchedule",
         "build_property_rent_roll_schedule",
         "aggregate_flow_to_annual",
+        "aggregate_flow_over_forward_exit_window",
         "snapshot_state_at_year_end",
         "average_state_over_year",
     ):
-        assert not hasattr(leasing, absent), (
-            f"{absent} belongs to D1.3 and must not exist yet"
-        )
+        assert hasattr(leasing, present), f"{present} is a D1.3 public export"
 
 
 def test_rent_helpers_stay_off_the_public_package_surface() -> None:

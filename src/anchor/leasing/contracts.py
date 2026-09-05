@@ -130,11 +130,18 @@ class LeaseMonthlySchedule:
     lease's *raw, unclamped* periods -- possibly negative, possibly past the
     horizon. Those drive escalation; these describe the window.
 
+    ``occupied_area`` (D1.3) is the square footage this lease occupies in each
+    month: ``leased_area_sf`` while contractually active, ``0.0`` otherwise.
+    It is **state**, not flow, so it is never summed across months. Crucially
+    it is derived from contractual *activity*, never from rent dollars -- a
+    zero-rent lease occupies its suite exactly like any other, which is why
+    ``contractual_base_rent > 0`` must never be used as an occupancy test.
+
     The D2/D3 fields D0 lists on this contract -- ``free_rent``,
     ``expense_recoveries``, ``tenant_improvements``, ``leasing_commissions``,
-    ``occupancy_factor`` -- and the ``occupied_area`` state series D1.3 owns
-    are deliberately not declared yet, following the same rule applied to
-    ``Lease``: a gate declares only what it can actually produce.
+    ``occupancy_factor`` -- are deliberately not declared yet, following the
+    same rule applied to ``Lease``: a gate declares only what it can actually
+    produce.
 
     Built only by ``anchor.leasing.rent.build_lease_monthly_schedule``; this
     dataclass performs no calculation of its own.
@@ -144,16 +151,85 @@ class LeaseMonthlySchedule:
     suite_id: str
     months: tuple[ModelMonth, ...]
     contractual_base_rent: tuple[float, ...]
+    occupied_area: tuple[float, ...]
     first_rent_period: int | None
     last_rent_period: int | None
 
     def __post_init__(self) -> None:
-        if len(self.months) != len(self.contractual_base_rent):
-            raise ValueError(
-                "LeaseMonthlySchedule requires one rent figure per model "
-                f"month; got {len(self.contractual_base_rent)} figures for "
-                f"{len(self.months)} months."
-            )
+        expected = len(self.months)
+        for name, series in (
+            ("contractual_base_rent", self.contractual_base_rent),
+            ("occupied_area", self.occupied_area),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"LeaseMonthlySchedule requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PropertyRentRollSchedule:
+    """The canonical monthly property rent roll (D0 Section 4.7) -- the D1
+    deliverable.
+
+    One row per canonical month, for the whole property. ``months`` is the
+    same ``ModelMonth`` tuple every constituent ``LeaseMonthlySchedule`` was
+    built against: one timeline, shared by reference, never rebuilt per lease.
+
+    ``lease_schedules`` is retained deliberately. Property rent in March is
+    auditable back to the individual leases that produced it -- monthly
+    schedules are first-class outputs, not scratch work discarded after
+    aggregation (guardrail G-M1).
+
+    **Flow.** ``contractual_base_rent`` is the property's gross contractual
+    base rent per month, the deterministic sum of the lease-level figures.
+    Annual totals are derived from this series by
+    ``anchor.leasing.aggregation.aggregate_flow_to_annual`` and by nothing
+    else -- there is no independent annual rent formula anywhere.
+
+    **State.** ``occupied_area``, ``vacant_area`` and ``physical_occupancy``
+    are point-in-time values. They are never summed across months; their
+    annual forms are an explicit year-end snapshot or an explicit average
+    (D0 Section 5.7). ``occupied + vacant == rentable_area_sf`` holds in every
+    month.
+
+    Deliberately absent: NOI, recoveries, other income, operating expenses,
+    market rent, rollover, TI, LC, free rent, debt, and every return metric.
+    None exists in D1.
+
+    Built only by
+    ``anchor.leasing.aggregation.build_property_rent_roll_schedule``; this
+    dataclass performs no calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    lease_schedules: tuple[LeaseMonthlySchedule, ...]
+    contractual_base_rent: tuple[float, ...]
+    occupied_area: tuple[float, ...]
+    vacant_area: tuple[float, ...]
+    physical_occupancy: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("contractual_base_rent", self.contractual_base_rent),
+            ("occupied_area", self.occupied_area),
+            ("vacant_area", self.vacant_area),
+            ("physical_occupancy", self.physical_occupancy),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"PropertyRentRollSchedule requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+        for schedule in self.lease_schedules:
+            if schedule.months != self.months:
+                raise ValueError(
+                    f"lease schedule {schedule.lease_id!r} was built against a "
+                    "different month sequence; every schedule in a property "
+                    "rent roll must share one canonical timeline."
+                )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

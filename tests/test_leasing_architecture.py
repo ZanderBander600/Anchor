@@ -311,14 +311,98 @@ def test_the_rent_module_is_the_only_one_that_touches_rent_fields() -> None:
     ), f"{rent_module} must contain the compound-escalation term"
 
 
-def test_leasing_package_contains_only_the_gate_d1_2_modules() -> None:
-    """D0 Gate D1.0 files, plus D1.1's ``calendar.py`` and D1.2's ``rent.py``.
-    The aggregation module (D1.3) arrives at its own gate."""
+def test_leasing_package_contains_only_the_gate_d1_3_modules() -> None:
+    """D0 Gate D1.0 files, plus D1.1's ``calendar.py``, D1.2's ``rent.py`` and
+    D1.3's ``aggregation.py``."""
 
     assert {path.name for path in _leasing_source_files()} == {
         "__init__.py",
+        "aggregation.py",
         "calendar.py",
         "contracts.py",
         "rent.py",
         "validation.py",
     }
+
+
+# =============================================================================
+# D1.3 -- property aggregation is isolated from rent derivation
+# =============================================================================
+
+
+_AGGREGATION_MODULE = "aggregation.py"
+
+
+def test_aggregation_never_references_a_rent_assumption() -> None:
+    """Property aggregation must be completely agnostic to *how* a
+    ``LeaseMonthlySchedule`` obtained its monthly values.
+
+    Stronger than the arithmetic-only rule applied to the other modules: the
+    aggregator may not so much as *name* ``base_rent_psf`` or
+    ``escalation_pct``. That is what lets a future ``rent_anchor_date`` or an
+    explicit rent-step schedule change how monthly rent is derived without
+    touching a line of property aggregation -- the accepted D1.2 current-rent
+    limitation is confined to ``rent.py`` by construction.
+    """
+
+    module = _LEASING_DIR / _AGGREGATION_MODULE
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+    referenced = _referenced_names(tree)
+
+    leaked = referenced & _RENT_BEARING_FIELDS
+    assert not leaked, (
+        f"{module} references {sorted(leaked)}; property aggregation must "
+        "depend only on LeaseMonthlySchedule, never on a rent assumption"
+    )
+
+
+def test_aggregation_consumes_the_authoritative_lease_schedule() -> None:
+    """The dependency must run aggregation -> rent, so there is exactly one
+    contractual-rent formula in production code."""
+
+    module = _LEASING_DIR / _AGGREGATION_MODULE
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+    referenced = _referenced_names(tree)
+
+    assert "build_lease_monthly_schedule" in referenced
+    assert "LeaseMonthlySchedule" in referenced
+
+
+def test_no_annual_figure_is_produced_from_anything_but_a_monthly_series() -> None:
+    """Guardrails G-M2 and G-M3: annual values derive solely from canonical
+    monthly ones, and there is no independent annual rent engine.
+
+    Every annual-producing function takes exactly one positional data
+    parameter -- the monthly series -- plus the keyword-only ``hold_period``.
+    None of them can reach a ``Lease``, a ``Suite``, or a property input,
+    because none of them accepts one.
+    """
+
+    module = _LEASING_DIR / _AGGREGATION_MODULE
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+
+    annual_producers = {
+        "aggregate_flow_to_annual",
+        "aggregate_flow_over_forward_exit_window",
+        "snapshot_state_at_year_end",
+        "average_state_over_year",
+    }
+    seen: set[str] = set()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in annual_producers:
+            continue
+        seen.add(node.name)
+
+        positional = [argument.arg for argument in node.args.args]
+        assert positional == ["monthly"], (
+            f"{node.name} must take the monthly series as its only positional "
+            f"argument; got {positional}"
+        )
+        keyword_only = [argument.arg for argument in node.args.kwonlyargs]
+        assert keyword_only == ["hold_period"], (
+            f"{node.name} must take only hold_period as a keyword argument; "
+            f"got {keyword_only}"
+        )
+
+    assert seen == annual_producers, f"missing annual producers: {annual_producers - seen}"

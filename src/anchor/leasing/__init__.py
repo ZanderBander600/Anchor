@@ -36,12 +36,21 @@ lease, the exact dollar rent in every canonical month, on the lease's true
 contractual chronology. ``rent.py`` is the only module permitted to perform
 rent arithmetic.
 
-D1.3 adds the property rent-roll schedule and the annual aggregation derived
-from it.
+D1.3 adds the property rent-roll schedule -- many leases across many suites
+combined into one canonical monthly series, with occupied and vacant rentable
+area derived from contractual activity -- and the annual aggregation derived
+solely from those monthly values. There is no independent annual rent engine.
 """
 
 from __future__ import annotations
 
+from .aggregation import (
+    aggregate_flow_over_forward_exit_window,
+    aggregate_flow_to_annual,
+    average_state_over_year,
+    build_property_rent_roll_schedule,
+    snapshot_state_at_year_end,
+)
 from .calendar import (
     build_model_months,
     is_first_day_of_month,
@@ -58,6 +67,7 @@ from .contracts import (
     LeaseMonthlySchedule,
     LeaseType,
     ModelMonth,
+    PropertyRentRollSchedule,
     Suite,
 )
 from .rent import build_lease_monthly_schedule
@@ -84,6 +94,13 @@ __all__ = [
     # rent (D1.2)
     "LeaseMonthlySchedule",
     "build_lease_monthly_schedule",
+    # property aggregation (D1.3)
+    "PropertyRentRollSchedule",
+    "build_property_rent_roll_schedule",
+    "aggregate_flow_to_annual",
+    "aggregate_flow_over_forward_exit_window",
+    "snapshot_state_at_year_end",
+    "average_state_over_year",
     # contracts
     "EscalationBasis",
     "Lease",

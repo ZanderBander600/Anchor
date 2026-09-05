@@ -107,9 +107,13 @@ def test_schedule_is_immutable_and_value_equal() -> None:
         first.lease_id = "L2"  # type: ignore[misc]
 
 
-def test_schedule_declares_only_the_d1_2_fields() -> None:
-    """D2/D3's free rent, recoveries, TI, LC and occupancy series are not
-    declared yet: a gate declares only what it can actually produce."""
+def test_schedule_declares_only_the_delivered_fields() -> None:
+    """D2/D3's free rent, recoveries, TI, LC and ``occupancy_factor`` are not
+    declared: a gate declares only what it can actually produce.
+
+    ``occupied_area`` joined at D1.3, when property aggregation gave it a
+    consumer.
+    """
 
     declared = {f.name for f in dataclasses.fields(LeaseMonthlySchedule)}
 
@@ -118,8 +122,16 @@ def test_schedule_declares_only_the_d1_2_fields() -> None:
         "suite_id",
         "months",
         "contractual_base_rent",
+        "occupied_area",
         "first_rent_period",
         "last_rent_period",
+    }
+    assert not declared & {
+        "free_rent",
+        "expense_recoveries",
+        "tenant_improvements",
+        "leasing_commissions",
+        "occupancy_factor",
     }
 
 
@@ -133,12 +145,24 @@ def test_rent_is_aligned_one_to_one_with_the_canonical_months() -> None:
 def test_a_length_mismatch_is_rejected_at_construction() -> None:
     months = build_model_months(analysis_start=date(2027, 1, 1), hold_period=1)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="contractual_base_rent"):
         LeaseMonthlySchedule(
             lease_id="L1",
             suite_id="S1",
             months=months,
             contractual_base_rent=(1.0,),
+            occupied_area=(0.0,) * len(months),
+            first_rent_period=1,
+            last_rent_period=1,
+        )
+
+    with pytest.raises(ValueError, match="occupied_area"):
+        LeaseMonthlySchedule(
+            lease_id="L1",
+            suite_id="S1",
+            months=months,
+            contractual_base_rent=(0.0,) * len(months),
+            occupied_area=(1.0,),
             first_rent_period=1,
             last_rent_period=1,
         )
@@ -731,11 +755,12 @@ def test_the_informational_possession_date_never_affects_rent() -> None:
 # =============================================================================
 
 
-def test_two_leases_are_scheduled_independently_with_no_aggregator() -> None:
-    """D1.3 owns property aggregation. A test may call the single-lease
-    builder twice; production must offer no way to sum them."""
+def test_two_leases_are_scheduled_independently_by_the_rent_module() -> None:
+    """The rent module's own scope is one lease. Summing them is D1.3's
+    property aggregator, which lives in its own module and consumes these
+    finished schedules -- ``rent.py`` still offers no way to combine them."""
 
-    import anchor.leasing as leasing
+    from anchor.leasing import rent as rent_module
 
     months = build_model_months(analysis_start=date(2027, 1, 1), hold_period=1)
     first = build_lease_monthly_schedule(
@@ -754,7 +779,9 @@ def test_two_leases_are_scheduled_independently_with_no_aggregator() -> None:
 
     for absent in (
         "build_property_rent_roll_schedule",
-        "PropertyRentRollSchedule",
         "aggregate_flow_to_annual",
+        "PropertyRentRollSchedule",
     ):
-        assert not hasattr(leasing, absent), f"{absent} belongs to D1.3"
+        assert not hasattr(rent_module, absent), (
+            f"{absent} belongs to anchor.leasing.aggregation, not rent.py"
+        )

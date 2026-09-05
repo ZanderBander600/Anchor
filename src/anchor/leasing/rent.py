@@ -145,7 +145,9 @@ def build_lease_monthly_schedule(
     a market rent, or creates a successor.
 
     A zero-rent lease is a real, valid lease -- its months are active and its
-    rent is exactly ``0.0``. Zero rent is never reinterpreted as vacancy.
+    rent is exactly ``0.0``. Zero rent is never reinterpreted as vacancy: the
+    ``occupied_area`` series is driven by contractual activity alone, so such
+    a lease still occupies its full ``leased_area_sf`` in every active month.
 
     The schedule spans exactly the ``months`` supplied and never invents a
     period beyond them, so a lease running past the projection horizon is
@@ -156,15 +158,18 @@ def build_lease_monthly_schedule(
     raw_first, raw_last = lease_rent_periods(lease, analysis_start=analysis_start)
 
     contractual_base_rent: list[float] = []
+    occupied_area: list[float] = []
     active_periods: list[int] = []
 
     for month in months:
         period = month.period_index
         if not (raw_first <= period <= raw_last):
             contractual_base_rent.append(0.0)
+            occupied_area.append(0.0)
             continue
 
         active_periods.append(period)
+        occupied_area.append(lease.leased_area_sf)
         contractual_base_rent.append(
             monthly_base_rent(
                 base_rent_psf=lease.base_rent_psf,
@@ -185,4 +190,5 @@ def build_lease_monthly_schedule(
         first_rent_period=active_periods[0] if active_periods else None,
         last_rent_period=active_periods[-1] if active_periods else None,
         contractual_base_rent=tuple(contractual_base_rent),
+        occupied_area=tuple(occupied_area),
     )
