@@ -503,7 +503,7 @@ At D4, `anchor.engine.acquisition` imports `anchor.leasing` — never the revers
 
 | Concept | Decision | Rationale |
 |---|---|---|
-| **Property** | `LeaseLevelPropertyInputs` — a small scalar record, not an entity graph | Only `analysis_start_date` and `property_area_sf` are financially load-bearing |
+| **Property** | `LeaseLevelPropertyInputs` — a small scalar record, not an entity graph | Only `analysis_start_date` and `rentable_area_sf` are financially load-bearing |
 | **Suite / Space** | **First-class entity:** `Suite` | A suite persists across leases. It is what rolls over, what sits vacant, and what carries a market-rent override |
 | **Tenant** | **No entity.** `tenant_name: str \| None` on `Lease` | A tenant matters financially only via credit and multi-suite rollup, neither in competition scope. Two leases for one tenant are two rows with equal `tenant_name` |
 | **Lease** | **First-class entity, separate from `Suite`** | One suite has many leases over time. A successor lease has no known tenant, which a merged Tenant/Lease entity could not represent |
@@ -514,11 +514,33 @@ At D4, `anchor.engine.acquisition` imports `anchor.leasing` — never the revers
 | Field | Type | Units | Required | Domain | Meaning | I/D |
 |---|---|---|---|---|---|---|
 | `analysis_start_date` | `date` | — | required | **first day of a calendar month** | First day of Month 1. The single anchor for month identity and for market-rent growth | input |
-| `property_area_sf` | `float` | SF | required | `> 0` | Total rentable area. Denominator for occupancy and the area invariant | input |
+| `rentable_area_sf` | `float` | SF | required | `> 0`; `== sum(suite_area_sf)` | **Total rentable (leasable) area represented by this rent roll.** Occupancy denominator and basis of the area invariant. Never gross building area (4.2.1) | input |
 
 Deliberately absent: `property_name`, `address`, `property_type`, `year_built` —
 those are `DealContext` (`ingestion/contracts.py:161`), informational, never
 engine inputs.
+
+#### 4.2.1 What `rentable_area_sf` means — locked
+
+`rentable_area_sf` is the **total rentable (leasable) area represented by the
+Lease-Level rent roll**: the area that can be leased to a tenant, and that
+every `Suite` collectively accounts for.
+
+It is explicitly **not**:
+
+- gross building area,
+- gross floor area,
+- an arbitrary property square footage, or
+- building area inclusive of non-rentable common area.
+
+`Suite.suite_area_sf` is rentable area on the identical basis, so the two
+reconcile exactly (Section 18.4). A field meaning "property area" would invite
+a gross figure, which would silently inflate the occupancy denominator and
+understate both vacancy and upside with nothing on screen to show it.
+
+Out of scope for D1–D3, and not implied by this definition: load factors,
+usable-versus-rentable area, common-area allocation, and partial-suite
+leasing.
 
 ### 4.3 `Suite`  *(D1; D2 adds the override fields)*
 
@@ -526,7 +548,7 @@ engine inputs.
 |---|---|---|---|---|---|---|---|
 | `suite_id` | `str` | — | required | non-empty, unique in property | Stable identity. **Financial**: the key binding a lease to the space that rolls over | input | D1 |
 | `suite_label` | `str \| None` | — | optional | — | Display name ("Suite 300"). Informational | input | D1 |
-| `suite_area_sf` | `float` | SF | required | `> 0` | Rentable area | input | D1 |
+| `suite_area_sf` | `float` | SF | required | `> 0` | Rentable (leasable) area of this suite, on the same basis as `rentable_area_sf` (4.2.1) | input | D1 |
 | `market_rent_psf` | `float \| None` | $/SF/yr | optional | `>= 0` | Suite market-rent override as of `analysis_start_date`; `None` → property default | input | D2 |
 | `market_leasing_override` | `MarketLeasingAssumptions \| None` | — | optional | — | Full suite-level override | input | D2 |
 
@@ -1558,7 +1580,18 @@ applies to lease revenue), and is **not** part of the recovery base.
   area to `vacant_area[m]`.
 - A suite in downtime contributes zero rent (or the boundary factor, 9.3) and
   its area to `vacant_area[m]`.
-- `physical_occupancy[m] = occupied_area[m] / property_area_sf`.
+- `physical_occupancy[m] = occupied_area[m] / rentable_area_sf`.
+
+**`rentable_area_sf` is the denominator for Lease-Level physical occupancy**,
+and because the suites reconcile to it exactly (Section 18.4):
+
+```
+occupied rentable SF + vacant rentable SF = rentable_area_sf
+```
+
+holds in every month, with no residual and no non-leasable area diluting the
+ratio. Occupancy is always *derived* from suites plus their active leases —
+there is no occupancy input field anywhere in Lease-Level (Section 15.2).
 
 ### 15.2 Detailed's general vacancy field does not exist here
 
@@ -1640,7 +1673,7 @@ silent default and never as a Hold-Year-1 substitute. Failure mode **FM-24**.
 ### 16.3 The D3 formulas
 
 ```
-ProRataShare(L)       = L.leased_area_sf / property_area_sf
+ProRataShare(L)       = L.leased_area_sf / rentable_area_sf
 RecoverableExpenses_m = (TotalOpex_m - ManagementFee_m) * recoverable_expense_ratio
 
 NNN:             Recovery(L, m) = ProRataShare(L) * RecoverableExpenses_m
@@ -1807,14 +1840,48 @@ Flow: chronological summation (5.6). State: explicit snapshot or average (5.7).
 Invariant asserted in **every** month:
 
 ```
-occupied_area[m] + vacant_area[m] == property_area_sf     (abs=1e-9)
+occupied_area[m] + vacant_area[m] == rentable_area_sf     (abs=1e-9)
 ```
 
 This is the structural guarantee that no fractional physical space was ever
 created (8.3), and the direct defense against failure mode **FM-12b**.
 
-Validation additionally requires `sum(suite_area_sf) <= property_area_sf`, any
-shortfall being common area (Section 19.3).
+This holds exactly because the suites reconcile exactly: validation requires
+
+```
+sum(suite_area_sf) == rentable_area_sf
+```
+
+within the deterministic comparison tolerance of Section 18.4.1. **Every
+rentable square foot must be accounted for by a suite.** A shortfall and an
+excess are both `RENTABLE_AREA_NOT_RECONCILED` **ERRORs** (Section 19.2).
+
+**No residual is ever classified as common area.** Vacant rentable area is
+represented as a `Suite` carrying no lease (Section 4.3) — never as area left
+outside the suite schedule. Inferring common area from a residual would let
+unmodeled leasable space dilute physical occupancy, understating both vacancy
+and upside.
+
+#### 18.4.1 Area comparison tolerance
+
+Reconciliation compares under Anchor's existing production tolerance form,
+already used by `anchor.ingestion.classifier_provider._isclose`:
+
+```
+abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
+```
+
+An exact `==` would be wrong: `sum()` over many suite areas accumulates
+ordinary IEEE-754 last-bit drift that scales with both the suite count and the
+building size, so a rent roll that reconciles on paper could fail on
+floating-point noise alone. A fixed absolute epsilon would be wrong in the
+other direction — tight enough for a 10,000 SF building, too tight for a
+1,000,000 SF one. The scaled form is correct at any building size and is fully
+deterministic.
+
+The tolerance is far tighter than any real area discrepancy: at 1,000,000 SF it
+permits `0.001` SF — about `0.144` square inches — so no genuine unmodeled
+space can pass.
 
 ### 18.5 Reconciliation
 
@@ -1878,7 +1945,7 @@ substituted zero.
 |---|---|
 | `ANALYSIS_START_NOT_MONTH_ALIGNED` | `analysis_start_date` is not the first day of a month |
 | `LEASE_DATE_NOT_MONTH_ALIGNED` | `rent_commencement_date` is not the first day of a month, or `lease_expiration_date` is not the last day of a month |
-| `PROPERTY_AREA_OUT_OF_DOMAIN` | `property_area_sf <= 0` |
+| `RENTABLE_AREA_OUT_OF_DOMAIN` | `rentable_area_sf <= 0` |
 | `SUITE_AREA_OUT_OF_DOMAIN` | `suite_area_sf <= 0` |
 | `LEASE_AREA_OUT_OF_DOMAIN` | `leased_area_sf <= 0` |
 | `LEASE_AREA_MISMATCH` | `leased_area_sf != suite_area_sf` (D1–D3) |
@@ -1890,7 +1957,7 @@ substituted zero.
 | `OVERLAPPING_LEASES_IN_SUITE` | Two leases on one suite with overlapping `[first_rent_period, last_rent_period]` ranges |
 | `BASE_RENT_OUT_OF_DOMAIN` | `base_rent_psf < 0` |
 | `ESCALATION_OUT_OF_DOMAIN` | `escalation_pct <= -1` |
-| `LEASED_AREA_EXCEEDS_PROPERTY_AREA` | `sum(suite_area_sf) > property_area_sf` |
+| `RENTABLE_AREA_NOT_RECONCILED` | `sum(suite_area_sf) != rentable_area_sf` in either direction (Section 18.4). A shortfall means the rent roll is incomplete; an excess means it claims more leasable area than exists |
 | `NON_FINITE_VALUE` | Any non-finite input or intermediate |
 | *D2* `RENEWAL_PROBABILITY_OUT_OF_DOMAIN` | `p` outside `[0, 1]` |
 | *D2* `NEGATIVE_DOWNTIME` / `NEGATIVE_FREE_RENT` | `< 0` |
@@ -1903,12 +1970,16 @@ substituted zero.
 
 | Code | Condition | Why non-fatal |
 |---|---|---|
-| `AREA_SHORTFALL_TREATED_AS_COMMON_AREA` | `sum(suite_area_sf) < property_area_sf` | Legitimate (lobbies, mechanical), but occupancy is then computed on a denominator including non-leasable area, which the analyst must intend |
 | `LEASE_STARTS_AFTER_HORIZON` | `first_rent_period > 12H+12` | Harmless; contributes nothing |
 | `LEASE_EXTENDS_BEYOND_HORIZON` | `last_rent_period > 12H+12` | Expected; noted so the analyst knows revenue is truncated while the LC basis is not (12.2) |
 | *D2* `WEIGHTED_ROLLOVER_APPLIED` | `0 < renewal_probability < 1` on any suite | Discloses that the successor is an expected assumption, not a known tenant (8.4) |
 | *D2* `ROLLOVER_IN_EXIT_WINDOW` | A rollover commences in months `12H+1..12H+12` | Materially affects `exit_noi` (17.4) |
 | *D4* `UNUSUALLY_HIGH_CREDIT_LOSS` | `credit_loss_pct > 0.10` | Usually a Detailed vacancy figure carried across by mistake (15.4) |
+
+Both D1 warnings are relative to the projection window (`12H+12`), so they land
+at **D1.1** with `projection_month_count`, not at D1.0. D1.0 therefore raises
+errors only — and no warning is invented to exercise the severity enum
+(Section 28, Gate D1.0).
 
 ### 19.4 What validation deliberately does not do
 
@@ -1981,7 +2052,7 @@ class LeaseCandidateRow:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RentRollExtractionResult:
-    property_area_sf: FieldCandidates
+    rentable_area_sf: FieldCandidates
     lease_rows: tuple[LeaseCandidateRow, ...]
 ```
 
@@ -2327,7 +2398,7 @@ guardrail, or a later-gate acceptance test.
 | **FM-26** | **Non-deterministic ordering** — iterating a `set`/`dict` of leases and summing in varying order | Python iteration order for some key types | All lease collections are `tuple`, ordered at construction; summation is ascending-period. A 100-run bit-identity test |
 | **FM-27** | **Quick or Detailed silently changed** | Touching a shared function or extracting a shared helper | **G-2**: both golden cases bit-identical after every Sprint D gate |
 | **FM-28** | **Monthly data leaking downstream** — a monthly tuple reaching the annual IRR solver | The envelope carries both resolutions | **G-6**: the IRR solver receives exactly `H+1` values; no module outside `anchor.leasing` reads a canonical monthly series |
-| **FM-29** | **Area over-allocation** — leases summing to more than `property_area_sf` | A rent-roll transcription error | `LEASED_AREA_EXCEEDS_PROPERTY_AREA` ERROR; per-month area invariant (18.4) |
+| **FM-29** | **Rentable area not reconciled** — suites summing to more *or less* than `rentable_area_sf`. A shortfall is the dangerous half: unmodeled leasable space would silently dilute occupancy and understate vacancy and upside | A rent-roll transcription error, or an analyst omitting vacant space instead of declaring it as a `Suite` with no lease | `RENTABLE_AREA_NOT_RECONCILED` ERROR in both directions (18.4); per-month area invariant (18.4) |
 
 ---
 
@@ -2340,7 +2411,7 @@ Unless a case overrides them:
 ```
 analysis_start_date  = 2026-01-01     (Month 1 = Jan 2026)
 hold_period H        = 5              (projection window = periods 1..72)
-property_area_sf     = 10,000
+rentable_area_sf     = 10,000
 purchase_price       = 10,000,000
 exit_cap_rate        = 0.065
 ltv = 0.0, interest_rate = 0.0, amortization = 30, io_period = 0
@@ -2351,6 +2422,10 @@ annual_capex_reserve = 0.0
 Zero leverage and zero transaction costs are deliberate: they isolate the lease
 engine so any drift is unambiguously lease-level. Leverage is exercised by the
 existing V2 golden case, which remains untouched.
+
+Every case below reconciles exactly: its suite areas sum to `rentable_area_sf`
+(Section 18.4). Where a case has vacant space, that space is a `Suite` carrying
+no lease — never area omitted from the rent roll.
 
 For cases that reach NOI (D2 and later): all six expense lines `0.0`,
 `management_fee_pct = 0.0`, `other_income = 0.0`, `credit_loss_pct = 0.0`,
@@ -2564,6 +2639,12 @@ occupied_area = 7,000 ; vacant_area = 3,000 ; physical_occupancy = 0.7
 **Asserts.** A suite with zero leases is legal in D1; it contributes exactly
 `0.0` revenue and 3,000 SF of vacancy in every period; **no synthetic vacant
 lease appears in `lease_schedules`**; the area invariant holds.
+
+This is also the reconciliation case: `7,000 + 3,000 == 10,000 ==
+rentable_area_sf`, so declaring `S2` is what makes the rent roll complete.
+Omitting `S2` entirely — leaving 3,000 SF unaccounted — must fail D1.0
+validation with `RENTABLE_AREA_NOT_RECONCILED` rather than quietly modeling a
+7,000 SF building or inferring 3,000 SF of common area (18.4).
 
 ---
 
@@ -2949,8 +3030,15 @@ deterministically, with ERROR / WARNING severity scoped entirely to
 `tests/test_leasing_d1_0_validation.py`, `tests/test_leasing_architecture.py`.
 
 - Every ERROR rule in 19.2 that applies at D1 fires with the correct code and
-  path for a minimal input.
-- Every WARNING rule in 19.3 that applies at D1 fires and does **not** block.
+  path for a minimal input, including `RENTABLE_AREA_NOT_RECONCILED` in both
+  the shortfall and the excess direction (18.4).
+- An explicit vacant `Suite` completes the reconciliation; an omitted one fails
+  it. No residual is treated as common area.
+- **D1.0 has no WARNING condition of its own** — the two D1 warnings in 19.3
+  are horizon-relative and therefore land at D1.1, once the projection window
+  exists. The `LeaseIssueSeverity` architecture is proven by testing the result
+  partitioning directly, never by inventing a domain warning to exercise the
+  enum.
 - **D1-G10** (all six sub-cases) passes, including the leap-February trap and
   the out-of-window case.
 - Issue ordering is deterministic across 100 runs.
@@ -3086,8 +3174,9 @@ are summed in declared tuple order — never `set`- or `dict`-ordered
   `abs=1e-9`.
 - Year-slice partition test: the union of the `H` year slices is exactly periods
   `1..12H`, with no gap and no overlap (**FM-2**, **FM-3**).
-- Area invariant `occupied + vacant == property_area_sf` in every period of
-  every case.
+- Area invariant `occupied + vacant == rentable_area_sf` in every period of
+  every case — exact, because D1.0 already rejected any rent roll whose suites
+  do not reconcile to `rentable_area_sf` (18.4).
 - State metrics are exposed only under `_at_year_end` / `average_..._over_year`
   names (**G-M6**).
 - 100 repeated runs are bit-identical.
@@ -3301,8 +3390,21 @@ for and either removed or confirmed absent.
 | `annual_debt_service / 12` | **Absent.** Forbidden by 5.8, G-M11, FM-23 |
 | D1 dependencies on rollover / TI / LC / recoveries / other income | **Absent.** 28.1 excludes all of them; 14 states D1 does not depend on other income |
 
-**Two arithmetic corrections were made during this pass**, both in material that
-would otherwise have reached an implementer:
+**Post-D1.0 amendment (recorded here to keep this document's own history
+honest).** D1.0 human financial review rejected this document's original
+rentable-area convention, which permitted `sum(suite_area_sf) <=
+property_area_sf` and reported the residual as an
+`AREA_SHORTFALL_TREATED_AS_COMMON_AREA` *warning*. A generic building area is
+not a valid occupancy denominator, and inferring common area from a residual
+lets unmodeled leasable space dilute occupancy invisibly. Sections 4.2, 4.2.1,
+4.3, 15.1, 18.4, 18.4.1, 19.2, 19.3, 26 (FM-29), 27 and 28 were reconciled to
+the approved convention: the field is `rentable_area_sf`, the suites reconcile
+to it exactly, and any mismatch in either direction is a
+`RENTABLE_AREA_NOT_RECONCILED` ERROR. The warning code no longer exists
+anywhere in this document or in the implementation.
+
+**Two arithmetic corrections were made during the original amendment pass**,
+both in material that would otherwise have reached an implementer:
 
 1. **A period-index error.** A lease commencing `2027-04-01` with
    `analysis_start_date = 2026-01-01` is period **16**, not 15

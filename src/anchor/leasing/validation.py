@@ -254,8 +254,8 @@ def _areas_reconcile(total_suite_area: float, rentable_area: float) -> bool:
     the same inputs always give the same answer.
 
     The tolerance is deliberately far tighter than any real area discrepancy:
-    at 1,000,000 SF it permits about a thousandth of a square inch, so a
-    genuine unmodeled floor can never slip through.
+    at 1,000,000 SF it permits ``0.001`` SF -- about ``0.144`` square inches --
+    so a genuine unmodeled floor can never slip through.
     """
 
     return abs(total_suite_area - rentable_area) <= 1e-9 * max(
