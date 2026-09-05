@@ -91,7 +91,15 @@ const ALL_TABS: { key: TabKey; label: string }[] = [
   { key: 'interest_rate_ltv', label: 'Interest Rate × LTV' },
 ];
 
+export type SensitivityTabKey = TabKey;
+
 interface SensitivityPanelProps {
+  /** Sprint C Gate C4: restricts the panel to a subset of its matrices, so
+   * the Risk workspace can present return sensitivity and debt sensitivity
+   * as separate views instead of stacking every matrix on one surface. A
+   * presentation filter only -- it never changes which presets the backend
+   * computed, and an omitted list still shows everything the presets carry. */
+  only?: TabKey[];
   /** Detailed Operating Model V2.1 Gate 14: also accepts
    * ``StandardDetailedSensitivityPresets``, which has no
    * ``exit_cap_noi_growth`` member (``noi_growth`` has no
@@ -101,9 +109,11 @@ interface SensitivityPanelProps {
   presets: StandardSensitivityPresets | StandardDetailedSensitivityPresets | null;
   isLoading: boolean;
   error: string | null;
+  /** Overrides the panel heading so a Risk sub-view can name what it shows. */
+  title?: string;
 }
 
-export function SensitivityPanel({ presets, isLoading, error }: SensitivityPanelProps) {
+export function SensitivityPanel({ presets, isLoading, error, only, title }: SensitivityPanelProps) {
   const [activeTab, setActiveTab] = useState<TabKey>('exit_cap_noi_growth');
   const [ltvMetric, setLtvMetric] = useState<SensitivityMetric>('levered_irr');
 
@@ -111,14 +121,15 @@ export function SensitivityPanel({ presets, isLoading, error }: SensitivityPanel
     return null;
   }
 
-  const availableTabs = presets ? ALL_TABS.filter((tab) => tab.key in presets) : ALL_TABS;
+  const offeredTabs = only ? ALL_TABS.filter((tab) => only.includes(tab.key)) : ALL_TABS;
+  const availableTabs = presets ? offeredTabs.filter((tab) => tab.key in presets) : offeredTabs;
   const effectiveActiveTab = availableTabs.some((tab) => tab.key === activeTab)
     ? activeTab
     : availableTabs[0]?.key;
 
   return (
     <section className="card sensitivity-panel">
-      <h3 className="card-title">Sensitivity Analysis</h3>
+      <h3 className="card-title">{title ?? 'Sensitivity Analysis'}</h3>
 
       {isLoading && <div className="sensitivity-status">Calculating sensitivity…</div>}
       {error && <div className="error-banner">{error}</div>}

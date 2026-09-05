@@ -49,3 +49,6 @@ credentials.json
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Local review artifacts (Sprint C visual QA screenshots, etc.)
+scratchpad/

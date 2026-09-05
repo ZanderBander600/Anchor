@@ -1,7 +1,5 @@
 import type { AcquisitionResults } from '../types';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
-import { CashFlowTable } from './CashFlowTable';
-import { OwnerReturnSchedule } from './OwnerReturnSchedule';
 
 interface StatProps {
   label: string;
@@ -34,11 +32,23 @@ function InfoRow({ label, value }: StatProps) {
   );
 }
 
-interface ResultsPanelProps {
+interface ResultsSummaryPanelProps {
   results: AcquisitionResults;
 }
 
-export function ResultsPanel({ results }: ResultsPanelProps) {
+/**
+ * Sprint C Gate C3 -- the Summary view of the Results tab.
+ *
+ * This is the former `ResultsPanel`'s own content (Key Returns, Owner
+ * Returns, Property, Capitalization, Exit), unchanged field for field and
+ * format for format. What changed is only what it no longer does: it no
+ * longer also renders `CashFlowTable` and `OwnerReturnSchedule` beneath
+ * itself. Those are now peer views under the Results sub-navigation, so one
+ * results surface is visible at a time instead of four stacked.
+ *
+ * Every figure is a direct read of the engine's `AcquisitionResults`.
+ */
+export function ResultsSummaryPanel({ results }: ResultsSummaryPanelProps) {
   return (
     <div className="results-panel">
       <section className="headline-stats">
@@ -105,9 +115,6 @@ export function ResultsPanel({ results }: ResultsPanelProps) {
           <InfoRow label="Net Sale Proceeds" value={formatCurrency(results.net_sale_proceeds)} />
         </section>
       </div>
-
-      <CashFlowTable results={results} />
-      <OwnerReturnSchedule results={results} />
     </div>
   );
 }

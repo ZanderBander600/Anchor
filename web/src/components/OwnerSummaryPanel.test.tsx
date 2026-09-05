@@ -292,10 +292,11 @@ describe('golden display values (Underwriting V2 golden case)', () => {
   });
 
   it('gives the four hero cards more visual weight than the supporting rows (distinct DOM roles)', () => {
-    // Hero cards use `.stat-value-primary`; supporting figures use the
-    // plain `.info-value` row style -- never identical markup, per the
-    // "not all eight metrics get equal visual weight" requirement.
-    const heroValues = document.querySelectorAll('.stat-value-primary');
+    // Hero cards use `.metric-card-value` (Sprint C Gate C4's light metric
+    // card); supporting figures use the plain `.info-value` row style --
+    // never identical markup, per the "not all eight metrics get equal
+    // visual weight" requirement.
+    const heroValues = document.querySelectorAll('.metric-card-value');
     const infoValues = document.querySelectorAll('.info-value');
     expect(heroValues.length).toBe(4);
     expect(infoValues.length).toBeGreaterThan(0);
@@ -737,10 +738,10 @@ describe('AI Deal Story (Gate B4)', () => {
     expect(screen.getByText('AI Interpretation')).toBeTruthy();
     const storySection = screen.getByLabelText('AI Interpretation');
     // The AI block never borrows the hero-metric card treatment.
-    expect(storySection.querySelectorAll('.stat-card').length).toBe(0);
-    expect(storySection.querySelectorAll('.stat-value-primary').length).toBe(0);
+    expect(storySection.querySelectorAll('.metric-card').length).toBe(0);
+    expect(storySection.querySelectorAll('.metric-card-value').length).toBe(0);
     // ...and the four deterministic hero cards keep theirs.
-    expect(document.querySelectorAll('.stat-value-primary').length).toBe(4);
+    expect(document.querySelectorAll('.metric-card-value').length).toBe(4);
   });
 
   it('places the Deal Story below the hero metrics it interprets, never above them', () => {

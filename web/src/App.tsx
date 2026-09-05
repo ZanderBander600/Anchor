@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import type { FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import {
   analyzeAcquisition,
   analyzeDetailedAcquisition,
@@ -28,23 +27,48 @@ import {
   uploadOm,
 } from './api';
 import { AiAnalystPanel } from './components/AiAnalystPanel';
-import { AssumptionsForm } from './components/AssumptionsForm';
+import { AppSidebar } from './components/AppSidebar';
 import { BreakEvenPanel } from './components/BreakEvenPanel';
-import { DealBar } from './components/DealBar';
-import { DealContextField } from './components/DealContextField';
-import type { SaveStatus } from './components/DealBar';
+import { CashFlowTable } from './components/CashFlowTable';
+import { DealHeader } from './components/DealHeader';
+import type { SaveStatus } from './components/DealHeader';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
-import { DetailedAssumptionsForm } from './components/DetailedAssumptionsForm';
 import { DetailedExcelReviewPanel } from './components/DetailedExcelReviewPanel';
 import { DetailedOmReviewPanel } from './components/DetailedOmReviewPanel';
 import { ExcelReviewPanel } from './components/ExcelReviewPanel';
 import { ExcelUploadPanel } from './components/ExcelUploadPanel';
 import { OmReviewPanel } from './components/OmReviewPanel';
 import { OperatingStatementTable } from './components/OperatingStatementTable';
+import { OwnerReturnSchedule } from './components/OwnerReturnSchedule';
 import { OwnerSummaryPanel } from './components/OwnerSummaryPanel';
-import { ResultsPanel } from './components/ResultsPanel';
+import { ResultsSummaryPanel } from './components/ResultsSummaryPanel';
 import { SensitivityPanel } from './components/SensitivityPanel';
+import { SubNav } from './components/SubNav';
+import { UnderwriteWorkspace } from './components/UnderwriteWorkspace';
+import { WorkspaceNav } from './components/WorkspaceNav';
+import { WorkspacePanel } from './components/WorkspacePanel';
 import { buildOwnerSummaryData } from './ownerSummary';
+import { buildDetailedSections, buildQuickSections } from './underwrite';
+import type { ResultsViewId, UnderwriteTabId } from './underwrite';
+import type { WorkspaceId } from './workspaces';
+
+/** Sprint C Gate C4: the Risk workspace's internal views. */
+const RISK_VIEWS = [
+  { id: 'returns', label: 'Return Sensitivity' },
+  { id: 'debt', label: 'Debt Sensitivity' },
+  { id: 'break-even', label: 'Break-Even' },
+];
+
+/** Documents is split by SOURCE TYPE rather than upload/review because
+ * that is how the existing components are actually shaped: the OM panel
+ * owns upload AND per-field analyst review as one unit, while the Excel
+ * flow is an upload panel plus a separate review panel. Splitting by
+ * upload/review would require changing OmReviewPanel's behavior, which
+ * this gate explicitly forbids. Each tab is one source's complete flow. */
+const DOCUMENT_VIEWS = [
+  { id: 'om', label: 'Offering Memorandum' },
+  { id: 'excel', label: 'Excel Workbook' },
+];
 import {
   BLANK_DETAILED_FORM_VALUES,
   BLANK_FORM_VALUES,
@@ -123,6 +147,37 @@ export default function App() {
   // rather than the break-even panel's own edited targets -- Gate 14 is a
   // wiring-only gate that explicitly excludes AI changes.
   const [operatingMode, setOperatingMode] = useState<OperatingMode>('quick');
+
+  // Sprint C Gate C2: which of the five deal workspaces is showing
+  // (docs/workspace_ux_visual_system_v3_spec.md section 12). Local React
+  // state, deliberately not a router -- five views with no deep-linking
+  // requirement do not justify a routing dependency.
+  //
+  // Deliberately SHARED across operating modes: a workspace means the same
+  // thing in Quick and Detailed, so switching modes keeps the selected
+  // workspace rather than resetting it. This is navigation state only -- it
+  // is never part of the dirty-tracking snapshot, is never persisted, and
+  // touches no financial, analysis, or AI state.
+  const [workspace, setWorkspace] = useState<WorkspaceId>('underwrite');
+
+  // Sprint C Gate C3: Underwrite's own internal navigation. Like `workspace`
+  // above this is navigation state only -- never part of the dirty-tracking
+  // snapshot, never persisted, and never touching financial, analysis or AI
+  // state. Held here (not inside the workspace component) so switching tabs
+  // re-renders without remounting any input, which is what preserves unsaved
+  // values across tab changes by construction.
+  //
+  // Shared across operating modes for the same reason `workspace` is: a tab
+  // means the same thing in Quick and Detailed.
+  const [underwriteTab, setUnderwriteTab] = useState<UnderwriteTabId>('acquisition');
+  const [operationsView, setOperationsView] = useState('revenue');
+  const [resultsView, setResultsView] = useState<ResultsViewId>('summary');
+
+  // Sprint C Gate C4: internal navigation for the Risk and Documents
+  // workspaces. Navigation state only -- never persisted, never part of the
+  // dirty snapshot, never touching financial, analysis or AI state.
+  const [riskView, setRiskView] = useState<'returns' | 'debt' | 'break-even'>('returns');
+  const [documentsView, setDocumentsView] = useState<'om' | 'excel'>('om');
 
   const [detailedValues, setDetailedValues] = useState<DetailedFormValues>(
     BLANK_DETAILED_FORM_VALUES,
@@ -219,6 +274,7 @@ export default function App() {
     setDetailedExcelReviewError(null);
     try {
       const report = await uploadDetailedExcel(file);
+      setDocumentsView('excel');
       setDetailedExcelReview({
         fileName: file.name,
         values: buildDetailedFormValuesFromExcelIntakeReport(report),
@@ -302,6 +358,8 @@ export default function App() {
       'Detailed assumptions approved and loaded. Review the deal assumptions, then click ' +
         'Analyze Deal.',
     );
+    // Sprint C Gate C2 (spec section 12.4) -- see handleApproveExcelReview.
+    setWorkspace('underwrite');
   }
 
   /** Discards the pending Detailed Excel review without touching
@@ -334,6 +392,7 @@ export default function App() {
     setDetailedOcrExtraction(null);
     try {
       const extraction = await uploadDetailedOm(file);
+      setDocumentsView('om');
       setDetailedOcrExtraction(extraction);
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -366,6 +425,8 @@ export default function App() {
     setDetailedError(null);
     clearDetailedAiAnalysis();
     clearSaveDetailedDealError();
+    // Sprint C Gate C2 (spec section 12.4) -- see handleFinishOmReview.
+    setWorkspace('underwrite');
   }
 
   /** Discards the pending Detailed OM extraction without touching
@@ -482,6 +543,10 @@ export default function App() {
    * Detailed deal: both end in the same blank, never-saved Detailed
    * workspace state. Never touches any Quick-mode state. */
   function resetToBlankDetailedDeal() {
+    // Sprint C Gate C2 (spec section 12.4): a blank deal has nothing to show
+    // on Overview, so New Deal -- and deleting the deal this mode had open --
+    // land on Underwrite, where the work starts.
+    setWorkspace('underwrite');
     setDetailedValues(BLANK_DETAILED_FORM_VALUES);
     setDetailedDealName('');
     setDetailedDealContext('');
@@ -534,6 +599,8 @@ export default function App() {
         values: detailedValues,
         dealContext: deal.deal_context ?? '',
       });
+      // Sprint C Gate C2 -- see handleSaveDeal.
+      void loadSavedDeals();
 
       if (detailedResults !== null) {
         const fingerprint = await fetchDetailedDealFingerprint(
@@ -705,8 +772,14 @@ export default function App() {
     }
   }
 
-  async function handleDetailedSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  /** Sprint C Gate C2: the Detailed analysis path, extracted verbatim from
+   * the former `handleDetailedSubmit` so the new deal header's Analyze
+   * button and the assumptions form's own "Analyze Deal" submit button run
+   * one identical function. Validation, the endpoints called, the
+   * deterministic results, the snapshot-provenance refresh, and every piece
+   * of downstream state are unchanged -- relocating the action changed
+   * nothing about what it does. */
+  async function runDetailedAnalyze() {
     resetDetailedDownstreamAnalysisState();
 
     let terms;
@@ -772,6 +845,11 @@ export default function App() {
     }
     setIsDetailedSubmitting(false);
     setLastDetailedRequest({ terms, detailedOperatingInputs });
+    // Sprint C Gate C2 (spec section 12.4): a SUCCESSFUL analysis moves the
+    // analyst to Overview -- the owner-facing read of what they just
+    // produced. Placed after the error path's early `return` above, so a
+    // failed Analyze never navigates away from the inputs that need fixing.
+    setWorkspace('overview');
 
     setIsDetailedSensitivityLoading(true);
     try {
@@ -1031,6 +1109,7 @@ export default function App() {
     setOcrExtraction(null);
     try {
       const extraction = await uploadOm(file);
+      setDocumentsView('om');
       setOcrExtraction(extraction);
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -1051,6 +1130,9 @@ export default function App() {
     setValues((previous) => ({ ...previous, ...formValues }));
     resetDownstreamAnalysisState();
     clearSaveDealError();
+    // Sprint C Gate C2 (spec section 12.4) -- approved OM fields are
+    // assumptions; their home is Underwrite.
+    setWorkspace('underwrite');
   }
 
   /**
@@ -1069,6 +1151,7 @@ export default function App() {
     setExcelReviewError(null);
     try {
       const report = await uploadExcel(file);
+      setDocumentsView('excel');
       setExcelReview({
         fileName: file.name,
         values: buildFormValuesFromExcelIntakeReport(report),
@@ -1128,10 +1211,11 @@ export default function App() {
     setExcelUploadSuccessMessage(
       'Excel assumptions approved and loaded. Review the deal assumptions, then click Analyze Deal.',
     );
-    document.querySelector('.assumptions-form')?.scrollIntoView?.({
-      behavior: 'smooth',
-      block: 'start',
-    });
+    // Sprint C Gate C2 (spec section 12.4): approval produces assumptions,
+    // whose home is Underwrite. This replaces the pre-Sprint-C
+    // `scrollIntoView` nudge toward the form on the old single-page layout --
+    // same intent, expressed as navigation.
+    setWorkspace('underwrite');
   }
 
   /** Discards the pending Excel review without touching the active deal --
@@ -1177,6 +1261,8 @@ export default function App() {
   /** Shared by New Deal and by deleting the currently-open deal: both end
    * in the same blank, never-saved workspace state. */
   function resetToBlankDeal() {
+    // Sprint C Gate C2 (spec section 12.4) -- see resetToBlankDetailedDeal.
+    setWorkspace('underwrite');
     setValues(BLANK_FORM_VALUES);
     setDealName('');
     setDealContext('');
@@ -1221,6 +1307,9 @@ export default function App() {
       setDealContext(deal.deal_context ?? '');
       setLastSavedAt(deal.updated_at);
       setSavedSnapshot({ dealName: deal.name, values, dealContext: deal.deal_context ?? '' });
+      // Sprint C Gate C2: refresh the shared deal list so the sidebar's
+      // Recent Deals reflects the save. Read-only; never blocks the save.
+      void loadSavedDeals();
 
       // `results`/`aiAnalysis` are always either null or already valid for
       // the current `values`/`dealContext` by construction (any assumption
@@ -1266,6 +1355,16 @@ export default function App() {
       setIsDealsLoading(false);
     }
   }
+
+  // Sprint C Gate C2: the sidebar's Recent Deals list renders the same
+  // `savedDeals` state the Deal Library view renders, so the list is loaded
+  // once on mount rather than only when the library is opened. This is the
+  // existing `loadSavedDeals()` -- no second deal-library state system, and
+  // no persistence code was rewritten to support the sidebar.
+  useEffect(() => {
+    void loadSavedDeals();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function handleOpenLibrary() {
     setView('library');
@@ -1328,10 +1427,12 @@ export default function App() {
         // returned when it matches the deal's current assumptions.
         // Deliberately does not touch sensitivity/break-even state, which
         // Gate A6 does not persist -- those remain empty until recomputed.
+        let hasRestoredAnalysis = false;
         if (
           fullDeal.analysis_snapshot !== null &&
           isDetailedAnalysisSnapshot(fullDeal.analysis_snapshot)
         ) {
+          hasRestoredAnalysis = true;
           setDetailedResults(fullDeal.analysis_snapshot);
           setLastDetailedRequest({
             terms: fullDeal.terms,
@@ -1341,6 +1442,13 @@ export default function App() {
         if (fullDeal.ai_snapshot !== null) {
           setDetailedAiAnalysis(fullDeal.ai_snapshot);
         }
+        // Sprint C Gate C2 (spec section 12.4): a reopened deal whose
+        // persisted analysis snapshot was restored opens on Overview -- there
+        // is something to read. One without a valid snapshot opens on
+        // Underwrite rather than on an empty Overview. This is a navigation
+        // decision only: it never changes whether a snapshot is restored, and
+        // never fabricates one.
+        setWorkspace(hasRestoredAnalysis ? 'overview' : 'underwrite');
         clearSaveDetailedDealError();
         clearDetailedIntakeFeedback();
         setOperatingMode('detailed');
@@ -1378,16 +1486,20 @@ export default function App() {
       resetDownstreamAnalysisState();
       // Owner Return Metrics V3 Gate A6: mirrors the Detailed branch above
       // exactly -- see its comment.
+      let hasRestoredAnalysis = false;
       if (
         fullDeal.analysis_snapshot !== null &&
         !isDetailedAnalysisSnapshot(fullDeal.analysis_snapshot)
       ) {
+        hasRestoredAnalysis = true;
         setResults(fullDeal.analysis_snapshot);
         setLastRequest(fullDeal.inputs);
       }
       if (fullDeal.ai_snapshot !== null) {
         setAiAnalysis(fullDeal.ai_snapshot);
       }
+      // Sprint C Gate C2 (spec section 12.4) -- see the Detailed branch above.
+      setWorkspace(hasRestoredAnalysis ? 'overview' : 'underwrite');
       clearSaveDealError();
       clearIntakeFeedback();
       setOperatingMode('quick');
@@ -1416,9 +1528,16 @@ export default function App() {
    * the analyst see the new copy appear in context, right next to the
    * original, before deciding whether to open it. */
   async function handleDuplicateDeal(deal: Deal) {
+    await handleDuplicateDealById(deal.id);
+  }
+
+  /** Sprint C Gate C2: the duplicate path, keyed by id so the Deal Library
+   * row and the deal header's overflow menu share one implementation rather
+   * than growing a second copy. Behavior is unchanged. */
+  async function handleDuplicateDealById(dealId: string) {
     setDealsError(null);
     try {
-      await duplicateDeal(deal.id);
+      await duplicateDeal(dealId);
       await loadSavedDeals();
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -1439,13 +1558,20 @@ export default function App() {
    * deleted id). Deleting a deal never changes which mode is currently
    * selected; only that mode's own state resets. */
   async function handleDeleteDeal(deal: Deal) {
+    await handleDeleteDealById(deal.id);
+  }
+
+  /** Sprint C Gate C2: the delete path, keyed by id -- see
+   * `handleDuplicateDealById`. Behavior is unchanged, including resetting a
+   * mode's workspace to a blank deal when the deal it had open is deleted. */
+  async function handleDeleteDealById(dealId: string) {
     setDealsError(null);
     try {
-      await deleteDeal(deal.id);
-      if (currentDealId === deal.id) {
+      await deleteDeal(dealId);
+      if (currentDealId === dealId) {
         resetToBlankDeal();
       }
-      if (currentDetailedDealId === deal.id) {
+      if (currentDetailedDealId === dealId) {
         resetToBlankDetailedDeal();
       }
       await loadSavedDeals();
@@ -1622,8 +1748,9 @@ export default function App() {
     }
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  /** Sprint C Gate C2: the Quick analysis path, extracted verbatim from the
+   * former `handleSubmit` -- see `runDetailedAnalyze`'s note. */
+  async function runQuickAnalyze() {
     setResults(null);
     setError(null);
     setSensitivity(null);
@@ -1679,6 +1806,8 @@ export default function App() {
     }
     setIsSubmitting(false);
     setLastRequest(request);
+    // Sprint C Gate C2 (spec section 12.4) -- see runDetailedAnalyze.
+    setWorkspace('overview');
 
     setIsSensitivityLoading(true);
     try {
@@ -1703,305 +1832,643 @@ export default function App() {
     );
   }
 
-  return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div className="app-header-brand">
-          <img className="app-header-logo" src="/anchor-mark.png" alt="" />
-          <div>
-            <h1>Anchor</h1>
-            <p>Commercial Real Estate Acquisition Analysis</p>
+  /** Sprint C Gate C3: the single Analyze entry point. C2 had both a header
+   * Analyze and a form-level "Analyze Deal"; manual review found the
+   * duplication unhelpful, so the persistent deal header -- always visible
+   * from every workspace and every Underwrite tab -- now owns the action
+   * outright. What Analyze DOES is untouched: same validation, same request
+   * construction, same endpoints, same downstream state, same snapshot
+   * provenance.
+   *
+   * Dispatches to the active operating mode's own analysis path, never
+   * both. */
+  function handleAnalyzeFromHeader() {
+    if (operatingMode === 'detailed') {
+      void runDetailedAnalyze();
+      return;
+    }
+    void runQuickAnalyze();
+  }
+
+  /** Sprint C Gate C2: the deal the sidebar should mark active is whichever
+   * one the *currently selected* operating mode has open -- the other mode's
+   * open deal stays untouched in the background, exactly as it always has. */
+  const activeDealId = operatingMode === 'detailed' ? currentDetailedDealId : currentDealId;
+
+  function handleNewDealFromSidebar() {
+    if (operatingMode === 'detailed') {
+      handleNewDetailedDeal();
+      return;
+    }
+    handleNewDeal();
+  }
+
+  /** Deal-header overflow actions. Both reuse the same by-id handlers the
+   * Deal Library rows use, and delete asks for the same `window.confirm`
+   * the library asks for -- the app's existing convention. */
+  function handleDuplicateCurrentDeal() {
+    if (activeDealId === null) {
+      return;
+    }
+    void handleDuplicateDealById(activeDealId);
+  }
+
+  function handleDeleteCurrentDeal() {
+    if (activeDealId === null) {
+      return;
+    }
+    const name =
+      (operatingMode === 'detailed' ? detailedDealName : dealName).trim() || 'Untitled Deal';
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) {
+      return;
+    }
+    void handleDeleteDealById(activeDealId);
+  }
+
+  // ===========================================================================
+  // Sprint C Gate C2 -- workspace content.
+  //
+  // Quick and Detailed each render their own five workspaces from their own
+  // independent state, deliberately never sharing a "current mode" view model.
+  // That mirrors how the rest of this component already keeps the two modes
+  // apart (Gate 6): Detailed never reads or writes Quick state, and vice
+  // versa, so a shell change can never make one mode's numbers leak into the
+  // other's. The two blocks below are structurally parallel on purpose.
+  //
+  // Only ONE mode's block is mounted at a time (mode switching stays
+  // conditional). Within the mounted mode, all five workspace panels stay
+  // mounted and the inactive ones are `hidden` -- see WorkspacePanel.
+  // ===========================================================================
+
+  // Sprint C Gate C3: each mode resolves its OWN assumptions into the shared
+  // tab layout. The layout is shared; the state never is.
+  const detailedSections = buildDetailedSections({
+    termsValues: detailedValues.terms,
+    operatingValues: detailedValues.operating,
+    onTermsFieldChange: handleDetailedTermsFieldChange,
+    onOperatingFieldChange: handleDetailedOperatingFieldChange,
+  });
+
+  const quickSections = buildQuickSections({
+    values,
+    onFieldChange: handleFieldChange,
+  });
+
+  const detailedWorkspaces = (
+    <>
+      <WorkspacePanel
+        id="overview"
+        active={workspace}
+        title="Overview"
+        subtitle="A concise view of the investment, key returns, and what drives the story."
+      >
+        {detailedResults && lastDetailedRequest ? (
+          <OwnerSummaryPanel
+            data={buildOwnerSummaryData({
+              operatingMode: 'detailed',
+              dealName: detailedDealName,
+              dealContext: detailedDealContext,
+              terms: lastDetailedRequest.terms,
+              detailedOperatingInputs: lastDetailedRequest.detailedOperatingInputs,
+              results: detailedResults.results,
+              breakEven: detailedBreakEven,
+            })}
+            dealStory={detailedAiAnalysis?.deal_story ?? null}
+            showIdentity={false}
+          />
+        ) : (
+          <div className="empty-state">
+            Enter assumptions and click <strong>Analyze Deal</strong> to see the Owner Summary.
+          </div>
+        )}
+      </WorkspacePanel>
+
+      <WorkspacePanel
+        id="underwrite"
+        active={workspace}
+        title="Underwrite"
+        subtitle="The assumptions the deterministic engine runs on."
+        className="workspace-panel-fill"
+      >
+        <UnderwriteWorkspace
+          operatingMode="detailed"
+          sections={detailedSections}
+          dealContext={detailedDealContext}
+          onDealContextChange={handleDetailedDealContextChange}
+          isSubmitting={isDetailedSubmitting}
+          activeTab={underwriteTab}
+          onTabChange={setUnderwriteTab}
+          operationsView={operationsView}
+          onOperationsViewChange={setOperationsView}
+          resultsView={resultsView}
+          onResultsViewChange={setResultsView}
+          results={detailedResults?.results ?? null}
+          resultsViews={
+            detailedResults
+              ? {
+                  summary: <ResultsSummaryPanel results={detailedResults.results} />,
+                  'cash-flow': <CashFlowTable results={detailedResults.results} />,
+                  'owner-returns': <OwnerReturnSchedule results={detailedResults.results} />,
+                  'operating-statement': (
+                    <OperatingStatementTable
+                      operatingProjection={detailedResults.operating_projection}
+                      results={detailedResults.results}
+                    />
+                  ),
+                }
+              : {}
+          }
+        />
+      </WorkspacePanel>
+
+      <WorkspacePanel
+        id="risk"
+        active={workspace}
+        title="Risk"
+        subtitle="Sensitivity analysis and key break-evens."
+      >
+        {!detailedResults ? (
+          <div className="empty-state">Analyze the deal to view risk analysis.</div>
+        ) : !detailedSensitivity &&
+            !isDetailedSensitivityLoading &&
+            !detailedSensitivityError &&
+            !detailedBreakEven &&
+            !isDetailedBreakEvenLoading &&
+            !detailedBreakEvenError ? (
+          <div className="empty-state">
+            Run <strong>Analyze</strong> to refresh Risk outputs for this deal.
+          </div>
+        ) : (
+          <div className="risk-workspace">
+            {/* Sprint C Gate C4: return sensitivity, debt sensitivity and
+             * break-even are peer views rather than one long stack. Each
+             * renders the existing authoritative outputs unchanged. Both
+             * sensitivity views come from ONE sensitivity request, so its
+             * loading and error state lives here once rather than being
+             * duplicated into each view. */}
+            {detailedSensitivityError && <div className="error-banner">{detailedSensitivityError}</div>}
+            {isDetailedSensitivityLoading && (
+              <div className="sensitivity-status">Calculating sensitivity…</div>
+            )}
+            <SubNav
+              items={RISK_VIEWS}
+              active={riskView}
+              onSelect={(id) => setRiskView(id as 'returns' | 'debt' | 'break-even')}
+              label="Risk views"
+              idFor={(id) => `risk-tab-${id}`}
+              controlsFor={(id) => `risk-panel-${id}`}
+            />
+
+            <div
+              id="risk-panel-returns"
+              role="tabpanel"
+              aria-labelledby="risk-tab-returns"
+              hidden={riskView !== 'returns'}
+            >
+              <SensitivityPanel
+                presets={detailedSensitivity}
+                isLoading={false}
+                error={null}
+                only={['exit_cap_noi_growth', 'purchase_price_exit_cap']}
+                title="Return Sensitivity"
+              />
+            </div>
+
+            <div
+              id="risk-panel-debt"
+              role="tabpanel"
+              aria-labelledby="risk-tab-debt"
+              hidden={riskView !== 'debt'}
+            >
+              <SensitivityPanel
+                presets={detailedSensitivity}
+                isLoading={false}
+                error={null}
+                only={['interest_rate_ltv']}
+                title="Debt Sensitivity"
+              />
+            </div>
+
+            <div
+              id="risk-panel-break-even"
+              role="tabpanel"
+              aria-labelledby="risk-tab-break-even"
+              hidden={riskView !== 'break-even'}
+            >
+              <BreakEvenPanel
+                analysis={detailedBreakEven}
+                isLoading={isDetailedBreakEvenLoading}
+                error={detailedBreakEvenError}
+                targetLeveredIrrPercent={detailedTargetLeveredIrrPercent}
+                targetEquityMultiple={detailedTargetEquityMultiple}
+                targetHeadlineDscr={detailedTargetHeadlineDscr}
+                returnHurdleMetric={detailedReturnHurdleMetric}
+                onTargetLeveredIrrChange={handleDetailedTargetLeveredIrrChange}
+                onTargetEquityMultipleChange={handleDetailedTargetEquityMultipleChange}
+                onTargetHeadlineDscrChange={handleDetailedTargetHeadlineDscrChange}
+                onReturnHurdleMetricChange={handleDetailedReturnHurdleMetricChange}
+              />
+            </div>
+          </div>
+        )}
+      </WorkspacePanel>
+
+      <WorkspacePanel
+        id="ai"
+        active={workspace}
+        title="AI Analyst"
+        subtitle="An interpretation of the verified deterministic results."
+      >
+        {detailedResults ? (
+          <AiAnalystPanel
+            analysis={detailedAiAnalysis}
+            isLoading={isDetailedAiAnalysisLoading}
+            error={detailedAiAnalysisError}
+            onGenerate={() => void handleGenerateDetailedAiAnalysis()}
+          />
+        ) : (
+          <div className="empty-state">
+            Analyze the deal first. The AI Analyst interprets verified results; it never
+            calculates them.
+          </div>
+        )}
+      </WorkspacePanel>
+
+      <WorkspacePanel
+        id="documents"
+        active={workspace}
+        title="Documents"
+        subtitle="Upload an offering memorandum or workbook, then review what was extracted."
+      >
+        <div className="documents-workspace">
+          <SubNav
+            items={DOCUMENT_VIEWS}
+            active={documentsView}
+            onSelect={(id) => setDocumentsView(id as 'om' | 'excel')}
+            label="Document sources"
+            idFor={(id) => `documents-tab-${id}`}
+            controlsFor={(id) => `documents-panel-${id}`}
+          />
+
+          <div
+            id="documents-panel-om"
+            role="tabpanel"
+            aria-labelledby="documents-tab-om"
+            hidden={documentsView !== 'om'}
+            className="documents-view"
+          >
+            <DetailedOmReviewPanel
+              extraction={detailedOcrExtraction}
+              isLoading={isDetailedExtracting}
+              error={detailedExtractionError}
+              onUpload={(file) => void handleUploadDetailedOm(file)}
+              onFinishReview={handleFinishDetailedOmReview}
+              onCancel={handleCancelDetailedOmReview}
+            />
+          </div>
+
+          <div
+            id="documents-panel-excel"
+            role="tabpanel"
+            aria-labelledby="documents-tab-excel"
+            hidden={documentsView !== 'excel'}
+            className="documents-view"
+          >
+            <ExcelUploadPanel
+              isLoading={isUploadingDetailedExcel}
+              error={detailedExcelUploadError}
+              successMessage={detailedExcelUploadSuccessMessage}
+              onUpload={(file) => void handleUploadDetailedExcel(file)}
+            />
+
+            {detailedExcelReview && (
+              <DetailedExcelReviewPanel
+                fileName={detailedExcelReview.fileName}
+                termsValues={detailedExcelReview.values.terms}
+                operatingValues={detailedExcelReview.values.operating}
+                error={detailedExcelReviewError}
+                onTermsFieldChange={handleDetailedExcelReviewTermsFieldChange}
+                onOperatingFieldChange={handleDetailedExcelReviewOperatingFieldChange}
+                onApprove={handleApproveDetailedExcelReview}
+                onCancel={handleCancelDetailedExcelReview}
+              />
+            )}
           </div>
         </div>
-      </header>
+      </WorkspacePanel>
+    </>
+  );
 
-      <main className="app-main">
-        <div className="operating-mode-toggle" role="tablist" aria-label="Underwriting Mode">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={operatingMode === 'quick'}
-            className={
-              operatingMode === 'quick'
-                ? 'mode-toggle-button mode-toggle-button-active'
-                : 'mode-toggle-button'
-            }
-            onClick={() => setOperatingMode('quick')}
-          >
-            Quick Underwrite
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={operatingMode === 'detailed'}
-            className={
-              operatingMode === 'detailed'
-                ? 'mode-toggle-button mode-toggle-button-active'
-                : 'mode-toggle-button'
-            }
-            onClick={() => setOperatingMode('detailed')}
-          >
-            Detailed Underwrite
-          </button>
-        </div>
-
-        {view === 'library' ? (
-          <DealLibraryPanel
-            deals={savedDeals}
-            isLoading={isDealsLoading}
-            error={dealsError}
-            onOpen={(deal) => void handleOpenDeal(deal)}
-            onDuplicate={(deal) => void handleDuplicateDeal(deal)}
-            onDelete={(deal) => void handleDeleteDeal(deal)}
-            onClose={handleCloseLibrary}
+  const quickWorkspaces = (
+    <>
+      <WorkspacePanel
+        id="overview"
+        active={workspace}
+        title="Overview"
+        subtitle="A concise view of the investment, key returns, and what drives the story."
+      >
+        {results && lastRequest ? (
+          <OwnerSummaryPanel
+            data={buildOwnerSummaryData({
+              operatingMode: 'quick',
+              dealName,
+              dealContext,
+              inputs: lastRequest,
+              results,
+              breakEven,
+            })}
+            dealStory={aiAnalysis?.deal_story ?? null}
+            showIdentity={false}
           />
-        ) : operatingMode === 'detailed' ? (
-          <>
-            <DealBar
-              dealName={detailedDealName}
-              onDealNameChange={handleDetailedDealNameChange}
-              isSavedDeal={currentDetailedDealId !== null}
-              isSaving={isSavingDetailedDeal}
-              error={saveDetailedDealError}
-              saveStatus={detailedSaveStatus}
-              lastSavedAt={lastDetailedSavedAt}
-              onSaveDeal={() => void handleSaveDetailedDeal()}
-              onOpenLibrary={handleOpenLibrary}
-              onNewDeal={handleNewDetailedDeal}
+        ) : (
+          <div className="empty-state">
+            Enter assumptions and click <strong>Analyze Deal</strong> to see the Owner Summary.
+          </div>
+        )}
+      </WorkspacePanel>
+
+      <WorkspacePanel
+        id="underwrite"
+        active={workspace}
+        title="Underwrite"
+        subtitle="The assumptions the deterministic engine runs on."
+        className="workspace-panel-fill"
+      >
+        <UnderwriteWorkspace
+          operatingMode="quick"
+          sections={quickSections}
+          dealContext={dealContext}
+          onDealContextChange={handleDealContextChange}
+          isSubmitting={isSubmitting}
+          activeTab={underwriteTab}
+          onTabChange={setUnderwriteTab}
+          operationsView={operationsView}
+          onOperationsViewChange={setOperationsView}
+          resultsView={resultsView}
+          onResultsViewChange={setResultsView}
+          results={results}
+          resultsViews={
+            results
+              ? {
+                  summary: <ResultsSummaryPanel results={results} />,
+                  'cash-flow': <CashFlowTable results={results} />,
+                  'owner-returns': <OwnerReturnSchedule results={results} />,
+                }
+              : {}
+          }
+        />
+      </WorkspacePanel>
+
+      <WorkspacePanel
+        id="risk"
+        active={workspace}
+        title="Risk"
+        subtitle="Sensitivity analysis and key break-evens."
+      >
+        {!results ? (
+          <div className="empty-state">Analyze the deal to view risk analysis.</div>
+        ) : !sensitivity &&
+            !isSensitivityLoading &&
+            !sensitivityError &&
+            !breakEven &&
+            !isBreakEvenLoading &&
+            !breakEvenError ? (
+          <div className="empty-state">
+            Run <strong>Analyze</strong> to refresh Risk outputs for this deal.
+          </div>
+        ) : (
+          <div className="risk-workspace">
+            {/* Sprint C Gate C4: return sensitivity, debt sensitivity and
+             * break-even are peer views rather than one long stack. Each
+             * renders the existing authoritative outputs unchanged. Both
+             * sensitivity views come from ONE sensitivity request, so its
+             * loading and error state lives here once rather than being
+             * duplicated into each view. */}
+            {sensitivityError && <div className="error-banner">{sensitivityError}</div>}
+            {isSensitivityLoading && (
+              <div className="sensitivity-status">Calculating sensitivity…</div>
+            )}
+            <SubNav
+              items={RISK_VIEWS}
+              active={riskView}
+              onSelect={(id) => setRiskView(id as 'returns' | 'debt' | 'break-even')}
+              label="Risk views"
+              idFor={(id) => `risk-tab-${id}`}
+              controlsFor={(id) => `risk-panel-${id}`}
             />
 
-            <DealContextField
-              value={detailedDealContext}
-              onChange={handleDetailedDealContextChange}
-            />
-
-            <div className="intake-section">
-              <h2 className="section-heading">Deal Intake</h2>
-              <div className="intake-grid">
-                <ExcelUploadPanel
-                  isLoading={isUploadingDetailedExcel}
-                  error={detailedExcelUploadError}
-                  successMessage={detailedExcelUploadSuccessMessage}
-                  onUpload={(file) => void handleUploadDetailedExcel(file)}
-                />
-
-                <DetailedOmReviewPanel
-                  extraction={detailedOcrExtraction}
-                  isLoading={isDetailedExtracting}
-                  error={detailedExtractionError}
-                  onUpload={(file) => void handleUploadDetailedOm(file)}
-                  onFinishReview={handleFinishDetailedOmReview}
-                  onCancel={handleCancelDetailedOmReview}
-                />
-              </div>
-
-              {detailedExcelReview && (
-                <DetailedExcelReviewPanel
-                  fileName={detailedExcelReview.fileName}
-                  termsValues={detailedExcelReview.values.terms}
-                  operatingValues={detailedExcelReview.values.operating}
-                  error={detailedExcelReviewError}
-                  onTermsFieldChange={handleDetailedExcelReviewTermsFieldChange}
-                  onOperatingFieldChange={handleDetailedExcelReviewOperatingFieldChange}
-                  onApprove={handleApproveDetailedExcelReview}
-                  onCancel={handleCancelDetailedExcelReview}
-                />
-              )}
+            <div
+              id="risk-panel-returns"
+              role="tabpanel"
+              aria-labelledby="risk-tab-returns"
+              hidden={riskView !== 'returns'}
+            >
+              <SensitivityPanel
+                presets={sensitivity}
+                isLoading={false}
+                error={null}
+                only={['exit_cap_noi_growth', 'purchase_price_exit_cap']}
+                title="Return Sensitivity"
+              />
             </div>
 
-            <DetailedAssumptionsForm
-              termsValues={detailedValues.terms}
-              operatingValues={detailedValues.operating}
-              onTermsFieldChange={handleDetailedTermsFieldChange}
-              onOperatingFieldChange={handleDetailedOperatingFieldChange}
-              onSubmit={(event) => void handleDetailedSubmit(event)}
-              isSubmitting={isDetailedSubmitting}
+            <div
+              id="risk-panel-debt"
+              role="tabpanel"
+              aria-labelledby="risk-tab-debt"
+              hidden={riskView !== 'debt'}
+            >
+              <SensitivityPanel
+                presets={sensitivity}
+                isLoading={false}
+                error={null}
+                only={['interest_rate_ltv']}
+                title="Debt Sensitivity"
+              />
+            </div>
+
+            <div
+              id="risk-panel-break-even"
+              role="tabpanel"
+              aria-labelledby="risk-tab-break-even"
+              hidden={riskView !== 'break-even'}
+            >
+              <BreakEvenPanel
+                analysis={breakEven}
+                isLoading={isBreakEvenLoading}
+                error={breakEvenError}
+                targetLeveredIrrPercent={targetLeveredIrrPercent}
+                targetEquityMultiple={targetEquityMultiple}
+                targetHeadlineDscr={targetHeadlineDscr}
+                returnHurdleMetric={returnHurdleMetric}
+                onTargetLeveredIrrChange={handleTargetLeveredIrrChange}
+                onTargetEquityMultipleChange={handleTargetEquityMultipleChange}
+                onTargetHeadlineDscrChange={handleTargetHeadlineDscrChange}
+                onReturnHurdleMetricChange={handleReturnHurdleMetricChange}
+              />
+            </div>
+          </div>
+        )}
+      </WorkspacePanel>
+
+      <WorkspacePanel
+        id="ai"
+        active={workspace}
+        title="AI Analyst"
+        subtitle="An interpretation of the verified deterministic results."
+      >
+        {results ? (
+          <AiAnalystPanel
+            analysis={aiAnalysis}
+            isLoading={isAiAnalysisLoading}
+            error={aiAnalysisError}
+            onGenerate={() => void handleGenerateAiAnalysis()}
+          />
+        ) : (
+          <div className="empty-state">
+            Analyze the deal first. The AI Analyst interprets verified results; it never
+            calculates them.
+          </div>
+        )}
+      </WorkspacePanel>
+
+      <WorkspacePanel
+        id="documents"
+        active={workspace}
+        title="Documents"
+        subtitle="Upload an offering memorandum or workbook, then review what was extracted."
+      >
+        <div className="documents-workspace">
+          <SubNav
+            items={DOCUMENT_VIEWS}
+            active={documentsView}
+            onSelect={(id) => setDocumentsView(id as 'om' | 'excel')}
+            label="Document sources"
+            idFor={(id) => `documents-tab-${id}`}
+            controlsFor={(id) => `documents-panel-${id}`}
+          />
+
+          <div
+            id="documents-panel-om"
+            role="tabpanel"
+            aria-labelledby="documents-tab-om"
+            hidden={documentsView !== 'om'}
+            className="documents-view"
+          >
+            <OmReviewPanel
+              extraction={ocrExtraction}
+              isLoading={isExtracting}
+              error={extractionError}
+              onUpload={(file) => void handleUploadOm(file)}
+              onFinishReview={handleFinishOmReview}
+            />
+          </div>
+
+          <div
+            id="documents-panel-excel"
+            role="tabpanel"
+            aria-labelledby="documents-tab-excel"
+            hidden={documentsView !== 'excel'}
+            className="documents-view"
+          >
+            <ExcelUploadPanel
+              isLoading={isUploadingExcel}
+              error={excelUploadError}
+              successMessage={excelUploadSuccessMessage}
+              onUpload={(file) => void handleUploadExcel(file)}
             />
 
-            <div className="results-column">
-              {detailedError && <div className="error-banner">{detailedError}</div>}
+            {excelReview && (
+              <ExcelReviewPanel
+                fileName={excelReview.fileName}
+                values={excelReview.values}
+                requiredV2FieldIds={excelReview.requiredV2FieldIds}
+                error={excelReviewError}
+                onFieldChange={handleExcelReviewFieldChange}
+                onApprove={handleApproveExcelReview}
+                onCancel={handleCancelExcelReview}
+              />
+            )}
+          </div>
+        </div>
+      </WorkspacePanel>
+    </>
+  );
 
-              {!detailedResults && !detailedError && (
-                <div className="empty-state">
-                  Enter assumptions and click <strong>Analyze Deal</strong> to see results.
-                </div>
-              )}
+  const isDetailed = operatingMode === 'detailed';
 
-              {detailedResults && lastDetailedRequest && (
-                <OwnerSummaryPanel
-                  data={buildOwnerSummaryData({
-                    operatingMode: 'detailed',
-                    dealName: detailedDealName,
-                    dealContext: detailedDealContext,
-                    terms: lastDetailedRequest.terms,
-                    detailedOperatingInputs: lastDetailedRequest.detailedOperatingInputs,
-                    results: detailedResults.results,
-                    breakEven: detailedBreakEven,
-                  })}
-                  dealStory={detailedAiAnalysis?.deal_story ?? null}
-                />
-              )}
+  return (
+    <div className="app-shell">
+      <AppSidebar
+        deals={savedDeals}
+        isDealsLoading={isDealsLoading}
+        activeDealId={activeDealId}
+        view={view}
+        onOpenLibrary={handleOpenLibrary}
+        onNewDeal={handleNewDealFromSidebar}
+        onOpenDeal={(deal) => void handleOpenDeal(deal)}
+      />
 
-              {detailedResults && <ResultsPanel results={detailedResults.results} />}
-
-              {detailedResults && (
-                <OperatingStatementTable
-                  operatingProjection={detailedResults.operating_projection}
-                  results={detailedResults.results}
-                />
-              )}
-
-              {detailedResults && (
-                <SensitivityPanel
-                  presets={detailedSensitivity}
-                  isLoading={isDetailedSensitivityLoading}
-                  error={detailedSensitivityError}
-                />
-              )}
-
-              {detailedResults && (
-                <BreakEvenPanel
-                  analysis={detailedBreakEven}
-                  isLoading={isDetailedBreakEvenLoading}
-                  error={detailedBreakEvenError}
-                  targetLeveredIrrPercent={detailedTargetLeveredIrrPercent}
-                  targetEquityMultiple={detailedTargetEquityMultiple}
-                  targetHeadlineDscr={detailedTargetHeadlineDscr}
-                  returnHurdleMetric={detailedReturnHurdleMetric}
-                  onTargetLeveredIrrChange={handleDetailedTargetLeveredIrrChange}
-                  onTargetEquityMultipleChange={handleDetailedTargetEquityMultipleChange}
-                  onTargetHeadlineDscrChange={handleDetailedTargetHeadlineDscrChange}
-                  onReturnHurdleMetricChange={handleDetailedReturnHurdleMetricChange}
-                />
-              )}
-
-              {detailedResults && (
-                <AiAnalystPanel
-                  analysis={detailedAiAnalysis}
-                  isLoading={isDetailedAiAnalysisLoading}
-                  error={detailedAiAnalysisError}
-                  onGenerate={() => void handleGenerateDetailedAiAnalysis()}
-                />
-              )}
-            </div>
-          </>
+      <div className="app-main">
+        {view === 'library' ? (
+          <div className="library-view">
+            <DealLibraryPanel
+              deals={savedDeals}
+              isLoading={isDealsLoading}
+              error={dealsError}
+              onOpen={(deal) => void handleOpenDeal(deal)}
+              onDuplicate={(deal) => void handleDuplicateDeal(deal)}
+              onDelete={(deal) => void handleDeleteDeal(deal)}
+              onClose={handleCloseLibrary}
+            />
+          </div>
         ) : (
           <>
-            <DealBar
-              dealName={dealName}
-              onDealNameChange={handleDealNameChange}
-              isSavedDeal={currentDealId !== null}
-              isSaving={isSavingDeal}
-              error={saveDealError}
-              saveStatus={saveStatus}
-              lastSavedAt={lastSavedAt}
-              onSaveDeal={() => void handleSaveDeal()}
-              onOpenLibrary={handleOpenLibrary}
-              onNewDeal={handleNewDeal}
+            <DealHeader
+              dealName={isDetailed ? detailedDealName : dealName}
+              onDealNameChange={isDetailed ? handleDetailedDealNameChange : handleDealNameChange}
+              operatingMode={operatingMode}
+              onOperatingModeChange={setOperatingMode}
+              isSavedDeal={activeDealId !== null}
+              isSaving={isDetailed ? isSavingDetailedDeal : isSavingDeal}
+              saveStatus={isDetailed ? detailedSaveStatus : saveStatus}
+              lastSavedAt={isDetailed ? lastDetailedSavedAt : lastSavedAt}
+              error={isDetailed ? saveDetailedDealError : saveDealError}
+              onSaveDeal={() => {
+                if (isDetailed) {
+                  void handleSaveDetailedDeal();
+                  return;
+                }
+                void handleSaveDeal();
+              }}
+              onAnalyze={handleAnalyzeFromHeader}
+              isAnalyzing={isDetailed ? isDetailedSubmitting : isSubmitting}
+              onDuplicateDeal={handleDuplicateCurrentDeal}
+              onDeleteDeal={handleDeleteCurrentDeal}
             />
 
-            <DealContextField value={dealContext} onChange={handleDealContextChange} />
+            <WorkspaceNav active={workspace} onSelect={setWorkspace} />
 
-            <div className="intake-section">
-              <h2 className="section-heading">Deal Intake</h2>
-              <div className="intake-grid">
-                <ExcelUploadPanel
-                  isLoading={isUploadingExcel}
-                  error={excelUploadError}
-                  successMessage={excelUploadSuccessMessage}
-                  onUpload={(file) => void handleUploadExcel(file)}
-                />
-
-                <OmReviewPanel
-                  extraction={ocrExtraction}
-                  isLoading={isExtracting}
-                  error={extractionError}
-                  onUpload={(file) => void handleUploadOm(file)}
-                  onFinishReview={handleFinishOmReview}
-                />
-              </div>
-
-              {excelReview && (
-                <ExcelReviewPanel
-                  fileName={excelReview.fileName}
-                  values={excelReview.values}
-                  requiredV2FieldIds={excelReview.requiredV2FieldIds}
-                  error={excelReviewError}
-                  onFieldChange={handleExcelReviewFieldChange}
-                  onApprove={handleApproveExcelReview}
-                  onCancel={handleCancelExcelReview}
-                />
-              )}
-            </div>
-
-            <AssumptionsForm
-              values={values}
-              onFieldChange={handleFieldChange}
-              onSubmit={handleSubmit}
-              isSubmitting={isSubmitting}
-            />
-
-            <div className="results-column">
-              {error && <div className="error-banner">{error}</div>}
-
-              {!results && !error && (
-                <div className="empty-state">
-                  Enter assumptions and click <strong>Analyze Deal</strong> to see results.
+            <div className="workspace-scroll">
+              {/* Analyze can be triggered from the header on any workspace, so
+               * its error belongs to the frame rather than to one panel --
+               * otherwise a validation failure raised while the analyst is on
+               * Risk would be reported on a workspace they cannot see. */}
+              {(isDetailed ? detailedError : error) && (
+                <div className="error-banner workspace-error">
+                  {isDetailed ? detailedError : error}
                 </div>
               )}
 
-              {results && lastRequest && (
-                <OwnerSummaryPanel
-                  data={buildOwnerSummaryData({
-                    operatingMode: 'quick',
-                    dealName,
-                    dealContext,
-                    inputs: lastRequest,
-                    results,
-                    breakEven,
-                  })}
-                  dealStory={aiAnalysis?.deal_story ?? null}
-                />
+              {dealsError && (
+                <div className="error-banner workspace-error">{dealsError}</div>
               )}
 
-              {results && <ResultsPanel results={results} />}
-
-              {results && (
-                <SensitivityPanel
-                  presets={sensitivity}
-                  isLoading={isSensitivityLoading}
-                  error={sensitivityError}
-                />
-              )}
-
-              {results && (
-                <BreakEvenPanel
-                  analysis={breakEven}
-                  isLoading={isBreakEvenLoading}
-                  error={breakEvenError}
-                  targetLeveredIrrPercent={targetLeveredIrrPercent}
-                  targetEquityMultiple={targetEquityMultiple}
-                  targetHeadlineDscr={targetHeadlineDscr}
-                  returnHurdleMetric={returnHurdleMetric}
-                  onTargetLeveredIrrChange={handleTargetLeveredIrrChange}
-                  onTargetEquityMultipleChange={handleTargetEquityMultipleChange}
-                  onTargetHeadlineDscrChange={handleTargetHeadlineDscrChange}
-                  onReturnHurdleMetricChange={handleReturnHurdleMetricChange}
-                />
-              )}
-
-              {results && (
-                <AiAnalystPanel
-                  analysis={aiAnalysis}
-                  isLoading={isAiAnalysisLoading}
-                  error={aiAnalysisError}
-                  onGenerate={() => void handleGenerateAiAnalysis()}
-                />
-              )}
+              {isDetailed ? detailedWorkspaces : quickWorkspaces}
             </div>
           </>
         )}
-      </main>
+      </div>
     </div>
   );
 }
