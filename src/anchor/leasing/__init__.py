@@ -152,6 +152,7 @@ from .contracts import (
     NewTenantBranch,
     PropertyRentRollSchedule,
     RecoverableExpensePool,
+    RecoveryBasis,
     RenewalBranch,
     ResolvedMarketLeasing,
     Suite,
@@ -174,6 +175,7 @@ from .recoveries import (
     build_lease_recovery_schedule,
     lease_responsibility_factors,
     monthly_expense_recovery,
+    monthly_expense_stop_dollars,
     tenant_pro_rata_share,
 )
 from .rent import (
@@ -283,10 +285,12 @@ __all__ = [
     "build_recursive_rollover",
     # expense recoveries (D3.1)
     "RecoverableExpensePool",
+    "RecoveryBasis",
     "LeaseRecoverySchedule",
     "tenant_pro_rata_share",
     "lease_responsibility_factors",
     "monthly_expense_recovery",
+    "monthly_expense_stop_dollars",
     "build_lease_recovery_schedule",
     # contracts
     "EscalationBasis",

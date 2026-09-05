@@ -2166,9 +2166,22 @@ def test_recovery_is_never_netted_against_the_pool_or_added_to_rent() -> None:
         if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Sub):
             continue
         operands = _referenced_names(node)
-        assert not (
-            {"recoverable_expenses", "tenant_recoverable_expense_share"} & operands
-        ), "a recovery is never subtracted from the expense pool"
+
+        # D3.2 introduces exactly one sanctioned subtraction: the Modified
+        # Gross clip, which subtracts the *stop* from the tenant's share. That
+        # is a threshold comparison, not a netting -- the pool is untouched and
+        # the recovery is still reported on its own line. Recognised narrowly,
+        # by both operands, so no other subtraction slips through.
+        if operands == {"tenant_recoverable_expense_share", "monthly_stop_dollars"}:
+            continue
+
+        assert "recoverable_expenses" not in operands, (
+            "a recovery is never subtracted from the expense pool"
+        )
+        assert "tenant_recoverable_expense_share" not in operands, (
+            "the only subtraction permitted on the tenant expense share is the "
+            "Modified Gross stop clip"
+        )
 
     # And no other leasing module folds a recovery into its own series.
     for source_file in _leasing_source_files():
@@ -2202,10 +2215,209 @@ def test_gross_is_an_explicit_branch_not_a_zero_factor() -> None:
     assert "MODIFIED_GROSS" in referenced
 
 
-def test_no_modified_gross_formula_exists_at_d3_1() -> None:
-    """D3.2 owns it, and it needs an explicit contractual basis that has no
-    field yet. A silent zero would under-recover every Modified Gross lease
-    while looking like a computed answer."""
+def _contracts_tree() -> ast.AST:
+    source = (_LEASING_DIR / "contracts.py").read_text(encoding="utf-8")
+    return ast.parse(source, filename="contracts.py")
+
+
+def _recovery_fn() -> ast.FunctionDef:
+    return next(
+        node
+        for node in ast.walk(_recoveries_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "monthly_expense_recovery"
+    )
+
+
+def _stop_fn() -> ast.FunctionDef:
+    return next(
+        node
+        for node in ast.walk(_recoveries_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "monthly_expense_stop_dollars"
+    )
+
+
+def test_exactly_one_expense_stop_clip_exists_in_the_package() -> None:
+    """The Modified Gross clip is a single authoritative expression. A second
+    one is how the two forms of D3 Section 7.1.1 start to diverge -- one call
+    site scaling the share, another scaling the obligation -- with no test able
+    to see which one a given figure came from."""
+
+    clips: list[tuple[str, ast.Call]] = []
+    for source_file in _leasing_source_files():
+        tree = ast.parse(
+            source_file.read_text(encoding="utf-8"), filename=str(source_file)
+        )
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "max"
+                and "monthly_stop_dollars" in _referenced_names(node)
+            ):
+                clips.append((source_file.name, node))
+
+    assert len(clips) == 1, (
+        f"expected exactly one expense-stop clip; found {len(clips)} at "
+        f"{[name for name, _ in clips]}"
+    )
+    assert clips[0][0] == _RECOVERIES_MODULE, (
+        f"the clip belongs to {_RECOVERIES_MODULE}, not {clips[0][0]}"
+    )
+
+
+def test_the_clip_floors_at_zero_and_subtracts_the_stop_from_the_share() -> None:
+    """``max(0, share - stop)`` and nothing else. A reversed subtraction is a
+    landlord credit, and a floor other than zero is a minimum recovery -- both
+    are structures Anchor does not model (D3 Section 5.3)."""
+
+    clip = next(
+        node
+        for node in ast.walk(_recovery_fn())
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "max"
+    )
+
+    assert len(clip.args) == 2, "the clip takes a floor and one expression"
+
+    floor = clip.args[0]
+    assert isinstance(floor, ast.Constant) and floor.value == 0.0, (
+        "the clip floors at exactly 0.0; any other floor is a minimum recovery"
+    )
+
+    difference = clip.args[1]
+    assert isinstance(difference, ast.BinOp) and isinstance(difference.op, ast.Sub), (
+        "the clipped expression is a subtraction"
+    )
+    assert isinstance(difference.left, ast.Name)
+    assert difference.left.id == "tenant_recoverable_expense_share", (
+        "the stop is subtracted *from the tenant share*, not the reverse"
+    )
+    assert isinstance(difference.right, ast.Name)
+    assert difference.right.id == "monthly_stop_dollars"
+
+
+def test_both_operands_of_the_clip_are_monthly_tenant_dollars() -> None:
+    """Failure mode FM-D3-18. The stop reaches the clip only as
+    ``monthly_stop_dollars``; the ``$/SF/YEAR`` rate never appears in the
+    recovery arithmetic, so a rate can never be subtracted from dollars.
+    Because both quantities are positive, that error would produce a
+    plausible-looking figure rather than an obvious one."""
+
+    referenced = _referenced_names(_recovery_fn())
+
+    assert "monthly_stop_dollars" in referenced
+    for rate_level in ("expense_stop_psf", "leased_area_sf", "recovery_basis"):
+        assert rate_level not in referenced, (
+            f"monthly_expense_recovery references {rate_level!r}; it receives "
+            "the stop already converted to monthly tenant dollars"
+        )
+
+
+def test_the_psf_to_monthly_conversion_divides_by_twelve_once() -> None:
+    """The stop is stated in ``$/SF/YEAR`` (HD-D3-3), so exactly one division
+    by 12 stands between the contract and the comparison -- the same shape D1
+    uses for ``base_rent_psf``. Two divisions understate the stop twelvefold
+    and over-recover on every Modified Gross lease."""
+
+    divisions = [
+        node
+        for node in ast.walk(_stop_fn())
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+    ]
+
+    assert len(divisions) == 1, (
+        f"expected exactly one division in the conversion; found {len(divisions)}"
+    )
+    divisor = divisions[0].right
+    assert isinstance(divisor, ast.Constant) and divisor.value == 12.0, (
+        "the annual stop is divided by 12 to reach a monthly figure"
+    )
+
+    multiplicands = _referenced_names(divisions[0].left)
+    assert {"expense_stop_psf", "leased_area_sf"} <= multiplicands, (
+        "the rate is multiplied by the *tenant's own* leased area, so the "
+        "threshold scales with the space the tenant occupies"
+    )
+    assert "rentable_area_sf" not in multiplicands, (
+        "an expense stop is a tenant-level term; scaling it by building area "
+        "would apply the whole property's threshold to one lease"
+    )
+
+
+def test_the_responsibility_factor_is_applied_outside_the_clip() -> None:
+    """Failure mode FM-D3-19, and the one ordering D3 Section 7.1.1 fixes. The
+    factor must multiply the finished obligation, never a term inside the
+    clip: ``max(0, O x share - stop)`` compares a partial month's share against
+    a whole month's stop and under-recovers in every fractional month."""
+
+    clip = next(
+        node
+        for node in ast.walk(_recovery_fn())
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "max"
+    )
+
+    assert "responsibility_factor" not in _referenced_names(clip), (
+        "the responsibility factor appears inside the expense-stop clip; it "
+        "scales the finished obligation, never a term being compared"
+    )
+
+    products = [
+        node
+        for node in ast.walk(_recovery_fn())
+        if isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Mult)
+        and "responsibility_factor" in _referenced_names(node)
+    ]
+    assert len(products) == 1, (
+        "the factor is applied exactly once, at the end of the calculation"
+    )
+    assert "full_month_recovery" in _referenced_names(products[0]), (
+        "the factor multiplies the full-month obligation, which is the value "
+        "the clip produced"
+    )
+
+
+def test_the_stop_is_nominally_fixed_with_no_escalation_or_reset() -> None:
+    """HD-D3-4 and D3 Section 6.3. The stop does not grow, does not compound
+    and does not reset, so no growth rate, no anniversary and no year index may
+    touch it. A stop that escalated with the pool would recover nothing, ever."""
+
+    referenced = _referenced_names(_stop_fn())
+    for forbidden in (
+        "expense_growth",
+        "market_rent_growth",
+        "escalation_pct",
+        "escalation_basis",
+        "growth",
+        "period",
+        "months",
+        "month",
+        "year",
+        "lease_year",
+        "anniversary",
+    ):
+        assert forbidden not in referenced, (
+            f"monthly_expense_stop_dollars references {forbidden!r}; the stop "
+            "is nominally fixed for the life of the lease"
+        )
+
+    assert not any(
+        isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+        for node in ast.walk(_stop_fn())
+    ), "the stop never compounds"
+
+
+def test_no_base_year_is_implemented_anywhere_in_the_package() -> None:
+    """D3 Section 6.2 rejected a calendar base year outright: it needs the
+    historical actual expenses of a year that predates the acquisition, which
+    Anchor does not possess. `RecoveryBasis` reserves the seam; nothing
+    implements it, and in particular nothing substitutes Hold Year 1 for the
+    history a base year would need (D3 Section 6.1, FM-D3-6)."""
 
     for source_file in _leasing_source_files():
         tree = ast.parse(
@@ -2213,28 +2425,134 @@ def test_no_modified_gross_formula_exists_at_d3_1() -> None:
         )
         referenced = _referenced_names(tree)
         for forbidden in (
-            "expense_stop_psf",
-            "RecoveryBasis",
-            "recovery_basis",
             "base_year",
-            "monthly_expense_stop_dollars",
+            "base_year_expenses",
+            "base_year_stop",
+            "BASE_YEAR",
+            "hold_year_one_expenses",
         ):
             assert forbidden not in referenced, (
-                f"{source_file} references {forbidden!r}, which belongs to D3.2"
+                f"{source_file} references {forbidden!r}; D3 rejected the "
+                "calendar base year, and Hold Year 1 is not a substitute for it"
             )
 
-    # `max` would be the shape of the Modified Gross clip; it must not appear
-    # in the recovery arithmetic yet.
-    recovery_fn = next(
+
+def test_recovery_basis_has_exactly_one_member() -> None:
+    """The seam idiom `LeasingCommissionMethod` established. One member is
+    deliberate: it makes the choice explicit in data without inviting methods
+    no gate has specified."""
+
+    enum_class = next(
         node
-        for node in ast.walk(_recoveries_tree())
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "monthly_expense_recovery"
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "RecoveryBasis"
     )
-    assert "max" not in _referenced_names(recovery_fn), (
-        "monthly_expense_recovery clips a value; the Modified Gross "
-        "max(0, ...) belongs to D3.2"
+    members = [
+        node.targets[0].id
+        for node in enum_class.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ]
+
+    assert members == ["EXPENSE_STOP_PSF"], (
+        f"RecoveryBasis declares {members}; D3 specifies exactly one member "
+        "and reserves the rest"
     )
+
+
+def test_the_stop_is_never_inferred_from_the_pool() -> None:
+    """FM-D3-6. An unstated stop is refused, never derived from the expense
+    schedule Anchor happens to hold -- a derived stop would silently rewrite a
+    contract term on every Modified Gross lease in a rent roll."""
+
+    stop_referenced = _referenced_names(_stop_fn())
+    for forbidden in ("pool", "recoverable_expenses", "RecoverableExpensePool"):
+        assert forbidden not in stop_referenced, (
+            f"monthly_expense_stop_dollars references {forbidden!r}; the stop "
+            "is a contract term and is never inferred from expenses"
+        )
+
+    # And the Modified Gross branch refuses rather than defaulting.
+    branch_sources = [
+        ast.unparse(node)
+        for node in ast.walk(_recovery_fn())
+        if isinstance(node, ast.If) and "MODIFIED_GROSS" in _referenced_names(node.test)
+    ]
+    assert branch_sources, "no MODIFIED_GROSS branch found"
+    assert any("raise" in source for source in branch_sources), (
+        "the MODIFIED_GROSS branch must refuse a missing stop, not default it"
+    )
+
+
+def test_a_stop_on_nnn_or_gross_is_refused_rather_than_ignored() -> None:
+    """D3 Section 5.2. *A stop implies Modified Gross.* Accepting one on
+    another structure and quietly ignoring it would make ``lease_type``
+    unreliable as an economic discriminator."""
+
+    for branch_type in ("NNN", "GROSS"):
+        branches = [
+            node
+            for node in ast.walk(_recovery_fn())
+            if isinstance(node, ast.If)
+            and branch_type in _referenced_names(node.test)
+        ]
+        assert branches, f"no {branch_type} branch found"
+        assert any(
+            "monthly_stop_dollars" in ast.unparse(node) and "raise" in ast.unparse(node)
+            for node in branches
+        ), (
+            f"the {branch_type} branch must raise when a stop is supplied, "
+            "not ignore it"
+        )
+
+
+def test_the_stop_is_a_scalar_on_the_schedule_not_a_series() -> None:
+    """A per-month stop series is the shape a resetting or escalating stop
+    would need. Holding one scalar makes the fixity structural rather than a
+    property of the values that happen to be in it."""
+
+    schedule = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "LeaseRecoverySchedule"
+    )
+    annotations = {
+        node.target.id: ast.unparse(node.annotation)
+        for node in schedule.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+
+    assert annotations["monthly_expense_stop_dollars"] == "float | None"
+    assert annotations["expense_stop_psf"] == "float | None"
+    assert annotations["recovery_basis"] == "RecoveryBasis | None"
+    assert annotations["full_month_expense_recovery"] == "tuple[float, ...]", (
+        "the pre-responsibility obligation varies by month and is a series"
+    )
+
+
+def test_the_expense_stop_fields_default_to_none_on_the_lease() -> None:
+    """D1 and D2 call sites construct an identical `Lease` and no earlier
+    economics move. A required field would have forced every existing
+    construction to state a recovery term it does not have."""
+
+    lease_class = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "Lease"
+    )
+    defaults = {
+        node.target.id: ast.unparse(node.value)
+        for node in lease_class.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.value is not None
+    }
+
+    assert defaults["recovery_basis"] == "None"
+    assert defaults["expense_stop_psf"] == "None"
+
+
 
 
 def test_no_later_d3_gate_concept_exists() -> None:

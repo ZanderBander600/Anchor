@@ -13,7 +13,9 @@ The claims that matter most:
 - the responsibility factor comes from **D1 contractual activity**, never from
   rent dollars, so a zero-rent active lease still recovers (FM-D3-12);
 - `GROSS` is an **explicit zero**, not `NNN` with a zero factor;
-- `MODIFIED_GROSS` is **refused**, never silently zeroed (FM-D3-5);
+- `MODIFIED_GROSS` **without an explicit basis** is refused, never silently
+  zeroed (FM-D3-5) -- D3.2 prices it once a basis is stated, and these
+  tests continue to pin the refusal for the unstated case;
 - the pro-rata denominator is rentable area, so a vacant suite leaves its share
   of the pool **unrecovered** -- the disclosed no-gross-up consequence;
 - the arithmetic already accepts a **fractional** factor, so D3.3/D3.4 can pass
@@ -558,18 +560,29 @@ def test_golden_12_modified_gross_is_refused_by_validation() -> None:
         )
 
 
-def test_no_expense_stop_or_recovery_basis_exists_at_d3_1() -> None:
-    """D3.2 owns them. Declaring either now would put vocabulary into the
-    package with no mechanism behind it."""
+def test_the_d3_1_lease_is_unchanged_by_the_arrival_of_the_expense_stop() -> None:
+    """Superseded form of a D3.1 absence guardrail. D3.2 landed
+    ``recovery_basis`` and ``expense_stop_psf``, so the claim worth keeping is
+    no longer that they are absent but that they are **additive**: both default
+    to ``None``, so every D3.1 construction of a `Lease` still compiles and
+    still produces the same recovery.
+
+    ``base_year`` stays absent permanently -- D3 Section 6.2 rejected the
+    calendar base year outright, and that is not a sequencing statement."""
 
     lease_fields = {f.name for f in dataclasses.fields(Lease)}
-    for absent in ("recovery_basis", "expense_stop_psf", "base_year"):
-        assert absent not in lease_fields
+    assert "base_year" not in lease_fields
 
-    import anchor.leasing as leasing
+    defaults = {
+        f.name: f.default for f in dataclasses.fields(Lease) if f.name in
+        {"recovery_basis", "expense_stop_psf"}
+    }
+    assert defaults == {"recovery_basis": None, "expense_stop_psf": None}
 
-    for absent in ("RecoveryBasis", "expense_stop_psf"):
-        assert not hasattr(leasing, absent)
+    # A D3.1-shaped NNN lease -- constructed without either field -- is
+    # unaffected.
+    assert lease().recovery_basis is None
+    assert lease().expense_stop_psf is None
 
 
 def test_modified_gross_remains_a_valid_lease_type_for_d1_and_d2() -> None:
@@ -854,14 +867,27 @@ def test_inputs_are_never_mutated() -> None:
     assert the_pool == before_pool
 
 
-def test_the_schedule_carries_no_d3_2_or_later_field() -> None:
+def test_the_schedule_carries_no_d3_3_or_later_field() -> None:
+    """The two D3.2 fields have since landed; the D3.3+ vocabulary has not.
+    A schedule field named for a gate that has not run is how an unimplemented
+    concept acquires the appearance of an answer."""
+
     fields = {f.name for f in dataclasses.fields(LeaseRecoverySchedule)}
 
+    for present in ("expense_stop_psf", "recovery_basis"):
+        assert present in fields
+
     for absent in (
-        "expense_stop_psf",
-        "recovery_basis",
         "expected_expense_recovery",
         "property_expense_recovery",
         "annual_expense_recovery",
     ):
         assert absent not in fields
+
+    # `NNN` and `GROSS` carry no threshold at all, so the D3.2 fields stay
+    # `None` on exactly the schedules D3.1 produced.
+    for lease_type in (LeaseType.NNN, LeaseType.GROSS):
+        schedule = recovery(lease(lease_type=lease_type))
+        assert schedule.recovery_basis is None
+        assert schedule.expense_stop_psf is None
+        assert schedule.monthly_expense_stop_dollars is None

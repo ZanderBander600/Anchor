@@ -186,6 +186,11 @@ def test_two_leases_for_one_tenant_are_two_rows_with_equal_tenant_name() -> None
 #:   ``successor_escalation_pct``) and ``origin``, which D0 Section 4.4 marks
 #:   derived and phases to D2.
 #:
+#: - **D3.2** removed ``recovery_basis``, which that gate delivers on ``Lease``
+#:   as an explicit contractual term (D3 Section 6.2). ``recoverable_expense_ratio``
+#:   stays banned permanently: it is the shadow expense engine D3 Section 3.4
+#:   forbids, and no gate will deliver it.
+#:
 #: Everything D2.3 and later owns stays, so the guardrail keeps its full force
 #: against the new-tenant branch, downtime, free rent, TI, LC, probability and
 #: every downstream concept.
@@ -211,8 +216,7 @@ _FORBIDDEN_D1_FIELD_NAMES = frozenset(
         "renewal_lc_pct",
         "new_lc_pct",
         "leasing_commissions",
-        # D3 recoveries
-        "recovery_basis",
+        # D3 recoveries -- the shadow expense engine, never delivered
         "recoverable_expense_ratio",
         # Detailed-mode vacancy -- must never exist on a Lease-Level contract
         "vacancy_credit_loss_pct",
@@ -352,8 +356,9 @@ def test_package_exposes_no_d3_or_later_entry_point() -> None:
     """Each surface moved to a positive assertion when its gate landed: month
     identity at D1.1, rent at D1.2, aggregation at D1.3, market rent at D2.1,
     the branches at D2.2/D2.3, leasing costs at D2.4, the expected-value
-    composition at D2.5 and the recursion at D2.6. **Sprint D2 is complete**;
-    what remains absent is everything D3 and D4 own."""
+    composition at D2.5, the recursion at D2.6, lease-level recoveries at D3.1
+    and the expense stop at D3.2. What remains absent is the rest of D3 --
+    expected and property-level recoveries -- and everything D4 owns."""
 
     import anchor.leasing as leasing
 
@@ -361,9 +366,10 @@ def test_package_exposes_no_d3_or_later_entry_point() -> None:
         "build_lease_level_operating_projection",
         "MonthlyPropertyProjection",
         "AnnualOperatingProjection",
-        "expense_recoveries",
-        "build_expense_recoveries",
-        "RecoveryBasis",
+        "PropertyRecoverySchedule",
+        "build_property_recovery_schedule",
+        "ExpectedRecoverySchedule",
+        "build_expected_recovery_schedule",
     ):
         assert not hasattr(leasing, absent), (
             f"{absent} belongs to a later gate and must not exist yet"

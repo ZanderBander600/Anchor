@@ -117,6 +117,30 @@ class LeasingCommissionMethod(StrEnum):
     PCT_OF_TOTAL_CONTRACTUAL_BASE_RENT = "pct_of_total_contractual_base_rent"
 
 
+class RecoveryBasis(StrEnum):
+    """How a Modified Gross lease's recovery threshold is expressed (D3.2).
+
+    **Exactly one member in D3**, and that is deliberate -- it is an extension
+    seam, not evidence that more methods should be added now (D3 conventions
+    Section 6.2, HD-D3-3).
+
+    ``EXPENSE_STOP_PSF`` is an explicit contractual expense stop in
+    **``$/SF/YEAR``**, held on ``Lease.expense_stop_psf``. It was chosen over a
+    calendar base year because a true base year needs the historical actual
+    expenses of a year that predates the acquisition -- data Anchor does not
+    possess -- and supporting one would tempt exactly the Hold-Year-1
+    substitution D3 Section 6.1 forbids.
+
+    A base-year amount is **reserved** as the enum's second member, to be added
+    only if a competition rent roll forces it *and* the history it needs can be
+    sourced. Adding it costs one member plus one nullable field, with no change
+    to any other ``Lease`` field and no migration -- the same seam idiom
+    ``LeasingCommissionMethod`` uses.
+    """
+
+    EXPENSE_STOP_PSF = "expense_stop_psf"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ModelMonth:
     """One canonical monthly period of the Lease-Level projection
@@ -668,8 +692,28 @@ class Lease:
     Section 10), so there is one contractual-rent engine in the package and
     the rollover gate reimplements nothing.
 
-    **Deliberately still not declared**: ``free_rent_months`` (D2.3) and
-    ``recovery_basis`` (D3). Each waits for the gate that can produce it.
+    **``recovery_basis`` and ``expense_stop_psf`` (D3.2, additive).** Both
+    default to ``None``, so every D1 and D2 call site constructs an identical
+    lease and no earlier economics move. They carry a `MODIFIED_GROSS` lease's
+    **explicit** contractual recovery threshold, which Anchor never infers: a
+    base year or expense stop is a contract term that predates the acquisition,
+    while the buyer's first hold year is an artifact of when they bought, and
+    substituting one for the other would change recovery on every Modified
+    Gross lease in a rent roll (D3 Section 6.1).
+
+    ``expense_stop_psf`` is in **``$/SF/YEAR``**, domain ``>= 0``, and is
+    **nominally fixed** for the life of the lease: it does not grow with
+    expense growth, market growth or contractual escalation, and does not reset
+    annually or at acquisition (D3 Section 6.3, HD-D3-4).
+
+    The two fields belong to `MODIFIED_GROSS` alone. A stop on an `NNN` or
+    `GROSS` lease is a validation **ERROR** rather than a silently ignored
+    value, because *a stop implies Modified Gross* -- allowing one elsewhere
+    would make ``lease_type`` unreliable as an economic discriminator (D3
+    Section 5.2).
+
+    **Deliberately still not declared**: ``free_rent_months`` (D2.3), which
+    waits for the gate that can produce it.
     """
 
     lease_id: str
@@ -684,6 +728,8 @@ class Lease:
     tenant_name: str | None = None
     lease_start_date: date | None = None
     origin: LeaseOrigin = LeaseOrigin.IN_PLACE
+    recovery_basis: RecoveryBasis | None = None
+    expense_stop_psf: float | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1483,8 +1529,29 @@ class LeaseRecoverySchedule:
     tenant owes none of it: the share is a fact about area, the recovery is a
     fact about the lease.
 
-    ``expense_recovery`` is what the lease actually owes:
-    ``factor × share × pool`` for `NNN`, and exactly ``0.0`` for `GROSS`.
+    ``expense_recovery`` is what the lease actually owes: ``factor × share ×
+    pool`` for `NNN`, exactly ``0.0`` for `GROSS`, and
+    ``factor × max(0, share × pool − monthly stop)`` for `MODIFIED_GROSS`.
+
+    **Four fields exist so a Modified Gross figure is auditable without
+    reconstructing a hidden assumption** (D3.2). Each answers a distinct
+    question:
+
+    - ``recovery_basis`` and ``expense_stop_psf`` -- *which contractual
+      threshold applied, and at what rate*. Both are ``None`` for `NNN` and
+      `GROSS`, which carry no threshold at all.
+    - ``monthly_expense_stop_dollars`` -- *the threshold in the units the
+      comparison actually uses*: ``expense_stop_psf × leased_area_sf / 12``, a
+      scalar because the stop is nominally fixed and the area does not vary.
+      ``None`` where there is no stop.
+    - ``full_month_expense_recovery`` -- *the obligation before responsibility
+      was applied*. It makes the D3 Section 7.1.1 ordering visible: the factor
+      scales this figure, and never the expense share inside the clip.
+
+    ``full_month_expense_recovery`` is meaningful for every structure -- the
+    tenant share for `NNN`, ``0.0`` for `GROSS`, the clipped excess for
+    `MODIFIED_GROSS` -- so it is a series rather than a nullable, and carries no
+    special case.
 
     Built only by ``anchor.leasing.recoveries.build_lease_recovery_schedule``;
     this dataclass performs no calculation of its own.
@@ -1495,8 +1562,12 @@ class LeaseRecoverySchedule:
     lease_type: LeaseType
     months: tuple[ModelMonth, ...]
     tenant_pro_rata_share: float
+    recovery_basis: RecoveryBasis | None
+    expense_stop_psf: float | None
+    monthly_expense_stop_dollars: float | None
     economic_responsibility_factor: tuple[float, ...]
     tenant_recoverable_expense_share: tuple[float, ...]
+    full_month_expense_recovery: tuple[float, ...]
     expense_recovery: tuple[float, ...]
 
     def __post_init__(self) -> None:
@@ -1509,6 +1580,10 @@ class LeaseRecoverySchedule:
             (
                 "tenant_recoverable_expense_share",
                 self.tenant_recoverable_expense_share,
+            ),
+            (
+                "full_month_expense_recovery",
+                self.full_month_expense_recovery,
             ),
             ("expense_recovery", self.expense_recovery),
         ):

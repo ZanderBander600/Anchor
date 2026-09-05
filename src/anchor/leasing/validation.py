@@ -63,6 +63,7 @@ from .contracts import (
     LeasingCommissionMethod,
     MarketLeasingAssumptions,
     RecoverableExpensePool,
+    RecoveryBasis,
     Suite,
 )
 
@@ -156,6 +157,11 @@ class LeaseIssueCode(StrEnum):
     MISSING_MODIFIED_GROSS_RECOVERY_BASIS = (
         "MISSING_MODIFIED_GROSS_RECOVERY_BASIS"
     )
+    RECOVERY_BASIS_ON_NON_MODIFIED_GROSS = (
+        "RECOVERY_BASIS_ON_NON_MODIFIED_GROSS"
+    )
+    EXPENSE_STOP_OUT_OF_DOMAIN = "EXPENSE_STOP_OUT_OF_DOMAIN"
+    UNSUPPORTED_RECOVERY_BASIS = "UNSUPPORTED_RECOVERY_BASIS"
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -1513,16 +1519,22 @@ def validate_recovery_inputs(
     *identity* rather than length is the point -- a pool from a different
     projection would zip cleanly and produce a plausible, wrong answer.
 
-    **Modified Gross** (``MISSING_MODIFIED_GROSS_RECOVERY_BASIS``, D0
-    Section 16.2 / D3 Section 6.1): a `MODIFIED_GROSS` lease has no explicit
-    contractual recovery basis, because D3.1 declares no field to hold one. The
-    basis is never inferred -- not from Hold Year 1, the analysis year, the
-    acquisition year or the current expense schedule -- so recovery for such a
-    lease is refused rather than defaulted. D3.2 introduces the field, and this
-    same code then fires when it is present but unset.
+    **Modified Gross** (D0 Section 16.2 / D3 Section 6.1). A `MODIFIED_GROSS`
+    lease must carry **both** ``recovery_basis`` and ``expense_stop_psf``; the
+    basis is never inferred from Hold Year 1, the analysis year, the acquisition
+    year or the current expense schedule, so a missing one is
+    ``MISSING_MODIFIED_GROSS_RECOVERY_BASIS`` rather than a default. A basis D3
+    does not implement is ``UNSUPPORTED_RECOVERY_BASIS``.
 
-    Not validated here: `NNN` and `GROSS` need no recovery input beyond the pool
-    and their own area, both already validated elsewhere.
+    **A stop on `NNN` or `GROSS` is an ERROR**, not a silently ignored field
+    (``RECOVERY_BASIS_ON_NON_MODIFIED_GROSS``, D3 Section 5.2). *A stop implies
+    Modified Gross*; permitting one elsewhere would make ``lease_type``
+    unreliable as an economic discriminator and leave a financial input with no
+    effect.
+
+    **Stop domain** (``EXPENSE_STOP_OUT_OF_DOMAIN``): finite and ``>= 0``
+    wherever supplied. Zero is economically valid -- it means the lease
+    reimburses its full share -- and is not an upper-bounded quantity.
     """
 
     lease_tuple = tuple(leases)
@@ -1561,19 +1573,76 @@ def validate_recovery_inputs(
         )
 
     for index, lease in enumerate(lease_tuple):
-        if lease.lease_type is LeaseType.MODIFIED_GROSS:
+        path = f"leases[{index}]"
+        modified_gross = lease.lease_type is LeaseType.MODIFIED_GROSS
+
+        if modified_gross:
+            if lease.recovery_basis is None or lease.expense_stop_psf is None:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.MISSING_MODIFIED_GROSS_RECOVERY_BASIS,
+                        f"{path}.recovery_basis",
+                        f"lease {lease.lease_id!r} is MODIFIED_GROSS and "
+                        "carries no explicit contractual recovery basis. A base "
+                        "year or expense stop is never inferred from Hold "
+                        "Year 1, the analysis year, the acquisition year or "
+                        "the current expense schedule; the analyst must supply "
+                        "both recovery_basis and expense_stop_psf.",
+                    )
+                )
+            elif not isinstance(lease.recovery_basis, RecoveryBasis):
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.UNSUPPORTED_RECOVERY_BASIS,
+                        f"{path}.recovery_basis",
+                        f"recovery_basis {lease.recovery_basis!r} must be a "
+                        "RecoveryBasis member.",
+                    )
+                )
+            elif lease.recovery_basis is not RecoveryBasis.EXPENSE_STOP_PSF:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.UNSUPPORTED_RECOVERY_BASIS,
+                        f"{path}.recovery_basis",
+                        f"recovery basis {lease.recovery_basis.value!r} is not "
+                        "implemented; D3 supports only EXPENSE_STOP_PSF.",
+                    )
+                )
+        elif lease.recovery_basis is not None or lease.expense_stop_psf is not None:
+            # A stop implies Modified Gross. Refused rather than ignored,
+            # because a silently-ignored financial field would make
+            # `lease_type` unreliable as an economic discriminator (D3 5.2).
             issues.append(
                 _issue(
-                    LeaseIssueCode.MISSING_MODIFIED_GROSS_RECOVERY_BASIS,
-                    f"leases[{index}].lease_type",
-                    f"lease {lease.lease_id!r} is MODIFIED_GROSS and carries no "
-                    "explicit contractual recovery basis. A base year or "
-                    "expense stop is never inferred from Hold Year 1, the "
-                    "analysis year, the acquisition year or the current "
-                    "expense schedule; the analyst must supply it. Modified "
-                    "Gross recovery arrives at D3.2.",
+                    LeaseIssueCode.RECOVERY_BASIS_ON_NON_MODIFIED_GROSS,
+                    f"{path}.recovery_basis",
+                    f"lease {lease.lease_id!r} is "
+                    f"{lease.lease_type.value} but carries a recovery basis or "
+                    "expense stop. A lease with a contractual expense stop is "
+                    "MODIFIED_GROSS in Anchor, not NNN or GROSS.",
                 )
             )
+
+        stop = lease.expense_stop_psf
+        if stop is not None:
+            if not _is_finite_number(stop):
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.NON_FINITE_VALUE,
+                        f"{path}.expense_stop_psf",
+                        "expense_stop_psf must be a finite number.",
+                    )
+                )
+            elif stop < 0:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.EXPENSE_STOP_OUT_OF_DOMAIN,
+                        f"{path}.expense_stop_psf",
+                        f"expense_stop_psf {stop!r} must be greater than or "
+                        "equal to 0. Zero is valid and means the lease "
+                        "reimburses its full share.",
+                    )
+                )
 
     return LeaseValidationResult(issues=tuple(issues))
 

@@ -8,7 +8,9 @@ Section 16; those documents govern on any discrepancy.
 
 **The one question this gate answers.** For a known lease in a suite and a
 canonical month: *given the recoverable property expense pool for that month,
-how much does this tenant reimburse?* For `NNN` and `GROSS` only.
+how much does this tenant reimburse?* D3.1 answered it for `NNN` and `GROSS`;
+D3.2 adds `MODIFIED_GROSS`, which reimburses only the part of its share that
+exceeds an **explicit** contractual expense stop.
 
 **Recovery is revenue** (D0 Section 10.2, D3 Section 1.2). It sits on its own
 line above EGI and is never a reduction to contractual base rent, never a
@@ -31,10 +33,12 @@ concession therefore cannot silently eliminate a reimbursement -- which is what
 makes D2's free rent safe to connect at D3.4 (D3 Section 8, failure mode
 FM-D3-3).
 
-**Deliberately absent, all of it later work:** `MODIFIED_GROSS`, the expense
-stop and `RecoveryBasis` (D3.2); successor recovery assumptions (D3.3); expected
-and recursive recoveries (D3.4); property aggregation and annual totals (D3.5);
-and every downstream integration, which is D4's.
+**Deliberately absent, all of it later work:** successor recovery assumptions
+(D3.3); expected and recursive recoveries (D3.4); property aggregation and
+annual totals (D3.5); and every downstream integration, which is D4's. Also
+absent, and permanently so at this layer: any calendar or historical base year,
+which D3 Section 6.2 rejected because Anchor cannot source the actuals it would
+need, and any escalation of the stop, which D3 Section 6.3 fixed nominally.
 """
 
 from __future__ import annotations
@@ -48,6 +52,7 @@ from .contracts import (
     LeaseRecoverySchedule,
     LeaseType,
     RecoverableExpensePool,
+    RecoveryBasis,
 )
 
 
@@ -142,11 +147,65 @@ def lease_responsibility_factors(
     )
 
 
+def monthly_expense_stop_dollars(
+    *, expense_stop_psf: float, leased_area_sf: float
+) -> float:
+    """Return a Modified Gross lease's monthly expense stop, in **dollars**.
+
+    ```
+    monthly_expense_stop_dollars = expense_stop_psf × leased_area_sf / 12
+    ```
+
+    D3 Section 5.0 and 6.2. ``expense_stop_psf`` is stated in **``$/SF/YEAR``**
+    -- the units a lease abstract uses -- and is converted to the tenant's own
+    monthly dollar threshold here, **dividing by 12 once, last**, exactly as D1
+    does for ``base_rent_psf``.
+
+    **This conversion is why the comparison is dimensionally valid.** The
+    Modified Gross clip subtracts this figure from the tenant's monthly share of
+    the pool, and both are then tenant-level dollars per month. Subtracting a
+    ``$/SF`` rate from pool dollars instead would not be a smaller number but a
+    meaningless one, and because both are positive it would still produce a
+    plausible-looking figure -- failure mode **FM-D3-18**.
+
+    **The result is constant for the life of the lease.** The stop is nominally
+    fixed (D3 Section 6.3, HD-D3-4): it does not grow with property expense
+    growth, market rent growth or contractual rent escalation, and does not
+    reset annually, on a lease anniversary, or at acquisition. There is
+    deliberately no escalation parameter to supply. That fixity is what makes
+    the structure economically interesting -- the pool grows past a stationary
+    threshold, and recoveries emerge.
+
+    The area is the lease's own ``leased_area_sf``, so the threshold scales with
+    the space the tenant actually occupies, not with the building.
+    """
+
+    if not isfinite(expense_stop_psf):
+        raise ValueError(
+            f"expense_stop_psf must be finite; got {expense_stop_psf!r}."
+        )
+    if expense_stop_psf < 0:
+        raise ValueError(
+            f"expense_stop_psf {expense_stop_psf!r} must be greater than or "
+            "equal to 0."
+        )
+    if not isfinite(leased_area_sf) or leased_area_sf <= 0:
+        raise ValueError(
+            f"leased_area_sf must be a finite positive area; got "
+            f"{leased_area_sf!r}."
+        )
+
+    return ensure_finite(
+        "monthly_expense_stop_dollars", expense_stop_psf * leased_area_sf / 12.0
+    )
+
+
 def monthly_expense_recovery(
     *,
     lease_type: LeaseType,
     tenant_recoverable_expense_share: float,
     responsibility_factor: float,
+    monthly_stop_dollars: float | None = None,
 ) -> float:
     """Return one lease's expense-recovery revenue for one month, in dollars.
 
@@ -156,11 +215,21 @@ def monthly_expense_recovery(
     aggregation or a test.
 
     ```
-    NNN:    recovery_m = O_m × tenant_recoverable_expense_share_m
-    GROSS:  recovery_m = 0.0
+    NNN:             full_month = tenant_recoverable_expense_share_m
+    GROSS:           recovery_m = 0.0
+    MODIFIED_GROSS:  full_month = max(0, tenant_recoverable_expense_share_m
+                                         − monthly_stop_dollars)
+
+    recovery_m = O_m × full_month
     ```
 
-    where ``tenant_recoverable_expense_share_m = share × P_m`` (D3 Section 5.0).
+    where ``tenant_recoverable_expense_share_m = share × P_m`` (D3 Section 5.0)
+    and ``monthly_stop_dollars = expense_stop_psf × leased_area_sf / 12``.
+
+    **Both terms inside the clip are tenant-level dollars per month.** That is
+    the whole point of converting the stop first: the comparison is the tenant's
+    share of this month's pool against the tenant's own monthly threshold, in
+    the units a lease abstract states (failure mode FM-D3-18).
 
     **`NNN` is first-dollar**: no expense stop, no base year, no deductible, no
     cap, no administrative fee, no gross-up. Each of those is either D3 Section
@@ -180,11 +249,31 @@ def monthly_expense_recovery(
     lease in a rent roll while looking like a computed answer.
 
     **The responsibility factor scales the full-month obligation**, computed
-    first (D3 Section 7.1.1). At D3.1 the obligation is linear in the factor so
-    the ordering is not yet observable, but the shape is fixed now because at
-    D3.2 it becomes load-bearing: for `MODIFIED_GROSS`, scaling the expense
-    share instead of the obligation would compare a partial month's share
-    against a whole month's stop (failure mode FM-D3-19).
+    first, and this is now load-bearing (D3 Section 7.1.1). For
+    `MODIFIED_GROSS` the two orderings genuinely differ:
+
+    ```
+    O_m × max(0, share − stop)     <-- CORRECT
+    max(0, O_m × share − stop)     <-- WRONG
+    ```
+
+    The wrong form compares a *partial* month's expense share against a *whole*
+    month's stop, so it under-recovers in every fractional responsibility month
+    and can report zero where the lease genuinely owes money. On the reference
+    case -- a $40,000 share against a $20,000 stop at ``O_m = 0.75`` -- the
+    correct form gives ``$15,000`` and the wrong one ``$10,000``. Failure mode
+    **FM-D3-19**.
+
+    **Below or exactly at the stop, recovery is exactly zero.** There is no
+    negative reimbursement, no landlord credit, no carryforward and no
+    cumulative annual true-up; each of those is a separate structure Anchor does
+    not model. At exactly the stop the clip returns ``0.0`` on ordinary float
+    arithmetic, with no tolerance applied to manufacture a positive result.
+
+    **A zero stop is economically valid**, and makes a Modified Gross lease
+    recover its full tenant share -- numerically identical to `NNN` for the same
+    pool, share and factor. The lease is still Modified Gross: `lease_type`
+    describes the contract, not the arithmetic that happens to coincide.
 
     Accepting a **fractional** factor is the D3.3/D3.4 seam. This module never
     imports ``rollover``; a successor's ``successor_occupancy_factor`` is simply
@@ -202,18 +291,15 @@ def monthly_expense_recovery(
         )
 
     if lease_type is LeaseType.GROSS:
+        # A stop supplied on a Gross lease is refused rather than ignored: *a
+        # stop implies Modified Gross*, and consuming one here would make
+        # `lease_type` unreliable as an economic discriminator (D3 Section 5.2).
+        if monthly_stop_dollars is not None:
+            raise ValueError(
+                "a GROSS lease carries no expense stop; a lease with a "
+                "contractual stop is MODIFIED_GROSS."
+            )
         return 0.0
-
-    if lease_type is LeaseType.MODIFIED_GROSS:
-        raise ValueError(
-            "MODIFIED_GROSS expense recovery is not implemented at D3.1; it "
-            "requires an explicit contractual recovery basis, which D3.2 "
-            "introduces. Refusing rather than returning zero, which would "
-            "silently under-recover."
-        )
-
-    if lease_type is not LeaseType.NNN:
-        raise ValueError(f"unsupported lease type for recovery: {lease_type!r}.")
 
     if not isfinite(tenant_recoverable_expense_share):
         raise ValueError(
@@ -221,7 +307,38 @@ def monthly_expense_recovery(
             f"{tenant_recoverable_expense_share!r}."
         )
 
-    full_month_recovery = tenant_recoverable_expense_share
+    if lease_type is LeaseType.NNN:
+        if monthly_stop_dollars is not None:
+            raise ValueError(
+                "an NNN lease recovers from the first dollar and carries no "
+                "expense stop; a lease with a contractual stop is "
+                "MODIFIED_GROSS."
+            )
+        full_month_recovery = tenant_recoverable_expense_share
+
+    elif lease_type is LeaseType.MODIFIED_GROSS:
+        if monthly_stop_dollars is None:
+            raise ValueError(
+                "MODIFIED_GROSS recovery requires an explicit contractual "
+                "expense stop. Anchor never infers one -- not from Hold Year 1, "
+                "the analysis year, the acquisition year or the current "
+                "expense schedule -- so this refuses rather than defaulting."
+            )
+        if not isfinite(monthly_stop_dollars):
+            raise ValueError(
+                f"monthly_stop_dollars must be finite; got "
+                f"{monthly_stop_dollars!r}."
+            )
+        # The single economically operative clip in the package. Both operands
+        # are tenant-level dollars per month.
+        full_month_recovery = max(
+            0.0, tenant_recoverable_expense_share - monthly_stop_dollars
+        )
+
+    else:
+        raise ValueError(f"unsupported lease type for recovery: {lease_type!r}.")
+
+    # The factor scales the finished obligation, never a term inside the clip.
     return ensure_finite(
         "monthly_expense_recovery", responsibility_factor * full_month_recovery
     )
@@ -254,13 +371,21 @@ def build_lease_recovery_schedule(
     timeline; nothing here builds a second, pads, truncates, or repeats a last
     value.
 
-    The three series returned are, in order of derivation:
+    The series returned are, in order of derivation:
 
     1. ``economic_responsibility_factor`` -- from D1 contractual activity;
-    2. ``tenant_recoverable_expense_share`` -- ``share × P_m``, retained for
-       audit and reported even for a `GROSS` lease, where the tenant owes none
-       of it;
-    3. ``expense_recovery`` -- through the single authoritative formula.
+    2. ``tenant_recoverable_expense_share`` -- ``share × P_m``, **before** any
+       stop, structure or factor. Its meaning is unchanged from D3.1: it is the
+       tenant's raw arithmetic share, reported even for a `GROSS` lease that
+       owes none of it and for a `MODIFIED_GROSS` lease whose stop consumes it;
+    3. ``full_month_expense_recovery`` -- the obligation before responsibility,
+       which is where the Modified Gross clip lands;
+    4. ``expense_recovery`` -- the factor applied to that obligation, through
+       the single authoritative formula.
+
+    For a `MODIFIED_GROSS` lease the monthly stop is computed **once**, from the
+    lease's own ``expense_stop_psf`` and area, because it is nominally fixed and
+    neither input varies by month.
 
     Pure and deterministic: no I/O, no mutation. The lease, its schedule and the
     pool are read and never written.
@@ -287,7 +412,34 @@ def build_lease_recovery_schedule(
         schedule, leased_area_sf=lease.leased_area_sf
     )
 
+    # The stop is nominally fixed and the area does not vary, so this is a
+    # scalar computed once. `None` for every structure that carries no stop.
+    stop_dollars: float | None = None
+    if lease.lease_type is LeaseType.MODIFIED_GROSS:
+        if lease.recovery_basis is None or lease.expense_stop_psf is None:
+            raise ValueError(
+                f"lease {lease.lease_id!r} is MODIFIED_GROSS and carries no "
+                "explicit contractual recovery basis; Anchor never infers one. "
+                "Validate recovery inputs before building a schedule."
+            )
+        if lease.recovery_basis is not RecoveryBasis.EXPENSE_STOP_PSF:
+            raise ValueError(
+                f"recovery basis {lease.recovery_basis!r} is not implemented; "
+                "D3 supports only EXPENSE_STOP_PSF."
+            )
+        stop_dollars = monthly_expense_stop_dollars(
+            expense_stop_psf=lease.expense_stop_psf,
+            leased_area_sf=lease.leased_area_sf,
+        )
+    elif lease.expense_stop_psf is not None or lease.recovery_basis is not None:
+        raise ValueError(
+            f"lease {lease.lease_id!r} is {lease.lease_type.value} but carries "
+            "a recovery basis or expense stop; a lease with a contractual stop "
+            "is MODIFIED_GROSS."
+        )
+
     tenant_share: list[float] = []
+    full_month: list[float] = []
     recovery: list[float] = []
 
     for position in range(len(months)):
@@ -296,11 +448,23 @@ def build_lease_recovery_schedule(
             share * pool.recoverable_expenses[position],
         )
         tenant_share.append(month_share)
+        # The obligation at full responsibility, then the factor -- computed by
+        # the one authoritative formula, called twice so the audit series and
+        # the recognised figure can never disagree about the clip.
+        full_month.append(
+            monthly_expense_recovery(
+                lease_type=lease.lease_type,
+                tenant_recoverable_expense_share=month_share,
+                responsibility_factor=1.0,
+                monthly_stop_dollars=stop_dollars,
+            )
+        )
         recovery.append(
             monthly_expense_recovery(
                 lease_type=lease.lease_type,
                 tenant_recoverable_expense_share=month_share,
                 responsibility_factor=factors[position],
+                monthly_stop_dollars=stop_dollars,
             )
         )
 
@@ -310,7 +474,11 @@ def build_lease_recovery_schedule(
         lease_type=lease.lease_type,
         months=months,
         tenant_pro_rata_share=share,
+        recovery_basis=lease.recovery_basis,
+        expense_stop_psf=lease.expense_stop_psf,
+        monthly_expense_stop_dollars=stop_dollars,
         economic_responsibility_factor=factors,
         tenant_recoverable_expense_share=tuple(tenant_share),
+        full_month_expense_recovery=tuple(full_month),
         expense_recovery=tuple(recovery),
     )
