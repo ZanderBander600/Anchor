@@ -294,20 +294,44 @@ def test_contracts_module_defines_no_calculation() -> None:
 
 
 def test_package_exposes_no_rent_or_schedule_entry_point_yet() -> None:
-    """D1.1/D1.2/D1.3 own month identity, base rent and aggregation. None of
-    it may be reachable from the D1.0 public surface."""
+    """D1.2 owns base rent and D1.3 owns aggregation. Neither may be
+    reachable yet.
+
+    Month identity (``ModelMonth``, ``month_index``, ``build_model_months``)
+    was on this list at D1.0 and is now a delivered D1.1 surface, so it has
+    moved to the positive assertion below.
+    """
 
     import anchor.leasing as leasing
 
     for absent in (
-        "ModelMonth",
-        "month_index",
-        "build_model_months",
         "monthly_base_rent",
         "build_lease_monthly_schedule",
+        "lease_rent_periods",
+        "escalation_period_index",
         "build_property_rent_roll_schedule",
         "aggregate_flow_to_annual",
+        "snapshot_state_at_year_end",
     ):
         assert not hasattr(leasing, absent), (
-            f"{absent} belongs to a later D1 gate and must not exist at D1.0"
+            f"{absent} belongs to a later D1 gate and must not exist yet"
         )
+
+
+def test_package_exposes_the_d1_1_calendar_surface() -> None:
+    """The D1.1 deliverable: one trusted representation of every modeled
+    month, reachable from the package's public API."""
+
+    import anchor.leasing as leasing
+
+    for present in (
+        "ModelMonth",
+        "build_model_months",
+        "projection_month_count",
+        "month_index",
+        "month_start_for_index",
+        "is_first_day_of_month",
+        "is_last_day_of_month",
+        "last_day_of_month",
+    ):
+        assert hasattr(leasing, present), f"{present} is a D1.1 public export"

@@ -1,4 +1,4 @@
-"""Sprint D Gate D1.0 -- Lease-Level input contracts.
+"""Sprint D Gates D1.0/D1.1 -- Lease-Level contracts.
 
 Restates
 ``docs/plans/2026-09-04-anchor-lease-level-underwriting-d0-architecture.md``
@@ -7,10 +7,11 @@ discrepancy. Like ``anchor.engine.contracts``, this module performs no
 calculation and no I/O of its own -- it only describes the shape of a
 Lease-Level deal's inputs.
 
-D1.0 is deliberately vocabulary and invariants only. Nothing here computes a
-month index, a monthly rent, an annual aggregate, a rollover, an NOI, or a
-return; those belong to D1.1 (month identity), D1.2 (base-rent timeline),
-D1.3 (property aggregation) and later phases.
+These are vocabulary and invariants only. Nothing here computes anything: a
+monthly rent, an annual aggregate, a rollover, an NOI and a return all belong
+to D1.2 (base-rent timeline), D1.3 (property aggregation) and later phases.
+``ModelMonth`` (D1.1) describes one canonical month but is built solely by
+``anchor.leasing.calendar.build_model_months``.
 
 The three entities mirror the D0 entity decisions (Section 4.1):
 
@@ -68,6 +69,42 @@ class LeaseType(StrEnum):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ModelMonth:
+    """One canonical monthly period of the Lease-Level projection
+    (D0 Section 4.7).
+
+    Carries **both** identities so a monthly figure can be audited against a
+    real calendar without re-deriving it from array position -- the guarantee
+    guardrail G-M9 enforces and failure mode FM-4 exists to catch.
+
+    ``period_index`` is the 1-based sequential model month: Month 1 is the
+    calendar month containing ``analysis_start_date``. Zero-based financial
+    period numbering is deliberately never exposed.
+
+    ``month_start`` is the first calendar day of that month -- a plain
+    ``date``, never a timestamp, never timezone-aware, never a display label.
+    Presentation such as "Jan-27" belongs to the frontend.
+
+    ``hold_year`` is derived from ``period_index``, never from the calendar
+    year: ``((period_index - 1) // 12) + 1``. With an analysis start of
+    2027-07-01, Hold Year 1 runs Jul-2027 through Jun-2028. The twelve forward
+    exit months carry ``hold_year == H + 1``.
+
+    ``is_forward_exit_month`` marks the twelve months ``12H+1 .. 12H+12`` that
+    form the forward exit-NOI window (D0 Section 17.1), so that window can be
+    identified without being recomputed anywhere else.
+
+    Built only by ``anchor.leasing.calendar.build_model_months``; like every
+    other contract in this module it performs no calculation of its own.
+    """
+
+    period_index: int
+    month_start: date
+    hold_year: int
+    is_forward_exit_month: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class LeaseLevelPropertyInputs:
     """The property-level scalars a Lease-Level deal needs (D0 Section 4.2).
 
@@ -96,12 +133,6 @@ class LeaseLevelPropertyInputs:
     ``Suite`` with no lease -- never as area left outside the suite schedule.
     Common area is therefore never inferred from a residual, because there is
     no residual.
-
-    The D0 planning document names this field ``property_area_sf`` while
-    defining it as "Total rentable area" (D0 Section 4.2). The name is
-    renamed here to match that stated meaning: a field called
-    "property area" invites a gross building area, which would silently
-    corrupt every occupancy figure derived from it.
 
     Deliberately absent: ``property_name``, ``address``, ``property_type``,
     ``year_built``. Those are ``DealContext``

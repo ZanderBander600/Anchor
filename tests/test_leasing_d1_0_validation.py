@@ -28,6 +28,7 @@ from anchor.leasing import (
     LeaseType,
     LeaseValidationError,
     Suite,
+    month_index,
     require_valid_lease_level_inputs,
     validate_lease_level_inputs,
 )
@@ -986,3 +987,287 @@ def test_validation_never_mutates_or_coerces_its_inputs() -> None:
     assert inputs.analysis_start_date == date(2026, 1, 15)
     assert original_lease.rent_commencement_date == date(2026, 1, 15)
     assert original_suite == suite()
+
+
+# =============================================================================
+# D1.1 -- horizon warnings (evaluated only when a hold period is supplied)
+# =============================================================================
+#
+# D0 Sections 6.4 and 19.3. Both are WARNING: neither makes the financial
+# input ambiguous or incorrect. The horizon is the FULL canonical projection,
+# 12H + 12 months -- the acquisition hold plus the twelve forward exit-NOI
+# months -- not merely the sale month at 12H.
+
+
+HOLD_PERIOD = 5                      # 60 hold months + 12 forward = 72 months
+HORIZON_START = date(2031, 12, 1)    # model month 72 for a 2026-01-01 start
+
+
+def test_a_lease_entirely_inside_the_horizon_raises_no_horizon_warning() -> None:
+    result = validate_lease_level_inputs(
+        property_inputs(), [suite()], [lease()], hold_period=HOLD_PERIOD
+    )
+
+    assert result.is_valid
+    assert result.warnings == ()
+
+
+def test_omitting_the_hold_period_evaluates_no_horizon_rule() -> None:
+    """The two horizon rules are definitionally relative to the projection
+    window, so without a hold period they simply do not apply. Every other
+    rule is unaffected."""
+
+    beyond = lease(
+        rent_commencement_date=date(2040, 1, 1),
+        lease_expiration_date=date(2045, 12, 31),
+    )
+
+    without = validate_lease_level_inputs(property_inputs(), [suite()], [beyond])
+    with_hold = validate_lease_level_inputs(
+        property_inputs(), [suite()], [beyond], hold_period=HOLD_PERIOD
+    )
+
+    assert without.warnings == ()
+    assert without.is_valid
+    assert with_hold.warnings != ()
+    assert with_hold.is_valid
+
+
+def test_rent_commencement_after_the_horizon_warns() -> None:
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [
+            lease(
+                rent_commencement_date=date(2032, 1, 1),   # model month 73
+                lease_expiration_date=date(2037, 12, 31),
+            )
+        ],
+        hold_period=HOLD_PERIOD,
+    )
+
+    assert codes(result) == [LeaseIssueCode.LEASE_STARTS_AFTER_HORIZON]
+    assert result.issues[0].severity is LeaseIssueSeverity.WARNING
+    assert result.issues[0].path == "leases[0].rent_commencement_date"
+    assert result.is_valid
+
+
+def test_commencement_on_the_final_modeled_month_does_not_warn() -> None:
+    """Boundary: model month 12H+12 is inside the horizon."""
+
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [
+            lease(
+                rent_commencement_date=HORIZON_START,       # model month 72
+                lease_expiration_date=date(2036, 11, 30),
+            )
+        ],
+        hold_period=HOLD_PERIOD,
+    )
+
+    assert LeaseIssueCode.LEASE_STARTS_AFTER_HORIZON not in codes(result)
+
+
+def test_a_lease_extending_beyond_the_horizon_warns() -> None:
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [lease(lease_expiration_date=date(2032, 1, 31))],   # model month 73
+        hold_period=HOLD_PERIOD,
+    )
+
+    assert codes(result) == [LeaseIssueCode.LEASE_EXTENDS_BEYOND_HORIZON]
+    assert result.issues[0].severity is LeaseIssueSeverity.WARNING
+    assert result.issues[0].path == "leases[0].lease_expiration_date"
+    assert result.is_valid
+
+
+def test_expiration_on_the_final_modeled_month_does_not_warn() -> None:
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [lease(lease_expiration_date=date(2031, 12, 31))],  # model month 72
+        hold_period=HOLD_PERIOD,
+    )
+
+    assert LeaseIssueCode.LEASE_EXTENDS_BEYOND_HORIZON not in codes(result)
+    assert result.is_valid
+
+
+def test_the_horizon_is_the_full_projection_not_the_sale_month() -> None:
+    """A lease running into the forward exit window is economically live
+    there, because that window is what exit NOI is measured over. It must not
+    warn merely for passing the sale month at 12H."""
+
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [lease(lease_expiration_date=date(2031, 6, 30))],   # month 66, past 12H=60
+        hold_period=HOLD_PERIOD,
+    )
+
+    assert result.warnings == ()
+
+
+def test_a_lease_starting_beyond_the_horizon_reports_one_fact_once() -> None:
+    """It necessarily also ends beyond the horizon; reporting both would be
+    the same fact told twice."""
+
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [
+            lease(
+                rent_commencement_date=date(2040, 1, 1),
+                lease_expiration_date=date(2045, 12, 31),
+            )
+        ],
+        hold_period=HOLD_PERIOD,
+    )
+
+    assert codes(result) == [LeaseIssueCode.LEASE_STARTS_AFTER_HORIZON]
+
+
+def test_horizon_warnings_use_rent_commencement_not_the_possession_date() -> None:
+    """An informational possession date must never determine economics."""
+
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [
+            lease(
+                lease_start_date=date(2025, 6, 17),   # long before the horizon
+                rent_commencement_date=date(2032, 1, 1),
+                lease_expiration_date=date(2037, 12, 31),
+            )
+        ],
+        hold_period=HOLD_PERIOD,
+    )
+
+    assert codes(result) == [LeaseIssueCode.LEASE_STARTS_AFTER_HORIZON]
+
+
+def test_horizon_warnings_do_not_make_the_result_invalid() -> None:
+    beyond = lease(lease_expiration_date=date(2033, 12, 31))
+
+    result = validate_lease_level_inputs(
+        property_inputs(), [suite()], [beyond], hold_period=HOLD_PERIOD
+    )
+
+    assert result.is_valid
+    assert result.errors == ()
+    assert len(result.warnings) == 1
+
+    require_valid_lease_level_inputs(
+        property_inputs(), [suite()], [beyond], hold_period=HOLD_PERIOD
+    )
+
+
+def test_horizon_warning_ordering_is_deterministic_and_follows_lease_order() -> None:
+    suites = [
+        suite(suite_id="S1", suite_area_sf=5_000.0),
+        suite(suite_id="S2", suite_area_sf=5_000.0),
+    ]
+    leases = [
+        lease(
+            lease_id="L1",
+            suite_id="S1",
+            leased_area_sf=5_000.0,
+            lease_expiration_date=date(2033, 12, 31),
+        ),
+        lease(
+            lease_id="L2",
+            suite_id="S2",
+            leased_area_sf=5_000.0,
+            rent_commencement_date=date(2032, 1, 1),
+            lease_expiration_date=date(2037, 12, 31),
+        ),
+    ]
+
+    first = validate_lease_level_inputs(
+        property_inputs(), suites, leases, hold_period=HOLD_PERIOD
+    )
+
+    assert codes(first) == [
+        LeaseIssueCode.LEASE_EXTENDS_BEYOND_HORIZON,
+        LeaseIssueCode.LEASE_STARTS_AFTER_HORIZON,
+    ]
+    for _ in range(50):
+        assert (
+            validate_lease_level_inputs(
+                property_inputs(), suites, leases, hold_period=HOLD_PERIOD
+            ).issues
+            == first.issues
+        )
+
+
+def test_a_shorter_hold_moves_the_horizon() -> None:
+    """The same lease warns or not depending on the hold period -- proof the
+    rule really is horizon-relative."""
+
+    expiring_2029 = lease(lease_expiration_date=date(2029, 12, 31))   # month 48
+
+    five_year = validate_lease_level_inputs(
+        property_inputs(), [suite()], [expiring_2029], hold_period=5
+    )
+    two_year = validate_lease_level_inputs(
+        property_inputs(), [suite()], [expiring_2029], hold_period=2
+    )
+
+    assert LeaseIssueCode.LEASE_EXTENDS_BEYOND_HORIZON not in codes(five_year)
+    assert LeaseIssueCode.LEASE_EXTENDS_BEYOND_HORIZON in codes(two_year)
+
+
+# =============================================================================
+# D1.1 -- the calendar refactor changed no D1.0 semantics
+# =============================================================================
+
+
+def test_calendar_centralization_left_overlap_semantics_unchanged() -> None:
+    """The overlap rule now anchors its comparison to ``analysis_start_date``;
+    that is a translation of every index by one constant, so back-to-back
+    stays valid and a shared month stays an error."""
+
+    back_to_back = [
+        lease(lease_id="L1", lease_expiration_date=date(2028, 3, 31)),
+        lease(
+            lease_id="L2",
+            rent_commencement_date=date(2028, 4, 1),
+            lease_expiration_date=date(2033, 3, 31),
+        ),
+    ]
+    shared_month = [
+        lease(lease_id="L1", lease_expiration_date=date(2028, 3, 31)),
+        lease(
+            lease_id="L2",
+            rent_commencement_date=date(2028, 3, 1),
+            lease_expiration_date=date(2033, 2, 28),
+        ),
+    ]
+
+    assert validate_lease_level_inputs(
+        property_inputs(), [suite()], back_to_back
+    ).is_valid
+    assert LeaseIssueCode.OVERLAPPING_LEASES_IN_SUITE in codes(
+        validate_lease_level_inputs(property_inputs(), [suite()], shared_month)
+    )
+
+
+def test_a_lease_commenced_before_the_analysis_start_is_never_clamped() -> None:
+    """D1.2 needs the raw contractual commencement to place an in-place lease
+    on its correct escalation step. The calendar must not rewrite it."""
+
+    original = lease(rent_commencement_date=date(2024, 1, 1))
+
+    result = validate_lease_level_inputs(
+        property_inputs(), [suite()], [original], hold_period=HOLD_PERIOD
+    )
+
+    assert result.is_valid
+    assert original.rent_commencement_date == date(2024, 1, 1)
+    assert (
+        month_index(original.rent_commencement_date, analysis_start=ANALYSIS_START)
+        == -23
+    )

@@ -32,23 +32,27 @@ rounding, no silent default for a missing required value, no downgrade of a
 mathematically invalid input to a warning. Where D1's scope cannot model
 something correctly, validation refuses.
 
-No rent, month index, or schedule is computed anywhere in this module. The two
-rules that reason about time -- expiry before the analysis start, and
-same-suite overlap -- compare **absolute month keys** derived from the dates
-themselves (``_month_key``), which is order-isomorphic to the 1-based
-sequential month index D1.1 will introduce but needs no origin and builds no
-calendar.
+No rent and no schedule is computed anywhere in this module. Every rule that
+reasons about time -- expiry before the analysis start, same-suite overlap, and
+the two D1.1 horizon warnings -- expresses itself in canonical model months via
+``anchor.leasing.calendar.month_index``, so there is exactly one notion of
+"which month" in the package.
 """
 
 from __future__ import annotations
 
-import calendar
 from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
 from math import isfinite
 from typing import Iterable
 
+from .calendar import (
+    is_first_day_of_month,
+    is_last_day_of_month,
+    month_index,
+    projection_month_count,
+)
 from .contracts import EscalationBasis, Lease, LeaseLevelPropertyInputs, Suite
 
 
@@ -103,6 +107,10 @@ class LeaseIssueCode(StrEnum):
     LEASE_POSSESSION_AFTER_RENT_START = "LEASE_POSSESSION_AFTER_RENT_START"
     LEASE_EXPIRED_BEFORE_ANALYSIS_START = "LEASE_EXPIRED_BEFORE_ANALYSIS_START"
     OVERLAPPING_LEASES_IN_SUITE = "OVERLAPPING_LEASES_IN_SUITE"
+
+    # --- horizon (D1.1; warnings, evaluated only when a hold period is given)
+    LEASE_STARTS_AFTER_HORIZON = "LEASE_STARTS_AFTER_HORIZON"
+    LEASE_EXTENDS_BEYOND_HORIZON = "LEASE_EXTENDS_BEYOND_HORIZON"
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -194,42 +202,19 @@ class LeaseValidationError(ValueError):
 
 
 # =============================================================================
-# Date helpers
+# Numeric helpers
 #
-# Private at D1.0. D1.1 introduces ``anchor.leasing.calendar`` and owns the
-# public month-identity surface (``month_index``, ``build_model_months``,
-# ``is_first_day_of_month``, ``is_last_day_of_month``); these helpers move
-# there and this module imports them, rather than a second copy existing.
+# The date predicates and month identity this module needs live in
+# ``anchor.leasing.calendar`` (D1.1) and are imported above. D1.0's private
+# copies were removed there so month-boundary logic exists in exactly one
+# place; behavior is unchanged.
+#
+# D1.0's private ``_month_key`` is likewise gone: every rule below that
+# reasons about time now uses the public, analysis-anchored ``month_index``.
+# Both surviving uses are translation-invariant comparisons, so anchoring them
+# leaves their semantics bit-identical while removing a competing notion of
+# "which month".
 # =============================================================================
-
-
-def _is_first_day_of_month(value: date) -> bool:
-    return value.day == 1
-
-
-def _is_last_day_of_month(value: date) -> bool:
-    """``True`` when ``value`` is the final calendar day of its own month.
-
-    Calendar-aware by construction: February 29 is the last day of February
-    in a leap year and February 28 is the last day in a common year, and this
-    returns the correct answer for both without a special case.
-    """
-
-    return value.day == calendar.monthrange(value.year, value.month)[1]
-
-
-def _month_key(value: date) -> int:
-    """An absolute, origin-free month ordinal: ``year * 12 + month``.
-
-    Strictly increasing in calendar month, so comparing two ``_month_key``
-    values answers "same month / earlier month / later month" exactly. It is
-    order-isomorphic to D1.1's 1-based ``month_index`` (which is this value
-    minus the analysis start's, plus one) but needs no origin and builds no
-    calendar, so the two time-aware rules below can be expressed at D1.0
-    without pre-empting D1.1.
-    """
-
-    return value.year * 12 + value.month
 
 
 def _is_finite_number(value: object) -> bool:
@@ -284,7 +269,7 @@ def _validate_property(
 ) -> list[LeaseValidationIssue]:
     issues: list[LeaseValidationIssue] = []
 
-    if not _is_first_day_of_month(property_inputs.analysis_start_date):
+    if not is_first_day_of_month(property_inputs.analysis_start_date):
         issues.append(
             _issue(
                 LeaseIssueCode.ANALYSIS_START_NOT_MONTH_ALIGNED,
@@ -443,7 +428,7 @@ def _validate_lease(
             )
 
     # --- dates ---
-    if not _is_first_day_of_month(lease.rent_commencement_date):
+    if not is_first_day_of_month(lease.rent_commencement_date):
         issues.append(
             _issue(
                 LeaseIssueCode.LEASE_DATE_NOT_MONTH_ALIGNED,
@@ -453,7 +438,7 @@ def _validate_lease(
             )
         )
 
-    if not _is_last_day_of_month(lease.lease_expiration_date):
+    if not is_last_day_of_month(lease.lease_expiration_date):
         issues.append(
             _issue(
                 LeaseIssueCode.LEASE_DATE_NOT_MONTH_ALIGNED,
@@ -488,7 +473,7 @@ def _validate_lease(
             )
         )
 
-    if _month_key(lease.lease_expiration_date) < _month_key(analysis_start_date):
+    if month_index(lease.lease_expiration_date, analysis_start=analysis_start_date) < 1:
         issues.append(
             _issue(
                 LeaseIssueCode.LEASE_EXPIRED_BEFORE_ANALYSIS_START,
@@ -560,16 +545,21 @@ def _validate_lease(
 
 
 def _validate_suite_occupancy_overlap(
-    leases: tuple[Lease, ...],
+    leases: tuple[Lease, ...], *, analysis_start_date: date
 ) -> list[LeaseValidationIssue]:
     """One suite may never be economically occupied by two leases at once.
 
     Overlap is evaluated on each lease's **economic occupancy interval**,
-    ``[rent_commencement_date, lease_expiration_date]``, reduced to absolute
-    month keys. ``lease_start_date`` (possession) is deliberately not
+    ``[rent_commencement_date, lease_expiration_date]``, reduced to canonical
+    model months. ``lease_start_date`` (possession) is deliberately not
     consulted: it is informational and never enters an economic calculation,
     so two leases whose possession periods touch but whose rent-paying
     periods do not are not an overlap.
+
+    Anchoring the comparison to ``analysis_start_date`` is a translation of
+    every index by the same constant, so the overlap relation is bit-identical
+    to D1.0's origin-free formulation -- the anchoring exists only so the
+    package has one notion of "which month".
 
     Because ``lease_expiration_date`` is inclusive and month-aligned,
     back-to-back leases do not overlap: an expiration of 2028-03-31 (month
@@ -585,13 +575,21 @@ def _validate_suite_occupancy_overlap(
 
     indexed = tuple(enumerate(leases))
     for position, (index_a, lease_a) in enumerate(indexed):
-        first_a = _month_key(lease_a.rent_commencement_date)
-        last_a = _month_key(lease_a.lease_expiration_date)
+        first_a = month_index(
+            lease_a.rent_commencement_date, analysis_start=analysis_start_date
+        )
+        last_a = month_index(
+            lease_a.lease_expiration_date, analysis_start=analysis_start_date
+        )
         for index_b, lease_b in indexed[position + 1 :]:
             if lease_a.suite_id != lease_b.suite_id:
                 continue
-            first_b = _month_key(lease_b.rent_commencement_date)
-            last_b = _month_key(lease_b.lease_expiration_date)
+            first_b = month_index(
+                lease_b.rent_commencement_date, analysis_start=analysis_start_date
+            )
+            last_b = month_index(
+                lease_b.lease_expiration_date, analysis_start=analysis_start_date
+            )
             if first_a <= last_b and first_b <= last_a:
                 issues.append(
                     _issue(
@@ -604,6 +602,84 @@ def _validate_suite_occupancy_overlap(
                         "in the same month.",
                     )
                 )
+
+    return issues
+
+
+def _validate_horizon(
+    leases: tuple[Lease, ...],
+    *,
+    analysis_start_date: date,
+    hold_period: int,
+) -> list[LeaseValidationIssue]:
+    """Flag leases that fall outside the canonical projection window.
+
+    Both rules are **WARNING**, per D0 Sections 6.4 and 19.3: neither makes
+    the financial input ambiguous or incorrect, so neither may block analysis.
+
+    The horizon is the **full canonical projection** -- ``12H + 12`` months,
+    the acquisition hold plus the twelve forward exit-NOI months -- not merely
+    the sale month at ``12H``. A lease running into the forward window is
+    economically live there, because that window is what exit NOI is measured
+    over (D0 Section 17.1).
+
+    ``LEASE_STARTS_AFTER_HORIZON``: the lease's economic commencement falls
+    entirely beyond the window, so it contributes nothing. Evaluated on
+    ``rent_commencement_date``, never on the informational
+    ``lease_start_date`` -- a possession or execution date must never
+    determine economics.
+
+    ``LEASE_EXTENDS_BEYOND_HORIZON``: the contractual term outlasts the
+    window. Entirely normal; noted so the analyst knows revenue is truncated
+    at the horizon while the D2 leasing-commission basis is not (D0
+    Section 12.2). The ``Lease`` contract itself is never truncated or
+    rewritten -- D1.2 simply computes only the months inside the window.
+
+    Boundary semantics are inclusive at the final modeled month: commencing or
+    expiring exactly in month ``12H+12`` is inside the horizon and warns
+    nothing; one month later warns.
+    """
+
+    horizon = projection_month_count(hold_period)
+    issues: list[LeaseValidationIssue] = []
+
+    for index, lease in enumerate(leases):
+        path = f"leases[{index}]"
+
+        first_rent_period = month_index(
+            lease.rent_commencement_date, analysis_start=analysis_start_date
+        )
+        if first_rent_period > horizon:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.LEASE_STARTS_AFTER_HORIZON,
+                    f"{path}.rent_commencement_date",
+                    f"lease {lease.lease_id!r} commences in model month "
+                    f"{first_rent_period}, beyond the {horizon}-month "
+                    f"projection window for a {hold_period}-year hold; it "
+                    "contributes nothing to this analysis.",
+                    LeaseIssueSeverity.WARNING,
+                )
+            )
+            # A lease that starts beyond the horizon necessarily ends beyond
+            # it too. Reporting both would be one fact told twice.
+            continue
+
+        last_rent_period = month_index(
+            lease.lease_expiration_date, analysis_start=analysis_start_date
+        )
+        if last_rent_period > horizon:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.LEASE_EXTENDS_BEYOND_HORIZON,
+                    f"{path}.lease_expiration_date",
+                    f"lease {lease.lease_id!r} runs to model month "
+                    f"{last_rent_period}, past the {horizon}-month projection "
+                    f"window for a {hold_period}-year hold; its revenue is "
+                    "truncated at the window.",
+                    LeaseIssueSeverity.WARNING,
+                )
+            )
 
     return issues
 
@@ -677,6 +753,8 @@ def validate_lease_level_inputs(
     property_inputs: LeaseLevelPropertyInputs,
     suites: Iterable[Suite],
     leases: Iterable[Lease],
+    *,
+    hold_period: int | None = None,
 ) -> LeaseValidationResult:
     """Validate one complete Lease-Level input set, deterministically.
 
@@ -684,12 +762,20 @@ def validate_lease_level_inputs(
     ``require_valid_lease_level_inputs`` is the variant that raises. Warnings
     never prevent a valid result.
 
+    ``hold_period`` is the acquisition hold in whole years, from
+    ``AcquisitionTerms``. It is optional because it is needed by exactly two
+    rules -- the horizon warnings, which are definitionally relative to the
+    projection window (D0 Section 19.3). Omitting it evaluates every other
+    rule unchanged and simply raises no horizon warning; it never weakens an
+    error or alters a result in any other way.
+
     **Issue ordering** (D0 Section 19.1) is fixed and reproducible:
     property-level issues first, then suites in declared order, then leases in
     declared order with each lease's own fields in canonical field order, then
-    the cross-lease suite-overlap rule, then area reconciliation. Nothing here
-    iterates a ``set`` or ``dict`` to produce output, so repeated runs emit
-    byte-identical sequences.
+    the cross-lease suite-overlap rule, then the horizon warnings in declared
+    lease order, then area reconciliation. Nothing here iterates a ``set`` or
+    ``dict`` to produce output, so repeated runs emit byte-identical
+    sequences.
 
     No value is defaulted, coerced, rounded, or inferred: a missing or
     malformed input becomes an issue, never a substituted number.
@@ -720,7 +806,19 @@ def validate_lease_level_inputs(
             )
         )
 
-    issues.extend(_validate_suite_occupancy_overlap(lease_tuple))
+    issues.extend(
+        _validate_suite_occupancy_overlap(
+            lease_tuple, analysis_start_date=property_inputs.analysis_start_date
+        )
+    )
+    if hold_period is not None:
+        issues.extend(
+            _validate_horizon(
+                lease_tuple,
+                analysis_start_date=property_inputs.analysis_start_date,
+                hold_period=hold_period,
+            )
+        )
     issues.extend(
         _validate_rentable_area_reconciliation(property_inputs, suite_tuple)
     )
@@ -732,6 +830,8 @@ def require_valid_lease_level_inputs(
     property_inputs: LeaseLevelPropertyInputs,
     suites: Iterable[Suite],
     leases: Iterable[Lease],
+    *,
+    hold_period: int | None = None,
 ) -> LeaseValidationResult:
     """Validate and raise ``LeaseValidationError`` if any ERROR was found.
 
@@ -739,7 +839,9 @@ def require_valid_lease_level_inputs(
     wants both the go-ahead and the warnings needs exactly one call.
     """
 
-    result = validate_lease_level_inputs(property_inputs, suites, leases)
+    result = validate_lease_level_inputs(
+        property_inputs, suites, leases, hold_period=hold_period
+    )
     if result.errors:
         raise LeaseValidationError(result)
     return result

@@ -113,8 +113,8 @@ def test_leasing_package_imports_no_external_sdk() -> None:
 
 
 def test_leasing_package_imports_only_stdlib_and_its_own_modules_at_d1_0() -> None:
-    """At D1.0 the package is self-contained. It has no reason to import any
-    other ``anchor`` module at all; ``AcquisitionTerms`` first becomes
+    """Through D1.1 the package is self-contained. It has no reason to import
+    any other ``anchor`` module at all; ``AcquisitionTerms`` first becomes
     relevant at D4."""
 
     for source_file in _leasing_source_files():
@@ -214,31 +214,64 @@ def test_leasing_validation_does_not_import_global_validation() -> None:
 # =============================================================================
 
 
-def test_leasing_package_declares_no_arithmetic_on_rent_at_d1_0() -> None:
-    """D1.0 is vocabulary and invariants only. No module may divide by 12,
-    compound a growth factor, or otherwise begin the D1.2 rent timeline."""
+#: Fields whose arithmetic *is* rent arithmetic. Area arithmetic is
+#: deliberately absent from this set: reconciling suite areas against
+#: ``rentable_area_sf`` is legitimate, reviewed D1.0 behaviour.
+_RENT_BEARING_FIELDS = frozenset({"base_rent_psf", "escalation_pct"})
+
+
+def _referenced_names(node: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name):
+            names.add(child.id)
+        elif isinstance(child, ast.Attribute):
+            names.add(child.attr)
+    return names
+
+
+def test_leasing_package_performs_no_rent_arithmetic_yet() -> None:
+    """Through D1.1 the package computes time, not money.
+
+    Two semantic checks, deliberately replacing D1.0's raw-text bans on the
+    substrings ``**`` and ``/ 12``. Those were too blunt in both directions:
+    they tripped on prose that merely *mentioned* the forbidden form, and they
+    would have blocked legitimate calendar arithmetic, while still saying
+    nothing about whether a rent field was actually involved.
+
+    1. No exponentiation anywhere -- that is compound escalation, which
+       arrives with the D1.2 rent timeline (D0 Section 6.1).
+    2. No arithmetic expression may reference a rent-bearing field.
+       ``base_rent_psf * leased_area_sf / 12`` is exactly the D1.2 formula and
+       must not appear before its gate.
+
+    D1.2 relaxes rule 2 for ``rent.py`` alone, deliberately and visibly.
+    """
 
     for source_file in _leasing_source_files():
-        source = source_file.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(source_file))
+        tree = ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
         for node in ast.walk(tree):
-            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            if not isinstance(node, ast.BinOp):
+                continue
+            if isinstance(node.op, ast.Pow):
                 pytest.fail(
                     f"{source_file} contains exponentiation; growth compounding "
                     "belongs to D1.2"
                 )
-        assert "/ 12" not in source, (
-            f"{source_file} divides by 12; monthly conversion belongs to D1.2"
-        )
+            leaked = _referenced_names(node) & _RENT_BEARING_FIELDS
+            assert not leaked, (
+                f"{source_file} performs arithmetic on {sorted(leaked)}; "
+                "rent calculation belongs to D1.2"
+            )
 
 
-def test_leasing_package_contains_only_the_three_d1_0_modules() -> None:
-    """D0 Gate D1.0 'Files. New only: __init__.py, contracts.py,
-    validation.py'. ``calendar.py`` and the rent/aggregation modules arrive at
-    their own gates."""
+def test_leasing_package_contains_only_the_gate_d1_1_modules() -> None:
+    """D0 Gate D1.0 files plus Gate D1.1's ``calendar.py``. The rent (D1.2)
+    and aggregation (D1.3) modules arrive at their own gates."""
 
     assert {path.name for path in _leasing_source_files()} == {
         "__init__.py",
+        "calendar.py",
         "contracts.py",
         "validation.py",
     }

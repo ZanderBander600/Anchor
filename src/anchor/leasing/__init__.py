@@ -24,18 +24,34 @@ no month index, no monthly rent, no annual aggregate, no NOI, no return. A
 reader should be able to answer "what is a valid contractual lease in Anchor"
 from this package without encountering a single rent calculation.
 
-Later D1 gates add, in order: canonical month identity (D1.1), the
-contractual base-rent monthly timeline (D1.2), and the property rent-roll
-schedule with annual aggregation derived from it (D1.3).
+D1.1 adds the canonical monthly calendar: ``ModelMonth`` plus
+``build_model_months``, which together give one trusted, auditable
+representation of every modeled lease month -- sequential index, real calendar
+month, hold year, and the twelve forward exit-NOI months, in a single
+projection. Still no rent: calendar arithmetic is in scope, financial
+arithmetic is not.
+
+Later D1 gates add the contractual base-rent monthly timeline (D1.2) and the
+property rent-roll schedule with annual aggregation derived from it (D1.3).
 """
 
 from __future__ import annotations
 
+from .calendar import (
+    build_model_months,
+    is_first_day_of_month,
+    is_last_day_of_month,
+    last_day_of_month,
+    month_index,
+    month_start_for_index,
+    projection_month_count,
+)
 from .contracts import (
     EscalationBasis,
     Lease,
     LeaseLevelPropertyInputs,
     LeaseType,
+    ModelMonth,
     Suite,
 )
 from .validation import (
@@ -49,6 +65,15 @@ from .validation import (
 )
 
 __all__ = [
+    # calendar (D1.1)
+    "ModelMonth",
+    "build_model_months",
+    "projection_month_count",
+    "month_index",
+    "month_start_for_index",
+    "is_first_day_of_month",
+    "is_last_day_of_month",
+    "last_day_of_month",
     # contracts
     "EscalationBasis",
     "Lease",
