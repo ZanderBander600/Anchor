@@ -44,7 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
-from math import isfinite
+from math import floor, isfinite
 from typing import Iterable
 
 from .calendar import (
@@ -130,6 +130,12 @@ class LeaseIssueCode(StrEnum):
     RENEWAL_TERM_OUT_OF_DOMAIN = "RENEWAL_TERM_OUT_OF_DOMAIN"
     SUCCESSOR_ESCALATION_OUT_OF_DOMAIN = "SUCCESSOR_ESCALATION_OUT_OF_DOMAIN"
     SUCCESSOR_LEASE_NAMES_A_TENANT = "SUCCESSOR_LEASE_NAMES_A_TENANT"
+
+    # --- downtime and free rent (D2.3) ---
+    DOWNTIME_OUT_OF_DOMAIN = "DOWNTIME_OUT_OF_DOMAIN"
+    FREE_RENT_OUT_OF_DOMAIN = "FREE_RENT_OUT_OF_DOMAIN"
+    NEW_TERM_OUT_OF_DOMAIN = "NEW_TERM_OUT_OF_DOMAIN"
+    FREE_RENT_EXCEEDS_OCCUPIABLE_TERM = "FREE_RENT_EXCEEDS_OCCUPIABLE_TERM"
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -267,6 +273,20 @@ def _areas_reconcile(total_suite_area: float, rentable_area: float) -> bool:
     )
 
 
+def _months_within_tolerance(left: float, right: float) -> bool:
+    """Whether two month counts are equal under Anchor's scaled comparison.
+
+    The same form ``_areas_reconcile`` uses, for the same reason: an exact
+    ``==`` would be wrong because ``frac(D)`` carries ordinary IEEE-754
+    representation error, so a concession stated as exactly the maximum
+    consumable amount could fail on floating-point noise alone. At the
+    magnitudes involved -- months, rarely above a few hundred -- the tolerance
+    is far tighter than any economically meaningful difference.
+    """
+
+    return abs(left - right) <= 1e-9 * max(1.0, abs(left), abs(right))
+
+
 # =============================================================================
 # Validation
 # =============================================================================
@@ -319,6 +339,90 @@ def _validate_property(
     return issues
 
 
+def _validate_non_negative_months(
+    value: object, *, path: str, field: str, code: LeaseIssueCode
+) -> list[LeaseValidationIssue]:
+    """Domain ``>= 0``, fractional permitted, for a duration in months.
+
+    Shared by the downtime and free-rent fields on both branches so the four
+    cannot drift apart. Fractional values are legitimate: an analyst may state
+    ``4.5`` months of downtime or ``7.5`` months of free rent, and D2
+    Sections 6 and 7 define both exactly.
+    """
+
+    if not _is_finite_number(value):
+        return [
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                path,
+                f"{field} must be a finite number of months.",
+            )
+        ]
+    if value < 0:
+        return [
+            _issue(
+                code,
+                path,
+                f"{field} {value!r} must be greater than or equal to 0.",
+            )
+        ]
+    return []
+
+
+def _validate_free_rent_over_grant(
+    assumptions: MarketLeasingAssumptions,
+    *,
+    path: str,
+    branch: str,
+    term_months: object,
+    downtime_months: object,
+    free_rent_months: object,
+) -> list[LeaseValidationIssue]:
+    """D2 Section 7.5, approved at D2.3: the concession must be consumable.
+
+    ```
+    free_rent_months <= term_months - frac(downtime_months)
+    ```
+
+    Evaluated only when the three inputs are individually in domain -- a
+    negative term or a non-finite downtime already has its own error, and
+    stacking a derived complaint on top of it would report the same defect
+    twice.
+
+    The comparison uses the package's scaled numeric convention rather than a
+    bare ``>``, so a concession stated as exactly the maximum survives the
+    ordinary floating-point representation of ``frac(D)``.
+    """
+
+    if isinstance(term_months, bool) or not isinstance(term_months, int):
+        return []
+    if term_months < 1:
+        return []
+    if not _is_finite_number(downtime_months) or downtime_months < 0:
+        return []
+    if not _is_finite_number(free_rent_months) or free_rent_months < 0:
+        return []
+
+    maximum = term_months - (downtime_months - floor(downtime_months))
+    if free_rent_months <= maximum or _months_within_tolerance(
+        free_rent_months, maximum
+    ):
+        return []
+
+    return [
+        _issue(
+            LeaseIssueCode.FREE_RENT_EXCEEDS_OCCUPIABLE_TERM,
+            f"{path}.{branch}_free_rent_months",
+            f"{branch}_free_rent_months {free_rent_months!r} exceeds the "
+            f"{maximum!r} month-equivalents the successor term can absorb "
+            f"({branch}_term_months {term_months!r} less the "
+            f"{downtime_months - floor(downtime_months)!r} fractional month of "
+            f"{branch}_downtime_months {downtime_months!r}). The concession "
+            "would be silently discarded.",
+        )
+    ]
+
+
 def _validate_market_leasing_assumptions(
     assumptions: MarketLeasingAssumptions, *, path: str
 ) -> list[LeaseValidationIssue]:
@@ -335,6 +439,39 @@ def _validate_market_leasing_assumptions(
       exactly ``-1`` is excluded because it collapses the market to zero at
       the first anniversary and stays there, which is a degenerate assumption
       rather than a rate.
+
+    The D2.3 downtime and free-rent domains (D0 Section 4.5, D2 Sections 6-7),
+    applied identically to both branches:
+
+    - ``renewal_downtime_months``, ``new_downtime_months`` ``>= 0``, fractional
+      permitted. Zero is the ordinary renewal case, not an absence.
+    - ``renewal_free_rent_months``, ``new_free_rent_months`` ``>= 0``,
+      fractional permitted, denominated in full month-equivalents of
+      base-rent abatement.
+    - ``new_term_months >= 1``, a whole number of months.
+
+    Plus the **free-rent over-grant** rule (D2 Section 7.5, approved at D2.3),
+    checked per branch:
+
+    ```
+    free_rent_months <= term_months - frac(downtime_months)
+    ```
+
+    The right-hand side is the largest concession the waterfall can absorb over
+    the successor's term: the first period contributes ``1 - frac(D)`` and the
+    remaining ``T - 1`` periods contribute ``1.0`` each. A larger concession
+    cannot be fully consumed within the lease, and silently discarding the
+    remainder would understate it invisibly -- exactly the failure the
+    sequential waterfall replaced. Anchor therefore refuses rather than
+    capping, discarding, carrying the remainder past expiration, or extending
+    the term to absorb it.
+
+    **The bound uses the FULL contractual term, never the visible
+    projection.** A 60-month successor of which only eight months fall inside
+    the canonical window may legitimately carry a twelve-month concession; the
+    schedule simply ends with free rent still being consumed. Validating
+    against the visible portion would reject sound underwriting because of
+    where the hold period happens to end.
 
     The D2.2 renewal domains, likewise exactly as D0 Section 4.5 states them:
 
@@ -470,6 +607,66 @@ def _validate_market_leasing_assumptions(
                 "than -1.",
             )
         )
+
+    new_term = assumptions.new_term_months
+    if isinstance(new_term, bool) or not isinstance(new_term, int):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NEW_TERM_OUT_OF_DOMAIN,
+                f"{path}.new_term_months",
+                f"new_term_months {new_term!r} must be a whole number of "
+                "months.",
+            )
+        )
+    elif new_term < 1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.NEW_TERM_OUT_OF_DOMAIN,
+                f"{path}.new_term_months",
+                f"new_term_months {new_term!r} must be at least 1.",
+            )
+        )
+
+    for field_name in ("renewal_downtime_months", "new_downtime_months"):
+        issues.extend(
+            _validate_non_negative_months(
+                getattr(assumptions, field_name),
+                path=f"{path}.{field_name}",
+                field=field_name,
+                code=LeaseIssueCode.DOWNTIME_OUT_OF_DOMAIN,
+            )
+        )
+
+    for field_name in ("renewal_free_rent_months", "new_free_rent_months"):
+        issues.extend(
+            _validate_non_negative_months(
+                getattr(assumptions, field_name),
+                path=f"{path}.{field_name}",
+                field=field_name,
+                code=LeaseIssueCode.FREE_RENT_OUT_OF_DOMAIN,
+            )
+        )
+
+    issues.extend(
+        _validate_free_rent_over_grant(
+            assumptions,
+            path=path,
+            branch="renewal",
+            term_months=assumptions.renewal_term_months,
+            downtime_months=assumptions.renewal_downtime_months,
+            free_rent_months=assumptions.renewal_free_rent_months,
+        )
+    )
+    issues.extend(
+        _validate_free_rent_over_grant(
+            assumptions,
+            path=path,
+            branch="new",
+            term_months=assumptions.new_term_months,
+            downtime_months=assumptions.new_downtime_months,
+            free_rent_months=assumptions.new_free_rent_months,
+        )
+    )
 
     return issues
 

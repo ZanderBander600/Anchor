@@ -725,7 +725,7 @@ contract term, which for a `T`-month term commencing at a fractional boundary is
 `T − frac(D)`. A stated concession larger than that cannot be fully consumed
 within the lease.
 
-**Recommendation for D2.3 (recorded for human review).** Validate
+**APPROVED AT D2.3 — human decision, now a binding convention.** Validate
 
 ```
 free_rent_months ≤ successor_term_months − frac(downtime_months)
@@ -735,9 +735,28 @@ as a **validation ERROR** — `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM` — naming bot
 figures. Silently discarding the unconsumable remainder would understate the
 concession invisibly, which is exactly the failure the waterfall replaced.
 
+Anchor therefore **refuses** rather than doing any of the following, each of
+which was considered and rejected: silently capping the concession; discarding
+the unconsumable remainder; carrying it past the successor’s contractual
+expiration; or extending the successor term to absorb it. Each would change the
+economics without saying so.
+
+**The bound is measured over the FULL successor contract term**, never over the
+portion visible inside Anchor’s canonical projection. A 60-month successor of
+which only eight months fall before the projection ends may legitimately carry a
+twelve-month concession; the displayed schedule simply ends with free rent still
+being consumed. Erroring merely because the horizon arrives first would reject
+sound underwriting on the basis of where the hold period happens to end. The
+rule fires **only** when the concession cannot be consumed over the whole
+contractual term.
+
+The comparison uses the package’s scaled numeric convention rather than a bare
+`>`, so a concession stated as exactly the maximum survives the ordinary
+floating-point representation of `frac(D)`.
+
 **This is a tightening of D0**, which sets the domain at `≥ 0` with no upper
-bound. It is recorded here rather than applied: it takes effect only if approved
-at D2.3, and it does not block D2.1.
+bound. It applies to **both branches**, each against its own term, downtime and
+free rent.
 
 ## 8. TI and LC
 
@@ -1212,7 +1231,7 @@ because both were misread once:
 | **7** | Zero free rent | `F = 0` | Successor pays full contractual rent from `c` |
 | **8** | Integer free rent | `F = 6` | Six abated periods from `c`; `contractual_base_rent` stays **gross**; abatement on its own line |
 | **9** | Fractional free rent + fractional downtime | `D = 2.25`, `F = 2.5` | **The Section 7.2 reference case, asserted period by period**: Sep `0.75 / 0.00`, Oct `1.00 / 0.00`, Nov `0.75 / 0.25`, Dec `0.00 / 1.00`; total abatement exactly `2.50`. Proves September consumes `0.75` of a free month, not `1.0` |
-| **9b** | Free rent exceeding the occupiable term | `T = 6`, `D = 0.5`, `F = 6` | Section 7.5's `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM` ERROR — the concession is never silently discarded *(subject to approval at D2.3)* |
+| **9b** | Free rent exceeding the occupiable term | `T = 6`, `D = 0.5`, `F = 6` | Section 7.5's `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM` ERROR — the concession is never silently discarded *(approved at D2.3)* |
 | **10** | TI | `ti_psf = 10`, `D = 2.25`, expiry June | Full TI in **September** (period `c`), never prorated, never in a downtime period, **NOI bit-identical** when TI doubles |
 | **11** | LC | term 60, `D = 2.25`, `F = 6`, escalating | LC on **60 full contractual months**, gross of free rent, untruncated by the horizon, unaffected by the `0.75` boundary factor; recorded at `c`; **NOI bit-identical** when LC doubles |
 | **12** | Market step before rollover | expiry period 11, `D = 0` → `c = 12`; expiry period 12, `D = 0` → `c = 13` | The successor commencing in period 13 prices one growth band higher. Market rent steps on the **analysis** anniversary |
@@ -1278,13 +1297,15 @@ Extends D0 §26 (FM-1 … FM-29). Each entry names its detection mechanism.
 
 **No human financial decision blocks D2.1.**
 
-### 17.1 One recommendation recorded for later review
+### 17.1 One recommendation recorded for later review — closed at D2.3
 
-**Free-rent over-grant validation (Section 7.5).** Recommend
-`free_rent_months ≤ successor_term_months − frac(downtime_months)` as a
-validation **ERROR** rather than silently discarding an unconsumable remainder.
-This tightens D0's `≥ 0` domain, so it is recorded rather than assumed. **Due at
-D2.3; does not block D2.1.**
+**Free-rent over-grant validation (Section 7.5). — APPROVED AT D2.3.**
+`free_rent_months ≤ successor_term_months − frac(downtime_months)` is a
+validation **ERROR**, `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM`, rather than a silent
+discard of an unconsumable remainder. It tightens D0's `≥ 0` domain, applies to
+both branches against their own term and downtime, and is measured over the full
+contractual term rather than the visible projection. This was the one
+recommendation this document left open; it is now closed.
 
 ### 17.2 Carried forward, unchanged
 

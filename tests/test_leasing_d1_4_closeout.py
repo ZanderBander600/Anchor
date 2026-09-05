@@ -1039,21 +1039,23 @@ def test_d1_exposes_no_downstream_financial_concept() -> None:
         ), f"{absent} must not exist in D1"
 
 
-def test_no_contract_declares_a_d2_3_or_downstream_field() -> None:
+def test_no_contract_declares_a_d2_4_or_downstream_field() -> None:
     """Narrowed only by the fields each gate actually delivers, when it lands.
 
     D2.1 removed ``market_rent_psf`` / ``market_rent_growth``; D2.2 removed
-    ``origin`` and the four renewal-branch fields. Everything D2.3 and later
-    owns -- the new-tenant branch, downtime, free rent, TI, LC, recovery
-    structure and every downstream operating concept -- remains banned, so
-    this guardrail keeps its full force over the rest of Sprint D.
+    ``origin`` and the four renewal-branch fields; D2.3 removed
+    ``downtime_months`` and ``free_rent_months`` together with the branch-side
+    spellings. Everything D2.4 and later owns -- TI, LC,
+    ``renewal_probability``, recovery structure and every downstream operating
+    concept -- remains banned, so this guardrail keeps its full force over the
+    rest of Sprint D.
     """
 
     from anchor.leasing import contracts as contracts_module
 
     banned = {
         "renewal_probability",
-        "downtime_months", "free_rent_months", "ti_psf",
+        "ti_psf",
         "tenant_improvements", "lc_pct", "leasing_commissions",
         "recovery_basis", "expense_stop", "base_year",
         "noi", "capex", "other_income", "operating_expenses",
@@ -1072,8 +1074,8 @@ def test_no_contract_declares_a_d2_3_or_downstream_field() -> None:
 def test_the_d1_rent_formula_is_untouched_by_d2() -> None:
     """Failure mode FM-D2-20 stated as a source-level assertion:
     ``Lease.base_rent_psf``'s meaning and ``rent.py``'s formula must be
-    untouched by D2 -- re-asserted at D2.2, where a successor could most
-    plausibly have grown its own rent path.
+    untouched by D2 -- re-asserted at D2.3, where a concession could most
+    plausibly have been netted into the contractual rent engine.
 
     The D1.2 formula ``base_rent_psf * (1 + escalation_pct) ** k * area / 12``
     is asserted verbatim in structure, and the market-rent module is proven
@@ -1096,3 +1098,6 @@ def test_the_d1_rent_formula_is_untouched_by_d2() -> None:
     assert "market_rent_growth" not in source
     assert "renewal_rent_spread" not in source
     assert "successor_escalation_pct" not in source
+    assert "downtime_months" not in source
+    assert "cash_rent_factor" not in source
+    assert "successor_occupancy_factor" not in source

@@ -529,11 +529,17 @@ def test_no_later_gate_module_exists_at_d2_2() -> None:
 #: None of it may appear anywhere in production code -- not as a field, not as
 #: a parameter, not as a function name.
 #:
-#: **Narrowed at D2.2**, and only by the four fields that gate delivers:
-#: ``renewal_rent_psf``, ``renewal_rent_spread``, ``renewal_term_months`` and
-#: ``successor_escalation_pct``. Everything D2.3 and later owns stays, so the
-#: guardrail keeps its full force against the new-tenant branch, downtime,
-#: free rent, TI, LC and probability weighting.
+#: **Narrowed at D2.3**, and only by the fields that gate delivers:
+#: ``new_term_months``, ``new_downtime_months``, ``new_free_rent_months``,
+#: ``renewal_downtime_months`` and ``renewal_free_rent_months``, plus the
+#: mechanics named ``downtime_months``, ``free_rent_months`` and the occupancy
+#: factor. Everything D2.4 and later owns stays, so the guardrail keeps its
+#: full force against TI, LC and probability weighting.
+#:
+#: ``new_rent_psf`` stays banned permanently and deliberately: D2 Section 12
+#: records its absence as correct, because a new letting prices at market by
+#: definition. Its appearance would be a financial-model error, not a gate
+#: violation.
 _LATER_D2_GATE_NAMES = frozenset(
     {
         # D2.5 -- probability composition
@@ -542,17 +548,9 @@ _LATER_D2_GATE_NAMES = frozenset(
         "expected_occupied_area_sf",
         "expected_rent_psf",
         "expected_term_months",
-        # D2.3 -- the new-tenant branch
-        "new_term_months",
+        # never -- a new letting prices at market (D2 Section 12)
         "new_rent_psf",
-        # D2.3 -- downtime and free rent
-        "renewal_downtime_months",
-        "new_downtime_months",
-        "downtime_months",
-        "renewal_free_rent_months",
-        "new_free_rent_months",
-        "free_rent_months",
-        "occupancy_factor",
+        "new_rent_spread",
         # D2.4 -- TI and LC
         "renewal_ti_psf",
         "new_ti_psf",
@@ -566,13 +564,14 @@ _LATER_D2_GATE_NAMES = frozenset(
 
 
 def test_no_later_d2_gate_vocabulary_appears_in_production_code() -> None:
-    """D2.2 builds the pure renewal branch and stops.
+    """D2.3 builds both pure branches and their concession mechanics, and
+    stops.
 
-    The new-tenant branch, downtime, free rent, TI, LC and probability
-    weighting are D2.3-D2.5. Declaring any of their names now would put
-    vocabulary into the package with no mechanism behind it -- the same rule
-    D1 applied to ``Lease.origin`` and ``Suite.market_rent_psf``, which each
-    waited for the gate that could actually produce them.
+    TI, LC and probability weighting are D2.4-D2.5. Declaring any of their
+    names now would put vocabulary into the package with no mechanism behind
+    it -- the same rule D1 applied to ``Lease.origin`` and
+    ``Suite.market_rent_psf``, which each waited for the gate that could
+    actually produce them.
     """
 
     for source_file in _leasing_source_files():
@@ -802,26 +801,77 @@ def test_the_rent_and_market_modules_are_unchanged_by_the_renewal_gate() -> None
             )
 
 
-def test_no_downtime_or_free_rent_concept_exists_in_the_renewal_branch() -> None:
-    """A pure renewal has no vacancy by construction: the successor commences
-    the month after expiry. D2.3 owns downtime, the fractional-commencement
-    boundary factor and free rent."""
+def test_the_downtime_and_free_rent_mechanics_each_have_one_home() -> None:
+    """D2.3's two mechanics live in ``rollover.py`` and nowhere else.
+
+    A second downtime formula or a second waterfall would be free to disagree
+    with the first, and the branch that used the wrong one would still look
+    plausible. The check runs both ways: the mechanics must be *in*
+    ``rollover.py``, and *absent* from every other module.
+    """
 
     referenced = _referenced_names(_rollover_tree())
-
-    for absent in (
+    for required in (
+        "successor_occupancy_factors",
+        "free_rent_waterfall",
         "downtime_months",
-        "renewal_downtime_months",
-        "new_downtime_months",
         "free_rent_months",
-        "renewal_free_rent_months",
-        "occupancy_factor",
-        "boundary_factor",
-        "floor",
     ):
-        assert absent not in referenced, (
-            f"rollover.py references {absent!r}, which belongs to D2.3"
+        assert required in referenced, (
+            f"rollover.py must own {required!r}"
         )
+
+    for source_file in _leasing_source_files():
+        if source_file.name in {_ROLLOVER_MODULE, "contracts.py", "validation.py"}:
+            continue
+        tree = ast.parse(
+            source_file.read_text(encoding="utf-8"), filename=str(source_file)
+        )
+        names = _referenced_names(tree)
+        for forbidden in (
+            "successor_occupancy_factors",
+            "free_rent_waterfall",
+            "downtime_months",
+            "free_rent_months",
+            "cash_rent_factor",
+        ):
+            assert forbidden not in names, (
+                f"{source_file} references {forbidden!r}; the downtime and "
+                f"free-rent mechanics belong to {_ROLLOVER_MODULE}"
+            )
+
+
+def test_the_free_rent_waterfall_is_sequential_not_multiplicative() -> None:
+    """HD-D2-4, mechanically. The waterfall carries running state and
+    subtracts; a multiplicative rule would not need either.
+
+    Asserts the function contains a ``min`` against a running remainder and a
+    subtraction from it -- the shape of the approved rule -- and that no
+    product of an occupancy factor and a free-rent factor appears.
+    """
+
+    waterfall = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef) and node.name == "free_rent_waterfall"
+    )
+    referenced = _referenced_names(waterfall)
+
+    assert "min" in referenced, "the waterfall must clamp against the remainder"
+    assert any(
+        isinstance(node, ast.AugAssign) and isinstance(node.op, ast.Sub)
+        for node in ast.walk(waterfall)
+    ) or any(
+        isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub)
+        for node in ast.walk(waterfall)
+    ), "the waterfall must decrement the remaining concession"
+
+    for node in ast.walk(waterfall):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            pytest.fail(
+                "free_rent_waterfall multiplies; the approved rule is "
+                "sequential (HD-D2-4), never a product of independent factors"
+            )
 
 
 def test_no_probability_or_composition_exists_in_the_renewal_branch() -> None:
@@ -863,15 +913,104 @@ def test_no_ti_or_lc_concept_exists_in_the_renewal_branch() -> None:
         )
 
 
-def test_no_new_tenant_concept_exists_in_the_renewal_branch() -> None:
-    """D2.3 owns the new-tenant branch. D2.2 models renewal only."""
+def test_a_new_letting_has_no_rent_field_of_its_own() -> None:
+    """D2 Section 12: the absence of ``new_rent_psf`` is deliberate, not a gap.
 
-    referenced = _referenced_names(_rollover_tree())
+    A new letting prices at ``MarketRentPSF(c)`` by definition, while a renewal
+    is negotiated relative to market and therefore carries both an explicit
+    level and a spread. A ``new_rent_psf`` field would be a financial-model
+    error at any gate.
+    """
 
-    for absent in ("new_term_months", "new_rent_psf", "NewTenantBranch"):
-        assert absent not in referenced, (
-            f"rollover.py references {absent!r}, which belongs to D2.3"
+    for source_file in _leasing_source_files():
+        tree = ast.parse(
+            source_file.read_text(encoding="utf-8"), filename=str(source_file)
         )
+        names = _referenced_names(tree)
+        for forbidden in ("new_rent_psf", "new_rent_spread"):
+            assert forbidden not in names, (
+                f"{source_file} references {forbidden!r}; a new letting prices "
+                "at market by definition"
+            )
+
+
+def test_the_new_tenant_branch_never_reads_a_renewal_assumption() -> None:
+    """Cross-branch contamination is what the two-branch method exists to
+    prevent. The new-tenant pricing function may not name a renewal field."""
+
+    pricer = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "new_tenant_starting_rent_psf"
+    )
+    referenced = _referenced_names(pricer)
+
+    for forbidden in ("renewal_rent_psf", "renewal_rent_spread"):
+        assert forbidden not in referenced, (
+            f"new_tenant_starting_rent_psf references {forbidden!r}; a "
+            "replacement tenant never inherits a renewal concession"
+        )
+
+
+def test_both_branches_expose_the_same_series_names() -> None:
+    """D2.5 weights the two branches month by month. A composition layer that
+    had to translate between two shapes would be a place for the branches to
+    disagree, so the series names must match exactly."""
+
+    import dataclasses
+
+    from anchor.leasing import NewTenantBranch, RenewalBranch
+
+    series = {
+        "contractual_base_rent",
+        "successor_occupancy_factor",
+        "free_rent_abatement_months",
+        "cash_rent_factor",
+        "free_rent",
+        "cash_base_rent",
+        "occupied_area",
+        "physical_occupancy",
+    }
+    renewal_fields = {f.name for f in dataclasses.fields(RenewalBranch)}
+    new_fields = {f.name for f in dataclasses.fields(NewTenantBranch)}
+
+    assert series <= renewal_fields
+    assert series <= new_fields
+
+    # The renewal branch carries exactly two extra fields -- its own pricing
+    # assumptions -- and nothing else differs.
+    assert renewal_fields - new_fields == {"renewal_rent_psf", "renewal_rent_spread"}
+    assert new_fields - renewal_fields == set()
+
+
+def test_face_rent_is_never_overwritten_with_cash_rent() -> None:
+    """``contractual_base_rent`` is gross face rent on both branches; cash and
+    the abatement live on their own series (failure modes FM-D2-10,
+    FM-D2-11b). D2.4's LC basis reads face and must never see a concession.
+
+    Asserted structurally: no assignment in ``rollover.py`` puts a
+    cash-factored or abated value into the face-rent series.
+    """
+
+    tree = _rollover_tree()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Attribute) and node.func.attr == "append"):
+            continue
+        if not (
+            isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "contractual_base_rent"
+        ):
+            continue
+        appended = _referenced_names(node)
+        for forbidden in ("cash_factor", "abatement_months", "cash_rent_factor"):
+            assert forbidden not in appended, (
+                "contractual_base_rent is FACE rent; a concession must never "
+                "be netted into it"
+            )
 
 
 def test_the_renewal_branch_does_not_recurse() -> None:
@@ -948,8 +1087,7 @@ def test_successor_provenance_is_set_by_the_engine_not_the_caller() -> None:
     builder = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "build_renewal_successor_lease"
+        if isinstance(node, ast.FunctionDef) and node.name == "build_successor_lease"
     )
     parameters = {argument.arg for argument in builder.args.args} | {
         argument.arg for argument in builder.args.kwonlyargs

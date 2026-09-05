@@ -63,6 +63,19 @@ moment it commences. This is conceptually the ``p = 1`` endpoint, but no
 probability exists yet -- the new-tenant branch, downtime and free rent are
 D2.3, TI and LC are D2.4, ``renewal_probability`` and expected-value
 composition are D2.5, and recursion is D2.6.
+
+D2.3 adds the pure new-tenant branch and the concession mechanics both
+branches share. Downtime sets the successor's month-equivalent occupancy
+factor -- ``floor(D)`` fully vacant periods, then ``1 - frac(D)`` at
+commencement -- and free rent is then consumed against that occupancy by a
+sequential waterfall, never as an independent multiplicative factor. Face rent
+and cash rent are kept as separate series: neither concession reduces
+contractual face rent, which D2.4's LC basis reads. Branch physical occupancy
+stays integral and keeps that name; the fractional
+``successor_occupancy_factor`` is a different quantity under a different name.
+The renewal branch gains the same mechanics, and at zero downtime and zero free
+rent reproduces the accepted D2.2 result exactly. TI and LC are D2.4,
+``renewal_probability`` and composition are D2.5, recursion is D2.6.
 """
 
 from __future__ import annotations
@@ -94,6 +107,7 @@ from .contracts import (
     MarketLeasingAssumptions,
     MarketRentSchedule,
     ModelMonth,
+    NewTenantBranch,
     PropertyRentRollSchedule,
     RenewalBranch,
     ResolvedMarketLeasing,
@@ -109,11 +123,18 @@ from .market import (
 )
 from .rent import build_lease_monthly_schedule
 from .rollover import (
+    build_new_tenant_branch,
     build_renewal_branch,
     build_renewal_successor_lease,
+    build_successor_lease,
+    free_rent_waterfall,
+    maximum_consumable_free_rent_months,
+    new_tenant_starting_rent_psf,
     renewal_commencement_period,
     renewal_starting_rent_psf,
+    successor_commencement_period,
     successor_expiration_period,
+    successor_occupancy_factors,
 )
 from .validation import (
     LeaseIssueCode,
@@ -164,6 +185,15 @@ __all__ = [
     "renewal_starting_rent_psf",
     "build_renewal_successor_lease",
     "build_renewal_branch",
+    # new-tenant branch, downtime and free rent (D2.3)
+    "NewTenantBranch",
+    "build_new_tenant_branch",
+    "build_successor_lease",
+    "new_tenant_starting_rent_psf",
+    "successor_commencement_period",
+    "successor_occupancy_factors",
+    "free_rent_waterfall",
+    "maximum_consumable_free_rent_months",
     # contracts
     "EscalationBasis",
     "Lease",

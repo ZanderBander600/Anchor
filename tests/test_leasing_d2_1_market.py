@@ -72,11 +72,11 @@ def strict(expected: float) -> object:
 def assumptions(**overrides: object) -> MarketLeasingAssumptions:
     """A property-default record.
 
-    The renewal fields below arrived at D2.2 and are required on the record
-    (the all-or-nothing override rule is structural). **D2.1 reads none of
-    them**, so every market-rent expectation in this module is unaffected by
-    their presence -- which the D2.1/D2.2 isolation test at the end asserts
-    directly."""
+    The renewal fields arrived at D2.2 and the concession fields at D2.3; all
+    are required on the record (the all-or-nothing override rule is
+    structural). **D2.1 reads none of them**, so every market-rent expectation
+    in this module is unaffected by their presence -- which the isolation test
+    at the end asserts directly."""
 
     base: dict[str, object] = {
         "market_rent_psf": 40.0,
@@ -86,6 +86,12 @@ def assumptions(**overrides: object) -> MarketLeasingAssumptions:
         "renewal_rent_spread": 0.0,
         "renewal_term_months": 60,
         "successor_escalation_pct": 0.0,
+        # D2.3 concession fields -- inert for every assertion in this module.
+        "renewal_downtime_months": 0.0,
+        "renewal_free_rent_months": 0.0,
+        "new_term_months": 60,
+        "new_downtime_months": 0.0,
+        "new_free_rent_months": 0.0,
     }
     base.update(overrides)
     return MarketLeasingAssumptions(**base)  # type: ignore[arg-type]
@@ -828,7 +834,7 @@ def test_an_incomplete_override_cannot_be_constructed_at_all() -> None:
     with pytest.raises(TypeError):
         MarketLeasingAssumptions(market_rent_growth=0.03)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
-        # Still structural as the record grew at D2.2.
+        # Still structural as the record grew at D2.2 and again at D2.3.
         MarketLeasingAssumptions(  # type: ignore[call-arg]
             market_rent_psf=40.0, market_rent_growth=0.03
         )

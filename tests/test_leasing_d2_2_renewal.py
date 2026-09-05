@@ -77,6 +77,12 @@ def assumptions(**overrides: object) -> MarketLeasingAssumptions:
         "renewal_rent_spread": 0.0,
         "renewal_term_months": 60,
         "successor_escalation_pct": 0.04,
+        # D2.3 concession fields -- inert for every assertion in this module.
+        "renewal_downtime_months": 0.0,
+        "renewal_free_rent_months": 0.0,
+        "new_term_months": 60,
+        "new_downtime_months": 0.0,
+        "new_free_rent_months": 0.0,
     }
     base.update(overrides)
     return MarketLeasingAssumptions(**base)  # type: ignore[arg-type]
@@ -1011,10 +1017,9 @@ def test_a_suite_override_drives_the_renewal() -> None:
     """Precedence resolves once per suite (D0 Section 24.5) and the renewal
     prices from the resolved record, not from the property default."""
 
-    override = MarketLeasingAssumptions(
+    override = assumptions(
         market_rent_psf=60.0,
         market_rent_growth=0.05,
-        renewal_rent_psf=None,
         renewal_rent_spread=-0.10,
         renewal_term_months=36,
         successor_escalation_pct=0.03,
@@ -1180,14 +1185,7 @@ def test_a_suite_override_is_checked_against_the_renewal_domains() -> None:
         [
             suite(
                 "S1",
-                market_leasing_override=MarketLeasingAssumptions(
-                    market_rent_psf=40.0,
-                    market_rent_growth=0.03,
-                    renewal_rent_psf=None,
-                    renewal_rent_spread=0.0,
-                    renewal_term_months=0,
-                    successor_escalation_pct=0.0,
-                ),
+                market_leasing_override=assumptions(renewal_term_months=0),
             )
         ],
         [],
@@ -1206,20 +1204,26 @@ def test_an_incomplete_assumption_record_cannot_be_constructed() -> None:
     """The all-or-nothing override rule (D0 Section 24.2) stays structural as
     the record grows: every D2.2 field is required and none has a default."""
 
+    complete = {
+        "market_rent_psf": 40.0,
+        "market_rent_growth": 0.03,
+        "renewal_rent_psf": None,
+        "renewal_rent_spread": 0.0,
+        "renewal_term_months": 60,
+        "successor_escalation_pct": 0.03,
+        "renewal_downtime_months": 0.0,
+        "renewal_free_rent_months": 0.0,
+        "new_term_months": 60,
+        "new_downtime_months": 0.0,
+        "new_free_rent_months": 0.0,
+    }
     for omitted in (
         "renewal_rent_psf",
         "renewal_rent_spread",
         "renewal_term_months",
         "successor_escalation_pct",
     ):
-        fields = {
-            "market_rent_psf": 40.0,
-            "market_rent_growth": 0.03,
-            "renewal_rent_psf": None,
-            "renewal_rent_spread": 0.0,
-            "renewal_term_months": 60,
-            "successor_escalation_pct": 0.03,
-        }
+        fields = dict(complete)
         del fields[omitted]
         with pytest.raises(TypeError):
             MarketLeasingAssumptions(**fields)  # type: ignore[arg-type]

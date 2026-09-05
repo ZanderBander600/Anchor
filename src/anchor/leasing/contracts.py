@@ -300,13 +300,35 @@ class MarketLeasingAssumptions:
     ordinary contractual lease escalating on **its own** anniversaries. The
     two are different clocks and conflating them is failure mode FM-D2-14.
 
-    **Only the D2.1 and D2.2 fields are declared.** D0 Section 4.5 lists this
+    **The new-tenant branch and the concession mechanics (D2.3).**
+    ``new_term_months`` is the replacement tenant's term, in whole months,
+    domain ``>= 1``. There is deliberately **no** ``new_rent_psf``: a new
+    letting prices at ``MarketRentPSF(c)`` by definition, whereas a renewal is
+    negotiated *relative* to market and therefore needs both an explicit level
+    and a spread. D2 Section 12 records that asymmetry as correct rather than
+    as a gap.
+
+    ``new_downtime_months`` and ``renewal_downtime_months`` are the months the
+    suite stands vacant after expiry before that branch's successor commences
+    (D2 Section 6.1), domain ``>= 0``, fractional permitted. Renewal downtime
+    is typically ``0.0`` -- a renewing tenant does not vacate -- but the field
+    exists on both branches because an analyst may legitimately state a
+    holdover gap, and because nothing is ever averaged between branches.
+
+    ``new_free_rent_months`` and ``renewal_free_rent_months`` are full
+    **month-equivalents of base-rent abatement**, domain ``>= 0``, fractional
+    permitted (D2 Section 7.1). Free rent is a concession against base-rent
+    *cash*; it never reduces contractual face rent and never makes occupied
+    space vacant. Its upper bound is validated against the branch's own term
+    and downtime (D2 Section 7.5).
+
+    **Only the D2.1-D2.3 fields are declared.** D0 Section 4.5 lists this
     record's full field set, and the D2 conventions document (Section 12,
     Section 14) gates each one: rent and growth at D2.1, the renewal branch at
     D2.2, the new-tenant branch plus downtime and free rent at D2.3, TI/LC at
     D2.4, ``renewal_probability`` at D2.5. This package's established rule is
     that **a gate declares only what it can actually produce** (see ``Lease``
-    and ``Suite`` below); D2.2 has no new-tenant path and no probability
+    and ``Suite`` below); D2.3 has no leasing costs and no probability
     weighting, so those would be vocabulary with no mechanism behind them.
 
     The all-or-nothing override rule (D0 Section 24.2) is enforced
@@ -323,6 +345,11 @@ class MarketLeasingAssumptions:
     renewal_rent_spread: float
     renewal_term_months: int
     successor_escalation_pct: float
+    renewal_downtime_months: float
+    renewal_free_rent_months: float
+    new_term_months: int
+    new_downtime_months: float
+    new_free_rent_months: float
 
 
 class MarketAssumptionSource(StrEnum):
@@ -606,46 +633,58 @@ class Lease:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RenewalBranch:
     """One suite's complete **pure renewal** scenario across the canonical
-    timeline (D2.2).
+    timeline (D2.2, extended at D2.3).
 
     Under the approved composition (D2 HD-D2-1 / Section 4.2) a rollover is
     modelled as two independent, complete branch schedules that are weighted
     only at the monthly **output** level. This is the renewal branch: the
     deterministic answer to "what happens if this tenant renews, with
     certainty". It is conceptually the ``p = 1`` endpoint, but **no
-    probability exists at D2.2** -- the weight arrives at D2.5, where this
+    probability exists at D2.3** -- the weight arrives at D2.5, where this
     branch must be reproduced bit-identically by setting ``p = 1``.
 
+    **D2.3 added downtime and free rent to this branch.** With
+    ``downtime_months = 0.0`` and ``free_rent_months = 0.0`` every series below
+    reduces to the accepted D2.2 pure-renewal result exactly: ``c`` is
+    ``e + 1``, every ``successor_occupancy_factor`` inside the successor term
+    is ``1.0``, every ``cash_rent_factor`` is ``1.0``, and ``cash_base_rent``
+    equals ``contractual_base_rent``. D2.2's meaning is unchanged; D2.3 only
+    made the zero case expressible as a value rather than as an absence.
+
     **Component assumptions are preserved verbatim** (D0 Section 8.4), never
-    overwritten by the result they produced: ``market_rent_psf_at_commencement``,
-    ``renewal_rent_psf``, ``renewal_rent_spread``, ``term_months`` and the
-    resolved market-leasing record with its provenance are all carried here,
-    so "which assumption produced this rollover, and where did it come from"
-    is answerable from the output alone.
+    overwritten by the result they produced, so "which assumption produced
+    this rollover, and where did it come from" is answerable from the output
+    alone.
 
     **The two schedules stay separate and authoritative.**
     ``expiring_schedule`` is the in-place lease's own D1 schedule, reused
-    unchanged -- D2.2 never recomputes an existing lease's contractual rent
-    and never lets a market assumption touch it (D0 Section 24.4).
+    unchanged -- D2 never recomputes an existing lease's contractual rent and
+    never lets a market assumption touch it (D0 Section 24.4).
     ``successor_schedule`` is the successor's D1 schedule, built by the same
-    ``rent.build_lease_monthly_schedule``. ``contractual_base_rent`` is their
-    month-by-month sum, which is exact because the no-gap/no-overlap invariant
-    guarantees at most one of them is active in any period.
+    ``rent.build_lease_monthly_schedule``.
+
+    **Face rent and cash rent are separate series, and both are kept.**
+    ``contractual_base_rent`` is **gross contractual face rent** -- the sum of
+    the two schedules, reduced by neither downtime nor free rent. D2.4's LC
+    basis reads it and must not see a concession (failure modes FM-D2-10,
+    FM-D2-11b). ``cash_base_rent`` is what the property actually collects, and
+    ``free_rent`` is the abatement on its own line, never netted into face
+    rent.
 
     **Occupancy here is genuine, integral, branch physical occupancy** and
     keeps that name (D2 HD-D2-2's binding naming restriction). Within this
-    scenario the suite is either occupied or it is not; nothing here is
-    fractional. The composed, possibly-fractional
+    scenario the suite is either occupied or it is not. The fractional
+    ``successor_occupancy_factor`` is a **different quantity under a different
+    name**: a month-equivalent rent-eligibility fraction, never a claim that
+    part of a suite exists. The composed, possibly-fractional
     ``expected_occupied_area_sf`` / ``expected_occupancy`` series belongs to
-    D2.5 and may never be called ``physical_occupancy``.
+    D2.5 and may never carry the ``physical_occupancy`` name either.
 
     **Horizon fields are untruncated.** ``successor_expiration_period`` is the
     successor's true contractual last period even when it lies beyond the
-    projection, and ``commences_within_projection`` records whether the
-    successor commences inside the window at all. The monthly series stop at
-    the canonical horizon (D0 Section 8.6), but the contractual term is a real
-    obligation and is preserved -- D2.4's LC basis needs the full term
-    (Section 8.3, failure mode FM-D2-11).
+    projection. The monthly series stop at the canonical horizon (D0
+    Section 8.6), but the contractual term is a real obligation and is
+    preserved -- D2.4's LC basis needs the full term (failure mode FM-D2-11).
 
     Built only by ``anchor.leasing.rollover.build_renewal_branch``; this
     dataclass performs no calculation of its own.
@@ -667,13 +706,24 @@ class RenewalBranch:
     starting_rent_psf: float
     term_months: int
     successor_escalation_pct: float
+    downtime_months: float
+    free_rent_months: float
 
-    # --- the two authoritative schedules, and their sum ---
+    # --- the two authoritative schedules ---
     successor_lease: Lease
     months: tuple[ModelMonth, ...]
     expiring_schedule: LeaseMonthlySchedule
     successor_schedule: LeaseMonthlySchedule
+
+    # --- face rent (gross), then the concession waterfall, then cash ---
     contractual_base_rent: tuple[float, ...]
+    successor_occupancy_factor: tuple[float, ...]
+    free_rent_abatement_months: tuple[float, ...]
+    cash_rent_factor: tuple[float, ...]
+    free_rent: tuple[float, ...]
+    cash_base_rent: tuple[float, ...]
+
+    # --- integral branch physical state ---
     occupied_area: tuple[float, ...]
     physical_occupancy: tuple[float, ...]
 
@@ -681,13 +731,18 @@ class RenewalBranch:
         expected = len(self.months)
         for name, series in (
             ("contractual_base_rent", self.contractual_base_rent),
+            ("successor_occupancy_factor", self.successor_occupancy_factor),
+            ("free_rent_abatement_months", self.free_rent_abatement_months),
+            ("cash_rent_factor", self.cash_rent_factor),
+            ("free_rent", self.free_rent),
+            ("cash_base_rent", self.cash_base_rent),
             ("occupied_area", self.occupied_area),
             ("physical_occupancy", self.physical_occupancy),
         ):
             if len(series) != expected:
                 raise ValueError(
-                    f"RenewalBranch requires one {name} figure per model "
-                    f"month; got {len(series)} for {expected} months."
+                    f"RenewalBranch requires one {name} figure per model month; "
+                    f"got {len(series)} for {expected} months."
                 )
         for label, schedule in (
             ("expiring", self.expiring_schedule),
@@ -695,7 +750,111 @@ class RenewalBranch:
         ):
             if schedule.months != self.months:
                 raise ValueError(
-                    f"the {label} schedule was built against a different month "
-                    "sequence; a renewal branch must share one canonical "
+                    f"the {label} schedule was built against a different "
+                    "month sequence; a renewal branch must share one canonical "
+                    "timeline."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class NewTenantBranch:
+    """One suite's complete **pure new-tenant** scenario across the canonical
+    timeline (D2.3).
+
+    The other branch of the approved composition (D2 HD-D2-1 / Section 4.2):
+    the deterministic answer to "what happens if this tenant does *not* renew,
+    with certainty". It is conceptually the ``p = 0`` endpoint, but **no
+    probability exists at D2.3** -- D2.5 must reproduce this branch
+    bit-identically by setting ``p = 0``.
+
+    **Every series carries the same name and the same meaning as on
+    ``RenewalBranch``.** That is deliberate: D2.5 weights the two branches
+    month by month, and a composition layer that had to translate between two
+    shapes would be a place for the branches to disagree. The two differ in
+    exactly one economic respect -- how the successor's starting rent is
+    priced -- and in the assumption fields that pricing reads.
+
+    **A new letting prices at market, by definition.** There is no
+    ``new_rent_psf`` field and no new-tenant spread: ``starting_rent_psf`` is
+    ``MarketRentPSF(c)`` at the successor's commencement period, read from the
+    canonical D2.1 schedule. A renewal is negotiated *relative* to market and
+    therefore carries both an explicit level and a spread; a new letting *is*
+    market. D2 Section 12 records that asymmetry as correct rather than as a
+    gap.
+
+    **Downtime is this branch's characteristic mechanic.** The suite stands
+    physically vacant for ``floor(downtime_months)`` full periods after expiry;
+    the successor commences at ``c = e + 1 + floor(D)`` and recognises
+    ``1 - frac(D)`` of that first month's rent (D2 Section 6.1). Total rent
+    forgone is exactly ``D`` month-equivalents.
+
+    Face rent, cash rent, the free-rent waterfall, integral branch physical
+    occupancy and the untruncated horizon fields all carry the meanings
+    documented on ``RenewalBranch``.
+
+    Built only by ``anchor.leasing.rollover.build_new_tenant_branch``; this
+    dataclass performs no calculation of its own.
+    """
+
+    suite_id: str
+    expiring_lease_id: str
+    successor_lease_id: str
+    expiration_period: int
+    commencement_period: int
+    successor_expiration_period: int
+    commences_within_projection: bool
+
+    # --- component assumptions, preserved verbatim (D0 Section 8.4) ---
+    resolved: ResolvedMarketLeasing
+    market_rent_psf_at_commencement: float
+    starting_rent_psf: float
+    term_months: int
+    successor_escalation_pct: float
+    downtime_months: float
+    free_rent_months: float
+
+    # --- the two authoritative schedules ---
+    successor_lease: Lease
+    months: tuple[ModelMonth, ...]
+    expiring_schedule: LeaseMonthlySchedule
+    successor_schedule: LeaseMonthlySchedule
+
+    # --- face rent (gross), then the concession waterfall, then cash ---
+    contractual_base_rent: tuple[float, ...]
+    successor_occupancy_factor: tuple[float, ...]
+    free_rent_abatement_months: tuple[float, ...]
+    cash_rent_factor: tuple[float, ...]
+    free_rent: tuple[float, ...]
+    cash_base_rent: tuple[float, ...]
+
+    # --- integral branch physical state ---
+    occupied_area: tuple[float, ...]
+    physical_occupancy: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("contractual_base_rent", self.contractual_base_rent),
+            ("successor_occupancy_factor", self.successor_occupancy_factor),
+            ("free_rent_abatement_months", self.free_rent_abatement_months),
+            ("cash_rent_factor", self.cash_rent_factor),
+            ("free_rent", self.free_rent),
+            ("cash_base_rent", self.cash_base_rent),
+            ("occupied_area", self.occupied_area),
+            ("physical_occupancy", self.physical_occupancy),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"NewTenantBranch requires one {name} figure per model month; "
+                    f"got {len(series)} for {expected} months."
+                )
+        for label, schedule in (
+            ("expiring", self.expiring_schedule),
+            ("successor", self.successor_schedule),
+        ):
+            if schedule.months != self.months:
+                raise ValueError(
+                    f"the {label} schedule was built against a different "
+                    "month sequence; a new-tenant branch must share one canonical "
                     "timeline."
                 )
