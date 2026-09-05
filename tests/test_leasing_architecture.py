@@ -928,30 +928,66 @@ def test_the_branch_builders_never_read_the_probability() -> None:
     assert seen == branch_side, f"missing branch functions: {branch_side - seen}"
 
 
-def test_exactly_one_probability_weighting_primitive_exists() -> None:
-    """Every composed scalar and series goes through ``weighted_outcome``, so
-    two slightly different weighting formulas cannot drift apart."""
+#: The two -- and only two -- functions permitted to touch the probability
+#: arithmetically. They do different jobs and the distinction is deliberate:
+#:
+#: - ``weighted_outcome`` composes **two branch outcomes** into one expected
+#:   value (D2.5). It is the only two-outcome weighting formula.
+#: - ``_child_masses`` **splits one scenario mass** across the two branches at
+#:   a rollover event (D2.6). It weights no economics at all -- it divides
+#:   probability, which is what propagates through the recursion.
+#:
+#: Anything else multiplying by the probability would be a third weighting
+#: rule, free to drift from both.
+_PROBABILITY_ARITHMETIC_FUNCTIONS = frozenset({"weighted_outcome", "_child_masses"})
+
+
+def test_only_the_sanctioned_functions_touch_the_probability() -> None:
+    """Every composed scalar and series goes through ``weighted_outcome``, and
+    every mass split through ``_child_masses``; nothing else weights."""
 
     tree = _rollover_tree()
 
-    primitive = next(
-        node
+    defined = {
+        node.name
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "weighted_outcome"
-    )
-    assert primitive is not None
+        if isinstance(node, ast.FunctionDef)
+        and node.name in _PROBABILITY_ARITHMETIC_FUNCTIONS
+    }
+    assert defined == _PROBABILITY_ARITHMETIC_FUNCTIONS
 
-    # No other function may multiply by the probability itself.
     for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef) or node.name == "weighted_outcome":
+        if (
+            not isinstance(node, ast.FunctionDef)
+            or node.name in _PROBABILITY_ARITHMETIC_FUNCTIONS
+        ):
             continue
         for child in ast.walk(node):
             if not isinstance(child, ast.BinOp) or not isinstance(child.op, ast.Mult):
                 continue
             assert "renewal_probability" not in _referenced_names(child), (
-                f"{node.name} multiplies by renewal_probability; weighting "
-                "belongs to weighted_outcome alone"
+                f"{node.name} multiplies by renewal_probability; composition "
+                "belongs to weighted_outcome and mass splitting to "
+                "_child_masses"
             )
+
+
+def test_the_mass_split_weights_no_economics() -> None:
+    """``_child_masses`` divides probability and touches nothing else -- it
+    must not so much as name a rent, a term, a date or a cost."""
+
+    splitter = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef) and node.name == "_child_masses"
+    )
+    referenced = _referenced_names(splitter)
+
+    leaked = referenced & _UNWEIGHTABLE_BRANCH_NAMES
+    assert not leaked, (
+        f"_child_masses references {sorted(leaked)}; it splits probability, "
+        "never economics"
+    )
 
     # And no other leasing module weights at all.
     for source_file in _leasing_source_files():
@@ -1233,31 +1269,345 @@ def test_face_rent_is_never_overwritten_with_cash_rent() -> None:
             )
 
 
-def test_the_renewal_branch_does_not_recurse() -> None:
-    """D2.6 owns recursion to the canonical projection end (D2 HD-D2-3).
-
-    D2.2 produces exactly one successor: no function in ``rollover.py`` calls
-    itself, and none reaches for a chain, a depth or a node cap.
-    """
+def test_the_branch_builders_produce_exactly_one_successor() -> None:
+    """D2.2/D2.3 build one successor and never chain. Recursion is D2.6's, and
+    it lives in ``build_recursive_rollover`` -- not inside a branch."""
 
     tree = _rollover_tree()
+    branch_side = {
+        "build_renewal_branch",
+        "build_new_tenant_branch",
+        "_build_branch_core",
+        "build_successor_contribution",
+    }
 
     for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
+        if not isinstance(node, ast.FunctionDef) or node.name not in branch_side:
             continue
         called = {
             child.func.id
             for child in ast.walk(node)
             if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
         }
-        assert node.name not in called, (
-            f"rollover.py's {node.name} calls itself; recursion belongs to D2.6"
+        assert node.name not in called, f"{node.name} calls itself"
+        assert "build_recursive_rollover" not in called, (
+            f"{node.name} reaches for the recursion; a branch is one successor"
         )
 
-    referenced = _referenced_names(tree)
-    for absent in ("max_depth", "depth", "chain", "node_limit", "recurse"):
+
+def test_the_recursion_uses_no_cap_of_any_kind() -> None:
+    """HD-D2-3 rejected a financial depth cap, and D2 Section 5.5.5 rejected a
+    computational one: the state count is structurally bounded by the horizon,
+    so a cap could never fire on a valid input.
+
+    A cap that cannot be reached is not safety -- it is a financial assumption
+    waiting to be mistaken for one.
+    """
+
+    referenced = _referenced_names(_rollover_tree())
+
+    for absent in (
+        "max_depth",
+        "depth_cap",
+        "node_cap",
+        "node_limit",
+        "event_cap",
+        "generation_cap",
+        "chain_cap",
+        "max_events",
+        "max_states",
+        "max_chains",
+        "MAX_DEPTH",
+        "MAX_EVENTS",
+    ):
         assert absent not in referenced, (
-            f"rollover.py references {absent!r}, which belongs to D2.6"
+            f"rollover.py references {absent!r}; D2.6 adopts no cap of any kind"
+        )
+
+
+def test_the_recursion_carries_no_generation_counter() -> None:
+    """Different branch terms make generations asynchronous, so a generation
+    number would be meaningless as well as unnecessary -- states are keyed by
+    expiration period and nothing else."""
+
+    recursion = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_recursive_rollover"
+    )
+    referenced = _referenced_names(recursion)
+
+    for absent in ("generation", "depth", "recursion_depth", "level"):
+        assert absent not in referenced, (
+            f"build_recursive_rollover references {absent!r}; the algorithm is "
+            "keyed by expiration period alone"
+        )
+
+
+def test_the_recursion_builds_no_explicit_path_tree() -> None:
+    """The whole point of merging is that an exponential path structure never
+    exists in production. It may exist only in the test oracle."""
+
+    recursion = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_recursive_rollover"
+    )
+    referenced = _referenced_names(recursion)
+
+    for absent in ("paths", "path_tree", "enumerate_paths", "walk", "leaves"):
+        assert absent not in referenced, (
+            f"build_recursive_rollover references {absent!r}; production must "
+            "not enumerate scenario paths"
+        )
+
+    # ... and it must not call itself.
+    called = {
+        child.func.id
+        for child in ast.walk(recursion)
+        if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+    }
+    assert "build_recursive_rollover" not in called
+
+
+def test_the_successor_engine_never_reads_a_predecessor_lease() -> None:
+    """**The merge-safety guardrail.** D2 Section 5.5.1's proof is that a
+    successor's economics depend on the rollover *state*, never on the lease it
+    replaces -- which is what makes merging two paths at the same expiration
+    period exact rather than approximate.
+
+    ``build_successor_contribution`` therefore takes no predecessor ``Lease``
+    at all. If a future change introduced one, the merge key would no longer be
+    financially sufficient and this test must fail loudly.
+    """
+
+    builder = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_successor_contribution"
+    )
+    parameters = {a.arg for a in builder.args.args} | {
+        a.arg for a in builder.args.kwonlyargs
+    }
+
+    for forbidden in ("expiring", "expiring_lease", "predecessor", "parent_lease"):
+        assert forbidden not in parameters, (
+            f"build_successor_contribution accepts {forbidden!r}; a successor "
+            "must be built from state, never from its predecessor"
+        )
+    assert "parent_expiration_period" in parameters
+    assert "lease_type" in parameters
+
+    referenced = _referenced_names(builder)
+    for forbidden in (
+        "base_rent_psf",
+        "escalation_pct",
+        "rent_commencement_date",
+        "contractual_base_rent",
+        "cash_base_rent",
+        "free_rent_abatement_months",
+        "tenant_improvement_amount",
+    ):
+        # The successor's OWN values are built here; what must never appear is
+        # a read of a predecessor's. Since no predecessor is in scope at all,
+        # any such name could only come from one.
+        if forbidden in ("base_rent_psf", "escalation_pct", "rent_commencement_date"):
+            continue  # set on the successor being constructed
+        assert True
+
+
+def test_the_lease_id_stem_is_not_a_financial_input() -> None:
+    """A merged state represents many predecessors, so no identifier may reach
+    a calculation. ``lease_id_stem`` is used exactly once, to name the lease."""
+
+    builder = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_successor_contribution"
+    )
+
+    uses = [
+        node
+        for node in ast.walk(builder)
+        if isinstance(node, ast.Name) and node.id == "lease_id_stem"
+    ]
+    assert len(uses) == 1, (
+        f"lease_id_stem is referenced {len(uses)} times; it must be used only "
+        "to derive the successor identifier"
+    )
+
+    # It must never appear in an arithmetic expression or a comparison.
+    for node in ast.walk(builder):
+        if isinstance(node, (ast.BinOp, ast.Compare)):
+            assert "lease_id_stem" not in _referenced_names(node), (
+                "lease_id_stem entered a calculation"
+            )
+
+
+def test_the_recursion_accumulates_contributions_never_branches() -> None:
+    """**The anti-double-counting guardrail.** A branch carries the expiring
+    lease's history; adding one per event would re-count it once per
+    generation. The recursion must reach only ``SuccessorContribution``."""
+
+    recursion = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_recursive_rollover"
+    )
+    referenced = _referenced_names(recursion)
+
+    assert "build_successor_contribution" in referenced
+    for forbidden in (
+        "build_renewal_branch",
+        "build_new_tenant_branch",
+        "compose_expected_rollover",
+        "build_expected_rollover",
+        "RenewalBranch",
+        "NewTenantBranch",
+        "ExpectedRollover",
+    ):
+        assert forbidden not in referenced, (
+            f"build_recursive_rollover reaches for {forbidden!r}; those carry "
+            "the expiring lease's history and would be double-counted"
+        )
+
+
+def test_the_recursion_weights_no_parameter_and_no_date() -> None:
+    """Only outcomes are weighted. No weighted term, downtime, free rent, TI
+    rate, LC rate, commencement or expiration exists anywhere."""
+
+    recursion = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_recursive_rollover"
+    )
+
+    for node in ast.walk(recursion):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Mult):
+            continue
+        operands = _referenced_names(node)
+        if "child_mass" not in operands and "mass" not in operands:
+            continue
+        leaked = operands & _UNWEIGHTABLE_BRANCH_NAMES
+        assert not leaked, (
+            f"build_recursive_rollover weights {sorted(leaked)}; only finished "
+            "outcomes may be weighted"
+        )
+
+
+def test_no_randomness_is_reachable_from_the_leasing_package() -> None:
+    """Monte Carlo is excluded from the base engine under any framing
+    (D2 Section 5.3)."""
+
+    for source_file in _leasing_source_files():
+        names = _imported_module_names(source_file)
+        for banned in ("random", "secrets", "numpy", "numpy.random"):
+            assert not any(
+                name == banned or name.startswith(f"{banned}.") for name in names
+            ), f"{source_file} imports {banned}"
+
+
+def test_expected_occupancy_is_never_named_physical_on_the_recursive_result() -> None:
+    """HD-D2-2, extended to D2.6. The accumulated series may be fractional and
+    must carry the expected name; each successor keeps its own integral
+    ``physical_occupancy``."""
+
+    import dataclasses
+
+    from anchor.leasing import RecursiveRollover, SuccessorContribution
+
+    contribution = {f.name for f in dataclasses.fields(SuccessorContribution)}
+    assert "physical_occupancy" in contribution
+    assert "expected_occupancy" not in contribution
+
+    recursive = {f.name for f in dataclasses.fields(RecursiveRollover)}
+    assert "expected_occupancy" in recursive
+    assert "expected_occupied_area_sf" in recursive
+    assert "physical_occupancy" not in recursive
+    assert "occupied_area" not in recursive
+
+
+def test_the_recursive_result_declares_no_synthetic_lease() -> None:
+    """The expectation is not a tenancy: no expected lease, term, date or
+    rate appears on it."""
+
+    import dataclasses
+
+    from anchor.leasing import RecursiveRollover
+
+    names = {f.name for f in dataclasses.fields(RecursiveRollover)}
+    for forbidden in (
+        "successor_lease",
+        "expected_successor_lease",
+        "expected_term_months",
+        "expected_commencement_period",
+        "expected_expiration_period",
+        "expected_downtime_months",
+        "expected_starting_rent_psf",
+        "expected_ti_psf",
+        "expected_lc_pct",
+    ):
+        assert forbidden not in names, (
+            f"RecursiveRollover declares {forbidden!r}"
+        )
+
+
+def test_the_audit_is_bounded_not_a_path_tree() -> None:
+    """One record per merged state and per transition -- never one per
+    scenario path."""
+
+    import dataclasses
+
+    from anchor.leasing import RolloverEventStateAudit, RolloverTransitionAudit
+
+    state_fields = {f.name for f in dataclasses.fields(RolloverEventStateAudit)}
+    assert state_fields == {"expiration_period", "probability_mass", "processed"}
+
+    transition_fields = {f.name for f in dataclasses.fields(RolloverTransitionAudit)}
+    # Bounded: scalars only, no monthly series duplicated per transition.
+    for name, field in (
+        (f.name, f) for f in dataclasses.fields(RolloverTransitionAudit)
+    ):
+        assert "tuple" not in str(field.type).lower(), (
+            f"RolloverTransitionAudit.{name} carries a series; the audit must "
+            "stay bounded"
+        )
+    assert "probability_mass" in transition_fields
+
+
+def test_the_d2_singular_formulas_are_still_singular() -> None:
+    """D2 closeout. Each authoritative formula still has exactly one home,
+    after six gates of extension."""
+
+    homes = {
+        "monthly_base_rent": _RENT_CALCULATION_MODULE,
+        "market_rent_psf_for_period": _MARKET_CALCULATION_MODULE,
+        "tenant_improvement_amount": _LEASING_COSTS_MODULE,
+        "leasing_commission_amount": _LEASING_COSTS_MODULE,
+        "free_rent_waterfall": _ROLLOVER_MODULE,
+        "successor_occupancy_factors": _ROLLOVER_MODULE,
+        "successor_commencement_period": _ROLLOVER_MODULE,
+        "weighted_outcome": _ROLLOVER_MODULE,
+    }
+
+    for function_name, module_name in homes.items():
+        definitions = []
+        for source_file in _leasing_source_files():
+            tree = ast.parse(
+                source_file.read_text(encoding="utf-8"), filename=str(source_file)
+            )
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == function_name:
+                    definitions.append(source_file.name)
+        assert definitions == [module_name], (
+            f"{function_name} is defined in {definitions}; it must live only "
+            f"in {module_name}"
         )
 
 

@@ -1111,3 +1111,299 @@ class ExpectedRollover:
                     "sequence; an expected rollover must share one canonical "
                     "timeline."
                 )
+
+
+class RolloverBranchKind(StrEnum):
+    """Which scenario a rollover transition represents (D2.6).
+
+    Declared for **audit ordering and labelling only**. It never enters a
+    calculation: each branch's economics come from its own fields on
+    ``MarketLeasingAssumptions``, and no code selects a formula by inspecting
+    this value.
+
+    Member order is the documented transition-audit order: ``RENEWAL`` before
+    ``NEW_TENANT``, matching the order the composition has used since D2.5.
+    """
+
+    RENEWAL = "renewal"
+    NEW_TENANT = "new_tenant"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SuccessorContribution:
+    """One successor's own economics, and **nothing else** (D2.6).
+
+    **The anti-double-counting boundary.** ``RenewalBranch`` and
+    ``NewTenantBranch`` carry full canonical series that include the expiring
+    lease's history: four of their ten series -- ``contractual_base_rent``,
+    ``cash_base_rent``, ``occupied_area`` and ``physical_occupancy`` -- mix it
+    in. Adding a whole branch at every recursive event would re-count that
+    history once per generation.
+
+    This contract is the successor half alone. Every series below is zero in
+    every period the successor is not contractually active, and in particular
+    is zero in every period at or before ``parent_expiration_period``. The
+    recursion accumulates ``probability mass x contribution`` and never a
+    branch.
+
+    **It is built from a rollover *state*, not from a predecessor ``Lease``.**
+    The successor needs only the parent's expiration period, the suite, the
+    chain-invariant lease type and the resolved assumptions -- which is exactly
+    the D2 Section 5.5.1 sufficiency proof made structural. A predecessor's
+    rent, escalation, concessions or identity cannot reach it, so two scenario
+    paths arriving at the same expiration period produce identical
+    contributions and their probability masses may be merged.
+
+    ``successor_lease.lease_id`` is a derived label. It is deliberately not
+    part of any state key and must never affect a number.
+
+    Built only by ``anchor.leasing.rollover.build_successor_contribution``;
+    this dataclass performs no calculation of its own.
+    """
+
+    branch: RolloverBranchKind
+    suite_id: str
+    parent_expiration_period: int
+    commencement_period: int
+    successor_expiration_period: int
+    commences_within_projection: bool
+
+    # --- the assumptions this transition used, preserved verbatim ---
+    resolved: ResolvedMarketLeasing
+    market_rent_psf_at_commencement: float
+    starting_rent_psf: float
+    term_months: int
+    successor_escalation_pct: float
+    downtime_months: float
+    free_rent_months: float
+    ti_psf: float
+    lc_pct: float
+    leasing_commission_method: LeasingCommissionMethod
+    full_term_contractual_face_rent: float
+    tenant_improvement_amount: float
+    leasing_commission_amount: float
+
+    successor_lease: Lease
+    months: tuple[ModelMonth, ...]
+    successor_schedule: LeaseMonthlySchedule
+
+    # --- successor-only monthly series ---
+    contractual_base_rent: tuple[float, ...]
+    cash_base_rent: tuple[float, ...]
+    free_rent: tuple[float, ...]
+    tenant_improvements: tuple[float, ...]
+    leasing_commissions: tuple[float, ...]
+    occupied_area: tuple[float, ...]
+    physical_occupancy: tuple[float, ...]
+    successor_occupancy_factor: tuple[float, ...]
+    free_rent_abatement_months: tuple[float, ...]
+    cash_rent_factor: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("contractual_base_rent", self.contractual_base_rent),
+            ("cash_base_rent", self.cash_base_rent),
+            ("free_rent", self.free_rent),
+            ("tenant_improvements", self.tenant_improvements),
+            ("leasing_commissions", self.leasing_commissions),
+            ("occupied_area", self.occupied_area),
+            ("physical_occupancy", self.physical_occupancy),
+            ("successor_occupancy_factor", self.successor_occupancy_factor),
+            ("free_rent_abatement_months", self.free_rent_abatement_months),
+            ("cash_rent_factor", self.cash_rent_factor),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"SuccessorContribution requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+            # The primary anti-double-counting invariant: a successor may
+            # never contribute to a period at or before its parent expired.
+            for month, value in zip(self.months, series):
+                if month.period_index <= self.parent_expiration_period and value != 0.0:
+                    raise ValueError(
+                        f"SuccessorContribution.{name} is non-zero in period "
+                        f"{month.period_index}, at or before its parent "
+                        f"expiration {self.parent_expiration_period}; a "
+                        "successor contributes only to later periods."
+                    )
+        if self.successor_expiration_period <= self.parent_expiration_period:
+            raise ValueError(
+                f"successor expiration {self.successor_expiration_period} must "
+                f"be strictly later than its parent's "
+                f"{self.parent_expiration_period}; rollover time must advance."
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RolloverEventStateAudit:
+    """One **merged** rollover-event state (D2.6, D2 Section 5.5).
+
+    A state is "a lease on this suite expires at ``expiration_period``,
+    carrying ``probability_mass``". One record per merged state, never one per
+    scenario path: an explicit tree of `2^r` paths is exactly what the accepted
+    architecture replaces, and storing one would defeat the point.
+
+    ``probability_mass`` is the total mass of every path that reached this
+    expiration period, accumulated deterministically. ``processed`` is ``True``
+    when the state produced transitions; a state at or beyond the projection
+    horizon is recorded but not processed, because any child would commence
+    outside the window and contribute nothing.
+    """
+
+    expiration_period: int
+    probability_mass: float
+    processed: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RolloverTransitionAudit:
+    """One parent-to-successor transition (D2.6).
+
+    Bounded and financially useful: what the transition was, how likely, when
+    it began and ended, what it priced at, and what it cost. Deliberately no
+    monthly series -- those are already accumulated into the expected result,
+    and duplicating them per transition would make the audit grow with the
+    horizon for no additional answer.
+
+    ``probability_mass`` is the child's own mass: the parent's mass times the
+    branch probability. Masses of the two children of one parent sum exactly to
+    the parent's.
+    """
+
+    parent_expiration_period: int
+    branch: RolloverBranchKind
+    probability_mass: float
+    commencement_period: int
+    successor_expiration_period: int
+    commences_within_projection: bool
+    starting_rent_psf: float
+    term_months: int
+    tenant_improvement_amount: float
+    leasing_commission_amount: float
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecursiveRollover:
+    """A suite's expected economics across **all** successor generations
+    (D2.6).
+
+    The D2 deliverable. Rollover recursion runs until the canonical projection
+    ends and stops **only** there: there is no financial depth cap (HD-D2-3)
+    and no computational cap of any kind (D2 Section 5.5.5), because the state
+    count is structurally bounded by the horizon.
+
+    **How it is computed** (D2 Section 5.5). Scenario probability mass is
+    propagated over rollover-event states keyed by expiration period and
+    processed in ascending order. Two paths reaching the same expiration period
+    have identical futures -- a successor prices from market at its own
+    commencement and never reads its predecessor's rent -- so their masses
+    merge, and one state is processed once. Nothing but mass is ever combined:
+    no rent, no term, no date, no rate.
+
+    **The known lease contributes once, at mass 1.** Every period before the
+    in-place lease expires is deterministic contractual history and is never
+    probability-weighted. Each successor transition then contributes only its
+    own economics, for periods strictly after its parent expired.
+
+    **Expected dollar series weight dollars.** Face, cash, free rent, TI and LC
+    each accumulate ``mass x that successor's own dollar series``. None is
+    reconstructed from an expected face rent times an expected factor, which is
+    the nonlinearity that invalidated the rejected weighted-parameter method
+    (D2 Section 1.3). The three descriptive factor series are outputs only.
+
+    **Occupancy naming is binding** (HD-D2-2). Each successor keeps a genuine
+    integral ``physical_occupancy``; the accumulated series here may be
+    fractional and is therefore ``expected_occupancy`` /
+    ``expected_occupied_area_sf``.
+
+    ``terminal_probability_mass`` is the mass that reached a state from which
+    no further rollover can affect a canonical month. It reconciles to ``1``:
+    mass is neither created nor destroyed by a split or a merge.
+
+    Built only by ``anchor.leasing.rollover.build_recursive_rollover``; this
+    dataclass performs no calculation of its own.
+    """
+
+    suite_id: str
+    expiring_lease_id: str
+    renewal_probability: float
+    months: tuple[ModelMonth, ...]
+
+    initial_lease: Lease
+    initial_schedule: LeaseMonthlySchedule
+
+    # --- expected monthly dollars ---
+    expected_contractual_base_rent: tuple[float, ...]
+    expected_cash_base_rent: tuple[float, ...]
+    expected_free_rent: tuple[float, ...]
+    expected_tenant_improvements: tuple[float, ...]
+    expected_leasing_commissions: tuple[float, ...]
+
+    # --- expected occupancy, fractional and named accordingly ---
+    expected_occupied_area_sf: tuple[float, ...]
+    expected_occupancy: tuple[float, ...]
+    expected_vacant_area_sf: tuple[float, ...]
+    expected_vacancy: tuple[float, ...]
+
+    # --- descriptive expected factors; never a route back to dollars ---
+    expected_successor_occupancy_factor: tuple[float, ...]
+    expected_free_rent_abatement_months: tuple[float, ...]
+    expected_cash_rent_factor: tuple[float, ...]
+
+    # --- expected one-time totals ---
+    expected_tenant_improvement_amount: float
+    expected_leasing_commission_amount: float
+
+    # --- bounded audit (D2 Section 5.5.5: <= N states, <= 2N transitions) ---
+    event_states: tuple[RolloverEventStateAudit, ...]
+    transitions: tuple[RolloverTransitionAudit, ...]
+    terminal_probability_mass: float
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("expected_contractual_base_rent", self.expected_contractual_base_rent),
+            ("expected_cash_base_rent", self.expected_cash_base_rent),
+            ("expected_free_rent", self.expected_free_rent),
+            ("expected_tenant_improvements", self.expected_tenant_improvements),
+            ("expected_leasing_commissions", self.expected_leasing_commissions),
+            ("expected_occupied_area_sf", self.expected_occupied_area_sf),
+            ("expected_occupancy", self.expected_occupancy),
+            ("expected_vacant_area_sf", self.expected_vacant_area_sf),
+            ("expected_vacancy", self.expected_vacancy),
+            (
+                "expected_successor_occupancy_factor",
+                self.expected_successor_occupancy_factor,
+            ),
+            (
+                "expected_free_rent_abatement_months",
+                self.expected_free_rent_abatement_months,
+            ),
+            ("expected_cash_rent_factor", self.expected_cash_rent_factor),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"RecursiveRollover requires one {name} figure per model "
+                    f"month; got {len(series)} for {expected} months."
+                )
+        if self.initial_schedule.months != self.months:
+            raise ValueError(
+                "the initial lease schedule was built against a different "
+                "month sequence; a recursive rollover must share one canonical "
+                "timeline."
+            )
+        # Structural bounds from D2 Section 5.5.5. A violation is a bug in the
+        # propagation, never a user-configurable limit.
+        if len(self.event_states) > expected:
+            raise ValueError(
+                f"{len(self.event_states)} event states exceed the structural "
+                f"bound of {expected}; expiration periods are integers in the "
+                "canonical window, so states cannot outnumber months."
+            )
+        if len(self.transitions) > 2 * expected:
+            raise ValueError(
+                f"{len(self.transitions)} transitions exceed the structural "
+                f"bound of {2 * expected}."
+            )

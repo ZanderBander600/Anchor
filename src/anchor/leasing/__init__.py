@@ -121,6 +121,11 @@ from .calendar import (
 from .contracts import (
     EscalationBasis,
     ExpectedRollover,
+    RecursiveRollover,
+    RolloverBranchKind,
+    RolloverEventStateAudit,
+    RolloverTransitionAudit,
+    SuccessorContribution,
     Lease,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
@@ -158,6 +163,8 @@ from .rent import (
 )
 from .rollover import (
     build_expected_rollover,
+    build_recursive_rollover,
+    build_successor_contribution,
     build_new_tenant_branch,
     compose_expected_rollover,
     build_renewal_branch,
@@ -244,6 +251,14 @@ __all__ = [
     "weighted_outcome",
     "compose_expected_rollover",
     "build_expected_rollover",
+    # recursive rollover (D2.6)
+    "RolloverBranchKind",
+    "SuccessorContribution",
+    "RolloverEventStateAudit",
+    "RolloverTransitionAudit",
+    "RecursiveRollover",
+    "build_successor_contribution",
+    "build_recursive_rollover",
     # contracts
     "EscalationBasis",
     "Lease",

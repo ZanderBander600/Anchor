@@ -348,21 +348,22 @@ def test_contracts_module_defines_no_calculation() -> None:
     assert functions == [], f"contracts.py must define no functions; found {functions}"
 
 
-def test_package_exposes_no_d2_6_or_later_entry_point() -> None:
+def test_package_exposes_no_d3_or_later_entry_point() -> None:
     """Each surface moved to a positive assertion when its gate landed: month
     identity at D1.1, rent at D1.2, aggregation at D1.3, market rent at D2.1,
-    the branches at D2.2/D2.3, leasing costs at D2.4 and the expected-value
-    composition at D2.5. What remains absent is everything D2.6 and D4 own."""
+    the branches at D2.2/D2.3, leasing costs at D2.4, the expected-value
+    composition at D2.5 and the recursion at D2.6. **Sprint D2 is complete**;
+    what remains absent is everything D3 and D4 own."""
 
     import anchor.leasing as leasing
 
     for absent in (
-        "build_rollover_chain",
-        "build_recursive_rollover",
-        "RolloverChain",
+        "build_lease_level_operating_projection",
         "MonthlyPropertyProjection",
         "AnnualOperatingProjection",
-        "build_lease_level_operating_projection",
+        "expense_recoveries",
+        "build_expense_recoveries",
+        "RecoveryBasis",
     ):
         assert not hasattr(leasing, absent), (
             f"{absent} belongs to a later gate and must not exist yet"

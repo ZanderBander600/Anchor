@@ -79,7 +79,7 @@ one successor and never rolls it over.
 from __future__ import annotations
 
 from datetime import date
-from math import floor, isfinite
+from math import floor, fsum, isfinite
 
 from ..engine.contracts import ensure_finite
 from .calendar import last_day_of_month, month_start_for_index
@@ -89,13 +89,19 @@ from .contracts import (
     Lease,
     LeaseMonthlySchedule,
     LeaseOrigin,
+    LeaseType,
     LeasingCommissionMethod,
     MarketLeasingAssumptions,
     MarketRentSchedule,
     ModelMonth,
     NewTenantBranch,
+    RecursiveRollover,
     RenewalBranch,
     ResolvedMarketLeasing,
+    RolloverBranchKind,
+    RolloverEventStateAudit,
+    RolloverTransitionAudit,
+    SuccessorContribution,
     Suite,
 )
 from .leasing_costs import (
@@ -586,6 +592,211 @@ def build_renewal_successor_lease(
 # =============================================================================
 
 
+def build_successor_contribution(
+    *,
+    suite: Suite,
+    analysis_start: date,
+    months: tuple[ModelMonth, ...],
+    market_schedule: MarketRentSchedule,
+    parent_expiration_period: int,
+    lease_type: LeaseType,
+    branch: RolloverBranchKind,
+    lease_id_stem: str,
+) -> SuccessorContribution:
+    """Return one successor's own economics, computed from a rollover *state*.
+
+    **The single successor engine.** Both the D2.2/D2.3 branch builders and the
+    D2.6 recursion reach it, so a first-generation successor and a
+    fifth-generation one are constructed by identical code and cannot drift.
+
+    **It takes no predecessor ``Lease``.** Its inputs are the parent's
+    expiration period, the suite, the chain-invariant ``lease_type`` and the
+    resolved assumptions -- exactly the sufficient state D2 Section 5.5.1
+    proves. A predecessor's rent, escalation, concessions, tenant or identity
+    cannot reach it even by accident, which is what makes merging two paths at
+    the same expiration period financially safe rather than merely plausible.
+
+    ``lease_id_stem`` names the successor and is **not** an economic input. The
+    first rollover derives it from the expiring lease so D2.2's identifiers are
+    unchanged; the recursion derives it from the state, so a merged state
+    produces one deterministic identifier regardless of which paths reached it.
+
+    Everything below is the accepted D2.1-D2.4 economics, unchanged: pricing at
+    ``c`` from the canonical market schedule, ``c = e + 1 + floor(D)``, the
+    occupancy factors, the sequential free-rent waterfall, the face/cash split,
+    and TI and LC on the full contractual term.
+
+    The returned series are **successor-only** and are zero in every period at
+    or before ``parent_expiration_period`` -- the contract asserts it.
+    """
+
+    resolved = market_schedule.resolved
+    assumptions = resolved.assumptions
+
+    if branch is RolloverBranchKind.RENEWAL:
+        term_months = assumptions.renewal_term_months
+        downtime_months = assumptions.renewal_downtime_months
+        free_rent_months = assumptions.renewal_free_rent_months
+        ti_psf = assumptions.renewal_ti_psf
+        lc_pct = assumptions.renewal_lc_pct
+        suffix = _RENEWAL_SUCCESSOR_SUFFIX
+    else:
+        term_months = assumptions.new_term_months
+        downtime_months = assumptions.new_downtime_months
+        free_rent_months = assumptions.new_free_rent_months
+        ti_psf = assumptions.new_ti_psf
+        lc_pct = assumptions.new_lc_pct
+        suffix = _NEW_TENANT_SUCCESSOR_SUFFIX
+
+    commencement_period = successor_commencement_period(
+        expiration_period=parent_expiration_period, downtime_months=downtime_months
+    )
+    last_period = successor_expiration_period(
+        commencement_period=commencement_period, term_months=term_months
+    )
+
+    if commencement_period < 1:
+        # Only reachable from an input validation already rejects: a lease that
+        # expired before the analysis start raises
+        # LEASE_EXPIRED_BEFORE_ANALYSIS_START. Market rent is undefined before
+        # Month 1, so this refuses rather than clamping `c` to 1 -- a silent
+        # normalisation would price the successor off the wrong growth band and
+        # report a plausible number for an unrepresentable scenario.
+        raise ValueError(
+            f"a lease expiring at period {parent_expiration_period} with "
+            f"{downtime_months!r} months of downtime would have its successor "
+            f"commence at period {commencement_period}, before the analysis "
+            "start. Market rent is undefined there; validate inputs before "
+            "building a rollover."
+        )
+
+    first_period = months[0].period_index if months else 1
+    horizon_period = months[-1].period_index if months else 0
+    within = first_period <= commencement_period <= horizon_period
+
+    if within:
+        market_rate = market_rent_psf_at_period(market_schedule, commencement_period)
+    else:
+        market_rate = market_rent_psf_for_period(
+            market_rent_psf=assumptions.market_rent_psf,
+            market_rent_growth=assumptions.market_rent_growth,
+            period=commencement_period,
+        )
+
+    if branch is RolloverBranchKind.RENEWAL:
+        starting_rent = renewal_starting_rent_psf(
+            assumptions=assumptions,
+            market_rent_psf_at_commencement=market_rate,
+            commencement_period=commencement_period,
+        )
+    else:
+        starting_rent = new_tenant_starting_rent_psf(
+            market_rent_psf_at_commencement=market_rate
+        )
+
+    commencement = month_start_for_index(
+        commencement_period, analysis_start=analysis_start
+    )
+    expiration = last_day_of_month(
+        month_start_for_index(last_period, analysis_start=analysis_start)
+    )
+    successor = Lease(
+        lease_id=f"{lease_id_stem}{suffix}",
+        suite_id=suite.suite_id,
+        tenant_name=None,
+        leased_area_sf=suite.suite_area_sf,
+        rent_commencement_date=commencement,
+        lease_expiration_date=expiration,
+        base_rent_psf=starting_rent,
+        escalation_pct=assumptions.successor_escalation_pct,
+        escalation_basis=EscalationBasis.LEASE_ANNIVERSARY,
+        lease_type=lease_type,
+        origin=LeaseOrigin.SUCCESSOR,
+    )
+
+    successor_schedule = build_lease_monthly_schedule(
+        successor, analysis_start=analysis_start, months=months
+    )
+
+    occupancy_factor = successor_occupancy_factors(
+        months=months,
+        commencement_period=commencement_period,
+        last_rent_period=last_period,
+        downtime_months=downtime_months,
+    )
+    abatement_months, cash_factor = free_rent_waterfall(
+        occupancy_factor, free_rent_months=free_rent_months
+    )
+
+    full_term_face_rent = contractual_face_rent_over_full_term(successor)
+    ti_amount = tenant_improvement_amount(
+        ti_psf=ti_psf, leased_area_sf=successor.leased_area_sf
+    )
+    lc_amount = leasing_commission_amount(
+        lc_pct=lc_pct,
+        full_term_contractual_face_rent=full_term_face_rent,
+        method=assumptions.leasing_commission_method,
+    )
+    event_period = leasing_cost_event_period(
+        months=months, successor_occupancy_factor=occupancy_factor
+    )
+
+    suite_area = suite.suite_area_sf
+    face: list[float] = []
+    cash: list[float] = []
+    free_rent: list[float] = []
+    occupied_area: list[float] = []
+    physical_occupancy: list[float] = []
+
+    for position in range(len(months)):
+        successor_face = successor_schedule.contractual_base_rent[position]
+        face.append(successor_face)
+        cash.append(successor_face * cash_factor[position])
+        free_rent.append(successor_face * abatement_months[position])
+        occupied = successor_schedule.occupied_area[position]
+        occupied_area.append(occupied)
+        physical_occupancy.append(occupied / suite_area)
+
+    return SuccessorContribution(
+        branch=branch,
+        suite_id=suite.suite_id,
+        parent_expiration_period=parent_expiration_period,
+        commencement_period=commencement_period,
+        successor_expiration_period=last_period,
+        commences_within_projection=within,
+        resolved=resolved,
+        market_rent_psf_at_commencement=market_rate,
+        starting_rent_psf=starting_rent,
+        term_months=term_months,
+        successor_escalation_pct=assumptions.successor_escalation_pct,
+        downtime_months=downtime_months,
+        free_rent_months=free_rent_months,
+        ti_psf=ti_psf,
+        lc_pct=lc_pct,
+        leasing_commission_method=assumptions.leasing_commission_method,
+        full_term_contractual_face_rent=full_term_face_rent,
+        tenant_improvement_amount=ti_amount,
+        leasing_commission_amount=lc_amount,
+        successor_lease=successor,
+        months=months,
+        successor_schedule=successor_schedule,
+        contractual_base_rent=tuple(face),
+        cash_base_rent=tuple(cash),
+        free_rent=tuple(free_rent),
+        tenant_improvements=leasing_cost_event_series(
+            months=months, event_period=event_period, amount=ti_amount
+        ),
+        leasing_commissions=leasing_cost_event_series(
+            months=months, event_period=event_period, amount=lc_amount
+        ),
+        occupied_area=tuple(occupied_area),
+        physical_occupancy=tuple(physical_occupancy),
+        successor_occupancy_factor=occupancy_factor,
+        free_rent_abatement_months=abatement_months,
+        cash_rent_factor=cash_factor,
+    )
+
+
 class _BranchCore:
     """The fields every rollover branch shares, computed once.
 
@@ -615,6 +826,7 @@ class _BranchCore:
         "cash_base_rent",
         "occupied_area",
         "physical_occupancy",
+        "contribution",
         "full_term_face_rent",
         "ti_amount",
         "lc_amount",
@@ -655,115 +867,58 @@ def _build_branch_core(
     analysis_start: date,
     months: tuple[ModelMonth, ...],
     market_schedule: MarketRentSchedule,
-    term_months: int,
-    downtime_months: float,
-    free_rent_months: float,
-    successor_escalation_pct: float,
-    price_successor,
-    lease_id_suffix: str,
-    ti_psf: float,
-    lc_pct: float,
-    leasing_commission_method: LeasingCommissionMethod,
+    branch: RolloverBranchKind,
 ) -> _BranchCore:
-    """Compute one branch end to end. Shared by both public builders."""
+    """Compute one branch end to end. Shared by both public builders.
 
-    assumptions = market_schedule.resolved.assumptions
+    **The successor half is delegated**, in full, to
+    ``build_successor_contribution``; this function adds the expiring lease's
+    own D1 schedule to it. That split is what makes the recursion safe: the
+    contribution is successor-only, so D2.6 can accumulate it without
+    re-counting history, while a branch is the contribution plus exactly one
+    lease's history and is therefore only ever correct for the *first*
+    rollover.
+    """
 
-    _, expiration_period = lease_rent_periods(expiring, analysis_start=analysis_start)
-    commencement_period = successor_commencement_period(
-        expiration_period=expiration_period, downtime_months=downtime_months
-    )
-    last_period = successor_expiration_period(
-        commencement_period=commencement_period, term_months=term_months
-    )
-
-    if commencement_period < 1:
-        # Only reachable from an input validation already rejects: a lease that
-        # expired before the analysis start raises
-        # LEASE_EXPIRED_BEFORE_ANALYSIS_START. Market rent is undefined before
-        # Month 1, so this refuses rather than clamping `c` to 1 -- a silent
-        # normalisation would price the successor off the wrong growth band and
-        # report a plausible number for an unrepresentable scenario.
-        raise ValueError(
-            f"lease {expiring.lease_id!r} expires at period {expiration_period} "
-            f"with {downtime_months!r} months of downtime, so its successor "
-            f"would commence at period {commencement_period}, before the "
-            "analysis start. Market rent is undefined there; validate inputs "
-            "before building a rollover branch."
-        )
-
-    first_period = months[0].period_index if months else 1
-    horizon_period = months[-1].period_index if months else 0
-    within = first_period <= commencement_period <= horizon_period
-
-    # The market rate at `c`. Read from the canonical schedule whenever `c`
-    # lies inside it; otherwise computed by the same authoritative function,
-    # because a successor commencing past the horizon still has a real
-    # contractual rent that D2.4's LC basis will need.
-    if within:
-        market_rate = market_rent_psf_at_period(market_schedule, commencement_period)
-    else:
-        market_rate = market_rent_psf_for_period(
-            market_rent_psf=assumptions.market_rent_psf,
-            market_rent_growth=assumptions.market_rent_growth,
-            period=commencement_period,
-        )
-
-    starting_rent = price_successor(market_rate, commencement_period)
-
-    successor = build_successor_lease(
-        expiring,
+    contribution = build_successor_contribution(
         suite=suite,
         analysis_start=analysis_start,
-        commencement_period=commencement_period,
-        term_months=term_months,
-        starting_rent_psf=starting_rent,
-        successor_escalation_pct=successor_escalation_pct,
-        lease_id_suffix=lease_id_suffix,
+        months=months,
+        market_schedule=market_schedule,
+        parent_expiration_period=lease_rent_periods(
+            expiring, analysis_start=analysis_start
+        )[1],
+        lease_type=expiring.lease_type,
+        branch=branch,
+        lease_id_stem=expiring.lease_id,
     )
 
     expiring_schedule = build_lease_monthly_schedule(
         expiring, analysis_start=analysis_start, months=months
     )
-    successor_schedule = build_lease_monthly_schedule(
-        successor, analysis_start=analysis_start, months=months
-    )
-
-    occupancy_factor = successor_occupancy_factors(
-        months=months,
-        commencement_period=commencement_period,
-        last_rent_period=last_period,
-        downtime_months=downtime_months,
-    )
-    abatement_months, cash_factor = free_rent_waterfall(
-        occupancy_factor, free_rent_months=free_rent_months
-    )
 
     suite_area = suite.suite_area_sf
     contractual_base_rent: list[float] = []
-    free_rent: list[float] = []
     cash_base_rent: list[float] = []
     occupied_area: list[float] = []
     physical_occupancy: list[float] = []
 
     for position in range(len(months)):
         expiring_face = expiring_schedule.contractual_base_rent[position]
-        successor_face = successor_schedule.contractual_base_rent[position]
 
         # FACE rent -- gross, reduced by neither downtime nor free rent. The
         # successor's own schedule is already zero before commencement and
         # after expiration, so downtime needs no subtraction here; the
         # boundary month carries a FULL month of face rent and only its cash
         # recognition is scaled (failure mode FM-D2-11b).
-        contractual_base_rent.append(expiring_face + successor_face)
-
-        # The abatement line, and the cash actually collected. The expiring
-        # lease is a signed in-place lease: it collects its face rent in full,
-        # and neither concession applies to it.
-        free_rent.append(successor_face * abatement_months[position])
-        cash_base_rent.append(
-            expiring_face + successor_face * cash_factor[position]
+        contractual_base_rent.append(
+            expiring_face + contribution.contractual_base_rent[position]
         )
+
+        # The cash actually collected. The expiring lease is a signed in-place
+        # lease: it collects its face rent in full, and neither concession
+        # applies to it.
+        cash_base_rent.append(expiring_face + contribution.cash_base_rent[position])
 
         # INTEGRAL branch physical occupancy (D2 HD-D2-2). Derived from
         # contractual activity, never from dollars and never from the
@@ -772,58 +927,32 @@ def _build_branch_core(
         # downtime periods have neither lease active and are genuinely 0.
         occupied = (
             expiring_schedule.occupied_area[position]
-            + successor_schedule.occupied_area[position]
+            + contribution.occupied_area[position]
         )
         occupied_area.append(occupied)
         physical_occupancy.append(occupied / suite_area)
 
-    # --- leasing costs, strictly below NOI (D2.4) ---
-    #
-    # Computed from the successor lease and the branch's own rates, and never
-    # from any series above: the loop that produced rent, cash and occupancy
-    # has already finished, and nothing below writes back into it.
-    #
-    # The LC basis is the successor's FULL contractual term, which may run past
-    # the projection horizon, so it comes from the successor `Lease` rather
-    # than from `successor_schedule` -- summing the visible schedule would
-    # silently truncate the commission (failure mode FM-17).
-    full_term_face_rent = contractual_face_rent_over_full_term(successor)
-    ti_amount = tenant_improvement_amount(
-        ti_psf=ti_psf, leased_area_sf=successor.leased_area_sf
-    )
-    lc_amount = leasing_commission_amount(
-        lc_pct=lc_pct,
-        full_term_contractual_face_rent=full_term_face_rent,
-        method=leasing_commission_method,
-    )
-    event_period = leasing_cost_event_period(
-        months=months, successor_occupancy_factor=occupancy_factor
-    )
-
     core = _BranchCore()
-    core.full_term_face_rent = full_term_face_rent
-    core.ti_amount = ti_amount
-    core.lc_amount = lc_amount
-    core.tenant_improvements = leasing_cost_event_series(
-        months=months, event_period=event_period, amount=ti_amount
-    )
-    core.leasing_commissions = leasing_cost_event_series(
-        months=months, event_period=event_period, amount=lc_amount
-    )
-    core.expiration_period = expiration_period
-    core.commencement_period = commencement_period
-    core.last_period = last_period
-    core.within = within
-    core.market_rate = market_rate
-    core.starting_rent = starting_rent
-    core.successor = successor
+    core.contribution = contribution
+    core.full_term_face_rent = contribution.full_term_contractual_face_rent
+    core.ti_amount = contribution.tenant_improvement_amount
+    core.lc_amount = contribution.leasing_commission_amount
+    core.tenant_improvements = contribution.tenant_improvements
+    core.leasing_commissions = contribution.leasing_commissions
+    core.expiration_period = contribution.parent_expiration_period
+    core.commencement_period = contribution.commencement_period
+    core.last_period = contribution.successor_expiration_period
+    core.within = contribution.commences_within_projection
+    core.market_rate = contribution.market_rent_psf_at_commencement
+    core.starting_rent = contribution.starting_rent_psf
+    core.successor = contribution.successor_lease
     core.expiring_schedule = expiring_schedule
-    core.successor_schedule = successor_schedule
+    core.successor_schedule = contribution.successor_schedule
     core.contractual_base_rent = tuple(contractual_base_rent)
-    core.occupancy_factor = occupancy_factor
-    core.abatement_months = abatement_months
-    core.cash_factor = cash_factor
-    core.free_rent = tuple(free_rent)
+    core.occupancy_factor = contribution.successor_occupancy_factor
+    core.abatement_months = contribution.free_rent_abatement_months
+    core.cash_factor = contribution.cash_rent_factor
+    core.free_rent = contribution.free_rent
     core.cash_base_rent = tuple(cash_base_rent)
     core.occupied_area = tuple(occupied_area)
     core.physical_occupancy = tuple(physical_occupancy)
@@ -887,19 +1016,7 @@ def build_renewal_branch(
         analysis_start=analysis_start,
         months=months,
         market_schedule=schedule,
-        term_months=assumptions.renewal_term_months,
-        downtime_months=assumptions.renewal_downtime_months,
-        free_rent_months=assumptions.renewal_free_rent_months,
-        successor_escalation_pct=assumptions.successor_escalation_pct,
-        price_successor=lambda rate, period: renewal_starting_rent_psf(
-            assumptions=assumptions,
-            market_rent_psf_at_commencement=rate,
-            commencement_period=period,
-        ),
-        lease_id_suffix=_RENEWAL_SUCCESSOR_SUFFIX,
-        ti_psf=assumptions.renewal_ti_psf,
-        lc_pct=assumptions.renewal_lc_pct,
-        leasing_commission_method=assumptions.leasing_commission_method,
+        branch=RolloverBranchKind.RENEWAL,
     )
 
     return RenewalBranch(
@@ -998,17 +1115,7 @@ def build_new_tenant_branch(
         analysis_start=analysis_start,
         months=months,
         market_schedule=schedule,
-        term_months=assumptions.new_term_months,
-        downtime_months=assumptions.new_downtime_months,
-        free_rent_months=assumptions.new_free_rent_months,
-        successor_escalation_pct=assumptions.successor_escalation_pct,
-        price_successor=lambda rate, period: new_tenant_starting_rent_psf(
-            market_rent_psf_at_commencement=rate
-        ),
-        lease_id_suffix=_NEW_TENANT_SUCCESSOR_SUFFIX,
-        ti_psf=assumptions.new_ti_psf,
-        lc_pct=assumptions.new_lc_pct,
-        leasing_commission_method=assumptions.leasing_commission_method,
+        branch=RolloverBranchKind.NEW_TENANT,
     )
 
     return NewTenantBranch(
@@ -1336,4 +1443,301 @@ def build_expected_rollover(
         renewal,
         new_tenant,
         renewal_probability=resolved_schedule.resolved.assumptions.renewal_probability,
+    )
+
+
+# =============================================================================
+# D2.6 -- recursive rollover by probability-mass state propagation
+#
+# The accepted architecture (D2 Section 5.5). Rollover recursion runs until the
+# canonical projection ends and stops only there: no financial depth cap
+# (HD-D2-3) and no computational cap of any kind (Section 5.5.5).
+# =============================================================================
+
+
+#: Deterministic child order, used for transition audit ordering and for the
+#: order masses are accumulated in. Renewal before new tenant, matching the
+#: composition order D2.5 already uses.
+_BRANCH_ORDER = (RolloverBranchKind.RENEWAL, RolloverBranchKind.NEW_TENANT)
+
+#: Probability reconciliation tolerance. Masses are bounded in [0, 1] and are
+#: products and sums of such numbers, so a tolerance suited to that magnitude
+#: is appropriate -- and is deliberately NOT used for dollar reconciliation,
+#: where magnitudes are millions and the relevant policy is D2 Section 13.2's.
+_MASS_REL_TOL = 1e-12
+_MASS_ABS_TOL = 1e-15
+
+
+def _child_masses(
+    parent_mass: float, *, renewal_probability: float
+) -> tuple[tuple[RolloverBranchKind, float], ...]:
+    """Split a parent's mass across the two branches.
+
+    ``q·p`` and ``q·(1−p)``, which sum exactly to ``q``.
+
+    **Endpoints generate one child, not two.** At ``p = 1`` only the renewal
+    chain exists and at ``p = 0`` only the new-tenant chain does, so the
+    surviving child takes the parent's mass **unchanged** rather than
+    multiplied by ``1.0``. That keeps the endpoints exactly identical to a
+    deterministic single-scenario chain and creates no zero-mass states to
+    process, no zero-mass transitions to audit and no spurious successor
+    leases.
+    """
+
+    if renewal_probability == 1.0:
+        return ((RolloverBranchKind.RENEWAL, parent_mass),)
+    if renewal_probability == 0.0:
+        return ((RolloverBranchKind.NEW_TENANT, parent_mass),)
+    return (
+        (RolloverBranchKind.RENEWAL, parent_mass * renewal_probability),
+        (RolloverBranchKind.NEW_TENANT, parent_mass * (1.0 - renewal_probability)),
+    )
+
+
+def build_recursive_rollover(
+    expiring: Lease,
+    *,
+    suite: Suite,
+    analysis_start: date,
+    months: tuple[ModelMonth, ...],
+    property_defaults: MarketLeasingAssumptions,
+    market_schedule: MarketRentSchedule | None = None,
+) -> RecursiveRollover:
+    """Return one suite's expected economics across **all** successor
+    generations.
+
+    **Precondition: the inputs are already validated**, as for every other
+    builder in this package. In particular a lease that expired before the
+    analysis start is a ``LEASE_EXPIRED_BEFORE_ANALYSIS_START`` **ERROR**, so
+    the first rollover event is always representable on the canonical timeline;
+    this function refuses such input at its boundary rather than inventing
+    pre-analysis history.
+
+    **The algorithm** (D2 Section 5.5), in full:
+
+    1. The in-place lease contributes **once**, at mass ``1``. Every period
+       before it expires is deterministic contractual history and is never
+       probability-weighted.
+    2. Its expiration seeds one rollover-event state.
+    3. States are processed in **ascending expiration period**. Because every
+       child expires strictly later than its parent, processing ``e`` can never
+       create a state at or before ``e`` -- so a state's mass is complete
+       before it is processed, and one pass suffices with no revisiting.
+    4. Each processed state splits its mass across the two branches, builds
+       each successor's **own** economics, and accumulates
+       ``mass x contribution``. A whole branch is never added: a branch carries
+       the expiring lease's history and adding one per event would re-count it
+       once per generation.
+    5. A child whose expiration still falls inside the window is enqueued --
+       **merging with any other path that reaches the same period**, because
+       their futures are identical. A child whose expiration lies at or beyond
+       the horizon is contributed but not enqueued: its own rollover would
+       commence outside the window and contribute nothing.
+
+    **Merging combines probability mass and nothing else.** No rent, no term,
+    no date, no rate is ever averaged -- that is the rejected
+    weighted-parameter method. Two paths merge because they genuinely face the
+    same future, which holds because a successor prices from market at its own
+    commencement and never reads its predecessor's rent (D2 Section 5.5.1).
+
+    **Vacancy is the absence of a contribution.** When downtime pushes a
+    commencement past the horizon the child contributes zero, and the months
+    after its parent expired simply have no occupant in that scenario -- which
+    is exactly the expected vacancy they should show. Nothing is represented
+    negatively and no ``ModelMonth`` is ever fabricated beyond the window.
+
+    **No cap of any kind.** Expiration periods are integers in the canonical
+    window, so the state count is bounded by the horizon itself: at most ``N``
+    states and ``2N`` transitions. ``RecursiveRollover`` asserts both bounds as
+    consequences of the algorithm, never as configurable limits.
+
+    Pure and deterministic: no I/O, no mutation, no sampling.
+    """
+
+    schedule = _resolve_market_schedule(
+        suite,
+        months=months,
+        property_defaults=property_defaults,
+        market_schedule=market_schedule,
+    )
+    assumptions = schedule.resolved.assumptions
+    renewal_probability = assumptions.renewal_probability
+
+    if not 0.0 <= renewal_probability <= 1.0:
+        raise ValueError(
+            f"renewal_probability {renewal_probability!r} must be between 0 "
+            "and 1 inclusive."
+        )
+    if not months:
+        raise ValueError("a recursive rollover requires a canonical timeline.")
+
+    horizon = months[-1].period_index
+    count = len(months)
+
+    # --- 1. the known lease, deterministic and unweighted -----------------
+    initial_schedule = build_lease_monthly_schedule(
+        expiring, analysis_start=analysis_start, months=months
+    )
+    suite_area = suite.suite_area_sf
+
+    face = list(initial_schedule.contractual_base_rent)
+    cash = list(initial_schedule.contractual_base_rent)
+    free_rent = [0.0] * count
+    tenant_improvements = [0.0] * count
+    leasing_commissions = [0.0] * count
+    occupied_area = list(initial_schedule.occupied_area)
+    occupancy_factor = [0.0] * count
+    abatement_months = [0.0] * count
+    cash_factor = [0.0] * count
+    ti_total_parts: list[float] = []
+    lc_total_parts: list[float] = []
+
+    _, initial_expiration = lease_rent_periods(expiring, analysis_start=analysis_start)
+    if initial_expiration < 1:
+        raise ValueError(
+            f"lease {expiring.lease_id!r} expires at period "
+            f"{initial_expiration}, before the analysis start; it is not a "
+            "lease of this deal and cannot seed a rollover."
+        )
+
+    # --- 2. propagate probability mass over rollover-event states ---------
+    #
+    # `incoming` maps an expiration period to the mass contributions that
+    # reached it, kept as a list so the sum is taken once, deterministically,
+    # over a fixed insertion order.
+    incoming: dict[int, list[float]] = {initial_expiration: [1.0]}
+    processed: dict[int, float] = {}
+    transitions: list[RolloverTransitionAudit] = []
+    terminal_parts: list[float] = []
+
+    while True:
+        pending = sorted(
+            period
+            for period in incoming
+            if period not in processed and 1 <= period < horizon
+        )
+        if not pending:
+            break
+        period = pending[0]
+        mass = fsum(incoming[period])
+        processed[period] = mass
+
+        for branch, child_mass in _child_masses(
+            mass, renewal_probability=renewal_probability
+        ):
+            contribution = build_successor_contribution(
+                suite=suite,
+                analysis_start=analysis_start,
+                months=months,
+                market_schedule=schedule,
+                parent_expiration_period=period,
+                lease_type=expiring.lease_type,
+                branch=branch,
+                # Derived from the STATE, never from a predecessor path, so a
+                # merged state has one identifier however many paths reached
+                # it -- and the identifier reaches no calculation.
+                lease_id_stem=f"{expiring.lease_id}@e{period}",
+            )
+
+            for index in range(count):
+                face[index] += child_mass * contribution.contractual_base_rent[index]
+                cash[index] += child_mass * contribution.cash_base_rent[index]
+                free_rent[index] += child_mass * contribution.free_rent[index]
+                tenant_improvements[index] += (
+                    child_mass * contribution.tenant_improvements[index]
+                )
+                leasing_commissions[index] += (
+                    child_mass * contribution.leasing_commissions[index]
+                )
+                occupied_area[index] += child_mass * contribution.occupied_area[index]
+                occupancy_factor[index] += (
+                    child_mass * contribution.successor_occupancy_factor[index]
+                )
+                abatement_months[index] += (
+                    child_mass * contribution.free_rent_abatement_months[index]
+                )
+                cash_factor[index] += child_mass * contribution.cash_rent_factor[index]
+
+            ti_total_parts.append(child_mass * contribution.tenant_improvement_amount)
+            lc_total_parts.append(child_mass * contribution.leasing_commission_amount)
+
+            transitions.append(
+                RolloverTransitionAudit(
+                    parent_expiration_period=period,
+                    branch=branch,
+                    probability_mass=child_mass,
+                    commencement_period=contribution.commencement_period,
+                    successor_expiration_period=(
+                        contribution.successor_expiration_period
+                    ),
+                    commences_within_projection=(
+                        contribution.commences_within_projection
+                    ),
+                    starting_rent_psf=contribution.starting_rent_psf,
+                    term_months=contribution.term_months,
+                    tenant_improvement_amount=contribution.tenant_improvement_amount,
+                    leasing_commission_amount=contribution.leasing_commission_amount,
+                )
+            )
+
+            child_expiration = contribution.successor_expiration_period
+            if child_expiration <= period:
+                # Unreachable: c = e + 1 + floor(D) and last = c + T - 1 with
+                # D >= 0 and T >= 1 give last >= e + 1. Asserted anyway, because
+                # a violation would mean the propagation could not terminate.
+                raise ValueError(
+                    f"rollover time did not advance: a successor of the state "
+                    f"expiring at {period} itself expires at "
+                    f"{child_expiration}."
+                )
+            if child_expiration < horizon:
+                incoming.setdefault(child_expiration, []).append(child_mass)
+            else:
+                terminal_parts.append(child_mass)
+
+    # Mass that never rolled at all: the in-place lease already expires at or
+    # beyond the horizon, so no rollover can affect a canonical month.
+    if initial_expiration not in processed:
+        terminal_parts.append(fsum(incoming[initial_expiration]))
+
+    # --- 3. derived series and the bounded audit --------------------------
+    expected_occupancy = tuple(occupied / suite_area for occupied in occupied_area)
+
+    event_states = tuple(
+        RolloverEventStateAudit(
+            expiration_period=period,
+            probability_mass=(
+                processed[period] if period in processed else fsum(incoming[period])
+            ),
+            processed=period in processed,
+        )
+        for period in sorted(incoming)
+    )
+
+    return RecursiveRollover(
+        suite_id=suite.suite_id,
+        expiring_lease_id=expiring.lease_id,
+        renewal_probability=renewal_probability,
+        months=months,
+        initial_lease=expiring,
+        initial_schedule=initial_schedule,
+        expected_contractual_base_rent=tuple(face),
+        expected_cash_base_rent=tuple(cash),
+        expected_free_rent=tuple(free_rent),
+        expected_tenant_improvements=tuple(tenant_improvements),
+        expected_leasing_commissions=tuple(leasing_commissions),
+        expected_occupied_area_sf=tuple(occupied_area),
+        expected_occupancy=expected_occupancy,
+        expected_vacant_area_sf=tuple(
+            suite_area - occupied for occupied in occupied_area
+        ),
+        expected_vacancy=tuple(1.0 - occupancy for occupancy in expected_occupancy),
+        expected_successor_occupancy_factor=tuple(occupancy_factor),
+        expected_free_rent_abatement_months=tuple(abatement_months),
+        expected_cash_rent_factor=tuple(cash_factor),
+        expected_tenant_improvement_amount=fsum(ti_total_parts),
+        expected_leasing_commission_amount=fsum(lc_total_parts),
+        event_states=event_states,
+        transitions=tuple(transitions),
+        terminal_probability_mass=fsum(terminal_parts),
     )
