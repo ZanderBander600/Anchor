@@ -13,6 +13,23 @@ arithmetic.** ``calendar.py`` computes time, ``validation.py`` checks inputs,
 Scope is deliberately one lease. Property aggregation, occupied and vacant
 area, annual totals, rollover, free rent, TI, LC, recoveries and NOI all
 belong to D1.3 and later gates. Nothing here sums two leases.
+
+**Known D1 limitation -- the rent anchor.** ``Lease.base_rent_psf`` is the
+rent *as of ``rent_commencement_date``* (D0 Section 4.4). Real rent rolls
+frequently state instead the **current** contractual rent, or an explicit
+schedule of dated rent steps. An analyst holding only a current rent for an
+older in-place lease must today back-solve the commencement rent
+(``current / (1 + escalation_pct) ** k``) or restate the commencement, and
+record which they did.
+
+D0 Section 6.6 already schedules the fix -- "explicit dated rent steps"
+(D2+, needing a ``RentStep`` child contract) is named there as the most
+likely first extension. Either that or an optional ``rent_anchor_date``
+would be a change to **this module plus one nullable ``Lease`` field**, and
+nothing else: ``aggregation.py`` consumes finished ``LeaseMonthlySchedule``
+values and is forbidden by guardrail from even naming a rent assumption, so
+no property, annual or calendar code would move. The limitation does not
+block D1.
 """
 
 from __future__ import annotations
