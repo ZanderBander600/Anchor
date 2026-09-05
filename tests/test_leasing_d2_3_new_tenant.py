@@ -37,6 +37,7 @@ from anchor.leasing import (
     LeaseLevelPropertyInputs,
     LeaseOrigin,
     LeaseType,
+    LeasingCommissionMethod,
     MarketLeasingAssumptions,
     NewTenantBranch,
     RenewalBranch,
@@ -88,6 +89,14 @@ def assumptions(**overrides: object) -> MarketLeasingAssumptions:
         "new_term_months": 60,
         "new_downtime_months": 0.0,
         "new_free_rent_months": 0.0,
+        # D2.4 leasing costs -- inert for every assertion in this module.
+        "renewal_ti_psf": 0.0,
+        "new_ti_psf": 0.0,
+        "leasing_commission_method": (
+            LeasingCommissionMethod.PCT_OF_TOTAL_CONTRACTUAL_BASE_RENT
+        ),
+        "renewal_lc_pct": 0.0,
+        "new_lc_pct": 0.0,
     }
     base.update(overrides)
     return MarketLeasingAssumptions(**base)  # type: ignore[arg-type]
@@ -1375,6 +1384,13 @@ def test_an_incomplete_assumption_record_cannot_be_constructed() -> None:
         "new_term_months": 60,
         "new_downtime_months": 0.0,
         "new_free_rent_months": 0.0,
+        "renewal_ti_psf": 0.0,
+        "new_ti_psf": 0.0,
+        "leasing_commission_method": (
+            LeasingCommissionMethod.PCT_OF_TOTAL_CONTRACTUAL_BASE_RENT
+        ),
+        "renewal_lc_pct": 0.0,
+        "new_lc_pct": 0.0,
     }
     for omitted in (
         "renewal_downtime_months",

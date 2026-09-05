@@ -91,6 +91,32 @@ class LeaseOrigin(StrEnum):
     SUCCESSOR = "successor"
 
 
+class LeasingCommissionMethod(StrEnum):
+    """How a leasing commission is computed (D0 Section 12.3).
+
+    **Exactly one member in D2**, and that is deliberate. Institutional
+    practice genuinely varies -- percentage of total contractual base rent,
+    percentage of first-year rent, stepped percentages by lease year, ``$/SF``
+    -- so Anchor picks one, says which, and does not claim it is universal
+    (D0 Section 12.1).
+
+    ``PCT_OF_TOTAL_CONTRACTUAL_BASE_RENT`` is that choice: a percentage of the
+    successor's total contractual base rent over its **full** term, including
+    escalations, gross of free rent, untruncated by the hold horizon
+    (D2 Section 8.3).
+
+    **The method lives on ``MarketLeasingAssumptions``, never on ``Lease``.**
+    That placement is the extension seam: adding ``PER_SF`` or
+    ``PCT_OF_FIRST_YEAR_RENT`` later means one enum member plus the rate fields
+    it needs on the assumptions record -- no change to the ``Lease`` contract,
+    no change to any lease schedule, and no migration of lease data. D2
+    implements one method; the seam exists so a second never requires replacing
+    the lease contract.
+    """
+
+    PCT_OF_TOTAL_CONTRACTUAL_BASE_RENT = "pct_of_total_contractual_base_rent"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ModelMonth:
     """One canonical monthly period of the Lease-Level projection
@@ -322,14 +348,28 @@ class MarketLeasingAssumptions:
     space vacant. Its upper bound is validated against the branch's own term
     and downtime (D2 Section 7.5).
 
-    **Only the D2.1-D2.3 fields are declared.** D0 Section 4.5 lists this
+    **The leasing costs (D2.4).** ``renewal_ti_psf`` and ``new_ti_psf`` are
+    tenant-improvement allowances in ``$/SF``, domain ``>= 0``, multiplied by
+    the successor's leased area and recorded in full at commencement.
+    ``renewal_lc_pct`` and ``new_lc_pct`` are commission rates, domain
+    ``0 <= x <= 1``, applied to the successor's **full-term contractual face
+    rent**. ``leasing_commission_method`` names the basis and has exactly one
+    member in D2 (D0 Section 12.3).
+
+    Both are **below NOI** (D0 Sections 11 and 12.2): neither reduces rent,
+    occupancy, EGI, NOI, DSCR or debt yield. Both are charged only on a
+    rollover successor -- never on an in-place D1 lease, whose improvements and
+    commission were funded by the seller before acquisition (failure mode
+    FM-11).
+
+    **Only the D2.1-D2.4 fields are declared.** D0 Section 4.5 lists this
     record's full field set, and the D2 conventions document (Section 12,
     Section 14) gates each one: rent and growth at D2.1, the renewal branch at
     D2.2, the new-tenant branch plus downtime and free rent at D2.3, TI/LC at
     D2.4, ``renewal_probability`` at D2.5. This package's established rule is
     that **a gate declares only what it can actually produce** (see ``Lease``
-    and ``Suite`` below); D2.3 has no leasing costs and no probability
-    weighting, so those would be vocabulary with no mechanism behind them.
+    and ``Suite`` below); D2.4 has no probability weighting, so it would be
+    vocabulary with no mechanism behind it.
 
     The all-or-nothing override rule (D0 Section 24.2) is enforced
     structurally rather than by validation: every field is required and none
@@ -350,6 +390,11 @@ class MarketLeasingAssumptions:
     new_term_months: int
     new_downtime_months: float
     new_free_rent_months: float
+    renewal_ti_psf: float
+    new_ti_psf: float
+    leasing_commission_method: LeasingCommissionMethod
+    renewal_lc_pct: float
+    new_lc_pct: float
 
 
 class MarketAssumptionSource(StrEnum):
@@ -686,6 +731,22 @@ class RenewalBranch:
     Section 8.6), but the contractual term is a real obligation and is
     preserved -- D2.4's LC basis needs the full term (failure mode FM-D2-11).
 
+
+    **Leasing costs are below NOI and never touch the rent or occupancy series
+    above** (D0 Sections 11 and 12.2, D2 Section 8). ``tenant_improvements``
+    and ``leasing_commissions`` are monthly dollar series aligned 1:1 with the
+    canonical timeline and are zero in every period except the successor's
+    commencement, where each carries its full amount. When the successor
+    commences beyond the projection they are zero throughout -- the timeline is
+    never extended to display an event.
+
+    ``full_term_contractual_face_rent`` is the LC basis: the successor's total
+    contractual face rent over its **entire** term, including escalations,
+    gross of free rent, untruncated by the hold horizon, and unreduced by the
+    fractional first month that downtime creates. It is retained because it
+    can depend on contractual months lying beyond the visible projection, so
+    the commission is otherwise unauditable from the schedule alone.
+
     Built only by ``anchor.leasing.rollover.build_renewal_branch``; this
     dataclass performs no calculation of its own.
     """
@@ -727,6 +788,16 @@ class RenewalBranch:
     occupied_area: tuple[float, ...]
     physical_occupancy: tuple[float, ...]
 
+    # --- leasing costs, below NOI (D2.4) ---
+    ti_psf: float
+    lc_pct: float
+    leasing_commission_method: LeasingCommissionMethod
+    full_term_contractual_face_rent: float
+    tenant_improvement_amount: float
+    leasing_commission_amount: float
+    tenant_improvements: tuple[float, ...]
+    leasing_commissions: tuple[float, ...]
+
     def __post_init__(self) -> None:
         expected = len(self.months)
         for name, series in (
@@ -738,6 +809,8 @@ class RenewalBranch:
             ("cash_base_rent", self.cash_base_rent),
             ("occupied_area", self.occupied_area),
             ("physical_occupancy", self.physical_occupancy),
+            ("tenant_improvements", self.tenant_improvements),
+            ("leasing_commissions", self.leasing_commissions),
         ):
             if len(series) != expected:
                 raise ValueError(
@@ -792,6 +865,22 @@ class NewTenantBranch:
     occupancy and the untruncated horizon fields all carry the meanings
     documented on ``RenewalBranch``.
 
+
+    **Leasing costs are below NOI and never touch the rent or occupancy series
+    above** (D0 Sections 11 and 12.2, D2 Section 8). ``tenant_improvements``
+    and ``leasing_commissions`` are monthly dollar series aligned 1:1 with the
+    canonical timeline and are zero in every period except the successor's
+    commencement, where each carries its full amount. When the successor
+    commences beyond the projection they are zero throughout -- the timeline is
+    never extended to display an event.
+
+    ``full_term_contractual_face_rent`` is the LC basis: the successor's total
+    contractual face rent over its **entire** term, including escalations,
+    gross of free rent, untruncated by the hold horizon, and unreduced by the
+    fractional first month that downtime creates. It is retained because it
+    can depend on contractual months lying beyond the visible projection, so
+    the commission is otherwise unauditable from the schedule alone.
+
     Built only by ``anchor.leasing.rollover.build_new_tenant_branch``; this
     dataclass performs no calculation of its own.
     """
@@ -831,6 +920,16 @@ class NewTenantBranch:
     occupied_area: tuple[float, ...]
     physical_occupancy: tuple[float, ...]
 
+    # --- leasing costs, below NOI (D2.4) ---
+    ti_psf: float
+    lc_pct: float
+    leasing_commission_method: LeasingCommissionMethod
+    full_term_contractual_face_rent: float
+    tenant_improvement_amount: float
+    leasing_commission_amount: float
+    tenant_improvements: tuple[float, ...]
+    leasing_commissions: tuple[float, ...]
+
     def __post_init__(self) -> None:
         expected = len(self.months)
         for name, series in (
@@ -842,6 +941,8 @@ class NewTenantBranch:
             ("cash_base_rent", self.cash_base_rent),
             ("occupied_area", self.occupied_area),
             ("physical_occupancy", self.physical_occupancy),
+            ("tenant_improvements", self.tenant_improvements),
+            ("leasing_commissions", self.leasing_commissions),
         ):
             if len(series) != expected:
                 raise ValueError(

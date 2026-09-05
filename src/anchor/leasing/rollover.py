@@ -58,10 +58,16 @@ free rent means *a tenant is in possession but is not paying base rent*, leaves
 occupancy untouched, and leaves recoveries to the lease's own structure. They
 are sequential stages of one waterfall, not competing multiplicative factors.
 
-**Deliberately absent, all of it later work:** TI and LC (D2.4);
-``renewal_probability`` and every expected-value composition (D2.5); the second
-and later rollovers, recursion and any computational limit (D2.6). Each branch
-here produces exactly one successor and never rolls it over.
+**Leasing costs are computed but never mixed in.** D2.4 adds each branch's own
+TI and LC, from ``leasing_costs.py``, on a basis from
+``rent.contractual_face_rent_over_full_term``. Both are strictly below NOI and
+this module never lets either touch a rent, cash or occupancy series -- they
+travel as their own monthly outputs alongside.
+
+**Deliberately absent, all of it later work:** ``renewal_probability`` and
+every expected-value composition (D2.5); the second and later rollovers,
+recursion and any computational limit (D2.6). Each branch here produces exactly
+one successor and never rolls it over.
 """
 
 from __future__ import annotations
@@ -75,6 +81,7 @@ from .contracts import (
     Lease,
     LeaseMonthlySchedule,
     LeaseOrigin,
+    LeasingCommissionMethod,
     MarketLeasingAssumptions,
     MarketRentSchedule,
     ModelMonth,
@@ -83,12 +90,22 @@ from .contracts import (
     ResolvedMarketLeasing,
     Suite,
 )
+from .leasing_costs import (
+    leasing_commission_amount,
+    leasing_cost_event_period,
+    leasing_cost_event_series,
+    tenant_improvement_amount,
+)
 from .market import (
     build_market_rent_schedule,
     market_rent_psf_at_period,
     market_rent_psf_for_period,
 )
-from .rent import build_lease_monthly_schedule, lease_rent_periods
+from .rent import (
+    build_lease_monthly_schedule,
+    contractual_face_rent_over_full_term,
+    lease_rent_periods,
+)
 
 
 #: Suffixes appended to the expiring lease's id to name each branch's
@@ -590,6 +607,11 @@ class _BranchCore:
         "cash_base_rent",
         "occupied_area",
         "physical_occupancy",
+        "full_term_face_rent",
+        "ti_amount",
+        "lc_amount",
+        "tenant_improvements",
+        "leasing_commissions",
     )
 
 
@@ -631,6 +653,9 @@ def _build_branch_core(
     successor_escalation_pct: float,
     price_successor,
     lease_id_suffix: str,
+    ti_psf: float,
+    lc_pct: float,
+    leasing_commission_method: LeasingCommissionMethod,
 ) -> _BranchCore:
     """Compute one branch end to end. Shared by both public builders."""
 
@@ -744,7 +769,39 @@ def _build_branch_core(
         occupied_area.append(occupied)
         physical_occupancy.append(occupied / suite_area)
 
+    # --- leasing costs, strictly below NOI (D2.4) ---
+    #
+    # Computed from the successor lease and the branch's own rates, and never
+    # from any series above: the loop that produced rent, cash and occupancy
+    # has already finished, and nothing below writes back into it.
+    #
+    # The LC basis is the successor's FULL contractual term, which may run past
+    # the projection horizon, so it comes from the successor `Lease` rather
+    # than from `successor_schedule` -- summing the visible schedule would
+    # silently truncate the commission (failure mode FM-17).
+    full_term_face_rent = contractual_face_rent_over_full_term(successor)
+    ti_amount = tenant_improvement_amount(
+        ti_psf=ti_psf, leased_area_sf=successor.leased_area_sf
+    )
+    lc_amount = leasing_commission_amount(
+        lc_pct=lc_pct,
+        full_term_contractual_face_rent=full_term_face_rent,
+        method=leasing_commission_method,
+    )
+    event_period = leasing_cost_event_period(
+        months=months, successor_occupancy_factor=occupancy_factor
+    )
+
     core = _BranchCore()
+    core.full_term_face_rent = full_term_face_rent
+    core.ti_amount = ti_amount
+    core.lc_amount = lc_amount
+    core.tenant_improvements = leasing_cost_event_series(
+        months=months, event_period=event_period, amount=ti_amount
+    )
+    core.leasing_commissions = leasing_cost_event_series(
+        months=months, event_period=event_period, amount=lc_amount
+    )
     core.expiration_period = expiration_period
     core.commencement_period = commencement_period
     core.last_period = last_period
@@ -832,6 +889,9 @@ def build_renewal_branch(
             commencement_period=period,
         ),
         lease_id_suffix=_RENEWAL_SUCCESSOR_SUFFIX,
+        ti_psf=assumptions.renewal_ti_psf,
+        lc_pct=assumptions.renewal_lc_pct,
+        leasing_commission_method=assumptions.leasing_commission_method,
     )
 
     return RenewalBranch(
@@ -863,6 +923,14 @@ def build_renewal_branch(
         cash_base_rent=core.cash_base_rent,
         occupied_area=core.occupied_area,
         physical_occupancy=core.physical_occupancy,
+        ti_psf=assumptions.renewal_ti_psf,
+        lc_pct=assumptions.renewal_lc_pct,
+        leasing_commission_method=assumptions.leasing_commission_method,
+        full_term_contractual_face_rent=core.full_term_face_rent,
+        tenant_improvement_amount=core.ti_amount,
+        leasing_commission_amount=core.lc_amount,
+        tenant_improvements=core.tenant_improvements,
+        leasing_commissions=core.leasing_commissions,
     )
 
 
@@ -930,6 +998,9 @@ def build_new_tenant_branch(
             market_rent_psf_at_commencement=rate
         ),
         lease_id_suffix=_NEW_TENANT_SUCCESSOR_SUFFIX,
+        ti_psf=assumptions.new_ti_psf,
+        lc_pct=assumptions.new_lc_pct,
+        leasing_commission_method=assumptions.leasing_commission_method,
     )
 
     return NewTenantBranch(
@@ -959,4 +1030,12 @@ def build_new_tenant_branch(
         cash_base_rent=core.cash_base_rent,
         occupied_area=core.occupied_area,
         physical_occupancy=core.physical_occupancy,
+        ti_psf=assumptions.new_ti_psf,
+        lc_pct=assumptions.new_lc_pct,
+        leasing_commission_method=assumptions.leasing_commission_method,
+        full_term_contractual_face_rent=core.full_term_face_rent,
+        tenant_improvement_amount=core.ti_amount,
+        leasing_commission_amount=core.lc_amount,
+        tenant_improvements=core.tenant_improvements,
+        leasing_commissions=core.leasing_commissions,
     )

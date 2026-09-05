@@ -341,20 +341,17 @@ def test_the_rent_module_is_the_only_one_that_touches_rent_fields() -> None:
     ), f"{rent_module} must contain the compound-escalation term"
 
 
-def test_leasing_package_contains_only_the_gate_d2_2_modules() -> None:
+def test_leasing_package_contains_only_the_gate_d2_4_modules() -> None:
     """D0 Gate D1.0 files, plus D1.1's ``calendar.py``, D1.2's ``rent.py``,
-    D1.3's ``aggregation.py``, D2.1's ``market.py`` and D2.2's
-    ``rollover.py``.
-
-    In particular ``leasing_costs.py`` must **not** exist yet: D2 Section 14
-    gates it at D2.4, and an empty placeholder module would be TI/LC
-    vocabulary in a gate whose scope excludes it."""
+    D1.3's ``aggregation.py``, D2.1's ``market.py``, D2.2/D2.3's
+    ``rollover.py`` and D2.4's ``leasing_costs.py`` (D2 Section 14)."""
 
     assert {path.name for path in _leasing_source_files()} == {
         "__init__.py",
         "aggregation.py",
         "calendar.py",
         "contracts.py",
+        "leasing_costs.py",
         "market.py",
         "rent.py",
         "rollover.py",
@@ -509,19 +506,17 @@ def test_the_d1_modules_never_reference_a_market_assumption(module_name: str) ->
     )
 
 
-def test_no_later_gate_module_exists_at_d2_2() -> None:
-    """D2 Section 14 gates ``leasing_costs.py`` at D2.4. It may not exist yet,
-    even empty.
-
-    ``renewal.py`` and ``downtime.py`` are also barred, for a different reason:
-    D2 Section 14 assigns the whole rollover engine to one module, and a
+def test_no_later_gate_module_exists_at_d2_4() -> None:
+    """D2 Section 14 assigns the whole rollover engine to one module, so a
     second, overlapping home for branch logic is how two rollover
-    implementations start."""
+    implementations start. ``composition.py`` is barred for the same reason at
+    D2.5: the weighting belongs in ``rollover.py`` beside the branches it
+    weights."""
 
-    for forbidden in ("leasing_costs.py", "renewal.py", "downtime.py", "successor.py"):
+    for forbidden in ("renewal.py", "downtime.py", "successor.py", "composition.py"):
         assert not (_LEASING_DIR / forbidden).exists(), (
-            f"{forbidden} belongs to a later D2 gate, or duplicates "
-            "rollover.py, and must not exist at D2.2"
+            f"{forbidden} duplicates rollover.py or belongs to a later D2 "
+            "gate, and must not exist at D2.4"
         )
 
 
@@ -529,17 +524,20 @@ def test_no_later_gate_module_exists_at_d2_2() -> None:
 #: None of it may appear anywhere in production code -- not as a field, not as
 #: a parameter, not as a function name.
 #:
-#: **Narrowed at D2.3**, and only by the fields that gate delivers:
-#: ``new_term_months``, ``new_downtime_months``, ``new_free_rent_months``,
-#: ``renewal_downtime_months`` and ``renewal_free_rent_months``, plus the
-#: mechanics named ``downtime_months``, ``free_rent_months`` and the occupancy
-#: factor. Everything D2.4 and later owns stays, so the guardrail keeps its
-#: full force against TI, LC and probability weighting.
+#: **Narrowed at D2.4**, and only by the fields that gate delivers:
+#: ``renewal_ti_psf``, ``new_ti_psf``, ``renewal_lc_pct``, ``new_lc_pct``,
+#: ``leasing_commission_method`` and the ``tenant_improvements`` /
+#: ``leasing_commissions`` series. Everything D2.5 owns stays, so the guardrail
+#: keeps its full force against probability weighting and expected values.
 #:
 #: ``new_rent_psf`` stays banned permanently and deliberately: D2 Section 12
 #: records its absence as correct, because a new letting prices at market by
 #: definition. Its appearance would be a financial-model error, not a gate
 #: violation.
+#:
+#: The D4 integration names are barred permanently *at this layer*: D4.0 owns
+#: the decision about how below-NOI costs reach the shared acquisition engine,
+#: and `anchor.leasing` must not pre-empt it by inventing a channel.
 _LATER_D2_GATE_NAMES = frozenset(
     {
         # D2.5 -- probability composition
@@ -548,28 +546,28 @@ _LATER_D2_GATE_NAMES = frozenset(
         "expected_occupied_area_sf",
         "expected_rent_psf",
         "expected_term_months",
+        "expected_ti_psf",
+        "expected_lc_pct",
         # never -- a new letting prices at market (D2 Section 12)
         "new_rent_psf",
         "new_rent_spread",
-        # D2.4 -- TI and LC
-        "renewal_ti_psf",
-        "new_ti_psf",
-        "renewal_lc_pct",
-        "new_lc_pct",
-        "leasing_commission_method",
-        "tenant_improvements",
-        "leasing_commissions",
+        # D4 -- the downstream below-NOI channel
+        "leasing_costs_by_year",
+        "variable_below_noi_costs_by_year",
+        "property_capital_costs_by_year",
+        "BelowNoiCosts",
+        "AcquisitionResults",
     }
 )
 
 
 def test_no_later_d2_gate_vocabulary_appears_in_production_code() -> None:
-    """D2.3 builds both pure branches and their concession mechanics, and
-    stops.
+    """D2.4 builds both branches, their concessions and their leasing costs,
+    and stops.
 
-    TI, LC and probability weighting are D2.4-D2.5. Declaring any of their
-    names now would put vocabulary into the package with no mechanism behind
-    it -- the same rule D1 applied to ``Lease.origin`` and
+    Probability weighting is D2.5 and the downstream below-NOI channel is D4.
+    Declaring any of their names now would put vocabulary into the package with
+    no mechanism behind it -- the same rule D1 applied to ``Lease.origin`` and
     ``Suite.market_rent_psf``, which each waited for the gate that could
     actually produce them.
     """
@@ -894,22 +892,39 @@ def test_no_probability_or_composition_exists_in_the_renewal_branch() -> None:
         )
 
 
-def test_no_ti_or_lc_concept_exists_in_the_renewal_branch() -> None:
-    """D2.4 owns TI and LC, both below NOI."""
+def test_each_branch_reads_only_its_own_leasing_cost_rates() -> None:
+    """D2.4. Both branches exist in one module, so the guardrail that keeps
+    them apart is that each builder names only its own rates.
 
-    referenced = _referenced_names(_rollover_tree())
+    A renewal that read ``new_ti_psf`` would look entirely plausible and be
+    silently wrong, which is what the two-branch method exists to prevent."""
 
-    for absent in (
-        "renewal_ti_psf",
-        "new_ti_psf",
-        "tenant_improvements",
-        "renewal_lc_pct",
-        "new_lc_pct",
-        "leasing_commissions",
-        "leasing_commission_method",
+    tree = _rollover_tree()
+
+    for builder, own, foreign in (
+        (
+            "build_renewal_branch",
+            {"renewal_ti_psf", "renewal_lc_pct"},
+            {"new_ti_psf", "new_lc_pct"},
+        ),
+        (
+            "build_new_tenant_branch",
+            {"new_ti_psf", "new_lc_pct"},
+            {"renewal_ti_psf", "renewal_lc_pct"},
+        ),
     ):
-        assert absent not in referenced, (
-            f"rollover.py references {absent!r}, which belongs to D2.4"
+        node = next(
+            item
+            for item in ast.walk(tree)
+            if isinstance(item, ast.FunctionDef) and item.name == builder
+        )
+        referenced = _referenced_names(node)
+
+        assert own <= referenced, f"{builder} must read {sorted(own)}"
+        leaked = referenced & foreign
+        assert not leaked, (
+            f"{builder} reads {sorted(leaked)}; a branch never inherits the "
+            "other branch's leasing-cost rates"
         )
 
 
@@ -1118,3 +1133,267 @@ def test_successor_provenance_is_set_by_the_engine_not_the_caller() -> None:
     assert isinstance(origin, ast.Attribute) and origin.attr == "SUCCESSOR", (
         "a successor's origin must be literally LeaseOrigin.SUCCESSOR"
     )
+
+
+# =============================================================================
+# D2.4 -- TI and LC have one home each, sit below NOI, and use FACE rent
+# =============================================================================
+
+
+_LEASING_COSTS_MODULE = "leasing_costs.py"
+
+
+def _leasing_costs_tree() -> ast.AST:
+    module = _LEASING_DIR / _LEASING_COSTS_MODULE
+    return ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+
+
+def test_the_ti_and_lc_formulas_have_one_home_each() -> None:
+    """Both live in ``leasing_costs.py`` and nowhere else. A second TI or LC
+    formula would be free to disagree with the first, and the branch that used
+    the wrong one would still look plausible."""
+
+    referenced = _referenced_names(_leasing_costs_tree())
+    for required in ("ti_psf", "lc_pct", "leased_area_sf"):
+        assert required in referenced, f"leasing_costs.py must own {required!r}"
+
+    for source_file in _leasing_source_files():
+        if source_file.name in {
+            _LEASING_COSTS_MODULE,
+            "contracts.py",
+            "validation.py",
+            _ROLLOVER_MODULE,
+        }:
+            continue
+        names = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        for forbidden in ("ti_psf", "lc_pct", "tenant_improvement_amount",
+                          "leasing_commission_amount"):
+            assert forbidden not in names, (
+                f"{source_file} references {forbidden!r}; leasing-cost "
+                f"calculation belongs to {_LEASING_COSTS_MODULE}"
+            )
+
+
+def test_rollover_delegates_the_leasing_cost_formulas() -> None:
+    """``rollover.py`` may pass the rates through, but must not compute either
+    amount itself."""
+
+    tree = _rollover_tree()
+    referenced = _referenced_names(tree)
+
+    assert "tenant_improvement_amount" in referenced
+    assert "leasing_commission_amount" in referenced
+    assert "contractual_face_rent_over_full_term" in referenced
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Mult):
+            continue
+        operands = _referenced_names(node)
+        assert not ({"ti_psf", "lc_pct"} & operands), (
+            "rollover.py multiplies a leasing-cost rate; both formulas belong "
+            f"to {_LEASING_COSTS_MODULE}"
+        )
+
+
+def test_the_lc_basis_is_contractual_face_rent_never_cash() -> None:
+    """The commission is earned on the lease signed. Naming a cash series in an
+    *amount* function would understate every commission carrying free rent or
+    downtime, and would do it invisibly (failure mode FM-D2-10).
+
+    The ban is scoped to the two amount functions rather than to the whole
+    module, and the distinction is the point: ``leasing_cost_event_period``
+    *must* read ``successor_occupancy_factor``, because D2 Section 8.1 defines
+    the event month as the first period with ``O_m > 0``. Occupancy determines
+    **when** a cost lands; it may never determine **how much**.
+    """
+
+    tree = _leasing_costs_tree()
+    amount_functions = {"tenant_improvement_amount", "leasing_commission_amount"}
+
+    seen = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in amount_functions:
+            continue
+        seen.add(node.name)
+        referenced = _referenced_names(node)
+        for forbidden in (
+            "cash_rent_factor",
+            "cash_base_rent",
+            "free_rent",
+            "free_rent_abatement_months",
+            "successor_occupancy_factor",
+            "downtime_months",
+            "free_rent_months",
+        ):
+            assert forbidden not in referenced, (
+                f"{node.name} references {forbidden!r}; the LC basis is "
+                "contractual FACE rent, and TI is never prorated"
+            )
+
+    assert seen == amount_functions, f"missing amount functions: {amount_functions - seen}"
+
+
+def test_the_full_term_basis_reuses_the_one_contractual_rent_formula() -> None:
+    """D2.4 extended ``rent.py`` additively. The extension must call the same
+    ``monthly_base_rent`` and ``escalation_period_index`` the D1 schedule uses,
+    so exactly one contractual-rent formula still exists."""
+
+    module = _LEASING_DIR / _RENT_CALCULATION_MODULE
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+
+    helper = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "contractual_face_rent_over_full_term"
+    )
+    referenced = _referenced_names(helper)
+
+    assert "monthly_base_rent" in referenced, (
+        "the full-term basis must call the authoritative monthly formula"
+    )
+    assert "escalation_period_index" in referenced, (
+        "the full-term basis must use the authoritative escalation chronology"
+    )
+
+    # No closed form: the helper must iterate, and must not exponentiate.
+    assert any(isinstance(node, ast.For) for node in ast.walk(helper)), (
+        "the full-term basis must iterate the contractual months"
+    )
+    for node in ast.walk(helper):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            pytest.fail(
+                "the full-term basis contains exponentiation; a geometric "
+                "shortcut would be a second rent formula"
+            )
+
+
+def test_only_one_monthly_contractual_rent_formula_exists() -> None:
+    """The compound-escalation term appears exactly once in the package -- in
+    ``monthly_base_rent`` -- and every other contractual-rent path reaches it."""
+
+    module = _LEASING_DIR / _RENT_CALCULATION_MODULE
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+
+    powers = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+    ]
+    assert len(powers) == 1, (
+        f"{module} contains {len(powers)} exponentiations; the contractual "
+        "escalation term must appear exactly once"
+    )
+
+    owner = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "monthly_base_rent"
+    )
+    assert any(
+        isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+        for node in ast.walk(owner)
+    ), "monthly_base_rent must hold the escalation term"
+
+
+def test_the_lc_basis_never_sums_the_visible_schedule() -> None:
+    """A successor term may exceed the projection, so summing
+    ``successor_schedule`` would truncate the commission (failure mode FM-17).
+    The basis must come from the successor ``Lease``, not from its schedule."""
+
+    tree = _rollover_tree()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "contractual_face_rent_over_full_term"
+        ):
+            continue
+        operands = _referenced_names(node)
+        assert "successor_schedule" not in operands, (
+            "the LC basis must be derived from the successor Lease, never from "
+            "its truncated schedule"
+        )
+        assert "contractual_base_rent" not in operands
+
+
+def test_leasing_costs_are_pure_and_perform_no_io() -> None:
+    referenced = _referenced_names(_leasing_costs_tree())
+
+    for forbidden in ("open", "read_text", "write_text", "connect", "now", "today"):
+        assert forbidden not in referenced, (
+            f"leasing_costs.py references {forbidden!r}; it must be pure"
+        )
+
+
+def test_leasing_costs_never_reach_the_downstream_engine() -> None:
+    """D4.0 owns how below-NOI costs reach acquisition, debt and returns.
+    ``anchor.leasing`` must not pre-empt that decision by inventing a channel,
+    and the forbidden-import list already bars every engine calculator."""
+
+    module = _LEASING_DIR / _LEASING_COSTS_MODULE
+    names = _imported_module_names(module)
+
+    for forbidden in _FORBIDDEN_LEASING_IMPORTS:
+        assert not any(
+            name == forbidden or name.startswith(f"{forbidden}.") for name in names
+        ), f"{module} must not import {forbidden}"
+
+
+def test_the_commission_method_lives_on_the_assumptions_never_on_a_lease() -> None:
+    """D0 Section 12.3's extension seam: adding ``PER_SF`` later must mean one
+    enum member plus rate fields, with no ``Lease`` contract change and no
+    lease-data migration."""
+
+    import dataclasses
+
+    from anchor.leasing import Lease, LeasingCommissionMethod, MarketLeasingAssumptions
+
+    assert "leasing_commission_method" not in {
+        f.name for f in dataclasses.fields(Lease)
+    }
+    assert "leasing_commission_method" in {
+        f.name for f in dataclasses.fields(MarketLeasingAssumptions)
+    }
+    assert len(list(LeasingCommissionMethod)) == 1
+
+
+def test_leasing_costs_are_never_added_into_a_rent_series() -> None:
+    """Below NOI, structurally: no append into a rent, cash or occupancy list
+    may reference a leasing-cost value."""
+
+    tree = _rollover_tree()
+    rent_series = {
+        "contractual_base_rent",
+        "cash_base_rent",
+        "free_rent",
+        "occupied_area",
+        "physical_occupancy",
+    }
+    cost_names = {
+        "ti_amount",
+        "lc_amount",
+        "tenant_improvements",
+        "leasing_commissions",
+        "full_term_face_rent",
+    }
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Attribute) and node.func.attr == "append"):
+            continue
+        if not (
+            isinstance(node.func.value, ast.Name)
+            and node.func.value.id in rent_series
+        ):
+            continue
+        leaked = _referenced_names(node) & cost_names
+        assert not leaked, (
+            f"{node.func.value.id} receives {sorted(leaked)}; TI and LC are "
+            "strictly below NOI and never enter a rent series"
+        )

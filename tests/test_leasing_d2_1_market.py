@@ -35,6 +35,7 @@ from anchor.leasing import (
     Lease,
     LeaseLevelPropertyInputs,
     LeaseType,
+    LeasingCommissionMethod,
     MarketAssumptionSource,
     MarketLeasingAssumptions,
     MarketRentSchedule,
@@ -92,6 +93,14 @@ def assumptions(**overrides: object) -> MarketLeasingAssumptions:
         "new_term_months": 60,
         "new_downtime_months": 0.0,
         "new_free_rent_months": 0.0,
+        # D2.4 leasing costs -- inert for every assertion in this module.
+        "renewal_ti_psf": 0.0,
+        "new_ti_psf": 0.0,
+        "leasing_commission_method": (
+            LeasingCommissionMethod.PCT_OF_TOTAL_CONTRACTUAL_BASE_RENT
+        ),
+        "renewal_lc_pct": 0.0,
+        "new_lc_pct": 0.0,
     }
     base.update(overrides)
     return MarketLeasingAssumptions(**base)  # type: ignore[arg-type]

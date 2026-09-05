@@ -74,8 +74,19 @@ contractual face rent, which D2.4's LC basis reads. Branch physical occupancy
 stays integral and keeps that name; the fractional
 ``successor_occupancy_factor`` is a different quantity under a different name.
 The renewal branch gains the same mechanics, and at zero downtime and zero free
-rent reproduces the accepted D2.2 result exactly. TI and LC are D2.4,
-``renewal_probability`` and composition are D2.5, recursion is D2.6.
+rent reproduces the accepted D2.2 result exactly.
+
+D2.4 adds each branch's tenant improvements and leasing commissions, both
+strictly below NOI and neither touching a rent or occupancy series. TI is
+``ti_psf x leased_area_sf``, recorded in full in the first canonical month with
+``successor_occupancy_factor > 0``. LC is ``lc_pct`` times the successor's
+**full-term** contractual face rent -- including escalations, gross of free
+rent, untruncated by the projection horizon and unreduced by a fractional first
+month -- recorded in the same month. That basis comes from
+``rent.contractual_face_rent_over_full_term``, which reaches the one D1
+monthly-rent formula, so no second escalation formula and no closed-form
+shortcut exists anywhere. ``renewal_probability`` and composition are D2.5,
+recursion is D2.6, and the downstream below-NOI channel is D4.
 """
 
 from __future__ import annotations
@@ -103,6 +114,7 @@ from .contracts import (
     LeaseMonthlySchedule,
     LeaseOrigin,
     LeaseType,
+    LeasingCommissionMethod,
     MarketAssumptionSource,
     MarketLeasingAssumptions,
     MarketRentSchedule,
@@ -121,7 +133,17 @@ from .market import (
     market_rent_psf_for_period,
     resolve_market_leasing,
 )
-from .rent import build_lease_monthly_schedule
+from .leasing_costs import (
+    leasing_commission_amount,
+    leasing_cost_event_period,
+    leasing_cost_event_series,
+    tenant_improvement_amount,
+)
+from .rent import (
+    build_lease_monthly_schedule,
+    contractual_face_rent_over_full_term,
+    lease_contractual_term_months,
+)
 from .rollover import (
     build_new_tenant_branch,
     build_renewal_branch,
@@ -194,6 +216,14 @@ __all__ = [
     "successor_occupancy_factors",
     "free_rent_waterfall",
     "maximum_consumable_free_rent_months",
+    # leasing costs (D2.4)
+    "LeasingCommissionMethod",
+    "tenant_improvement_amount",
+    "leasing_commission_amount",
+    "leasing_cost_event_period",
+    "leasing_cost_event_series",
+    "contractual_face_rent_over_full_term",
+    "lease_contractual_term_months",
     # contracts
     "EscalationBasis",
     "Lease",

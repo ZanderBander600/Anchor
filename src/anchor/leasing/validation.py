@@ -58,6 +58,7 @@ from .contracts import (
     Lease,
     LeaseLevelPropertyInputs,
     LeaseOrigin,
+    LeasingCommissionMethod,
     MarketLeasingAssumptions,
     Suite,
 )
@@ -136,6 +137,11 @@ class LeaseIssueCode(StrEnum):
     FREE_RENT_OUT_OF_DOMAIN = "FREE_RENT_OUT_OF_DOMAIN"
     NEW_TERM_OUT_OF_DOMAIN = "NEW_TERM_OUT_OF_DOMAIN"
     FREE_RENT_EXCEEDS_OCCUPIABLE_TERM = "FREE_RENT_EXCEEDS_OCCUPIABLE_TERM"
+
+    # --- leasing costs (D2.4) ---
+    TI_OUT_OF_DOMAIN = "TI_OUT_OF_DOMAIN"
+    LC_PCT_OUT_OF_DOMAIN = "LC_PCT_OUT_OF_DOMAIN"
+    UNSUPPORTED_LEASING_COMMISSION_METHOD = "UNSUPPORTED_LEASING_COMMISSION_METHOD"
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -473,6 +479,18 @@ def _validate_market_leasing_assumptions(
     against the visible portion would reject sound underwriting because of
     where the hold period happens to end.
 
+    The D2.4 leasing-cost domains (D0 Section 4.5), applied per branch:
+
+    - ``renewal_ti_psf``, ``new_ti_psf`` ``>= 0``, in ``$/SF``. Zero is a real
+      allowance -- a renewal often carries none -- never an absence.
+    - ``renewal_lc_pct``, ``new_lc_pct`` ``0 <= x <= 1``. The upper bound is
+      D0's, not invented here: a commission exceeding the entire contractual
+      rent stream is not a rate.
+    - ``leasing_commission_method`` must be a supported
+      ``LeasingCommissionMethod``. D2 implements exactly one member
+      (D0 Section 12.3); an unsupported method is refused rather than silently
+      computed under another method's rule.
+
     The D2.2 renewal domains, likewise exactly as D0 Section 4.5 states them:
 
     - ``renewal_rent_psf >= 0``, or ``None``. ``None`` means "no explicit
@@ -644,6 +662,60 @@ def _validate_market_leasing_assumptions(
                 path=f"{path}.{field_name}",
                 field=field_name,
                 code=LeaseIssueCode.FREE_RENT_OUT_OF_DOMAIN,
+            )
+        )
+
+    for field_name, code in (
+        ("renewal_ti_psf", LeaseIssueCode.TI_OUT_OF_DOMAIN),
+        ("new_ti_psf", LeaseIssueCode.TI_OUT_OF_DOMAIN),
+    ):
+        value = getattr(assumptions, field_name)
+        if not _is_finite_number(value):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.NON_FINITE_VALUE,
+                    f"{path}.{field_name}",
+                    f"{field_name} must be a finite number.",
+                )
+            )
+        elif value < 0:
+            issues.append(
+                _issue(
+                    code,
+                    f"{path}.{field_name}",
+                    f"{field_name} {value!r} must be greater than or equal "
+                    "to 0.",
+                )
+            )
+
+    for field_name in ("renewal_lc_pct", "new_lc_pct"):
+        value = getattr(assumptions, field_name)
+        if not _is_finite_number(value):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.NON_FINITE_VALUE,
+                    f"{path}.{field_name}",
+                    f"{field_name} must be a finite number.",
+                )
+            )
+        elif not 0 <= value <= 1:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.LC_PCT_OUT_OF_DOMAIN,
+                    f"{path}.{field_name}",
+                    f"{field_name} {value!r} must be between 0 and 1 "
+                    "inclusive.",
+                )
+            )
+
+    method = assumptions.leasing_commission_method
+    if not isinstance(method, LeasingCommissionMethod):
+        issues.append(
+            _issue(
+                LeaseIssueCode.UNSUPPORTED_LEASING_COMMISSION_METHOD,
+                f"{path}.leasing_commission_method",
+                f"leasing_commission_method {method!r} must be a "
+                "LeasingCommissionMethod member.",
             )
         )
 

@@ -209,3 +209,96 @@ def build_lease_monthly_schedule(
         contractual_base_rent=tuple(contractual_base_rent),
         occupied_area=tuple(occupied_area),
     )
+
+
+# =============================================================================
+# D2.4 -- contractual face rent over a lease's FULL term
+#
+# An additive extension. It introduces no formula: both functions below reach
+# the same `monthly_base_rent` and `escalation_period_index` the D1 schedule
+# builder uses, so there remains exactly one contractual-rent formula in the
+# package. `build_lease_monthly_schedule` is untouched and its output is
+# bit-identical.
+# =============================================================================
+
+
+def lease_contractual_term_months(lease: Lease) -> int:
+    """Return the lease's own contractual term, in whole months.
+
+    Derived from the lease's own dates rather than accepted as a parameter, so
+    a caller cannot pass a term that disagrees with the contract it describes.
+    ``lease_expiration_date`` is inclusive and both dates are month-aligned
+    (enforced by ``anchor.leasing.validation``), so a lease commencing
+    2028-07-01 and expiring 2033-06-30 is exactly 60 months.
+
+    Anchored to the lease's **own commencement**, never to the analysis start:
+    the result is a property of the contract and is identical whatever deal it
+    is acquired in.
+    """
+
+    return month_index(
+        lease.lease_expiration_date, analysis_start=lease.rent_commencement_date
+    )
+
+
+def contractual_face_rent_over_full_term(lease: Lease) -> float:
+    """Return the lease's total contractual **face** base rent over its whole
+    term, in dollars.
+
+    ```
+    sum over m in 1 .. term_months of
+        base_rent_psf * (1 + escalation_pct) ** floor((m - 1) / 12)
+            * leased_area_sf / 12
+    ```
+
+    **This is the D2.4 leasing-commission basis** (D0 Section 12.2, D2
+    Section 8.3), and every property of that basis follows from what this
+    function does and does not consult:
+
+    - **Escalations are included** -- each month is priced on the lease's own
+      contractual chronology, through the same ``escalation_period_index`` the
+      D1 schedule uses.
+    - **It is gross of free rent.** Free rent is a cash concession and is not a
+      ``Lease`` field at all, so it cannot reach this calculation. A broker
+      earns on the lease signed, not on the landlord's concession.
+    - **It is untruncated by the projection horizon.** The iteration runs over
+      the lease's own ``term_months``, not over canonical ``ModelMonth``
+      values, so a 60-month successor inside an eight-month remaining window
+      still contributes 60 months. Truncating it is failure mode FM-17.
+    - **It is unreduced by downtime.** The successor's first contractual period
+      carries a **full** month of face rent even when a fractional downtime
+      boundary means Anchor recognises only part of that month's *cash*. The
+      boundary factor is a cash-recognition artifact of the monthly grid and
+      never enters this basis (D2 Section 8.3, failure mode FM-D2-11b).
+
+    **No second calendar is created.** The iteration is over offsets from the
+    lease's own commencement, so no ``ModelMonth`` beyond the canonical
+    projection is constructed, no hold year moves, and the forward exit window
+    is untouched. These periods enter no revenue, EGI or NOI series -- forming
+    a commission basis is the one thing they are for (D0 Section 12.2).
+
+    **No closed form.** A geometric-series shortcut would be a second rent
+    formula free to disagree with the first; this iterates and calls the
+    authoritative one, exactly as the schedule builder does.
+
+    Wrapped in ``ensure_finite``, so a term long enough to overflow fails
+    loudly rather than propagating a silent ``inf``.
+    """
+
+    term_months = lease_contractual_term_months(lease)
+    first_period = 1  # the lease's own first contractual period
+
+    total = 0.0
+    for offset in range(term_months):
+        total += monthly_base_rent(
+            base_rent_psf=lease.base_rent_psf,
+            leased_area_sf=lease.leased_area_sf,
+            escalation_pct=lease.escalation_pct,
+            escalation_index=escalation_period_index(
+                period=first_period + offset,
+                raw_first_rent_period=first_period,
+                basis=lease.escalation_basis,
+            ),
+        )
+
+    return ensure_finite("contractual_face_rent_over_full_term", total)
