@@ -4,7 +4,7 @@ type: feat
 date: 2026-09-05
 topic: lease-level-underwriting
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: awaiting-human-financial-decision
+artifact_readiness: financially-accepted
 execution: docs-only
 sprint: D
 gate: D2.0
@@ -24,11 +24,16 @@ Verified baseline (`main` @ `9cca23d`): leasing suite 810 passed, full backend
 2583 passed, Quick and Detailed bit-identical, D1 isolated from the rest of
 Anchor.
 
+**Human financial review is complete.** Every decision this document raised
+has been answered; the outcomes are recorded in Section 3. Two were approved as
+proposed, one was approved with a naming restriction, and two were rejected and
+replaced with stricter rules. No human financial decision blocks D2.1.
+
 This document **does not overwrite**
 `docs/plans/2026-09-04-anchor-lease-level-underwriting-d0-architecture.md`
-(hereafter D0). Where it recommends changing a D0-approved convention, that
-change is recorded explicitly in Section 3 and **requires human approval before
-D2.1 begins**.
+(hereafter D0). Where an approved D2 convention supersedes a D0-approved one,
+that supersession is recorded explicitly in Section 3 with the original
+preserved. D0 itself is unmodified.
 
 ---
 
@@ -92,9 +97,9 @@ parameter.
 The term problem is the one D0 anticipated. The rent-timing and LC problems are
 larger and were not anticipated.
 
-### 1.4 Recommendation
+### 1.4 Approved methodology
 
-**Adopt Option B — weight the outcomes, not the parameters.**
+**Option B — weight the outcomes, not the parameters. APPROVED.**
 
 Build the renewal path and the new-tenant path as two complete deterministic
 monthly schedules, then form the expected monthly series:
@@ -108,19 +113,26 @@ rounding and no forced equality. Reproduces `p = 1` and `p = 0` trivially. Both
 branch assumption sets survive intact for audit, because they are what the
 engine actually computes rather than inputs it averages away.
 
-Two consequences require human approval (Section 3):
+The composed schedule is an **expected-value underwriting output**, not a
+literal signed successor lease. Both branches' assumptions *and* both branches'
+results are preserved for audit.
 
-- **HD-D2-1** — this reverses D0 §8.2 and §8.3's explicit rejection of branch
-  economics.
-- **HD-D2-2** — after a rollover, occupancy becomes a probability-weighted
-  *expected* occupancy, not a contractual *physical* one. D0 §8.3 claims the
-  synthetic method "avoids fractional physical occupancy." Anchor must instead
-  report the two as distinct, clearly labelled series.
+Three consequences, all now settled (Section 3):
+
+- **HD-D2-2** — composed occupancy may be fractional, and must be named
+  `expected_occupied_area_sf` / `expected_occupancy`, never
+  `physical_occupancy`.
+- **HD-D2-3** — rollover recursion runs to the **canonical projection end**.
+  There is no financial depth cap. Any computational limit is implementation
+  safety only, deferred to D2.6.
+- **HD-D2-4** — downtime and free rent compose as a **sequential waterfall**,
+  not as independent multiplicative factors.
 
 ### 1.5 Classification
 
-**B — D2.0 COMPLETE, HUMAN FINANCIAL DECISION REQUIRED.** Four decisions
-(HD-D2-1 … HD-D2-4). The first two block D2.1.
+**A — D2.0 FINANCIALLY ACCEPTED, READY TO BEGIN D2.1.** All four decisions are
+resolved. One new recommendation (free-rent over-grant validation, Section 7.5)
+is recorded for review at D2.3 and does not block D2.1.
 
 ---
 
@@ -154,11 +166,12 @@ convention below is justified on financial and architectural grounds only.
 
 ---
 
-## 3. Proposed Changes to D0 — HUMAN APPROVAL REQUIRED
+## 3. Approved Changes to D0 — Decisions Recorded
 
-Recorded in the required form. D0 itself is **not edited by this gate**.
+Recorded in the required form, with the original preserved. **D0 itself is not
+edited by this gate**; these supersessions govern D2 implementation.
 
-### HD-D2-1 — The rollover composition method
+### HD-D2-1 — The rollover composition method — **APPROVED**
 
 **CURRENT D0** (§8.2, §8.3). One synthetic successor built from
 probability-weighted *parameters*: `expected_rent_psf`,
@@ -195,11 +208,29 @@ parameter is averaged. No term is rounded.
 later rollovers. Section 5 bounds it explicitly rather than rejecting the
 method.
 
-**HUMAN APPROVAL REQUIRED.** This reverses an explicitly locked D0 convention.
+**OUTCOME: APPROVED.** D0 §8.2's synthetic weighted-parameter successor is
+**SUPERSEDED for D2 implementation** by probability-weighted outcome economics.
+D0's text stands as the historical record of the rejected method.
+
+The approved composition, stated once and normatively:
+
+```
+expected_monthly_economic_value
+    = p × renewal_branch_value  +  (1 − p) × new_tenant_branch_value
+```
+
+where each branch is calculated **independently and completely** from its own
+starting rent, contractual escalation, downtime, free rent, TI, LC, lease term,
+commencement timing, expiration timing, and future rollover timing.
+
+Input parameters are **never** probability-weighted, and no synthetic `Lease` is
+constructed. The composed schedule is an **expected-value underwriting output**,
+not a signed lease. Both branch assumption sets and both branch *results* are
+preserved for auditability.
 
 ---
 
-### HD-D2-2 — Physical occupancy versus expected occupancy
+### HD-D2-2 — Physical vs expected occupancy — **APPROVED WITH NAMING RESTRICTION**
 
 **CURRENT D0** (§8.3). "Avoids fractional physical occupancy. One suite, one
 successor, integral space. Occupancy stays reportable and the area invariant
@@ -228,50 +259,87 @@ extends the same honesty to the occupancy series.
 The frontend must label the two differently, and the month at which a suite
 crosses from contractual to expected must be visible.
 
-**HUMAN APPROVAL REQUIRED.** This adds a concept D0 does not have and softens
-a stated D0 property.
+**OUTCOME: APPROVED, with a binding naming restriction.**
+
+| Concept | Meaning | Integral? | Name |
+|---|---|---|---|
+| **Branch physical occupancy** | A scenario state: within the renewal path or the new-tenant path, the suite is occupied or it is not | **Yes, always** | `physical_occupancy` / `occupied_area_sf`, per branch |
+| **Composed expected occupancy** | `p × renewal occupancy + (1 − p) × new occupancy` — a probability-weighted underwriting expectation | May be fractional | **`expected_occupied_area_sf`, `expected_occupancy`** |
+
+**The composed fractional series must never be named `physical_occupancy`** or
+otherwise imply that 65% of a suite is literally occupied. Each individual
+branch retains a genuine, integral physical occupancy; only the composition is
+an expectation.
+
+**D1's contractual `physical_occupancy` semantics are unchanged.** Every period
+before a suite's first rollover remains contractual and integral.
+
+D0 §8.3's "avoids fractional physical occupancy" is therefore **preserved at the
+branch level** and **superseded only for the composed series**, which is a
+different quantity under a different name.
 
 ---
 
-### HD-D2-3 — Second and later rollovers
+### HD-D2-3 — Second and later rollovers — **REJECTED AND REPLACED**
 
 **CURRENT D0.** §8.1 states a successor "is itself eligible to roll over when
 it expires, so a short remaining term in a long hold produces a chain," and
 §8.3 rejects recursion as unauditable. D0 does not reconcile the two.
 
-**PROPOSED D2.0.** Recurse with per-rollover independence, **bounded by an
-explicit validated cap**: rollover depth ≤ 4 per suite, i.e. at most 16 chains.
-Exceeding it is a validation ERROR naming the suite, not a silent truncation
-and not a silent approximation. See Section 5.
+**PROPOSED D2.0 (rejected).** A fixed financial recursion cap of depth 4
+(≤ 16 chains), with an ERROR beyond it.
 
-**WHY.** Independence is the true model. The cap is what makes it auditable and
-bounded, and 4 covers every realistic competition case (Section 5.2). An
-analyst who trips it has a rent roll with sub-2-year terms across a 10-year
-hold and should be told, not quietly given an averaged answer.
+**OUTCOME: REJECTED AND REPLACED.** A fixed depth cap is a *financial*
+truncation dressed as a safety limit, and it was justified partly by the claim
+that one-year commercial leases are unrealistic. **That claim is withdrawn** —
+short-term commercial leases exist, and a model must not refuse them on
+aesthetic grounds.
 
-**HUMAN APPROVAL REQUIRED** — for the cap value and for the error-rather-than-
-approximate behaviour.
+**The approved economic rule:**
+
+> **Recurse as required until the canonical projection ends.** The projection
+> horizon `12H + 12` is the financial termination, and the only one.
+
+Rollover generation stops when a successor's commencement exceeds the window,
+never because a count of rollover events was reached.
+
+**Separately**, D2.6 *may* introduce a **computational safety guardrail** —
+maximum generated nodes, maximum rollover events, or an equivalently
+deterministic complexity limit. Any such guardrail:
+
+- fails explicitly with an **ERROR**;
+- **never silently truncates economics**;
+- is **never treated as a financial assumption**;
+- is sized from actual deterministic performance testing, not guessed;
+- comfortably preserves ordinary commercial lease cases.
+
+The exact threshold, and whether one is needed at all, is **deferred to D2.6**.
+It does **not** block D2.1–D2.5. See Section 5.
 
 ---
 
-### HD-D2-4 — Free-rent and downtime boundary interaction
+### HD-D2-4 — Downtime and free rent — **REJECTED AND REPLACED**
 
 **CURRENT D0.** §9.3 defines the downtime boundary factor; §10.3 says downtime
 and free rent are sequential and disjoint. Neither states what happens when a
 *fractional* downtime boundary month is also the first free-rent month.
 
-**PROPOSED D2.0.** The two factors are **independent and multiplicative** in
-that single month:
+**PROPOSED D2.0 (rejected).** Independent multiplicative factors:
 `rent(c) = contractual(c) × (1 − frac(D)) × (1 − free_rent_factor(c))`.
-Continuous in both D and F, one rule, no special case. Section 7.3.
 
-**WHY.** The alternatives each introduce a discontinuity (free rent "winning"
-the month makes `F = 0` pay 75% and `F = 0.01` pay 0%) or a second convention
-("free rent starts at the first full month"). Under Option B both D and F are
-per-branch analyst assumptions and are normally integers, so this edge is rare
-— but it must be defined rather than discovered in code.
+**OUTCOME: REJECTED AND REPLACED** by a **sequential economic waterfall**.
 
-**HUMAN APPROVAL REQUIRED** — minor, but it is a financial convention.
+The multiplicative rule silently destroyed part of the concession: in a
+fractional commencement month it consumed a *whole* free month while abating
+only a *fraction* of a month's rent. A tenant granted 2.5 months free would
+receive less than 2.5 months of abatement, with the shortfall invisible.
+
+The approved waterfall makes `free_rent_months` mean what it says —
+**full month-equivalents of base-rent abatement** — and guarantees
+`Σ free_abatement_m = free_rent_months` exactly. Full specification and worked
+example in Section 7.
+
+**Approved.**
 
 ---
 
@@ -309,12 +377,12 @@ Compute the renewal path and the new-tenant path as complete deterministic
 monthly schedules over the canonical timeline, then weight the **outputs**:
 
 ```
-contractual_base_rent[m] = p · rent_R[m] + (1 − p) · rent_N[m]
-occupied_area[m]         = p · occ_R[m]  + (1 − p) · occ_N[m]     (expected)
-free_rent[m]             = p · free_R[m] + (1 − p) · free_N[m]
-tenant_improvements[m]   = p · ti_R[m]   + (1 − p) · ti_N[m]
-leasing_commissions[m]   = p · lc_R[m]   + (1 − p) · lc_N[m]
-expense_recoveries[m]    = p · rec_R[m]  + (1 − p) · rec_N[m]      (D3)
+contractual_base_rent[m]     = p · rent_R[m] + (1 − p) · rent_N[m]
+free_rent[m]                 = p · free_R[m] + (1 − p) · free_N[m]
+tenant_improvements[m]       = p · ti_R[m]   + (1 − p) · ti_N[m]
+leasing_commissions[m]       = p · lc_R[m]   + (1 − p) · lc_N[m]
+expense_recoveries[m]        = p · rec_R[m]  + (1 − p) · rec_N[m]   (D3)
+expected_occupied_area_sf[m] = p · occ_R[m]  + (1 − p) · occ_N[m]
 ```
 
 Every one of these is exact by linearity of expectation, because each branch
@@ -323,7 +391,7 @@ series is deterministic and the weights are constants.
 | Property | Result |
 |---|---|
 | Rent | Exact |
-| Occupancy | Exact **as an expectation**; fractional after rollover (HD-D2-2) |
+| Occupancy | Exact **as an expectation**. Each branch keeps an integral `physical_occupancy`; only the composed `expected_occupied_area_sf` may be fractional (HD-D2-2) |
 | Downtime | Exact — each branch has its own integer or fractional downtime, applied within its own path |
 | Free rent | Exact, same reasoning |
 | TI | Exact, **including timing** — each branch pays at its own commencement month |
@@ -333,9 +401,11 @@ series is deterministic and the weights are constants.
 | Recoveries (D3) | Compose cleanly — recoveries are a monthly series like any other |
 | Exit NOI | Composes cleanly — the forward window is just months `12H+1…12H+12` of the weighted series |
 
-**The one genuine cost:** fractional expected occupancy after the first
-rollover, and branch growth at the second and later rollovers. Both are
-addressed — HD-D2-2 and Section 5 respectively.
+**The one genuine cost:** the composed occupancy series is an expectation and
+may be fractional, and the chain count grows with rollover depth. Both are
+settled — HD-D2-2 fixes the naming so the expectation is never mistaken for a
+physical fact, and Section 5 makes the projection horizon the only financial
+terminator while deferring any computational limit to D2.6.
 
 **On D0 §8.3's objection.** D0 rejected this as producing "an average over a
 tree no analyst can enumerate." For the *first* rollover the tree is exactly two
@@ -427,55 +497,64 @@ documented fallback.
 
 ## 5. Second and Later Rollovers
 
-### 5.1 The structure
+### 5.1 Financial termination — the canonical projection end
 
-Under Option B a suite's future is a **tree of lease chains**, each chain
-deterministic and carrying a probability. After `r` rollovers inside the
-projection window there are `2^r` chains, and the expected series is the
-probability-weighted sum over them. Expectation stays exact at every depth;
-only the enumeration grows.
+**The economic rule: recurse as required until the canonical projection ends.**
 
-Chain probabilities multiply: renew-then-renew is `p²`, renew-then-vacate is
-`p(1−p)`, and so on, summing to 1.
+A successor that expires inside the window rolls over again, and so on, until a
+successor's commencement would fall beyond period `12H + 12`. The projection
+horizon is the financial termination and the only one. No count of rollover
+events ever terminates the economics.
 
-### 5.2 How deep does it actually go?
+Under the approved outcome-weighting methodology a suite's future is a **tree of
+deterministic lease chains**, each carrying a probability. Chain probabilities
+multiply — renew-then-renew is `p²`, renew-then-vacate is `p(1 − p)` — and sum
+to `1` at every depth. Expectation stays exact at every depth; only the
+enumeration grows.
 
-Rollovers inside a `12H + 12` window, by successor term:
+### 5.2 Computational safety is a separate concern — deferred to D2.6
+
+The number of chains grows with the number of rollovers inside the window:
 
 | Hold | Window | 10-yr terms | 5-yr terms | 3-yr terms | 1-yr terms |
 |---|---|---|---|---|---|
 | 5 yr | 72 mo | 1 | 2 | 2 | 6 |
 | 10 yr | 132 mo | 2 | 3 | 4 | 11 |
 
-Chains = `2^r`: a 10-year hold with 5-year terms is 8 chains per suite; with
-3-year terms, 16. A 20-suite property at depth 4 is 320 chains × 132 months —
-entirely tractable. One-year terms (2048 chains) are the pathological case, and
-they are also not a realistic commercial rent roll.
+Short-term commercial leases are legitimate and Anchor must model them. Nothing
+here treats a one-year term as unrealistic.
 
-### 5.3 Recommendation
+**A naive `2^r` chain materialisation is an implementation choice, not a
+requirement of the economics.** The expected monthly series is a linear
+functional of the chains, so a deterministic dynamic-programming or state-based
+formulation can compute the identical result without enumerating the tree — for
+example by carrying, per canonical period, the probability mass currently in
+each distinguishable successor state rather than each distinguishable history.
+**D2.6 owns that choice and must prove it.** No optimisation is required now,
+and no approximation is permitted in exchange for one.
 
-**Recurse with per-rollover independence, capped at rollover depth 4 per
-suite** (≤ 16 chains). Exceeding the cap is a validation **ERROR** naming the
-suite and its term, never a silent truncation and never a silent switch to a
-cheaper method.
+If implementation and performance testing at D2.6 show a safety limit is needed,
+it may be added as **implementation safety only**, sized from measurement. Any
+such limit must:
 
-Rationale: depth 4 covers every case in the table above except 1-year terms;
-the failure is loud, explains itself, and has an obvious analyst remedy (state
-a longer successor term, or shorten the hold). Silently approximating at depth
-5 would reintroduce exactly the class of hidden convention this gate exists to
-eliminate.
+- fail explicitly with an **ERROR** naming the suite;
+- **never silently truncate economics**;
+- **never be treated as a financial assumption**;
+- comfortably preserve ordinary commercial lease cases.
 
-**Dependency on the primary methodology.** This recommendation exists *because*
-Option B was chosen. Under Option A there is one synthetic chain and no tree;
-under D-i there are permanently two. If HD-D2-1 is declined, HD-D2-3 is moot.
+**Whether such a limit is needed, and its threshold, is deferred to D2.6.** It
+does not block D2.1–D2.5, and it is not a financial convention.
+
+### 5.3 Monte Carlo remains excluded
+
+Recursion is deterministic enumeration or its dynamic-programming equivalent.
+No sampling, at any depth, under any framing.
 
 ### 5.4 Truncation at the horizon is unchanged
 
 A chain stops when its successor's commencement exceeds `12H + 12`. Nothing
 beyond the window is computed for revenue. D0 §8.6's rule stands, and the LC
 basis remains untruncated (Section 8.3).
-
----
 
 ## 6. Downtime — Exact Monthly Semantics
 
@@ -528,89 +607,134 @@ different things and D2 does not blur them.
 
 ## 7. Free Rent — Exact Semantics
 
-### 7.1 Fractional free rent: permitted, symmetric with downtime
+### 7.1 The two-step waterfall — approved (HD-D2-4)
 
-With `F ≥ 0` free months from the successor's commencement period `c`:
+Downtime and free rent compose **sequentially**, never as independent
+multiplicative factors.
+
+**Step 1 — downtime sets occupancy.** For each canonical period `m`, downtime
+determines the successor's occupancy / rent-eligibility fraction:
 
 ```
-fully abated   = periods c … c + floor(F) − 1        exactly floor(F) periods
-partial period = c + floor(F), abated by frac(F)
-no abatement   = thereafter
+O_m ∈ [0, 1]
+
+O_m = 0                     for a fully vacant downtime period
+O_m = 1 − frac(D)           for the commencement period c = e + 1 + floor(D)
+O_m = 1                     for every full successor period thereafter
+O_m = 0                     before expiry and after the successor's term
 ```
 
-Total abated = exactly `F` months of contractual rent.
+**Step 2 — free rent is consumed against occupancy.** `free_rent_months` is
+**full month-equivalents of base-rent abatement**, `≥ 0`, fractional permitted.
+It may be consumed **only while the successor is economically occupying the
+suite**. Walking the successor's periods chronologically, carrying
+`remaining_free_rent_months` initialised to `free_rent_months`:
 
-| `F` | fully abated | partial | total abated |
-|---|---|---|---|
-| `0` | *none* | *none* | `0` |
-| `2` | `c, c+1` | *none* | `2` |
-| `2.5` | `c, c+1` | `c+2` at `0.5` | `2.5` |
-| `6` | `c … c+5` | *none* | `6` |
+```
+free_abatement_m   = min(O_m, remaining_free_rent_months)
+cash_rent_factor_m = O_m − free_abatement_m
+remaining_free_rent_months −= free_abatement_m
+```
 
-**Permitted rather than required.** Under Option B each branch carries its own
-free-rent assumption, normally a whole number ("six months free"). Fractional
-`F` exists only because an analyst may state it.
+Monthly base rent recognised is then
+`contractual_monthly_rent(m) × cash_rent_factor_m`, and the abatement reported
+on its own line is `contractual_monthly_rent(m) × free_abatement_m`.
 
-### 7.2 What free rent does and does not do
+**Guarantee:** `Σ free_abatement_m = free_rent_months` exactly, subject only to
+Section 7.5's validation.
+
+**Why this replaced the multiplicative rule.** Multiplying independent factors
+consumed a *whole* free month in a fractional commencement period while abating
+only a *fraction* of a month's rent — silently shortchanging the concession. The
+waterfall makes `free_rent_months` mean what it says.
+
+### 7.2 Worked example — the approved reference case
+
+Lease expires **June 30**. Downtime **2.25** months. Free rent **2.5** months.
+
+`floor(2.25) = 2`, so `c = e + 1 + 2` = **September**, and
+`O_September = 1 − 0.25 = 0.75`.
+
+| Period | `O_m` | `free_abatement_m` | `cash_rent_factor_m` | remaining |
+|---|---|---|---|---|
+| July | `0.00` | `0.00` | `0.00` | `2.50` |
+| August | `0.00` | `0.00` | `0.00` | `2.50` |
+| **September** | `0.75` | **`0.75`** | **`0.00`** | `1.75` |
+| **October** | `1.00` | **`1.00`** | **`0.00`** | `0.75` |
+| **November** | `1.00` | **`0.75`** | **`0.25`** | `0.00` |
+| **December** | `1.00` | `0.00` | `1.00` | `0.00` |
+
+**Total abatement = `2.50` full-rent-month equivalents.** ✓
+
+September consumes **0.75**, not `1.0` — it is one calendar period but only
+three-quarters of a month of occupancy, and the concession is denominated in
+month-equivalents of rent, not in calendar periods.
+
+### 7.3 What free rent does and does not do
 
 | | |
 |---|---|
 | Abates | Contractual **base rent** only |
-| Above or below NOI | **Above** — it is a revenue abatement, reported on its own line, never netted into `contractual_base_rent`, never reclassified as a capital cost |
-| Occupancy | **No effect.** The tenant is in possession and the suite is occupied |
+| Above or below NOI | **Above** — a revenue abatement on its own line, never netted into `contractual_base_rent`, never reclassified as a capital cost |
+| Occupancy | **No effect.** `O_m` is unchanged by free rent. **Free rent never makes occupied space vacant** |
 | Recoveries (D3) | **No automatic effect.** Whether a tenant reimburses during an abatement is a function of the lease's recovery structure, not of the free-rent input |
 | LC basis | **No effect** — the basis is gross of free rent (Section 8.3) |
 
-### 7.3 The boundary-month interaction — HD-D2-4
-
-When period `c` is both the fractional downtime boundary *and* a free-rent
-period, the two factors are **independent and multiplicative**:
-
-```
-rent(c) = contractual(c) × (1 − frac(D)) × (1 − free_rent_factor(c))
-```
-
-Worked: `D = 2.25`, `F = 1`, contractual `10,000`/month →
-`10,000 × 0.75 × 0 = 0`. With `F = 0.5` → `10,000 × 0.75 × 0.5 = 3,750`.
-
-Continuous in both `D` and `F`, one rule, no special case. The alternatives
-were rejected: "free rent wins the month" is discontinuous at `F = 0⁺`, and
-"free rent starts at the first full month" needs a second convention and makes
-a tenant with six months free still pay a stub month.
-
-**Consequence, stated:** free-rent consumption is measured in **contract months
-from `c`**, so when a boundary month exists the *dollars* abated are slightly
-less than `F` full months. That is correct — the lease grants `F` months of
-contract time, and the tenant only occupied part of the first one.
+The occupancy-versus-cash distinction is load-bearing and **must survive into
+D3**: a tenant in a free-rent period is in possession, so a NNN successor
+continues to reimburse operating expenses even while paying no base rent.
 
 ### 7.4 Downtime versus free rent — locked
 
 | | **Downtime** | **Free rent** |
 |---|---|---|
 | Physical state | Space is **vacant**; no successor in possession | Successor **is in possession** |
-| Occupancy | Suite counts as vacant | Suite counts as occupied |
-| Base rent | Zero (no tenant) | Zero (abated concession) |
-| Recoveries (D3) | **Stop** — no tenant to reimburse | **Unaffected by free rent itself** |
-| TI timing | TI is *not* paid during downtime | TI already paid at `c` |
-| Sequence | Ends at `c` | Begins at `c` |
+| Occupancy `O_m` | Drives it to `0` (or a boundary fraction) | **Unchanged** |
+| Base rent | Zero — there is no tenant | Zero or partially abated — there is a tenant |
+| Recoveries (D3) | **Stop** — no tenant to reimburse | **Continue**, per the lease's recovery structure |
+| TI timing | TI is *not* paid during downtime | TI already paid at commencement |
+| Sequence | Step 1 — sets `O_m` | Step 2 — consumed against `O_m` |
 | Cause | Time to re-let | Concession to win the lease |
 
-They never overlap: downtime ends at `c`, free rent begins at `c`. The single
-period `c` may carry a downtime *factor* and a free-rent *factor*
-simultaneously (7.3), but it is unambiguously an **occupied** period.
+They are stages of one waterfall, not competing factors on one period.
 
-This distinction is load-bearing for D3 recoveries, for the occupancy series,
-and for TI timing, which is why it is locked here rather than in D2.3.
+### 7.5 Free-rent domain and over-grant validation
 
----
+**Domain: `free_rent_months ≥ 0`, fractional permitted.** Confirmed unchanged
+from D0.
+
+The waterfall can absorb at most `Σ O_m` month-equivalents over the successor's
+contract term, which for a `T`-month term commencing at a fractional boundary is
+`T − frac(D)`. A stated concession larger than that cannot be fully consumed
+within the lease.
+
+**Recommendation for D2.3 (recorded for human review).** Validate
+
+```
+free_rent_months ≤ successor_term_months − frac(downtime_months)
+```
+
+as a **validation ERROR** — `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM` — naming both
+figures. Silently discarding the unconsumable remainder would understate the
+concession invisibly, which is exactly the failure the waterfall replaced.
+
+**This is a tightening of D0**, which sets the domain at `≥ 0` with no upper
+bound. It is recorded here rather than applied: it takes effect only if approved
+at D2.3, and it does not block D2.1.
 
 ## 8. TI and LC
 
 ### 8.1 TI timing — confirmed
 
-TI is `ti_psf × leased_area_sf`, recorded **in full, in the single period `c`**,
-below NOI. It is **not** prorated by the downtime boundary factor and **not**
-spread across a draw schedule in D2.
+TI is `ti_psf × leased_area_sf`, recorded **in full, in the first canonical
+period with `O_m > 0`** — that is, the first period in which the successor
+economically occupies the suite after downtime. Below NOI. **Not** prorated by
+the boundary factor and **not** spread across a draw schedule in D2.
+
+That period is exactly `c = e + 1 + floor(D)`: every earlier period has
+`O_m = 0`, and `O_c = 1 − frac(D) > 0` for every real `D ≥ 0`. The two
+statements coincide by construction; the `O_m > 0` form is stated as primary
+because it survives any future refinement of the occupancy step.
 
 Worked, exactly as the review asked: lease expires **June 30**, downtime
 **2.25** months.
@@ -831,12 +955,12 @@ Option B **nothing is weighted at the parameter level**, so the column reads
 | `renewal_rent_spread` | decimal | n/a | `> −1` | renewal | ~ | from `c_R` | no | no | D2.2 |
 | `renewal_term_months` | months | from `c_R` | `≥ 1` | renewal | **✘ fractional** | term length | no | **yes** | D2.2 |
 | `renewal_downtime_months` | months | from expiry | `≥ 0` | renewal | **✘ timing** | vacancy block | **yes** | **yes** (shifts `c`) | D2.2 |
-| `renewal_free_rent_months` | months | from `c_R` | `≥ 0` | renewal | **✘ timing** | abatement | no | no | D2.2 |
+| `renewal_free_rent_months` | months | consumed from `c_R` | `≥ 0`, fractional ok (7.5) | renewal | **✘ timing** | abatement waterfall | no | no | D2.2 |
 | `renewal_ti_psf` | $/SF | paid at `c_R` | `≥ 0` | renewal | ~ amount yes, timing no | at `c_R`, below NOI | no | no | D2.4 |
 | `renewal_lc_pct` | decimal | paid at `c_R` | `0 ≤ x ≤ 1` | renewal | **✘ product** | at `c_R`, below NOI | no | no | D2.4 |
 | `new_term_months` | months | from `c_N` | `≥ 1` | new | **✘ fractional** | term length | no | **yes** | D2.3 |
 | `new_downtime_months` | months | from expiry | `≥ 0` | new | **✘ timing** | vacancy block | **yes** | **yes** | D2.3 |
-| `new_free_rent_months` | months | from `c_N` | `≥ 0` | new | **✘ timing** | abatement | no | no | D2.3 |
+| `new_free_rent_months` | months | consumed from `c_N` | `≥ 0`, fractional ok (7.5) | new | **✘ timing** | abatement waterfall | no | no | D2.3 |
 | `new_ti_psf` | $/SF | paid at `c_N` | `≥ 0` | new | ~ | at `c_N`, below NOI | no | no | D2.4 |
 | `new_lc_pct` | decimal | paid at `c_N` | `0 ≤ x ≤ 1` | new | **✘ product** | at `c_N`, below NOI | no | no | D2.4 |
 | `leasing_commission_method` | enum | n/a | one member in D2 | common | n/a | LC basis | no | no | D2.4 |
@@ -931,7 +1055,7 @@ already-verified code rather than new claims.
 | **D2.3** | Pure new-tenant path (`p = 0`) + downtime + free rent | Market-priced successor after downtime; the exact `D` and `F` boundary rules of Sections 6–7; downtime/free-rent distinction visible in the occupancy series | `rollover.py` |
 | **D2.4** | TI + LC | Both below NOI, both at `c`, LC on contractual face rent untruncated and gross of free rent; **G-3 perturbation** (doubling TI/LC leaves NOI bit-identical) | new `leasing_costs.py` |
 | **D2.5** | Expected rollover composition | The weighting `E[x] = p·x_R + (1−p)·x_N`; `p=1`/`p=0` reproduce D2.2/D2.3 **bit-identically**; expected vs physical occupancy split (HD-D2-2) | `rollover.py` |
-| **D2.6** | Recursive rollover + closeout | Bounded tree (HD-D2-3), depth cap and its ERROR, forward-window rollover, full D2 golden suite, guardrails | `rollover.py`, tests |
+| **D2.6** | Recursive rollover + closeout | Recursion to the canonical projection end; forward-window rollover; full D2 golden suite; guardrails. **Owns the computational-safety decision**: whether a node/event limit is needed, sized from measurement, ERROR-only, never a financial assumption | `rollover.py`, tests |
 
 **The D2.5 bit-identity requirement is the key safety property**: `p = 1` must
 reproduce D2.2's output bit-for-bit and `p = 0` must reproduce D2.3's, because
@@ -963,7 +1087,8 @@ stated period `e`.
 | **6** | Fractional downtime | `D = 2.25` and `D = 5.5` | Section 6.2's table exactly; **total forgone = D** to `abs=1e-9` |
 | **7** | Zero free rent | `F = 0` | Successor pays full contractual rent from `c` |
 | **8** | Integer free rent | `F = 6` | Six abated periods from `c`; `contractual_base_rent` stays **gross**; abatement on its own line |
-| **9** | Fractional free rent + boundary | `D = 2.25`, `F = 2.5` | The multiplicative rule of 7.3: period `c` pays `contractual × 0.75 × 0.5` |
+| **9** | Fractional free rent + fractional downtime | `D = 2.25`, `F = 2.5` | **The Section 7.2 reference case, asserted period by period**: Sep `0.75 / 0.00`, Oct `1.00 / 0.00`, Nov `0.75 / 0.25`, Dec `0.00 / 1.00`; total abatement exactly `2.50`. Proves September consumes `0.75` of a free month, not `1.0` |
+| **9b** | Free rent exceeding the occupiable term | `T = 6`, `D = 0.5`, `F = 6` | Section 7.5's `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM` ERROR — the concession is never silently discarded *(subject to approval at D2.3)* |
 | **10** | TI | `ti_psf = 10`, `D = 2.25`, expiry June | Full TI in **September** (period `c`), never prorated, never in a downtime period, **NOI bit-identical** when TI doubles |
 | **11** | LC | term 60, `D = 2.25`, `F = 6`, escalating | LC on **60 full contractual months**, gross of free rent, untruncated by the horizon, unaffected by the `0.75` boundary factor; recorded at `c`; **NOI bit-identical** when LC doubles |
 | **12** | Market step before rollover | expiry period 11, `D = 0` → `c = 12`; expiry period 12, `D = 0` → `c = 13` | The successor commencing in period 13 prices one growth band higher. Market rent steps on the **analysis** anniversary |
@@ -971,7 +1096,8 @@ stated period `e`.
 | **14** | Successor escalation after commencement | `c = 25`, market growth 5%, `successor_escalation_pct` 3% | Periods 37–48 are `44.100 × 1.03`, **not** `40 × 1.05³`. Market growth prices the start; the lease escalates thereafter |
 | **15** | Expiry just before the forward window | expiry period `12H`, `D = 0` | Successor commences at `12H+1`, the first forward period; the hold-year annual series excludes it while the forward scalar includes it |
 | **16** | Rollover inside the forward window | expiry period `12H+3`, `D = 6` | Rollover is live in the window; downtime depresses the forward-window rent; `ROLLOVER_IN_EXIT_WINDOW` warns; TI/LC land in the window and are **disclosed, not deducted** |
-| **17** | Successor expires inside the projection | term 24, hold 5 | A second rollover occurs; chain probabilities multiply; both branches' second rollovers appear in the log |
+| **17** | Successor expires inside the projection | term 24, hold 5 | A second rollover occurs; chain probabilities multiply and sum to `1`; both branches' second rollovers appear in the log |
+| **17b** | Deep recursion to the horizon | term 12, hold 10 | Recursion runs to period `12H+12` and stops **only** there — no depth cap, no truncation. A short-term rent roll is modelled, not refused |
 | **18** | **Different renewal/new terms — the design stress test** | `p = 0.65`, renewal 60 mo / `D=0` / $40, new 120 mo / `D=9` / $44 | **Mandatory.** The exact case D0 §8.2 cannot represent. Proves: no term is rounded; the renewal branch expires at `e+60` and the new branch at `e+129`; both dates appear in the rollover log; the weighted rent in periods `e+1…e+5` is `p × renewal rent` and **not zero**; LC is `p·lc_R·Σrent_R + (1−p)·lc_N·Σrent_N`; TI appears in **two** periods, not one |
 
 Case 18 additionally records, as a regression against the rejected method, the
@@ -994,9 +1120,11 @@ Extends D0 §26 (FM-1 … FM-29). Each entry names its detection mechanism.
 | **FM-D2-4** | Different branch terms mishandled — collapsed, rounded, or one branch's term silently used for both | **Golden 18**; the rollover log must show two distinct expirations |
 | **FM-D2-5** | Downtime off-by-one — `c` computed as `e + floor(D)` or `e + 1 + ceil(D)` | Golden 4/5/6; the `total forgone = D` identity |
 | **FM-D2-6** | Fractional downtime over- or under-recognised | Golden 6, asserted at `abs=1e-9` |
-| **FM-D2-7** | Free rent confused with downtime | Golden 9; the occupancy series differs between them (Section 7.4) |
-| **FM-D2-8** | Free rent reducing occupancy | Golden 8: occupancy is `1.0` throughout an abated period |
-| **FM-D2-9** | TI paid in the wrong month — at expiry, during downtime, or prorated by the boundary factor | Golden 10 |
+| **FM-D2-7** | Free rent confused with downtime | Golden 9; `O_m` differs between them (Section 7.4) |
+| **FM-D2-7b** | Free rent consuming a whole calendar period in a fractional commencement month | **Golden 9**: September consumes `0.75`, not `1.0` |
+| **FM-D2-7c** | Free-rent abatement not summing to `free_rent_months` | Golden 9 invariant: `Σ free_abatement_m == F` at `abs=1e-9` |
+| **FM-D2-8** | Free rent reducing occupancy | Golden 8: `O_m` is `1.0` throughout an abated period. Load-bearing for D3 recoveries |
+| **FM-D2-9** | TI paid in the wrong month — at expiry, during a period with `O_m = 0`, or prorated by the boundary factor | Golden 10 |
 | **FM-D2-10** | LC computed on cash net of free rent instead of contractual face rent | Golden 11: LC is bit-identical with and without free rent |
 | **FM-D2-11** | LC truncated at the hold horizon | Golden 11: the basis uses all `term_months`, some beyond the window |
 | **FM-D2-11b** | LC basis reduced by the fractional first month | Golden 11 (Section 8.3) |
@@ -1005,36 +1133,80 @@ Extends D0 §26 (FM-1 … FM-29). Each entry names its detection mechanism.
 | **FM-D2-14** | Successor contractual escalation confused with market growth | **Golden 14** |
 | **FM-D2-15** | Rollover ignored inside the forward exit window | Golden 16 |
 | **FM-D2-16** | TI/LC reducing exit NOI | **G-3 perturbation**: doubling TI/LC leaves every NOI figure and `exit_noi` bit-identical |
-| **FM-D2-17** | Recursive branch explosion | Depth cap (Section 5.3) with an ERROR, plus a scale test at depth 4 |
+| **FM-D2-17** | Rollover recursion terminated by anything other than the projection horizon | **Golden 17b**: a 12-month-term rent roll recurses to `12H+12`. Any D2.6 computational limit must ERROR, never truncate |
+| **FM-D2-17b** | A computational safety limit mistaken for a financial assumption | D2.6: the limit is documented as implementation safety, is measured rather than guessed, and its ERROR names the suite |
 | **FM-D2-18** | A successor presented as a known tenant | `tenant_name is None`; `WEIGHTED_ROLLOVER_APPLIED` warning when `0 < p < 1` |
-| **FM-D2-19** | Physical occupancy silently made fractional without the expected/physical distinction | HD-D2-2: two named series; a guardrail asserts the contractual series stays integral in every pre-rollover period |
+| **FM-D2-19** | A fractional composed occupancy published under the name `physical_occupancy` | **HD-D2-2 naming restriction**: a guardrail asserts no fractional series carries that name, that the composed series is `expected_occupied_area_sf` / `expected_occupancy`, and that each branch's own `physical_occupancy` stays integral |
 | **FM-D2-20** | The current-rent anchor inadvertently changed | A guardrail asserts `Lease.base_rent_psf`'s meaning and `rent.py`'s formula are untouched by D2 |
 | **FM-D2-21** | Expected occupancy and expected rent inconsistent — a period showing rent but zero expected occupancy, or the reverse | Invariant test: for every period, expected occupancy `> 0` whenever expected rent `> 0` (a zero-rent branch lease is the one legitimate exception and is asserted explicitly) |
 | **FM-D2-22** | Branch probabilities failing to sum to 1 at depth | Invariant test over the chain tree at every rollover depth |
 
 ---
 
-## 17. Human Decisions Required Before D2.1
+## 17. Decision Register — All Resolved
 
-| ID | Decision | Recommendation | Blocks |
+| ID | Decision | Outcome | Blocks D2.1? |
 |---|---|---|---|
-| **HD-D2-1** | Rollover composition: D0 §8.2 weighted parameters, or Option B weighted outcomes? | **Option B.** D0's method reports zero rent for five months where the expectation is `21,666.67`/month, and misstates LC by −19.8% | **D2.1** |
-| **HD-D2-2** | Does Anchor report a fractional *expected* occupancy after rollover, distinct from contractual *physical* occupancy? | **Yes — two named series.** Required by Option B and more honest than either alternative | **D2.1** |
-| **HD-D2-3** | Second and later rollovers: recursion depth cap of 4, with an ERROR beyond it? | **Yes.** Covers every realistic case; fails loudly rather than approximating. Moot if HD-D2-1 is declined | D2.6 |
-| **HD-D2-4** | Downtime and free-rent factors multiplicative in a shared boundary month? | **Yes.** The only continuous single-rule option | D2.3 |
+| **HD-D2-1** | Rollover composition | **APPROVED** — probability-weighted *outcome* economics. D0 §8.2's synthetic weighted-parameter successor is superseded for D2 | No |
+| **HD-D2-2** | Expected vs physical occupancy | **APPROVED WITH NAMING RESTRICTION** — branch occupancy stays integral and keeps the name; the composed fractional series is `expected_occupied_area_sf` / `expected_occupancy` and may never be called `physical_occupancy` | No |
+| **HD-D2-3** | Second and later rollovers | **REJECTED AND REPLACED** — no financial depth cap. Recursion runs to the canonical projection end. Any computational limit is implementation safety only, deferred to D2.6 | No |
+| **HD-D2-4** | Downtime and free rent | **REJECTED AND REPLACED** — sequential waterfall, not independent multiplication. `Σ free_abatement_m = free_rent_months` exactly | No |
 
-**If HD-D2-1 is declined** and D0 §8.2 stands, this document's Sections 6–13
-remain valid as written — they are methodology-independent. Only Sections 4, 5,
-14 and the Option-B-specific golden cases (3, 17, 18) would need revision, and
-the accepted consequence would be the quantified errors in §1.2.
+**No human financial decision blocks D2.1.**
+
+### 17.1 One recommendation recorded for later review
+
+**Free-rent over-grant validation (Section 7.5).** Recommend
+`free_rent_months ≤ successor_term_months − frac(downtime_months)` as a
+validation **ERROR** rather than silently discarding an unconsumable remainder.
+This tightens D0's `≥ 0` domain, so it is recorded rather than assumed. **Due at
+D2.3; does not block D2.1.**
+
+### 17.2 Carried forward, unchanged
+
+- **Rent anchor** (Section 13.1) — recommended for D5 ingestion, not D2. Not a
+  financial convention; no decision required to proceed.
+- **Float policy** (Section 13.2) — unchanged for D2. D4 must adopt a
+  magnitude-aware reconciliation rule for G-M4.
+- **Computational safety threshold** — deferred to D2.6 by decision, to be
+  sized from measurement.
 
 ---
 
-## 18. Scope Statement
+## 18. Consistency Audit
 
-This gate changed `docs/` only. No file under `src/`, `tests/`, `web/`, no
-migration, no dependency, no configuration. D1 economics are untouched and
-`anchor.leasing` is unmodified.
+Performed after amendment. Each superseded term was searched for; every
+surviving occurrence is inside clearly-labelled historical or rejected-method
+discussion, which the review permits.
 
-No D2 production code exists. D2.1 begins only after HD-D2-1 and HD-D2-2 are
-answered.
+| Searched term | Result |
+|---|---|
+| Weighted successor *parameters* as the active method | **Removed.** Survives only in §1.2/§3/§4.1 as the quantified, explicitly rejected D0 §8.2 method |
+| Weighted / averaged lease term | **Removed.** §12 records `✘ fractional` as the reason it was rejected |
+| `round_half_up` on a successor term | **Absent** from every active rule; named in §3 as deleted |
+| Synthetic expected expiration | **Removed.** Each branch keeps its own expiration (§4.2, §12, Golden 18) |
+| Fractional **physical** occupancy | **Removed.** Branch occupancy is integral; the composed series is `expected_occupied_area_sf` (§3 HD-D2-2, §4.2) |
+| Fixed recursion depth 4 | **Removed.** Survives only in §3 HD-D2-3 as the rejected proposal |
+| 16-chain limit | **Removed.** §5.2's table now describes growth, not a cap |
+| One-year leases called unrealistic | **Removed and withdrawn** (§3 HD-D2-3, §5.2) |
+| Downtime × free-rent multiplication | **Removed.** Survives only in §3 HD-D2-4 as the rejected proposal |
+| Free rent consuming whole calendar periods after fractional commencement | **Removed.** §7.2 September consumes `0.75`; FM-D2-7b guards it |
+| LC from weighted parameters | **Removed.** §8.4 composes per-branch LC; the −19.8% error is retained as rejected-method evidence |
+
+**Two substantive corrections were made to this document's own earlier
+recommendations**, both from human review and both improvements:
+
+1. The multiplicative downtime/free-rent rule silently shortchanged the
+   concession in a fractional commencement month. The waterfall does not.
+2. The depth-4 recursion cap was a financial truncation in safety clothing, and
+   its justification relied on a claim about one-year leases that does not hold.
+
+---
+
+## 19. Scope Statement
+
+This gate changed `docs/` only — one file, this document. No file under `src/`,
+`tests/`, `web/`, no migration, no dependency, no configuration. D1 economics
+are untouched, `anchor.leasing` is unmodified, and D0 is unmodified.
+
+No D2 production code exists. **D2.1 may begin.**
