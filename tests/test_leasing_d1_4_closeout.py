@@ -21,6 +21,7 @@ Governed by
 from __future__ import annotations
 
 import dataclasses
+import pathlib
 import time
 from datetime import date
 
@@ -1038,14 +1039,23 @@ def test_d1_exposes_no_downstream_financial_concept() -> None:
         ), f"{absent} must not exist in D1"
 
 
-def test_no_d1_contract_declares_a_d2_or_downstream_field() -> None:
+def test_no_contract_declares_a_d3_or_downstream_field() -> None:
+    """Narrowed only by the fields each gate actually delivers, when it lands.
+
+    D2.1 removed the market-rent fields; D2.2 removed ``origin`` and the
+    renewal-branch fields; D2.3 removed downtime and free rent; D2.4 removed TI
+    and LC; D2.5 removed ``renewal_probability`` and the composed
+    expected-occupancy names. What remains banned is D3's recovery structure,
+    every downstream operating concept, and the **rejected**
+    weighted-parameter names, which no gate will ever add.
+    """
+
     from anchor.leasing import contracts as contracts_module
 
     banned = {
-        "renewal_probability", "market_rent_psf", "market_rent_growth",
-        "successor", "downtime_months", "free_rent_months", "ti_psf",
-        "tenant_improvements", "lc_pct", "leasing_commissions",
-        "recovery_basis", "expense_stop", "base_year", "origin",
+        "expected_rent_psf", "expected_term_months", "expected_ti_psf",
+        "expected_lc_pct", "expected_downtime_months",
+        "recovery_basis", "expense_stop", "base_year",
         "noi", "capex", "other_income", "operating_expenses",
         "vacancy_credit_loss_pct", "occupancy", "credit_loss_pct",
     }
@@ -1056,4 +1066,40 @@ def test_no_d1_contract_declares_a_d2_or_downstream_field() -> None:
             continue
         declared = {f.name for f in dataclasses.fields(obj)}
         leaked = declared & banned
-        assert not leaked, f"{name} declares out-of-D1 fields: {sorted(leaked)}"
+        assert not leaked, f"{name} declares out-of-scope fields: {sorted(leaked)}"
+
+
+def test_the_d1_rent_formula_is_untouched_by_d2() -> None:
+    """Failure mode FM-D2-20 stated as a source-level assertion:
+    ``Lease.base_rent_psf``'s meaning and ``rent.py``'s formula must be
+    untouched by D2 -- re-asserted at D2.4, which extended ``rent.py``
+    additively with a full-term basis helper and must not have disturbed the
+    D1 schedule path.
+
+    The D1.2 formula ``base_rent_psf * (1 + escalation_pct) ** k * area / 12``
+    is asserted verbatim in structure, and the market-rent module is proven
+    absent from ``rent.py``'s imports."""
+
+    from anchor.leasing import rent as rent_module
+
+    source = pathlib.Path(rent_module.__file__).read_text(encoding="utf-8")
+
+    assert "annual_rent_psf = base_rent_psf * (1 + escalation_pct) ** escalation_index" in source
+    assert "annual_rent_psf * leased_area_sf / 12.0" in source
+    # Import-level and field-level bans only. A raw-text ban on the word
+    # "renewal" would trip on rent.py's own prose ("nothing here ... infers a
+    # renewal"), which is exactly the blunt-substring mistake D1.0 replaced
+    # with semantic checks. The AST guardrails in
+    # tests/test_leasing_architecture.py carry the field-reference proof.
+    assert "from .market import" not in source
+    assert "from .rollover import" not in source
+    assert "market_rent_psf" not in source
+    assert "market_rent_growth" not in source
+    assert "renewal_rent_spread" not in source
+    assert "successor_escalation_pct" not in source
+    assert "downtime_months" not in source
+    assert "cash_rent_factor" not in source
+    assert "successor_occupancy_factor" not in source
+    assert "ti_psf" not in source
+    assert "lc_pct" not in source
+    assert "leasing_commission" not in source

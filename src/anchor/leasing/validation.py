@@ -44,7 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
-from math import isfinite
+from math import floor, isfinite
 from typing import Iterable
 
 from .calendar import (
@@ -53,7 +53,15 @@ from .calendar import (
     month_index,
     projection_month_count,
 )
-from .contracts import EscalationBasis, Lease, LeaseLevelPropertyInputs, Suite
+from .contracts import (
+    EscalationBasis,
+    Lease,
+    LeaseLevelPropertyInputs,
+    LeaseOrigin,
+    LeasingCommissionMethod,
+    MarketLeasingAssumptions,
+    Suite,
+)
 
 
 class LeaseIssueSeverity(StrEnum):
@@ -111,6 +119,33 @@ class LeaseIssueCode(StrEnum):
     # --- horizon (D1.1; warnings, evaluated only when a hold period is given)
     LEASE_STARTS_AFTER_HORIZON = "LEASE_STARTS_AFTER_HORIZON"
     LEASE_EXTENDS_BEYOND_HORIZON = "LEASE_EXTENDS_BEYOND_HORIZON"
+
+    # --- market leasing (D2.1) ---
+    MARKET_RENT_OUT_OF_DOMAIN = "MARKET_RENT_OUT_OF_DOMAIN"
+    MARKET_RENT_GROWTH_OUT_OF_DOMAIN = "MARKET_RENT_GROWTH_OUT_OF_DOMAIN"
+    MARKET_LEASING_DEFAULT_REQUIRED = "MARKET_LEASING_DEFAULT_REQUIRED"
+
+    # --- renewal rollover (D2.2) ---
+    RENEWAL_RENT_OUT_OF_DOMAIN = "RENEWAL_RENT_OUT_OF_DOMAIN"
+    RENEWAL_RENT_SPREAD_OUT_OF_DOMAIN = "RENEWAL_RENT_SPREAD_OUT_OF_DOMAIN"
+    RENEWAL_TERM_OUT_OF_DOMAIN = "RENEWAL_TERM_OUT_OF_DOMAIN"
+    SUCCESSOR_ESCALATION_OUT_OF_DOMAIN = "SUCCESSOR_ESCALATION_OUT_OF_DOMAIN"
+    SUCCESSOR_LEASE_NAMES_A_TENANT = "SUCCESSOR_LEASE_NAMES_A_TENANT"
+
+    # --- downtime and free rent (D2.3) ---
+    DOWNTIME_OUT_OF_DOMAIN = "DOWNTIME_OUT_OF_DOMAIN"
+    FREE_RENT_OUT_OF_DOMAIN = "FREE_RENT_OUT_OF_DOMAIN"
+    NEW_TERM_OUT_OF_DOMAIN = "NEW_TERM_OUT_OF_DOMAIN"
+    FREE_RENT_EXCEEDS_OCCUPIABLE_TERM = "FREE_RENT_EXCEEDS_OCCUPIABLE_TERM"
+
+    # --- leasing costs (D2.4) ---
+    TI_OUT_OF_DOMAIN = "TI_OUT_OF_DOMAIN"
+    LC_PCT_OUT_OF_DOMAIN = "LC_PCT_OUT_OF_DOMAIN"
+    UNSUPPORTED_LEASING_COMMISSION_METHOD = "UNSUPPORTED_LEASING_COMMISSION_METHOD"
+
+    # --- probability composition (D2.5) ---
+    RENEWAL_PROBABILITY_OUT_OF_DOMAIN = "RENEWAL_PROBABILITY_OUT_OF_DOMAIN"
+    WEIGHTED_ROLLOVER_APPLIED = "WEIGHTED_ROLLOVER_APPLIED"
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -248,6 +283,20 @@ def _areas_reconcile(total_suite_area: float, rentable_area: float) -> bool:
     )
 
 
+def _months_within_tolerance(left: float, right: float) -> bool:
+    """Whether two month counts are equal under Anchor's scaled comparison.
+
+    The same form ``_areas_reconcile`` uses, for the same reason: an exact
+    ``==`` would be wrong because ``frac(D)`` carries ordinary IEEE-754
+    representation error, so a concession stated as exactly the maximum
+    consumable amount could fail on floating-point noise alone. At the
+    magnitudes involved -- months, rarely above a few hundred -- the tolerance
+    is far tighter than any economically meaningful difference.
+    """
+
+    return abs(left - right) <= 1e-9 * max(1.0, abs(left), abs(right))
+
+
 # =============================================================================
 # Validation
 # =============================================================================
@@ -296,6 +345,545 @@ def _validate_property(
                 f"rentable_area_sf {area!r} must be greater than 0.",
             )
         )
+
+    return issues
+
+
+def _validate_non_negative_months(
+    value: object, *, path: str, field: str, code: LeaseIssueCode
+) -> list[LeaseValidationIssue]:
+    """Domain ``>= 0``, fractional permitted, for a duration in months.
+
+    Shared by the downtime and free-rent fields on both branches so the four
+    cannot drift apart. Fractional values are legitimate: an analyst may state
+    ``4.5`` months of downtime or ``7.5`` months of free rent, and D2
+    Sections 6 and 7 define both exactly.
+    """
+
+    if not _is_finite_number(value):
+        return [
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                path,
+                f"{field} must be a finite number of months.",
+            )
+        ]
+    if value < 0:
+        return [
+            _issue(
+                code,
+                path,
+                f"{field} {value!r} must be greater than or equal to 0.",
+            )
+        ]
+    return []
+
+
+def _validate_free_rent_over_grant(
+    assumptions: MarketLeasingAssumptions,
+    *,
+    path: str,
+    branch: str,
+    term_months: object,
+    downtime_months: object,
+    free_rent_months: object,
+) -> list[LeaseValidationIssue]:
+    """D2 Section 7.5, approved at D2.3: the concession must be consumable.
+
+    ```
+    free_rent_months <= term_months - frac(downtime_months)
+    ```
+
+    Evaluated only when the three inputs are individually in domain -- a
+    negative term or a non-finite downtime already has its own error, and
+    stacking a derived complaint on top of it would report the same defect
+    twice.
+
+    The comparison uses the package's scaled numeric convention rather than a
+    bare ``>``, so a concession stated as exactly the maximum survives the
+    ordinary floating-point representation of ``frac(D)``.
+    """
+
+    if isinstance(term_months, bool) or not isinstance(term_months, int):
+        return []
+    if term_months < 1:
+        return []
+    if not _is_finite_number(downtime_months) or downtime_months < 0:
+        return []
+    if not _is_finite_number(free_rent_months) or free_rent_months < 0:
+        return []
+
+    maximum = term_months - (downtime_months - floor(downtime_months))
+    if free_rent_months <= maximum or _months_within_tolerance(
+        free_rent_months, maximum
+    ):
+        return []
+
+    return [
+        _issue(
+            LeaseIssueCode.FREE_RENT_EXCEEDS_OCCUPIABLE_TERM,
+            f"{path}.{branch}_free_rent_months",
+            f"{branch}_free_rent_months {free_rent_months!r} exceeds the "
+            f"{maximum!r} month-equivalents the successor term can absorb "
+            f"({branch}_term_months {term_months!r} less the "
+            f"{downtime_months - floor(downtime_months)!r} fractional month of "
+            f"{branch}_downtime_months {downtime_months!r}). The concession "
+            "would be silently discarded.",
+        )
+    ]
+
+
+def _validate_market_leasing_assumptions(
+    assumptions: MarketLeasingAssumptions, *, path: str
+) -> list[LeaseValidationIssue]:
+    """Domain rules for one ``MarketLeasingAssumptions`` record (D0 Section 4.5).
+
+    Exactly D0's two D2.1 domains, neither widened nor tightened:
+
+    - ``market_rent_psf >= 0``. Zero is **permitted** and means a market rent
+      of zero, which computes to exactly zero in every period. It is never
+      reinterpreted as vacancy, missing data, or free rent, so it is not an
+      error and not a warning.
+    - ``market_rent_growth > -1``. This is the same lower bound every other
+      Anchor compounding rate carries, so a declining market is expressible;
+      exactly ``-1`` is excluded because it collapses the market to zero at
+      the first anniversary and stays there, which is a degenerate assumption
+      rather than a rate.
+
+    The D2.3 downtime and free-rent domains (D0 Section 4.5, D2 Sections 6-7),
+    applied identically to both branches:
+
+    - ``renewal_downtime_months``, ``new_downtime_months`` ``>= 0``, fractional
+      permitted. Zero is the ordinary renewal case, not an absence.
+    - ``renewal_free_rent_months``, ``new_free_rent_months`` ``>= 0``,
+      fractional permitted, denominated in full month-equivalents of
+      base-rent abatement.
+    - ``new_term_months >= 1``, a whole number of months.
+
+    Plus the **free-rent over-grant** rule (D2 Section 7.5, approved at D2.3),
+    checked per branch:
+
+    ```
+    free_rent_months <= term_months - frac(downtime_months)
+    ```
+
+    The right-hand side is the largest concession the waterfall can absorb over
+    the successor's term: the first period contributes ``1 - frac(D)`` and the
+    remaining ``T - 1`` periods contribute ``1.0`` each. A larger concession
+    cannot be fully consumed within the lease, and silently discarding the
+    remainder would understate it invisibly -- exactly the failure the
+    sequential waterfall replaced. Anchor therefore refuses rather than
+    capping, discarding, carrying the remainder past expiration, or extending
+    the term to absorb it.
+
+    **The bound uses the FULL contractual term, never the visible
+    projection.** A 60-month successor of which only eight months fall inside
+    the canonical window may legitimately carry a twelve-month concession; the
+    schedule simply ends with free rent still being consumed. Validating
+    against the visible portion would reject sound underwriting because of
+    where the hold period happens to end.
+
+    The D2.5 probability domain (D0 Section 4.5, D2 HD-D2-1):
+
+    - ``renewal_probability`` finite, ``0 <= p <= 1``. There is deliberately no
+      ``new_tenant_probability`` input to cross-check: it is ``1 - p`` by
+      construction, so the pair cannot disagree and no sums-to-one rule is
+      needed.
+
+    Plus one **WARNING**, ``WEIGHTED_ROLLOVER_APPLIED``, whenever
+    ``0 < p < 1`` (D0 Section 8.4, failure mode FM-D2-18). The composed result
+    is then an expected value corresponding to no single real-world outcome: at
+    ``p = 0.65`` it pays a rent no actual tenant would pay. The economics are
+    correct and the analysis proceeds -- but an interface must never present
+    that figure as a known tenancy, and the warning is what makes the
+    convention visible rather than assumed. At the endpoints the result *is* a
+    single scenario, so no warning fires.
+
+    The D2.4 leasing-cost domains (D0 Section 4.5), applied per branch:
+
+    - ``renewal_ti_psf``, ``new_ti_psf`` ``>= 0``, in ``$/SF``. Zero is a real
+      allowance -- a renewal often carries none -- never an absence.
+    - ``renewal_lc_pct``, ``new_lc_pct`` ``0 <= x <= 1``. The upper bound is
+      D0's, not invented here: a commission exceeding the entire contractual
+      rent stream is not a rate.
+    - ``leasing_commission_method`` must be a supported
+      ``LeasingCommissionMethod``. D2 implements exactly one member
+      (D0 Section 12.3); an unsupported method is refused rather than silently
+      computed under another method's rule.
+
+    The D2.2 renewal domains, likewise exactly as D0 Section 4.5 states them:
+
+    - ``renewal_rent_psf >= 0``, or ``None``. ``None`` means "no explicit
+      renewal level was supplied" and sends pricing down the spread path
+      (D0 Section 24.3); it is never read as zero.
+    - ``renewal_rent_spread > -1``. ``0.0`` renews at market; negative is a
+      discount and positive a premium. The bound excludes exactly ``-1``,
+      which would price every renewal at zero.
+    - ``renewal_term_months >= 1``, a whole number of months. Booleans are
+      rejected explicitly: ``True`` is an ``int`` in Python and a one-month
+      term arrived at by accident is not a term.
+    - ``successor_escalation_pct > -1``, the same lower bound every other
+      Anchor compounding rate carries.
+
+    The record is checked wherever it appears -- as the property default or as
+    a suite's full override -- by one function, so the two can never drift
+    apart. There is no "incomplete override" rule to write: every field is
+    required on the dataclass and none has a default, so an all-or-nothing
+    override (D0 Section 24.2) is enforced structurally at construction.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+
+    rent = assumptions.market_rent_psf
+    if not _is_finite_number(rent):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                f"{path}.market_rent_psf",
+                "market_rent_psf must be a finite number.",
+            )
+        )
+    elif rent < 0:
+        issues.append(
+            _issue(
+                LeaseIssueCode.MARKET_RENT_OUT_OF_DOMAIN,
+                f"{path}.market_rent_psf",
+                f"market_rent_psf {rent!r} must be greater than or equal to 0.",
+            )
+        )
+
+    growth = assumptions.market_rent_growth
+    if not _is_finite_number(growth):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                f"{path}.market_rent_growth",
+                "market_rent_growth must be a finite number.",
+            )
+        )
+    elif growth <= -1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.MARKET_RENT_GROWTH_OUT_OF_DOMAIN,
+                f"{path}.market_rent_growth",
+                f"market_rent_growth {growth!r} must be greater than -1.",
+            )
+        )
+
+    renewal_rent = assumptions.renewal_rent_psf
+    if renewal_rent is not None:
+        if not _is_finite_number(renewal_rent):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.NON_FINITE_VALUE,
+                    f"{path}.renewal_rent_psf",
+                    "renewal_rent_psf must be a finite number or None.",
+                )
+            )
+        elif renewal_rent < 0:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.RENEWAL_RENT_OUT_OF_DOMAIN,
+                    f"{path}.renewal_rent_psf",
+                    f"renewal_rent_psf {renewal_rent!r} must be greater than "
+                    "or equal to 0, or None.",
+                )
+            )
+
+    spread = assumptions.renewal_rent_spread
+    if not _is_finite_number(spread):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                f"{path}.renewal_rent_spread",
+                "renewal_rent_spread must be a finite number.",
+            )
+        )
+    elif spread <= -1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.RENEWAL_RENT_SPREAD_OUT_OF_DOMAIN,
+                f"{path}.renewal_rent_spread",
+                f"renewal_rent_spread {spread!r} must be greater than -1.",
+            )
+        )
+
+    term = assumptions.renewal_term_months
+    if isinstance(term, bool) or not isinstance(term, int):
+        issues.append(
+            _issue(
+                LeaseIssueCode.RENEWAL_TERM_OUT_OF_DOMAIN,
+                f"{path}.renewal_term_months",
+                f"renewal_term_months {term!r} must be a whole number of "
+                "months.",
+            )
+        )
+    elif term < 1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.RENEWAL_TERM_OUT_OF_DOMAIN,
+                f"{path}.renewal_term_months",
+                f"renewal_term_months {term!r} must be at least 1.",
+            )
+        )
+
+    escalation = assumptions.successor_escalation_pct
+    if not _is_finite_number(escalation):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                f"{path}.successor_escalation_pct",
+                "successor_escalation_pct must be a finite number.",
+            )
+        )
+    elif escalation <= -1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.SUCCESSOR_ESCALATION_OUT_OF_DOMAIN,
+                f"{path}.successor_escalation_pct",
+                f"successor_escalation_pct {escalation!r} must be greater "
+                "than -1.",
+            )
+        )
+
+    new_term = assumptions.new_term_months
+    if isinstance(new_term, bool) or not isinstance(new_term, int):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NEW_TERM_OUT_OF_DOMAIN,
+                f"{path}.new_term_months",
+                f"new_term_months {new_term!r} must be a whole number of "
+                "months.",
+            )
+        )
+    elif new_term < 1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.NEW_TERM_OUT_OF_DOMAIN,
+                f"{path}.new_term_months",
+                f"new_term_months {new_term!r} must be at least 1.",
+            )
+        )
+
+    for field_name in ("renewal_downtime_months", "new_downtime_months"):
+        issues.extend(
+            _validate_non_negative_months(
+                getattr(assumptions, field_name),
+                path=f"{path}.{field_name}",
+                field=field_name,
+                code=LeaseIssueCode.DOWNTIME_OUT_OF_DOMAIN,
+            )
+        )
+
+    for field_name in ("renewal_free_rent_months", "new_free_rent_months"):
+        issues.extend(
+            _validate_non_negative_months(
+                getattr(assumptions, field_name),
+                path=f"{path}.{field_name}",
+                field=field_name,
+                code=LeaseIssueCode.FREE_RENT_OUT_OF_DOMAIN,
+            )
+        )
+
+    for field_name, code in (
+        ("renewal_ti_psf", LeaseIssueCode.TI_OUT_OF_DOMAIN),
+        ("new_ti_psf", LeaseIssueCode.TI_OUT_OF_DOMAIN),
+    ):
+        value = getattr(assumptions, field_name)
+        if not _is_finite_number(value):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.NON_FINITE_VALUE,
+                    f"{path}.{field_name}",
+                    f"{field_name} must be a finite number.",
+                )
+            )
+        elif value < 0:
+            issues.append(
+                _issue(
+                    code,
+                    f"{path}.{field_name}",
+                    f"{field_name} {value!r} must be greater than or equal "
+                    "to 0.",
+                )
+            )
+
+    for field_name in ("renewal_lc_pct", "new_lc_pct"):
+        value = getattr(assumptions, field_name)
+        if not _is_finite_number(value):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.NON_FINITE_VALUE,
+                    f"{path}.{field_name}",
+                    f"{field_name} must be a finite number.",
+                )
+            )
+        elif not 0 <= value <= 1:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.LC_PCT_OUT_OF_DOMAIN,
+                    f"{path}.{field_name}",
+                    f"{field_name} {value!r} must be between 0 and 1 "
+                    "inclusive.",
+                )
+            )
+
+    probability = assumptions.renewal_probability
+    if not _is_finite_number(probability):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                f"{path}.renewal_probability",
+                "renewal_probability must be a finite number.",
+            )
+        )
+    elif not 0 <= probability <= 1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.RENEWAL_PROBABILITY_OUT_OF_DOMAIN,
+                f"{path}.renewal_probability",
+                f"renewal_probability {probability!r} must be between 0 and 1 "
+                "inclusive.",
+            )
+        )
+    elif 0 < probability < 1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.WEIGHTED_ROLLOVER_APPLIED,
+                f"{path}.renewal_probability",
+                f"renewal_probability {probability!r} produces a "
+                "probability-weighted expected rollover. The composed result "
+                "is an expected value, not a signed lease, and must never be "
+                "presented as a known tenancy.",
+                LeaseIssueSeverity.WARNING,
+            )
+        )
+
+    method = assumptions.leasing_commission_method
+    if not isinstance(method, LeasingCommissionMethod):
+        issues.append(
+            _issue(
+                LeaseIssueCode.UNSUPPORTED_LEASING_COMMISSION_METHOD,
+                f"{path}.leasing_commission_method",
+                f"leasing_commission_method {method!r} must be a "
+                "LeasingCommissionMethod member.",
+            )
+        )
+
+    issues.extend(
+        _validate_free_rent_over_grant(
+            assumptions,
+            path=path,
+            branch="renewal",
+            term_months=assumptions.renewal_term_months,
+            downtime_months=assumptions.renewal_downtime_months,
+            free_rent_months=assumptions.renewal_free_rent_months,
+        )
+    )
+    issues.extend(
+        _validate_free_rent_over_grant(
+            assumptions,
+            path=path,
+            branch="new",
+            term_months=assumptions.new_term_months,
+            downtime_months=assumptions.new_downtime_months,
+            free_rent_months=assumptions.new_free_rent_months,
+        )
+    )
+
+    return issues
+
+
+def _validate_suite_market_leasing(
+    suites: tuple[Suite, ...],
+    *,
+    market_leasing: MarketLeasingAssumptions | None,
+) -> list[LeaseValidationIssue]:
+    """D2.1 market-rent rules for the property default and every suite.
+
+    Three rules, in declared suite order so the output stays deterministic:
+
+    1. The property default, when supplied, satisfies its domains.
+    2. Each suite's ``market_rent_psf`` rent-level override (D0 Section 24.1)
+       satisfies the same ``>= 0`` domain as the field it replaces.
+    3. Each suite's full ``market_leasing_override`` record satisfies both
+       domains.
+
+    Plus one structural rule: **a suite may not carry a market override with
+    no property default in force.** D0 Section 4.5 states the property default
+    is always present, and a suite supplying only a rent level has no growth
+    rate without it. Rather than invent a growth rate, this is an
+    ``MARKET_LEASING_DEFAULT_REQUIRED`` ERROR.
+
+    When ``market_leasing`` is ``None`` and no suite declares a market field,
+    no market rule is evaluated at all -- which is exactly the D1 rent-roll
+    call, whose behaviour is therefore unchanged.
+
+    Deliberately not written here: "override for unknown suite" and "duplicate
+    suite override". Both are structurally impossible under the D0
+    Section 4.3 architecture, where an override is a field **on** the ``Suite``
+    rather than a free-standing record keyed by ``suite_id``. An override
+    cannot name a suite that does not exist, and a suite declared twice is
+    already a ``DUPLICATE_SUITE_ID`` error. Adding codes for unreachable
+    states would imply a keyed-override design that D0 did not approve.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+
+    if market_leasing is not None:
+        issues.extend(
+            _validate_market_leasing_assumptions(
+                market_leasing, path="market_leasing"
+            )
+        )
+
+    for index, suite in enumerate(suites):
+        path = f"suites[{index}]"
+        declares_market = (
+            suite.market_rent_psf is not None
+            or suite.market_leasing_override is not None
+        )
+
+        if declares_market and market_leasing is None:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MARKET_LEASING_DEFAULT_REQUIRED,
+                    f"{path}.market_rent_psf"
+                    if suite.market_leasing_override is None
+                    else f"{path}.market_leasing_override",
+                    f"suite {suite.suite_id!r} declares a market-rent override "
+                    "but no property-level MarketLeasingAssumptions default was "
+                    "supplied; the property default is always required.",
+                )
+            )
+
+        suite_rent = suite.market_rent_psf
+        if suite_rent is not None:
+            if not _is_finite_number(suite_rent):
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.NON_FINITE_VALUE,
+                        f"{path}.market_rent_psf",
+                        "market_rent_psf must be a finite number.",
+                    )
+                )
+            elif suite_rent < 0:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.MARKET_RENT_OUT_OF_DOMAIN,
+                        f"{path}.market_rent_psf",
+                        f"market_rent_psf {suite_rent!r} must be greater than "
+                        "or equal to 0.",
+                    )
+                )
+
+        if suite.market_leasing_override is not None:
+            issues.extend(
+                _validate_market_leasing_assumptions(
+                    suite.market_leasing_override,
+                    path=f"{path}.market_leasing_override",
+                )
+            )
 
     return issues
 
@@ -541,6 +1129,22 @@ def _validate_lease(
             )
         )
 
+    # --- rollover provenance (D2.2) ---
+    if lease.origin is LeaseOrigin.SUCCESSOR and lease.tenant_name is not None:
+        # D0 Section 8.4, made unrepresentable rather than merely discouraged.
+        # A successor is an underwriting assumption about what follows an
+        # expiry; naming a tenant on one gives a modelled outcome documentary
+        # certainty it does not have (failure mode FM-D2-18).
+        issues.append(
+            _issue(
+                LeaseIssueCode.SUCCESSOR_LEASE_NAMES_A_TENANT,
+                f"{path}.tenant_name",
+                f"lease {lease.lease_id!r} has origin SUCCESSOR but names "
+                f"tenant {lease.tenant_name!r}; a rollover successor is an "
+                "underwriting assumption, never a known tenant.",
+            )
+        )
+
     return issues
 
 
@@ -755,6 +1359,7 @@ def validate_lease_level_inputs(
     leases: Iterable[Lease],
     *,
     hold_period: int | None = None,
+    market_leasing: MarketLeasingAssumptions | None = None,
 ) -> LeaseValidationResult:
     """Validate one complete Lease-Level input set, deterministically.
 
@@ -769,11 +1374,20 @@ def validate_lease_level_inputs(
     rule unchanged and simply raises no horizon warning; it never weakens an
     error or alters a result in any other way.
 
+    ``market_leasing`` is the property-level ``MarketLeasingAssumptions``
+    default (D2.1). It is optional for the same reason: a D1 contractual rent
+    roll needs no market assumption, and omitting it leaves every D1 rule and
+    every D1 result bit-identical. Supplying it evaluates the D2.1 market
+    domains for the default and for every suite override. A suite that
+    declares a market override while this is omitted is an error rather than
+    a silent inheritance of nothing.
+
     **Issue ordering** (D0 Section 19.1) is fixed and reproducible:
-    property-level issues first, then suites in declared order, then leases in
-    declared order with each lease's own fields in canonical field order, then
-    the cross-lease suite-overlap rule, then the horizon warnings in declared
-    lease order, then area reconciliation. Nothing here iterates a ``set`` or
+    property-level issues first, then suites in declared order, then the
+    market-leasing rules (the property default, then suites in declared
+    order), then leases in declared order with each lease's own fields in
+    canonical field order, then the cross-lease suite-overlap rule, then the
+    horizon warnings in declared lease order, then area reconciliation. Nothing here iterates a ``set`` or
     ``dict`` to produce output, so repeated runs emit byte-identical
     sequences.
 
@@ -787,6 +1401,9 @@ def validate_lease_level_inputs(
     issues: list[LeaseValidationIssue] = []
     issues.extend(_validate_property(property_inputs))
     issues.extend(_validate_suites(suite_tuple))
+    issues.extend(
+        _validate_suite_market_leasing(suite_tuple, market_leasing=market_leasing)
+    )
 
     # First declaration of a suite_id wins as the area reference; a duplicate
     # id has already produced its own DUPLICATE_SUITE_ID error.
@@ -832,6 +1449,7 @@ def require_valid_lease_level_inputs(
     leases: Iterable[Lease],
     *,
     hold_period: int | None = None,
+    market_leasing: MarketLeasingAssumptions | None = None,
 ) -> LeaseValidationResult:
     """Validate and raise ``LeaseValidationError`` if any ERROR was found.
 
@@ -840,7 +1458,11 @@ def require_valid_lease_level_inputs(
     """
 
     result = validate_lease_level_inputs(
-        property_inputs, suites, leases, hold_period=hold_period
+        property_inputs,
+        suites,
+        leases,
+        hold_period=hold_period,
+        market_leasing=market_leasing,
     )
     if result.errors:
         raise LeaseValidationError(result)

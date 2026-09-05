@@ -176,16 +176,29 @@ def test_two_leases_for_one_tenant_are_two_rows_with_equal_tenant_name() -> None
 # =============================================================================
 
 
+#: Fields no D1 contract may declare. The set is narrowed **only** by the
+#: fields each gate actually delivers, when it lands:
+#:
+#: - **D2.1** removed ``market_rent_psf`` / ``market_rent_growth`` and the
+#:   ``Suite`` overrides D0 Section 4.3 phases to D2.
+#: - **D2.2** removed the four renewal-branch fields
+#:   (``renewal_rent_psf``, ``renewal_rent_spread``, ``renewal_term_months``,
+#:   ``successor_escalation_pct``) and ``origin``, which D0 Section 4.4 marks
+#:   derived and phases to D2.
+#:
+#: Everything D2.3 and later owns stays, so the guardrail keeps its full force
+#: against the new-tenant branch, downtime, free rent, TI, LC, probability and
+#: every downstream concept.
+#:
+#: ``Lease`` and ``LeaseLevelPropertyInputs`` are still checked against the
+#: market names below, because D0 assigns the market override to ``Suite``
+#: alone -- market rent is an assumption about a *space*, never a term of a
+#: signed lease (D0 Section 24.4).
 _FORBIDDEN_D1_FIELD_NAMES = frozenset(
     {
-        # D2 rollover / market leasing
+        # D2.3+ rollover
         "renewal_probability",
-        "market_rent_psf",
-        "market_rent_growth",
-        "market_leasing_override",
-        "renewal_rent_psf",
-        "renewal_rent_spread",
-        "renewal_term_months",
+        "new_rent_psf",
         "new_term_months",
         "renewal_downtime_months",
         "new_downtime_months",
@@ -198,10 +211,6 @@ _FORBIDDEN_D1_FIELD_NAMES = frozenset(
         "renewal_lc_pct",
         "new_lc_pct",
         "leasing_commissions",
-        # D2 rollover provenance -- D0 Section 4.4 marks `origin` derived and
-        # phases it to D2. D1 cannot construct successor economics, so a
-        # SUCCESSOR lease is a financially impossible state at this gate.
-        "origin",
         # D3 recoveries
         "recovery_basis",
         "recoverable_expense_ratio",
@@ -213,6 +222,12 @@ _FORBIDDEN_D1_FIELD_NAMES = frozenset(
 )
 
 
+#: The D2.1 market-rent fields. Permitted on ``Suite`` only (D0 Section 4.3).
+_D2_1_MARKET_FIELD_NAMES = frozenset(
+    {"market_rent_psf", "market_rent_growth", "market_leasing_override"}
+)
+
+
 @pytest.mark.parametrize(
     "contract", [LeaseLevelPropertyInputs, Suite, Lease], ids=lambda c: c.__name__
 )
@@ -221,6 +236,39 @@ def test_no_out_of_scope_field_leaked_into_a_d1_contract(contract: type) -> None
     leaked = declared & _FORBIDDEN_D1_FIELD_NAMES
 
     assert not leaked, f"{contract.__name__} declares out-of-D1-scope fields: {leaked}"
+
+
+def test_market_rent_overrides_live_on_the_suite_and_nowhere_else() -> None:
+    """D0 Section 4.3 puts the market-rent override on ``Suite``; D0
+    Section 24.4 keeps every market assumption off a signed ``Lease``.
+
+    A ``market_rent_psf`` on ``Lease`` would make market rent look like a
+    contractual term, which is exactly the confusion D2 Section 10 exists to
+    prevent."""
+
+    suite_fields = {f.name for f in dataclasses.fields(Suite)}
+    assert "market_rent_psf" in suite_fields
+    assert "market_leasing_override" in suite_fields
+
+    for contract in (Lease, LeaseLevelPropertyInputs):
+        declared = {f.name for f in dataclasses.fields(contract)}
+        leaked = declared & _D2_1_MARKET_FIELD_NAMES
+        assert not leaked, (
+            f"{contract.__name__} declares {sorted(leaked)}; market rent is an "
+            "assumption about a space, never a term of a lease"
+        )
+
+
+def test_the_d2_1_suite_overrides_default_to_inheriting() -> None:
+    """Both override fields default to ``None``, so every D1 call site
+    constructs an identical ``Suite`` and no D1 economics moved at D2.1."""
+
+    defaults = {
+        f.name: f.default
+        for f in dataclasses.fields(Suite)
+        if f.name in _D2_1_MARKET_FIELD_NAMES
+    }
+    assert defaults == {"market_rent_psf": None, "market_leasing_override": None}
 
 
 def test_no_lease_level_contract_declares_a_detailed_vacancy_field() -> None:
@@ -252,20 +300,27 @@ def test_lease_type_declares_exactly_the_three_recovery_structures() -> None:
     }
 
 
-def test_no_lease_origin_concept_exists_at_d1() -> None:
-    """D0 Section 4.4 marks ``origin`` as *derived* and phases it to **D2**.
+def test_lease_origin_arrived_at_d2_2_and_defaults_to_in_place() -> None:
+    """D0 Section 4.4 marks ``origin`` *derived* and phases it to **D2**. D2.2
+    is the gate that can actually construct a successor, so the field and its
+    enum land here rather than earlier.
 
-    D1 has no mechanism for constructing successor economics, so a
-    ``SUCCESSOR`` lease is a financially impossible state here. Declaring the
-    field (or its enum) now would make that impossible state representable
-    purely for future convenience. D2 introduces both alongside the rollover
-    engine that can actually produce one."""
+    It defaults to ``IN_PLACE``, which is what keeps the addition non-breaking:
+    every D1 call site constructs an identical lease and no D1 economics
+    move."""
 
     import anchor.leasing as leasing
 
-    assert not hasattr(leasing, "LeaseOrigin")
-    assert not hasattr(contracts_module, "LeaseOrigin")
-    assert "origin" not in {f.name for f in dataclasses.fields(Lease)}
+    assert hasattr(leasing, "LeaseOrigin")
+    assert {member.value for member in leasing.LeaseOrigin} == {
+        "in_place",
+        "successor",
+    }
+
+    origin_field = next(
+        f for f in dataclasses.fields(Lease) if f.name == "origin"
+    )
+    assert origin_field.default is leasing.LeaseOrigin.IN_PLACE
 
 
 # =============================================================================
@@ -293,20 +348,22 @@ def test_contracts_module_defines_no_calculation() -> None:
     assert functions == [], f"contracts.py must define no functions; found {functions}"
 
 
-def test_package_exposes_no_d2_or_later_entry_point() -> None:
-    """Month identity, the rent surface and property aggregation were each
-    delivered at D1.1, D1.2 and D1.3 and moved to positive assertions below.
-    What remains absent is everything D2 and later own."""
+def test_package_exposes_no_d3_or_later_entry_point() -> None:
+    """Each surface moved to a positive assertion when its gate landed: month
+    identity at D1.1, rent at D1.2, aggregation at D1.3, market rent at D2.1,
+    the branches at D2.2/D2.3, leasing costs at D2.4, the expected-value
+    composition at D2.5 and the recursion at D2.6. **Sprint D2 is complete**;
+    what remains absent is everything D3 and D4 own."""
 
     import anchor.leasing as leasing
 
     for absent in (
-        "MarketLeasingAssumptions",
-        "RolloverEvent",
-        "build_rollover_schedule",
+        "build_lease_level_operating_projection",
         "MonthlyPropertyProjection",
         "AnnualOperatingProjection",
-        "build_lease_level_operating_projection",
+        "expense_recoveries",
+        "build_expense_recoveries",
+        "RecoveryBasis",
     ):
         assert not hasattr(leasing, absent), (
             f"{absent} belongs to a later gate and must not exist yet"

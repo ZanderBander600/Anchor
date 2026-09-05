@@ -35,6 +35,31 @@ This document **does not overwrite**
 that supersession is recorded explicitly in Section 3 with the original
 preserved. D0 itself is unmodified.
 
+**Amended after D2.2, for gate ownership only.** D2.1 and D2.2 are implemented
+and human-accepted. Reconciling this document against the accepted
+implementation sequence exposed two places where it contradicted itself about
+*which gate* owns a mechanic; both are corrected, and **no financial convention
+changed**:
+
+1. The Section 14 gate table assigned a **second rollover** to D2.2, which
+   Section 5 and the same table's D2.6 row assign to D2.6. D2.2 produces
+   exactly one successor; recursion is D2.6 (Sections 14.1, 14.2).
+2. The Section 12 inventory gated `renewal_downtime_months` and
+   `renewal_free_rent_months` at **D2.2**, which has no downtime or free-rent
+   mechanics at all. Both are D2.3 (Section 12's Gate-column note).
+
+The financial rules these fields and mechanics obey — the recursion horizon,
+the fractional-downtime rule, the free-rent waterfall — are unchanged and are
+not reopened. Section 18's audit records the amendment.
+
+**Amended again at D2.6 Part A, for the recursion algorithm only.** Section 5.2
+deferred two implementation questions to D2.6; Section 5.5 now answers both:
+the recursion is computed by deterministic probability-mass propagation over
+rollover-event states keyed by expiration period, and **no computational cap is
+adopted**, because the state count is structurally bounded by the projection
+horizon. Again **no financial convention changed** — HD-D2-3's rejection of a
+financial depth cap stands, and Sections 6-11 are untouched.
+
 ---
 
 ## 1. Executive Summary
@@ -531,7 +556,8 @@ formulation can compute the identical result without enumerating the tree — fo
 example by carrying, per canonical period, the probability mass currently in
 each distinguishable successor state rather than each distinguishable history.
 **D2.6 owns that choice and must prove it.** No optimisation is required now,
-and no approximation is permitted in exchange for one.
+and no approximation is permitted in exchange for one. *(Decided at D2.6:
+Section 5.5 records the chosen formulation and its proof.)*
 
 If implementation and performance testing at D2.6 show a safety limit is needed,
 it may be added as **implementation safety only**, sized from measurement. Any
@@ -543,7 +569,8 @@ such limit must:
 - comfortably preserve ordinary commercial lease cases.
 
 **Whether such a limit is needed, and its threshold, is deferred to D2.6.** It
-does not block D2.1–D2.5, and it is not a financial convention.
+does not block D2.1–D2.5, and it is not a financial convention. *(Decided at
+D2.6: no limit is adopted — Section 5.5.5.)*
 
 ### 5.3 Monte Carlo remains excluded
 
@@ -555,6 +582,171 @@ No sampling, at any depth, under any framing.
 A chain stops when its successor's commencement exceeds `12H + 12`. Nothing
 beyond the window is computed for revenue. D0 §8.6's rule stands, and the LC
 basis remains untruncated (Section 8.3).
+
+### 5.5 The recursion algorithm — decided at D2.6
+
+Section 5.2 deferred two things to D2.6: **which** deterministic formulation
+computes the recursion, and **whether** a computational-safety limit is needed.
+Both are settled here. **No financial convention changes.** Sections 6-11 stand
+exactly as accepted, and the no-financial-depth-cap rule of HD-D2-3 is
+reaffirmed, not weakened.
+
+**Chosen: deterministic probability-mass propagation over rollover-event
+states.** Not an explicit path tree, and not a synthetic weighted successor.
+
+#### 5.5.1 The state, and why it is sufficient
+
+A **rollover-event state** is "a lease on this suite expires at canonical
+period `e`, carrying probability mass `q`". The sufficient state key is
+
+```
+(suite_id, expiration_period, lease_type, leased_area_sf)
+```
+
+and within a single suite's chain the last three are invariant, so the key
+reduces in practice to the **expiration period alone**.
+
+This is provable from the successor construction rather than assumed. A
+successor lease reads exactly two things from the lease it replaces: its
+`lease_id`, used only to derive an identifier, and its `lease_type`, which is
+therefore constant along every chain descending from the original lease. Every
+economically load-bearing input comes from elsewhere:
+
+| Successor input | Source | Depends on the parent's economics? |
+|---|---|---|
+| `leased_area_sf` | `Suite.suite_area_sf` | No — constant |
+| `rent_commencement_date` | `c = e + 1 + floor(D)` | No — only on `e` and `D` |
+| `lease_expiration_date` | `c + T - 1` | No |
+| `base_rent_psf` | `MarketRentPSF(c)`, or `renewal_rent_psf` grown to `c`, or `MarketRentPSF(c) × (1 + spread)` | **No** |
+| `escalation_pct` | `successor_escalation_pct` | No |
+| `escalation_basis` | always `LEASE_ANNIVERSARY` | No |
+| `lease_type` | inherited | Invariant along the chain |
+| TI, LC, downtime, free rent, term | resolved `MarketLeasingAssumptions` | No |
+
+The load-bearing row is `base_rent_psf`. **The parent's rent never reaches the
+child.** A successor prices from market at its own commencement period, so two
+paths that arrive at the same `e` — however differently they were priced, and
+whichever branch type they came from — have *identical* futures.
+
+**Therefore two scenario paths reaching the same expiration period may be
+merged by adding their probability masses.** Nothing else is combined: no rent,
+no term, no date, no rate. Merging probability mass is not the rejected
+weighted-parameter method, because no *assumption* is averaged — the two paths
+genuinely face the same future, and the only thing that differs is how likely
+they were to get there.
+
+#### 5.5.2 Incremental contribution — the double-counting rule
+
+`RenewalBranch` and `NewTenantBranch` carry full canonical series that
+**include the expiring lease's own history**. Four of their ten series mix it
+in — `contractual_base_rent`, `cash_base_rent`, `occupied_area` and
+`physical_occupancy` — while the other six are already successor-only.
+
+**A recursive event therefore contributes only its own successor's economics,
+never a whole branch.** History before `e` was recognised when the lease that
+produced it was created, and adding a branch series at every event would
+re-count it once per generation. The rule is:
+
+> Each transition contributes `mass × (that successor's own monthly series)`
+> and nothing else. The original in-place lease contributes exactly once, at
+> mass `1`.
+
+#### 5.5.3 Transitions, and the termination proof
+
+At an event `(e, q)`, with `p = renewal_probability`:
+
+```
+renewal child      mass q·p        commences c_R = e + 1 + floor(D_R), expires e + floor(D_R) + T_R
+new-tenant child   mass q·(1−p)    commences c_N = e + 1 + floor(D_N), expires e + floor(D_N) + T_N
+```
+
+**Strict forward progression.** Since `D ≥ 0` and `T ≥ 1`,
+
+```
+e' = e + floor(D) + T ≥ e + 0 + 1 = e + 1 > e
+```
+
+so every generated expiration is **strictly later** than its parent's. With a
+finite horizon this alone guarantees termination — no depth counter is
+involved, which is what keeps HD-D2-3's rejection of a financial cap intact.
+
+**Termination rule.** Process an event only when `1 ≤ e < 12H + 12`. At
+`e = 12H + 12` or beyond, any child would commence at `e + 1` or later, outside
+the projection, and contribute nothing. A child whose own expiration falls
+outside the window is contributed but not re-enqueued.
+
+**Vacancy is the absence of a contribution, never a negative one.** When
+downtime pushes a commencement past the horizon, the child contributes zero and
+the months after `e` simply have no occupant in that scenario — which is
+exactly the expected vacancy those months should show. Nothing needs to be
+represented positively, and nothing is lost by not re-enqueueing.
+
+**Zero-mass children are not generated.** At `p = 1` only the renewal chain
+exists and at `p = 0` only the new-tenant chain does, so the endpoints stay
+exact and produce no spurious events.
+
+#### 5.5.4 Probability conservation
+
+Because branch terms differ, two paths can be at different successor
+generations in the same calendar month, so "all paths at generation `k` sum to
+1" is not meaningful. The invariants are stated on events and on time instead:
+
+1. **At every split**, child masses sum exactly to the parent's:
+   `q·p + q·(1−p) = q`.
+2. **Globally**, mass entering the system is exactly `1` (the in-place lease),
+   and mass is neither created nor destroyed by a split or a merge.
+3. **In every canonical month**, `expected_occupancy(m) ∈ [0, 1]`, with the
+   shortfall from `1` being precisely the mass that is dark in that month.
+
+#### 5.5.5 Complexity, and the computational-safety decision
+
+States are keyed by expiration period, and expiration periods are integers in
+`[1, 12H + 12]`. **The number of distinct states is therefore bounded by the
+horizon itself:**
+
+```
+states ≤ N,    transitions ≤ 2N,    monthly operations = O(N²)
+```
+
+where `N = 12H + 12`. For a ten-year hold, `N = 132`: at most 132 states, 264
+transitions, and on the order of 35,000 monthly floating-point operations.
+
+Measured against the pathological case — one-month renewal and new-tenant terms
+with zero downtime over a ten-year hold, where an explicit tree has `2¹³¹`
+paths:
+
+| Case | `N` | Merged states | Transitions | Explicit paths |
+|---|---|---|---|---|
+| 10-year terms | 132 | 3 | 6 | 4 |
+| 5-year terms | 132 | 5 | 10 | 7 |
+| 1-year terms | 132 | 38 | 76 | 1,190 |
+| Case 18 (60 vs 120 mo) | 132 | 4 | 8 | 5 |
+| **1-month terms** | **132** | **131** | **262** | **≈ 2.7 × 10³⁹** |
+
+**Decision: no computational cap, of any kind.** The carried-forward item in
+Section 17.2 is closed. A limit would be justified only if the work could grow
+without a structural bound, and it cannot: expiration periods advance strictly,
+they are integers, and the horizon is finite, so the state count is bounded by
+`N` before any limit could bind. An arbitrary node or event cap would therefore
+be a number that can never fire on a valid input, and HD-D2-3's warning applies
+to it directly — a cap that cannot be reached is not safety, it is a financial
+assumption waiting to be mistaken for one.
+
+Should a future gate widen the model in a way that breaks the `states ≤ N`
+bound — per-suite recursion is what makes it hold — the decision must be
+revisited **with measurement**, and any limit adopted then must ERROR naming
+the suite, never truncate silently, and never alter economics below its
+threshold.
+
+#### 5.5.6 What D2.6 reuses, and what it must not
+
+D2.5's `compose_expected_rollover` remains the authoritative **single-rollover**
+composition and is not re-implemented. But a whole `ExpectedRollover` must
+**never** be summed into a recursive accumulation: it composes full branch
+series, history included, and adding one per event is precisely the
+double-count 5.5.2 forbids. D2.6 reuses the weighting primitive and the
+successor-level economics; it does not reuse the branch-level series.
+
 
 ## 6. Downtime — Exact Monthly Semantics
 
@@ -708,7 +900,7 @@ contract term, which for a `T`-month term commencing at a fractional boundary is
 `T − frac(D)`. A stated concession larger than that cannot be fully consumed
 within the lease.
 
-**Recommendation for D2.3 (recorded for human review).** Validate
+**APPROVED AT D2.3 — human decision, now a binding convention.** Validate
 
 ```
 free_rent_months ≤ successor_term_months − frac(downtime_months)
@@ -718,9 +910,28 @@ as a **validation ERROR** — `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM` — naming bot
 figures. Silently discarding the unconsumable remainder would understate the
 concession invisibly, which is exactly the failure the waterfall replaced.
 
+Anchor therefore **refuses** rather than doing any of the following, each of
+which was considered and rejected: silently capping the concession; discarding
+the unconsumable remainder; carrying it past the successor’s contractual
+expiration; or extending the successor term to absorb it. Each would change the
+economics without saying so.
+
+**The bound is measured over the FULL successor contract term**, never over the
+portion visible inside Anchor’s canonical projection. A 60-month successor of
+which only eight months fall before the projection ends may legitimately carry a
+twelve-month concession; the displayed schedule simply ends with free rent still
+being consumed. Erroring merely because the horizon arrives first would reject
+sound underwriting on the basis of where the hold period happens to end. The
+rule fires **only** when the concession cannot be consumed over the whole
+contractual term.
+
+The comparison uses the package’s scaled numeric convention rather than a bare
+`>`, so a concession stated as exactly the maximum survives the ordinary
+floating-point representation of `frac(D)`.
+
 **This is a tightening of D0**, which sets the domain at `≥ 0` with no upper
-bound. It is recorded here rather than applied: it takes effect only if approved
-at D2.3, and it does not block D2.1.
+bound. It applies to **both branches**, each against its own term, downtime and
+free rent.
 
 ## 8. TI and LC
 
@@ -876,10 +1087,30 @@ record is used in full and no field falls through. `Suite.market_rent_psf` is
 the single deliberate exception, because overriding only the rent level is the
 overwhelmingly common case.
 
+**`Suite.market_rent_psf` overrides the rent level and *only* the rent level.**
+This is a correctness clarification of the hierarchy above, not a new
+convention: the two rules were already stated separately, and this records how
+they compose. The resolver takes whichever record won the second rule — the
+suite's full override if it supplied one, otherwise the property default — and
+substitutes the rent level into it. Every other field is **preserved from that
+record**, unchanged.
+
+The implementation consequence is worth stating because it is easy to get
+wrong: the resolved record must be produced by **record-preserving replacement**
+of the single field, never by reconstructing it from an enumerated field list.
+A resolver that rebuilds the record field by field is correct only until the
+next gate adds a field, at which point a suite carrying a rent-level override
+silently loses that assumption — a suite with a better-quality space would have
+quietly lost its renewal term when D2.2 landed. The defect is invisible in the
+resolved record's rent, which is why it is named here.
+
 The resolver runs **once per suite** and the resolved record plus its source
 (`"property_default"` / `"suite_override"`) is recorded on every `RolloverEvent`
 it drives, so "which assumption applied here, and where did it come from" is
-answerable from the output alone.
+answerable from the output alone. Because the rent-level exception can apply on
+top of *either* source, whether it fired is recorded alongside the source rather
+than folded into it; the two facts are orthogonal and one label cannot carry
+both.
 
 ---
 
@@ -954,8 +1185,8 @@ Option B **nothing is weighted at the parameter level**, so the column reads
 | `renewal_rent_psf` | $/SF/yr | `analysis_start_date` | `≥ 0`, nullable | renewal | ~ only if timing matches | from `c_R` | no | no | D2.2 |
 | `renewal_rent_spread` | decimal | n/a | `> −1` | renewal | ~ | from `c_R` | no | no | D2.2 |
 | `renewal_term_months` | months | from `c_R` | `≥ 1` | renewal | **✘ fractional** | term length | no | **yes** | D2.2 |
-| `renewal_downtime_months` | months | from expiry | `≥ 0` | renewal | **✘ timing** | vacancy block | **yes** | **yes** (shifts `c`) | D2.2 |
-| `renewal_free_rent_months` | months | consumed from `c_R` | `≥ 0`, fractional ok (7.5) | renewal | **✘ timing** | abatement waterfall | no | no | D2.2 |
+| `renewal_downtime_months` | months | from expiry | `≥ 0` | renewal | **✘ timing** | vacancy block | **yes** | **yes** (shifts `c`) | D2.3 |
+| `renewal_free_rent_months` | months | consumed from `c_R` | `≥ 0`, fractional ok (7.5) | renewal | **✘ timing** | abatement waterfall | no | no | D2.3 |
 | `renewal_ti_psf` | $/SF | paid at `c_R` | `≥ 0` | renewal | ~ amount yes, timing no | at `c_R`, below NOI | no | no | D2.4 |
 | `renewal_lc_pct` | decimal | paid at `c_R` | `0 ≤ x ≤ 1` | renewal | **✘ product** | at `c_R`, below NOI | no | no | D2.4 |
 | `new_term_months` | months | from `c_N` | `≥ 1` | new | **✘ fractional** | term length | no | **yes** | D2.3 |
@@ -966,6 +1197,24 @@ Option B **nothing is weighted at the parameter level**, so the column reads
 | `leasing_commission_method` | enum | n/a | one member in D2 | common | n/a | LC basis | no | no | D2.4 |
 | `successor_escalation_pct` | decimal | successor anniversaries | `> −1` | common | ✔ | from `c+12` | no | no | D2.2 |
 | *(new-tenant rent)* | — | — | — | new | — | — | — | — | — |
+
+**Reading the Gate column — the mechanic, not the branch, decides the gate.**
+A field's gate is the gate that first *implements the mechanic it belongs to*,
+which is not always the gate that owns its branch. `renewal_downtime_months`
+and `renewal_free_rent_months` are renewal-side assumptions, but downtime and
+free rent are **D2.3 mechanics**: D2.3 establishes fractional downtime, the
+successor occupancy factor and the sequential free-rent waterfall on the pure
+new-tenant branch, where they are load-bearing, and only then are they
+available to either branch. Assigning them to D2.2 would have made the pure
+renewal gate depend on machinery that does not exist there.
+
+**D2.2 therefore has no downtime and no free rent at all** — not as a field, not
+as a parameter, and not as a hard-coded zero. A pure renewal commences the month
+after expiry by construction (Section 14.1), so the gate needs no vacancy
+concept to express the absence of one. Representing "no downtime" with a zero
+field would put the D2.3 mechanic into D2.2 under a different name. If a later
+gate admits branch-specific renewal downtime or free rent, that incorporation
+happens **no earlier than D2.3** and does not retroactively broaden D2.2.
 
 **One gap found in D0, and it is deliberate rather than missing.** There is no
 `new_rent_psf` field: the new-tenant branch prices at `MarketRentPSF(c_N)` by
@@ -1051,8 +1300,8 @@ already-verified code rather than new claims.
 |---|---|---|---|
 | **D2.0** | *This document* | Conventions locked, D0 changes flagged | `docs/` only |
 | **D2.1** | Market rent timeline | Annual step growth on analysis anniversaries; suite override precedence; no monthly compounding; no lease-anniversary reset | new `market.py` |
-| **D2.2** | Pure renewal path (`p = 1`) | One expiring lease produces one renewal successor: rent from spread or explicit level, own term, own escalation from `c`, second rollover if it expires in-window | new `rollover.py` |
-| **D2.3** | Pure new-tenant path (`p = 0`) + downtime + free rent | Market-priced successor after downtime; the exact `D` and `F` boundary rules of Sections 6–7; downtime/free-rent distinction visible in the occupancy series | `rollover.py` |
+| **D2.2** | Pure renewal path (`p = 1`) | One expiring lease produces **exactly one** renewal successor: immediate commencement at `e + 1`, rent from spread or explicit level, own term, own escalation from `c`. **No second rollover** — recursion is D2.6 | new `rollover.py` |
+| **D2.3** | Pure new-tenant path (`p = 0`) + downtime + free rent | Market-priced successor after downtime; the exact `D` and `F` boundary rules of Sections 6–7; downtime/free-rent distinction visible in the occupancy series. **Owns the first implementation of downtime and free rent**, established on the new-tenant branch, where both are load-bearing; the renewal-side `renewal_downtime_months` / `renewal_free_rent_months` become available no earlier than here, and D2.2's pure renewal is re-proved once they exist | `rollover.py` |
 | **D2.4** | TI + LC | Both below NOI, both at `c`, LC on contractual face rent untruncated and gross of free rent; **G-3 perturbation** (doubling TI/LC leaves NOI bit-identical) | new `leasing_costs.py` |
 | **D2.5** | Expected rollover composition | The weighting `E[x] = p·x_R + (1−p)·x_N`; `p=1`/`p=0` reproduce D2.2/D2.3 **bit-identically**; expected vs physical occupancy split (HD-D2-2) | `rollover.py` |
 | **D2.6** | Recursive rollover + closeout | Recursion to the canonical projection end; forward-window rollover; full D2 golden suite; guardrails. **Owns the computational-safety decision**: whether a node/event limit is needed, sized from measurement, ERROR-only, never a financial assumption | `rollover.py`, tests |
@@ -1069,6 +1318,62 @@ where the economics are complete and checkable.
 **Nothing in D2 integrates acquisition, debt or returns.** `anchor.leasing`
 remains dark to the rest of Anchor through D2; D4 owns integration.
 
+### 14.1 D2.2 — the locked pure renewal path
+
+Recorded after D2.2 implementation and human financial review, so the accepted
+scope is unambiguous for every later gate. **This is the proven D2.2 financial
+case:**
+
+```
+existing lease expires  (inclusive, last paying month = e)
+  -> successor commences the next canonical month, c = e + 1
+  -> no downtime
+  -> no vacancy gap
+  -> no free rent
+  -> market-based starting renewal rent, from MarketRentPSF(c) (Section 24.3)
+  -> successor contractual escalation on the successor's own anniversaries
+  -> exact renewal term, and one expiration
+```
+
+Exactly **one** successor is generated. The successor is **not** itself rolled
+over when it expires, whether or not that expiration falls inside the window.
+
+`c = e + 1` is the whole of D2.2's timing rule. D0 §8.5's general form
+`c = e + 1 + floor(D)` is the D2.3 form; the `floor(D)` term is introduced by
+the gate that introduces `D`, and appears in D2.2 in no form — including as a
+zero.
+
+Occupancy across the rollover is therefore **continuous and integral**: the
+expiry month belongs to the expiring lease alone, period `c` to the successor
+alone, and no month has two occupants or none. It is genuine branch physical
+occupancy and correctly keeps that name (HD-D2-2); the composed fractional
+`expected_occupancy` does not exist until D2.5.
+
+The expiring lease is reused unchanged. D2.2 never recomputes an in-place
+lease's contractual rent, and no market assumption touches one (D0 §24.4).
+
+### 14.2 Second and later rollovers belong to D2.6 — stated once
+
+The financial principle is unchanged and is **not** reopened here: rollover
+recursion continues until the canonical projection ends, with no financial
+depth cap (Section 5, HD-D2-3).
+
+What is fixed here is **which gate implements it**. D2.6 owns, in full:
+
+- a successor's own expiration followed by another rollover;
+- recursive successor generation to the canonical projection end;
+- repeated renewal / new-tenant composition at depth;
+- the chain-probability tree and its `sum = 1` invariant at every depth;
+- any computational-complexity guardrail, which remains implementation safety
+  only, ERROR-only, and never a financial assumption (Section 5.2);
+- the dynamic-programming or state-based formulation, if one is used.
+
+No earlier gate generates a second successor. D2.2 and D2.3 each produce one
+successor per expiring lease so that a single branch's economics can be
+reviewed on their own; D2.4 and D2.5 add costs and weighting to that single
+rollover. Golden cases **17**, **17b** and **18**'s chain assertions are
+therefore **D2.6 acceptance cases**, not D2.2 or D2.3 ones.
+
 ---
 
 ## 15. D2 Golden Case Plan
@@ -1076,6 +1381,19 @@ remains dark to the rest of Anchor through D2; D4 owns integration.
 Every case states the exact financial question it settles. Shared frame:
 `analysis_start = 2027-01-01`, 10,000 SF single suite unless stated, expiry at a
 stated period `e`.
+
+**These are the cases for the *complete* D2 engine, not a per-gate checklist.**
+Each gate proves the cases its mechanics support, and a case is due at the gate
+that owns its last unimplemented mechanic. Two consequences worth stating,
+because both were misread once:
+
+- A case written with `D = 0` and `F = 0` — Case 1, for instance — is a
+  *full-engine* case in which those parameters are set to zero. It is **not** a
+  statement that D2.2 has a downtime or free-rent parameter to set. D2.2 has
+  neither (Section 14.1), so its own acceptance case states no `D` and no `F` at
+  all, and the pure-renewal case is re-proved at D2.3 once the parameters exist.
+- Cases **17**, **17b**, and Case 18's chain assertions require a second
+  rollover, so they are **D2.6** acceptance cases (Section 14.2).
 
 | # | Case | Setup | Proves |
 |---|---|---|---|
@@ -1088,7 +1406,7 @@ stated period `e`.
 | **7** | Zero free rent | `F = 0` | Successor pays full contractual rent from `c` |
 | **8** | Integer free rent | `F = 6` | Six abated periods from `c`; `contractual_base_rent` stays **gross**; abatement on its own line |
 | **9** | Fractional free rent + fractional downtime | `D = 2.25`, `F = 2.5` | **The Section 7.2 reference case, asserted period by period**: Sep `0.75 / 0.00`, Oct `1.00 / 0.00`, Nov `0.75 / 0.25`, Dec `0.00 / 1.00`; total abatement exactly `2.50`. Proves September consumes `0.75` of a free month, not `1.0` |
-| **9b** | Free rent exceeding the occupiable term | `T = 6`, `D = 0.5`, `F = 6` | Section 7.5's `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM` ERROR — the concession is never silently discarded *(subject to approval at D2.3)* |
+| **9b** | Free rent exceeding the occupiable term | `T = 6`, `D = 0.5`, `F = 6` | Section 7.5's `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM` ERROR — the concession is never silently discarded *(approved at D2.3)* |
 | **10** | TI | `ti_psf = 10`, `D = 2.25`, expiry June | Full TI in **September** (period `c`), never prorated, never in a downtime period, **NOI bit-identical** when TI doubles |
 | **11** | LC | term 60, `D = 2.25`, `F = 6`, escalating | LC on **60 full contractual months**, gross of free rent, untruncated by the horizon, unaffected by the `0.75` boundary factor; recorded at `c`; **NOI bit-identical** when LC doubles |
 | **12** | Market step before rollover | expiry period 11, `D = 0` → `c = 12`; expiry period 12, `D = 0` → `c = 13` | The successor commencing in period 13 prices one growth band higher. Market rent steps on the **analysis** anniversary |
@@ -1154,13 +1472,15 @@ Extends D0 §26 (FM-1 … FM-29). Each entry names its detection mechanism.
 
 **No human financial decision blocks D2.1.**
 
-### 17.1 One recommendation recorded for later review
+### 17.1 One recommendation recorded for later review — closed at D2.3
 
-**Free-rent over-grant validation (Section 7.5).** Recommend
-`free_rent_months ≤ successor_term_months − frac(downtime_months)` as a
-validation **ERROR** rather than silently discarding an unconsumable remainder.
-This tightens D0's `≥ 0` domain, so it is recorded rather than assumed. **Due at
-D2.3; does not block D2.1.**
+**Free-rent over-grant validation (Section 7.5). — APPROVED AT D2.3.**
+`free_rent_months ≤ successor_term_months − frac(downtime_months)` is a
+validation **ERROR**, `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM`, rather than a silent
+discard of an unconsumable remainder. It tightens D0's `≥ 0` domain, applies to
+both branches against their own term and downtime, and is measured over the full
+contractual term rather than the visible projection. This was the one
+recommendation this document left open; it is now closed.
 
 ### 17.2 Carried forward, unchanged
 
@@ -1168,8 +1488,11 @@ D2.3; does not block D2.1.**
   financial convention; no decision required to proceed.
 - **Float policy** (Section 13.2) — unchanged for D2. D4 must adopt a
   magnitude-aware reconciliation rule for G-M4.
-- **Computational safety threshold** — deferred to D2.6 by decision, to be
-  sized from measurement.
+- **Computational safety threshold** — **CLOSED at D2.6** (Section 5.5.5).
+  Measurement showed the state count is structurally bounded by the horizon
+  (`states ≤ N`), so **no cap of any kind is adopted**. The
+  no-financial-depth-cap rule of HD-D2-3 is unchanged and now needs no
+  computational companion.
 
 ---
 
@@ -1193,6 +1516,29 @@ discussion, which the review permits.
 | Free rent consuming whole calendar periods after fractional commencement | **Removed.** §7.2 September consumes `0.75`; FM-D2-7b guards it |
 | LC from weighted parameters | **Removed.** §8.4 composes per-branch LC; the −19.8% error is retained as rejected-method evidence |
 
+### 18.1 Gate-ownership audit — performed after D2.2
+
+A second pass, searching for every active statement about *which gate* owns a
+mechanic. Terms searched: `D2.2`, `D2.3`, `D2.6`, "second rollover",
+"recursive", "recursion", "downtime", `renewal_downtime_months`, "free rent",
+`renewal_free_rent_months`, `successor_escalation_pct`, and the non-term
+`renewal_escalation_pct`.
+
+| Searched term | Result |
+|---|---|
+| "second rollover" in an active D2.2 statement | **Corrected.** Section 14's D2.2 row said "second rollover if it expires in-window"; it now says exactly one successor, no second rollover. Sections 14.1/14.2 state the split |
+| "recursion" / "recursive" | **Consistent.** Every active occurrence assigns recursion to D2.6 (Sections 5.1, 5.2, 14, 14.2, HD-D2-3, FM-D2-17). Section 1.2/§3/§4.1 occurrences are the labelled rejected-method discussion |
+| `renewal_downtime_months`, `renewal_free_rent_months` gate | **Corrected.** Section 12's Gate column read D2.2; both now read D2.3, with a note explaining that the *mechanic*, not the branch, decides the gate |
+| "downtime" / "free rent" in an active D2.2 statement | **None remain.** Section 14.1 states D2.2 has neither, in any form, including a zero |
+| Golden cases stating `D` and `F` | **Clarified**, not changed. Section 15's preamble records that these are full-engine cases and that D2.2's own case states no `D` and no `F` |
+| Golden cases 17, 17b, 18-chain | **Clarified** as D2.6 acceptance cases (Section 14.2) |
+| `renewal_escalation_pct` | **Never used as a field name**, here or in production. It appears in this document only in this audit row and the search list above, both of which name it as the *non-*term. The approved contract field is `successor_escalation_pct`, and that is correct rather than incidental: D0 §4.5 defines it as a **common** successor assumption shared by both branches, not a renewal-side one, so a `renewal_`-prefixed name would misstate its scope. Its D2.2 gating is correct and unchanged |
+| `successor_escalation_pct` gated D2.2 | **Correct, unchanged.** D2.2 implements it |
+| Recursion's financial termination | **Unchanged.** Section 5.1's rule — recurse until the canonical projection ends, no financial depth cap — is not reopened. Only its implementing gate was ever in question |
+
+No financial convention was altered by this pass. Sections 6, 7, 8, 9.1, 9.2,
+10 and 11 are untouched.
+
 **Two substantive corrections were made to this document's own earlier
 recommendations**, both from human review and both improvements:
 
@@ -1205,8 +1551,25 @@ recommendations**, both from human review and both improvements:
 
 ## 19. Scope Statement
 
+### 19.1 D2.0, as originally accepted
+
 This gate changed `docs/` only — one file, this document. No file under `src/`,
 `tests/`, `web/`, no migration, no dependency, no configuration. D1 economics
 are untouched, `anchor.leasing` is unmodified, and D0 is unmodified.
 
 No D2 production code exists. **D2.1 may begin.**
+
+### 19.2 The post-D2.2 gate-ownership amendment
+
+The amendment recorded in the Status section and audited in Section 18.1 is
+likewise **documentation only** — this one file. No file under `src/`,
+`tests/`, `web/`, no migration, no dependency, no configuration; no production
+rename, in particular none of `successor_escalation_pct`.
+
+It changed **no financial convention**. Every rule in Sections 6–11 stands as
+accepted, including the recursion horizon, the fractional-downtime rule and the
+free-rent waterfall. What changed is which gate implements two mechanics, and
+the correction moved both to the gate the accepted sequence already named.
+
+D2.1 and D2.2 are implemented and human-accepted; their economics are unaffected
+by this amendment. **D2.3 may begin.**
