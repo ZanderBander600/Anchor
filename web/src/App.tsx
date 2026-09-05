@@ -1934,6 +1934,7 @@ export default function App() {
               breakEven: detailedBreakEven,
             })}
             dealStory={detailedAiAnalysis?.deal_story ?? null}
+            showIdentity={false}
           />
         ) : (
           <div className="empty-state">
@@ -2176,6 +2177,7 @@ export default function App() {
               breakEven,
             })}
             dealStory={aiAnalysis?.deal_story ?? null}
+            showIdentity={false}
           />
         ) : (
           <div className="empty-state">

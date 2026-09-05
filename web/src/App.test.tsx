@@ -5480,7 +5480,7 @@ describe('One-Page Owner Summary (Gate B3)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
-    expect(await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('.owner-summary-panel')).not.toBeNull());
   });
 
   it('renders after a successful Detailed analysis', async () => {
@@ -5492,7 +5492,7 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     fillDetailedGoldenDeal();
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
-    expect(await screen.findByText('Detailed Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('.owner-summary-panel')).not.toBeNull());
   });
 
   it('renders above the existing ResultsPanel content, never replacing it', async () => {
@@ -5502,12 +5502,12 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
-    await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' });
+    await waitFor(() => expect(document.querySelector('.owner-summary-panel')).not.toBeNull());
 
     // "Property" is a ResultsPanel-only card heading -- Owner Summary has
     // no section with this name -- so its presence proves ResultsPanel
     // still renders in full underneath the summary.
-    const ownerSummaryBadge = screen.getByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' });
+    const ownerSummaryBadge = ownerSummary();
     const resultsPanelHeading = screen.getByText('Property');
     expect(resultsPanelHeading).toBeTruthy();
 
@@ -5532,7 +5532,7 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
 
-    expect(await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('.owner-summary-panel')).not.toBeNull());
     expect(mockAnalyze).not.toHaveBeenCalled();
   });
 
@@ -5546,7 +5546,7 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
 
-    expect(await screen.findByText('Detailed Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('.owner-summary-panel')).not.toBeNull());
     expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
   });
 
@@ -5556,13 +5556,13 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     render(<App />);
     fillGoldenDeal();
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
-    expect(await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('.owner-summary-panel')).not.toBeNull());
 
     fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
       target: { value: '60000000' },
     });
 
-    expect(screen.queryByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeNull();
+    expect(document.querySelector('.owner-summary-panel')).toBeNull();
   });
 
   it('a Deal-Context-only edit leaves the summary rendered and updates THE PLAY immediately', async () => {
@@ -5578,14 +5578,14 @@ describe('One-Page Owner Summary (Gate B3)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
-    expect(await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('.owner-summary-panel')).not.toBeNull());
     expect(screen.getByText('Original strategy.', { selector: '.owner-summary-play-text' })).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Deal Context'), {
       target: { value: 'Updated strategy.' },
     });
 
-    expect(screen.getByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' })).toBeTruthy();
+    expect(document.querySelector('.owner-summary-panel')).not.toBeNull();
     expect(screen.getByText('Updated strategy.', { selector: '.owner-summary-play-text' })).toBeTruthy();
     expect(
       screen.queryByText('Original strategy.', { selector: '.owner-summary-play-text' }),
@@ -5599,7 +5599,7 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     fillGoldenDeal();
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
-    await screen.findByText('Quick Underwrite', { selector: '.owner-summary-mode-badge' });
+    await waitFor(() => expect(document.querySelector('.owner-summary-panel')).not.toBeNull());
 
     // ResultsPanel's own headline section and detail cards are unaffected.
     // Gate B5: scoped to the ResultsPanel root, so the Owner Summary's own
@@ -7648,5 +7648,269 @@ describe('Sprint C Gate C4 -- Documents', () => {
     await waitFor(() => expect(activeWorkspace()).toBe('Underwrite'));
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
     expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// Sprint C Gate C5 -- polish, accessibility, and the gate's speed tests.
+//
+// These encode the acceptance criteria as behavior: how few moves it takes to
+// reach a thing, and that the shell stays keyboard-operable and honest.
+// ===========================================================================
+
+describe('Sprint C Gate C5 -- speed tests', () => {
+  it('ten-second test: the owner story is on Overview in one place', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysisWithStory(),
+      deal_context: 'Core-plus industrial with mark-to-market upside.',
+    });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(activeWorkspace()).toBe('Overview'));
+
+    // Deal name and operating mode come from the persistent header, not a
+    // second copy inside the summary.
+    const header = within(document.querySelector('.deal-header') as HTMLElement);
+    expect(header.getByLabelText('Deal Name')).toHaveProperty('value', '111 Main St');
+    expect(header.getByRole('tab', { name: 'Quick Underwrite' })).toHaveProperty(
+      'ariaSelected',
+      'true',
+    );
+
+    const overview = within(panel('overview'));
+    expect(overview.getByText('The Play')).toBeTruthy();
+    expect(overview.getByText('Core-plus industrial with mark-to-market upside.')).toBeTruthy();
+    for (const label of [
+      'Levered IRR',
+      'Equity Multiple',
+      'Year 1 Levered CoC',
+      'Year 1 DSCR',
+      'Purchase Price',
+      'Year 1 NOI',
+    ]) {
+      expect(overview.getAllByText(label).length).toBeGreaterThan(0);
+    }
+    expect(overview.getAllByText(/^Minimum DSCR/).length).toBeGreaterThan(0);
+    expect(overview.getAllByText('Cumulative Operating Distributions').length).toBeGreaterThan(0);
+    expect(overview.getByText('AI Interpretation')).toBeTruthy();
+  });
+
+  it('Underwrite speed test: five key assumptions are each one click away', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await goTo(user, 'Underwrite');
+
+    const nav = within(document.querySelector('[aria-label="Underwrite sections"]') as HTMLElement);
+
+    await user.click(nav.getByRole('tab', { name: 'Acquisition' }));
+    expect(within(underwritePanel('acquisition')).getByText('Purchase Price')).toBeTruthy();
+
+    await user.click(nav.getByRole('tab', { name: 'Debt' }));
+    expect(within(underwritePanel('debt')).getByText('Interest Rate')).toBeTruthy();
+
+    await user.click(nav.getByRole('tab', { name: 'Exit' }));
+    expect(within(underwritePanel('exit')).getByText('Exit Cap Rate')).toBeTruthy();
+
+    await user.click(nav.getByRole('tab', { name: 'Operations' }));
+    const opsNav = within(
+      document.querySelector('[aria-label="Operations sections"]') as HTMLElement,
+    );
+    await opsNav.getByRole('tab', { name: 'Revenue' }).click();
+    expect(within(underwritePanel('operations')).getByText('Vacancy & Credit Loss')).toBeTruthy();
+    await user.click(opsNav.getByRole('tab', { name: 'Growth' }));
+    expect(within(underwritePanel('operations')).getByText('Revenue Growth')).toBeTruthy();
+  });
+
+  it('Risk speed test: each risk view is one click inside Risk', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'Risk');
+
+    const nav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
+    for (const [label, id] of [
+      ['Return Sensitivity', 'returns'],
+      ['Debt Sensitivity', 'debt'],
+      ['Break-Even', 'break-even'],
+    ] as [string, string][]) {
+      await user.click(nav.getByRole('tab', { name: label }));
+      expect(riskViewPanel(id).hasAttribute('hidden')).toBe(false);
+    }
+  });
+
+  it('AI speed test: Risks, Questions and Data Gaps are each one click', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'AI Analyst');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
+
+    const nav = within(document.querySelector('[aria-label="AI report sections"]') as HTMLElement);
+    for (const [label, id] of [
+      ['Risks', 'risks'],
+      ['Questions to Investigate', 'questions'],
+      ['Confidence / Data Gaps', 'confidence'],
+    ] as [string, string][]) {
+      await user.click(nav.getByRole('tab', { name: label }));
+      expect(aiSectionPanel(id).hasAttribute('hidden')).toBe(false);
+    }
+  });
+
+  it('Documents speed test: each source’s upload and review is one click', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Documents');
+
+    const nav = within(document.querySelector('[aria-label="Document sources"]') as HTMLElement);
+    await user.click(nav.getByRole('tab', { name: 'Offering Memorandum' }));
+    expect(within(documentsViewPanel('om')).getByLabelText('Upload OM (PDF)')).toBeTruthy();
+
+    await user.click(nav.getByRole('tab', { name: 'Excel Workbook' }));
+    expect(
+      within(documentsViewPanel('excel')).getByLabelText('Upload Anchor Workbook (.xlsx)'),
+    ).toBeTruthy();
+  });
+});
+
+describe('Sprint C Gate C5 -- polish and accessibility', () => {
+  it('keeps the sidebar rail compact and the open deal always visible', async () => {
+    const user = userEvent.setup();
+    const deals = Array.from({ length: 9 }, (_, index) =>
+      makeDeal({ id: `deal-${index}`, name: `Deal ${index}` }),
+    );
+    mockListDeals.mockResolvedValue(deals);
+    mockGetDeal.mockResolvedValue(deals[7]);
+    render(<App />);
+    await within(sidebar()).findByText('Deal 0');
+
+    expect(sidebar().querySelectorAll('.sidebar-deal-row').length).toBe(5);
+    await user.click(within(sidebar()).getByRole('button', { name: 'View all 9 deals' }));
+    expect(document.querySelector('.deal-library-panel')).toBeTruthy();
+
+    // Opening a deal outside the recent window still pins it into the rail.
+    await user.click((await screen.findAllByRole('button', { name: 'Open' }))[7]);
+    await waitFor(() =>
+      expect(
+        within(sidebar()).getByText('Deal 7').closest('button')?.getAttribute('aria-current'),
+      ).toBe('true'),
+    );
+  });
+
+  it('renders financial values in the sans stack with tabular numerals', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await goTo(user, 'Overview');
+
+    // Sprint C Gate C5 moved financial display off the monospaced stack.
+    // The class carrying the value is the metric card's, not a code style.
+    const value = panel('overview').querySelector('.metric-card-value') as HTMLElement;
+    expect(value).toBeTruthy();
+    expect(value.className).not.toContain('mono');
+  });
+
+  it('gives every workspace an intentional empty state before analysis', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await goTo(user, 'Overview');
+    expect(within(panel('overview')).getByText(/Enter assumptions and click/)).toBeTruthy();
+
+    await goTo(user, 'Underwrite');
+    expect(within(liveCase()).getByText('Analyze the deal to populate live metrics.')).toBeTruthy();
+
+    await goTo(user, 'Risk');
+    expect(within(panel('risk')).getByText('Analyze the deal to view risk analysis.')).toBeTruthy();
+
+    await goTo(user, 'AI Analyst');
+    expect(within(panel('ai')).getByText(/Analyze the deal first/)).toBeTruthy();
+
+    await goTo(user, 'Documents');
+    expect(
+      within(documentsViewPanel('om')).getByText(/Upload an Offering Memorandum PDF/),
+    ).toBeTruthy();
+  });
+
+  it('never signals status by color alone', async () => {
+    const user = userEvent.setup();
+    mockCreateDeal.mockResolvedValue(makeDeal());
+    render(<App />);
+
+    expect(screen.getByText('Unsaved deal')).toBeTruthy();
+
+    fillGoldenDeal();
+    await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+
+    expect(await screen.findByText(/^Saved/)).toBeTruthy();
+  });
+
+  it('exposes every level of navigation as keyboard-operable ARIA tabs', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+
+    // Workspace level.
+    screen.getByRole('tab', { name: 'Underwrite' }).focus();
+    await user.keyboard('{Enter}');
+    expect(activeWorkspace()).toBe('Underwrite');
+
+    // Underwrite section level.
+    const nav = within(document.querySelector('[aria-label="Underwrite sections"]') as HTMLElement);
+    nav.getByRole('tab', { name: 'Results' }).focus();
+    await user.keyboard('{Enter}');
+    expect(activeUnderwriteTab()).toBe('Results');
+
+    // Results view level.
+    const resultsNav = within(document.querySelector('[aria-label="Results views"]') as HTMLElement);
+    resultsNav.getByRole('tab', { name: 'Cash Flow' }).focus();
+    await user.keyboard('{Enter}');
+    expect(resultsPanelFor('cash-flow').hasAttribute('hidden')).toBe(false);
+  });
+
+  it('gives every nested tablist an accessible name and paired panels', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    // Each tablist is checked while its own workspace is active -- an
+    // inactive workspace is `hidden`, and therefore correctly absent from
+    // the accessibility tree.
+    for (const label of ['Deal workspace', 'Underwriting Mode']) {
+      expect(screen.getByRole('tablist', { name: label })).toBeTruthy();
+    }
+
+    await goTo(user, 'Underwrite');
+    expect(screen.getByRole('tablist', { name: 'Underwrite sections' })).toBeTruthy();
+
+    await goTo(user, 'Risk');
+    expect(screen.getByRole('tablist', { name: 'Risk views' })).toBeTruthy();
+
+    const riskNav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
+    const debtTab = riskNav.getByRole('tab', { name: 'Debt Sensitivity' });
+    expect(debtTab.getAttribute('aria-controls')).toBe(riskViewPanel('debt').id);
+    expect(riskViewPanel('debt').getAttribute('aria-labelledby')).toBe(debtTab.id);
+  });
+
+  it('keeps every shell control a real button with an accessible name', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Underwrite');
+
+    const controls = [
+      ...within(sidebar()).getAllByRole('button'),
+      ...within(document.querySelector('.deal-header') as HTMLElement).getAllByRole('button'),
+      ...screen.getAllByRole('tab'),
+    ];
+    for (const control of controls) {
+      expect(control.tagName).toBe('BUTTON');
+      expect((control.textContent ?? '') + (control.getAttribute('aria-label') ?? '')).not.toBe('');
+    }
   });
 });

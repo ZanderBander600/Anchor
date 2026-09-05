@@ -3,8 +3,12 @@ import type { Deal } from '../types';
 
 /** Maximum saved deals surfaced in the sidebar's Recent Deals list. The full
  * list always remains one click away in the Deal Library view -- the sidebar
- * is a shortcut, not a replacement for it. */
-const RECENT_DEAL_LIMIT = 8;
+ * is a shortcut, not a replacement for it.
+ *
+ * Sprint C Gate C5 cut this from eight to five: a long list of similarly
+ * named deals reads as visual noise in a 236px rail, and the "View all"
+ * affordance below makes the rest one click away rather than hidden. */
+const RECENT_DEAL_LIMIT = 5;
 
 /** Inline SVG so the shell adds no icon dependency. Every icon is decorative:
  * each nav row also carries a real text label (hidden only in the collapsed
@@ -94,7 +98,14 @@ export function AppSidebar({
   onNewDeal,
   onOpenDeal,
 }: AppSidebarProps) {
-  const recentDeals = deals.slice(0, RECENT_DEAL_LIMIT);
+  // Never hide the deal the analyst currently has open: if it falls outside
+  // the most-recent window, it is appended rather than dropped, so the rail
+  // always shows where you are.
+  const mostRecent = deals.slice(0, RECENT_DEAL_LIMIT);
+  const activeDeal = deals.find((deal) => deal.id === activeDealId);
+  const recentDeals =
+    activeDeal && !mostRecent.includes(activeDeal) ? [...mostRecent, activeDeal] : mostRecent;
+  const hasMore = deals.length > recentDeals.length;
 
   return (
     <nav className="app-sidebar" aria-label="Anchor navigation">
@@ -159,6 +170,12 @@ export function AppSidebar({
             );
           })}
         </ul>
+
+        {hasMore && (
+          <button type="button" className="sidebar-view-all" onClick={onOpenLibrary}>
+            View all {deals.length} deals
+          </button>
+        )}
       </div>
 
       <div className="sidebar-footer">

@@ -149,8 +149,38 @@ describe('AppSidebar', () => {
     renderSidebar({ deals });
 
     const list = document.querySelector('.sidebar-deal-list') as HTMLElement;
-    expect(within(list).getAllByRole('button').length).toBe(8);
+    expect(within(list).getAllByRole('button').length).toBe(5);
     expect(screen.queryByText('Deal 8')).toBeNull();
+    // The rest stay one click away rather than hidden.
+    expect(screen.getByRole('button', { name: 'View all 12 deals' })).toBeTruthy();
+  });
+
+  it('always shows the open deal, even outside the most-recent window', () => {
+    const deals = Array.from({ length: 12 }, (_, index) =>
+      makeDeal({ id: `deal-${index}`, name: `Deal ${index}` }),
+    );
+    renderSidebar({ deals, activeDealId: 'deal-9' });
+
+    const row = screen.getByText('Deal 9').closest('button');
+    expect(row).toBeTruthy();
+    expect(row?.getAttribute('aria-current')).toBe('true');
+  });
+
+  it('offers View all only when there are more deals than the rail shows', () => {
+    renderSidebar({ deals: [makeDeal()] });
+    expect(screen.queryByRole('button', { name: /View all/ })).toBeNull();
+  });
+
+  it('View all opens the Deal Library', async () => {
+    const user = userEvent.setup();
+    const deals = Array.from({ length: 9 }, (_, index) =>
+      makeDeal({ id: `deal-${index}`, name: `Deal ${index}` }),
+    );
+    const props = renderSidebar({ deals });
+
+    await user.click(screen.getByRole('button', { name: 'View all 9 deals' }));
+
+    expect(props.onOpenLibrary).toHaveBeenCalledTimes(1);
   });
 
   it('shows an empty state when nothing is saved, and a loading state while fetching', () => {

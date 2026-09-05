@@ -146,6 +146,13 @@ export interface OwnerSummaryPanelProps {
    * does -- the caller passes `aiAnalysis?.deal_story ?? null`, so every
    * existing `clearAiAnalysis()` path clears the Deal Story for free. */
   dealStory?: DealStory | null;
+  /** Sprint C Gate C5: whether to render the deal name and operating-mode
+   * badge at the top of the summary. Defaults to `true`, so the panel stays
+   * self-contained. The app passes `false` inside the workspace shell, where
+   * the persistent deal header already shows both directly above -- the
+   * duplication cost roughly 44px of the owner story's first viewport and
+   * told the reader nothing new. */
+  showIdentity?: boolean;
 }
 
 /**
@@ -161,7 +168,11 @@ export interface OwnerSummaryPanelProps {
  * mode-specific branch anywhere below is Operating Story's growth fields,
  * which `data.operatingStory` itself already discriminates.
  */
-export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelProps) {
+export function OwnerSummaryPanel({
+  data,
+  dealStory = null,
+  showIdentity = true,
+}: OwnerSummaryPanelProps) {
   const { identity, dealContext, keyReturns, ownerReturns, investmentSnapshot, debtRisk, operatingStory, breakEvenHighlights } =
     data;
 
@@ -173,12 +184,14 @@ export function OwnerSummaryPanel({ data, dealStory = null }: OwnerSummaryPanelP
 
   return (
     <div className="owner-summary-panel">
-      <header className="owner-summary-header">
-        <h2 className="owner-summary-deal-name">{identity.dealName}</h2>
-        <span className="owner-summary-mode-badge">
-          {identity.operatingMode === 'quick' ? 'Quick Underwrite' : 'Detailed Underwrite'}
-        </span>
-      </header>
+      {showIdentity && (
+        <header className="owner-summary-header">
+          <h2 className="owner-summary-deal-name">{identity.dealName}</h2>
+          <span className="owner-summary-mode-badge">
+            {identity.operatingMode === 'quick' ? 'Quick Underwrite' : 'Detailed Underwrite'}
+          </span>
+        </header>
+      )}
 
       {dealContext !== null && (
         <section className="owner-summary-play">
