@@ -40,6 +40,17 @@ D1.3 adds the property rent-roll schedule -- many leases across many suites
 combined into one canonical monthly series, with occupied and vacant rentable
 area derived from contractual activity -- and the annual aggregation derived
 solely from those monthly values. There is no independent annual rent engine.
+
+D2.1 adds the canonical monthly market-rent schedule: for each suite, the
+market rent in ``$/SF/year`` in every canonical month, growing in annual steps
+on ``analysis_start_date`` anniversaries, with the property-default /
+suite-override precedence resolved once per suite. ``market.py`` is the only
+module permitted to perform market-rent arithmetic, exactly as ``rent.py`` is
+the only one permitted to perform contractual-rent arithmetic; neither reads
+the other's fields. Market rent is an assumption **rate** about available
+space -- it is not a successor lease, and nothing at D2.1 converts it into a
+dollar cash flow. Rollover, renewal, downtime, free rent, TI, LC and
+probability composition are D2.2 and later.
 """
 
 from __future__ import annotations
@@ -66,9 +77,21 @@ from .contracts import (
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
     LeaseType,
+    MarketAssumptionSource,
+    MarketLeasingAssumptions,
+    MarketRentSchedule,
     ModelMonth,
     PropertyRentRollSchedule,
+    ResolvedMarketLeasing,
     Suite,
+)
+from .market import (
+    build_market_rent_schedule,
+    build_property_market_rent_schedules,
+    market_growth_index,
+    market_rent_psf_at_period,
+    market_rent_psf_for_period,
+    resolve_market_leasing,
 )
 from .rent import build_lease_monthly_schedule
 from .validation import (
@@ -101,6 +124,17 @@ __all__ = [
     "aggregate_flow_over_forward_exit_window",
     "snapshot_state_at_year_end",
     "average_state_over_year",
+    # market rent (D2.1)
+    "MarketLeasingAssumptions",
+    "MarketAssumptionSource",
+    "ResolvedMarketLeasing",
+    "MarketRentSchedule",
+    "resolve_market_leasing",
+    "market_growth_index",
+    "market_rent_psf_for_period",
+    "build_market_rent_schedule",
+    "build_property_market_rent_schedules",
+    "market_rent_psf_at_period",
     # contracts
     "EscalationBasis",
     "Lease",

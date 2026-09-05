@@ -21,6 +21,7 @@ Governed by
 from __future__ import annotations
 
 import dataclasses
+import pathlib
 import time
 from datetime import date
 
@@ -1038,11 +1039,20 @@ def test_d1_exposes_no_downstream_financial_concept() -> None:
         ), f"{absent} must not exist in D1"
 
 
-def test_no_d1_contract_declares_a_d2_or_downstream_field() -> None:
+def test_no_contract_declares_a_d2_2_or_downstream_field() -> None:
+    """**Narrowed at D2.1**, and only by the two fields that gate delivers.
+
+    ``market_rent_psf`` and ``market_rent_growth`` were removed from the
+    banned set when ``MarketLeasingAssumptions`` landed. Everything D2.2 and
+    later owns -- renewal, successors, downtime, free rent, TI, LC, recovery
+    structure and every downstream operating concept -- remains banned, so
+    this guardrail keeps its full force over the rest of Sprint D.
+    """
+
     from anchor.leasing import contracts as contracts_module
 
     banned = {
-        "renewal_probability", "market_rent_psf", "market_rent_growth",
+        "renewal_probability",
         "successor", "downtime_months", "free_rent_months", "ti_psf",
         "tenant_improvements", "lc_pct", "leasing_commissions",
         "recovery_basis", "expense_stop", "base_year", "origin",
@@ -1056,4 +1066,24 @@ def test_no_d1_contract_declares_a_d2_or_downstream_field() -> None:
             continue
         declared = {f.name for f in dataclasses.fields(obj)}
         leaked = declared & banned
-        assert not leaked, f"{name} declares out-of-D1 fields: {sorted(leaked)}"
+        assert not leaked, f"{name} declares out-of-scope fields: {sorted(leaked)}"
+
+
+def test_the_d1_rent_formula_is_untouched_by_d2_1() -> None:
+    """Failure mode FM-D2-20 stated as a source-level assertion:
+    ``Lease.base_rent_psf``'s meaning and ``rent.py``'s formula must be
+    untouched by D2.
+
+    The D1.2 formula ``base_rent_psf * (1 + escalation_pct) ** k * area / 12``
+    is asserted verbatim in structure, and the market-rent module is proven
+    absent from ``rent.py``'s imports."""
+
+    from anchor.leasing import rent as rent_module
+
+    source = pathlib.Path(rent_module.__file__).read_text(encoding="utf-8")
+
+    assert "annual_rent_psf = base_rent_psf * (1 + escalation_pct) ** escalation_index" in source
+    assert "annual_rent_psf * leased_area_sf / 12.0" in source
+    assert "from .market import" not in source
+    assert "market_rent_psf" not in source
+    assert "market_rent_growth" not in source

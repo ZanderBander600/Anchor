@@ -53,7 +53,13 @@ from .calendar import (
     month_index,
     projection_month_count,
 )
-from .contracts import EscalationBasis, Lease, LeaseLevelPropertyInputs, Suite
+from .contracts import (
+    EscalationBasis,
+    Lease,
+    LeaseLevelPropertyInputs,
+    MarketLeasingAssumptions,
+    Suite,
+)
 
 
 class LeaseIssueSeverity(StrEnum):
@@ -111,6 +117,11 @@ class LeaseIssueCode(StrEnum):
     # --- horizon (D1.1; warnings, evaluated only when a hold period is given)
     LEASE_STARTS_AFTER_HORIZON = "LEASE_STARTS_AFTER_HORIZON"
     LEASE_EXTENDS_BEYOND_HORIZON = "LEASE_EXTENDS_BEYOND_HORIZON"
+
+    # --- market leasing (D2.1) ---
+    MARKET_RENT_OUT_OF_DOMAIN = "MARKET_RENT_OUT_OF_DOMAIN"
+    MARKET_RENT_GROWTH_OUT_OF_DOMAIN = "MARKET_RENT_GROWTH_OUT_OF_DOMAIN"
+    MARKET_LEASING_DEFAULT_REQUIRED = "MARKET_LEASING_DEFAULT_REQUIRED"
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -296,6 +307,165 @@ def _validate_property(
                 f"rentable_area_sf {area!r} must be greater than 0.",
             )
         )
+
+    return issues
+
+
+def _validate_market_leasing_assumptions(
+    assumptions: MarketLeasingAssumptions, *, path: str
+) -> list[LeaseValidationIssue]:
+    """Domain rules for one ``MarketLeasingAssumptions`` record (D0 Section 4.5).
+
+    Exactly D0's two D2.1 domains, neither widened nor tightened:
+
+    - ``market_rent_psf >= 0``. Zero is **permitted** and means a market rent
+      of zero, which computes to exactly zero in every period. It is never
+      reinterpreted as vacancy, missing data, or free rent, so it is not an
+      error and not a warning.
+    - ``market_rent_growth > -1``. This is the same lower bound every other
+      Anchor compounding rate carries, so a declining market is expressible;
+      exactly ``-1`` is excluded because it collapses the market to zero at
+      the first anniversary and stays there, which is a degenerate assumption
+      rather than a rate.
+
+    The record is checked wherever it appears -- as the property default or as
+    a suite's full override -- by one function, so the two can never drift
+    apart. There is no "incomplete override" rule to write: both fields are
+    required on the dataclass and neither has a default, so an all-or-nothing
+    override (D0 Section 24.2) is enforced structurally at construction.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+
+    rent = assumptions.market_rent_psf
+    if not _is_finite_number(rent):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                f"{path}.market_rent_psf",
+                "market_rent_psf must be a finite number.",
+            )
+        )
+    elif rent < 0:
+        issues.append(
+            _issue(
+                LeaseIssueCode.MARKET_RENT_OUT_OF_DOMAIN,
+                f"{path}.market_rent_psf",
+                f"market_rent_psf {rent!r} must be greater than or equal to 0.",
+            )
+        )
+
+    growth = assumptions.market_rent_growth
+    if not _is_finite_number(growth):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                f"{path}.market_rent_growth",
+                "market_rent_growth must be a finite number.",
+            )
+        )
+    elif growth <= -1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.MARKET_RENT_GROWTH_OUT_OF_DOMAIN,
+                f"{path}.market_rent_growth",
+                f"market_rent_growth {growth!r} must be greater than -1.",
+            )
+        )
+
+    return issues
+
+
+def _validate_suite_market_leasing(
+    suites: tuple[Suite, ...],
+    *,
+    market_leasing: MarketLeasingAssumptions | None,
+) -> list[LeaseValidationIssue]:
+    """D2.1 market-rent rules for the property default and every suite.
+
+    Three rules, in declared suite order so the output stays deterministic:
+
+    1. The property default, when supplied, satisfies its domains.
+    2. Each suite's ``market_rent_psf`` rent-level override (D0 Section 24.1)
+       satisfies the same ``>= 0`` domain as the field it replaces.
+    3. Each suite's full ``market_leasing_override`` record satisfies both
+       domains.
+
+    Plus one structural rule: **a suite may not carry a market override with
+    no property default in force.** D0 Section 4.5 states the property default
+    is always present, and a suite supplying only a rent level has no growth
+    rate without it. Rather than invent a growth rate, this is an
+    ``MARKET_LEASING_DEFAULT_REQUIRED`` ERROR.
+
+    When ``market_leasing`` is ``None`` and no suite declares a market field,
+    no market rule is evaluated at all -- which is exactly the D1 rent-roll
+    call, whose behaviour is therefore unchanged.
+
+    Deliberately not written here: "override for unknown suite" and "duplicate
+    suite override". Both are structurally impossible under the D0
+    Section 4.3 architecture, where an override is a field **on** the ``Suite``
+    rather than a free-standing record keyed by ``suite_id``. An override
+    cannot name a suite that does not exist, and a suite declared twice is
+    already a ``DUPLICATE_SUITE_ID`` error. Adding codes for unreachable
+    states would imply a keyed-override design that D0 did not approve.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+
+    if market_leasing is not None:
+        issues.extend(
+            _validate_market_leasing_assumptions(
+                market_leasing, path="market_leasing"
+            )
+        )
+
+    for index, suite in enumerate(suites):
+        path = f"suites[{index}]"
+        declares_market = (
+            suite.market_rent_psf is not None
+            or suite.market_leasing_override is not None
+        )
+
+        if declares_market and market_leasing is None:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MARKET_LEASING_DEFAULT_REQUIRED,
+                    f"{path}.market_rent_psf"
+                    if suite.market_leasing_override is None
+                    else f"{path}.market_leasing_override",
+                    f"suite {suite.suite_id!r} declares a market-rent override "
+                    "but no property-level MarketLeasingAssumptions default was "
+                    "supplied; the property default is always required.",
+                )
+            )
+
+        suite_rent = suite.market_rent_psf
+        if suite_rent is not None:
+            if not _is_finite_number(suite_rent):
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.NON_FINITE_VALUE,
+                        f"{path}.market_rent_psf",
+                        "market_rent_psf must be a finite number.",
+                    )
+                )
+            elif suite_rent < 0:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.MARKET_RENT_OUT_OF_DOMAIN,
+                        f"{path}.market_rent_psf",
+                        f"market_rent_psf {suite_rent!r} must be greater than "
+                        "or equal to 0.",
+                    )
+                )
+
+        if suite.market_leasing_override is not None:
+            issues.extend(
+                _validate_market_leasing_assumptions(
+                    suite.market_leasing_override,
+                    path=f"{path}.market_leasing_override",
+                )
+            )
 
     return issues
 
@@ -755,6 +925,7 @@ def validate_lease_level_inputs(
     leases: Iterable[Lease],
     *,
     hold_period: int | None = None,
+    market_leasing: MarketLeasingAssumptions | None = None,
 ) -> LeaseValidationResult:
     """Validate one complete Lease-Level input set, deterministically.
 
@@ -769,11 +940,20 @@ def validate_lease_level_inputs(
     rule unchanged and simply raises no horizon warning; it never weakens an
     error or alters a result in any other way.
 
+    ``market_leasing`` is the property-level ``MarketLeasingAssumptions``
+    default (D2.1). It is optional for the same reason: a D1 contractual rent
+    roll needs no market assumption, and omitting it leaves every D1 rule and
+    every D1 result bit-identical. Supplying it evaluates the D2.1 market
+    domains for the default and for every suite override. A suite that
+    declares a market override while this is omitted is an error rather than
+    a silent inheritance of nothing.
+
     **Issue ordering** (D0 Section 19.1) is fixed and reproducible:
-    property-level issues first, then suites in declared order, then leases in
-    declared order with each lease's own fields in canonical field order, then
-    the cross-lease suite-overlap rule, then the horizon warnings in declared
-    lease order, then area reconciliation. Nothing here iterates a ``set`` or
+    property-level issues first, then suites in declared order, then the
+    market-leasing rules (the property default, then suites in declared
+    order), then leases in declared order with each lease's own fields in
+    canonical field order, then the cross-lease suite-overlap rule, then the
+    horizon warnings in declared lease order, then area reconciliation. Nothing here iterates a ``set`` or
     ``dict`` to produce output, so repeated runs emit byte-identical
     sequences.
 
@@ -787,6 +967,9 @@ def validate_lease_level_inputs(
     issues: list[LeaseValidationIssue] = []
     issues.extend(_validate_property(property_inputs))
     issues.extend(_validate_suites(suite_tuple))
+    issues.extend(
+        _validate_suite_market_leasing(suite_tuple, market_leasing=market_leasing)
+    )
 
     # First declaration of a suite_id wins as the area reference; a duplicate
     # id has already produced its own DUPLICATE_SUITE_ID error.
@@ -832,6 +1015,7 @@ def require_valid_lease_level_inputs(
     leases: Iterable[Lease],
     *,
     hold_period: int | None = None,
+    market_leasing: MarketLeasingAssumptions | None = None,
 ) -> LeaseValidationResult:
     """Validate and raise ``LeaseValidationError`` if any ERROR was found.
 
@@ -840,7 +1024,11 @@ def require_valid_lease_level_inputs(
     """
 
     result = validate_lease_level_inputs(
-        property_inputs, suites, leases, hold_period=hold_period
+        property_inputs,
+        suites,
+        leases,
+        hold_period=hold_period,
+        market_leasing=market_leasing,
     )
     if result.errors:
         raise LeaseValidationError(result)

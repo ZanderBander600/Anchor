@@ -233,6 +233,145 @@ class PropertyRentRollSchedule:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class MarketLeasingAssumptions:
+    """Market leasing assumptions for space that is available or rolling over
+    (D0 Section 4.5).
+
+    Property-level default, optionally overridden per suite (D0 Section 7.1).
+    This record describes the **market**, not any signed lease: nothing here
+    ever overrides a ``Lease``'s own contractual terms (D0 Section 24.4).
+    Market assumptions apply only to successor leases the D2 rollover engine
+    creates and to vacant suites being leased up.
+
+    ``market_rent_psf`` is annual market rent per square foot (``$/SF/year``)
+    **as of ``analysis_start_date``** -- it is the Month 1 market rent, not
+    today's rent and not the rent at any rollover date. Domain ``>= 0``; zero
+    is a real, computable market rent and is never reinterpreted as vacancy,
+    missing data, or free rent.
+
+    ``market_rent_growth`` is the **annual step** growth rate applied on
+    ``analysis_start_date`` anniversaries (D0 Section 7.2). Domain ``> -1``,
+    matching every other Anchor compounding rate, so a declining market is
+    expressible.
+
+    **Only the two D2.1 fields are declared.** D0 Section 4.5 lists this
+    record's full field set -- ``renewal_probability``, the renewal and
+    new-tenant terms, downtimes, free rent, TI, LC and
+    ``successor_escalation_pct`` -- and the D2 conventions document
+    (Section 12) gates each one: rent and growth at D2.1, the renewal side at
+    D2.2, the new-tenant side at D2.3, TI/LC at D2.4, probability at D2.5.
+    This package's established rule is that **a gate declares only what it can
+    actually produce** (see ``Lease`` and ``Suite`` below); D2.1 has no
+    rollover engine, so a renewal probability would be vocabulary with no
+    mechanism behind it. Each later gate adds its own fields to this record.
+
+    The all-or-nothing override rule (D0 Section 24.2) is enforced
+    structurally rather than by validation: both fields are required and
+    neither carries a default, so a partially-populated override cannot be
+    constructed at all.
+    """
+
+    market_rent_psf: float
+    market_rent_growth: float
+
+
+class MarketAssumptionSource(StrEnum):
+    """Which record supplied a suite's resolved market leasing assumptions
+    (D0 Section 24.5).
+
+    Exactly D0's two values. ``PROPERTY_DEFAULT`` means the suite declared no
+    ``market_leasing_override``; ``SUITE_OVERRIDE`` means it did, and that
+    record was used in full.
+
+    Whether the suite's rent-level-only exception (D0 Section 24.1) also
+    applied is carried separately on ``ResolvedMarketLeasing`` rather than
+    folded in as a third member here, because it is an orthogonal fact: a
+    suite may set ``Suite.market_rent_psf`` on top of *either* source, and
+    collapsing the two into one label would make one of them unreadable.
+    """
+
+    PROPERTY_DEFAULT = "property_default"
+    SUITE_OVERRIDE = "suite_override"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ResolvedMarketLeasing:
+    """One suite's market leasing assumptions after precedence is applied
+    (D0 Section 24.5).
+
+    The resolver runs **once per suite** and its result is recorded, so an
+    analyst can always answer "which assumption applied here, and where did
+    it come from" from the output alone -- without re-running the resolver
+    and without a second precedence implementation anywhere.
+
+    ``assumptions`` is the resolved record. ``source`` names which record it
+    came from. ``market_rent_psf_from_suite`` records whether the D0
+    Section 24.1 rent-level exception fired -- that is, whether
+    ``Suite.market_rent_psf`` supplied the rent level on top of ``source``.
+    Together the two answer the provenance question exactly, for both the
+    common case (override the rent level only) and the rare one (override the
+    whole record).
+
+    Produced only by ``anchor.leasing.market.resolve_market_leasing``; this
+    dataclass performs no resolution and no calculation of its own.
+    """
+
+    suite_id: str
+    assumptions: MarketLeasingAssumptions
+    source: MarketAssumptionSource
+    market_rent_psf_from_suite: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MarketRentSchedule:
+    """One suite's canonical monthly market-rent series (D2.1).
+
+    The authoritative answer to "what is the market rent of this space, in
+    ``$/SF/year``, as of this month" for every canonical month -- and the
+    **only** place that answer is computed. D2.2 and D2.3 price a successor by
+    reading ``market_rent_psf`` at the successor's commencement period from
+    this schedule (or by calling the same authoritative function that built
+    it); there is deliberately no second market-rent formula for rollover.
+
+    ``months`` is the exact ``ModelMonth`` tuple the schedule was built
+    against -- a reference to the one canonical D1 timeline, never a second
+    calendar. ``market_rent_psf[i]`` is the market rent for ``months[i]``, and
+    the two tuples always share a length.
+
+    ``market_rent_psf`` is a **rate**, in ``$/SF/year``, held flat within each
+    12-period band and stepping on ``analysis_start_date`` anniversaries. It
+    is emphatically **not** a dollar cash flow: nothing multiplies it by suite
+    area or divides it by 12 at D2.1, because market rent is an assumption
+    about available space, not income the property receives. Converting it to
+    a successor's cash rent is D2.2/D2.3 work and requires a commencement
+    period, a term, downtime and free rent -- none of which exist here.
+
+    ``resolved`` carries the assumptions the series was built from together
+    with their provenance, so a market rent in Month 40 is auditable back to
+    the record that produced it.
+
+    The monthly series is retained, never discarded after use: monthly is
+    canonical in Lease-Level and is later user-facing (guardrail G-M1).
+
+    Built only by ``anchor.leasing.market.build_market_rent_schedule``; this
+    dataclass performs no calculation of its own.
+    """
+
+    suite_id: str
+    resolved: ResolvedMarketLeasing
+    months: tuple[ModelMonth, ...]
+    market_rent_psf: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.market_rent_psf) != len(self.months):
+            raise ValueError(
+                "MarketRentSchedule requires one market_rent_psf figure per "
+                f"model month; got {len(self.market_rent_psf)} for "
+                f"{len(self.months)} months."
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class LeaseLevelPropertyInputs:
     """The property-level scalars a Lease-Level deal needs (D0 Section 4.2).
 
@@ -299,15 +438,45 @@ class Suite:
     area to vacancy. That is precisely how vacant space must be represented,
     rather than by omitting it from the rent roll.
 
-    The D2 market-rent override fields (``market_rent_psf``,
-    ``market_leasing_override``) are deliberately not declared at D1.0. They
-    are additive at D2 and adding them now would put unused market-leasing
-    vocabulary into a gate whose stated scope excludes it.
+    **Market-rent overrides (D2.1, additive).** Both fields default to
+    ``None``, which means "inherit the property default", so every D1 call
+    site constructs an identical ``Suite`` and no D1 economics move.
+
+    ``market_rent_psf`` overrides the **rent level alone**, keeping every
+    other market assumption from the property default. D0 Section 24.1 makes
+    this the single deliberate exception to the all-or-nothing rule below,
+    because overriding only the rent level -- better or worse space in an
+    otherwise uniform building -- is the overwhelmingly common case. It is
+    measured as of ``analysis_start_date``, exactly like the property default
+    it replaces.
+
+    ``market_leasing_override`` replaces the **entire**
+    ``MarketLeasingAssumptions`` record. D0 Section 24.2: it is
+    **all-or-nothing** -- when a suite supplies one, that record is used in
+    full and no field falls through to the property default. A partial
+    per-field merge would make "which value applied" unanswerable without
+    re-running the resolver. This is the rarer case: a retail suite in an
+    office building, whose growth and terms differ too, not just its rent.
+
+    Precedence between the two, and against the property default, is
+    D0 Section 24.1 and is implemented once in
+    ``anchor.leasing.market.resolve_market_leasing``:
+
+    ```
+    market_leasing_override.market_rent_psf  >  market_rent_psf  >  property default
+    ```
+
+    Neither field is a contractual term. No market assumption ever overrides
+    a ``Lease``'s own rent, escalation or dates (D0 Section 24.4); they apply
+    only to successor leases the rollover engine creates and to vacant space
+    being leased up.
     """
 
     suite_id: str
     suite_area_sf: float
     suite_label: str | None = None
+    market_rent_psf: float | None = None
+    market_leasing_override: MarketLeasingAssumptions | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

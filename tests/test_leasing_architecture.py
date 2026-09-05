@@ -244,12 +244,29 @@ def _referenced_names(node: ast.AST) -> set[str]:
     return names
 
 
-#: The one module permitted to perform rent arithmetic. Keeping this a single
-#: named file -- rather than a blanket exemption for ``anchor.leasing`` -- is
-#: what makes the financial boundary visible and enforceable: rent math has
-#: exactly one home, and a stray calculation in ``validation.py`` or
-#: ``calendar.py`` still fails.
+#: The one module permitted to perform contractual-rent arithmetic. Keeping
+#: this a single named file -- rather than a blanket exemption for
+#: ``anchor.leasing`` -- is what makes the financial boundary visible and
+#: enforceable: rent math has exactly one home, and a stray calculation in
+#: ``validation.py`` or ``calendar.py`` still fails.
 _RENT_CALCULATION_MODULE = "rent.py"
+
+#: Fields whose arithmetic *is* market-rent arithmetic (D2.1).
+_MARKET_BEARING_FIELDS = frozenset({"market_rent_psf", "market_rent_growth"})
+
+#: The one module permitted to perform market-rent arithmetic (D2.1), on the
+#: identical principle. The two calculation modules are peers with disjoint
+#: field sets: ``rent.py`` owns the contractual formula and ``market.py`` owns
+#: the market formula, and neither may reach into the other's assumptions.
+#: That is the mechanical form of D2 Section 10 -- two different clocks.
+_MARKET_CALCULATION_MODULE = "market.py"
+
+#: Exponentiation is compound growth, and both formulas need it: contractual
+#: escalation ``(1 + escalation_pct) ** k`` and market step growth
+#: ``(1 + market_rent_growth) ** k``. It stays banned everywhere else.
+_EXPONENTIATION_PERMITTED_MODULES = frozenset(
+    {_RENT_CALCULATION_MODULE, _MARKET_CALCULATION_MODULE}
+)
 
 
 def test_rent_arithmetic_is_confined_to_the_authoritative_rent_module() -> None:
@@ -273,22 +290,35 @@ def test_rent_arithmetic_is_confined_to_the_authoritative_rent_module() -> None:
     """
 
     for source_file in _leasing_source_files():
-        if source_file.name == _RENT_CALCULATION_MODULE:
-            continue
         tree = ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
         for node in ast.walk(tree):
             if not isinstance(node, ast.BinOp):
                 continue
-            if isinstance(node.op, ast.Pow):
+            if (
+                isinstance(node.op, ast.Pow)
+                and source_file.name not in _EXPONENTIATION_PERMITTED_MODULES
+            ):
                 pytest.fail(
-                    f"{source_file} contains exponentiation; compound "
-                    f"escalation belongs to {_RENT_CALCULATION_MODULE}"
+                    f"{source_file} contains exponentiation; compound growth "
+                    f"belongs to {sorted(_EXPONENTIATION_PERMITTED_MODULES)}"
                 )
-            leaked = _referenced_names(node) & _RENT_BEARING_FIELDS
-            assert not leaked, (
-                f"{source_file} performs arithmetic on {sorted(leaked)}; "
-                f"rent calculation belongs to {_RENT_CALCULATION_MODULE}"
-            )
+            referenced = _referenced_names(node)
+
+            if source_file.name != _RENT_CALCULATION_MODULE:
+                leaked = referenced & _RENT_BEARING_FIELDS
+                assert not leaked, (
+                    f"{source_file} performs arithmetic on {sorted(leaked)}; "
+                    f"contractual rent calculation belongs to "
+                    f"{_RENT_CALCULATION_MODULE}"
+                )
+
+            if source_file.name != _MARKET_CALCULATION_MODULE:
+                leaked = referenced & _MARKET_BEARING_FIELDS
+                assert not leaked, (
+                    f"{source_file} performs arithmetic on {sorted(leaked)}; "
+                    f"market rent calculation belongs to "
+                    f"{_MARKET_CALCULATION_MODULE}"
+                )
 
 
 def test_the_rent_module_is_the_only_one_that_touches_rent_fields() -> None:
@@ -311,15 +341,20 @@ def test_the_rent_module_is_the_only_one_that_touches_rent_fields() -> None:
     ), f"{rent_module} must contain the compound-escalation term"
 
 
-def test_leasing_package_contains_only_the_gate_d1_3_modules() -> None:
-    """D0 Gate D1.0 files, plus D1.1's ``calendar.py``, D1.2's ``rent.py`` and
-    D1.3's ``aggregation.py``."""
+def test_leasing_package_contains_only_the_gate_d2_1_modules() -> None:
+    """D0 Gate D1.0 files, plus D1.1's ``calendar.py``, D1.2's ``rent.py``,
+    D1.3's ``aggregation.py`` and D2.1's ``market.py``.
+
+    In particular ``rollover.py`` must **not** exist yet: D2 Section 14 gates
+    it at D2.2, and an empty placeholder module would be rollover vocabulary
+    in a gate whose scope excludes it."""
 
     assert {path.name for path in _leasing_source_files()} == {
         "__init__.py",
         "aggregation.py",
         "calendar.py",
         "contracts.py",
+        "market.py",
         "rent.py",
         "validation.py",
     }
@@ -406,3 +441,217 @@ def test_no_annual_figure_is_produced_from_anything_but_a_monthly_series() -> No
         )
 
     assert seen == annual_producers, f"missing annual producers: {annual_producers - seen}"
+
+
+# =============================================================================
+# D2.1 -- market rent is isolated, and no later D2 gate has leaked into it
+# =============================================================================
+
+
+def test_the_market_module_is_the_only_one_that_touches_market_fields() -> None:
+    """The exemption above is meaningful only if ``market.py`` genuinely holds
+    the market-rent formula -- otherwise the boundary could be satisfied by an
+    empty exempt file while the math lived elsewhere."""
+
+    module = _LEASING_DIR / _MARKET_CALCULATION_MODULE
+    assert module.exists(), "the authoritative market-rent module must exist"
+
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+    referenced = _referenced_names(tree)
+
+    assert _MARKET_BEARING_FIELDS <= referenced, (
+        f"{module} must reference {sorted(_MARKET_BEARING_FIELDS)}"
+    )
+    assert any(
+        isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+        for node in ast.walk(tree)
+    ), f"{module} must contain the annual-step growth term"
+
+
+def test_the_market_module_never_touches_a_contractual_rent_assumption() -> None:
+    """D2 Section 10, mechanically: market growth prices available space and
+    has no access to a signed lease's rent or escalation. Stronger than the
+    arithmetic rule -- ``market.py`` may not so much as *name* them
+    (failure mode FM-D2-14)."""
+
+    module = _LEASING_DIR / _MARKET_CALCULATION_MODULE
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+
+    leaked = _referenced_names(tree) & _RENT_BEARING_FIELDS
+    assert not leaked, (
+        f"{module} references {sorted(leaked)}; market rent must never read a "
+        "contractual lease assumption"
+    )
+
+
+@pytest.mark.parametrize(
+    "module_name", ["rent.py", "aggregation.py", "calendar.py"]
+)
+def test_the_d1_modules_never_reference_a_market_assumption(module_name: str) -> None:
+    """The converse boundary, and the mechanical form of failure mode
+    FM-D2-20: D2.1 left the D1 contractual-rent formula, the property
+    aggregator and the calendar completely untouched.
+
+    Stronger than the arithmetic rule: none of the three may even *name* a
+    market field. ``rent.py`` cannot reach for a market rent at expiration,
+    ``aggregation.py`` cannot compute one, and ``calendar.py`` cannot either.
+    """
+
+    module = _LEASING_DIR / module_name
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+
+    leaked = _referenced_names(tree) & _MARKET_BEARING_FIELDS
+    assert not leaked, (
+        f"{module} references {sorted(leaked)}; market-rent assumptions belong "
+        f"to {_MARKET_CALCULATION_MODULE}"
+    )
+
+
+def test_no_rollover_module_exists_at_d2_1() -> None:
+    """D2 Section 14 gates ``rollover.py`` at D2.2 and ``leasing_costs.py`` at
+    D2.4. Neither may exist yet, even empty."""
+
+    for forbidden in ("rollover.py", "leasing_costs.py", "renewal.py", "downtime.py"):
+        assert not (_LEASING_DIR / forbidden).exists(), (
+            f"{forbidden} belongs to a later D2 gate and must not exist at D2.1"
+        )
+
+
+#: Vocabulary each later D2 gate owns (D2 Section 12's assumption inventory).
+#: None of it may appear anywhere in D2.1 production code -- not as a field,
+#: not as a parameter, not as a function name.
+_LATER_D2_GATE_NAMES = frozenset(
+    {
+        # D2.5 -- probability composition
+        "renewal_probability",
+        "expected_occupancy",
+        "expected_occupied_area_sf",
+        # D2.2 -- the renewal branch
+        "renewal_rent_psf",
+        "renewal_rent_spread",
+        "renewal_term_months",
+        "new_term_months",
+        "successor_escalation_pct",
+        # D2.2 / D2.3 -- downtime and free rent
+        "renewal_downtime_months",
+        "new_downtime_months",
+        "downtime_months",
+        "renewal_free_rent_months",
+        "new_free_rent_months",
+        "occupancy_factor",
+        # D2.4 -- TI and LC
+        "renewal_ti_psf",
+        "new_ti_psf",
+        "renewal_lc_pct",
+        "new_lc_pct",
+        "leasing_commission_method",
+        "tenant_improvements",
+        "leasing_commissions",
+    }
+)
+
+
+def test_no_later_d2_gate_vocabulary_appears_in_production_code() -> None:
+    """D2.1 builds a market-rent rate schedule and stops.
+
+    Renewal, new tenants, downtime, free rent, TI, LC and probability
+    weighting are D2.2-D2.5. Declaring any of their names now would put
+    vocabulary into the package with no mechanism behind it -- the same rule
+    D1 applied to ``Lease.origin`` and ``Suite.market_rent_psf``, which each
+    waited for the gate that could actually produce them.
+    """
+
+    for source_file in _leasing_source_files():
+        tree = ast.parse(
+            source_file.read_text(encoding="utf-8"), filename=str(source_file)
+        )
+        leaked = _referenced_names(tree) & _LATER_D2_GATE_NAMES
+        assert not leaked, (
+            f"{source_file} names {sorted(leaked)}, which belongs to a later "
+            "D2 gate"
+        )
+
+
+def test_market_rent_is_never_converted_into_a_cash_flow() -> None:
+    """D2.1 produces a ``$/SF/year`` **rate**. Converting it to income needs a
+    commencement period, a term, downtime and free rent -- none of which exist
+    yet -- so no market field may be multiplied by an area or divided by 12.
+
+    The check is precise rather than textual: it looks for a multiplication or
+    division whose operands mix a market field with an area field or the
+    literal 12.
+    """
+
+    module = _LEASING_DIR / _MARKET_CALCULATION_MODULE
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+    area_names = {"suite_area_sf", "leased_area_sf", "rentable_area_sf"}
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp):
+            continue
+        if not isinstance(node.op, (ast.Mult, ast.Div)):
+            continue
+        referenced = _referenced_names(node)
+        if not referenced & _MARKET_BEARING_FIELDS:
+            continue
+
+        assert not referenced & area_names, (
+            f"{module} multiplies a market rate by an area; converting market "
+            "rent into a cash flow is D2.2/D2.3 work"
+        )
+        literals = {
+            child.value
+            for child in ast.walk(node)
+            if isinstance(child, ast.Constant)
+            and isinstance(child.value, (int, float))
+        }
+        assert 12 not in literals and 12.0 not in literals, (
+            f"{module} divides a market rate by 12; market rent is an annual "
+            "rate, not a monthly dollar amount"
+        )
+
+
+def test_the_market_module_performs_no_io() -> None:
+    """A pure calculator: no file, network, database or clock access."""
+
+    module = _LEASING_DIR / _MARKET_CALCULATION_MODULE
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+    referenced = _referenced_names(tree)
+
+    for forbidden in (
+        "open",
+        "read_text",
+        "write_text",
+        "connect",
+        "now",
+        "today",
+        "urlopen",
+    ):
+        assert forbidden not in referenced, (
+            f"{module} references {forbidden!r}; the market-rent builder must "
+            "be pure"
+        )
+
+
+def test_market_precedence_is_implemented_exactly_once() -> None:
+    """D0 Section 24.5: the resolver runs once per suite and its result is
+    recorded. A second precedence implementation anywhere would make "which
+    assumption applied" answerable two ways.
+
+    ``market_leasing_override`` is the field the precedence rule turns on, so
+    only the resolver's own module may read it -- ``contracts.py`` declares it
+    and ``validation.py`` domain-checks it, neither of which resolves it.
+    """
+
+    exempt = {_MARKET_CALCULATION_MODULE, "contracts.py", "validation.py"}
+
+    for source_file in _leasing_source_files():
+        if source_file.name in exempt:
+            continue
+        tree = ast.parse(
+            source_file.read_text(encoding="utf-8"), filename=str(source_file)
+        )
+        assert "market_leasing_override" not in _referenced_names(tree), (
+            f"{source_file} reads market_leasing_override; market-rent "
+            f"precedence belongs to {_MARKET_CALCULATION_MODULE}"
+        )

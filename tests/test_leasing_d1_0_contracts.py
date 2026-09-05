@@ -176,13 +176,23 @@ def test_two_leases_for_one_tenant_are_two_rows_with_equal_tenant_name() -> None
 # =============================================================================
 
 
+#: Fields no D1 contract may declare. **Narrowed at D2.1**: the three
+#: market-rent fields D2.1 delivers -- ``market_rent_psf`` and
+#: ``market_rent_growth`` on ``MarketLeasingAssumptions``, and
+#: ``market_rent_psf`` / ``market_leasing_override`` as the ``Suite``
+#: overrides D0 Section 4.3 phases to D2 -- were removed from this set when
+#: the gate that produces them landed. Everything D2.2 and later owns stays,
+#: so the guardrail keeps its full force against renewal, downtime, free rent,
+#: TI, LC, probability and every downstream concept.
+#:
+#: ``Lease`` and ``LeaseLevelPropertyInputs`` are still checked against the
+#: market names below, because D0 assigns the market override to ``Suite``
+#: alone -- market rent is an assumption about a *space*, never a term of a
+#: signed lease (D0 Section 24.4).
 _FORBIDDEN_D1_FIELD_NAMES = frozenset(
     {
-        # D2 rollover / market leasing
+        # D2.2+ rollover
         "renewal_probability",
-        "market_rent_psf",
-        "market_rent_growth",
-        "market_leasing_override",
         "renewal_rent_psf",
         "renewal_rent_spread",
         "renewal_term_months",
@@ -213,6 +223,12 @@ _FORBIDDEN_D1_FIELD_NAMES = frozenset(
 )
 
 
+#: The D2.1 market-rent fields. Permitted on ``Suite`` only (D0 Section 4.3).
+_D2_1_MARKET_FIELD_NAMES = frozenset(
+    {"market_rent_psf", "market_rent_growth", "market_leasing_override"}
+)
+
+
 @pytest.mark.parametrize(
     "contract", [LeaseLevelPropertyInputs, Suite, Lease], ids=lambda c: c.__name__
 )
@@ -221,6 +237,39 @@ def test_no_out_of_scope_field_leaked_into_a_d1_contract(contract: type) -> None
     leaked = declared & _FORBIDDEN_D1_FIELD_NAMES
 
     assert not leaked, f"{contract.__name__} declares out-of-D1-scope fields: {leaked}"
+
+
+def test_market_rent_overrides_live_on_the_suite_and_nowhere_else() -> None:
+    """D0 Section 4.3 puts the market-rent override on ``Suite``; D0
+    Section 24.4 keeps every market assumption off a signed ``Lease``.
+
+    A ``market_rent_psf`` on ``Lease`` would make market rent look like a
+    contractual term, which is exactly the confusion D2 Section 10 exists to
+    prevent."""
+
+    suite_fields = {f.name for f in dataclasses.fields(Suite)}
+    assert "market_rent_psf" in suite_fields
+    assert "market_leasing_override" in suite_fields
+
+    for contract in (Lease, LeaseLevelPropertyInputs):
+        declared = {f.name for f in dataclasses.fields(contract)}
+        leaked = declared & _D2_1_MARKET_FIELD_NAMES
+        assert not leaked, (
+            f"{contract.__name__} declares {sorted(leaked)}; market rent is an "
+            "assumption about a space, never a term of a lease"
+        )
+
+
+def test_the_d2_1_suite_overrides_default_to_inheriting() -> None:
+    """Both override fields default to ``None``, so every D1 call site
+    constructs an identical ``Suite`` and no D1 economics moved at D2.1."""
+
+    defaults = {
+        f.name: f.default
+        for f in dataclasses.fields(Suite)
+        if f.name in _D2_1_MARKET_FIELD_NAMES
+    }
+    assert defaults == {"market_rent_psf": None, "market_leasing_override": None}
 
 
 def test_no_lease_level_contract_declares_a_detailed_vacancy_field() -> None:
@@ -293,17 +342,19 @@ def test_contracts_module_defines_no_calculation() -> None:
     assert functions == [], f"contracts.py must define no functions; found {functions}"
 
 
-def test_package_exposes_no_d2_or_later_entry_point() -> None:
+def test_package_exposes_no_d2_2_or_later_entry_point() -> None:
     """Month identity, the rent surface and property aggregation were each
-    delivered at D1.1, D1.2 and D1.3 and moved to positive assertions below.
-    What remains absent is everything D2 and later own."""
+    delivered at D1.1, D1.2 and D1.3, and the market-rent surface at D2.1;
+    each moved to a positive assertion when its gate landed. What remains
+    absent is everything D2.2 and later own."""
 
     import anchor.leasing as leasing
 
     for absent in (
-        "MarketLeasingAssumptions",
         "RolloverEvent",
         "build_rollover_schedule",
+        "resolve_successor_rent",
+        "build_expected_rollover",
         "MonthlyPropertyProjection",
         "AnnualOperatingProjection",
         "build_lease_level_operating_projection",
