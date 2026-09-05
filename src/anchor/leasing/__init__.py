@@ -31,8 +31,13 @@ month, hold year, and the twelve forward exit-NOI months, in a single
 projection. Still no rent: calendar arithmetic is in scope, financial
 arithmetic is not.
 
-Later D1 gates add the contractual base-rent monthly timeline (D1.2) and the
-property rent-roll schedule with annual aggregation derived from it (D1.3).
+D1.2 adds the contractual base-rent monthly timeline: for one validated
+lease, the exact dollar rent in every canonical month, on the lease's true
+contractual chronology. ``rent.py`` is the only module permitted to perform
+rent arithmetic.
+
+D1.3 adds the property rent-roll schedule and the annual aggregation derived
+from it.
 """
 
 from __future__ import annotations
@@ -50,10 +55,12 @@ from .contracts import (
     EscalationBasis,
     Lease,
     LeaseLevelPropertyInputs,
+    LeaseMonthlySchedule,
     LeaseType,
     ModelMonth,
     Suite,
 )
+from .rent import build_lease_monthly_schedule
 from .validation import (
     LeaseIssueCode,
     LeaseIssueSeverity,
@@ -74,6 +81,9 @@ __all__ = [
     "is_first_day_of_month",
     "is_last_day_of_month",
     "last_day_of_month",
+    # rent (D1.2)
+    "LeaseMonthlySchedule",
+    "build_lease_monthly_schedule",
     # contracts
     "EscalationBasis",
     "Lease",

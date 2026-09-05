@@ -105,6 +105,58 @@ class ModelMonth:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class LeaseMonthlySchedule:
+    """One lease's canonical monthly contractual base-rent series
+    (D0 Section 4.7).
+
+    ``months`` is the exact ``ModelMonth`` tuple the schedule was built
+    against -- a reference to the one canonical timeline, never a second
+    representation of it. Carrying it here is what makes every rent figure
+    auditable to a real calendar month without the caller having to keep the
+    two aligned by hand. ``contractual_base_rent[i]`` is the rent for
+    ``months[i]``, and the two tuples always share a length.
+
+    ``contractual_base_rent`` is **gross** contractual rent in dollars per
+    month. In D1 nothing reduces it; from D2 it stays gross and free rent is
+    reported as its own separate line, never netted into this one.
+
+    ``first_rent_period`` / ``last_rent_period`` are the first and last
+    canonical periods **within this schedule's window** in which the lease is
+    contractually active, or ``None`` when the lease is active in no modeled
+    month at all. They are defined by contractual activity, not by a non-zero
+    figure: a zero-rent lease is active and reports real periods.
+
+    Note the distinction from ``rent.lease_rent_periods``, which returns the
+    lease's *raw, unclamped* periods -- possibly negative, possibly past the
+    horizon. Those drive escalation; these describe the window.
+
+    The D2/D3 fields D0 lists on this contract -- ``free_rent``,
+    ``expense_recoveries``, ``tenant_improvements``, ``leasing_commissions``,
+    ``occupancy_factor`` -- and the ``occupied_area`` state series D1.3 owns
+    are deliberately not declared yet, following the same rule applied to
+    ``Lease``: a gate declares only what it can actually produce.
+
+    Built only by ``anchor.leasing.rent.build_lease_monthly_schedule``; this
+    dataclass performs no calculation of its own.
+    """
+
+    lease_id: str
+    suite_id: str
+    months: tuple[ModelMonth, ...]
+    contractual_base_rent: tuple[float, ...]
+    first_rent_period: int | None
+    last_rent_period: int | None
+
+    def __post_init__(self) -> None:
+        if len(self.months) != len(self.contractual_base_rent):
+            raise ValueError(
+                "LeaseMonthlySchedule requires one rent figure per model "
+                f"month; got {len(self.contractual_base_rent)} figures for "
+                f"{len(self.months)} months."
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class LeaseLevelPropertyInputs:
     """The property-level scalars a Lease-Level deal needs (D0 Section 4.2).
 

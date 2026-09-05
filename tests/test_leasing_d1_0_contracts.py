@@ -293,29 +293,49 @@ def test_contracts_module_defines_no_calculation() -> None:
     assert functions == [], f"contracts.py must define no functions; found {functions}"
 
 
-def test_package_exposes_no_rent_or_schedule_entry_point_yet() -> None:
-    """D1.2 owns base rent and D1.3 owns aggregation. Neither may be
-    reachable yet.
+def test_package_exposes_no_property_aggregation_entry_point_yet() -> None:
+    """D1.3 owns property aggregation -- multiple leases, occupied and vacant
+    area, the property rent roll, annual totals. None may be reachable yet.
 
-    Month identity (``ModelMonth``, ``month_index``, ``build_model_months``)
-    was on this list at D1.0 and is now a delivered D1.1 surface, so it has
-    moved to the positive assertion below.
+    Month identity moved to the positive assertion at D1.1, and the rent
+    surface at D1.2, as each was delivered.
     """
 
     import anchor.leasing as leasing
 
     for absent in (
-        "monthly_base_rent",
-        "build_lease_monthly_schedule",
-        "lease_rent_periods",
-        "escalation_period_index",
+        "PropertyRentRollSchedule",
         "build_property_rent_roll_schedule",
         "aggregate_flow_to_annual",
         "snapshot_state_at_year_end",
+        "average_state_over_year",
     ):
         assert not hasattr(leasing, absent), (
-            f"{absent} belongs to a later D1 gate and must not exist yet"
+            f"{absent} belongs to D1.3 and must not exist yet"
         )
+
+
+def test_rent_helpers_stay_off_the_public_package_surface() -> None:
+    """Only the schedule and its builder are public. The step and per-month
+    helpers are reachable from ``anchor.leasing.rent`` for tests and future
+    internal callers, but are not part of the package's public API."""
+
+    import anchor.leasing as leasing
+
+    for helper in ("monthly_base_rent", "lease_rent_periods", "escalation_period_index"):
+        assert not hasattr(leasing, helper), (
+            f"{helper} is an internal rent helper, not a public export"
+        )
+
+
+def test_package_exposes_the_d1_2_rent_surface() -> None:
+    """The D1.2 deliverable: one validated lease in, its exact canonical
+    monthly base rent out."""
+
+    import anchor.leasing as leasing
+
+    for present in ("LeaseMonthlySchedule", "build_lease_monthly_schedule"):
+        assert hasattr(leasing, present), f"{present} is a D1.2 public export"
 
 
 def test_package_exposes_the_d1_1_calendar_surface() -> None:

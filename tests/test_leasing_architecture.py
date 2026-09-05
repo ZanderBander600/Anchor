@@ -112,18 +112,32 @@ def test_leasing_package_imports_no_external_sdk() -> None:
             ), f"{source_file} must not import {banned_prefix}"
 
 
-def test_leasing_package_imports_only_stdlib_and_its_own_modules_at_d1_0() -> None:
-    """Through D1.1 the package is self-contained. It has no reason to import
-    any other ``anchor`` module at all; ``AcquisitionTerms`` first becomes
-    relevant at D4."""
+#: The only non-leasing ``anchor`` modules D0 Section 3.5 permits the leasing
+#: package to import: ``anchor.engine.contracts`` for ``ensure_finite`` /
+#: ``NonFiniteResultError`` (D1.2 uses it so the package shares Anchor's one
+#: non-finite convention rather than growing a parallel one), and
+#: ``anchor.contracts`` for ``AcquisitionTerms`` from D4. Both are
+#: calculation-free contract modules.
+_PERMITTED_ANCHOR_IMPORTS = frozenset({"anchor.engine.contracts", "anchor.contracts"})
+
+
+def test_leasing_package_imports_only_stdlib_its_own_modules_and_contracts() -> None:
+    """The package stays free of every calculation module.
+
+    It may reach for a calculation-*free* contract module that D0 Section 3.5
+    explicitly sanctions, and nothing else under ``anchor``. The forbidden
+    list above still bars every engine calculator by name.
+    """
 
     for source_file in _leasing_source_files():
         for name in _imported_module_names(source_file):
             if not name.startswith("anchor"):
                 continue
-            assert name.startswith("anchor.leasing"), (
-                f"{source_file} imports {name}; at D1.0 anchor.leasing must "
-                "import only its own modules"
+            if name.startswith("anchor.leasing"):
+                continue
+            assert name in _PERMITTED_ANCHOR_IMPORTS, (
+                f"{source_file} imports {name}; anchor.leasing may import only "
+                f"its own modules plus {sorted(_PERMITTED_ANCHOR_IMPORTS)}"
             )
 
 
@@ -230,48 +244,81 @@ def _referenced_names(node: ast.AST) -> set[str]:
     return names
 
 
-def test_leasing_package_performs_no_rent_arithmetic_yet() -> None:
-    """Through D1.1 the package computes time, not money.
+#: The one module permitted to perform rent arithmetic. Keeping this a single
+#: named file -- rather than a blanket exemption for ``anchor.leasing`` -- is
+#: what makes the financial boundary visible and enforceable: rent math has
+#: exactly one home, and a stray calculation in ``validation.py`` or
+#: ``calendar.py`` still fails.
+_RENT_CALCULATION_MODULE = "rent.py"
 
-    Two semantic checks, deliberately replacing D1.0's raw-text bans on the
-    substrings ``**`` and ``/ 12``. Those were too blunt in both directions:
-    they tripped on prose that merely *mentioned* the forbidden form, and they
-    would have blocked legitimate calendar arithmetic, while still saying
-    nothing about whether a rent field was actually involved.
 
-    1. No exponentiation anywhere -- that is compound escalation, which
-       arrives with the D1.2 rent timeline (D0 Section 6.1).
-    2. No arithmetic expression may reference a rent-bearing field.
-       ``base_rent_psf * leased_area_sf / 12`` is exactly the D1.2 formula and
-       must not appear before its gate.
+def test_rent_arithmetic_is_confined_to_the_authoritative_rent_module() -> None:
+    """Money is computed in exactly one place; every other module computes
+    time, shape, or validity.
 
-    D1.2 relaxes rule 2 for ``rent.py`` alone, deliberately and visibly.
+    Two semantic checks, replacing D1.0's raw-text bans on the substrings
+    ``**`` and ``/ 12``. Those were blunt in both directions: they tripped on
+    prose that merely *mentioned* the forbidden form, and would have blocked
+    legitimate calendar arithmetic while saying nothing about whether a rent
+    field was actually involved.
+
+    1. No exponentiation outside ``rent.py`` -- that is compound escalation
+       (D0 Section 6.1).
+    2. No arithmetic expression outside ``rent.py`` may reference a
+       rent-bearing field. ``base_rent_psf * leased_area_sf / 12`` is the
+       D1.2 formula and belongs to one module only.
+
+    Area arithmetic stays permitted everywhere: reconciling suite areas
+    against ``rentable_area_sf`` is reviewed D1.0 behaviour, not rent math.
     """
 
     for source_file in _leasing_source_files():
+        if source_file.name == _RENT_CALCULATION_MODULE:
+            continue
         tree = ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
         for node in ast.walk(tree):
             if not isinstance(node, ast.BinOp):
                 continue
             if isinstance(node.op, ast.Pow):
                 pytest.fail(
-                    f"{source_file} contains exponentiation; growth compounding "
-                    "belongs to D1.2"
+                    f"{source_file} contains exponentiation; compound "
+                    f"escalation belongs to {_RENT_CALCULATION_MODULE}"
                 )
             leaked = _referenced_names(node) & _RENT_BEARING_FIELDS
             assert not leaked, (
                 f"{source_file} performs arithmetic on {sorted(leaked)}; "
-                "rent calculation belongs to D1.2"
+                f"rent calculation belongs to {_RENT_CALCULATION_MODULE}"
             )
 
 
-def test_leasing_package_contains_only_the_gate_d1_1_modules() -> None:
-    """D0 Gate D1.0 files plus Gate D1.1's ``calendar.py``. The rent (D1.2)
-    and aggregation (D1.3) modules arrive at their own gates."""
+def test_the_rent_module_is_the_only_one_that_touches_rent_fields() -> None:
+    """The exemption above is meaningful only if ``rent.py`` genuinely holds
+    the rent formula -- otherwise the boundary could be satisfied by an empty
+    exempt file while the math lived elsewhere."""
+
+    rent_module = _LEASING_DIR / _RENT_CALCULATION_MODULE
+    assert rent_module.exists(), "the authoritative rent module must exist"
+
+    tree = ast.parse(rent_module.read_text(encoding="utf-8"), filename=str(rent_module))
+    referenced = _referenced_names(tree)
+
+    assert _RENT_BEARING_FIELDS <= referenced, (
+        f"{rent_module} must reference {sorted(_RENT_BEARING_FIELDS)}"
+    )
+    assert any(
+        isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+        for node in ast.walk(tree)
+    ), f"{rent_module} must contain the compound-escalation term"
+
+
+def test_leasing_package_contains_only_the_gate_d1_2_modules() -> None:
+    """D0 Gate D1.0 files, plus D1.1's ``calendar.py`` and D1.2's ``rent.py``.
+    The aggregation module (D1.3) arrives at its own gate."""
 
     assert {path.name for path in _leasing_source_files()} == {
         "__init__.py",
         "calendar.py",
         "contracts.py",
+        "rent.py",
         "validation.py",
     }
