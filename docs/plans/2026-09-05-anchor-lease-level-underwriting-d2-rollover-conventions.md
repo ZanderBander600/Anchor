@@ -52,6 +52,14 @@ The financial rules these fields and mechanics obey — the recursion horizon,
 the fractional-downtime rule, the free-rent waterfall — are unchanged and are
 not reopened. Section 18's audit records the amendment.
 
+**Amended again at D2.6 Part A, for the recursion algorithm only.** Section 5.2
+deferred two implementation questions to D2.6; Section 5.5 now answers both:
+the recursion is computed by deterministic probability-mass propagation over
+rollover-event states keyed by expiration period, and **no computational cap is
+adopted**, because the state count is structurally bounded by the projection
+horizon. Again **no financial convention changed** — HD-D2-3's rejection of a
+financial depth cap stands, and Sections 6-11 are untouched.
+
 ---
 
 ## 1. Executive Summary
@@ -548,7 +556,8 @@ formulation can compute the identical result without enumerating the tree — fo
 example by carrying, per canonical period, the probability mass currently in
 each distinguishable successor state rather than each distinguishable history.
 **D2.6 owns that choice and must prove it.** No optimisation is required now,
-and no approximation is permitted in exchange for one.
+and no approximation is permitted in exchange for one. *(Decided at D2.6:
+Section 5.5 records the chosen formulation and its proof.)*
 
 If implementation and performance testing at D2.6 show a safety limit is needed,
 it may be added as **implementation safety only**, sized from measurement. Any
@@ -560,7 +569,8 @@ such limit must:
 - comfortably preserve ordinary commercial lease cases.
 
 **Whether such a limit is needed, and its threshold, is deferred to D2.6.** It
-does not block D2.1–D2.5, and it is not a financial convention.
+does not block D2.1–D2.5, and it is not a financial convention. *(Decided at
+D2.6: no limit is adopted — Section 5.5.5.)*
 
 ### 5.3 Monte Carlo remains excluded
 
@@ -572,6 +582,171 @@ No sampling, at any depth, under any framing.
 A chain stops when its successor's commencement exceeds `12H + 12`. Nothing
 beyond the window is computed for revenue. D0 §8.6's rule stands, and the LC
 basis remains untruncated (Section 8.3).
+
+### 5.5 The recursion algorithm — decided at D2.6
+
+Section 5.2 deferred two things to D2.6: **which** deterministic formulation
+computes the recursion, and **whether** a computational-safety limit is needed.
+Both are settled here. **No financial convention changes.** Sections 6-11 stand
+exactly as accepted, and the no-financial-depth-cap rule of HD-D2-3 is
+reaffirmed, not weakened.
+
+**Chosen: deterministic probability-mass propagation over rollover-event
+states.** Not an explicit path tree, and not a synthetic weighted successor.
+
+#### 5.5.1 The state, and why it is sufficient
+
+A **rollover-event state** is "a lease on this suite expires at canonical
+period `e`, carrying probability mass `q`". The sufficient state key is
+
+```
+(suite_id, expiration_period, lease_type, leased_area_sf)
+```
+
+and within a single suite's chain the last three are invariant, so the key
+reduces in practice to the **expiration period alone**.
+
+This is provable from the successor construction rather than assumed. A
+successor lease reads exactly two things from the lease it replaces: its
+`lease_id`, used only to derive an identifier, and its `lease_type`, which is
+therefore constant along every chain descending from the original lease. Every
+economically load-bearing input comes from elsewhere:
+
+| Successor input | Source | Depends on the parent's economics? |
+|---|---|---|
+| `leased_area_sf` | `Suite.suite_area_sf` | No — constant |
+| `rent_commencement_date` | `c = e + 1 + floor(D)` | No — only on `e` and `D` |
+| `lease_expiration_date` | `c + T - 1` | No |
+| `base_rent_psf` | `MarketRentPSF(c)`, or `renewal_rent_psf` grown to `c`, or `MarketRentPSF(c) × (1 + spread)` | **No** |
+| `escalation_pct` | `successor_escalation_pct` | No |
+| `escalation_basis` | always `LEASE_ANNIVERSARY` | No |
+| `lease_type` | inherited | Invariant along the chain |
+| TI, LC, downtime, free rent, term | resolved `MarketLeasingAssumptions` | No |
+
+The load-bearing row is `base_rent_psf`. **The parent's rent never reaches the
+child.** A successor prices from market at its own commencement period, so two
+paths that arrive at the same `e` — however differently they were priced, and
+whichever branch type they came from — have *identical* futures.
+
+**Therefore two scenario paths reaching the same expiration period may be
+merged by adding their probability masses.** Nothing else is combined: no rent,
+no term, no date, no rate. Merging probability mass is not the rejected
+weighted-parameter method, because no *assumption* is averaged — the two paths
+genuinely face the same future, and the only thing that differs is how likely
+they were to get there.
+
+#### 5.5.2 Incremental contribution — the double-counting rule
+
+`RenewalBranch` and `NewTenantBranch` carry full canonical series that
+**include the expiring lease's own history**. Four of their ten series mix it
+in — `contractual_base_rent`, `cash_base_rent`, `occupied_area` and
+`physical_occupancy` — while the other six are already successor-only.
+
+**A recursive event therefore contributes only its own successor's economics,
+never a whole branch.** History before `e` was recognised when the lease that
+produced it was created, and adding a branch series at every event would
+re-count it once per generation. The rule is:
+
+> Each transition contributes `mass × (that successor's own monthly series)`
+> and nothing else. The original in-place lease contributes exactly once, at
+> mass `1`.
+
+#### 5.5.3 Transitions, and the termination proof
+
+At an event `(e, q)`, with `p = renewal_probability`:
+
+```
+renewal child      mass q·p        commences c_R = e + 1 + floor(D_R), expires e + floor(D_R) + T_R
+new-tenant child   mass q·(1−p)    commences c_N = e + 1 + floor(D_N), expires e + floor(D_N) + T_N
+```
+
+**Strict forward progression.** Since `D ≥ 0` and `T ≥ 1`,
+
+```
+e' = e + floor(D) + T ≥ e + 0 + 1 = e + 1 > e
+```
+
+so every generated expiration is **strictly later** than its parent's. With a
+finite horizon this alone guarantees termination — no depth counter is
+involved, which is what keeps HD-D2-3's rejection of a financial cap intact.
+
+**Termination rule.** Process an event only when `1 ≤ e < 12H + 12`. At
+`e = 12H + 12` or beyond, any child would commence at `e + 1` or later, outside
+the projection, and contribute nothing. A child whose own expiration falls
+outside the window is contributed but not re-enqueued.
+
+**Vacancy is the absence of a contribution, never a negative one.** When
+downtime pushes a commencement past the horizon, the child contributes zero and
+the months after `e` simply have no occupant in that scenario — which is
+exactly the expected vacancy those months should show. Nothing needs to be
+represented positively, and nothing is lost by not re-enqueueing.
+
+**Zero-mass children are not generated.** At `p = 1` only the renewal chain
+exists and at `p = 0` only the new-tenant chain does, so the endpoints stay
+exact and produce no spurious events.
+
+#### 5.5.4 Probability conservation
+
+Because branch terms differ, two paths can be at different successor
+generations in the same calendar month, so "all paths at generation `k` sum to
+1" is not meaningful. The invariants are stated on events and on time instead:
+
+1. **At every split**, child masses sum exactly to the parent's:
+   `q·p + q·(1−p) = q`.
+2. **Globally**, mass entering the system is exactly `1` (the in-place lease),
+   and mass is neither created nor destroyed by a split or a merge.
+3. **In every canonical month**, `expected_occupancy(m) ∈ [0, 1]`, with the
+   shortfall from `1` being precisely the mass that is dark in that month.
+
+#### 5.5.5 Complexity, and the computational-safety decision
+
+States are keyed by expiration period, and expiration periods are integers in
+`[1, 12H + 12]`. **The number of distinct states is therefore bounded by the
+horizon itself:**
+
+```
+states ≤ N,    transitions ≤ 2N,    monthly operations = O(N²)
+```
+
+where `N = 12H + 12`. For a ten-year hold, `N = 132`: at most 132 states, 264
+transitions, and on the order of 35,000 monthly floating-point operations.
+
+Measured against the pathological case — one-month renewal and new-tenant terms
+with zero downtime over a ten-year hold, where an explicit tree has `2¹³¹`
+paths:
+
+| Case | `N` | Merged states | Transitions | Explicit paths |
+|---|---|---|---|---|
+| 10-year terms | 132 | 3 | 6 | 4 |
+| 5-year terms | 132 | 5 | 10 | 7 |
+| 1-year terms | 132 | 38 | 76 | 1,190 |
+| Case 18 (60 vs 120 mo) | 132 | 4 | 8 | 5 |
+| **1-month terms** | **132** | **131** | **262** | **≈ 2.7 × 10³⁹** |
+
+**Decision: no computational cap, of any kind.** The carried-forward item in
+Section 17.2 is closed. A limit would be justified only if the work could grow
+without a structural bound, and it cannot: expiration periods advance strictly,
+they are integers, and the horizon is finite, so the state count is bounded by
+`N` before any limit could bind. An arbitrary node or event cap would therefore
+be a number that can never fire on a valid input, and HD-D2-3's warning applies
+to it directly — a cap that cannot be reached is not safety, it is a financial
+assumption waiting to be mistaken for one.
+
+Should a future gate widen the model in a way that breaks the `states ≤ N`
+bound — per-suite recursion is what makes it hold — the decision must be
+revisited **with measurement**, and any limit adopted then must ERROR naming
+the suite, never truncate silently, and never alter economics below its
+threshold.
+
+#### 5.5.6 What D2.6 reuses, and what it must not
+
+D2.5's `compose_expected_rollover` remains the authoritative **single-rollover**
+composition and is not re-implemented. But a whole `ExpectedRollover` must
+**never** be summed into a recursive accumulation: it composes full branch
+series, history included, and adding one per event is precisely the
+double-count 5.5.2 forbids. D2.6 reuses the weighting primitive and the
+successor-level economics; it does not reuse the branch-level series.
+
 
 ## 6. Downtime — Exact Monthly Semantics
 
@@ -1313,8 +1488,11 @@ recommendation this document left open; it is now closed.
   financial convention; no decision required to proceed.
 - **Float policy** (Section 13.2) — unchanged for D2. D4 must adopt a
   magnitude-aware reconciliation rule for G-M4.
-- **Computational safety threshold** — deferred to D2.6 by decision, to be
-  sized from measurement.
+- **Computational safety threshold** — **CLOSED at D2.6** (Section 5.5.5).
+  Measurement showed the state count is structurally bounded by the horizon
+  (`states ≤ N`), so **no cap of any kind is adopted**. The
+  no-financial-depth-cap rule of HD-D2-3 is unchanged and now needs no
+  computational companion.
 
 ---
 
