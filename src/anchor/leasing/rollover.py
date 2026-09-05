@@ -64,8 +64,14 @@ TI and LC, from ``leasing_costs.py``, on a basis from
 this module never lets either touch a rent, cash or occupancy series -- they
 travel as their own monthly outputs alongside.
 
-**Deliberately absent, all of it later work:** ``renewal_probability`` and
-every expected-value composition (D2.5); the second and later rollovers,
+**D2.5 composes the two branches, last.** Each branch is calculated
+independently and completely first; only then is ``renewal_probability``
+applied, to the finished monthly *outcomes*. No input parameter is ever
+weighted, no synthetic successor is built, and no timing is averaged --
+weighting parameters instead of outcomes is the rejected method D2 Section 1.2
+quantified as materially wrong.
+
+**Deliberately absent, all of it later work:** the second and later rollovers,
 recursion and any computational limit (D2.6). Each branch here produces exactly
 one successor and never rolls it over.
 """
@@ -75,9 +81,11 @@ from __future__ import annotations
 from datetime import date
 from math import floor, isfinite
 
+from ..engine.contracts import ensure_finite
 from .calendar import last_day_of_month, month_start_for_index
 from .contracts import (
     EscalationBasis,
+    ExpectedRollover,
     Lease,
     LeaseMonthlySchedule,
     LeaseOrigin,
@@ -1038,4 +1046,294 @@ def build_new_tenant_branch(
         leasing_commission_amount=core.lc_amount,
         tenant_improvements=core.tenant_improvements,
         leasing_commissions=core.leasing_commissions,
+    )
+
+
+# =============================================================================
+# D2.5 -- probability-weighted outcome composition
+#
+# The branches above are complete before anything here runs. This section
+# applies one weight to finished results and computes nothing else.
+# =============================================================================
+
+
+def weighted_outcome(
+    renewal_value: float, new_tenant_value: float, *, renewal_probability: float
+) -> float:
+    """Return ``p * renewal_value + (1 - p) * new_tenant_value``.
+
+    **The single probability-weighting primitive in the package.** Every
+    composed scalar and every composed monthly series goes through this one
+    function, so there is exactly one weighting formula and no opportunity for
+    two slightly different ones to disagree.
+
+    It weights **outcomes, never parameters** (D2 HD-D2-1). The values passed
+    in are always finished branch results -- dollars, areas, factors -- never
+    assumptions. Weighting a rent PSF, a term, a downtime or an LC rate is the
+    rejected method, and the guardrail suite proves no such call exists.
+
+    Two exact short circuits, both algebraically identical to the formula:
+
+    - **Endpoints.** ``p == 1`` returns the renewal value and ``p == 0``
+      returns the new-tenant value, unchanged. D2 Section 14 requires ``p = 1``
+      to reproduce the pure renewal branch and ``p = 0`` the pure new-tenant
+      branch **bit-identically**, and that is the key safety property of the
+      whole composition layer: under Option B the weighting is literally
+      ``1.0 * x + 0.0 * y``, so if the endpoints do not reproduce the branches
+      the composition has a bug. Relying on floating-point arithmetic to happen
+      to preserve the identity is not the same as guaranteeing it --
+      ``1.0 * x + 0.0 * y`` is exact for finite ``x`` but silently wrong for an
+      infinite or NaN ``y`` that a pure endpoint would never have consulted.
+    - **Agreement.** When both branches produce the same value, that value is
+      returned unchanged. This is not an approximation: ``p * x + (1 - p) * x``
+      is ``x`` in exact arithmetic, but in IEEE-754 it can land one ULP away.
+      The case is extremely common -- every canonical month **before** the
+      expiring lease rolls is shared history, identical in both scenarios --
+      and drifting there would put avoidable noise into figures that no
+      probability should have touched.
+
+    ``renewal_probability`` is validated by
+    ``anchor.leasing.validation``; the domain check here is a
+    construction-boundary assertion against a programming error, not a second
+    validation authority.
+    """
+
+    if not 0.0 <= renewal_probability <= 1.0:
+        raise ValueError(
+            f"renewal_probability {renewal_probability!r} must be between 0 "
+            "and 1 inclusive."
+        )
+
+    if renewal_probability == 1.0:
+        return renewal_value
+    if renewal_probability == 0.0:
+        return new_tenant_value
+    if renewal_value == new_tenant_value:
+        return renewal_value
+
+    return ensure_finite(
+        "weighted_outcome",
+        renewal_probability * renewal_value
+        + (1.0 - renewal_probability) * new_tenant_value,
+    )
+
+
+def _weighted_series(
+    renewal_series: tuple[float, ...],
+    new_tenant_series: tuple[float, ...],
+    *,
+    renewal_probability: float,
+) -> tuple[float, ...]:
+    """Weight two aligned monthly series through the one primitive."""
+
+    return tuple(
+        weighted_outcome(
+            renewal_value, new_tenant_value, renewal_probability=renewal_probability
+        )
+        for renewal_value, new_tenant_value in zip(renewal_series, new_tenant_series)
+    )
+
+
+def _require_composable(
+    renewal_branch: RenewalBranch, new_tenant_branch: NewTenantBranch
+) -> None:
+    """Refuse to compose two branches that do not describe the same rollover.
+
+    Silently zipping mismatched branches would produce a plausible-looking
+    series describing nothing, so every structural precondition is checked
+    explicitly: the same suite, the same expiring lease, the same canonical
+    timeline and the same area basis. The two branches are meant to be the two
+    scenarios for **one** expiring lease on **one** suite.
+    """
+
+    if renewal_branch.suite_id != new_tenant_branch.suite_id:
+        raise ValueError(
+            f"cannot compose branches for different suites: "
+            f"{renewal_branch.suite_id!r} and {new_tenant_branch.suite_id!r}."
+        )
+    if renewal_branch.expiring_lease_id != new_tenant_branch.expiring_lease_id:
+        raise ValueError(
+            f"cannot compose branches for different expiring leases: "
+            f"{renewal_branch.expiring_lease_id!r} and "
+            f"{new_tenant_branch.expiring_lease_id!r}."
+        )
+    if renewal_branch.months != new_tenant_branch.months:
+        raise ValueError(
+            "cannot compose branches built against different month sequences; "
+            "both must share one canonical timeline."
+        )
+    if renewal_branch.expiration_period != new_tenant_branch.expiration_period:
+        raise ValueError(
+            "cannot compose branches with different expiration periods: "
+            f"{renewal_branch.expiration_period} and "
+            f"{new_tenant_branch.expiration_period}. Both scenarios follow the "
+            "same expiring lease."
+        )
+    renewal_area = renewal_branch.successor_lease.leased_area_sf
+    new_area = new_tenant_branch.successor_lease.leased_area_sf
+    if renewal_area != new_area:
+        raise ValueError(
+            f"cannot compose branches with different leased areas: "
+            f"{renewal_area!r} and {new_area!r}."
+        )
+
+
+def compose_expected_rollover(
+    renewal_branch: RenewalBranch,
+    new_tenant_branch: NewTenantBranch,
+    *,
+    renewal_probability: float,
+) -> ExpectedRollover:
+    """Compose two complete branches into their expected-value economics.
+
+    **The branches are inputs, not work done here.** Both arrive fully
+    calculated, and this function applies one weight to their finished monthly
+    results. That ordering is the entire financial content of D2.5: computing
+    ``p * f(renewal) + (1 - p) * f(new)`` rather than
+    ``f(p * renewal + (1 - p) * new)``. The two coincide only when ``f`` is
+    linear in every weighted input, and D2 Section 1.3 shows it is not --
+    different downtimes break the rent linearity, and a commission is a product
+    of two branch-correlated quantities.
+
+    **Every dollar series is weighted from the branch dollar series of the same
+    name.** Expected cash rent comes from the branches' ``cash_base_rent``,
+    never from an expected face rent multiplied by an expected cash factor;
+    expected free-rent dollars come from the branches' ``free_rent``, never
+    from expected face times expected abatement; expected TI and LC come from
+    the branches' own monthly cost series, each of which already reflects that
+    branch's own rate, own term and own full-term contractual basis. The
+    descriptive factor series below are outputs, never intermediates.
+
+    **Timing is never weighted.** Where the branches place a one-time cost in
+    different months, both weighted events appear at their own real months.
+    Nothing is moved to an intermediate date, and no expected commencement,
+    expiration, term or downtime is computed at all.
+
+    **Occupancy splits into three distinct series**, per D2 HD-D2-2 and the
+    D2.3 factor distinction. ``expected_occupancy`` weights the branches'
+    integral physical state and may be fractional -- which is why it may never
+    carry the physical name. ``expected_successor_occupancy_factor`` weights
+    month-equivalent rent eligibility and differs from it wherever a branch
+    sits in a fractional downtime-boundary month.
+
+    ``expected_vacant_area_sf`` and ``expected_vacancy`` are derived as the
+    complement of the expected occupied series against the suite area, so the
+    area invariant holds in the expected series exactly as it does in each
+    branch: the weights sum to one, so a convex combination of two series that
+    each satisfy ``occupied + vacant == area`` satisfies it too.
+
+    Pure and deterministic: no I/O, no mutation, no sampling. Monte Carlo is
+    excluded from the base engine under any framing (D2 Section 5.3).
+    """
+
+    _require_composable(renewal_branch, new_tenant_branch)
+
+    if not 0.0 <= renewal_probability <= 1.0:
+        raise ValueError(
+            f"renewal_probability {renewal_probability!r} must be between 0 "
+            "and 1 inclusive."
+        )
+
+    months = renewal_branch.months
+    suite_area = renewal_branch.successor_lease.leased_area_sf
+
+    def compose(series_name: str) -> tuple[float, ...]:
+        return _weighted_series(
+            getattr(renewal_branch, series_name),
+            getattr(new_tenant_branch, series_name),
+            renewal_probability=renewal_probability,
+        )
+
+    expected_occupied_area = compose("occupied_area")
+    expected_occupancy = compose("physical_occupancy")
+
+    return ExpectedRollover(
+        suite_id=renewal_branch.suite_id,
+        expiring_lease_id=renewal_branch.expiring_lease_id,
+        renewal_probability=renewal_probability,
+        months=months,
+        renewal_branch=renewal_branch,
+        new_tenant_branch=new_tenant_branch,
+        # --- dollars, weighted from branch dollars directly ---
+        expected_contractual_base_rent=compose("contractual_base_rent"),
+        expected_cash_base_rent=compose("cash_base_rent"),
+        expected_free_rent=compose("free_rent"),
+        expected_tenant_improvements=compose("tenant_improvements"),
+        expected_leasing_commissions=compose("leasing_commissions"),
+        # --- expected occupancy, fractional and named accordingly ---
+        expected_occupied_area_sf=expected_occupied_area,
+        expected_occupancy=expected_occupancy,
+        expected_vacant_area_sf=tuple(
+            suite_area - occupied for occupied in expected_occupied_area
+        ),
+        expected_vacancy=tuple(1.0 - occupancy for occupancy in expected_occupancy),
+        # --- descriptive factors ---
+        expected_successor_occupancy_factor=compose("successor_occupancy_factor"),
+        expected_free_rent_abatement_months=compose("free_rent_abatement_months"),
+        expected_cash_rent_factor=compose("cash_rent_factor"),
+        # --- expected one-time totals (D2 Section 8.4) ---
+        expected_tenant_improvement_amount=weighted_outcome(
+            renewal_branch.tenant_improvement_amount,
+            new_tenant_branch.tenant_improvement_amount,
+            renewal_probability=renewal_probability,
+        ),
+        expected_leasing_commission_amount=weighted_outcome(
+            renewal_branch.leasing_commission_amount,
+            new_tenant_branch.leasing_commission_amount,
+            renewal_probability=renewal_probability,
+        ),
+    )
+
+
+def build_expected_rollover(
+    expiring: Lease,
+    *,
+    suite: Suite,
+    analysis_start: date,
+    months: tuple[ModelMonth, ...],
+    property_defaults: MarketLeasingAssumptions,
+    market_schedule: MarketRentSchedule | None = None,
+) -> ExpectedRollover:
+    """Build both branches for one expiring lease, then compose them.
+
+    A convenience entry point over ``build_renewal_branch``,
+    ``build_new_tenant_branch`` and ``compose_expected_rollover``. It adds no
+    formula: the ordering it enforces -- **both branches complete, then one
+    weight** -- is the same ordering a caller assembling the three by hand
+    would follow, and the probability is read from the resolved market leasing
+    assumptions rather than passed separately, so it cannot disagree with the
+    record the branches were priced from.
+
+    **Precondition: the inputs are already validated**, as for every other
+    builder in this package.
+    """
+
+    resolved_schedule = _resolve_market_schedule(
+        suite,
+        months=months,
+        property_defaults=property_defaults,
+        market_schedule=market_schedule,
+    )
+
+    renewal = build_renewal_branch(
+        expiring,
+        suite=suite,
+        analysis_start=analysis_start,
+        months=months,
+        property_defaults=property_defaults,
+        market_schedule=resolved_schedule,
+    )
+    new_tenant = build_new_tenant_branch(
+        expiring,
+        suite=suite,
+        analysis_start=analysis_start,
+        months=months,
+        property_defaults=property_defaults,
+        market_schedule=resolved_schedule,
+    )
+
+    return compose_expected_rollover(
+        renewal,
+        new_tenant,
+        renewal_probability=resolved_schedule.resolved.assumptions.renewal_probability,
     )

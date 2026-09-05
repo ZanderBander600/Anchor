@@ -524,30 +524,40 @@ def test_no_later_gate_module_exists_at_d2_4() -> None:
 #: None of it may appear anywhere in production code -- not as a field, not as
 #: a parameter, not as a function name.
 #:
-#: **Narrowed at D2.4**, and only by the fields that gate delivers:
-#: ``renewal_ti_psf``, ``new_ti_psf``, ``renewal_lc_pct``, ``new_lc_pct``,
-#: ``leasing_commission_method`` and the ``tenant_improvements`` /
-#: ``leasing_commissions`` series. Everything D2.5 owns stays, so the guardrail
-#: keeps its full force against probability weighting and expected values.
+#: **Narrowed at D2.5**, and only by the two names that gate delivers:
+#: ``renewal_probability`` and the composed ``expected_occupancy`` /
+#: ``expected_occupied_area_sf`` series, which HD-D2-2 names explicitly.
 #:
-#: ``new_rent_psf`` stays banned permanently and deliberately: D2 Section 12
-#: records its absence as correct, because a new letting prices at market by
-#: definition. Its appearance would be a financial-model error, not a gate
-#: violation.
+#: What remains is banned **permanently**, not until some later gate:
 #:
-#: The D4 integration names are barred permanently *at this layer*: D4.0 owns
-#: the decision about how below-NOI costs reach the shared acquisition engine,
-#: and `anchor.leasing` must not pre-empt it by inventing a channel.
+#: - ``expected_rent_psf``, ``expected_term_months``, ``expected_ti_psf``,
+#:   ``expected_lc_pct``, ``expected_downtime_months``,
+#:   ``expected_free_rent_months`` are the **rejected weighted-parameter**
+#:   names from D0 Section 8.2. HD-D2-1 superseded that method; their
+#:   appearance would mean averaging inputs rather than outcomes, which D2
+#:   Section 1.2 quantified as materially wrong. No gate will ever add them.
+#: - ``new_rent_psf`` and ``new_rent_spread``: D2 Section 12 records their
+#:   absence as correct, because a new letting prices at market by definition.
+#: - The D4 integration names are barred at this layer: D4.0 owns how
+#:   below-NOI costs reach the shared acquisition engine, and `anchor.leasing`
+#:   must not pre-empt it by inventing a channel.
 _LATER_D2_GATE_NAMES = frozenset(
     {
-        # D2.5 -- probability composition
-        "renewal_probability",
-        "expected_occupancy",
-        "expected_occupied_area_sf",
+        # never -- the rejected weighted-parameter method (D0 Section 8.2)
         "expected_rent_psf",
         "expected_term_months",
         "expected_ti_psf",
         "expected_lc_pct",
+        "expected_downtime_months",
+        "expected_free_rent_months",
+        "weighted_term",
+        "weighted_downtime",
+        "weighted_free_rent",
+        "weighted_ti_psf",
+        "weighted_lc_pct",
+        "weighted_starting_rent",
+        "weighted_successor",
+        "synthetic_lease",
         # never -- a new letting prices at market (D2 Section 12)
         "new_rent_psf",
         "new_rent_spread",
@@ -561,15 +571,16 @@ _LATER_D2_GATE_NAMES = frozenset(
 )
 
 
-def test_no_later_d2_gate_vocabulary_appears_in_production_code() -> None:
-    """D2.4 builds both branches, their concessions and their leasing costs,
-    and stops.
+def test_no_rejected_or_later_gate_vocabulary_appears_in_production_code() -> None:
+    """D2.5 completes the approved composition, so what remains banned is
+    banned for good.
 
-    Probability weighting is D2.5 and the downstream below-NOI channel is D4.
-    Declaring any of their names now would put vocabulary into the package with
-    no mechanism behind it -- the same rule D1 applied to ``Lease.origin`` and
-    ``Suite.market_rent_psf``, which each waited for the gate that could
-    actually produce them.
+    Every ``expected_*`` and ``weighted_*`` *parameter* name above belongs to
+    the superseded D0 Section 8.2 method: averaging inputs and building one
+    synthetic successor from the averages. HD-D2-1 replaced it with weighting
+    outcomes, and D2 Section 1.2 quantified the difference -- five months of
+    rent reported as zero, and a commission 19.8% low. These names must never
+    reappear.
     """
 
     for source_file in _leasing_source_files():
@@ -872,23 +883,217 @@ def test_the_free_rent_waterfall_is_sequential_not_multiplicative() -> None:
             )
 
 
-def test_no_probability_or_composition_exists_in_the_renewal_branch() -> None:
-    """D2.5 owns ``renewal_probability`` and the expected-value composition.
-    D2.2 is one deterministic branch; it weights, averages and blends
-    nothing."""
+def test_the_branch_builders_never_read_the_probability() -> None:
+    """**Branches are calculated before, and independently of, the weight.**
 
-    referenced = _referenced_names(_rollover_tree())
+    Neither branch builder -- nor the shared core, nor either pricing
+    function, nor the successor-lease builder -- may name
+    ``renewal_probability``. A branch that knew the probability could bend its
+    own economics toward the other scenario, which is exactly what weighting
+    outcomes instead of parameters exists to prevent (HD-D2-1).
+    """
 
-    for absent in (
-        "renewal_probability",
-        "expected_occupancy",
-        "expected_occupied_area_sf",
-        "expected_rent_psf",
-        "weight",
-        "compose",
-    ):
-        assert absent not in referenced, (
-            f"rollover.py references {absent!r}, which belongs to D2.5"
+    tree = _rollover_tree()
+    branch_side = {
+        "build_renewal_branch",
+        "build_new_tenant_branch",
+        "_build_branch_core",
+        "renewal_starting_rent_psf",
+        "new_tenant_starting_rent_psf",
+        "build_successor_lease",
+        "build_renewal_successor_lease",
+        "successor_occupancy_factors",
+        "free_rent_waterfall",
+        "successor_commencement_period",
+        "successor_expiration_period",
+    }
+
+    seen = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in branch_side:
+            continue
+        seen.add(node.name)
+        referenced = _referenced_names(node)
+        for forbidden in (
+            "renewal_probability",
+            "weighted_outcome",
+            "expected_occupancy",
+            "compose_expected_rollover",
+        ):
+            assert forbidden not in referenced, (
+                f"{node.name} references {forbidden!r}; a branch is calculated "
+                "independently of the probability"
+            )
+
+    assert seen == branch_side, f"missing branch functions: {branch_side - seen}"
+
+
+def test_exactly_one_probability_weighting_primitive_exists() -> None:
+    """Every composed scalar and series goes through ``weighted_outcome``, so
+    two slightly different weighting formulas cannot drift apart."""
+
+    tree = _rollover_tree()
+
+    primitive = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "weighted_outcome"
+    )
+    assert primitive is not None
+
+    # No other function may multiply by the probability itself.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name == "weighted_outcome":
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.BinOp) or not isinstance(child.op, ast.Mult):
+                continue
+            assert "renewal_probability" not in _referenced_names(child), (
+                f"{node.name} multiplies by renewal_probability; weighting "
+                "belongs to weighted_outcome alone"
+            )
+
+    # And no other leasing module weights at all.
+    for source_file in _leasing_source_files():
+        if source_file.name in {_ROLLOVER_MODULE, "contracts.py", "validation.py"}:
+            continue
+        names = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        assert "renewal_probability" not in names, (
+            f"{source_file} references renewal_probability; composition "
+            f"belongs to {_ROLLOVER_MODULE}"
+        )
+
+
+def test_expected_dollar_series_weight_branch_dollars_directly() -> None:
+    """``E[X*Y] != E[X]E[Y]``. Every expected dollar series must be composed
+    from the branch series of the same name, never reconstructed from an
+    expected face rent multiplied by an expected factor (D2 Section 1.3).
+
+    Asserted structurally: the composer's only weighting calls name a branch
+    series, and no multiplication inside it mixes two expected series.
+    """
+
+    tree = _rollover_tree()
+    composer = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "compose_expected_rollover"
+    )
+
+    factor_names = {
+        "expected_cash_rent_factor",
+        "expected_free_rent_abatement_months",
+        "expected_successor_occupancy_factor",
+        "cash_rent_factor",
+        "free_rent_abatement_months",
+        "successor_occupancy_factor",
+    }
+    dollar_names = {
+        "expected_contractual_base_rent",
+        "expected_cash_base_rent",
+        "expected_free_rent",
+        "contractual_base_rent",
+        "cash_base_rent",
+        "free_rent",
+    }
+
+    for node in ast.walk(composer):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Mult):
+            continue
+        operands = _referenced_names(node)
+        assert not (operands & factor_names and operands & dollar_names), (
+            "compose_expected_rollover multiplies a rent series by a factor "
+            "series; expected dollars must weight branch dollars directly"
+        )
+
+
+#: Branch **assumptions** and **dates**. Weighting any of these would be the
+#: rejected weighted-parameter method (D0 Section 8.2, superseded by HD-D2-1).
+_UNWEIGHTABLE_BRANCH_NAMES = frozenset(
+    {
+        "ti_psf",
+        "lc_pct",
+        "term_months",
+        "downtime_months",
+        "free_rent_months",
+        "starting_rent_psf",
+        "successor_escalation_pct",
+        "renewal_rent_psf",
+        "renewal_rent_spread",
+        "market_rent_psf_at_commencement",
+        "full_term_contractual_face_rent",
+        "commencement_period",
+        "expiration_period",
+        "successor_expiration_period",
+        "successor_lease",
+    }
+)
+
+
+def test_the_composer_never_weights_a_parameter_or_a_date() -> None:
+    """Only **outcomes** are weighted.
+
+    Checked where it matters -- at the weighting call sites -- rather than by
+    banning every mention. The composer legitimately reads
+    ``successor_lease.leased_area_sf`` once, to form the vacancy complement:
+    that is a dimension, not a weighted quantity, and the two must not be
+    conflated. What must never happen is a rate, a term, a downtime or a date
+    being passed *into* the weighting.
+    """
+
+    composer = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "compose_expected_rollover"
+    )
+
+    weighting_calls = {"weighted_outcome", "_weighted_series", "compose"}
+    checked = 0
+    for node in ast.walk(composer):
+        if not isinstance(node, ast.Call):
+            continue
+        name = node.func.id if isinstance(node.func, ast.Name) else None
+        if name not in weighting_calls:
+            continue
+        checked += 1
+        arguments = set()
+        for argument in list(node.args) + [kw.value for kw in node.keywords]:
+            arguments |= _referenced_names(argument)
+        leaked = arguments & _UNWEIGHTABLE_BRANCH_NAMES
+        assert not leaked, (
+            f"compose_expected_rollover weights {sorted(leaked)}; only "
+            "finished outcomes may be weighted, never a parameter or a date"
+        )
+
+    assert checked > 0, "no weighting call sites were found to check"
+
+
+def test_the_composer_reads_the_successor_lease_only_for_its_area() -> None:
+    """The one legitimate structural read, pinned so it cannot widen into
+    pulling a rate or a date off the successor."""
+
+    composer = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "compose_expected_rollover"
+    )
+
+    for node in ast.walk(composer):
+        if not isinstance(node, ast.Attribute):
+            continue
+        if not (
+            isinstance(node.value, ast.Attribute)
+            and node.value.attr == "successor_lease"
+        ):
+            continue
+        assert node.attr == "leased_area_sf", (
+            f"compose_expected_rollover reads successor_lease.{node.attr}; "
+            "only the leased area is a legitimate structural read"
         )
 
 
@@ -1057,19 +1262,70 @@ def test_the_renewal_branch_does_not_recurse() -> None:
 
 
 def test_the_composed_fractional_naming_restriction_is_respected() -> None:
-    """D2 HD-D2-2's binding restriction, from the other direction: the branch's
-    own occupancy is genuine and integral, so it correctly *keeps* the name
-    ``physical_occupancy``. The fractional composed series does not exist yet
-    and must not be named here under any spelling."""
+    """D2 HD-D2-2's binding restriction, now that both series exist.
 
-    referenced = _referenced_names(_rollover_tree())
+    Each branch keeps a genuine integral ``physical_occupancy``; the composed,
+    possibly-fractional series is named ``expected_occupancy`` /
+    ``expected_occupied_area_sf`` and appears **only** on the composed
+    contract. A fractional series must never carry the physical name
+    (failure mode FM-D2-19).
+    """
 
-    assert "physical_occupancy" in referenced, (
-        "the renewal branch's occupancy is a genuine integral scenario state "
-        "and keeps that name"
+    import dataclasses
+
+    from anchor.leasing import ExpectedRollover, NewTenantBranch, RenewalBranch
+
+    for branch in (RenewalBranch, NewTenantBranch):
+        names = {f.name for f in dataclasses.fields(branch)}
+        assert "physical_occupancy" in names
+        assert "occupied_area" in names
+        assert "expected_occupancy" not in names
+        assert "expected_occupied_area_sf" not in names
+
+    composed = {f.name for f in dataclasses.fields(ExpectedRollover)}
+    assert "expected_occupancy" in composed
+    assert "expected_occupied_area_sf" in composed
+    assert "physical_occupancy" not in composed, (
+        "the composed series may be fractional and must never carry the "
+        "physical name"
     )
-    for absent in ("expected_occupancy", "expected_occupied_area_sf"):
-        assert absent not in referenced
+    assert "occupied_area" not in composed
+
+
+def test_the_expected_contract_declares_no_synthetic_lease() -> None:
+    """HD-D2-1: the expectation corresponds to no single real-world outcome, so
+    there is no expected ``Lease``, no expected term and no expected date."""
+
+    import dataclasses
+
+    from anchor.leasing import ExpectedRollover
+
+    names = {f.name for f in dataclasses.fields(ExpectedRollover)}
+    for forbidden in (
+        "successor_lease",
+        "expected_successor_lease",
+        "expected_commencement_period",
+        "expected_expiration_period",
+        "expected_term_months",
+        "expected_downtime_months",
+        "expected_starting_rent_psf",
+    ):
+        assert forbidden not in names, (
+            f"ExpectedRollover declares {forbidden!r}; the expectation is not "
+            "a lease and its timing is never weighted"
+        )
+
+
+def test_the_expected_contract_retains_both_branches() -> None:
+    """The composed result is a third layer that replaces neither branch."""
+
+    import dataclasses
+
+    from anchor.leasing import ExpectedRollover
+
+    fields = {f.name: f.type for f in dataclasses.fields(ExpectedRollover)}
+    assert "renewal_branch" in fields
+    assert "new_tenant_branch" in fields
 
 
 def test_the_rollover_module_performs_no_io() -> None:

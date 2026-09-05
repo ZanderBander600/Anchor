@@ -348,19 +348,18 @@ def test_contracts_module_defines_no_calculation() -> None:
     assert functions == [], f"contracts.py must define no functions; found {functions}"
 
 
-def test_package_exposes_no_d2_2_or_later_entry_point() -> None:
-    """Month identity, the rent surface and property aggregation were each
-    delivered at D1.1, D1.2 and D1.3, and the market-rent surface at D2.1;
-    each moved to a positive assertion when its gate landed. What remains
-    absent is everything D2.2 and later own."""
+def test_package_exposes_no_d2_6_or_later_entry_point() -> None:
+    """Each surface moved to a positive assertion when its gate landed: month
+    identity at D1.1, rent at D1.2, aggregation at D1.3, market rent at D2.1,
+    the branches at D2.2/D2.3, leasing costs at D2.4 and the expected-value
+    composition at D2.5. What remains absent is everything D2.6 and D4 own."""
 
     import anchor.leasing as leasing
 
     for absent in (
-        "RolloverEvent",
-        "build_rollover_schedule",
-        "resolve_successor_rent",
-        "build_expected_rollover",
+        "build_rollover_chain",
+        "build_recursive_rollover",
+        "RolloverChain",
         "MonthlyPropertyProjection",
         "AnnualOperatingProjection",
         "build_lease_level_operating_projection",

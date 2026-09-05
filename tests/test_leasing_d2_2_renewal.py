@@ -92,6 +92,8 @@ def assumptions(**overrides: object) -> MarketLeasingAssumptions:
         ),
         "renewal_lc_pct": 0.0,
         "new_lc_pct": 0.0,
+        # D2.5 probability -- inert for every assertion in this module.
+        "renewal_probability": 1.0,
     }
     base.update(overrides)
     return MarketLeasingAssumptions(**base)  # type: ignore[arg-type]
@@ -1232,6 +1234,7 @@ def test_an_incomplete_assumption_record_cannot_be_constructed() -> None:
         ),
         "renewal_lc_pct": 0.0,
         "new_lc_pct": 0.0,
+        "renewal_probability": 1.0,
     }
     for omitted in (
         "renewal_rent_psf",

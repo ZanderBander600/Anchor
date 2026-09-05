@@ -362,14 +362,24 @@ class MarketLeasingAssumptions:
     commission were funded by the seller before acquisition (failure mode
     FM-11).
 
-    **Only the D2.1-D2.4 fields are declared.** D0 Section 4.5 lists this
-    record's full field set, and the D2 conventions document (Section 12,
-    Section 14) gates each one: rent and growth at D2.1, the renewal branch at
-    D2.2, the new-tenant branch plus downtime and free rent at D2.3, TI/LC at
-    D2.4, ``renewal_probability`` at D2.5. This package's established rule is
-    that **a gate declares only what it can actually produce** (see ``Lease``
-    and ``Suite`` below); D2.4 has no probability weighting, so it would be
-    vocabulary with no mechanism behind it.
+    **The probability (D2.5).** ``renewal_probability`` is the probability the
+    sitting tenant renews, domain ``0 <= p <= 1``. The new-tenant probability
+    is deterministically ``1 - p`` and is deliberately **not** a second input:
+    two fields could disagree, and the pair would then need a sums-to-one
+    validation rule that this design makes unnecessary.
+
+    It is the **only** weight in the model, and it weights **outcomes, never
+    parameters** (D2 HD-D2-1). Every field above stays branch-specific and is
+    read by exactly one branch; the probability is applied afterwards, to the
+    completed monthly results. Nothing on this record is ever averaged with
+    anything else on it.
+
+    **This record now describes the complete D2 field set.** D0 Section 4.5's
+    inventory is fully declared: rent and growth (D2.1), the renewal branch
+    (D2.2), the new-tenant branch with downtime and free rent (D2.3), TI and LC
+    (D2.4), and the probability (D2.5). Each arrived with the gate that could
+    produce it, following this package's rule that **a gate declares only what
+    it can actually produce** (see ``Lease`` and ``Suite`` below).
 
     The all-or-nothing override rule (D0 Section 24.2) is enforced
     structurally rather than by validation: every field is required and none
@@ -395,6 +405,7 @@ class MarketLeasingAssumptions:
     leasing_commission_method: LeasingCommissionMethod
     renewal_lc_pct: float
     new_lc_pct: float
+    renewal_probability: float
 
 
 class MarketAssumptionSource(StrEnum):
@@ -957,5 +968,146 @@ class NewTenantBranch:
                 raise ValueError(
                     f"the {label} schedule was built against a different "
                     "month sequence; a new-tenant branch must share one canonical "
+                    "timeline."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExpectedRollover:
+    """The probability-weighted expected economics of one suite's rollover
+    (D2.5).
+
+    **The third layer, and it replaces neither branch.** D2 HD-D2-1 approves
+    weighting *outcomes*, not parameters: each branch is calculated
+    independently and completely first, and the weight is applied last, to the
+    finished monthly results. Both branches are retained here in full, so
+    "which assumption produced this, and what did each scenario actually do"
+    stays answerable from the output alone.
+
+    ```
+    Expected[m] = p * Renewal[m] + (1 - p) * NewTenant[m]
+    ```
+
+    **This is an expected-value underwriting output, not a lease.** There is
+    deliberately **no** successor ``Lease`` field on this contract and no
+    synthetic expected lease anywhere: at ``p = 0.65`` the expectation
+    corresponds to no single real-world outcome, pays a rent no actual tenant
+    would pay, and would have an expiration belonging to neither scenario. Each
+    branch keeps its own term, its own commencement and its own expiration
+    (D2 Section 1.3: a weighted term is not a term).
+
+    **Every dollar series is weighted from the corresponding branch dollar
+    series, directly.** None is reconstructed from weighted factors, because
+    ``E[X * Y] != E[X] * E[Y]`` whenever the two are branch-correlated -- which
+    they always are here. Reconstructing expected cash as
+    ``expected face * expected cash factor`` is precisely the error that
+    invalidated the rejected weighted-parameter method (D2 Section 1.3), and it
+    understates or overstates every month in which the branches differ in
+    timing.
+
+    **The occupancy naming is binding** (D2 HD-D2-2). Each branch keeps a
+    genuine, integral ``physical_occupancy``; the composed series here may be
+    fractional and is therefore named ``expected_occupancy`` and
+    ``expected_occupied_area_sf``. A fractional series must never carry the
+    physical name (failure mode FM-D2-19): 65% of a suite is not literally
+    occupied, and reporting it as though it were is dishonest in a way the
+    expected framing is not.
+
+    **Three occupancy-like series, deliberately distinct:**
+
+    - ``expected_occupancy`` -- weighted *physical* state. In a month where the
+      renewal branch is in possession and the new-tenant branch is still dark,
+      this is ``p``.
+    - ``expected_successor_occupancy_factor`` -- weighted *month-equivalent
+      rent eligibility*. It differs from the above whenever a branch is in a
+      fractional downtime-boundary month, where the suite is physically
+      occupied but only part of the month's rent is recognised.
+    - ``expected_cash_rent_factor`` -- weighted cash eligibility after free
+      rent. **Descriptive only.** It must never be multiplied by an expected
+      face rent to reconstruct expected cash.
+
+    ``expected_free_rent_abatement_months`` is descriptive in the same way and
+    under the same prohibition.
+
+    **Timing is never weighted.** No expected commencement, expiration, term or
+    downtime exists. Where the two branches place a one-time cost in different
+    months, the expected series carries **two** weighted events at their real
+    scenario months -- never one event at a synthetic intermediate date.
+
+    **One rollover only.** Each branch's first successor is composed as it
+    stands; a branch whose successor has already expired simply contributes its
+    own post-expiration values. Continuing the chain is D2.6's subject
+    (D2 HD-D2-3).
+
+    Built only by ``anchor.leasing.rollover.compose_expected_rollover``; this
+    dataclass performs no calculation of its own.
+    """
+
+    suite_id: str
+    expiring_lease_id: str
+    renewal_probability: float
+    months: tuple[ModelMonth, ...]
+
+    # --- both complete branches, retained in full (D2 HD-D2-1) ---
+    renewal_branch: RenewalBranch
+    new_tenant_branch: NewTenantBranch
+
+    # --- expected monthly dollars, each weighted from branch dollars ---
+    expected_contractual_base_rent: tuple[float, ...]
+    expected_cash_base_rent: tuple[float, ...]
+    expected_free_rent: tuple[float, ...]
+    expected_tenant_improvements: tuple[float, ...]
+    expected_leasing_commissions: tuple[float, ...]
+
+    # --- expected occupancy, fractional and named accordingly ---
+    expected_occupied_area_sf: tuple[float, ...]
+    expected_occupancy: tuple[float, ...]
+    expected_vacant_area_sf: tuple[float, ...]
+    expected_vacancy: tuple[float, ...]
+
+    # --- descriptive expected factors; never a route back to dollars ---
+    expected_successor_occupancy_factor: tuple[float, ...]
+    expected_free_rent_abatement_months: tuple[float, ...]
+    expected_cash_rent_factor: tuple[float, ...]
+
+    # --- expected one-time cost totals (D2 Section 8.4) ---
+    expected_tenant_improvement_amount: float
+    expected_leasing_commission_amount: float
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("expected_contractual_base_rent", self.expected_contractual_base_rent),
+            ("expected_cash_base_rent", self.expected_cash_base_rent),
+            ("expected_free_rent", self.expected_free_rent),
+            ("expected_tenant_improvements", self.expected_tenant_improvements),
+            ("expected_leasing_commissions", self.expected_leasing_commissions),
+            ("expected_occupied_area_sf", self.expected_occupied_area_sf),
+            ("expected_occupancy", self.expected_occupancy),
+            ("expected_vacant_area_sf", self.expected_vacant_area_sf),
+            ("expected_vacancy", self.expected_vacancy),
+            (
+                "expected_successor_occupancy_factor",
+                self.expected_successor_occupancy_factor,
+            ),
+            (
+                "expected_free_rent_abatement_months",
+                self.expected_free_rent_abatement_months,
+            ),
+            ("expected_cash_rent_factor", self.expected_cash_rent_factor),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"ExpectedRollover requires one {name} figure per model "
+                    f"month; got {len(series)} for {expected} months."
+                )
+        for label, branch in (
+            ("renewal", self.renewal_branch),
+            ("new-tenant", self.new_tenant_branch),
+        ):
+            if branch.months != self.months:
+                raise ValueError(
+                    f"the {label} branch was built against a different month "
+                    "sequence; an expected rollover must share one canonical "
                     "timeline."
                 )

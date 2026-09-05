@@ -143,6 +143,10 @@ class LeaseIssueCode(StrEnum):
     LC_PCT_OUT_OF_DOMAIN = "LC_PCT_OUT_OF_DOMAIN"
     UNSUPPORTED_LEASING_COMMISSION_METHOD = "UNSUPPORTED_LEASING_COMMISSION_METHOD"
 
+    # --- probability composition (D2.5) ---
+    RENEWAL_PROBABILITY_OUT_OF_DOMAIN = "RENEWAL_PROBABILITY_OUT_OF_DOMAIN"
+    WEIGHTED_ROLLOVER_APPLIED = "WEIGHTED_ROLLOVER_APPLIED"
+
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
     ESCALATION_OUT_OF_DOMAIN = "ESCALATION_OUT_OF_DOMAIN"
@@ -479,6 +483,22 @@ def _validate_market_leasing_assumptions(
     against the visible portion would reject sound underwriting because of
     where the hold period happens to end.
 
+    The D2.5 probability domain (D0 Section 4.5, D2 HD-D2-1):
+
+    - ``renewal_probability`` finite, ``0 <= p <= 1``. There is deliberately no
+      ``new_tenant_probability`` input to cross-check: it is ``1 - p`` by
+      construction, so the pair cannot disagree and no sums-to-one rule is
+      needed.
+
+    Plus one **WARNING**, ``WEIGHTED_ROLLOVER_APPLIED``, whenever
+    ``0 < p < 1`` (D0 Section 8.4, failure mode FM-D2-18). The composed result
+    is then an expected value corresponding to no single real-world outcome: at
+    ``p = 0.65`` it pays a rent no actual tenant would pay. The economics are
+    correct and the analysis proceeds -- but an interface must never present
+    that figure as a known tenancy, and the warning is what makes the
+    convention visible rather than assumed. At the endpoints the result *is* a
+    single scenario, so no warning fires.
+
     The D2.4 leasing-cost domains (D0 Section 4.5), applied per branch:
 
     - ``renewal_ti_psf``, ``new_ti_psf`` ``>= 0``, in ``$/SF``. Zero is a real
@@ -707,6 +727,37 @@ def _validate_market_leasing_assumptions(
                     "inclusive.",
                 )
             )
+
+    probability = assumptions.renewal_probability
+    if not _is_finite_number(probability):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                f"{path}.renewal_probability",
+                "renewal_probability must be a finite number.",
+            )
+        )
+    elif not 0 <= probability <= 1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.RENEWAL_PROBABILITY_OUT_OF_DOMAIN,
+                f"{path}.renewal_probability",
+                f"renewal_probability {probability!r} must be between 0 and 1 "
+                "inclusive.",
+            )
+        )
+    elif 0 < probability < 1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.WEIGHTED_ROLLOVER_APPLIED,
+                f"{path}.renewal_probability",
+                f"renewal_probability {probability!r} produces a "
+                "probability-weighted expected rollover. The composed result "
+                "is an expected value, not a signed lease, and must never be "
+                "presented as a known tenancy.",
+                LeaseIssueSeverity.WARNING,
+            )
+        )
 
     method = assumptions.leasing_commission_method
     if not isinstance(method, LeasingCommissionMethod):

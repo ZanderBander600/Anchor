@@ -1039,23 +1039,22 @@ def test_d1_exposes_no_downstream_financial_concept() -> None:
         ), f"{absent} must not exist in D1"
 
 
-def test_no_contract_declares_a_d2_5_or_downstream_field() -> None:
+def test_no_contract_declares_a_d3_or_downstream_field() -> None:
     """Narrowed only by the fields each gate actually delivers, when it lands.
 
-    D2.1 removed ``market_rent_psf`` / ``market_rent_growth``; D2.2 removed
-    ``origin`` and the four renewal-branch fields; D2.3 removed
-    ``downtime_months`` and ``free_rent_months``; D2.4 removed the TI and LC
-    fields. Everything D2.5 and later owns -- ``renewal_probability``, every
-    expected-value field, D3's recovery structure and every downstream
-    operating concept -- remains banned, so this guardrail keeps its full force
-    over the rest of Sprint D.
+    D2.1 removed the market-rent fields; D2.2 removed ``origin`` and the
+    renewal-branch fields; D2.3 removed downtime and free rent; D2.4 removed TI
+    and LC; D2.5 removed ``renewal_probability`` and the composed
+    expected-occupancy names. What remains banned is D3's recovery structure,
+    every downstream operating concept, and the **rejected**
+    weighted-parameter names, which no gate will ever add.
     """
 
     from anchor.leasing import contracts as contracts_module
 
     banned = {
-        "renewal_probability",
-        "expected_occupancy", "expected_occupied_area_sf", "expected_rent_psf",
+        "expected_rent_psf", "expected_term_months", "expected_ti_psf",
+        "expected_lc_pct", "expected_downtime_months",
         "recovery_basis", "expense_stop", "base_year",
         "noi", "capex", "other_income", "operating_expenses",
         "vacancy_credit_loss_pct", "occupancy", "credit_loss_pct",

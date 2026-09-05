@@ -85,8 +85,19 @@ rent, untruncated by the projection horizon and unreduced by a fractional first
 month -- recorded in the same month. That basis comes from
 ``rent.contractual_face_rent_over_full_term``, which reaches the one D1
 monthly-rent formula, so no second escalation formula and no closed-form
-shortcut exists anywhere. ``renewal_probability`` and composition are D2.5,
-recursion is D2.6, and the downstream below-NOI channel is D4.
+shortcut exists anywhere.
+
+D2.5 composes the two complete branches into their expected economics:
+``Expected[m] = p * Renewal[m] + (1 - p) * NewTenant[m]``, applied **last**, to
+finished monthly outcomes. No input parameter is ever weighted, no synthetic
+successor lease exists, and no timing is averaged -- where the branches place a
+cost in different months, both weighted events stand at their own real months.
+Every expected dollar series is weighted from the corresponding branch dollar
+series directly, never reconstructed from expected factors, because
+``E[X * Y] != E[X] * E[Y]`` for branch-correlated quantities. Branch
+``physical_occupancy`` stays integral; the composed fractional series is
+``expected_occupancy`` / ``expected_occupied_area_sf``. Recursion is D2.6, and
+the downstream below-NOI channel is D4.
 """
 
 from __future__ import annotations
@@ -109,6 +120,7 @@ from .calendar import (
 )
 from .contracts import (
     EscalationBasis,
+    ExpectedRollover,
     Lease,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
@@ -145,7 +157,9 @@ from .rent import (
     lease_contractual_term_months,
 )
 from .rollover import (
+    build_expected_rollover,
     build_new_tenant_branch,
+    compose_expected_rollover,
     build_renewal_branch,
     build_renewal_successor_lease,
     build_successor_lease,
@@ -157,6 +171,7 @@ from .rollover import (
     successor_commencement_period,
     successor_expiration_period,
     successor_occupancy_factors,
+    weighted_outcome,
 )
 from .validation import (
     LeaseIssueCode,
@@ -224,6 +239,11 @@ __all__ = [
     "leasing_cost_event_series",
     "contractual_face_rent_over_full_term",
     "lease_contractual_term_months",
+    # expected-value composition (D2.5)
+    "ExpectedRollover",
+    "weighted_outcome",
+    "compose_expected_rollover",
+    "build_expected_rollover",
     # contracts
     "EscalationBasis",
     "Lease",
