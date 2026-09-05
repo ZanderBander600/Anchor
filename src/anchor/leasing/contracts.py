@@ -1407,3 +1407,113 @@ class RecursiveRollover:
                 f"{len(self.transitions)} transitions exceed the structural "
                 f"bound of {2 * expected}."
             )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecoverableExpensePool:
+    """The property's monthly recoverable operating expense, injected (D3.1).
+
+    **This is the D3/D4 seam.** D3 answers "given the pool, what does the tenant
+    reimburse"; it does **not** project operating expenses, convert the engine's
+    annual figures to monthly, apply expense growth, or apply
+    ``recoverable_expense_ratio``. D4 owns constructing this series from the
+    authoritative operating projection (D3 conventions Section 3.4).
+
+    ``recoverable_expenses[i]`` is the **total property operating expense
+    dollars eligible for tenant recovery** in ``months[i]`` -- already net of
+    everything the accepted convention excludes: the management fee, capital
+    expenditures, TI, LC and debt service (D3 Section 3.3). D3 trusts that
+    construction and deliberately cannot inspect it: the pool arrives as one
+    figure per month with no category breakdown, so no code here can infer, or
+    silently re-police, what went into it.
+
+    Domain ``>= 0`` and finite. A negative pool would be an expense credit,
+    which the accepted D3 model has no convention for, so it is refused rather
+    than given an invented meaning.
+
+    ``months`` is the exact ``ModelMonth`` tuple the pool was built against --
+    a reference to the one canonical timeline, never a second calendar. Carrying
+    it here is what lets a recovery schedule verify **month identity** rather
+    than merely matching lengths, so a pool built for a different projection
+    cannot be silently zipped against a lease.
+
+    This contract performs no calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    recoverable_expenses: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.recoverable_expenses) != len(self.months):
+            raise ValueError(
+                "RecoverableExpensePool requires one recoverable_expenses "
+                f"figure per model month; got "
+                f"{len(self.recoverable_expenses)} for {len(self.months)} "
+                "months."
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LeaseRecoverySchedule:
+    """One lease's canonical monthly expense-recovery **revenue** (D3.1).
+
+    **Recovery is revenue on its own line** (D0 Section 10.2, D3 Section 1.2).
+    It is never a reduction to contractual base rent, never a reduction to
+    property operating expenses, never a negative expense, and never a leasing
+    cost. Nothing here is netted into anything.
+
+    ``months`` is the exact canonical ``ModelMonth`` tuple, shared by reference
+    with the pool and with the lease's own D1 schedule.
+
+    ``tenant_pro_rata_share`` is ``leased_area_sf / rentable_area_sf`` on D1's
+    exact rentable-area basis (D3 Section 4.1) -- a scalar, because neither area
+    varies by month in D1-D3.
+
+    ``economic_responsibility_factor`` is the fraction of each month for which
+    this lease is economically responsible for expenses. For a known in-place
+    lease it is ``1.0`` **only while contractually active** and ``0.0`` before
+    commencement and after expiration; because D1 dates are month-aligned it is
+    never fractional for such a lease (D3 Section 7.1). It is deliberately a
+    separate concept from ``physical_occupancy``, which D2 HD-D2-2 binds to be
+    an integral month-end *state*.
+
+    ``tenant_recoverable_expense_share`` is ``share × pool`` -- the tenant's
+    arithmetic share of the pool, before responsibility is applied. It is
+    retained for audit and is reported even for a `GROSS` lease, where the
+    tenant owes none of it: the share is a fact about area, the recovery is a
+    fact about the lease.
+
+    ``expense_recovery`` is what the lease actually owes:
+    ``factor × share × pool`` for `NNN`, and exactly ``0.0`` for `GROSS`.
+
+    Built only by ``anchor.leasing.recoveries.build_lease_recovery_schedule``;
+    this dataclass performs no calculation of its own.
+    """
+
+    lease_id: str
+    suite_id: str
+    lease_type: LeaseType
+    months: tuple[ModelMonth, ...]
+    tenant_pro_rata_share: float
+    economic_responsibility_factor: tuple[float, ...]
+    tenant_recoverable_expense_share: tuple[float, ...]
+    expense_recovery: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            (
+                "economic_responsibility_factor",
+                self.economic_responsibility_factor,
+            ),
+            (
+                "tenant_recoverable_expense_share",
+                self.tenant_recoverable_expense_share,
+            ),
+            ("expense_recovery", self.expense_recovery),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"LeaseRecoverySchedule requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )

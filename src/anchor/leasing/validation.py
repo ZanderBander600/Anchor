@@ -47,6 +47,7 @@ from enum import StrEnum
 from math import floor, isfinite
 from typing import Iterable
 
+from .contracts import ModelMonth  # noqa: F401  (used in signatures below)
 from .calendar import (
     is_first_day_of_month,
     is_last_day_of_month,
@@ -58,8 +59,10 @@ from .contracts import (
     Lease,
     LeaseLevelPropertyInputs,
     LeaseOrigin,
+    LeaseType,
     LeasingCommissionMethod,
     MarketLeasingAssumptions,
+    RecoverableExpensePool,
     Suite,
 )
 
@@ -146,6 +149,13 @@ class LeaseIssueCode(StrEnum):
     # --- probability composition (D2.5) ---
     RENEWAL_PROBABILITY_OUT_OF_DOMAIN = "RENEWAL_PROBABILITY_OUT_OF_DOMAIN"
     WEIGHTED_ROLLOVER_APPLIED = "WEIGHTED_ROLLOVER_APPLIED"
+
+    # --- expense recoveries (D3.1) ---
+    RECOVERABLE_EXPENSES_OUT_OF_DOMAIN = "RECOVERABLE_EXPENSES_OUT_OF_DOMAIN"
+    RECOVERY_POOL_NOT_ALIGNED = "RECOVERY_POOL_NOT_ALIGNED"
+    MISSING_MODIFIED_GROSS_RECOVERY_BASIS = (
+        "MISSING_MODIFIED_GROSS_RECOVERY_BASIS"
+    )
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -1464,6 +1474,123 @@ def require_valid_lease_level_inputs(
         hold_period=hold_period,
         market_leasing=market_leasing,
     )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D3.1 -- expense-recovery validation
+#
+# Deliberately a SEPARATE entry point, not folded into
+# `validate_lease_level_inputs`. `MODIFIED_GROSS` is a perfectly valid lease
+# type -- D1 has captured it since D1.0 and D2 carries it through rollover
+# unchanged -- so it must not become invalid input merely because the gate that
+# prices it has not landed. It is only *recovery* that cannot yet be computed
+# for one, and that is what this validator says.
+# =============================================================================
+
+
+def validate_recovery_inputs(
+    leases: Iterable[Lease],
+    pool: RecoverableExpensePool,
+    *,
+    months: tuple[ModelMonth, ...] | None = None,
+) -> LeaseValidationResult:
+    """Validate the inputs to a D3.1 expense-recovery calculation.
+
+    Three rules, in a fixed order so the emitted sequence is reproducible: the
+    pool's own domain, its alignment to the canonical timeline, then each lease
+    in declared order.
+
+    **Pool domain** (D3 Section 3, ``RECOVERABLE_EXPENSES_OUT_OF_DOMAIN``): every
+    figure finite and ``>= 0``. A negative pool would be an expense credit, for
+    which the accepted D3 model has no convention; it is refused rather than
+    given an invented meaning.
+
+    **Alignment** (``RECOVERY_POOL_NOT_ALIGNED``): when ``months`` is supplied,
+    the pool must have been built against that exact tuple. Checking month
+    *identity* rather than length is the point -- a pool from a different
+    projection would zip cleanly and produce a plausible, wrong answer.
+
+    **Modified Gross** (``MISSING_MODIFIED_GROSS_RECOVERY_BASIS``, D0
+    Section 16.2 / D3 Section 6.1): a `MODIFIED_GROSS` lease has no explicit
+    contractual recovery basis, because D3.1 declares no field to hold one. The
+    basis is never inferred -- not from Hold Year 1, the analysis year, the
+    acquisition year or the current expense schedule -- so recovery for such a
+    lease is refused rather than defaulted. D3.2 introduces the field, and this
+    same code then fires when it is present but unset.
+
+    Not validated here: `NNN` and `GROSS` need no recovery input beyond the pool
+    and their own area, both already validated elsewhere.
+    """
+
+    lease_tuple = tuple(leases)
+    issues: list[LeaseValidationIssue] = []
+
+    for index, amount in enumerate(pool.recoverable_expenses):
+        path = f"recoverable_expense_pool.recoverable_expenses[{index}]"
+        if not _is_finite_number(amount):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.NON_FINITE_VALUE,
+                    path,
+                    "recoverable expense must be a finite number.",
+                )
+            )
+        elif amount < 0:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.RECOVERABLE_EXPENSES_OUT_OF_DOMAIN,
+                    path,
+                    f"recoverable expense {amount!r} must be greater than or "
+                    "equal to 0; a negative pool would be an expense credit, "
+                    "which D3 has no convention for.",
+                )
+            )
+
+    if months is not None and pool.months != months:
+        issues.append(
+            _issue(
+                LeaseIssueCode.RECOVERY_POOL_NOT_ALIGNED,
+                "recoverable_expense_pool.months",
+                "the recoverable expense pool was built against a different "
+                "month sequence than the canonical projection; both must share "
+                "one timeline.",
+            )
+        )
+
+    for index, lease in enumerate(lease_tuple):
+        if lease.lease_type is LeaseType.MODIFIED_GROSS:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_MODIFIED_GROSS_RECOVERY_BASIS,
+                    f"leases[{index}].lease_type",
+                    f"lease {lease.lease_id!r} is MODIFIED_GROSS and carries no "
+                    "explicit contractual recovery basis. A base year or "
+                    "expense stop is never inferred from Hold Year 1, the "
+                    "analysis year, the acquisition year or the current "
+                    "expense schedule; the analyst must supply it. Modified "
+                    "Gross recovery arrives at D3.2.",
+                )
+            )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_recovery_inputs(
+    leases: Iterable[Lease],
+    pool: RecoverableExpensePool,
+    *,
+    months: tuple[ModelMonth, ...] | None = None,
+) -> LeaseValidationResult:
+    """Validate recovery inputs and raise ``LeaseValidationError`` on any ERROR.
+
+    Returns the full result when valid, so a caller that wants both the
+    go-ahead and any warnings needs exactly one call.
+    """
+
+    result = validate_recovery_inputs(leases, pool, months=months)
     if result.errors:
         raise LeaseValidationError(result)
     return result

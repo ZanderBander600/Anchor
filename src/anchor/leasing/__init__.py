@@ -98,6 +98,18 @@ series directly, never reconstructed from expected factors, because
 ``physical_occupancy`` stays integral; the composed fractional series is
 ``expected_occupancy`` / ``expected_occupied_area_sf``. Recursion is D2.6, and
 the downstream below-NOI channel is D4.
+
+D3.1 adds tenant expense-recovery revenue for known `NNN` and `GROSS` leases.
+Given an injected ``RecoverableExpensePool`` -- D3 projects no operating
+expenses and builds no shadow expense engine, which is the D3/D4 seam --
+``recoveries.py`` computes ``factor x share x pool`` through one authoritative
+formula. The pro-rata share is leased area over rentable area on D1's exact
+basis; the economic responsibility factor comes from D1 contractual activity,
+never from rent dollars, so a zero-rent lease still recovers in full. `GROSS`
+is an explicit zero rather than a zero factor, and `MODIFIED_GROSS` is refused
+rather than silently zeroed -- it needs an explicit contractual basis, which is
+D3.2. Successor recoveries are D3.3, expected and recursive recoveries D3.4,
+and property aggregation D3.5.
 """
 
 from __future__ import annotations
@@ -135,9 +147,11 @@ from .contracts import (
     MarketAssumptionSource,
     MarketLeasingAssumptions,
     MarketRentSchedule,
+    LeaseRecoverySchedule,
     ModelMonth,
     NewTenantBranch,
     PropertyRentRollSchedule,
+    RecoverableExpensePool,
     RenewalBranch,
     ResolvedMarketLeasing,
     Suite,
@@ -155,6 +169,12 @@ from .leasing_costs import (
     leasing_cost_event_period,
     leasing_cost_event_series,
     tenant_improvement_amount,
+)
+from .recoveries import (
+    build_lease_recovery_schedule,
+    lease_responsibility_factors,
+    monthly_expense_recovery,
+    tenant_pro_rata_share,
 )
 from .rent import (
     build_lease_monthly_schedule,
@@ -181,6 +201,8 @@ from .rollover import (
     weighted_outcome,
 )
 from .validation import (
+    require_valid_recovery_inputs,
+    validate_recovery_inputs,
     LeaseIssueCode,
     LeaseIssueSeverity,
     LeaseValidationError,
@@ -259,6 +281,13 @@ __all__ = [
     "RecursiveRollover",
     "build_successor_contribution",
     "build_recursive_rollover",
+    # expense recoveries (D3.1)
+    "RecoverableExpensePool",
+    "LeaseRecoverySchedule",
+    "tenant_pro_rata_share",
+    "lease_responsibility_factors",
+    "monthly_expense_recovery",
+    "build_lease_recovery_schedule",
     # contracts
     "EscalationBasis",
     "Lease",
@@ -273,4 +302,6 @@ __all__ = [
     "LeaseValidationResult",
     "require_valid_lease_level_inputs",
     "validate_lease_level_inputs",
+    "require_valid_recovery_inputs",
+    "validate_recovery_inputs",
 ]

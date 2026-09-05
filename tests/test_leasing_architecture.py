@@ -341,10 +341,11 @@ def test_the_rent_module_is_the_only_one_that_touches_rent_fields() -> None:
     ), f"{rent_module} must contain the compound-escalation term"
 
 
-def test_leasing_package_contains_only_the_gate_d2_4_modules() -> None:
+def test_leasing_package_contains_only_the_gate_d3_1_modules() -> None:
     """D0 Gate D1.0 files, plus D1.1's ``calendar.py``, D1.2's ``rent.py``,
     D1.3's ``aggregation.py``, D2.1's ``market.py``, D2.2/D2.3's
-    ``rollover.py`` and D2.4's ``leasing_costs.py`` (D2 Section 14)."""
+    ``rollover.py``, D2.4's ``leasing_costs.py`` and D3.1's ``recoveries.py``
+    (D3 conventions Section 14)."""
 
     assert {path.name for path in _leasing_source_files()} == {
         "__init__.py",
@@ -353,6 +354,7 @@ def test_leasing_package_contains_only_the_gate_d2_4_modules() -> None:
         "contracts.py",
         "leasing_costs.py",
         "market.py",
+        "recoveries.py",
         "rent.py",
         "rollover.py",
         "validation.py",
@@ -2002,4 +2004,269 @@ def test_leasing_costs_are_never_added_into_a_rent_series() -> None:
         assert not leaked, (
             f"{node.func.value.id} receives {sorted(leaked)}; TI and LC are "
             "strictly below NOI and never enter a rent series"
+        )
+
+
+# =============================================================================
+# D3.1 -- expense recoveries: one formula, revenue-only, and rent-independent
+# =============================================================================
+
+
+_RECOVERIES_MODULE = "recoveries.py"
+
+
+def _recoveries_tree() -> ast.AST:
+    module = _LEASING_DIR / _RECOVERIES_MODULE
+    return ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+
+
+def test_the_recovery_formula_has_one_home() -> None:
+    """``factor x share x pool`` exists in exactly one place, so it cannot be
+    re-spelled slightly differently in a builder, an aggregation or a test."""
+
+    definitions = []
+    for source_file in _leasing_source_files():
+        tree = ast.parse(
+            source_file.read_text(encoding="utf-8"), filename=str(source_file)
+        )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name in {
+                "monthly_expense_recovery",
+                "tenant_pro_rata_share",
+            }:
+                definitions.append((node.name, source_file.name))
+
+    assert sorted(definitions) == [
+        ("monthly_expense_recovery", _RECOVERIES_MODULE),
+        ("tenant_pro_rata_share", _RECOVERIES_MODULE),
+    ]
+
+
+def test_recovery_never_reads_a_rent_or_cash_series() -> None:
+    """**The load-bearing independence.** Recovery must not depend on what the
+    lease pays, which is what makes D2's free rent safe to connect at D3.4
+    (failure modes FM-D3-2, FM-D3-3).
+
+    ``recoveries.py`` may not so much as *name* a rent, cash or concession
+    quantity.
+    """
+
+    module = _LEASING_DIR / _RECOVERIES_MODULE
+    referenced = _referenced_names(_recoveries_tree())
+
+    for forbidden in (
+        "base_rent_psf",
+        "escalation_pct",
+        "contractual_base_rent",
+        "cash_base_rent",
+        "free_rent",
+        "free_rent_months",
+        "free_rent_abatement_months",
+        "cash_rent_factor",
+        "market_rent_psf",
+        "tenant_improvements",
+        "leasing_commissions",
+    ):
+        assert forbidden not in referenced, (
+            f"{module} references {forbidden!r}; recovery must be independent "
+            "of rent, cash and concessions"
+        )
+
+
+def test_recovery_derives_responsibility_from_contractual_activity() -> None:
+    """One notion of "is this lease active": the authoritative D1
+    ``occupied_area``, never a second date formula and never rent positivity."""
+
+    factors = next(
+        node
+        for node in ast.walk(_recoveries_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "lease_responsibility_factors"
+    )
+    referenced = _referenced_names(factors)
+
+    assert "occupied_area" in referenced, (
+        "responsibility must come from the D1 schedule's contractual activity"
+    )
+    for forbidden in (
+        "rent_commencement_date",
+        "lease_expiration_date",
+        "month_index",
+        "contractual_base_rent",
+    ):
+        assert forbidden not in referenced, (
+            f"lease_responsibility_factors references {forbidden!r}; it must "
+            "not re-derive D1 date semantics or read rent"
+        )
+
+
+def test_the_responsibility_factor_is_not_named_physical_occupancy() -> None:
+    """D2 HD-D2-2 binds ``physical_occupancy`` to be an integral month-end
+    state. The recovery factor is an economic fraction and carries its own
+    name (D3 Section 7.2, failure mode FM-D3-4)."""
+
+    import dataclasses
+
+    from anchor.leasing import LeaseRecoverySchedule
+
+    fields = {f.name for f in dataclasses.fields(LeaseRecoverySchedule)}
+    assert "economic_responsibility_factor" in fields
+    assert "physical_occupancy" not in fields
+    assert "successor_occupancy_factor" not in fields
+
+
+def test_recoveries_project_no_operating_expenses() -> None:
+    """**The D3/D4 seam.** D3 consumes an injected pool and builds no shadow
+    expense engine (D3 Section 3.4)."""
+
+    module = _LEASING_DIR / _RECOVERIES_MODULE
+    referenced = _referenced_names(_recoveries_tree())
+
+    for forbidden in (
+        "recoverable_expense_ratio",
+        "expense_growth",
+        "management_fee",
+        "management_fee_pct",
+        "property_taxes",
+        "insurance",
+        "utilities",
+        "repairs_maintenance",
+        "other_operating_expenses",
+        "total_operating_expenses",
+        "egi",
+        "noi",
+    ):
+        assert forbidden not in referenced, (
+            f"{module} references {forbidden!r}; D3 receives the pool and does "
+            "not build or inspect an expense engine"
+        )
+
+
+def test_recoveries_import_no_engine_calculator() -> None:
+    """The forbidden-import list already bars every engine calculator; asserted
+    here for the new module specifically, since the pool is the one place a
+    shortcut into the engine would be tempting."""
+
+    module = _LEASING_DIR / _RECOVERIES_MODULE
+    names = _imported_module_names(module)
+
+    for forbidden in _FORBIDDEN_LEASING_IMPORTS:
+        assert not any(
+            name == forbidden or name.startswith(f"{forbidden}.") for name in names
+        ), f"{module} must not import {forbidden}"
+
+
+def test_recovery_is_never_netted_against_the_pool_or_added_to_rent() -> None:
+    """Recovery is revenue on its own line (D0 Section 10.2). Nothing subtracts
+    it from the pool and nothing adds it into a rent series."""
+
+    tree = _recoveries_tree()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Sub):
+            continue
+        operands = _referenced_names(node)
+        assert not (
+            {"recoverable_expenses", "tenant_recoverable_expense_share"} & operands
+        ), "a recovery is never subtracted from the expense pool"
+
+    # And no other leasing module folds a recovery into its own series.
+    for source_file in _leasing_source_files():
+        if source_file.name in {_RECOVERIES_MODULE, "contracts.py", "validation.py"}:
+            continue
+        names = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        for forbidden in ("expense_recovery", "recoverable_expenses"):
+            assert forbidden not in names, (
+                f"{source_file} references {forbidden!r}; recovery revenue "
+                f"belongs to {_RECOVERIES_MODULE}"
+            )
+
+
+def test_gross_is_an_explicit_branch_not_a_zero_factor() -> None:
+    """`GROSS` recovers nothing because of what its lease says, not because a
+    number happens to be zero. Collapsing the two would make ``lease_type``
+    unreadable in the code that most depends on it."""
+
+    recovery_fn = next(
+        node
+        for node in ast.walk(_recoveries_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "monthly_expense_recovery"
+    )
+    referenced = _referenced_names(recovery_fn)
+
+    assert "GROSS" in referenced
+    assert "NNN" in referenced
+    assert "MODIFIED_GROSS" in referenced
+
+
+def test_no_modified_gross_formula_exists_at_d3_1() -> None:
+    """D3.2 owns it, and it needs an explicit contractual basis that has no
+    field yet. A silent zero would under-recover every Modified Gross lease
+    while looking like a computed answer."""
+
+    for source_file in _leasing_source_files():
+        tree = ast.parse(
+            source_file.read_text(encoding="utf-8"), filename=str(source_file)
+        )
+        referenced = _referenced_names(tree)
+        for forbidden in (
+            "expense_stop_psf",
+            "RecoveryBasis",
+            "recovery_basis",
+            "base_year",
+            "monthly_expense_stop_dollars",
+        ):
+            assert forbidden not in referenced, (
+                f"{source_file} references {forbidden!r}, which belongs to D3.2"
+            )
+
+    # `max` would be the shape of the Modified Gross clip; it must not appear
+    # in the recovery arithmetic yet.
+    recovery_fn = next(
+        node
+        for node in ast.walk(_recoveries_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "monthly_expense_recovery"
+    )
+    assert "max" not in _referenced_names(recovery_fn), (
+        "monthly_expense_recovery clips a value; the Modified Gross "
+        "max(0, ...) belongs to D3.2"
+    )
+
+
+def test_no_later_d3_gate_concept_exists() -> None:
+    """D3.3 owns successor recovery assumptions, D3.4 expected and recursive
+    recoveries, D3.5 property aggregation."""
+
+    for source_file in _leasing_source_files():
+        tree = ast.parse(
+            source_file.read_text(encoding="utf-8"), filename=str(source_file)
+        )
+        referenced = _referenced_names(tree)
+        for forbidden in (
+            "renewal_lease_type",
+            "new_lease_type",
+            "renewal_recovery_basis",
+            "new_recovery_basis",
+            "renewal_expense_stop_psf",
+            "new_expense_stop_psf",
+            "expected_expense_recovery",
+            "property_expense_recovery",
+            "annual_expense_recovery",
+        ):
+            assert forbidden not in referenced, (
+                f"{source_file} references {forbidden!r}, which belongs to a "
+                "later D3 gate"
+            )
+
+
+def test_recoveries_are_pure() -> None:
+    referenced = _referenced_names(_recoveries_tree())
+
+    for forbidden in ("open", "read_text", "write_text", "connect", "now", "today"):
+        assert forbidden not in referenced, (
+            f"recoveries.py references {forbidden!r}; it must be pure"
         )
