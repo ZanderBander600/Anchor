@@ -1,7 +1,7 @@
 ---
 title: "Lease-Level Underwriting — D3 Expense Recovery Conventions"
 gate: D3.0
-status: Awaiting human financial review
+status: Financially accepted at D3.0 human review; ready for D3.1
 supersedes: nothing
 governed_by:
   - docs/plans/2026-09-04-anchor-lease-level-underwriting-d0-architecture.md
@@ -18,6 +18,12 @@ no change to `src/anchor/leasing/`, no change to D1 or D2 economics.**
 Verified baseline (`main` @ `175af87`, PR #16): full leasing 1436 passed, full
 backend 3209 passed, D1 787 passed, architecture guardrails 82 passed, Quick 217
 and Detailed 62 passed. `anchor.leasing` remains dark to the rest of Anchor.
+
+**Amended after D3.0 human financial review.** The architecture was accepted.
+Four decisions are now **locked** — HD-D3-1 through HD-D3-4 (Section 17) — and
+the Modified Gross formula is restated in an explicitly dimensioned,
+tenant-level form (Section 5.3). No accepted D0, D1 or D2 convention changed,
+and the four `CAN DEFER` items remain open and undecided.
 
 This document does **not** overwrite D0 or the D2 conventions. Where D0 already
 locked a recovery rule (Section 16), this document restates it and resolves the
@@ -107,9 +113,11 @@ RecoverableExpenses_m = (TotalOpex_m − ManagementFee_m) × recoverable_expense
 `recoverable_expense_ratio ∈ [0, 1]` is already declared on
 `LeaseLevelOperatingInputs` (D0 §4.6) and phased **D3**.
 
-Per-category recoverability is D0 §16.5-deferred. It is real, and it is the
-first extension anyone will want; it is not required to underwrite a competition
-case credibly, and adding it later is additive (Section 15).
+Per-category recoverability is D0 §16.5-deferred and **is not reopened in D3**.
+It is real, and it is the first extension anyone will want; it is not required
+to underwrite a competition case credibly, and adding it later is additive
+(Section 15). The D3 competition model uses **one aggregate recoverable pool**,
+whose eligibility exclusions (Section 3.3) are likewise not reopened.
 
 ### 3.2 Why the management fee is excluded — and why it matters more than D0 said
 
@@ -177,8 +185,17 @@ one figure per canonical `ModelMonth`. This is the narrowest seam that:
 - makes every D3 golden hand-calculable, because the test supplies the pool
   directly rather than deriving it through a growth model.
 
-D4 then supplies the real schedule from `LeaseLevelOperatingInputs`. D3 states
-the contract that schedule must satisfy; it does not build it.
+Stated as three prohibitions, so the boundary cannot erode:
+
+- **D3 does not project property operating expenses.**
+- **D3 does not derive the monthly pool from the engine's annual expenses.**
+- **D3 builds no shadow expense engine**, in `anchor.leasing` or anywhere else.
+
+D3.1 therefore proves *tenant recovery arithmetic against an injected pool*, and
+nothing more. D4 later owns constructing that pool from the authoritative
+operating-expense projection, applying `recoverable_expense_ratio` to the
+eligible expenses under the accepted D0 convention. D3 states the contract that
+schedule must satisfy; it does not build it.
 
 **Non-goal made explicit:** D3 does not decide how expenses grow, how they are
 spread across months, or whether the Detailed helper is extracted or duplicated.
@@ -228,11 +245,39 @@ area quotient is the *only* denominator, which is unambiguous by construction.
 
 ## 5. Lease structures
 
+### 5.0 Notation — fixed, and dimensioned
+
+Every recovery formula below uses these symbols, and each carries its units
+explicitly. Recovery arithmetic mixes property-level dollars, tenant-level
+dollars and a `$/SF` rate, so the units are stated once here rather than being
+inferred at each use.
+
+| Symbol | Meaning | Units |
+|---|---|---|
+| `P_m` | Recoverable property expense pool in month `m` (Section 3) | **dollars** |
+| `A_t` | The lease's `leased_area_sf` | SF |
+| `A_p` | `LeaseLevelPropertyInputs.rentable_area_sf` | SF |
+| `share` | `A_t / A_p` (Section 4) | dimensionless |
+| `S` | The contractual expense stop | **`$/SF/year`** |
+| `O_m` | Economic responsibility factor in month `m` (Section 7) | dimensionless, `[0, 1]` |
+| `recovery_m` | Recognised reimbursement revenue | **dollars** |
+
+Two derived quantities, both in **dollars per month**:
+
+```
+tenant_expense_share_m        = share × P_m
+monthly_expense_stop_dollars  = S × A_t / 12
+```
+
+`S` is divided by 12 **once, last**, exactly as D1 does for `base_rent_psf`.
+
 ### 5.1 NNN — first-dollar, pro-rata
 
 ```
-Recovery(L, m) = ProRataShare(L) × RecoverableExpenses_m × ResponsibilityFactor(L, m)
+recovery_m = O_m × share × P_m
 ```
+
+First dollar. No stop, no base, no free-rent reduction.
 
 Answering the ten questions precisely:
 
@@ -245,18 +290,18 @@ Answering the ten questions precisely:
 | 5 | Does fractional commencement prorate it? | **Yes**, by the responsibility factor (Section 7) |
 | 6 | Does it stop during downtime? | **Yes** — factor is `0`, so recovery is `0` |
 | 7 | Expenses after expiration? | Not this tenant's. Factor is `0` |
-| 8 | Successor inheritance? | **HD-D3-1** — recommended to come from branch assumptions, not inheritance |
+| 8 | Successor inheritance? | **None.** HD-D3-1 is APPROVED: a successor's type comes from branch assumptions, never from its predecessor |
 | 9 | Caps? | **Not in D3.** D0 §16.5-deferred |
 | 10 | Admin fees? | **Not in D3.** D0 §16.5-deferred |
 
 ### 5.2 Gross — zero
 
 ```
-Recovery(L, m) = 0.0
+recovery_m = 0.0
 ```
 
-The landlord bears the operating expenses in full. **Confirmed as the intended
-D3 baseline.**
+The landlord bears the operating expenses in full. **Locked at D3.0 review as
+the intended D3 baseline.**
 
 **A Gross lease with an expense stop is `MODIFIED_GROSS` in Anchor, not
 `GROSS`.** The two names overlap in market usage, and allowing a stop on a
@@ -266,15 +311,40 @@ Modified Gross*. Validation enforces it (Section 11).
 
 ### 5.3 Modified Gross — above an explicit basis
 
+**Authoritative form — tenant-level, and the one to implement:**
+
 ```
-Recovery(L, m) = ProRataShare(L) × max(0, RecoverableExpenses_m − Stop_m(L)) × ResponsibilityFactor(L, m)
+full_month_recovery_m = max(0, tenant_expense_share_m − monthly_expense_stop_dollars)
+                      = max(0, share × P_m − S × A_t / 12)
+
+recovery_m            = O_m × full_month_recovery_m
 ```
 
-Note the placement of the share: the tenant reimburses **its share of the
-excess**, not the excess of its share. With one aggregate pool and a stop
-expressed at property level the two are algebraically identical; they diverge
-the moment per-category pools or per-lease stops in `$/SF` arrive, so the form
-is fixed now (Section 6.2) to avoid a silent change later.
+Both terms inside `max` are **tenant-level dollars per month**, which is what
+makes the comparison auditable: it is the tenant's share of this month's pool
+against the tenant's own monthly stop, in the units a lease abstract states.
+
+**Equivalent property-level form**, recorded because it is sometimes the more
+convenient reading and because the two must never be allowed to drift apart:
+
+```
+recovery_m = O_m × share × max(0, P_m − S × A_p / 12)
+```
+
+The two are algebraically identical for `share > 0`, since
+`share × P_m − S × A_t / 12 = share × (P_m − S × A_p / 12)`. **The tenant-level
+form is authoritative for implementation.**
+
+**Rejected — the unit-incompatible shorthand:**
+
+```
+share × max(0, P_m − S)          <-- WRONG: dollars compared to $/SF
+```
+
+`P_m` is dollars and `S` is `$/SF/year`. Subtracting one from the other is not
+a smaller number, it is a meaningless one, and because both are positive it
+would still produce a plausible-looking figure. This is failure mode
+**FM-D3-18** and Golden 4 is dimensioned specifically to catch it.
 
 `max(0, …)` means a Modified Gross tenant never receives money when expenses
 fall below the basis. Negative recovery is not a concept Anchor has.
@@ -303,8 +373,13 @@ closing date.
 
 ### 6.2 Representation — decision
 
-**Decision: D3 supports exactly one representation, an expense stop in `$/SF`
-per year**, carried through a one-member enum seam:
+**Decision (HD-D3-3, LOCKED at D3.0 human review): D3 supports exactly one
+representation, an explicit contractual expense stop in `$/SF/YEAR`**, carried
+through a one-member enum seam. **No calendar-year or base-year label is
+implemented in D3**, because a true historical base year would require actual
+expense history Anchor does not possess — and Anchor must never reconstruct
+that history from Hold Year 1, the analysis year, the acquisition year, the
+first projected year, or the current forward expense schedule.
 
 ```
 class RecoveryBasis(StrEnum):
@@ -313,13 +388,17 @@ class RecoveryBasis(StrEnum):
 
 with the value on the lease (`expense_stop_psf: float | None`, `>= 0`), and
 
+The field is `expense_stop_psf`, and its units are **`$/SF/YEAR`** — stated on
+the contract, not inferred. It converts to the tenant's own monthly dollar stop
+once, dividing by 12 last, exactly as D1 does for `base_rent_psf`:
+
 ```
-Stop_m(L) = L.expense_stop_psf × rentable_area_sf / 12.0
+monthly_expense_stop_dollars = expense_stop_psf × A_t / 12.0
 ```
 
-so the stop is expressed the way a lease expresses it — per square foot per
-year — and converted to a property-level monthly dollar amount once, dividing
-by 12 last, exactly as D1 does for rent.
+The property-level conversion `expense_stop_psf × A_p / 12.0` appears only in
+the equivalent property-level form of Section 5.3 and is never mixed with the
+tenant-level one in the same expression.
 
 **Why the stop and not a base-year amount**, chosen deliberately over the
 alternative:
@@ -335,19 +414,33 @@ alternative:
 3. **It is one number.** A base-year amount needs a year *and* an amount, and
    the year is then a second thing to validate against the projection.
 
-**The base-year amount is not rejected — it is the enum's second member**, added
-if a competition rent roll forces it. Adding it costs one enum member plus one
+**The base-year amount is not rejected on its merits — it is reserved as the
+enum's second member**, to be added only if a competition rent roll forces it
+*and* the historical expense data it needs can be sourced. It is **not
+implemented in D3**. Adding it costs one enum member plus one
 nullable field, with no change to `Lease`'s other fields and no migration. This
 is deliberately the same extension-seam idiom D2.4 used for
 `LeasingCommissionMethod`, which worked.
 
 ### 6.3 Does the basis escalate? — decision
 
-**Decision: the stop is nominally fixed for the life of the lease.**
+**Decision (HD-D3-4, LOCKED at D3.0 human review): the stop is nominally fixed
+through the lease term.**
 
 ```
-Stop_m(L) is constant in m
+expense_stop_psf is constant in m, in $/SF/year
 ```
+
+It explicitly does **not**:
+
+- grow with property expense growth,
+- grow with market rent growth,
+- grow with contractual rent escalation,
+- reset annually,
+- reset at acquisition.
+
+Future support for an escalating stop may be added only as an **explicit
+contractual assumption**. D3 never infers one.
 
 Reasons: it is the commonest institutional form of an expense stop; it is the
 smallest deterministic model that captures the economically meaningful case
@@ -377,8 +470,8 @@ and gives the factor a name and a general definition covering in-place leases
 too:
 
 ```
-ResponsibilityFactor(L, m) =
-    1.0                              L is an in-place lease, contractually active in m
+O_m =
+    1.0                              L is an in-place lease AND contractually active in m
     successor_occupancy_factor(m)    L is a successor  (D2.3)
     0.0                              otherwise
 ```
@@ -386,6 +479,46 @@ ResponsibilityFactor(L, m) =
 For a successor this is exactly D2.3's series: `0` in a fully vacant downtime
 period, `1 − frac(D)` in the commencement period `c`, `1` thereafter, `0` after
 the term ends.
+
+**An in-place lease does not simply get `1.0` for every canonical month.** It
+gets `1.0` **only while it is contractually active** — that is, within its own
+inclusive `[rent_commencement_date, lease_expiration_date]` window reduced to
+canonical periods. Before commencement and after expiration it is `0.0`, and a
+suite whose only lease has expired recovers nothing, which is the same rule
+Section 7.3 states for downtime.
+
+Because D1 requires both lease dates to be **month-aligned**, a known in-place
+lease has **no fractional responsibility month** under current D1 conventions:
+its factor is only ever `0.0` or `1.0`. Fractional values arise solely from a
+successor's downtime boundary. If a future gate ever admitted a non-aligned
+contractual date, this rule would need re-deriving — but D1 makes that a
+validation ERROR, so it cannot arise today.
+
+### 7.1.1 Where the factor is applied — locked
+
+`O_m` scales the **full-month recovery obligation**, computed first:
+
+```
+full_month_recovery_m = the structure's own monthly obligation, at O_m = 1
+recovery_m            = O_m × full_month_recovery_m
+```
+
+So `O_m = 0.75` means **75% of the otherwise-applicable monthly reimbursement is
+recognised** — not 75% of one input compared against 100% of another.
+
+**For Modified Gross this placement is load-bearing.** The wrong form scales the
+expense share but not the stop:
+
+```
+max(0, 0.75 × share × P_m − S × A_t / 12)     <-- WRONG
+0.75 × max(0, share × P_m − S × A_t / 12)     <-- CORRECT
+```
+
+The wrong form compares three-quarters of a month's expense share against a
+whole month's stop, so it under-recovers in every fractional commencement month
+and can report zero where the lease genuinely owes money. It is failure mode
+**FM-D3-19**, and Golden 6 is constructed on a Modified Gross lease specifically
+to catch it.
 
 ### 7.2 Why the occupancy *factor* and not physical occupancy — proof
 
@@ -483,8 +616,10 @@ replacement tenant Anchor finds also signs Gross, and so does every replacement
 after that, forever."* Real re-lettings routinely change structure — a legacy
 Gross tenant leaves and the space is re-let NNN at prevailing terms.
 
-**Recommended (HD-D3-1): the successor's lease type comes from branch-specific
-market-leasing assumptions**, not from inheritance:
+**Decision (HD-D3-1, LOCKED at D3.0 human review): the successor's lease type
+comes from branch-specific market-leasing assumptions**, not from inheritance.
+An existing `GROSS` lease whose renewal is `MODIFIED_GROSS` and whose
+new-tenant replacement is `NNN` must be representable:
 
 ```
 MarketLeasingAssumptions.renewal_lease_type: LeaseType
@@ -498,7 +633,8 @@ exactly when that is what is meant.
 
 ### 9.3 Successor recovery terms
 
-Symmetrically, and for the same reason (**HD-D3-2**):
+**Decision (HD-D3-2, LOCKED at D3.0 human review): recovery terms are
+branch-specific too**, and are never inherited from the predecessor:
 
 ```
 renewal_recovery_basis / renewal_expense_stop_psf
@@ -506,8 +642,12 @@ new_recovery_basis     / new_expense_stop_psf
 ```
 
 so a renewal can stay Modified Gross on a negotiated stop while a new letting
-signs NNN. Anchor will need this; the question is only whether D3 is where it
-lands.
+signs NNN.
+
+**Neither the lease type nor any recovery term is ever inherited from the
+predecessor lease.** That is not merely a modelling preference: it is what keeps
+future successor economics path-independent, and therefore what keeps the D2.6
+merge key valid (Section 10.2). Exact contract naming is chosen at D3.3.
 
 ---
 
@@ -581,10 +721,23 @@ re-enter the merge key as a live dimension, and the state count would multiply
 by the number of reachable structures. Anchor would still be correct, but it
 would have paid for a feature it did not choose.
 
-**Required guardrail (D3.4):** a test asserting that the successor-construction
-path reads no recovery term off a predecessor lease — the direct analogue of
-D2.6's existing "successor engine never reads a predecessor lease" guardrail,
-which is what makes the merge proof mechanical rather than aspirational.
+**Required guardrail (D3.3, before D3.4 builds recursion on it):** a test that
+**fails** if successor recovery pricing or successor lease-type resolution
+begins reading, as a financial input, the predecessor's
+
+- lease type,
+- expense stop,
+- recovery basis,
+- or any recovery history.
+
+This is the direct analogue of D2.6's existing "successor engine never reads a
+predecessor lease" guardrail, which is what makes the merge proof mechanical
+rather than aspirational.
+
+> **Binding rule.** D3 may retain the D2.6 event-state merge architecture
+> **only because** future successor recovery economics are path-independent. If
+> such a dependency is ever introduced, the D2.6 state-sufficiency proof must be
+> **re-derived, and the merge key re-established, before that change merges.**
 
 Note this is *also* an argument for the recommended design on its own merits:
 assumption-sourced terms are both more realistic **and** strictly cheaper
@@ -624,9 +777,9 @@ stated directly, per §3.4.
 | **1** | NNN, pool $10,000/mo, share 1.0 | Recovery `$10,000`. First-dollar, no basis |
 | **2** | Gross, same pool | Recovery **exactly `0.0`** in every month |
 | **3** | Modified Gross, pool below stop | Recovery **exactly `0.0`**; never negative |
-| **4** | Modified Gross, pool above stop | `share × (pool − stop)`, hand-checked |
+| **4** | Modified Gross, pool above stop, **with `A_t ≠ A_p`** | `max(0, share × P_m − S × A_t / 12)`, hand-checked. Areas and the stop are chosen so the unit-incompatible form (FM-D3-18) yields a visibly different number |
 | **5** | Expense growth crosses the stop | Zero recovery, then positive from the crossing month. **The case Modified Gross exists to model** |
-| **6** | Fractional commencement, `D = 2.25` | September recovery is **`0.75 ×`** a full month (§7.2) |
+| **6** | Fractional commencement, `D = 2.25`, on a **Modified Gross** lease | September recovery is **`0.75 ×`** the full-month obligation — the factor scales the obligation, not the expense share alone (§7.1.1, FM-D3-19) |
 | **7** | Full free-rent month, NNN | Base-rent cash `0`, recovery **unchanged and payable** (§8) |
 | **8** | Fully vacant downtime month | Recovery **exactly `0.0`**; landlord bears the expense |
 | **9** | Suite pro-rata share | 4,000 SF in 10,000 SF recovers exactly `0.40` of the pool |
@@ -666,6 +819,8 @@ plausible-looking wrong implementation would violate silently.
 | **FM-D3-15** | A successor inheriting a lease type the assumptions contradict | §9.2 / HD-D3-1 |
 | **FM-D3-16** | Recovery revenue double-counted at property aggregation | Golden 10; property total equals the sum of lease schedules |
 | **FM-D3-17** | Negative recovery from a Modified Gross lease | Golden 3; `max(0, …)` |
+| **FM-D3-18** | **Dimensional error** — property-level pool dollars compared to a `$/SF` stop | **Golden 4**, dimensioned so the wrong form gives an obviously wrong figure (§5.3) |
+| **FM-D3-19** | The responsibility factor applied to the expense share but **not** to the stop | **Golden 6**, built on a Modified Gross lease in a fractional commencement month (§7.1.1) |
 
 ---
 
@@ -682,7 +837,7 @@ each gate a real financial claim.
 | **D3.0** | *This document* | Conventions locked; D2.6 merge key proven safe | `docs/` only |
 | **D3.1** | Recoverable pool, pro-rata share, **NNN and Gross** | The pool contract and injected series; shares summing to `1.0`; first-dollar NNN; Gross exactly zero; the responsibility factor including the fractional boundary; free rent not reducing recovery; downtime zero | new `recoveries.py` |
 | **D3.2** | **Modified Gross** + the explicit basis | `max(0, pool − stop)`; the `RecoveryBasis` seam; the missing-basis ERROR; the growth-crossing case | `recoveries.py`, `validation.py` |
-| **D3.3** | Successor recovery assumptions | Branch-specific lease type and basis; **the merge-key guardrail**; renewal ≠ new-tenant structures | `contracts.py`, `rollover.py` |
+| **D3.3** | Successor recovery assumptions | Branch-specific lease type and basis (HD-D3-1/2, both decided); **the merge-key guardrail — required here, before D3.4 builds recursion on it**; renewal ≠ new-tenant structures | `contracts.py`, `rollover.py` |
 | **D3.4** | Expected + recursive recoveries | The eleventh weighted series through `weighted_outcome`; recursion across generations; `p=0`/`p=1` endpoint identity; explicit-tree oracle extended | `rollover.py` |
 | **D3.5** | Property recovery aggregation + D3 closeout | Lease → property monthly recovery; annual derived solely from monthly; full D3 golden suite; guardrails | `aggregation.py`, tests |
 
@@ -726,18 +881,25 @@ factor is a **fraction**, not a state metric, and is never summed across months.
 
 | ID | Question | Option A | Option B | Recommended | Why | Consequence | Blocks? |
 |---|---|---|---|---|---|---|---|
-| **HD-D3-1** | Where does a successor's **lease type** come from? | Inherit the original lease's type (today's behaviour) | Branch-specific `renewal_lease_type` / `new_lease_type` | **B** | A Gross tenant leaving and the space re-letting NNN is routine; inheritance asserts the structure never changes, forever. B also *preserves* the D2.6 merge key and is computationally cheaper than chain inheritance | Two fields on `MarketLeasingAssumptions`; setting `renewal_lease_type` to the in-place type reproduces A exactly | **BLOCKS D3.3** |
-| **HD-D3-2** | May renewal and new tenant have **different recovery terms**? | One shared set | Branch-specific basis and stop | **B** | Symmetric with HD-D3-1 and with every other D2 assumption, all of which are already branch-specific. A renewal negotiating a stop while a new letting signs NNN is the normal case | Two nullable fields per branch | **BLOCKS D3.3** |
-| **HD-D3-3** | Which **basis representation** does D3 implement? | Expense stop `$/SF` | Base-year amount | **A** | The stop needs no historical expense data and so cannot tempt the Hold-Year-1 substitution §6.1 forbids; it is what a lease abstract states. B remains available as a second enum member at zero structural cost | One enum member, one nullable field | **BLOCKS D3.2** |
-| **HD-D3-4** | Does the stop **escalate**? | Nominally fixed | Grows at a stated rate | **A** | Commonest institutional form, smallest deterministic model, and it preserves the economically interesting behaviour (the pool crosses a fixed stop). Explicitly recorded rather than assumed | An optional growth field is additive later | **BLOCKS D3.2** |
+| **HD-D3-1** | Where does a successor's **lease type** come from? | Inherit the original lease's type (today's behaviour) | Branch-specific `renewal_lease_type` / `new_lease_type` | **B — APPROVED** | A Gross tenant leaving and the space re-letting NNN is routine; inheritance asserts the structure never changes, forever. B also *preserves* the D2.6 merge key and is computationally cheaper than chain inheritance | Two fields on `MarketLeasingAssumptions`; setting `renewal_lease_type` to the in-place type reproduces A exactly. Exact naming chosen at D3.3 | **DECIDED** |
+| **HD-D3-2** | May renewal and new tenant have **different recovery terms**? | One shared set | Branch-specific basis and stop | **B — APPROVED** | Symmetric with HD-D3-1 and with every other D2 assumption, all of which are already branch-specific. A renewal negotiating a stop while a new letting signs NNN is the normal case | Two nullable fields per branch; **never inherited** (§9.3, §10.2) | **DECIDED** |
+| **HD-D3-3** | Which **basis representation** does D3 implement? | Expense stop `$/SF/year` | Base-year amount / calendar base year | **A — APPROVED** | A true base year needs historical actual expenses Anchor does not possess, and supporting it would tempt exactly the Hold-Year-1 substitution §6.1 forbids. The stop is what a lease abstract states. B remains available as a second enum member at zero structural cost | One enum member, one nullable field, units **`$/SF/YEAR`** | **DECIDED** |
+| **HD-D3-4** | Does the stop **escalate**? | Nominally fixed | Grows at a stated rate | **A — APPROVED** | Commonest institutional form, smallest deterministic model, and it preserves the economically interesting behaviour (the pool crosses a fixed stop). Explicitly recorded rather than assumed | An optional growth field is additive later, as an **explicit** contractual assumption only | **DECIDED** |
 | **HD-D3-5** | Does D3 support **per-category** recoverability? | Aggregate pool × ratio | Explicit categories | **A** | D0 §4.6/§16.3 already specify the ratio; per-category is D0 §16.5-deferred and is the first thing an institutional user will want, but it is not needed to underwrite credibly | Additive: the pool becomes a sum of category pools | **CAN DEFER** |
 | **HD-D3-6** | Explicit **pro-rata share override**? | Area quotient only | Optional override wins | **A for D3** | D1's exact area reconciliation makes the quotient reliable, and no override means no denominator ambiguity. Real leases do state shares, so B will come | One nullable field, same precedence idiom as `Suite.market_rent_psf` | **CAN DEFER** |
 | **HD-D3-7** | Are **recovery abatements** supported? | Unsupported; never inferred | Inferred from free rent | **A** | D2 §7.3 already locks that free rent has no automatic recovery effect. Inferring one would silently change every NNN lease with free rent | If needed later, an explicit input — never an inference | **CAN DEFER** |
 | **HD-D3-8** | Does the **injected pool** stay injected through D4? | D3 injects; D4 supplies | D3 builds an expense engine | **A** | D0 §13.1 explicitly warns against a second expense engine in `anchor.leasing`, and D4 carries the G-2 obligation to prove Detailed bit-identical | D3 defines the contract; D4 satisfies it | **CAN DEFER** |
 
-**Three decisions block implementation: HD-D3-1, HD-D3-2 (both D3.3) and
-HD-D3-3, HD-D3-4 (both D3.2).** None blocks **D3.1**, which needs only the pool,
-the share, NNN, Gross and the responsibility factor — all settled here.
+**All four blocking decisions are now DECIDED at D3.0 human financial review.**
+HD-D3-1 and HD-D3-2 are approved as branch-specific and never inherited;
+HD-D3-3 is approved as an explicit `$/SF/YEAR` expense stop with no base-year
+label; HD-D3-4 is approved as a nominally fixed stop.
+
+**No human decision blocks any D3 gate.** The four remaining items —
+HD-D3-5 through HD-D3-8 — stay `CAN DEFER` and are deliberately left
+**unresolved**: this amendment does not decide them, and D3 must not decide them
+silently. Each has a stated D3 behaviour that is safe in the interim (aggregate
+pool, area-quotient share, unsupported recovery abatement, injected pool).
 
 ---
 
@@ -751,14 +913,44 @@ the share, NNN, Gross and the responsibility factor — all settled here.
 2. **The `max(0, …)` non-linearity is easy to get wrong under composition.**
    Golden 13 exists specifically because weighting a pool and then clipping is a
    natural-looking implementation that is wrong.
-3. **HD-D3-1 is more consequential than it looks.** Choosing inheritance would
-   not be incorrect, but it would put `lease_type` back into the D2.6 merge key
-   and multiply the state count — a computational cost paid for an economic
-   assertion (structures never change) that is probably not intended.
+3. **HD-D3-1 is decided, and the risk it carried is now closed.** Inheritance
+   would have put `lease_type` back into the D2.6 merge key and multiplied the
+   state count — a computational cost paid for an economic assertion
+   (structures never change) that was not intended. The approved
+   branch-specific design avoids both. The residual risk is only that a future
+   change reintroduces inheritance by accident, which is what the D3.3
+   guardrail (§10.2) exists to catch.
 4. **Gross-up remains deferred and matters in a vacant building.** With no
    gross-up, a half-empty property recovers only half its pool. That is the
    honest arithmetic of the chosen convention, and it should be a disclosed
    sharp edge rather than a surprise at D4.
+
+---
+
+## 18A. Consistency audit — performed after the D3.0 review amendment
+
+Every active statement was searched and reconciled against the four locked
+decisions. Historical or rejected alternatives survive only where explicitly
+labelled as such.
+
+| Searched term | Result |
+|---|---|
+| Modified Gross formula | **Corrected.** Section 5.3 now states the tenant-level form as authoritative, records the equivalent property-level form, and names the unit-incompatible shorthand as rejected (FM-D3-18) |
+| `expense stop` / `expense_stop_psf` | **Consistent.** Units stated as `$/SF/YEAR` at Sections 5.0, 6.2 and in the HD table. Converted to tenant monthly dollars by `× A_t / 12` |
+| `base year` | **No active support.** Every occurrence is either the rejected calendar-base-year option (§6.2, HD-D3-3) or the prohibition on inferring one (§6.1) |
+| Hold Year 1 | **Only** in §6.1's prohibition and §6.2's rationale. Never a fallback anywhere |
+| successor lease type | **Locked branch-specific** (§9.2, HD-D3-1). No active statement implies permanent inheritance |
+| `inherit` | Survives only in §9.2's description of *today's* D2 placeholder behaviour and in §9.3/§10.2 naming inheritance as the design **not** adopted |
+| recovery basis | **Locked branch-specific and never inherited** (§9.3). Explicit-basis rule unchanged (§6.1) |
+| recoverable expense pool | **Consistent.** One aggregate pool, management fee / CapEx / TI / LC / debt service excluded, categories not reopened (§3.1, §3.3) |
+| responsibility factor | **Clarified.** In-place leases get `1.0` only while contractually active (§7.1); the factor scales the full-month obligation (§7.1.1) |
+| free rent | **Consistent.** Does not reduce recoveries; abatement unsupported and never inferred (§8) |
+| downtime | **Consistent.** `O_m = 0` in a fully vacant month; the fractional boundary uses D2.3's factor (§7.1, §7.3) |
+| D2.6 / merge key | **Consistent and strengthened.** §10.2 now states the binding re-derivation rule and moves the guardrail to **D3.3**, before recursion is built on it |
+| `CAN DEFER` items | **Untouched.** HD-D3-5 through HD-D3-8 remain undecided |
+
+No financial convention accepted at D0, D1 or D2 was altered by this amendment.
+Sections 1–4, 8 and 11–16 are substantively unchanged.
 
 ---
 
@@ -781,5 +973,9 @@ This gate changed `docs/` only — one file, this document. No file under `src/`
 `tests/` or `web/`, no migration, no dependency, no configuration. D1 and D2
 economics are untouched, `anchor.leasing` is unmodified, and D0 is unmodified.
 
-No D3 production code exists. **D3.1 may begin once HD-D3-1 through HD-D3-4 are
-answered** — or immediately, since none of the four blocks D3.1 itself.
+The post-review amendment is likewise documentation only — this one file. It
+locked four decisions, corrected the Modified Gross formula's dimensions, and
+clarified three rules. It changed no accepted financial convention.
+
+No D3 production code exists. **HD-D3-1 through HD-D3-4 are decided, so no human
+decision blocks any D3 gate. D3.1 may begin.**
