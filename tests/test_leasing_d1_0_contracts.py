@@ -23,7 +23,6 @@ from anchor.leasing import (
     EscalationBasis,
     Lease,
     LeaseLevelPropertyInputs,
-    LeaseOrigin,
     LeaseType,
     Suite,
 )
@@ -56,11 +55,11 @@ def build_lease(**overrides: object) -> Lease:
 
 def test_property_inputs_construct_from_the_two_d0_fields() -> None:
     property_inputs = LeaseLevelPropertyInputs(
-        analysis_start_date=ANALYSIS_START, property_area_sf=10_000.0
+        analysis_start_date=ANALYSIS_START, rentable_area_sf=10_000.0
     )
 
     assert property_inputs.analysis_start_date == ANALYSIS_START
-    assert property_inputs.property_area_sf == 10_000.0
+    assert property_inputs.rentable_area_sf == 10_000.0
 
 
 def test_suite_constructs_with_and_without_the_optional_label() -> None:
@@ -83,11 +82,10 @@ def test_lease_constructs_with_required_fields_and_documented_defaults() -> None
     assert lease.escalation_pct == 0.03
     assert lease.escalation_basis is EscalationBasis.LEASE_ANNIVERSARY
     assert lease.lease_type is LeaseType.NNN
-    # Documented D0 defaults: a lease need not name a tenant, need not state a
-    # possession date, and is in-place unless a later gate says otherwise.
+    # Documented D0 defaults: a lease need not name a tenant and need not
+    # state a possession date.
     assert lease.tenant_name is None
     assert lease.lease_start_date is None
-    assert lease.origin is LeaseOrigin.IN_PLACE
 
 
 def test_every_contract_is_keyword_only() -> None:
@@ -111,9 +109,9 @@ def test_every_contract_is_keyword_only() -> None:
     [
         (
             LeaseLevelPropertyInputs(
-                analysis_start_date=ANALYSIS_START, property_area_sf=10_000.0
+                analysis_start_date=ANALYSIS_START, rentable_area_sf=10_000.0
             ),
-            "property_area_sf",
+            "rentable_area_sf",
             1.0,
         ),
         (Suite(suite_id="S1", suite_area_sf=6_000.0), "suite_area_sf", 1.0),
@@ -200,6 +198,10 @@ _FORBIDDEN_D1_FIELD_NAMES = frozenset(
         "renewal_lc_pct",
         "new_lc_pct",
         "leasing_commissions",
+        # D2 rollover provenance -- D0 Section 4.4 marks `origin` derived and
+        # phases it to D2. D1 cannot construct successor economics, so a
+        # SUCCESSOR lease is a financially impossible state at this gate.
+        "origin",
         # D3 recoveries
         "recovery_basis",
         "recoverable_expense_ratio",
@@ -250,12 +252,20 @@ def test_lease_type_declares_exactly_the_three_recovery_structures() -> None:
     }
 
 
-def test_lease_origin_distinguishes_in_place_from_successor() -> None:
-    """``SUCCESSOR`` is declared but unused at D1: D1 generates no successor.
-    It exists so D2's rollover engine can mark what it produces without
-    changing this contract."""
+def test_no_lease_origin_concept_exists_at_d1() -> None:
+    """D0 Section 4.4 marks ``origin`` as *derived* and phases it to **D2**.
 
-    assert {member.value for member in LeaseOrigin} == {"in_place", "successor"}
+    D1 has no mechanism for constructing successor economics, so a
+    ``SUCCESSOR`` lease is a financially impossible state here. Declaring the
+    field (or its enum) now would make that impossible state representable
+    purely for future convenience. D2 introduces both alongside the rollover
+    engine that can actually produce one."""
+
+    import anchor.leasing as leasing
+
+    assert not hasattr(leasing, "LeaseOrigin")
+    assert not hasattr(contracts_module, "LeaseOrigin")
+    assert "origin" not in {f.name for f in dataclasses.fields(Lease)}
 
 
 # =============================================================================

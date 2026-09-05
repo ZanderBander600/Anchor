@@ -2,7 +2,23 @@
 
 Restates
 ``docs/plans/2026-09-04-anchor-lease-level-underwriting-d0-architecture.md``
-Section 19 exactly; that document governs on any discrepancy.
+Section 19; that document governs except where this module records an
+explicit, reviewed override below.
+
+**One deliberate departure from D0, approved at D1.0 human financial
+review.** D0 Sections 18.4 and 19.3 permit ``sum(suite_area_sf)`` to fall
+short of the property's area, reporting the residual as a
+``AREA_SHORTFALL_TREATED_AS_COMMON_AREA`` *warning* and inferring that the
+difference is common area. That convention is rejected: a generic building
+area is not a valid denominator for lease-level occupancy, and inferring
+common area from a residual lets unmodeled leasable space silently dilute
+occupancy. Anchor instead requires that every rentable square foot be
+accounted for by a suite, with vacant space declared explicitly as a
+``Suite`` carrying no lease. The reconciliation is exact and any mismatch is
+a ``RENTABLE_AREA_NOT_RECONCILED`` **ERROR**; the warning code no longer
+exists. The contract field is named ``rentable_area_sf`` to match the
+meaning D0 already assigned it ("Total rentable area", Section 4.2). D0
+itself is unchanged by this gate.
 
 **This module deliberately does not touch ``anchor.validation``.** Lease-Level
 needs an ERROR/WARNING severity distinction that Anchor's global validator
@@ -33,7 +49,7 @@ from enum import StrEnum
 from math import isfinite
 from typing import Iterable
 
-from .contracts import Lease, LeaseLevelPropertyInputs, Suite
+from .contracts import EscalationBasis, Lease, LeaseLevelPropertyInputs, Suite
 
 
 class LeaseIssueSeverity(StrEnum):
@@ -66,7 +82,7 @@ class LeaseIssueCode(StrEnum):
 
     # --- property / analysis ---
     ANALYSIS_START_NOT_MONTH_ALIGNED = "ANALYSIS_START_NOT_MONTH_ALIGNED"
-    PROPERTY_AREA_OUT_OF_DOMAIN = "PROPERTY_AREA_OUT_OF_DOMAIN"
+    RENTABLE_AREA_OUT_OF_DOMAIN = "RENTABLE_AREA_OUT_OF_DOMAIN"
 
     # --- identity ---
     EMPTY_SUITE_ID = "EMPTY_SUITE_ID"
@@ -79,7 +95,7 @@ class LeaseIssueCode(StrEnum):
     SUITE_AREA_OUT_OF_DOMAIN = "SUITE_AREA_OUT_OF_DOMAIN"
     LEASE_AREA_OUT_OF_DOMAIN = "LEASE_AREA_OUT_OF_DOMAIN"
     LEASE_AREA_MISMATCH = "LEASE_AREA_MISMATCH"
-    LEASED_AREA_EXCEEDS_PROPERTY_AREA = "LEASED_AREA_EXCEEDS_PROPERTY_AREA"
+    RENTABLE_AREA_NOT_RECONCILED = "RENTABLE_AREA_NOT_RECONCILED"
 
     # --- dates ---
     LEASE_DATE_NOT_MONTH_ALIGNED = "LEASE_DATE_NOT_MONTH_ALIGNED"
@@ -91,12 +107,12 @@ class LeaseIssueCode(StrEnum):
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
     ESCALATION_OUT_OF_DOMAIN = "ESCALATION_OUT_OF_DOMAIN"
+    ESCALATION_BASIS_REQUIRES_ZERO_ESCALATION = (
+        "ESCALATION_BASIS_REQUIRES_ZERO_ESCALATION"
+    )
 
     # --- numeric ---
     NON_FINITE_VALUE = "NON_FINITE_VALUE"
-
-    # --- warnings ---
-    AREA_SHORTFALL_TREATED_AS_COMMON_AREA = "AREA_SHORTFALL_TREATED_AS_COMMON_AREA"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -220,6 +236,33 @@ def _is_finite_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value)
 
 
+def _areas_reconcile(total_suite_area: float, rentable_area: float) -> bool:
+    """Whether two area figures agree under Anchor's numeric-comparison rule.
+
+    Mirrors the scaled tolerance already used in production by
+    ``anchor.ingestion.classifier_provider._isclose``
+    (``abs(a - b) <= 1e-9 * max(1.0, |a|, |b|)``) rather than introducing a
+    second, competing convention.
+
+    An exact ``==`` would be wrong here: ``sum()`` over many suite areas
+    accumulates ordinary IEEE-754 last-bit drift that scales with both the
+    suite count and the building size, so a rent roll that reconciles
+    perfectly on paper could fail on floating-point noise alone. A fixed
+    absolute epsilon would be equally wrong in the other direction -- tight
+    enough for a 10,000 SF building, too tight for a 1,000,000 SF one. The
+    scaled form is correct at any building size and is fully deterministic:
+    the same inputs always give the same answer.
+
+    The tolerance is deliberately far tighter than any real area discrepancy:
+    at 1,000,000 SF it permits about a thousandth of a square inch, so a
+    genuine unmodeled floor can never slip through.
+    """
+
+    return abs(total_suite_area - rentable_area) <= 1e-9 * max(
+        1.0, abs(total_suite_area), abs(rentable_area)
+    )
+
+
 # =============================================================================
 # Validation
 # =============================================================================
@@ -251,21 +294,21 @@ def _validate_property(
             )
         )
 
-    area = property_inputs.property_area_sf
+    area = property_inputs.rentable_area_sf
     if not _is_finite_number(area):
         issues.append(
             _issue(
                 LeaseIssueCode.NON_FINITE_VALUE,
-                "property.property_area_sf",
-                "property_area_sf must be a finite number.",
+                "property.rentable_area_sf",
+                "rentable_area_sf must be a finite number.",
             )
         )
     elif area <= 0:
         issues.append(
             _issue(
-                LeaseIssueCode.PROPERTY_AREA_OUT_OF_DOMAIN,
-                "property.property_area_sf",
-                f"property_area_sf {area!r} must be greater than 0.",
+                LeaseIssueCode.RENTABLE_AREA_OUT_OF_DOMAIN,
+                "property.rentable_area_sf",
+                f"rentable_area_sf {area!r} must be greater than 0.",
             )
         )
 
@@ -497,6 +540,21 @@ def _validate_lease(
                 f"escalation_pct {escalation!r} must be greater than -1.",
             )
         )
+    elif lease.escalation_basis is EscalationBasis.NONE and escalation != 0.0:
+        # "No escalation basis" and "a 3% escalation" are contradictory
+        # instructions. Ignoring the percentage would silently pick one
+        # reading; Anchor makes the analyst state which they meant. The
+        # converse pairing -- LEASE_ANNIVERSARY with 0.0 -- is unambiguous
+        # (a flat lease whose basis is stated anyway) and stays valid.
+        issues.append(
+            _issue(
+                LeaseIssueCode.ESCALATION_BASIS_REQUIRES_ZERO_ESCALATION,
+                f"{path}.escalation_pct",
+                f"escalation_pct {escalation!r} must be 0.0 when "
+                "escalation_basis is NONE; set a basis of LEASE_ANNIVERSARY "
+                "to apply it, or 0.0 to state a flat rent.",
+            )
+        )
 
     return issues
 
@@ -550,25 +608,38 @@ def _validate_suite_occupancy_overlap(
     return issues
 
 
-def _validate_area_reconciliation(
+def _validate_rentable_area_reconciliation(
     property_inputs: LeaseLevelPropertyInputs, suites: tuple[Suite, ...]
 ) -> list[LeaseValidationIssue]:
-    """Reconcile the sum of suite areas against the property's rentable area.
+    """Every rentable square foot must be accounted for by a suite.
 
-    Over-allocation is an ERROR: a rent roll whose suites exceed the building
-    cannot be underwritten. A shortfall is a WARNING, not an error -- lobbies,
-    corridors and mechanical space are legitimately non-leasable -- but the
-    analyst must know, because physical occupancy is then computed on a
-    denominator that includes area no lease can ever fill.
+    ``sum(suite_area_sf)`` must equal ``rentable_area_sf`` -- not merely stay
+    under it. Both directions are ERRORs:
 
-    Skipped entirely when any input area is non-finite or non-positive; those
+    - **Over-allocation** means the rent roll claims more leasable area than
+      the property has.
+    - **Shortfall** means part of the property's rentable area is simply
+      absent from the rent roll. That is an incomplete rent roll, not a
+      description of common area. Treating a residual as common area would
+      let unmodeled leasable space silently dilute physical occupancy and
+      understate both vacancy and upside, with nothing on screen to show it.
+
+    Vacant space is represented explicitly, as a ``Suite`` with no lease
+    (D0 Section 4.3) -- so a correct rent roll always reconciles exactly, and
+    Anchor never has to infer what unaccounted area was.
+
+    This tightens D0 Sections 18.4/19.3, which permitted a shortfall as a
+    ``AREA_SHORTFALL_TREATED_AS_COMMON_AREA`` warning. That convention was
+    rejected at D1.0 human financial review; the ERROR below replaces it, and
+    the warning code no longer exists. See the module docstring.
+
+    Skipped entirely when any input area is non-finite or non-positive: those
     have already produced their own, more specific errors, and summing them
     would only add noise.
     """
 
-    if not _is_finite_number(property_inputs.property_area_sf):
-        return []
-    if property_inputs.property_area_sf <= 0:
+    rentable_area = property_inputs.rentable_area_sf
+    if not _is_finite_number(rentable_area) or rentable_area <= 0:
         return []
     if not all(
         _is_finite_number(suite.suite_area_sf) and suite.suite_area_sf > 0
@@ -577,31 +648,29 @@ def _validate_area_reconciliation(
         return []
 
     total_suite_area = sum(suite.suite_area_sf for suite in suites)
+    if _areas_reconcile(total_suite_area, rentable_area):
+        return []
 
-    if total_suite_area > property_inputs.property_area_sf:
-        return [
-            _issue(
-                LeaseIssueCode.LEASED_AREA_EXCEEDS_PROPERTY_AREA,
-                "property.property_area_sf",
-                f"suite areas total {total_suite_area!r} SF, which exceeds "
-                f"property_area_sf {property_inputs.property_area_sf!r}.",
-            )
-        ]
+    unaccounted = rentable_area - total_suite_area
+    if unaccounted > 0:
+        detail = (
+            f"{unaccounted!r} SF of rentable area is not represented by any "
+            "suite; vacant space must be declared as a Suite with no lease, "
+            "never omitted from the rent roll"
+        )
+    else:
+        detail = (
+            f"suite areas exceed rentable_area_sf by {-unaccounted!r} SF"
+        )
 
-    if total_suite_area < property_inputs.property_area_sf:
-        return [
-            _issue(
-                LeaseIssueCode.AREA_SHORTFALL_TREATED_AS_COMMON_AREA,
-                "property.property_area_sf",
-                f"suite areas total {total_suite_area!r} SF against "
-                f"property_area_sf {property_inputs.property_area_sf!r}; the "
-                "difference is treated as common area and is included in the "
-                "occupancy denominator.",
-                LeaseIssueSeverity.WARNING,
-            )
-        ]
-
-    return []
+    return [
+        _issue(
+            LeaseIssueCode.RENTABLE_AREA_NOT_RECONCILED,
+            "property.rentable_area_sf",
+            f"suite areas total {total_suite_area!r} SF against "
+            f"rentable_area_sf {rentable_area!r}: {detail}.",
+        )
+    ]
 
 
 def validate_lease_level_inputs(
@@ -652,7 +721,9 @@ def validate_lease_level_inputs(
         )
 
     issues.extend(_validate_suite_occupancy_overlap(lease_tuple))
-    issues.extend(_validate_area_reconciliation(property_inputs, suite_tuple))
+    issues.extend(
+        _validate_rentable_area_reconciliation(property_inputs, suite_tuple)
+    )
 
     return LeaseValidationResult(issues=tuple(issues))
 

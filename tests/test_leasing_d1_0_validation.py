@@ -5,7 +5,7 @@ Proves, per
 Sections 5.5, 19 and 20:
 
 1. Every D1 ERROR rule in Section 19.2 fires with the correct code and path.
-2. The one D1 WARNING rule in Section 19.3 fires and does not block.
+2. Rentable area reconciles exactly; any mismatch is an ERROR.
 3. Golden case **D1-G10** (all six sub-cases, Section 27) passes -- including
    the leap-February trap and the out-of-window case.
 4. Golden case **D1-G9**'s month-end boundaries all validate cleanly.
@@ -39,7 +39,7 @@ ANALYSIS_START = date(2026, 1, 1)
 def property_inputs(**overrides: object) -> LeaseLevelPropertyInputs:
     fields: dict[str, object] = {
         "analysis_start_date": ANALYSIS_START,
-        "property_area_sf": 10_000.0,
+        "rentable_area_sf": 10_000.0,
     }
     fields.update(overrides)
     return LeaseLevelPropertyInputs(**fields)  # type: ignore[arg-type]
@@ -86,7 +86,7 @@ def test_a_minimal_valid_input_set_produces_no_issues() -> None:
 
 
 def test_a_valid_multi_suite_multi_lease_input_set_validates_cleanly() -> None:
-    inputs = property_inputs(property_area_sf=10_000.0)
+    inputs = property_inputs(rentable_area_sf=10_000.0)
     suites = [
         suite(suite_id="S1", suite_area_sf=6_000.0, suite_label="Suite 100"),
         suite(suite_id="S2", suite_area_sf=4_000.0),
@@ -133,15 +133,15 @@ def test_mid_month_analysis_start_date_is_an_error() -> None:
 @pytest.mark.parametrize("area", [0.0, -1.0])
 def test_non_positive_property_area_is_an_error(area: float) -> None:
     result = validate_lease_level_inputs(
-        property_inputs(property_area_sf=area), [suite()], [lease()]
+        property_inputs(rentable_area_sf=area), [suite()], [lease()]
     )
 
-    assert LeaseIssueCode.PROPERTY_AREA_OUT_OF_DOMAIN in codes(result)
+    assert LeaseIssueCode.RENTABLE_AREA_OUT_OF_DOMAIN in codes(result)
 
 
 def test_non_finite_property_area_is_a_non_finite_error() -> None:
     result = validate_lease_level_inputs(
-        property_inputs(property_area_sf=float("nan")), [suite()], [lease()]
+        property_inputs(rentable_area_sf=float("nan")), [suite()], [lease()]
     )
 
     assert LeaseIssueCode.NON_FINITE_VALUE in codes(result)
@@ -401,22 +401,9 @@ def test_leased_area_must_equal_suite_area_in_d1() -> None:
     assert LeaseIssueCode.LEASE_AREA_MISMATCH in codes(result)
 
 
-def test_suite_areas_exceeding_property_area_is_an_error() -> None:
+def test_suite_areas_totalling_exactly_the_rentable_area_reconcile() -> None:
     result = validate_lease_level_inputs(
-        property_inputs(property_area_sf=10_000.0),
-        [
-            suite(suite_id="S1", suite_area_sf=7_000.0),
-            suite(suite_id="S2", suite_area_sf=5_000.0),
-        ],
-        [],
-    )
-
-    assert LeaseIssueCode.LEASED_AREA_EXCEEDS_PROPERTY_AREA in codes(result)
-
-
-def test_suite_areas_totalling_exactly_the_property_area_raises_nothing() -> None:
-    result = validate_lease_level_inputs(
-        property_inputs(property_area_sf=10_000.0),
+        property_inputs(rentable_area_sf=10_000.0),
         [
             suite(suite_id="S1", suite_area_sf=6_000.0),
             suite(suite_id="S2", suite_area_sf=4_000.0),
@@ -427,30 +414,118 @@ def test_suite_areas_totalling_exactly_the_property_area_raises_nothing() -> Non
     assert result.issues == ()
 
 
-def test_area_shortfall_is_a_warning_that_does_not_block() -> None:
-    """The one genuine D1 WARNING: lobbies and mechanical space are legitimate,
-    but the analyst must know occupancy is computed on a denominator that
-    includes area no lease can fill."""
+def test_an_explicit_vacant_suite_completes_the_reconciliation() -> None:
+    """The approved way to represent vacant space: a Suite with area and no
+    lease. 40,000 leased + 35,000 leased + 25,000 vacant = 100,000 rentable."""
 
     result = validate_lease_level_inputs(
-        property_inputs(property_area_sf=10_000.0),
-        [suite(suite_id="S1", suite_area_sf=9_000.0)],
-        [],
+        property_inputs(rentable_area_sf=100_000.0),
+        [
+            suite(suite_id="A", suite_area_sf=40_000.0),
+            suite(suite_id="B", suite_area_sf=35_000.0),
+            suite(suite_id="C", suite_area_sf=25_000.0),
+        ],
+        [
+            lease(lease_id="L1", suite_id="A", leased_area_sf=40_000.0),
+            lease(
+                lease_id="L2",
+                suite_id="B",
+                leased_area_sf=35_000.0,
+                lease_expiration_date=date(2029, 12, 31),
+            ),
+        ],
     )
 
-    assert codes(result) == [LeaseIssueCode.AREA_SHORTFALL_TREATED_AS_COMMON_AREA]
-    assert result.issues[0].severity is LeaseIssueSeverity.WARNING
     assert result.is_valid
-    assert result.errors == ()
-    assert len(result.warnings) == 1
+    assert result.issues == ()
 
 
-def test_a_warning_alone_never_raises() -> None:
-    require_valid_lease_level_inputs(
-        property_inputs(property_area_sf=10_000.0),
-        [suite(suite_id="S1", suite_area_sf=9_000.0)],
+def test_unexplained_rentable_area_shortfall_is_an_error() -> None:
+    """The same 100,000 SF property with the remaining 25,000 SF simply absent
+    from the rent roll. That is an incomplete rent roll, not a description of
+    common area, and it must not be a successful financial state."""
+
+    result = validate_lease_level_inputs(
+        property_inputs(rentable_area_sf=100_000.0),
+        [
+            suite(suite_id="A", suite_area_sf=40_000.0),
+            suite(suite_id="B", suite_area_sf=35_000.0),
+        ],
         [],
     )
+
+    assert codes(result) == [LeaseIssueCode.RENTABLE_AREA_NOT_RECONCILED]
+    assert result.issues[0].severity is LeaseIssueSeverity.ERROR
+    assert not result.is_valid
+    assert "25000.0" in result.issues[0].message
+
+
+def test_suite_areas_exceeding_the_rentable_area_is_an_error() -> None:
+    result = validate_lease_level_inputs(
+        property_inputs(rentable_area_sf=10_000.0),
+        [
+            suite(suite_id="S1", suite_area_sf=7_000.0),
+            suite(suite_id="S2", suite_area_sf=5_000.0),
+        ],
+        [],
+    )
+
+    assert codes(result) == [LeaseIssueCode.RENTABLE_AREA_NOT_RECONCILED]
+    assert result.issues[0].severity is LeaseIssueSeverity.ERROR
+    assert "exceed" in result.issues[0].message
+
+
+def test_no_common_area_inference_behaviour_remains() -> None:
+    """The rejected D0 convention -- treating a residual as common area under
+    an ``AREA_SHORTFALL_TREATED_AS_COMMON_AREA`` warning -- must be gone, not
+    merely unused."""
+
+    assert not hasattr(LeaseIssueCode, "AREA_SHORTFALL_TREATED_AS_COMMON_AREA")
+    assert not hasattr(LeaseIssueCode, "LEASED_AREA_EXCEEDS_PROPERTY_AREA")
+    assert "AREA_SHORTFALL" not in {member.value for member in LeaseIssueCode}
+
+
+def test_reconciliation_tolerates_only_floating_point_summation_drift() -> None:
+    """Areas that reconcile on paper must reconcile in floats: summing many
+    suite areas accumulates ordinary IEEE-754 last-bit drift. A genuine
+    discrepancy of even a square foot must still fail."""
+
+    thirds = [
+        suite(suite_id=f"S{i}", suite_area_sf=10_000.0 / 3.0) for i in range(3)
+    ]
+    drifting = validate_lease_level_inputs(
+        property_inputs(rentable_area_sf=10_000.0), thirds, []
+    )
+    assert drifting.is_valid, codes(drifting)
+
+    one_sf_short = validate_lease_level_inputs(
+        property_inputs(rentable_area_sf=10_000.0),
+        [suite(suite_id="S1", suite_area_sf=9_999.0)],
+        [],
+    )
+    assert LeaseIssueCode.RENTABLE_AREA_NOT_RECONCILED in codes(one_sf_short)
+
+
+def test_the_severity_architecture_still_partitions_warnings() -> None:
+    """D1.0 has no genuine WARNING condition left, and none is fabricated to
+    exercise the enum. The partition machinery is tested directly instead, so
+    the architecture is proven without inventing domain behaviour."""
+
+    from anchor.leasing.validation import LeaseValidationIssue, LeaseValidationResult
+
+    warning = LeaseValidationIssue(
+        code=LeaseIssueCode.LEASE_AREA_MISMATCH,
+        path="suites[0]",
+        message="illustrative",
+        severity=LeaseIssueSeverity.WARNING,
+    )
+    error = LeaseValidationIssue(
+        code=LeaseIssueCode.LEASE_AREA_MISMATCH, path="suites[1]", message="illustrative"
+    )
+
+    assert LeaseValidationResult(issues=(warning,)).is_valid
+    assert LeaseValidationResult(issues=(warning,)).warnings == (warning,)
+    assert not LeaseValidationResult(issues=(warning, error)).is_valid
 
 
 # =============================================================================
@@ -499,6 +574,81 @@ def test_escalation_above_minus_one_is_permitted_with_no_upper_bound(
     )
 
     assert result.is_valid
+
+
+def test_basis_none_with_zero_escalation_is_valid() -> None:
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [lease(escalation_basis=EscalationBasis.NONE, escalation_pct=0.0)],
+    )
+
+    assert result.is_valid
+
+
+@pytest.mark.parametrize("escalation", [0.03, -0.02, 1.0])
+def test_basis_none_with_a_non_zero_escalation_is_an_error(escalation: float) -> None:
+    """"No escalation basis" and "a 3% escalation" are contradictory
+    instructions. Ignoring the percentage would silently pick one reading;
+    Anchor makes the analyst state which they meant."""
+
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [lease(escalation_basis=EscalationBasis.NONE, escalation_pct=escalation)],
+    )
+
+    assert codes(result) == [
+        LeaseIssueCode.ESCALATION_BASIS_REQUIRES_ZERO_ESCALATION
+    ]
+    assert result.issues[0].path == "leases[0].escalation_pct"
+    assert result.issues[0].severity is LeaseIssueSeverity.ERROR
+
+
+def test_lease_anniversary_with_zero_escalation_stays_valid() -> None:
+    """Unambiguous: a flat lease whose basis is stated anyway. Only the
+    NONE-plus-non-zero pairing is contradictory."""
+
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [
+            lease(
+                escalation_basis=EscalationBasis.LEASE_ANNIVERSARY,
+                escalation_pct=0.0,
+            )
+        ],
+    )
+
+    assert result.is_valid
+
+
+def test_lease_anniversary_with_a_valid_escalation_is_accepted() -> None:
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [
+            lease(
+                escalation_basis=EscalationBasis.LEASE_ANNIVERSARY,
+                escalation_pct=0.03,
+            )
+        ],
+    )
+
+    assert result.is_valid
+
+
+def test_an_out_of_domain_escalation_reports_the_domain_error_not_the_coherence_one() -> None:
+    """One field, one primary complaint: a value below -1 is malformed before
+    it is incoherent."""
+
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite()],
+        [lease(escalation_basis=EscalationBasis.NONE, escalation_pct=-2.0)],
+    )
+
+    assert codes(result) == [LeaseIssueCode.ESCALATION_OUT_OF_DOMAIN]
 
 
 @pytest.mark.parametrize(
@@ -635,7 +785,7 @@ def test_two_leases_sharing_a_single_month_in_one_suite_overlap() -> None:
 
 def test_leases_in_different_suites_may_overlap_freely() -> None:
     result = validate_lease_level_inputs(
-        property_inputs(property_area_sf=10_000.0),
+        property_inputs(rentable_area_sf=10_000.0),
         [
             suite(suite_id="S1", suite_area_sf=6_000.0),
             suite(suite_id="S2", suite_area_sf=4_000.0),
@@ -681,7 +831,7 @@ def test_a_suite_with_no_lease_is_valid() -> None:
     is represented. No synthetic vacant-lease row, no vacancy percentage."""
 
     result = validate_lease_level_inputs(
-        property_inputs(property_area_sf=10_000.0),
+        property_inputs(rentable_area_sf=10_000.0),
         [
             suite(suite_id="S1", suite_area_sf=7_000.0),
             suite(suite_id="S2", suite_area_sf=3_000.0),
@@ -705,10 +855,10 @@ def test_a_property_with_no_leases_at_all_is_valid() -> None:
 
 def _many_issue_input() -> tuple[LeaseLevelPropertyInputs, list[Suite], list[Lease]]:
     return (
-        property_inputs(analysis_start_date=date(2026, 1, 15), property_area_sf=1_000.0),
+        property_inputs(analysis_start_date=date(2026, 1, 15), rentable_area_sf=1_000.0),
         [
             suite(suite_id="S1", suite_area_sf=600.0),
-            suite(suite_id="S1", suite_area_sf=600.0),
+            suite(suite_id="S1", suite_area_sf=400.0),
             suite(suite_id="", suite_area_sf=-5.0),
         ],
         [

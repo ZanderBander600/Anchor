@@ -35,7 +35,6 @@ from .contracts import (
     EscalationBasis,
     Lease,
     LeaseLevelPropertyInputs,
-    LeaseOrigin,
     LeaseType,
     Suite,
 )
@@ -54,7 +53,6 @@ __all__ = [
     "EscalationBasis",
     "Lease",
     "LeaseLevelPropertyInputs",
-    "LeaseOrigin",
     "LeaseType",
     "Suite",
     # validation
