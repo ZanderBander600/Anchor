@@ -198,24 +198,22 @@ export function BreakEvenPanel({
             </button>
           </div>
 
+          {/* Sprint C acceptance pass: the return-hurdle and DSCR cards share
+           * ONE grid so they flow as balanced columns in a single row at wide
+           * desktop, instead of two grids that always broke to separate rows
+           * and left half a row empty. Purely presentational -- the same
+           * cards, in the same order, from the same configs, each already
+           * self-labelling which hurdle it solves for in its own subtitle. */}
           <div className="break-even-grid">
-            {RETURN_HURDLE_CARD_CONFIGS.filter((config) => config.key in analysis).map((config) => (
-              <BreakEvenCard
-                key={config.key}
-                title={config.title}
-                result={(analysis as unknown as Record<string, BreakEvenResult>)[config.key]}
-              />
-            ))}
-          </div>
-
-          <div className="break-even-grid">
-            {DSCR_CARD_CONFIGS.filter((config) => config.key in analysis).map((config) => (
-              <BreakEvenCard
-                key={config.key}
-                title={config.title}
-                result={(analysis as unknown as Record<string, BreakEvenResult>)[config.key]}
-              />
-            ))}
+            {[...RETURN_HURDLE_CARD_CONFIGS, ...DSCR_CARD_CONFIGS]
+              .filter((config) => config.key in analysis)
+              .map((config) => (
+                <BreakEvenCard
+                  key={config.key}
+                  title={config.title}
+                  result={(analysis as unknown as Record<string, BreakEvenResult>)[config.key]}
+                />
+              ))}
           </div>
         </>
       )}

@@ -9,6 +9,9 @@ export interface WorkspacePanelProps {
   title: string;
   /** One supporting line describing what the workspace owns. */
   subtitle: string;
+  /** Extra class for the panel root. Used by Underwrite to opt into the
+   * fill-available-height treatment its Results tables need. */
+  className?: string;
   children: ReactNode;
 }
 
@@ -25,14 +28,21 @@ export interface WorkspacePanelProps {
  * mid-review would silently discard an in-progress review. Hidden panels
  * occupy no layout, so this costs nothing in scroll length.
  */
-export function WorkspacePanel({ id, active, title, subtitle, children }: WorkspacePanelProps) {
+export function WorkspacePanel({
+  id,
+  active,
+  title,
+  subtitle,
+  className,
+  children,
+}: WorkspacePanelProps) {
   return (
     <section
       id={workspacePanelId(id)}
       role="tabpanel"
       aria-labelledby={workspaceTabId(id)}
       hidden={id !== active}
-      className="workspace-panel"
+      className={className ? `workspace-panel ${className}` : 'workspace-panel'}
     >
       <div className="workspace-panel-head">
         <h2 className="workspace-title">{title}</h2>

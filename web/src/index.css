@@ -3110,3 +3110,93 @@ body {
 .metric-card-value {
   font-size: 25px;
 }
+
+/* =========================================================================
+   Sprint C acceptance pass -- contained Results scrolling.
+
+   Human review found that Underwrite > Results scrolled the whole workspace
+   canvas to reach the lower rows of a financial table, which conflicts with
+   the sprint's own principle. The fix is a height chain, not a magic number:
+   the Underwrite panel claims the workspace's available height, every
+   intermediate box passes it down with `min-height: 0`, and the innermost
+   Results view is the only element that scrolls.
+
+   The deal header, workspace nav, strategy strip, Underwrite tabs, Results
+   sub-nav and the Live Case rail all sit OUTSIDE that scroller, so they stay
+   stationary while a schedule scrolls.
+
+   Desktop only. Below 1024px the Live Case rail moves above the editor and
+   the remaining height is too small to contain a schedule usefully, so the
+   workspace scrolls normally there.
+   ========================================================================= */
+
+@media (min-width: 1024px) {
+  .workspace-panel-fill {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .workspace-panel-fill .workspace-body {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .workspace-panel-fill .underwrite {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .workspace-panel-fill .underwrite-body {
+    flex: 1;
+    min-height: 0;
+    /* The editor column stretches to the available height so its Results
+       view can contain its own overflow; the rail keeps its natural height. */
+    align-items: stretch;
+  }
+
+  .workspace-panel-fill .live-case {
+    align-self: start;
+  }
+
+  .workspace-panel-fill .underwrite-editor {
+    min-height: 0;
+  }
+
+  /* The active tab panel is the flex child that receives the leftover
+     height; the inactive ones are `hidden` and take part in nothing. */
+  .workspace-panel-fill .underwrite-editor > [role='tabpanel']:not([hidden]) {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .workspace-panel-fill .underwrite-results-shell {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* The one scrolling surface. Padding keeps a card's shadow and focus ring
+     from being clipped against the scroll edge. */
+  .workspace-panel-fill .underwrite-results:not([hidden]) {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: var(--sp-1);
+    margin-right: calc(-1 * var(--sp-1));
+    scrollbar-width: thin;
+  }
+
+  /* Result cards keep their natural height inside that scroller. Without
+     this they are flex items that shrink to fit, which silently clipped the
+     lower rows of the operating statement instead of scrolling to them. */
+  .workspace-panel-fill .underwrite-results > * {
+    flex-shrink: 0;
+  }
+
+  /* An assumption tab is never taller than the space it has, so it keeps
+     its natural top-aligned layout rather than stretching its cards. */
+  .workspace-panel-fill .underwrite-tab-panel:not([hidden]) {
+    justify-content: flex-start;
+  }
+}

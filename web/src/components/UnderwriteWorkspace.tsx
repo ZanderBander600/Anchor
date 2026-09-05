@@ -113,6 +113,7 @@ export function UnderwriteWorkspace({
                   role="tabpanel"
                   aria-labelledby={tabId('section', tab.id)}
                   hidden={!isActive}
+                  className="underwrite-tab-panel"
                 >
                   {results === null ? (
                     <div className="empty-state">

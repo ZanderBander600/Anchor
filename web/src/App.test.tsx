@@ -29,7 +29,7 @@ import {
   uploadExcel,
   uploadOm,
 } from './api';
-import { formatCurrency, formatPercent } from './format';
+import { formatCurrency, formatMultiple, formatPercent } from './format';
 import {
   BLANK_DETAILED_FORM_VALUES,
   BLANK_FORM_VALUES,
@@ -7912,5 +7912,189 @@ describe('Sprint C Gate C5 -- polish and accessibility', () => {
       expect(control.tagName).toBe('BUTTON');
       expect((control.textContent ?? '') + (control.getAttribute('aria-label') ?? '')).not.toBe('');
     }
+  });
+});
+
+// ===========================================================================
+// Sprint C acceptance pass -- contained Results scrolling and the merged
+// break-even grid.
+//
+// The scrolling fix itself is layout (CSS height chain), which jsdom does not
+// compute. What is asserted here is everything the fix must NOT break: every
+// Results surface still reachable, all four rendering their full content, the
+// Live Case rail still present and outside the scrolling region, analysis and
+// AI state preserved across Results navigation, no request triggered by it,
+// and identical financial values.
+// ===========================================================================
+
+describe('Sprint C acceptance -- Results workspace', () => {
+  it('1-4. every Results subview is reachable and renders its full content', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await openUnderwriteTab(user, 'Results');
+
+    const nav = within(document.querySelector('[aria-label="Results views"]') as HTMLElement);
+
+    await user.click(nav.getByRole('tab', { name: 'Summary' }));
+    expect(resultsPanelFor('summary').querySelector('.results-panel')).toBeTruthy();
+    expect(within(resultsPanelFor('summary')).getByText('Key Returns')).toBeTruthy();
+
+    await user.click(nav.getByRole('tab', { name: 'Cash Flow' }));
+    expect(within(resultsPanelFor('cash-flow')).getByText('Year-by-Year Analysis')).toBeTruthy();
+
+    await user.click(nav.getByRole('tab', { name: 'Owner Returns' }));
+    expect(
+      within(resultsPanelFor('owner-returns')).getByText('Owner Return Schedule'),
+    ).toBeTruthy();
+
+    await user.click(nav.getByRole('tab', { name: 'Operating Statement' }));
+    const opstmt = resultsPanelFor('operating-statement');
+    expect(opstmt.contains(operatingStatement())).toBe(true);
+    // The whole statement renders -- the scrolling fix must never clip rows.
+    for (const line of [
+      'Effective Gross Income',
+      'Total Operating Expenses',
+      'Net Operating Income',
+      'Levered Cash Flow',
+    ]) {
+      expect(within(opstmt).getByText(line)).toBeTruthy();
+    }
+  });
+
+  it('5, 8. switching Results tabs preserves analysis state and issues no request', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await openUnderwriteTab(user, 'Results');
+
+    const before = {
+      analyze: mockAnalyzeDetailed.mock.calls.length,
+      sensitivity: mockFetchDetailedSensitivityPresets.mock.calls.length,
+      breakEven: mockFetchDetailedBreakEvenAnalysis.mock.calls.length,
+      ai: mockFetchDetailedAIAnalysis.mock.calls.length,
+    };
+
+    const nav = within(document.querySelector('[aria-label="Results views"]') as HTMLElement);
+    for (const label of ['Cash Flow', 'Owner Returns', 'Operating Statement', 'Summary']) {
+      await user.click(nav.getByRole('tab', { name: label }));
+    }
+
+    expect(mockAnalyzeDetailed.mock.calls.length).toBe(before.analyze);
+    expect(mockFetchDetailedSensitivityPresets.mock.calls.length).toBe(before.sensitivity);
+    expect(mockFetchDetailedBreakEvenAnalysis.mock.calls.length).toBe(before.breakEven);
+    expect(mockFetchDetailedAIAnalysis.mock.calls.length).toBe(before.ai);
+    // The analysis itself is still rendered after the round trip.
+    expect(resultsPanelFor('summary').querySelector('.results-panel')).toBeTruthy();
+    expect(panel('overview').querySelector('.owner-summary-panel')).toBeTruthy();
+  });
+
+  it('6. the Live Case rail stays present in Results, outside the scrolling region', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await openUnderwriteTab(user, 'Results');
+
+    // Present, and showing authoritative metrics rather than an empty state.
+    expect(within(liveCase()).getByText('Levered IRR')).toBeTruthy();
+    expect(within(liveCase()).getByText('7.91%')).toBeTruthy();
+
+    // Structurally outside the Results scroller, so table scrolling can never
+    // move it.
+    const scroller = resultsPanelFor('summary');
+    expect(scroller.contains(liveCase())).toBe(false);
+  });
+
+  it('7. Results values are the engine output verbatim, unchanged by the fix', async () => {
+    const user = userEvent.setup();
+    const results = makeResults();
+    mockAnalyze.mockResolvedValue(results);
+    render(<App />);
+    fillGoldenDeal();
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalled());
+    await openUnderwriteTab(user, 'Results');
+
+    const summary = within(resultsPanelFor('summary'));
+    expect(summary.getAllByText(formatPercent(results.levered_irr)).length).toBeGreaterThan(0);
+    expect(summary.getAllByText(formatMultiple(results.equity_multiple)).length).toBeGreaterThan(0);
+    expect(summary.getAllByText(formatCurrency(results.loan_amount)).length).toBeGreaterThan(0);
+    expect(
+      summary.getAllByText(formatCurrency(results.net_sale_proceeds)).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('the Results scroller is the innermost region, with the nav outside it', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeDetailedGoldenDeal(user);
+    await openUnderwriteTab(user, 'Results');
+
+    // The Results sub-nav and the Underwrite tabs both sit outside the view
+    // that scrolls, so they stay put while a schedule scrolls.
+    const scroller = resultsPanelFor('summary');
+    const resultsNav = document.querySelector('[aria-label="Results views"]') as HTMLElement;
+    const sectionNav = document.querySelector('[aria-label="Underwrite sections"]') as HTMLElement;
+    expect(scroller.contains(resultsNav)).toBe(false);
+    expect(scroller.contains(sectionNav)).toBe(false);
+    expect(resultsNav.parentElement?.contains(scroller)).toBe(true);
+  });
+});
+
+describe('Sprint C acceptance -- break-even card layout', () => {
+  it('10. renders all break-even results in one grid, in their existing order', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await openRiskView(user, 'Break-Even');
+
+    const grids = riskViewPanel('break-even').querySelectorAll('.break-even-grid');
+    expect(grids.length).toBe(1);
+
+    const titles = Array.from(grids[0].querySelectorAll('.break-even-title')).map(
+      (node) => node.textContent,
+    );
+    // Every return-hurdle card first, then every DSCR card -- exactly the
+    // order the two former grids produced, preserved.
+    expect(titles).toEqual([
+      'Maximum Purchase Price',
+      'Maximum Exit Cap',
+      'Minimum NOI Growth',
+      'Maximum Interest Rate',
+      'Minimum Current NOI',
+    ]);
+  });
+
+  it('keeps every break-even value, subtitle and control unchanged', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await openRiskView(user, 'Break-Even');
+
+    const breakEven = within(riskViewPanel('break-even'));
+    expect(breakEven.getAllByText('for 10.00% Levered IRR').length).toBe(3);
+    expect(breakEven.getAllByText('for 1.20x Year 1 DSCR').length).toBe(2);
+    expect(breakEven.getByLabelText(/Target Levered IRR/)).toBeTruthy();
+    expect(breakEven.getByLabelText(/Target Equity Multiple/)).toBeTruthy();
+    expect(breakEven.getByLabelText(/Target Year 1 DSCR/)).toBeTruthy();
+    expect(breakEven.getByRole('button', { name: 'Levered IRR' })).toBeTruthy();
+    expect(breakEven.getByRole('button', { name: 'Equity Multiple' })).toBeTruthy();
+  });
+
+  it('still re-runs break-even, and only break-even, when a hurdle changes', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await analyzeQuickGoldenDeal(user);
+    await openRiskView(user, 'Break-Even');
+    const sensitivityCalls = mockFetchSensitivityPresets.mock.calls.length;
+    const breakEvenCalls = mockFetchBreakEvenAnalysis.mock.calls.length;
+
+    await user.click(screen.getByRole('button', { name: 'Equity Multiple' }));
+
+    await waitFor(() =>
+      expect(mockFetchBreakEvenAnalysis.mock.calls.length).toBeGreaterThan(breakEvenCalls),
+    );
+    expect(mockFetchSensitivityPresets.mock.calls.length).toBe(sensitivityCalls);
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
   });
 });

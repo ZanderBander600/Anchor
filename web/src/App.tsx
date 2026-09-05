@@ -1948,6 +1948,7 @@ export default function App() {
         active={workspace}
         title="Underwrite"
         subtitle="The assumptions the deterministic engine runs on."
+        className="workspace-panel-fill"
       >
         <UnderwriteWorkspace
           operatingMode="detailed"
@@ -2191,6 +2192,7 @@ export default function App() {
         active={workspace}
         title="Underwrite"
         subtitle="The assumptions the deterministic engine runs on."
+        className="workspace-panel-fill"
       >
         <UnderwriteWorkspace
           operatingMode="quick"
