@@ -341,13 +341,14 @@ def test_the_rent_module_is_the_only_one_that_touches_rent_fields() -> None:
     ), f"{rent_module} must contain the compound-escalation term"
 
 
-def test_leasing_package_contains_only_the_gate_d2_1_modules() -> None:
+def test_leasing_package_contains_only_the_gate_d2_2_modules() -> None:
     """D0 Gate D1.0 files, plus D1.1's ``calendar.py``, D1.2's ``rent.py``,
-    D1.3's ``aggregation.py`` and D2.1's ``market.py``.
+    D1.3's ``aggregation.py``, D2.1's ``market.py`` and D2.2's
+    ``rollover.py``.
 
-    In particular ``rollover.py`` must **not** exist yet: D2 Section 14 gates
-    it at D2.2, and an empty placeholder module would be rollover vocabulary
-    in a gate whose scope excludes it."""
+    In particular ``leasing_costs.py`` must **not** exist yet: D2 Section 14
+    gates it at D2.4, and an empty placeholder module would be TI/LC
+    vocabulary in a gate whose scope excludes it."""
 
     assert {path.name for path in _leasing_source_files()} == {
         "__init__.py",
@@ -356,6 +357,7 @@ def test_leasing_package_contains_only_the_gate_d2_1_modules() -> None:
         "contracts.py",
         "market.py",
         "rent.py",
+        "rollover.py",
         "validation.py",
     }
 
@@ -507,37 +509,49 @@ def test_the_d1_modules_never_reference_a_market_assumption(module_name: str) ->
     )
 
 
-def test_no_rollover_module_exists_at_d2_1() -> None:
-    """D2 Section 14 gates ``rollover.py`` at D2.2 and ``leasing_costs.py`` at
-    D2.4. Neither may exist yet, even empty."""
+def test_no_later_gate_module_exists_at_d2_2() -> None:
+    """D2 Section 14 gates ``leasing_costs.py`` at D2.4. It may not exist yet,
+    even empty.
 
-    for forbidden in ("rollover.py", "leasing_costs.py", "renewal.py", "downtime.py"):
+    ``renewal.py`` and ``downtime.py`` are also barred, for a different reason:
+    D2 Section 14 assigns the whole rollover engine to one module, and a
+    second, overlapping home for branch logic is how two rollover
+    implementations start."""
+
+    for forbidden in ("leasing_costs.py", "renewal.py", "downtime.py", "successor.py"):
         assert not (_LEASING_DIR / forbidden).exists(), (
-            f"{forbidden} belongs to a later D2 gate and must not exist at D2.1"
+            f"{forbidden} belongs to a later D2 gate, or duplicates "
+            "rollover.py, and must not exist at D2.2"
         )
 
 
 #: Vocabulary each later D2 gate owns (D2 Section 12's assumption inventory).
-#: None of it may appear anywhere in D2.1 production code -- not as a field,
-#: not as a parameter, not as a function name.
+#: None of it may appear anywhere in production code -- not as a field, not as
+#: a parameter, not as a function name.
+#:
+#: **Narrowed at D2.2**, and only by the four fields that gate delivers:
+#: ``renewal_rent_psf``, ``renewal_rent_spread``, ``renewal_term_months`` and
+#: ``successor_escalation_pct``. Everything D2.3 and later owns stays, so the
+#: guardrail keeps its full force against the new-tenant branch, downtime,
+#: free rent, TI, LC and probability weighting.
 _LATER_D2_GATE_NAMES = frozenset(
     {
         # D2.5 -- probability composition
         "renewal_probability",
         "expected_occupancy",
         "expected_occupied_area_sf",
-        # D2.2 -- the renewal branch
-        "renewal_rent_psf",
-        "renewal_rent_spread",
-        "renewal_term_months",
+        "expected_rent_psf",
+        "expected_term_months",
+        # D2.3 -- the new-tenant branch
         "new_term_months",
-        "successor_escalation_pct",
-        # D2.2 / D2.3 -- downtime and free rent
+        "new_rent_psf",
+        # D2.3 -- downtime and free rent
         "renewal_downtime_months",
         "new_downtime_months",
         "downtime_months",
         "renewal_free_rent_months",
         "new_free_rent_months",
+        "free_rent_months",
         "occupancy_factor",
         # D2.4 -- TI and LC
         "renewal_ti_psf",
@@ -552,10 +566,10 @@ _LATER_D2_GATE_NAMES = frozenset(
 
 
 def test_no_later_d2_gate_vocabulary_appears_in_production_code() -> None:
-    """D2.1 builds a market-rent rate schedule and stops.
+    """D2.2 builds the pure renewal branch and stops.
 
-    Renewal, new tenants, downtime, free rent, TI, LC and probability
-    weighting are D2.2-D2.5. Declaring any of their names now would put
+    The new-tenant branch, downtime, free rent, TI, LC and probability
+    weighting are D2.3-D2.5. Declaring any of their names now would put
     vocabulary into the package with no mechanism behind it -- the same rule
     D1 applied to ``Lease.origin`` and ``Suite.market_rent_psf``, which each
     waited for the gate that could actually produce them.
@@ -655,3 +669,314 @@ def test_market_precedence_is_implemented_exactly_once() -> None:
             f"{source_file} reads market_leasing_override; market-rent "
             f"precedence belongs to {_MARKET_CALCULATION_MODULE}"
         )
+
+
+# =============================================================================
+# D2.2 -- the renewal branch owns no rent formula, and no later gate leaked in
+# =============================================================================
+
+
+_ROLLOVER_MODULE = "rollover.py"
+
+
+def _rollover_tree() -> ast.AST:
+    module = _LEASING_DIR / _ROLLOVER_MODULE
+    return ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+
+
+def test_the_rollover_module_consumes_the_authoritative_market_schedule() -> None:
+    """The renewal successor must price from D2.1's canonical schedule, not
+    from a market rent it derived itself."""
+
+    referenced = _referenced_names(_rollover_tree())
+
+    assert "market_rent_psf_at_period" in referenced, (
+        "rollover.py must read the market rate from the canonical schedule"
+    )
+    assert "MarketRentSchedule" in referenced
+
+
+def test_the_rollover_module_implements_no_market_growth_formula() -> None:
+    """There must never be one market-rent formula for schedules and another
+    for rollover (failure mode FM-D2-12/13).
+
+    ``rollover.py`` may *name* ``market_rent_growth`` -- it passes the rate to
+    ``market.market_rent_psf_for_period`` for D0 Section 24.3's explicit
+    renewal level -- but it may never perform arithmetic on it, and it may not
+    exponentiate at all. Compound growth has exactly two homes: contractual
+    escalation in ``rent.py`` and market step growth in ``market.py``.
+    """
+
+    module = _LEASING_DIR / _ROLLOVER_MODULE
+    tree = _rollover_tree()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            pytest.fail(
+                f"{module} contains exponentiation; compound growth belongs to "
+                f"{sorted(_EXPONENTIATION_PERMITTED_MODULES)}"
+            )
+
+    assert _ROLLOVER_MODULE not in _EXPONENTIATION_PERMITTED_MODULES
+
+
+def test_the_rollover_module_implements_no_contractual_rent_formula() -> None:
+    """A successor is an ordinary contractual lease from its commencement, so
+    its monthly rent comes from ``rent.build_lease_monthly_schedule`` -- the
+    one D1 formula. ``rollover.py`` constructs a ``Lease`` and hands it over.
+
+    It therefore may never perform arithmetic on a rent-bearing field, and may
+    never multiply a rent by an area or divide one by 12: that would be a
+    second contractual-rent engine, free to drift from the first.
+    """
+
+    module = _LEASING_DIR / _ROLLOVER_MODULE
+    tree = _rollover_tree()
+    referenced = _referenced_names(tree)
+
+    assert "build_lease_monthly_schedule" in referenced, (
+        "rollover.py must build successor rent through the D1 rent engine"
+    )
+
+    area_names = {"suite_area_sf", "leased_area_sf", "rentable_area_sf"}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp):
+            continue
+
+        leaked = _referenced_names(node) & _RENT_BEARING_FIELDS
+        assert not leaked, (
+            f"{module} performs arithmetic on {sorted(leaked)}; contractual "
+            f"rent calculation belongs to {_RENT_CALCULATION_MODULE}"
+        )
+
+        if not isinstance(node.op, (ast.Mult, ast.Div)):
+            continue
+        operands = _referenced_names(node)
+        if not operands & area_names:
+            continue
+        literals = {
+            child.value
+            for child in ast.walk(node)
+            if isinstance(child, ast.Constant) and isinstance(child.value, (int, float))
+        }
+        assert 12 not in literals and 12.0 not in literals, (
+            f"{module} converts a rate to a monthly dollar amount; that is "
+            f"{_RENT_CALCULATION_MODULE}'s single formula"
+        )
+
+
+def test_the_rollover_module_never_recomputes_the_expiring_lease() -> None:
+    """D0 Section 24.4: contractual terms always win, and D2.2 reuses the
+    in-place lease's D1 schedule unchanged. ``rollover.py`` may not read a
+    rent assumption off the expiring lease at all (failure mode FM-D2-20)."""
+
+    module = _LEASING_DIR / _ROLLOVER_MODULE
+    leaked = _referenced_names(_rollover_tree()) & _RENT_BEARING_FIELDS
+
+    assert not leaked, (
+        f"{module} references {sorted(leaked)}; the expiring lease's rent is "
+        "reused, never recomputed"
+    )
+
+
+def test_the_rent_and_market_modules_are_unchanged_by_the_renewal_gate() -> None:
+    """The dependency runs rollover -> {market, rent}, never the reverse.
+    Neither authority may learn about rollover, which is what keeps D1 and
+    D2.1 economics provably untouched."""
+
+    for module_name in ("rent.py", "market.py", "aggregation.py", "calendar.py"):
+        module = _LEASING_DIR / module_name
+        names = _imported_module_names(module)
+        assert "anchor.leasing.rollover" not in names, (
+            f"{module} imports rollover; the rollover engine is a consumer of "
+            "these modules, never a dependency of them"
+        )
+
+        referenced = _referenced_names(
+            ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+        )
+        for forbidden in ("RenewalBranch", "build_renewal_branch", "LeaseOrigin"):
+            assert forbidden not in referenced, (
+                f"{module} references {forbidden!r}; rollover vocabulary must "
+                "not leak into the D1/D2.1 authorities"
+            )
+
+
+def test_no_downtime_or_free_rent_concept_exists_in_the_renewal_branch() -> None:
+    """A pure renewal has no vacancy by construction: the successor commences
+    the month after expiry. D2.3 owns downtime, the fractional-commencement
+    boundary factor and free rent."""
+
+    referenced = _referenced_names(_rollover_tree())
+
+    for absent in (
+        "downtime_months",
+        "renewal_downtime_months",
+        "new_downtime_months",
+        "free_rent_months",
+        "renewal_free_rent_months",
+        "occupancy_factor",
+        "boundary_factor",
+        "floor",
+    ):
+        assert absent not in referenced, (
+            f"rollover.py references {absent!r}, which belongs to D2.3"
+        )
+
+
+def test_no_probability_or_composition_exists_in_the_renewal_branch() -> None:
+    """D2.5 owns ``renewal_probability`` and the expected-value composition.
+    D2.2 is one deterministic branch; it weights, averages and blends
+    nothing."""
+
+    referenced = _referenced_names(_rollover_tree())
+
+    for absent in (
+        "renewal_probability",
+        "expected_occupancy",
+        "expected_occupied_area_sf",
+        "expected_rent_psf",
+        "weight",
+        "compose",
+    ):
+        assert absent not in referenced, (
+            f"rollover.py references {absent!r}, which belongs to D2.5"
+        )
+
+
+def test_no_ti_or_lc_concept_exists_in_the_renewal_branch() -> None:
+    """D2.4 owns TI and LC, both below NOI."""
+
+    referenced = _referenced_names(_rollover_tree())
+
+    for absent in (
+        "renewal_ti_psf",
+        "new_ti_psf",
+        "tenant_improvements",
+        "renewal_lc_pct",
+        "new_lc_pct",
+        "leasing_commissions",
+        "leasing_commission_method",
+    ):
+        assert absent not in referenced, (
+            f"rollover.py references {absent!r}, which belongs to D2.4"
+        )
+
+
+def test_no_new_tenant_concept_exists_in_the_renewal_branch() -> None:
+    """D2.3 owns the new-tenant branch. D2.2 models renewal only."""
+
+    referenced = _referenced_names(_rollover_tree())
+
+    for absent in ("new_term_months", "new_rent_psf", "NewTenantBranch"):
+        assert absent not in referenced, (
+            f"rollover.py references {absent!r}, which belongs to D2.3"
+        )
+
+
+def test_the_renewal_branch_does_not_recurse() -> None:
+    """D2.6 owns recursion to the canonical projection end (D2 HD-D2-3).
+
+    D2.2 produces exactly one successor: no function in ``rollover.py`` calls
+    itself, and none reaches for a chain, a depth or a node cap.
+    """
+
+    tree = _rollover_tree()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        called = {
+            child.func.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+        }
+        assert node.name not in called, (
+            f"rollover.py's {node.name} calls itself; recursion belongs to D2.6"
+        )
+
+    referenced = _referenced_names(tree)
+    for absent in ("max_depth", "depth", "chain", "node_limit", "recurse"):
+        assert absent not in referenced, (
+            f"rollover.py references {absent!r}, which belongs to D2.6"
+        )
+
+
+def test_the_composed_fractional_naming_restriction_is_respected() -> None:
+    """D2 HD-D2-2's binding restriction, from the other direction: the branch's
+    own occupancy is genuine and integral, so it correctly *keeps* the name
+    ``physical_occupancy``. The fractional composed series does not exist yet
+    and must not be named here under any spelling."""
+
+    referenced = _referenced_names(_rollover_tree())
+
+    assert "physical_occupancy" in referenced, (
+        "the renewal branch's occupancy is a genuine integral scenario state "
+        "and keeps that name"
+    )
+    for absent in ("expected_occupancy", "expected_occupied_area_sf"):
+        assert absent not in referenced
+
+
+def test_the_rollover_module_performs_no_io() -> None:
+    """A pure calculator: no file, network, database or clock access."""
+
+    referenced = _referenced_names(_rollover_tree())
+
+    for forbidden in (
+        "open",
+        "read_text",
+        "write_text",
+        "connect",
+        "now",
+        "today",
+        "urlopen",
+    ):
+        assert forbidden not in referenced, (
+            f"rollover.py references {forbidden!r}; the branch builder must be pure"
+        )
+
+
+def test_successor_provenance_is_set_by_the_engine_not_the_caller() -> None:
+    """D0 Section 8.4: a successor's ``tenant_name`` is ``None`` and its
+    ``origin`` is ``SUCCESSOR``. Both are set inside the builder, so a caller
+    cannot produce a successor that presents as a known tenant
+    (failure mode FM-D2-18)."""
+
+    tree = _rollover_tree()
+
+    builder = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_renewal_successor_lease"
+    )
+    parameters = {argument.arg for argument in builder.args.args} | {
+        argument.arg for argument in builder.args.kwonlyargs
+    }
+
+    assert "tenant_name" not in parameters, (
+        "a caller must not be able to name a tenant on a successor"
+    )
+    assert "origin" not in parameters, (
+        "a caller must not be able to declare a successor's origin"
+    )
+
+    # ... and the builder sets both itself, on the Lease it constructs.
+    lease_call = next(
+        node
+        for node in ast.walk(builder)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Lease"
+    )
+    keywords = {keyword.arg: keyword.value for keyword in lease_call.keywords}
+
+    assert isinstance(keywords["tenant_name"], ast.Constant)
+    assert keywords["tenant_name"].value is None, (
+        "a successor's tenant_name must be literally None (D0 Section 8.4)"
+    )
+    origin = keywords["origin"]
+    assert isinstance(origin, ast.Attribute) and origin.attr == "SUCCESSOR", (
+        "a successor's origin must be literally LeaseOrigin.SUCCESSOR"
+    )

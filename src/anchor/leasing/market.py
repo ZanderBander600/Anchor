@@ -50,6 +50,7 @@ rate series and stops.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Iterable
 
 from ..engine.contracts import ensure_finite
@@ -121,13 +122,13 @@ def resolve_market_leasing(
     suite_level_rent = suite.market_rent_psf
     from_suite = suite_level_rent is not None
 
+    # D0 Section 24.1 overrides the rent **level alone**: every other field is
+    # kept from whichever record won above. `replace` states exactly that, and
+    # -- unlike rebuilding the record field by field -- it stays correct as
+    # later gates add fields to `MarketLeasingAssumptions`. Reconstructing it
+    # explicitly would silently drop each newly added assumption.
     assumptions = (
-        base
-        if not from_suite
-        else MarketLeasingAssumptions(
-            market_rent_psf=suite_level_rent,
-            market_rent_growth=base.market_rent_growth,
-        )
+        replace(base, market_rent_psf=suite_level_rent) if from_suite else base
     )
 
     return ResolvedMarketLeasing(

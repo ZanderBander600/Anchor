@@ -1039,12 +1039,12 @@ def test_d1_exposes_no_downstream_financial_concept() -> None:
         ), f"{absent} must not exist in D1"
 
 
-def test_no_contract_declares_a_d2_2_or_downstream_field() -> None:
-    """**Narrowed at D2.1**, and only by the two fields that gate delivers.
+def test_no_contract_declares_a_d2_3_or_downstream_field() -> None:
+    """Narrowed only by the fields each gate actually delivers, when it lands.
 
-    ``market_rent_psf`` and ``market_rent_growth`` were removed from the
-    banned set when ``MarketLeasingAssumptions`` landed. Everything D2.2 and
-    later owns -- renewal, successors, downtime, free rent, TI, LC, recovery
+    D2.1 removed ``market_rent_psf`` / ``market_rent_growth``; D2.2 removed
+    ``origin`` and the four renewal-branch fields. Everything D2.3 and later
+    owns -- the new-tenant branch, downtime, free rent, TI, LC, recovery
     structure and every downstream operating concept -- remains banned, so
     this guardrail keeps its full force over the rest of Sprint D.
     """
@@ -1053,9 +1053,9 @@ def test_no_contract_declares_a_d2_2_or_downstream_field() -> None:
 
     banned = {
         "renewal_probability",
-        "successor", "downtime_months", "free_rent_months", "ti_psf",
+        "downtime_months", "free_rent_months", "ti_psf",
         "tenant_improvements", "lc_pct", "leasing_commissions",
-        "recovery_basis", "expense_stop", "base_year", "origin",
+        "recovery_basis", "expense_stop", "base_year",
         "noi", "capex", "other_income", "operating_expenses",
         "vacancy_credit_loss_pct", "occupancy", "credit_loss_pct",
     }
@@ -1069,10 +1069,11 @@ def test_no_contract_declares_a_d2_2_or_downstream_field() -> None:
         assert not leaked, f"{name} declares out-of-scope fields: {sorted(leaked)}"
 
 
-def test_the_d1_rent_formula_is_untouched_by_d2_1() -> None:
+def test_the_d1_rent_formula_is_untouched_by_d2() -> None:
     """Failure mode FM-D2-20 stated as a source-level assertion:
     ``Lease.base_rent_psf``'s meaning and ``rent.py``'s formula must be
-    untouched by D2.
+    untouched by D2 -- re-asserted at D2.2, where a successor could most
+    plausibly have grown its own rent path.
 
     The D1.2 formula ``base_rent_psf * (1 + escalation_pct) ** k * area / 12``
     is asserted verbatim in structure, and the market-rent module is proven
@@ -1084,6 +1085,14 @@ def test_the_d1_rent_formula_is_untouched_by_d2_1() -> None:
 
     assert "annual_rent_psf = base_rent_psf * (1 + escalation_pct) ** escalation_index" in source
     assert "annual_rent_psf * leased_area_sf / 12.0" in source
+    # Import-level and field-level bans only. A raw-text ban on the word
+    # "renewal" would trip on rent.py's own prose ("nothing here ... infers a
+    # renewal"), which is exactly the blunt-substring mistake D1.0 replaced
+    # with semantic checks. The AST guardrails in
+    # tests/test_leasing_architecture.py carry the field-reference proof.
     assert "from .market import" not in source
+    assert "from .rollover import" not in source
     assert "market_rent_psf" not in source
     assert "market_rent_growth" not in source
+    assert "renewal_rent_spread" not in source
+    assert "successor_escalation_pct" not in source

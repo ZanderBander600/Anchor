@@ -51,6 +51,18 @@ the other's fields. Market rent is an assumption **rate** about available
 space -- it is not a successor lease, and nothing at D2.1 converts it into a
 dollar cash flow. Rollover, renewal, downtime, free rent, TI, LC and
 probability composition are D2.2 and later.
+
+D2.2 adds the pure renewal rollover path: an expiring lease produces exactly
+one renewal successor commencing the month after expiry, priced from the
+canonical market-rent schedule at that month by D0 Section 24.3, with its own
+integer term and its own contractual escalation running from its own
+commencement. ``rollover.py`` owns the renewal branch but owns no rent
+formula: market rent comes from ``market.py`` and contractual rent from
+``rent.py``, because a successor is an ordinary contractual lease from the
+moment it commences. This is conceptually the ``p = 1`` endpoint, but no
+probability exists yet -- the new-tenant branch, downtime and free rent are
+D2.3, TI and LC are D2.4, ``renewal_probability`` and expected-value
+composition are D2.5, and recursion is D2.6.
 """
 
 from __future__ import annotations
@@ -76,12 +88,14 @@ from .contracts import (
     Lease,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
+    LeaseOrigin,
     LeaseType,
     MarketAssumptionSource,
     MarketLeasingAssumptions,
     MarketRentSchedule,
     ModelMonth,
     PropertyRentRollSchedule,
+    RenewalBranch,
     ResolvedMarketLeasing,
     Suite,
 )
@@ -94,6 +108,13 @@ from .market import (
     resolve_market_leasing,
 )
 from .rent import build_lease_monthly_schedule
+from .rollover import (
+    build_renewal_branch,
+    build_renewal_successor_lease,
+    renewal_commencement_period,
+    renewal_starting_rent_psf,
+    successor_expiration_period,
+)
 from .validation import (
     LeaseIssueCode,
     LeaseIssueSeverity,
@@ -135,6 +156,14 @@ __all__ = [
     "build_market_rent_schedule",
     "build_property_market_rent_schedules",
     "market_rent_psf_at_period",
+    # renewal rollover (D2.2)
+    "LeaseOrigin",
+    "RenewalBranch",
+    "renewal_commencement_period",
+    "successor_expiration_period",
+    "renewal_starting_rent_psf",
+    "build_renewal_successor_lease",
+    "build_renewal_branch",
     # contracts
     "EscalationBasis",
     "Lease",

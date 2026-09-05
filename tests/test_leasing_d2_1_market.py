@@ -70,9 +70,22 @@ def strict(expected: float) -> object:
 
 
 def assumptions(**overrides: object) -> MarketLeasingAssumptions:
+    """A property-default record.
+
+    The renewal fields below arrived at D2.2 and are required on the record
+    (the all-or-nothing override rule is structural). **D2.1 reads none of
+    them**, so every market-rent expectation in this module is unaffected by
+    their presence -- which the D2.1/D2.2 isolation test at the end asserts
+    directly."""
+
     base: dict[str, object] = {
         "market_rent_psf": 40.0,
         "market_rent_growth": 0.03,
+        # D2.2 renewal fields -- inert for every assertion in this module.
+        "renewal_rent_psf": None,
+        "renewal_rent_spread": 0.0,
+        "renewal_term_months": 60,
+        "successor_escalation_pct": 0.0,
     }
     base.update(overrides)
     return MarketLeasingAssumptions(**base)  # type: ignore[arg-type]
@@ -376,9 +389,7 @@ def test_golden_7_suite_override_precedence_is_exact() -> None:
     exception wins over the override's own rent."""
 
     defaults = assumptions()
-    override = MarketLeasingAssumptions(
-        market_rent_psf=60.0, market_rent_growth=0.05
-    )
+    override = assumptions(market_rent_psf=60.0, market_rent_growth=0.05)
 
     a = resolve_market_leasing(suite("A"), property_defaults=defaults)
     assert a.assumptions == defaults
@@ -415,9 +426,7 @@ def test_golden_7_override_drives_the_whole_monthly_series() -> None:
     from. The override's own growth rate governs its bands."""
 
     defaults = assumptions()
-    override = MarketLeasingAssumptions(
-        market_rent_psf=60.0, market_rent_growth=0.05
-    )
+    override = assumptions(market_rent_psf=60.0, market_rent_growth=0.05)
 
     inherited = schedule_for(the_suite=suite("A"), defaults=defaults)
     rent_only = schedule_for(
@@ -445,9 +454,7 @@ def test_golden_7_an_override_never_mutates_the_property_assumption() -> None:
 
     defaults = assumptions()
     before = dataclasses.replace(defaults)
-    override = MarketLeasingAssumptions(
-        market_rent_psf=60.0, market_rent_growth=0.05
-    )
+    override = assumptions(market_rent_psf=60.0, market_rent_growth=0.05)
     overridden = suite("B", market_leasing_override=override)
 
     resolve_market_leasing(overridden, property_defaults=defaults)
@@ -780,7 +787,7 @@ def test_suite_full_override_is_domain_checked() -> None:
         [
             suite(
                 "S1",
-                market_leasing_override=MarketLeasingAssumptions(
+                market_leasing_override=assumptions(
                     market_rent_psf=50.0, market_rent_growth=-1.0
                 ),
             )
@@ -820,6 +827,11 @@ def test_an_incomplete_override_cannot_be_constructed_at_all() -> None:
         MarketLeasingAssumptions(market_rent_psf=40.0)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         MarketLeasingAssumptions(market_rent_growth=0.03)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        # Still structural as the record grew at D2.2.
+        MarketLeasingAssumptions(  # type: ignore[call-arg]
+            market_rent_psf=40.0, market_rent_growth=0.03
+        )
 
 
 def test_market_validation_is_ordered_property_default_then_suites() -> None:

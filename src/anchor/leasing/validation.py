@@ -57,6 +57,7 @@ from .contracts import (
     EscalationBasis,
     Lease,
     LeaseLevelPropertyInputs,
+    LeaseOrigin,
     MarketLeasingAssumptions,
     Suite,
 )
@@ -122,6 +123,13 @@ class LeaseIssueCode(StrEnum):
     MARKET_RENT_OUT_OF_DOMAIN = "MARKET_RENT_OUT_OF_DOMAIN"
     MARKET_RENT_GROWTH_OUT_OF_DOMAIN = "MARKET_RENT_GROWTH_OUT_OF_DOMAIN"
     MARKET_LEASING_DEFAULT_REQUIRED = "MARKET_LEASING_DEFAULT_REQUIRED"
+
+    # --- renewal rollover (D2.2) ---
+    RENEWAL_RENT_OUT_OF_DOMAIN = "RENEWAL_RENT_OUT_OF_DOMAIN"
+    RENEWAL_RENT_SPREAD_OUT_OF_DOMAIN = "RENEWAL_RENT_SPREAD_OUT_OF_DOMAIN"
+    RENEWAL_TERM_OUT_OF_DOMAIN = "RENEWAL_TERM_OUT_OF_DOMAIN"
+    SUCCESSOR_ESCALATION_OUT_OF_DOMAIN = "SUCCESSOR_ESCALATION_OUT_OF_DOMAIN"
+    SUCCESSOR_LEASE_NAMES_A_TENANT = "SUCCESSOR_LEASE_NAMES_A_TENANT"
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -328,10 +336,24 @@ def _validate_market_leasing_assumptions(
       the first anniversary and stays there, which is a degenerate assumption
       rather than a rate.
 
+    The D2.2 renewal domains, likewise exactly as D0 Section 4.5 states them:
+
+    - ``renewal_rent_psf >= 0``, or ``None``. ``None`` means "no explicit
+      renewal level was supplied" and sends pricing down the spread path
+      (D0 Section 24.3); it is never read as zero.
+    - ``renewal_rent_spread > -1``. ``0.0`` renews at market; negative is a
+      discount and positive a premium. The bound excludes exactly ``-1``,
+      which would price every renewal at zero.
+    - ``renewal_term_months >= 1``, a whole number of months. Booleans are
+      rejected explicitly: ``True`` is an ``int`` in Python and a one-month
+      term arrived at by accident is not a term.
+    - ``successor_escalation_pct > -1``, the same lower bound every other
+      Anchor compounding rate carries.
+
     The record is checked wherever it appears -- as the property default or as
     a suite's full override -- by one function, so the two can never drift
-    apart. There is no "incomplete override" rule to write: both fields are
-    required on the dataclass and neither has a default, so an all-or-nothing
+    apart. There is no "incomplete override" rule to write: every field is
+    required on the dataclass and none has a default, so an all-or-nothing
     override (D0 Section 24.2) is enforced structurally at construction.
     """
 
@@ -370,6 +392,82 @@ def _validate_market_leasing_assumptions(
                 LeaseIssueCode.MARKET_RENT_GROWTH_OUT_OF_DOMAIN,
                 f"{path}.market_rent_growth",
                 f"market_rent_growth {growth!r} must be greater than -1.",
+            )
+        )
+
+    renewal_rent = assumptions.renewal_rent_psf
+    if renewal_rent is not None:
+        if not _is_finite_number(renewal_rent):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.NON_FINITE_VALUE,
+                    f"{path}.renewal_rent_psf",
+                    "renewal_rent_psf must be a finite number or None.",
+                )
+            )
+        elif renewal_rent < 0:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.RENEWAL_RENT_OUT_OF_DOMAIN,
+                    f"{path}.renewal_rent_psf",
+                    f"renewal_rent_psf {renewal_rent!r} must be greater than "
+                    "or equal to 0, or None.",
+                )
+            )
+
+    spread = assumptions.renewal_rent_spread
+    if not _is_finite_number(spread):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                f"{path}.renewal_rent_spread",
+                "renewal_rent_spread must be a finite number.",
+            )
+        )
+    elif spread <= -1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.RENEWAL_RENT_SPREAD_OUT_OF_DOMAIN,
+                f"{path}.renewal_rent_spread",
+                f"renewal_rent_spread {spread!r} must be greater than -1.",
+            )
+        )
+
+    term = assumptions.renewal_term_months
+    if isinstance(term, bool) or not isinstance(term, int):
+        issues.append(
+            _issue(
+                LeaseIssueCode.RENEWAL_TERM_OUT_OF_DOMAIN,
+                f"{path}.renewal_term_months",
+                f"renewal_term_months {term!r} must be a whole number of "
+                "months.",
+            )
+        )
+    elif term < 1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.RENEWAL_TERM_OUT_OF_DOMAIN,
+                f"{path}.renewal_term_months",
+                f"renewal_term_months {term!r} must be at least 1.",
+            )
+        )
+
+    escalation = assumptions.successor_escalation_pct
+    if not _is_finite_number(escalation):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                f"{path}.successor_escalation_pct",
+                "successor_escalation_pct must be a finite number.",
+            )
+        )
+    elif escalation <= -1:
+        issues.append(
+            _issue(
+                LeaseIssueCode.SUCCESSOR_ESCALATION_OUT_OF_DOMAIN,
+                f"{path}.successor_escalation_pct",
+                f"successor_escalation_pct {escalation!r} must be greater "
+                "than -1.",
             )
         )
 
@@ -708,6 +806,22 @@ def _validate_lease(
                 f"escalation_pct {escalation!r} must be 0.0 when "
                 "escalation_basis is NONE; set a basis of LEASE_ANNIVERSARY "
                 "to apply it, or 0.0 to state a flat rent.",
+            )
+        )
+
+    # --- rollover provenance (D2.2) ---
+    if lease.origin is LeaseOrigin.SUCCESSOR and lease.tenant_name is not None:
+        # D0 Section 8.4, made unrepresentable rather than merely discouraged.
+        # A successor is an underwriting assumption about what follows an
+        # expiry; naming a tenant on one gives a modelled outcome documentary
+        # certainty it does not have (failure mode FM-D2-18).
+        issues.append(
+            _issue(
+                LeaseIssueCode.SUCCESSOR_LEASE_NAMES_A_TENANT,
+                f"{path}.tenant_name",
+                f"lease {lease.lease_id!r} has origin SUCCESSOR but names "
+                f"tenant {lease.tenant_name!r}; a rollover successor is an "
+                "underwriting assumption, never a known tenant.",
             )
         )
 

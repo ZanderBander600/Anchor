@@ -176,14 +176,19 @@ def test_two_leases_for_one_tenant_are_two_rows_with_equal_tenant_name() -> None
 # =============================================================================
 
 
-#: Fields no D1 contract may declare. **Narrowed at D2.1**: the three
-#: market-rent fields D2.1 delivers -- ``market_rent_psf`` and
-#: ``market_rent_growth`` on ``MarketLeasingAssumptions``, and
-#: ``market_rent_psf`` / ``market_leasing_override`` as the ``Suite``
-#: overrides D0 Section 4.3 phases to D2 -- were removed from this set when
-#: the gate that produces them landed. Everything D2.2 and later owns stays,
-#: so the guardrail keeps its full force against renewal, downtime, free rent,
-#: TI, LC, probability and every downstream concept.
+#: Fields no D1 contract may declare. The set is narrowed **only** by the
+#: fields each gate actually delivers, when it lands:
+#:
+#: - **D2.1** removed ``market_rent_psf`` / ``market_rent_growth`` and the
+#:   ``Suite`` overrides D0 Section 4.3 phases to D2.
+#: - **D2.2** removed the four renewal-branch fields
+#:   (``renewal_rent_psf``, ``renewal_rent_spread``, ``renewal_term_months``,
+#:   ``successor_escalation_pct``) and ``origin``, which D0 Section 4.4 marks
+#:   derived and phases to D2.
+#:
+#: Everything D2.3 and later owns stays, so the guardrail keeps its full force
+#: against the new-tenant branch, downtime, free rent, TI, LC, probability and
+#: every downstream concept.
 #:
 #: ``Lease`` and ``LeaseLevelPropertyInputs`` are still checked against the
 #: market names below, because D0 assigns the market override to ``Suite``
@@ -191,11 +196,9 @@ def test_two_leases_for_one_tenant_are_two_rows_with_equal_tenant_name() -> None
 #: signed lease (D0 Section 24.4).
 _FORBIDDEN_D1_FIELD_NAMES = frozenset(
     {
-        # D2.2+ rollover
+        # D2.3+ rollover
         "renewal_probability",
-        "renewal_rent_psf",
-        "renewal_rent_spread",
-        "renewal_term_months",
+        "new_rent_psf",
         "new_term_months",
         "renewal_downtime_months",
         "new_downtime_months",
@@ -208,10 +211,6 @@ _FORBIDDEN_D1_FIELD_NAMES = frozenset(
         "renewal_lc_pct",
         "new_lc_pct",
         "leasing_commissions",
-        # D2 rollover provenance -- D0 Section 4.4 marks `origin` derived and
-        # phases it to D2. D1 cannot construct successor economics, so a
-        # SUCCESSOR lease is a financially impossible state at this gate.
-        "origin",
         # D3 recoveries
         "recovery_basis",
         "recoverable_expense_ratio",
@@ -301,20 +300,27 @@ def test_lease_type_declares_exactly_the_three_recovery_structures() -> None:
     }
 
 
-def test_no_lease_origin_concept_exists_at_d1() -> None:
-    """D0 Section 4.4 marks ``origin`` as *derived* and phases it to **D2**.
+def test_lease_origin_arrived_at_d2_2_and_defaults_to_in_place() -> None:
+    """D0 Section 4.4 marks ``origin`` *derived* and phases it to **D2**. D2.2
+    is the gate that can actually construct a successor, so the field and its
+    enum land here rather than earlier.
 
-    D1 has no mechanism for constructing successor economics, so a
-    ``SUCCESSOR`` lease is a financially impossible state here. Declaring the
-    field (or its enum) now would make that impossible state representable
-    purely for future convenience. D2 introduces both alongside the rollover
-    engine that can actually produce one."""
+    It defaults to ``IN_PLACE``, which is what keeps the addition non-breaking:
+    every D1 call site constructs an identical lease and no D1 economics
+    move."""
 
     import anchor.leasing as leasing
 
-    assert not hasattr(leasing, "LeaseOrigin")
-    assert not hasattr(contracts_module, "LeaseOrigin")
-    assert "origin" not in {f.name for f in dataclasses.fields(Lease)}
+    assert hasattr(leasing, "LeaseOrigin")
+    assert {member.value for member in leasing.LeaseOrigin} == {
+        "in_place",
+        "successor",
+    }
+
+    origin_field = next(
+        f for f in dataclasses.fields(Lease) if f.name == "origin"
+    )
+    assert origin_field.default is leasing.LeaseOrigin.IN_PLACE
 
 
 # =============================================================================
