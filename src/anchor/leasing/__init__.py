@@ -119,6 +119,8 @@ from .aggregation import (
     aggregate_flow_to_annual,
     average_state_over_year,
     build_property_rent_roll_schedule,
+    build_property_recovery_schedule,
+    suite_recovery_projection,
     snapshot_state_at_year_end,
 )
 from .calendar import (
@@ -141,6 +143,7 @@ from .contracts import (
     RolloverTransitionAudit,
     SuccessorContribution,
     SuccessorRecoverySchedule,
+    SuiteRecoveryProjection,
     Lease,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
@@ -154,6 +157,7 @@ from .contracts import (
     ModelMonth,
     NewTenantBranch,
     PropertyRentRollSchedule,
+    PropertyRecoverySchedule,
     RecoverableExpensePool,
     RecoveryContributionAudit,
     RecoveryBasis,
@@ -212,8 +216,10 @@ from .rollover import (
 )
 from .validation import (
     require_valid_recovery_inputs,
+    require_valid_property_recovery_inputs,
     require_valid_successor_recovery_assumptions,
     validate_recovery_inputs,
+    validate_property_recovery_inputs,
     validate_successor_recovery_assumptions,
     LeaseIssueCode,
     LeaseIssueSeverity,
@@ -239,7 +245,10 @@ __all__ = [
     "build_lease_monthly_schedule",
     # property aggregation (D1.3)
     "PropertyRentRollSchedule",
+    "PropertyRecoverySchedule",
     "build_property_rent_roll_schedule",
+    "build_property_recovery_schedule",
+    "suite_recovery_projection",
     "aggregate_flow_to_annual",
     "aggregate_flow_over_forward_exit_window",
     "snapshot_state_at_year_end",
@@ -290,6 +299,7 @@ __all__ = [
     "RolloverBranchKind",
     "SuccessorContribution",
     "SuccessorRecoverySchedule",
+    "SuiteRecoveryProjection",
     "RolloverEventStateAudit",
     "RolloverTransitionAudit",
     "RecursiveRollover",
@@ -325,7 +335,9 @@ __all__ = [
     "require_valid_lease_level_inputs",
     "validate_lease_level_inputs",
     "require_valid_recovery_inputs",
+    "require_valid_property_recovery_inputs",
     "require_valid_successor_recovery_assumptions",
     "validate_recovery_inputs",
+    "validate_property_recovery_inputs",
     "validate_successor_recovery_assumptions",
 ]

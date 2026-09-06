@@ -356,9 +356,13 @@ def test_package_exposes_no_d3_or_later_entry_point() -> None:
     """Each surface moved to a positive assertion when its gate landed: month
     identity at D1.1, rent at D1.2, aggregation at D1.3, market rent at D2.1,
     the branches at D2.2/D2.3, leasing costs at D2.4, the expected-value
-    composition at D2.5, the recursion at D2.6, lease-level recoveries at D3.1
-    and the expense stop at D3.2. What remains absent is the rest of D3 --
-    expected and property-level recoveries -- and everything D4 owns."""
+    composition at D2.5, the recursion at D2.6, lease-level recoveries at D3.1,
+    the expense stop at D3.2, successor structures at D3.3, expected and
+    recursive recoveries at D3.4, and property aggregation at D3.5.
+
+    **Sprint D3 is complete.** What remains absent is everything D4 owns: the
+    operating projection, the expense engine, and the integration into
+    acquisition, debt and returns."""
 
     import anchor.leasing as leasing
 
@@ -366,10 +370,8 @@ def test_package_exposes_no_d3_or_later_entry_point() -> None:
         "build_lease_level_operating_projection",
         "MonthlyPropertyProjection",
         "AnnualOperatingProjection",
-        "PropertyRecoverySchedule",
-        "build_property_recovery_schedule",
-        "ExpectedRecoverySchedule",
-        "build_expected_recovery_schedule",
+        "build_recoverable_expense_pool",
+        "OperatingExpenseSchedule",
     ):
         assert not hasattr(leasing, absent), (
             f"{absent} belongs to a later gate and must not exist yet"

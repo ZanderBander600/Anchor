@@ -63,6 +63,7 @@ from .contracts import (
     LeasingCommissionMethod,
     MarketLeasingAssumptions,
     RecoverableExpensePool,
+    SuiteRecoveryProjection,
     RecoveryBasis,
     Suite,
 )
@@ -154,6 +155,8 @@ class LeaseIssueCode(StrEnum):
     # --- expense recoveries (D3.1) ---
     RECOVERABLE_EXPENSES_OUT_OF_DOMAIN = "RECOVERABLE_EXPENSES_OUT_OF_DOMAIN"
     RECOVERY_POOL_NOT_ALIGNED = "RECOVERY_POOL_NOT_ALIGNED"
+    RECOVERY_SCHEDULE_NOT_ALIGNED = "RECOVERY_SCHEDULE_NOT_ALIGNED"
+    MISSING_SUITE_RECOVERY_SCHEDULE = "MISSING_SUITE_RECOVERY_SCHEDULE"
     MISSING_MODIFIED_GROSS_RECOVERY_BASIS = (
         "MISSING_MODIFIED_GROSS_RECOVERY_BASIS"
     )
@@ -1784,6 +1787,138 @@ def require_valid_successor_recovery_assumptions(
     """
 
     result = validate_successor_recovery_assumptions(assumptions, path=path)
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+def validate_property_recovery_inputs(
+    projections: Iterable[SuiteRecoveryProjection],
+    *,
+    months: tuple[ModelMonth, ...],
+    suites: Iterable[Suite] | None = None,
+    leases: Iterable[Lease] | None = None,
+) -> LeaseValidationResult:
+    """Validate the inputs to one property recovery aggregation (D3.5).
+
+    Leasing-scoped, and deliberately separate from
+    ``validate_lease_level_inputs``: a rent roll is valid input to D1 and D2
+    whether or not any recovery has been modelled, so a missing recovery
+    schedule is reported by the aggregation that needs it and by nothing else.
+
+    **Duplicate suites** (``DUPLICATE_SUITE_ID``) are an ERROR rather than a
+    silent sum. Two projections for one suite would double that tenant's
+    recovery revenue -- a plausible-looking overstatement with no visible
+    symptom, since the property total is a sum and nothing else constrains it.
+
+    **Month identity is checked, not length**
+    (``RECOVERY_SCHEDULE_NOT_ALIGNED``). Schedules from a different analysis
+    start, hold horizon or forward window would zip cleanly by position and
+    add up to a plausible, wrong answer. There is one canonical timeline.
+
+    **Unknown suites** (``UNKNOWN_SUITE_REFERENCE``) are an ERROR when
+    ``suites`` is supplied: a projection for space the property does not
+    contain adds revenue from nowhere.
+
+    **Missing schedules** (``MISSING_SUITE_RECOVERY_SCHEDULE``) are an ERROR
+    only when both ``suites`` and ``leases`` are supplied, because only then is
+    completeness knowable: a suite that has a lease has a tenant whose recovery
+    someone decided not to model, and silently omitting it understates the
+    property. A suite with **no** lease correctly has no projection and
+    contributes zero -- Anchor never synthesizes a schedule, or a lease, for
+    vacant space.
+
+    Issues are emitted in a deterministic order: alignment and duplication in
+    the caller's own projection order, then unknown suites, then missing ones
+    in suite order.
+    """
+
+    issues: list[LeaseIssue] = []
+    projection_tuple = tuple(projections)
+
+    seen: set[str] = set()
+    for index, projection in enumerate(projection_tuple):
+        path = f"suite_recovery[{index}]"
+
+        if projection.months != months:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.RECOVERY_SCHEDULE_NOT_ALIGNED,
+                    f"{path}.months",
+                    f"the recovery schedule for suite {projection.suite_id!r} "
+                    "was built against a different canonical month sequence; "
+                    "one property aggregation shares one timeline, and "
+                    "matching lengths are not matching months.",
+                )
+            )
+
+        if projection.suite_id in seen:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.DUPLICATE_SUITE_ID,
+                    f"{path}.suite_id",
+                    f"suite {projection.suite_id!r} has more than one recovery "
+                    "schedule in this aggregation; its recovery revenue would "
+                    "be counted twice.",
+                )
+            )
+        seen.add(projection.suite_id)
+
+    if suites is None:
+        return LeaseValidationResult(issues=tuple(issues))
+
+    suite_tuple = tuple(suites)
+    known = {suite.suite_id for suite in suite_tuple}
+
+    for index, projection in enumerate(projection_tuple):
+        if projection.suite_id not in known:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.UNKNOWN_SUITE_REFERENCE,
+                    f"suite_recovery[{index}].suite_id",
+                    f"recovery schedule references suite "
+                    f"{projection.suite_id!r}, which is not a suite of this "
+                    "property; recovery revenue cannot come from space the "
+                    "property does not contain.",
+                )
+            )
+
+    if leases is None:
+        return LeaseValidationResult(issues=tuple(issues))
+
+    tenanted = {lease.suite_id for lease in leases}
+    for suite in suite_tuple:
+        if suite.suite_id in tenanted and suite.suite_id not in seen:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_SUITE_RECOVERY_SCHEDULE,
+                    f"suites[{suite.suite_id}]",
+                    f"suite {suite.suite_id!r} has a lease but no recovery "
+                    "schedule in this aggregation; omitting a known tenant "
+                    "understates property recovery revenue. A suite with no "
+                    "lease correctly has none and recovers zero.",
+                )
+            )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_property_recovery_inputs(
+    projections: Iterable[SuiteRecoveryProjection],
+    *,
+    months: tuple[ModelMonth, ...],
+    suites: Iterable[Suite] | None = None,
+    leases: Iterable[Lease] | None = None,
+) -> LeaseValidationResult:
+    """Validate property recovery inputs and raise on any ERROR.
+
+    Returns the full result when valid, so a caller that wants both the
+    go-ahead and any warnings needs exactly one call.
+    """
+
+    result = validate_property_recovery_inputs(
+        projections, months=months, suites=suites, leases=leases
+    )
     if result.errors:
         raise LeaseValidationError(result)
     return result

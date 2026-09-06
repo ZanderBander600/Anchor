@@ -2148,7 +2148,12 @@ def test_the_responsibility_factor_is_not_named_physical_occupancy() -> None:
 
 def test_recoveries_project_no_operating_expenses() -> None:
     """**The D3/D4 seam.** D3 consumes an injected pool and builds no shadow
-    expense engine (D3 Section 3.4)."""
+    expense engine (D3 Section 3.4).
+
+    Closes **FM-D3-7** (every expense treated as recoverable -- the ratio that
+    would do that belongs to D4 and cannot be named here) and **FM-D3-8**
+    (CapEx, TI or LC entering the pool -- the recovery module may not name
+    them)."""
 
     module = _LEASING_DIR / _RECOVERIES_MODULE
     referenced = _referenced_names(_recoveries_tree())
@@ -2216,7 +2221,15 @@ def test_recovery_is_never_netted_against_the_pool_or_added_to_rent() -> None:
 
     # And no other leasing module folds a recovery into its own series.
     for source_file in _leasing_source_files():
-        if source_file.name in {_RECOVERIES_MODULE, "contracts.py", "validation.py"}:
+        if source_file.name in {
+            _RECOVERIES_MODULE,
+            "contracts.py",
+            "validation.py",
+            # D3.5 sums finished recovery dollars into a property series.
+            # It names them because it aggregates them; the dedicated
+            # guardrails below prove it computes none of them.
+            _AGGREGATION_MODULE,
+        }:
             continue
         names = _referenced_names(
             ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
@@ -2301,7 +2314,9 @@ def test_exactly_one_expense_stop_clip_exists_in_the_package() -> None:
 def test_the_clip_floors_at_zero_and_subtracts_the_stop_from_the_share() -> None:
     """``max(0, share - stop)`` and nothing else. A reversed subtraction is a
     landlord credit, and a floor other than zero is a minimum recovery -- both
-    are structures Anchor does not model (D3 Section 5.3)."""
+    are structures Anchor does not model (D3 Section 5.3).
+
+    Closes **FM-D3-17** (a negative recovery from a Modified Gross lease)."""
 
     clip = next(
         node
@@ -2416,7 +2431,9 @@ def test_the_responsibility_factor_is_applied_outside_the_clip() -> None:
 def test_the_stop_is_nominally_fixed_with_no_escalation_or_reset() -> None:
     """HD-D3-4 and D3 Section 6.3. The stop does not grow, does not compound
     and does not reset, so no growth rate, no anniversary and no year index may
-    touch it. A stop that escalated with the pool would recover nothing, ever."""
+    touch it. A stop that escalated with the pool would recover nothing, ever.
+
+    Closes **FM-D3-14** (the stop growing unintentionally)."""
 
     referenced = _referenced_names(_stop_fn())
     for forbidden in (
@@ -2598,11 +2615,12 @@ def test_no_later_d3_gate_concept_exists() -> None:
         # D3.3 delivered the six branch-specific successor recovery
         # fields; narrowed by exactly what that gate produced. What
         # remains banned is D3.4's composition and D3.5's aggregation.
-        # D3.4 delivered expected and recursive recovery; narrowed by exactly
-        # what that gate produced. What remains banned is D3.5's aggregation.
+        # D3.5 delivered property and annual recovery aggregation, closing
+        # D3. What remains banned is everything D4 owns.
         for forbidden in (
-            "property_expense_recovery",
-            "annual_expense_recovery",
+            "build_lease_level_operating_projection",
+            "MonthlyPropertyProjection",
+            "AnnualOperatingProjection",
         ):
             assert forbidden not in referenced, (
                 f"{source_file} references {forbidden!r}, which belongs to a "
@@ -2700,6 +2718,9 @@ def test_no_predecessor_structure_is_ever_read_in_the_package() -> None:
     structures. The D3 document makes this binding: if such a dependency is
     ever introduced, the state-sufficiency proof must be re-derived and the
     merge key re-established **before** that change merges.
+
+    Closes **FM-D3-11** (the D2.6 merge key becoming insufficient), together
+    with the production-key assertion below.
     """
 
     for source_file in _leasing_source_files():
@@ -2840,7 +2861,15 @@ def test_every_recovery_formula_lives_in_the_recoveries_module() -> None:
     # terms it checks; neither computes a recovery. The exemption is the same
     # one the D3.1 netting guardrail already draws, and the delegation test
     # below is what actually pins the arithmetic to one place.
-    exempt = {_RECOVERIES_MODULE, "contracts.py", "validation.py"}
+    # `aggregation.py` joins the exemption at D3.5: it sums finished recovery
+    # dollars and therefore names the series, but the delegation and
+    # no-recalculation guardrails below prove it derives none of them.
+    exempt = {
+        _RECOVERIES_MODULE,
+        "contracts.py",
+        "validation.py",
+        _AGGREGATION_MODULE,
+    }
     for source_file in _leasing_source_files():
         if source_file.name in exempt:
             continue
@@ -3329,50 +3358,6 @@ def test_no_recovery_field_was_added_to_a_d2_result() -> None:
         )
 
 
-def test_no_property_or_annual_recovery_exists_at_d3_4() -> None:
-    """Guardrails 22-24. D3.5 owns lease-to-property aggregation and annual
-    totals; D4 owns the operating integration."""
-
-    for source_file in _leasing_source_files():
-        referenced = _referenced_names(
-            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
-        )
-        for forbidden in (
-            "property_expense_recovery",
-            "annual_expense_recovery",
-            "total_expense_recovery",
-            "build_property_recovery_schedule",
-            "recoverable_expense_ratio",
-            "management_fee",
-            "noi",
-            "egi",
-        ):
-            assert forbidden not in referenced, (
-                f"{source_file.name} references {forbidden!r}, which belongs "
-                "to D3.5 or D4"
-            )
-
-
-def test_no_property_recovery_aggregation_exists_at_d3_3() -> None:
-    """Guardrail 19. D3.5 owns lease-to-property aggregation and annual
-    totals, and annual figures must derive solely from monthly ones."""
-
-    for source_file in _leasing_source_files():
-        referenced = _referenced_names(
-            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
-        )
-        for forbidden in (
-            "property_expense_recovery",
-            "annual_expense_recovery",
-            "total_expense_recovery",
-            "build_property_recovery_schedule",
-        ):
-            assert forbidden not in referenced, (
-                f"{source_file.name} references {forbidden!r}, which belongs "
-                "to D3.5"
-            )
-
-
 def test_no_downstream_financial_concept_reaches_the_recovery_layer() -> None:
     """Guardrail 20. D4 owns the connection into acquisition, debt and
     returns, and it is made from ``anchor.engine`` toward ``anchor.leasing``,
@@ -3443,4 +3428,393 @@ def test_suite_rent_overrides_preserve_every_d3_successor_field() -> None:
         assert forbidden not in referenced, (
             f"resolve_market_leasing names {forbidden!r}; it must carry the "
             "whole record through untouched"
+        )
+
+
+# =============================================================================
+# D3.5 -- property recovery aggregation, and the D3 closeout
+# =============================================================================
+
+
+def _aggregation_tree() -> ast.AST:
+    source = (_LEASING_DIR / _AGGREGATION_MODULE).read_text(encoding="utf-8")
+    return ast.parse(source, filename=_AGGREGATION_MODULE)
+
+
+def _aggregation_fn(name: str) -> ast.FunctionDef:
+    return next(
+        node
+        for node in ast.walk(_aggregation_tree())
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+
+
+#: Everything property aggregation must never touch. Each would be a
+#: recalculation, and each has an authoritative owner further up.
+_PROPERTY_FORBIDDEN_NAMES = frozenset(
+    {
+        "lease_type",
+        "LeaseType",
+        "recovery_basis",
+        "RecoveryBasis",
+        "expense_stop_psf",
+        "monthly_expense_stop_dollars",
+        "monthly_expense_recovery",
+        "monthly_expense_stop_dollars",
+        "tenant_pro_rata_share",
+        "tenant_recoverable_expense_share",
+        "economic_responsibility_factor",
+        "successor_occupancy_factor",
+        "lease_responsibility_factors",
+        "renewal_probability",
+        "weighted_outcome",
+        "probability_mass",
+        "recoverable_expenses",
+        "RecoverableExpensePool",
+    }
+)
+
+
+def test_property_recovery_aggregation_recalculates_nothing() -> None:
+    """**Guardrails 2, 3, 4, 5, 6 and the core D3.5 rule.**
+
+    Property recovery is a summation problem, not another recovery
+    calculation. Every structural decision was made inside each suite's chain
+    by D3.1-D3.4 and is final. The builder must not name a lease type, an
+    expense stop, a pro-rata share, a responsibility factor, a probability or
+    the expense pool -- naming any of them is how a property-level threshold,
+    a property-average responsibility or a portfolio renewal probability would
+    begin to exist, none of which is a thing.
+    """
+
+    builder = _aggregation_fn("build_property_recovery_schedule")
+    referenced = _referenced_names(builder)
+
+    leaked = referenced & _PROPERTY_FORBIDDEN_NAMES
+    assert not leaked, (
+        f"build_property_recovery_schedule references {sorted(leaked)}; "
+        "property aggregation sums finished suite dollars and reprices nothing"
+    )
+
+    called = {
+        node.func.id
+        for node in ast.walk(builder)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "max" not in called, (
+        "property aggregation clips a value; the Modified Gross clip is "
+        "singular and belongs to recoveries.py"
+    )
+
+
+def test_the_projection_seam_copies_and_computes_nothing() -> None:
+    """The single extraction seam. It reads a finished series off an
+    authoritative D3 result; it must perform no arithmetic at all."""
+
+    projector = _aggregation_fn("suite_recovery_projection")
+
+    # Arithmetic only -- a `A | B | C` type union is also a BinOp, and is
+    # exactly how the accepted result types are named in the signature.
+    arithmetic = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Pow, ast.Mod)
+    for node in ast.walk(projector):
+        assert not (
+            isinstance(node, ast.BinOp) and isinstance(node.op, arithmetic)
+        ), (
+            "suite_recovery_projection performs arithmetic; it projects an "
+            "already-calculated series and computes nothing"
+        )
+
+    referenced = _referenced_names(projector)
+    leaked = referenced & _PROPERTY_FORBIDDEN_NAMES
+    assert not leaked, (
+        f"suite_recovery_projection references {sorted(leaked)}; the "
+        "aggregation boundary carries only identity, months and dollars"
+    )
+
+    # It takes the FULL-CHAIN series from the D3.4 results, not the
+    # successor-only one, which would drop every pre-expiration month.
+    rendered = ast.unparse(projector)
+    assert "expected_expense_recovery" in rendered
+    assert "expected_successor_expense_recovery" not in rendered, (
+        "the projection takes the successor-only series; the full chain "
+        "includes the known lease's own recoveries"
+    )
+
+
+def test_no_property_level_probability_weighting_exists() -> None:
+    """**Guardrail 4.** Suites roll at different times, so there is no single
+    property-level branch event to weight. ``0.25`` on one suite and ``0.80``
+    on another do not average into anything meaningful -- only completed
+    expected dollars are summed."""
+
+    referenced = _referenced_names(_aggregation_tree())
+
+    for forbidden in (
+        "renewal_probability",
+        "weighted_outcome",
+        "property_probability",
+        "portfolio_probability",
+        "probability_mass",
+        "expected_renewal_recovery",
+    ):
+        assert forbidden not in referenced, (
+            f"{_AGGREGATION_MODULE} references {forbidden!r}; probability "
+            "composition happened inside each suite's chain and never here"
+        )
+
+    schedule = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "PropertyRecoverySchedule"
+    )
+    fields = {
+        node.target.id
+        for node in schedule.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    for forbidden in (
+        "renewal_probability",
+        "probability",
+        "lease_type",
+        "recovery_basis",
+        "expense_stop_psf",
+        "tenant_pro_rata_share",
+        "economic_responsibility_factor",
+    ):
+        assert forbidden not in fields, (
+            f"PropertyRecoverySchedule declares {forbidden!r}; a property has "
+            "no recovery structure of its own"
+        )
+
+
+def test_the_aggregation_boundary_carries_only_dollars() -> None:
+    """Guardrails 5 and 6. ``SuiteRecoveryProjection`` is deliberately narrow:
+    an identity, a timeline, and completed dollars. Holding a structure here
+    would invite the recalculation D3.5 exists to avoid."""
+
+    projection = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "SuiteRecoveryProjection"
+    )
+    fields = {
+        node.target.id: ast.unparse(node.annotation)
+        for node in projection.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+
+    assert fields == {
+        "suite_id": "str",
+        "months": "tuple[ModelMonth, ...]",
+        "expense_recovery": "tuple[float, ...]",
+    }, f"the aggregation boundary widened: {sorted(fields)}"
+
+
+def test_no_gross_up_or_vacancy_redistribution_exists() -> None:
+    """**Guardrails 7 and 8.** Unrecovered expense is never redistributed: a
+    Gross tenant's share, a Modified Gross tenant's below-stop amount and a
+    vacant suite's share all simply go unrecovered (HD-D3-6, deferred).
+
+    A gross-up needs an occupancy denominator, so the vocabulary is banned
+    package-wide rather than only in the aggregator.
+    """
+
+    for source_file in _leasing_source_files():
+        referenced = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        for forbidden in (
+            "gross_up",
+            "grossed_up",
+            "gross_up_pct",
+            "gross_up_occupancy",
+            "occupancy_gross_up",
+            "recovery_gross_up",
+            "unrecovered_expense",
+            "redistribute",
+            "shortfall_allocation",
+        ):
+            assert forbidden not in referenced, (
+                f"{source_file.name} references {forbidden!r}; D3 performs no "
+                "gross-up and redistributes no unrecovered expense"
+            )
+
+    # And the property builder never divides by an occupancy figure, which is
+    # the arithmetic shape a gross-up would take.
+    builder = _aggregation_fn("build_property_recovery_schedule")
+    for node in ast.walk(builder):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            operands = _referenced_names(node)
+            assert not (
+                {"physical_occupancy", "occupied_area", "occupancy"} & operands
+            ), "property recovery is divided by an occupancy figure; that is a gross-up"
+
+
+def test_the_property_total_is_never_derived_from_the_pool() -> None:
+    """A property total is never ``pool x occupancy x some rate``. With a
+    mixture of NNN, Gross, Modified Gross and vacancy that figure is wrong in
+    a way no single rate can express -- the tenant schedules are
+    authoritative."""
+
+    referenced = _referenced_names(_aggregation_tree())
+
+    for forbidden in (
+        "RecoverableExpensePool",
+        "recoverable_expenses",
+        "recoverable_expense_ratio",
+        "pool",
+    ):
+        assert forbidden not in referenced, (
+            f"{_AGGREGATION_MODULE} references {forbidden!r}; the property "
+            "total is the sum of finished suite dollars, never re-derived "
+            "from the expense pool"
+        )
+
+
+def test_property_aggregation_is_order_independent_and_deterministic() -> None:
+    """Guardrail: two callers passing the same suites in different orders must
+    get identical figures, not merely close ones. The builder sorts by
+    ``suite_id`` and accumulates with ``fsum``."""
+
+    builder = _aggregation_fn("build_property_recovery_schedule")
+    rendered = ast.unparse(builder)
+
+    assert "sorted(" in rendered, (
+        "property aggregation does not impose a deterministic suite order"
+    )
+    assert "fsum(" in rendered, (
+        "property aggregation does not accumulate with fsum"
+    )
+
+
+def test_duplicate_and_misaligned_suites_are_refused_structurally() -> None:
+    """**Guardrails 9 and 10.** A duplicated suite would double that tenant's
+    revenue with no visible symptom, and a schedule from another timeline
+    would zip cleanly by position. Both are refused by the contract as well as
+    by validation, so neither depends on the caller validating first.
+
+    Closes **FM-D3-16** (recovery revenue double-counted at property
+    aggregation), together with the D3.4 anti-double-counting contracts that
+    keep a known lease and its successors disjoint."""
+
+    schedule = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "PropertyRecoverySchedule"
+    )
+    post_init = next(
+        node
+        for node in ast.walk(schedule)
+        if isinstance(node, ast.FunctionDef) and node.name == "__post_init__"
+    )
+    rendered = ast.unparse(post_init)
+
+    assert "counted twice" in rendered, (
+        "PropertyRecoverySchedule does not reject a duplicated suite"
+    )
+    assert "different month sequence" in rendered, (
+        "PropertyRecoverySchedule does not reject a misaligned suite schedule"
+    )
+
+
+def test_annual_property_recovery_derives_only_from_monthly() -> None:
+    """**Guardrails 18 and 19.** FM-D3-9. Monthly is canonical; annual is a
+    view of it, taken through the existing ``aggregate_flow_to_annual`` with
+    no independent formula (D3 Section 16)."""
+
+    builder = _aggregation_fn("build_property_recovery_schedule")
+    called = {
+        node.func.id
+        for node in ast.walk(builder)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "aggregate_flow_to_annual" in called, (
+        "annual recovery must come from the existing flow aggregator"
+    )
+    assert "aggregate_flow_over_forward_exit_window" in called, (
+        "the twelve forward exit months must be reported, never discarded"
+    )
+
+    # No second annual calendar: nothing divides or multiplies by 12 here.
+    for node in ast.walk(builder):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div | ast.Mult):
+            for operand in (node.left, node.right):
+                assert not (
+                    isinstance(operand, ast.Constant) and operand.value == 12
+                ), "property aggregation builds its own annual calendar"
+
+
+def test_the_forward_exit_window_is_preserved(  ) -> None:
+    """Guardrail 20. Recovery continues through ``12H + 12``; a later
+    generation recovering after the hold period is real revenue and the months
+    are reported separately rather than truncated at a sale month."""
+
+    schedule = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "PropertyRecoverySchedule"
+    )
+    fields = {
+        node.target.id
+        for node in schedule.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert "forward_exit_window_expense_recovery" in fields
+
+
+def test_no_operating_or_downstream_concept_reaches_d3() -> None:
+    """**Guardrails 21-25, the D3 closeout.** D3 stops at "monthly recovery
+    revenue, by lease and by property". The expense pool stays injected, and
+    every operating and downstream concept belongs to D4."""
+
+    for source_file in _leasing_source_files():
+        referenced = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        for forbidden in (
+            "recoverable_expense_ratio",
+            "management_fee",
+            "total_operating_expenses",
+            "operating_expenses",
+            "property_taxes",
+            "insurance",
+            "utilities",
+            "repairs_maintenance",
+            "egi",
+            "noi",
+            "exit_noi",
+            "credit_loss",
+            "other_income",
+            "capex",
+            "irr",
+            "dscr",
+            "debt_yield",
+            "purchase_price",
+            "sale_proceeds",
+        ):
+            assert forbidden not in referenced, (
+                f"{source_file.name} references {forbidden!r}; D3 produces a "
+                "recovery revenue series and integrates with nothing"
+            )
+
+
+def test_recovery_revenue_is_never_netted_against_an_expense() -> None:
+    """**Guardrail 1**, and FM-D3-1. Recoveries are revenue on their own line
+    (D0 Section 10.2). Nothing subtracts a recovery from an expense, and D4
+    will place the two lines separately before NOI."""
+
+    for node in ast.walk(_aggregation_tree()):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Sub):
+            continue
+        operands = _referenced_names(node)
+        assert not (
+            {"expense_recovery", "recoverable_expenses", "annual_expense_recovery"}
+            & operands
+        ), "a recovery is netted against an expense; recovery is revenue"
+
+    referenced = _referenced_names(_aggregation_tree())
+    for forbidden in ("net_operating_expenses", "expenses_net_of_recoveries"):
+        assert forbidden not in referenced, (
+            f"{_AGGREGATION_MODULE} references {forbidden!r}; D3 never nets"
         )

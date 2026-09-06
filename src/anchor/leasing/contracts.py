@@ -1969,3 +1969,130 @@ class RecursiveRolloverRecovery:
                     f"{successor!r}; a suite has one occupant at a time and "
                     "recovery must not be counted twice."
                 )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SuiteRecoveryProjection:
+    """One suite's finished monthly recovery dollars, and nothing else (D3.5).
+
+    **The aggregation boundary.** Property aggregation is a summation problem,
+    not another recovery calculation, so it consumes the narrowest possible
+    view of a suite: an identity, a timeline, and the completed dollars.
+
+    Deliberately **narrow**. A projection carries no lease type, no recovery
+    basis, no expense stop, no pro-rata share, no responsibility factor and no
+    probability. None of those is an input to a sum, and holding them at the
+    property layer would invite exactly the recalculation D3.5 exists to
+    avoid -- a property-level threshold, a property-average responsibility, or
+    a portfolio renewal probability, none of which is a thing.
+
+    **It computes nothing.** The dollars are copied from an authoritative D3
+    result -- a `LeaseRecoverySchedule` for a known lease, an
+    `ExpectedRolloverRecovery` for a single modelled rollover, or a
+    `RecursiveRolloverRecovery` for a full chain. Which of those produced it is
+    the caller's modelling decision; by this point the answer is already final.
+
+    A suite with no lease has **no projection**, which means zero. That is the
+    honest representation: Anchor does not synthesize a Gross lease for vacant
+    space (D1.3), and it must not synthesize a recovery schedule either.
+    """
+
+    suite_id: str
+    months: tuple[ModelMonth, ...]
+    expense_recovery: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.expense_recovery) != len(self.months):
+            raise ValueError(
+                "SuiteRecoveryProjection requires one expense_recovery figure "
+                f"per model month; got {len(self.expense_recovery)} for "
+                f"{len(self.months)} months."
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PropertyRecoverySchedule:
+    """One property's canonical monthly expense-recovery **revenue** (D3.5).
+
+    ```
+    PropertyRecovery_m = sum over included suites of SuiteRecovery_m
+    ```
+
+    **A sum, and only a sum.** Every structural decision -- NNN versus Gross
+    versus Modified Gross, the expense stop, the pro-rata share, the
+    responsibility factor, the renewal probability, the recursion -- was made
+    inside each suite's own chain and is already final. Nothing here reprices
+    anything, and there is no property-level structure of any kind.
+
+    **In particular there is no property renewal probability.** Suites roll at
+    different times, so there is no single property-level branch event to
+    weight; ``0.25`` on one suite and ``0.80`` on another do not average into
+    anything meaningful. Only completed expected dollars are summed.
+
+    **No gross-up** (D3 Section 4.2, HD-D3-6 deferred). Unrecovered expense is
+    not redistributed: a Gross tenant's share, a Modified Gross tenant's
+    below-stop amount and a vacant suite's share all simply go unrecovered.
+    In a 100,000 SF property of four equal suites -- NNN, Gross, Modified
+    Gross at a stop consuming half its share, and vacant -- a $100,000 pool
+    yields $37,500, not $100,000. That is the honest arithmetic of the chosen
+    convention and it is a disclosed sharp edge, not an omission.
+
+    **The pool is never re-read here.** A property total is never
+    ``pool x occupancy x some rate``: with a mixture of structures that figure
+    would be wrong in a way no single rate can express. The tenant schedules
+    are authoritative.
+
+    **Recovery stays revenue.** Nothing nets it against an operating expense;
+    D0 Section 10.2 puts recoveries on their own line and D4 will place that
+    line and the gross expense line separately, before NOI (FM-D3-1).
+
+    ``annual_expense_recovery`` is the chronological sum of the exact monthly
+    figures through ``aggregation.aggregate_flow_to_annual`` -- **no
+    independent annual formula** (D3 Section 16, FM-D3-9). It holds exactly
+    ``hold_period`` values, following D1's uniform ``_by_year`` shape, and the
+    twelve forward exit months are reported separately in
+    ``forward_exit_window_expense_recovery`` rather than discarded. Monthly
+    remains canonical; annual is a view of it.
+
+    Built only by ``anchor.leasing.aggregation``; this dataclass performs no
+    calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    rentable_area_sf: float
+    hold_period: int
+    suite_projections: tuple[SuiteRecoveryProjection, ...]
+
+    expense_recovery: tuple[float, ...]
+    annual_expense_recovery: tuple[float, ...]
+    forward_exit_window_expense_recovery: float
+
+    def __post_init__(self) -> None:
+        if len(self.expense_recovery) != len(self.months):
+            raise ValueError(
+                "PropertyRecoverySchedule requires one expense_recovery figure "
+                f"per model month; got {len(self.expense_recovery)} for "
+                f"{len(self.months)} months."
+            )
+        if len(self.annual_expense_recovery) != self.hold_period:
+            raise ValueError(
+                f"annual_expense_recovery holds {len(self.annual_expense_recovery)} "
+                f"values for a {self.hold_period}-year hold; D1's annual series "
+                "are uniformly one value per hold year, with the forward exit "
+                "window reported separately."
+            )
+        seen: set[str] = set()
+        for projection in self.suite_projections:
+            if projection.suite_id in seen:
+                raise ValueError(
+                    f"suite {projection.suite_id!r} appears twice in one "
+                    "property recovery aggregation; its recovery would be "
+                    "counted twice."
+                )
+            seen.add(projection.suite_id)
+            if projection.months != self.months:
+                raise ValueError(
+                    f"suite {projection.suite_id!r} was built against a "
+                    "different month sequence; one property aggregation shares "
+                    "one canonical timeline."
+                )
