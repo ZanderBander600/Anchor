@@ -111,6 +111,21 @@ rather than silently zeroed -- it needs an explicit contractual basis, which is
 D3.2. Successor recoveries are D3.3, expected and recursive recoveries D3.4,
 and property aggregation D3.5.
 
+D4.2 aggregates the completed leasing economics of the whole property.
+``suite_operating_projection`` is the one extraction seam: it copies an
+authoritative **full-chain** result -- ``RecursiveRollover`` for an occupied
+suite, ``InitialVacancyRollover`` for one vacant at the analysis start,
+including the explicit all-zero `HOLD_VACANT` chain -- onto a neutral
+``SuiteOperatingProjection``, and computes nothing.
+``build_property_operating_schedule`` then sums those finished dollars and
+areas once, deterministically, with every suite present exactly once. Cash base
+rent is **carried**, never rebuilt as contractual minus free rent, because in a
+fractional-downtime month those differ by the part of the month nobody
+occupied. Property occupancy is computed once from areas -- suite-level ratios
+are not published, so averaging them is unavailable rather than merely
+discouraged. Recoveries, property expenses, other income, credit loss, the
+management fee, EGI and NOI are all later gates.
+
 D4.1 closes the D3/D4 seam. ``expenses.py`` projects the five fixed property
 operating expense lines onto the canonical monthly timeline -- annual step
 growth on analysis-start anniversaries, then a level ``/ 12`` inside each model
@@ -131,8 +146,10 @@ from .aggregation import (
     aggregate_flow_over_forward_exit_window,
     aggregate_flow_to_annual,
     average_state_over_year,
+    build_property_operating_schedule,
     build_property_rent_roll_schedule,
     build_property_recovery_schedule,
+    suite_operating_projection,
     suite_recovery_projection,
     snapshot_state_at_year_end,
 )
@@ -160,6 +177,7 @@ from .contracts import (
     RolloverTransitionAudit,
     SuccessorContribution,
     SuccessorRecoverySchedule,
+    SuiteOperatingProjection,
     SuiteRecoveryProjection,
     Lease,
     LeaseLevelOperatingInputs,
@@ -175,6 +193,7 @@ from .contracts import (
     ModelMonth,
     MonthlyPropertyExpenseSchedule,
     NewTenantBranch,
+    PropertyOperatingSchedule,
     PropertyRentRollSchedule,
     PropertyRecoverySchedule,
     RecoverableExpensePool,
@@ -242,6 +261,8 @@ from .rollover import (
     weighted_outcome,
 )
 from .validation import (
+    require_valid_property_operating_inputs,
+    validate_property_operating_inputs,
     require_valid_lease_level_operating_inputs,
     require_valid_recoverable_expense_ratio,
     validate_lease_level_operating_inputs,
@@ -359,6 +380,13 @@ __all__ = [
     "build_expected_rollover_recovery",
     "build_recursive_rollover_recovery",
     "build_initial_vacancy_rollover_recovery",
+    # property leasing aggregation (D4.2)
+    "SuiteOperatingProjection",
+    "PropertyOperatingSchedule",
+    "suite_operating_projection",
+    "build_property_operating_schedule",
+    "validate_property_operating_inputs",
+    "require_valid_property_operating_inputs",
     # property operating expenses and the recoverable pool (D4.1)
     "LeaseLevelOperatingInputs",
     "MonthlyPropertyExpenseSchedule",

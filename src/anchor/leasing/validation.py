@@ -60,6 +60,7 @@ from .contracts import (
     Lease,
     LeaseLevelOperatingInputs,
     LeaseLevelPropertyInputs,
+    SuiteOperatingProjection,
     LeaseOrigin,
     LeaseType,
     LeasingCommissionMethod,
@@ -173,6 +174,11 @@ class LeaseIssueCode(StrEnum):
     )
     EXPENSE_STOP_OUT_OF_DOMAIN = "EXPENSE_STOP_OUT_OF_DOMAIN"
     UNSUPPORTED_RECOVERY_BASIS = "UNSUPPORTED_RECOVERY_BASIS"
+
+    # --- property leasing aggregation (D4.2) ---
+    OPERATING_SCHEDULE_NOT_ALIGNED = "OPERATING_SCHEDULE_NOT_ALIGNED"
+    MISSING_SUITE_OPERATING_PROJECTION = "MISSING_SUITE_OPERATING_PROJECTION"
+    SUITE_AREA_MISMATCH = "SUITE_AREA_MISMATCH"
 
     # --- property operating inputs (D4.1) ---
     PROPERTY_EXPENSE_OUT_OF_DOMAIN = "PROPERTY_EXPENSE_OUT_OF_DOMAIN"
@@ -2131,6 +2137,192 @@ def require_valid_initial_vacancy_inputs(
 
     result = validate_initial_vacancy_inputs(
         suites, leases, property_defaults=property_defaults, path=path
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D4.2 -- property leasing aggregation
+#
+# Mirrors ``validate_property_recovery_inputs`` (D3.5) rule for rule, with one
+# deliberate tightening: ``suites`` is REQUIRED and completeness is
+# unconditional. D3.5 could only judge completeness when it also knew the
+# leases, because a suite with no lease legitimately had no recovery schedule.
+# At D4.2 every suite has leasing economics -- an occupied one has its chain,
+# a MARKET_LEASE_UP one has its lease-up chain, and a HOLD_VACANT one has an
+# explicit all-zero chain -- so "this suite may be omitted" is no longer a
+# thing, and D3.6's refusal to let deliberate vacancy look like an omission is
+# preserved rather than weakened.
+# =============================================================================
+
+
+def validate_property_operating_inputs(
+    projections: Iterable[SuiteOperatingProjection],
+    suites: Iterable[Suite],
+    *,
+    months: tuple[ModelMonth, ...],
+    leases: Iterable[Lease] | None = None,
+) -> LeaseValidationResult:
+    """Validate the inputs to one property leasing aggregation (D4.2).
+
+    Leasing-scoped, and deliberately separate from
+    ``validate_lease_level_inputs``: a rent roll is valid input to D1 and D2
+    whether or not anyone has projected a suite, so a missing projection is
+    reported by the aggregation that needs it and by nothing else.
+
+    **Month identity is checked, not length**
+    (``OPERATING_SCHEDULE_NOT_ALIGNED``). A projection from a different
+    analysis start, hold horizon or forward window would zip cleanly by
+    position and add up to a plausible, wrong answer. There is one canonical
+    timeline, and matching lengths are not matching months.
+
+    **Duplicate suites** (``DUPLICATE_SUITE_ID``) are an ERROR rather than a
+    silent sum. Two projections for one suite would double that suite's rent,
+    TI, LC **and** its occupied area -- an overstatement with no visible
+    symptom, since the property total is a sum and nothing else constrains it.
+
+    **Unknown suites** (``UNKNOWN_SUITE_REFERENCE``): a projection for space
+    the property does not contain adds rent and occupied area from nowhere.
+
+    **Area mismatch** (``SUITE_AREA_MISMATCH``): a projection must claim the
+    suite's authoritative ``suite_area_sf``, compared under Anchor's existing
+    scaled tolerance rather than ``==``. The area is what every occupancy
+    figure is measured against, so a projection quietly carrying a different
+    one would corrupt property occupancy while every rent figure still looked
+    right.
+
+    **Missing projections**: every suite must appear exactly once. A suite
+    carrying an explicit initial-vacancy treatment that produced no projection
+    is ``MISSING_SUITE_OPERATING_PROJECTION`` -- a deliberate zero must be
+    *present*, so it stays distinguishable from an omission. A suite that is
+    vacant and was never underwritten at all is
+    ``MISSING_INITIAL_VACANCY_TREATMENT``, the D3.6 rule, unchanged: Anchor
+    does not assume vacant space stays vacant.
+
+    Issues are emitted in a deterministic order: alignment, duplication and
+    area in the caller's own projection order, then unknown suites, then
+    missing ones in suite order. Nothing here iterates a ``set`` or ``dict``
+    to produce an issue.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+    projection_tuple = tuple(projections)
+    suite_tuple = tuple(suites)
+    areas = {suite.suite_id: suite.suite_area_sf for suite in suite_tuple}
+
+    seen: set[str] = set()
+    for index, projection in enumerate(projection_tuple):
+        path = f"suite_operating[{index}]"
+
+        if projection.months != months:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.OPERATING_SCHEDULE_NOT_ALIGNED,
+                    f"{path}.months",
+                    f"the operating projection for suite "
+                    f"{projection.suite_id!r} was built against a different "
+                    "canonical month sequence; one property aggregation "
+                    "shares one timeline, and matching lengths are not "
+                    "matching months.",
+                )
+            )
+
+        if projection.suite_id in seen:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.DUPLICATE_SUITE_ID,
+                    f"{path}.suite_id",
+                    f"suite {projection.suite_id!r} has more than one "
+                    "operating projection in this aggregation; its rent, "
+                    "leasing costs and occupied area would all be counted "
+                    "twice.",
+                )
+            )
+        seen.add(projection.suite_id)
+
+        authoritative = areas.get(projection.suite_id)
+        if authoritative is not None and not _areas_reconcile(
+            projection.suite_area_sf, authoritative
+        ):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.SUITE_AREA_MISMATCH,
+                    f"{path}.suite_area_sf",
+                    f"the operating projection for suite "
+                    f"{projection.suite_id!r} claims "
+                    f"{projection.suite_area_sf!r} SF but the suite is "
+                    f"{authoritative!r} SF; occupancy is measured against the "
+                    "suite's authoritative area.",
+                )
+            )
+
+    known = set(areas)
+    for index, projection in enumerate(projection_tuple):
+        if projection.suite_id not in known:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.UNKNOWN_SUITE_REFERENCE,
+                    f"suite_operating[{index}].suite_id",
+                    f"operating projection references suite "
+                    f"{projection.suite_id!r}, which is not a suite of this "
+                    "property; rent and occupied area cannot come from space "
+                    "the property does not contain.",
+                )
+            )
+
+    tenanted = None if leases is None else {lease.suite_id for lease in leases}
+    for suite in suite_tuple:
+        if suite.suite_id in seen:
+            continue
+
+        if suite.initial_vacancy is None and (
+            tenanted is not None and suite.suite_id not in tenanted
+        ):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_INITIAL_VACANCY_TREATMENT,
+                    f"suites[{suite.suite_id}].initial_vacancy",
+                    f"suite {suite.suite_id!r} is vacant at the analysis start "
+                    "and states no initial-vacancy treatment, so its future "
+                    "leasing economics cannot be aggregated. Anchor does not "
+                    "assume vacant space stays vacant: state HOLD_VACANT or "
+                    "MARKET_LEASE_UP explicitly.",
+                )
+            )
+        else:
+            treatment = (
+                "is occupied or unlabelled"
+                if suite.initial_vacancy is None
+                else f"is vacant with an explicit "
+                f"{suite.initial_vacancy.strategy.value} treatment"
+            )
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_SUITE_OPERATING_PROJECTION,
+                    f"suites[{suite.suite_id}]",
+                    f"suite {suite.suite_id!r} {treatment} but has no "
+                    "operating projection in this aggregation. Every suite "
+                    "appears exactly once, so a deliberate zero is "
+                    "distinguishable from an omission.",
+                )
+            )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_property_operating_inputs(
+    projections: Iterable[SuiteOperatingProjection],
+    suites: Iterable[Suite],
+    *,
+    months: tuple[ModelMonth, ...],
+    leases: Iterable[Lease] | None = None,
+) -> LeaseValidationResult:
+    """Validate property leasing-aggregation inputs and raise on any ERROR."""
+
+    result = validate_property_operating_inputs(
+        projections, suites, months=months, leases=leases
     )
     if result.errors:
         raise LeaseValidationError(result)

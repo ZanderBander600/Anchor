@@ -4768,6 +4768,407 @@ def test_no_vacancy_or_occupancy_field_reaches_the_operating_contract() -> None:
         )
 
 
+def test_d4_2_suite_projection_copies_and_calculates_nothing() -> None:
+    """**D4.2 guardrails 1 and 2.** The extraction seam is a copy. It performs
+    no arithmetic of any kind -- not a multiplication, not a subtraction, not a
+    division -- because every figure it carries was finished by D1-D3."""
+
+    seam = _aggregation_fn("suite_operating_projection")
+
+    # ``ast.BitOr`` is excluded deliberately: ``A | B`` in an annotation is a
+    # type union, not arithmetic.
+    arithmetic = [
+        node
+        for node in ast.walk(seam)
+        if isinstance(node, ast.BinOp)
+        and isinstance(
+            node.op,
+            ast.Add | ast.Sub | ast.Mult | ast.Div | ast.FloorDiv | ast.Pow | ast.Mod,
+        )
+    ]
+    assert not arithmetic, (
+        "suite_operating_projection performs arithmetic; it copies completed "
+        "leasing economics and computes nothing"
+    )
+
+    referenced = _referenced_names(seam)
+    for required in (
+        "expected_contractual_base_rent",
+        "expected_cash_base_rent",
+        "expected_free_rent",
+        "expected_tenant_improvements",
+        "expected_leasing_commissions",
+        "expected_occupied_area_sf",
+    ):
+        assert required in referenced, (
+            f"suite_operating_projection does not read {required!r}; it must "
+            "carry the full-chain series"
+        )
+
+
+def test_d4_2_suite_projection_accepts_only_full_chain_results() -> None:
+    """**Guardrails 3 and 4.** An occupied suite projects from the complete
+    ``RecursiveRollover`` and a vacant one from the complete
+    ``InitialVacancyRollover``. A first-rollover-only result, a branch or a
+    successor contribution carries the same field names and would project
+    silently while dropping real months."""
+
+    referenced = _referenced_names(_aggregation_fn("suite_operating_projection"))
+
+    assert "RecursiveRollover" in referenced
+    assert "InitialVacancyRollover" in referenced
+    for forbidden in (
+        "ExpectedRollover",
+        "SuccessorContribution",
+        "RenewalBranch",
+        "NewTenantBranch",
+    ):
+        assert forbidden not in referenced, (
+            f"suite_operating_projection accepts {forbidden!r}; only complete "
+            "chains are property-level authority"
+        )
+
+
+def test_d4_2_cash_rent_is_never_reconstructed() -> None:
+    """**Guardrail 7, and HD-D4-5.** In a fractional-downtime month
+    ``contractual - free_rent`` exceeds cash rent by the part of the month
+    nobody occupied, so rebuilding cash rent recognises vacancy as revenue."""
+
+    for name in ("suite_operating_projection", "build_property_operating_schedule"):
+        for node in ast.walk(_aggregation_fn(name)):
+            if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Sub):
+                continue
+            operands = _referenced_names(node)
+            assert not (
+                {"cash_base_rent", "contractual_base_rent", "free_rent"} & operands
+            ), (
+                f"{name} subtracts a rent series; cash base rent is carried "
+                "from the chain, never rebuilt"
+            )
+
+
+def test_d4_2_absent_rent_is_not_a_production_concept() -> None:
+    """**Guardrail 8.** Human review narrowed it to an explanatory
+    reconciliation quantity: no contract field, no series, no code path."""
+
+    for source_file in _leasing_source_files():
+        referenced = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        assert "absent_rent" not in referenced, (
+            f"{source_file.name} references absent_rent; it is an explanatory "
+            "concept only (HD-D4-5 as narrowed)"
+        )
+
+
+#: Everything the property leasing aggregator must never touch. Each would be a
+#: recalculation of something already final, and each has an owner further up.
+_D4_2_PROPERTY_FORBIDDEN_NAMES = frozenset(
+    {
+        # leasing assumptions -- D2's
+        "renewal_probability",
+        "weighted_outcome",
+        "probability_mass",
+        "market_rent_psf",
+        "market_rent_growth",
+        "base_rent_psf",
+        "escalation_pct",
+        "successor_escalation_pct",
+        "downtime_months",
+        "renewal_downtime_months",
+        "new_downtime_months",
+        "free_rent_months",
+        "renewal_free_rent_months",
+        "new_free_rent_months",
+        "ti_psf",
+        "renewal_ti_psf",
+        "new_ti_psf",
+        "lc_pct",
+        "renewal_lc_pct",
+        "new_lc_pct",
+        "tenant_improvement_amount",
+        "leasing_commission_amount",
+        "free_rent_waterfall",
+        "successor_occupancy_factor",
+        "expected_successor_occupancy_factor",
+        "expected_cash_rent_factor",
+        # recovery and expense -- D3's and D4.1's
+        "expense_recovery",
+        "recoverable_expenses",
+        "RecoverableExpensePool",
+        "recoverable_expense_ratio",
+        "MonthlyPropertyExpenseSchedule",
+        "fixed_operating_expenses",
+        "tenant_pro_rata_share",
+        "economic_responsibility_factor",
+        "lease_type",
+        "LeaseType",
+        # later gates
+        "other_income",
+        "credit_loss",
+        "management_fee",
+        "effective_gross_income",
+        "noi",
+        "capex",
+        "exit_noi",
+    }
+)
+
+
+def test_d4_2_property_aggregation_recalculates_nothing() -> None:
+    """**Guardrails 9-23 and 26.** Property leasing aggregation is a summation
+    problem. Every structural decision was made inside each suite's chain by
+    D1-D3 and is final; every operating concept beyond leasing belongs to a
+    later gate.
+
+    ``expected_successor_occupancy_factor`` is banned by name for its own
+    reason (guardrail 26): it is a month-equivalent *economic exposure*, not
+    physical occupancy, and publishing it as occupancy is FM-D2-19."""
+
+    for name in ("suite_operating_projection", "build_property_operating_schedule"):
+        referenced = _referenced_names(_aggregation_fn(name))
+        leaked = referenced & _D4_2_PROPERTY_FORBIDDEN_NAMES
+        assert not leaked, (
+            f"{name} references {sorted(leaked)}; property aggregation sums "
+            "finished suite figures and reprices nothing"
+        )
+
+
+def test_d4_2_property_occupancy_is_an_area_quotient_computed_once() -> None:
+    """**Guardrails 24 and 25.** Occupied area is summed -- areas add -- and
+    divided by the property's rentable area a single time. A 90,000 SF suite
+    fully let beside an empty 10,000 SF suite is 90% occupied, not 50%."""
+
+    builder = _aggregation_fn("build_property_operating_schedule")
+
+    divisions = [
+        node
+        for node in ast.walk(builder)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+    ]
+    assert len(divisions) == 1, (
+        "property occupancy must be one division of occupied area by rentable "
+        f"area; found {len(divisions)} divisions"
+    )
+    operands = _referenced_names(divisions[0])
+    assert "rentable_area_sf" in operands
+    assert "occupied" in " ".join(sorted(operands))
+
+    called = {
+        node.func.id
+        for node in ast.walk(builder)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    for forbidden in ("mean", "fmean", "median", "average"):
+        assert forbidden not in called, (
+            f"build_property_operating_schedule calls {forbidden!r}; occupancy "
+            "is never an average of suite percentages"
+        )
+
+
+def test_d4_2_the_suite_projection_publishes_no_occupancy_ratio() -> None:
+    """The structural half of guardrail 25: there is no suite-level ratio to
+    average, so the mistake is unavailable rather than merely discouraged."""
+
+    projection = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "SuiteOperatingProjection"
+    )
+    fields = [
+        node.target.id
+        for node in projection.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    ]
+
+    assert fields == [
+        "suite_id",
+        "suite_area_sf",
+        "months",
+        "contractual_base_rent",
+        "cash_base_rent",
+        "free_rent",
+        "tenant_improvements",
+        "leasing_commissions",
+        "occupied_area_sf",
+    ]
+    assert "physical_occupancy" not in fields
+    assert "vacant_area_sf" not in fields
+
+
+def test_d4_2_property_aggregation_consumes_no_pool_or_expense_schedule() -> None:
+    """**Guardrails 16, 17 and 18.** D4.3 is the first gate that combines the
+    leasing aggregate with recoveries and property expenses."""
+
+    import inspect as _inspect
+
+    from anchor.leasing import build_property_operating_schedule
+
+    parameters = set(
+        _inspect.signature(build_property_operating_schedule).parameters
+    )
+    for forbidden in (
+        "pool",
+        "recoverable_expense_pool",
+        "expenses",
+        "expense_schedule",
+        "operating_inputs",
+        "recovery_schedule",
+        "recoveries",
+    ):
+        assert forbidden not in parameters, (
+            f"build_property_operating_schedule accepts {forbidden!r}; that is "
+            "D4.3's combination, not D4.2's aggregation"
+        )
+
+    referenced = _referenced_names(
+        _aggregation_fn("build_property_operating_schedule")
+    )
+    for forbidden in (
+        "build_lease_recovery_schedule",
+        "monthly_expense_recovery",
+        "build_recoverable_expense_pool",
+        "build_property_expense_schedule",
+        "build_property_recovery_schedule",
+        "PropertyRecoverySchedule",
+    ):
+        assert forbidden not in referenced, (
+            f"build_property_operating_schedule references {forbidden!r}"
+        )
+
+
+def test_d4_2_produces_no_annual_figure() -> None:
+    """**Guardrails 32 and 33.** Monthly is canonical; the annual adapter and
+    exit NOI are D4.4's. The builder takes no ``hold_period``, so it could not
+    slice a hold year even if it tried."""
+
+    builder = _aggregation_fn("build_property_operating_schedule")
+    referenced = _referenced_names(builder)
+
+    for forbidden in (
+        "aggregate_flow_to_annual",
+        "aggregate_flow_over_forward_exit_window",
+        "snapshot_state_at_year_end",
+        "average_state_over_year",
+        "hold_period",
+        "hold_year",
+        "_hold_year_slice",
+    ):
+        assert forbidden not in referenced, (
+            f"build_property_operating_schedule references {forbidden!r}; "
+            "annual derivation is D4.4's"
+        )
+
+    schedule = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "PropertyOperatingSchedule"
+    )
+    fields = {
+        node.target.id
+        for node in schedule.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert not any(name.endswith("_by_year") for name in fields)
+    assert "hold_period" not in fields
+
+
+def test_d4_2_retains_the_whole_canonical_window() -> None:
+    """**Guardrails 30 and 31.** Nothing is truncated at month ``12H``. Forward
+    rent, TI and LC are real leasing events; whose cash flow they are is
+    D4.4/D4.5's question."""
+
+    builder = _aggregation_fn("build_property_operating_schedule")
+
+    for node in ast.walk(builder):
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice):
+            pytest.fail(
+                "build_property_operating_schedule slices a series; the whole "
+                "canonical window is retained, forward months included"
+            )
+
+
+def test_d4_2_every_suite_must_appear_exactly_once() -> None:
+    """**Guardrails 6, 28 and 29.** ``suites`` is required and completeness is
+    unconditional: a deliberately empty suite contributes an explicit zero and
+    that zero must be present, so it stays distinguishable from an omission."""
+
+    import inspect as _inspect
+
+    from anchor.leasing import (
+        build_property_operating_schedule,
+        validate_property_operating_inputs,
+    )
+
+    parameters = _inspect.signature(build_property_operating_schedule).parameters
+    assert "suites" in parameters
+    assert parameters["suites"].default is _inspect.Parameter.empty, (
+        "suites must be required; a property aggregation cannot judge "
+        "completeness without knowing its own suites"
+    )
+
+    validator = next(
+        node
+        for node in ast.walk(
+            ast.parse(
+                (_LEASING_DIR / "validation.py").read_text(encoding="utf-8"),
+                filename="validation.py",
+            )
+        )
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "validate_property_operating_inputs"
+    )
+    referenced = _referenced_names(validator)
+    for required in (
+        "MISSING_SUITE_OPERATING_PROJECTION",
+        "MISSING_INITIAL_VACANCY_TREATMENT",
+        "DUPLICATE_SUITE_ID",
+        "UNKNOWN_SUITE_REFERENCE",
+        "SUITE_AREA_MISMATCH",
+        "OPERATING_SCHEDULE_NOT_ALIGNED",
+    ):
+        assert required in referenced, f"the validator never raises {required}"
+
+    assert validate_property_operating_inputs is not None
+
+
+def test_d4_2_month_identity_is_checked_not_length() -> None:
+    """A same-length tuple from a different analysis start zips cleanly and
+    produces a plausible, wrong answer."""
+
+    validator = next(
+        node
+        for node in ast.walk(
+            ast.parse(
+                (_LEASING_DIR / "validation.py").read_text(encoding="utf-8"),
+                filename="validation.py",
+            )
+        )
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "validate_property_operating_inputs"
+    )
+
+    compares = [
+        node
+        for node in ast.walk(validator)
+        if isinstance(node, ast.Compare)
+        and "months" in _referenced_names(node)
+        and any(isinstance(op, ast.NotEq | ast.Eq) for op in node.ops)
+    ]
+    assert compares, "month identity is never compared"
+
+    # The comparison must be of the tuples themselves, never of their lengths:
+    # ``len(a) != len(b)`` would accept a same-length tuple from a different
+    # analysis start.
+    for node in compares:
+        for side in (node.left, *node.comparators):
+            assert not (
+                isinstance(side, ast.Call)
+                and isinstance(side.func, ast.Name)
+                and side.func.id == "len"
+            ), "month alignment compares lengths; it must compare identity"
+
+
 def test_d4_1_did_not_reach_outside_the_leasing_package() -> None:
     """**Guardrails 29-33.** D4.1 is entirely inside ``anchor.leasing``. The
     integration bridge is D4.5 and belongs to ``anchor.analysis``; no engine,

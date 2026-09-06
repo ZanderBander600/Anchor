@@ -360,36 +360,40 @@ def test_package_exposes_no_d3_or_later_entry_point() -> None:
     the expense stop at D3.2, successor structures at D3.3, expected and
     recursive recoveries at D3.4, and property aggregation at D3.5.
 
-    **Sprint D3 is complete, and D4.1 has landed**: the property fixed-expense
-    projection and ``build_recoverable_expense_pool`` are now positive
-    assertions, because D4.1 is the gate that supplies the pool D3 has consumed
-    as an injected input since D3.1 (HD-D3-8: D3 injects, D4 supplies).
+    **Sprint D3 is complete, and D4.1 and D4.2 have landed.** D4.1 supplies the
+    recoverable pool D3 has consumed as an injected input since D3.1 (HD-D3-8:
+    D3 injects, D4 supplies); D4.2 adds the suite extraction seam and the
+    property leasing aggregation. Both are now positive assertions.
 
-    What remains absent is everything D4.2 and later own: the property
-    operating aggregation, the monthly property projection with its EGI and
-    NOI, the annual adapter, and the integration into acquisition, debt and
-    returns."""
+    What remains absent is everything D4.3 and later own: the monthly property
+    projection with its EGI and NOI, the annual adapter and exit NOI, and the
+    integration into acquisition, debt and returns."""
 
     import anchor.leasing as leasing
 
     for present in (
+        # D4.1
         "LeaseLevelOperatingInputs",
         "MonthlyPropertyExpenseSchedule",
         "build_property_expense_schedule",
         "build_recoverable_expense_pool",
         "annual_expense_amount",
+        # D4.2
+        "SuiteOperatingProjection",
+        "PropertyOperatingSchedule",
+        "suite_operating_projection",
+        "build_property_operating_schedule",
     ):
-        assert hasattr(leasing, present), f"D4.1 must expose {present}"
+        assert hasattr(leasing, present), f"D4.1/D4.2 must expose {present}"
 
     for absent in (
         "build_lease_level_operating_projection",
         "MonthlyPropertyProjection",
         "AnnualOperatingProjection",
         "OperatingExpenseSchedule",
-        "build_property_operating_schedule",
-        "suite_operating_projection",
         "aggregate_monthly_to_annual",
         "OperatingCapitalSchedule",
+        "LeaseLevelAcquisitionResults",
     ):
         assert not hasattr(leasing, absent), (
             f"{absent} belongs to a later gate and must not exist yet"

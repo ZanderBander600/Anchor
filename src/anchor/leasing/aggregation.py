@@ -44,15 +44,20 @@ from ..engine.contracts import ensure_finite
 from .calendar import build_model_months, projection_month_count
 from .contracts import (
     ExpectedRolloverRecovery,
+    InitialVacancyRollover,
     InitialVacancyRolloverRecovery,
     Lease,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
     LeaseRecoverySchedule,
+    ModelMonth,
+    PropertyOperatingSchedule,
     PropertyRecoverySchedule,
     PropertyRentRollSchedule,
+    RecursiveRollover,
     RecursiveRolloverRecovery,
     Suite,
+    SuiteOperatingProjection,
     SuiteRecoveryProjection,
 )
 from .rent import build_lease_monthly_schedule
@@ -449,4 +454,256 @@ def build_property_recovery_schedule(
         forward_exit_window_expense_recovery=(
             aggregate_flow_over_forward_exit_window(monthly, hold_period=hold_period)
         ),
+    )
+
+
+# =============================================================================
+# D4.2 -- property leasing aggregation
+#
+# The same shape as D3.5 above, one layer over: a single extraction seam onto a
+# neutral per-suite contract, then one deterministic property summation. Every
+# structural and economic decision -- rent, escalation, market rent, downtime,
+# free rent, TI, LC, renewal probability, recursion, initial vacancy -- was
+# made inside each suite's own chain by D1-D3 and is final before it arrives
+# here. This layer reprices nothing.
+# =============================================================================
+
+
+#: The authoritative **full-chain** leasing results a suite projection may be
+#: taken from. Each describes one suite over the whole canonical window: an
+#: occupied suite's own lease plus every expected successor generation, or an
+#: initially vacant suite's vacancy months plus its first speculative tenant
+#: plus every later generation.
+#:
+#: ``ExpectedRollover`` is deliberately **not** here even though it carries the
+#: same field names. It is the first rollover only, so taking it would silently
+#: drop every generation after the first -- and D2.6 proves recursion
+#: reproduces it exactly when there is no second rollover, so nothing is lost
+#: by requiring the complete result (D4 Section 2.10). A branch, a successor
+#: contribution and a pure renewal or new-tenant series are excluded for the
+#: same reason, one step more strongly: none of them is even a whole suite.
+_AUTHORITATIVE_OPERATING_RESULTS = (
+    "RecursiveRollover",
+    "InitialVacancyRollover",
+)
+
+
+def suite_operating_projection(
+    suite: Suite,
+    result: RecursiveRollover | InitialVacancyRollover,
+) -> SuiteOperatingProjection:
+    """Project an authoritative full-chain leasing result onto the property
+    boundary.
+
+    **The single extraction seam** (D4 Section 29.1), so property aggregation
+    has one input shape rather than one code path per suite kind. It **copies**
+    already-calculated series and computes nothing: no rent, no escalation, no
+    market rent, no downtime, no free-rent waterfall, no TI, no LC, no
+    probability weighting, no recursion, no lease-up timing. Every one of those
+    has exactly one owner further up, and each is final before it arrives.
+
+    Exactly two sources, and both are complete chains:
+
+    - `RecursiveRollover` (D2.6) -- an **occupied** suite: the known in-place
+      lease's own economics, seeded once and unweighted, plus every expected
+      successor generation through the end of the canonical window.
+    - `InitialVacancyRollover` (D3.6) -- a suite **vacant at the analysis
+      start**. Under `MARKET_LEASE_UP` that is the vacancy months as zeros,
+      then the deterministic first speculative tenant, then every later
+      generation; under `HOLD_VACANT` it is an explicit all-zero chain. A
+      hold-vacant suite therefore appears in the property aggregation like any
+      other, which is what keeps deliberate vacancy visible instead of looking
+      like a suite nobody underwrote (D3.6).
+
+    Both expose the ``expected_*`` series, and both are the **full** chain, so
+    one mapping serves both and no strategy branch exists here at all.
+
+    ``suite`` supplies the authoritative ``suite_area_sf`` -- the denominator
+    every occupancy figure is ultimately measured against -- and is checked to
+    be the suite the result actually describes, so a projection cannot pair one
+    suite's economics with another's area.
+
+    **Occupied area is carried, not derived.** ``expected_occupied_area_sf`` is
+    D2/D3's authoritative physical output. It is never recomputed from rent,
+    from ``expected_cash_rent_factor``, or from
+    ``expected_successor_occupancy_factor`` -- that last is a month-equivalent
+    *economic exposure* fraction, a different quantity under a different name,
+    and publishing it as physical occupancy is failure mode FM-D2-19. In a
+    fractional commencement month the tenant is in possession by month end, so
+    the suite's physical area is fully occupied while its economic
+    responsibility is a fraction.
+
+    **Cash base rent is carried, not reconstructed.** It is copied straight
+    from the chain, never rebuilt as ``contractual - free_rent``: in a
+    fractional-downtime month those differ by the portion of the month during
+    which nobody was in possession, and rebuilding it would recognise that
+    portion as collected revenue (HD-D4-5, D4 Section 5.4).
+    """
+
+    if not isinstance(result, RecursiveRollover | InitialVacancyRollover):
+        raise TypeError(
+            f"{type(result).__name__} is not an authoritative full-chain "
+            f"leasing result; expected one of "
+            f"{', '.join(_AUTHORITATIVE_OPERATING_RESULTS)}. A branch, a "
+            "successor contribution, a first-rollover-only result or a pure "
+            "renewal or new-tenant series is not a whole suite."
+        )
+
+    if suite.suite_id != result.suite_id:
+        raise ValueError(
+            f"suite {suite.suite_id!r} was paired with a leasing result for "
+            f"suite {result.suite_id!r}; a projection carries one suite's "
+            "economics and that same suite's area."
+        )
+
+    return SuiteOperatingProjection(
+        suite_id=result.suite_id,
+        suite_area_sf=suite.suite_area_sf,
+        months=result.months,
+        contractual_base_rent=result.expected_contractual_base_rent,
+        cash_base_rent=result.expected_cash_base_rent,
+        free_rent=result.expected_free_rent,
+        tenant_improvements=result.expected_tenant_improvements,
+        leasing_commissions=result.expected_leasing_commissions,
+        occupied_area_sf=result.expected_occupied_area_sf,
+    )
+
+
+#: The five monthly dollar series and the one monthly area series the property
+#: aggregation sums, named once so a single loop produces all six from one
+#: deterministic suite ordering. Splitting them across helpers is how suite
+#: ordering and completeness rules come to differ between two figures that are
+#: supposed to describe the same property.
+_PROPERTY_OPERATING_SERIES = (
+    "contractual_base_rent",
+    "cash_base_rent",
+    "free_rent",
+    "tenant_improvements",
+    "leasing_commissions",
+    "occupied_area_sf",
+)
+
+
+def build_property_operating_schedule(
+    projections: Iterable[SuiteOperatingProjection],
+    suites: Iterable[Suite],
+    *,
+    months: tuple[ModelMonth, ...],
+    rentable_area_sf: float,
+    leases: Iterable[Lease] | None = None,
+) -> PropertyOperatingSchedule:
+    """Combine suite operating projections into one canonical property schedule.
+
+    ```
+    PropertySeries_m = sum over every suite of SuiteSeries_m
+    ```
+
+    for each of the five dollar series and the occupied-area series, then
+
+    ```
+    vacant_area_sf_m     = rentable_area_sf - occupied_area_sf_m
+    physical_occupancy_m = occupied_area_sf_m / rentable_area_sf
+    ```
+
+    **Validates first, then sums**, following the D1.3 and D3.5 property entry
+    points. ``require_valid_property_operating_inputs`` is the single authority
+    for month alignment, duplicate suites, unknown suites, area mismatch and
+    completeness; this function adds no rule of its own.
+
+    **Every suite appears exactly once.** ``suites`` is required, not optional:
+    at D4.2 there is no such thing as a suite with no leasing economics, so
+    "this one may be omitted" is not a case. An occupied suite brings its
+    chain, a `MARKET_LEASE_UP` suite its lease-up chain, and a `HOLD_VACANT`
+    suite an explicit all-zero chain -- and that zero must be *present*, which
+    is what keeps deliberate vacancy distinguishable from an omission (D3.6).
+
+    **It contains no leasing formula.** No lease, no market rent, no
+    escalation, no downtime, no free-rent assumption, no TI or LC rate and no
+    renewal probability is read here. There is no property-level probability,
+    no property-level threshold and no property-average anything: two occupied
+    suites underwritten at different renewal probabilities simply contribute
+    their own finished expected dollars.
+
+    **Order-independent.** Projections are sorted by ``suite_id`` and each
+    month is accumulated with ``math.fsum``, so callers passing the same suites
+    in different orders get **identical** figures rather than merely close
+    ones -- the same policy D3.5 established for recoveries.
+
+    **Occupancy is computed once, from areas.** ``occupied_area_sf`` is summed
+    -- areas add -- and divided by the property's authoritative
+    ``rentable_area_sf`` a single time. Suite-level occupancy *ratios* are
+    never averaged, and ``SuiteOperatingProjection`` deliberately declares
+    none: a 90,000 SF suite fully let beside an empty 10,000 SF suite is 90%
+    occupied, not 50%, and the mistake is unavailable rather than merely
+    discouraged (D4 Section 16.1).
+
+    ``physical_occupancy`` may be fractional for a probability-weighted chain.
+    That is an *expected* physical occupancy over branch states whose own
+    occupancy is integral (D2 HD-D2-2), and it is a different quantity from
+    ``expected_successor_occupancy_factor``, which is never read here.
+
+    **The whole canonical window is retained**, hold months and the twelve
+    forward exit months alike. Rent, free rent, TI, LC and occupancy stay live
+    past month ``12H`` because those are real leasing events; which of them is
+    a seller cash flow is D4.4/D4.5's question, and answering it here would
+    destroy the audit trail those gates need (D4 Section 21.3).
+
+    **No annual figure is produced.** There is no ``hold_period`` parameter and
+    no ``_by_year`` field: monthly is canonical, and the annual adapter is
+    D4.4's.
+
+    Pure and deterministic: no I/O, no mutation, no ``set`` or ``dict``
+    iteration contributing to any figure.
+    """
+
+    from .validation import require_valid_property_operating_inputs
+
+    projection_tuple = tuple(projections)
+    suite_tuple = tuple(suites)
+
+    require_valid_property_operating_inputs(
+        projection_tuple,
+        suite_tuple,
+        months=months,
+        leases=None if leases is None else tuple(leases),
+    )
+
+    # Deterministic order, so the accumulation cannot depend on the caller.
+    ordered = sorted(projection_tuple, key=lambda projection: projection.suite_id)
+
+    summed: dict[str, tuple[float, ...]] = {
+        name: tuple(
+            ensure_finite(
+                f"property {name}",
+                fsum(getattr(projection, name)[index] for projection in ordered),
+            )
+            for index in range(len(months))
+        )
+        for name in _PROPERTY_OPERATING_SERIES
+    }
+
+    occupied_area_sf = summed["occupied_area_sf"]
+    # rentable_area_sf > 0 is guaranteed by D1 validation, so this division is
+    # always defined. Computed once, from areas, at the property level.
+    vacant_area_sf = tuple(
+        ensure_finite("property vacant_area_sf", rentable_area_sf - occupied)
+        for occupied in occupied_area_sf
+    )
+    physical_occupancy = tuple(
+        ensure_finite("property physical_occupancy", occupied / rentable_area_sf)
+        for occupied in occupied_area_sf
+    )
+
+    return PropertyOperatingSchedule(
+        months=months,
+        rentable_area_sf=rentable_area_sf,
+        suite_projections=tuple(ordered),
+        contractual_base_rent=summed["contractual_base_rent"],
+        cash_base_rent=summed["cash_base_rent"],
+        free_rent=summed["free_rent"],
+        tenant_improvements=summed["tenant_improvements"],
+        leasing_commissions=summed["leasing_commissions"],
+        occupied_area_sf=occupied_area_sf,
+        vacant_area_sf=vacant_area_sf,
+        physical_occupancy=physical_occupancy,
     )

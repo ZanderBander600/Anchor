@@ -2392,6 +2392,168 @@ class InitialVacancyRolloverRecovery:
 
 
 # =============================================================================
+# D4.2 -- suite operating projections and property leasing aggregation
+#
+# The aggregation boundary. Everything below carries **completed** D1-D3
+# leasing dollars and areas; nothing below prices a lease, and no gate after
+# this one reprices one either.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SuiteOperatingProjection:
+    """One suite's completed monthly leasing economics (D4.2).
+
+    **The single extraction seam onto the property boundary**, exactly as
+    ``SuiteRecoveryProjection`` is for D3.5 recoveries: property aggregation
+    gets one input shape rather than one code path per suite kind. Built only
+    by ``anchor.leasing.aggregation.suite_operating_projection``, which
+    **copies** already-calculated series and computes nothing.
+
+    Every series is the **full chain** for the suite -- an occupied suite's own
+    in-place lease plus every expected successor generation, or an initially
+    vacant suite's vacancy months plus its first speculative tenant plus every
+    later generation. There is no partial projection: taking a successor-only
+    or first-rollover-only series here would silently drop real months
+    (D4 Section 2.10).
+
+    **Deliberately absent, and each absence is load-bearing:**
+
+    - ``physical_occupancy`` and ``vacant_area_sf``. A suite-level *ratio* has
+      no business at the property boundary, because property occupancy is
+      ``property occupied area / rentable area`` and is computed once, from
+      areas (D4 Section 16.1). Averaging suite ratios is wrong the moment two
+      suites differ in size -- 90,000 SF full plus 10,000 SF empty is 90%
+      occupancy, not 50%. Omitting the field is what makes that mistake
+      unavailable rather than merely discouraged. ``occupied_area_sf`` is an
+      **area**, and areas add.
+    - ``expense_recovery``. That is ``SuiteRecoveryProjection``'s, computed by
+      D3 against an injected pool, and D4.2 never touches it.
+    - Everything above and below NOI: other income, credit loss, the
+      management fee, EGI, NOI, CapEx, debt and returns. D4.2 answers "what
+      are the completed monthly leasing economics of this suite", not "what
+      does the property earn".
+
+    ``occupied_area_sf`` may be **fractional** for a probability-weighted
+    chain, and that is correct: it is an *expected* area over branch states
+    whose own physical occupancy is integral (D2 HD-D2-2). It is never derived
+    from rent, from a cash factor, or from
+    ``expected_successor_occupancy_factor`` -- that factor is a month-equivalent
+    economic exposure, a different quantity under a different name, and
+    conflating the two is failure mode FM-D2-19.
+    """
+
+    suite_id: str
+    suite_area_sf: float
+    months: tuple[ModelMonth, ...]
+
+    # --- flow, dollars per month ---
+    contractual_base_rent: tuple[float, ...]
+    cash_base_rent: tuple[float, ...]
+    free_rent: tuple[float, ...]
+    tenant_improvements: tuple[float, ...]
+    leasing_commissions: tuple[float, ...]
+
+    # --- state, square feet ---
+    occupied_area_sf: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("contractual_base_rent", self.contractual_base_rent),
+            ("cash_base_rent", self.cash_base_rent),
+            ("free_rent", self.free_rent),
+            ("tenant_improvements", self.tenant_improvements),
+            ("leasing_commissions", self.leasing_commissions),
+            ("occupied_area_sf", self.occupied_area_sf),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"SuiteOperatingProjection requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PropertyOperatingSchedule:
+    """The property's canonical monthly leasing economics (D4.2).
+
+    The sum of every suite's completed leasing dollars and areas, over the
+    whole canonical projection -- the ``12H`` hold months **and** the twelve
+    forward exit months. Nothing stops at the sale date here: rent, free rent,
+    TI, LC and occupancy stay live through the forward window, because those
+    are real leasing events. Which of them is a *seller* cash flow is D4.4/D4.5's
+    question and is deliberately not answered here (D4 Section 21.3).
+
+    **This is a leasing aggregate, despite the name.** It carries no expense
+    recovery, no property operating expense, no other income, no credit loss,
+    no management fee, no EGI and no NOI. D4.3 is the first gate that combines
+    this schedule with ``PropertyRecoverySchedule`` and
+    ``MonthlyPropertyExpenseSchedule``.
+
+    ``contractual_base_rent`` and ``free_rent`` are **audit lines**.
+    ``cash_base_rent`` is the authoritative revenue figure D4.3 will consume,
+    and it is aggregated **directly** from the suite chains -- never
+    reconstructed as ``contractual - free_rent``, which is wrong in any month
+    with fractional downtime, where the two differ by the portion of the month
+    during which no tenant was in economic possession (HD-D4-5, D4
+    Section 5.4).
+
+    ``vacant_area_sf = rentable_area_sf - occupied_area_sf`` and
+    ``physical_occupancy = occupied_area_sf / rentable_area_sf``, both computed
+    once at the property level against the property's authoritative rentable
+    area (D0 Section 15.1), so ``occupied + vacant == rentable_area_sf`` holds
+    in every month. No vacancy percentage, no gross-up, and no average of
+    suite-level occupancy ratios is involved anywhere.
+
+    Built only by
+    ``anchor.leasing.aggregation.build_property_operating_schedule``; this
+    dataclass performs no calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    rentable_area_sf: float
+    suite_projections: tuple[SuiteOperatingProjection, ...]
+
+    # --- flow, dollars per month ---
+    contractual_base_rent: tuple[float, ...]
+    cash_base_rent: tuple[float, ...]
+    free_rent: tuple[float, ...]
+    tenant_improvements: tuple[float, ...]
+    leasing_commissions: tuple[float, ...]
+
+    # --- state, square feet and ratio ---
+    occupied_area_sf: tuple[float, ...]
+    vacant_area_sf: tuple[float, ...]
+    physical_occupancy: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("contractual_base_rent", self.contractual_base_rent),
+            ("cash_base_rent", self.cash_base_rent),
+            ("free_rent", self.free_rent),
+            ("tenant_improvements", self.tenant_improvements),
+            ("leasing_commissions", self.leasing_commissions),
+            ("occupied_area_sf", self.occupied_area_sf),
+            ("vacant_area_sf", self.vacant_area_sf),
+            ("physical_occupancy", self.physical_occupancy),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"PropertyOperatingSchedule requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+        for projection in self.suite_projections:
+            if projection.months != self.months:
+                raise ValueError(
+                    f"suite {projection.suite_id!r} was projected against a "
+                    "different canonical month sequence; one property "
+                    "aggregation shares one timeline."
+                )
+
+
+# =============================================================================
 # D4.1 -- property operating inputs and the canonical monthly expense schedule
 #
 # Property economics, deliberately separate from lease and market-leasing
