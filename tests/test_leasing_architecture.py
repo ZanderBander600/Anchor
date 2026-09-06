@@ -991,9 +991,14 @@ def test_the_mass_split_weights_no_economics() -> None:
         "never economics"
     )
 
-    # And no other leasing module weights at all.
+    # And no other leasing module implements a weighting formula. D3.4's
+    # recovery composition is exempt from the *name* ban because it legitimately
+    # passes the probability into `weighted_outcome` and carries it onto its
+    # result -- but it must not express `p * x + (1 - p) * y` itself, which the
+    # dedicated D3.4 guardrail below asserts directly.
+    exempt = {_ROLLOVER_MODULE, "contracts.py", "validation.py", _RECOVERIES_MODULE}
     for source_file in _leasing_source_files():
-        if source_file.name in {_ROLLOVER_MODULE, "contracts.py", "validation.py"}:
+        if source_file.name in exempt:
             continue
         names = _referenced_names(
             ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
@@ -2593,8 +2598,9 @@ def test_no_later_d3_gate_concept_exists() -> None:
         # D3.3 delivered the six branch-specific successor recovery
         # fields; narrowed by exactly what that gate produced. What
         # remains banned is D3.4's composition and D3.5's aggregation.
+        # D3.4 delivered expected and recursive recovery; narrowed by exactly
+        # what that gate produced. What remains banned is D3.5's aggregation.
         for forbidden in (
-            "expected_expense_recovery",
             "property_expense_recovery",
             "annual_expense_recovery",
         ):
@@ -2944,64 +2950,407 @@ def test_recovery_revenue_is_never_folded_into_a_d2_rent_series() -> None:
         )
 
 
-def test_no_expected_or_recursive_recovery_exists_at_d3_3() -> None:
-    """Guardrails 17 and 18. D3.4 owns composition and recursion. D3.3
-    calculates pure branch schedules only -- no probability may touch a
-    recovery here."""
+# =============================================================================
+# D3.4 -- expected and recursive recovery composition
+# =============================================================================
+
+
+_D34_COMPOSER_NAMES = (
+    "build_expected_rollover_recovery",
+    "build_recursive_rollover_recovery",
+)
+
+
+def _recoveries_fn(name: str) -> ast.FunctionDef:
+    return next(
+        node
+        for node in ast.walk(_recoveries_tree())
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+
+
+#: Everything a recovery expectation must never average. Weighting any of
+#: these builds a structure no tenant signs (FM-D3-10).
+_UNWEIGHTABLE_RECOVERY_NAMES = frozenset(
+    {
+        "lease_type",
+        "successor_lease_type",
+        "recovery_basis",
+        "expense_stop_psf",
+        "monthly_expense_stop_dollars",
+        "tenant_pro_rata_share",
+        "economic_responsibility_factor",
+        "successor_occupancy_factor",
+        "tenant_recoverable_expense_share",
+        "full_month_expense_recovery",
+        "recoverable_expenses",
+    }
+)
+
+
+def test_only_one_production_recursive_state_machine_exists() -> None:
+    """**Guardrails 1-7, and the most important rule in this gate.**
+
+    D2.6 owns the rollover-event recursion. ``recoveries.py`` must not grow a
+    second one: two state machines that agree today and diverge after one
+    change would produce a plausible recovery figure with no authority able to
+    say which was right.
+
+    The recursion is recognised by its shape -- a ``while`` loop that revisits
+    a mutable pending set. D3's accumulation is a flat ``for`` over an
+    authoritative transition list, so this is a real structural distinction
+    rather than a naming convention.
+    """
+
+    tree = _recoveries_tree()
+
+    assert not [
+        node for node in ast.walk(tree) if isinstance(node, ast.While)
+    ], (
+        f"{_RECOVERIES_MODULE} contains a `while` loop; the rollover event "
+        "queue belongs to build_recursive_rollover and must not be duplicated"
+    )
+
+    referenced = _referenced_names(tree)
+    for forbidden in (
+        "incoming",
+        "pending",
+        "processed",
+        "frontier",
+        "queue",
+        "heapq",
+        "heappush",
+        "heappop",
+        "deque",
+        "enqueue",
+        "_child_masses",
+        "terminal_parts",
+        "scenario_paths",
+        "enumerate_paths",
+    ):
+        assert forbidden not in referenced, (
+            f"{_RECOVERIES_MODULE} references {forbidden!r}; D3 attaches "
+            "recovery to the events D2.6 decided and owns no state machine"
+        )
+
+
+def test_recursive_recovery_consumes_the_authoritative_transitions() -> None:
+    """Guardrails 3-6. Which events exist, how mass splits, the ordering and
+    the terminal mass are all read from the retained ``RecursiveRollover``,
+    never re-derived."""
+
+    builder = _recoveries_fn("build_recursive_rollover_recovery")
+    rendered = ast.unparse(builder)
+
+    assert "rollover.transitions" in rendered, (
+        "recursive recovery must iterate the authoritative D2 transition list"
+    )
+    assert "transition.probability_mass" in rendered, (
+        "probability mass is read from the transition, never recomputed"
+    )
+    assert "rollover.terminal_probability_mass" in rendered, (
+        "terminal mass is mirrored from D2.6, never recalculated"
+    )
+
+    # It must not compute a mass of its own from the probability.
+    for forbidden in (
+        "1 - renewal_probability",
+        "1.0 - renewal_probability",
+    ):
+        assert forbidden not in rendered, (
+            f"recursive recovery computes {forbidden!r}; the mass split "
+            "belongs to _child_masses in rollover.py"
+        )
+
+
+def test_recovery_composition_uses_the_one_weighting_primitive() -> None:
+    """Guardrail 8. D2.5's ``weighted_outcome`` is the single probability
+    formula in the package. D3.4 reuses it rather than re-expressing
+    ``p * r + (1 - p) * n``, which is what guarantees the endpoint identities
+    and the identical-value short circuit."""
+
+    composer = _recoveries_fn("build_expected_rollover_recovery")
+    called = {
+        node.func.id
+        for node in ast.walk(composer)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "weighted_outcome" in called, (
+        "first-rollover recovery composition must go through weighted_outcome"
+    )
+
+    # No hand-rolled second weighting formula anywhere in the module.
+    rendered = ast.unparse(_recoveries_tree())
+    for forbidden in ("1 - renewal_probability", "1.0 - renewal_probability"):
+        assert forbidden not in rendered, (
+            f"{_RECOVERIES_MODULE} expresses {forbidden!r}; there is exactly "
+            "one weighting primitive"
+        )
+
+
+def test_only_completed_recovery_dollars_are_ever_weighted() -> None:
+    """**Guardrails 9-12.** FM-D3-10, and the reason this gate exists.
+
+    The Modified Gross clip is nonlinear, so ``E[max(0, X - S)]`` is not
+    ``max(0, E[X] - E[S])``. Every argument to the weighting primitive must be
+    a finished recovery **dollar**; a lease type, basis, stop, share or
+    responsibility factor reaching it would build a structure no tenant signs.
+    """
+
+    for node in ast.walk(_recoveries_tree()):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "weighted_outcome"
+        ):
+            continue
+        operands = _referenced_names(node)
+        leaked = operands & _UNWEIGHTABLE_RECOVERY_NAMES
+        assert not leaked, (
+            f"weighted_outcome is called with {sorted(leaked)}; only completed "
+            "recovery dollars may be probability-weighted (FM-D3-10)"
+        )
+
+
+def test_no_weighted_recovery_assumption_is_ever_named() -> None:
+    """Guardrails 9-12 again, by vocabulary. A field called
+    ``expected_expense_stop`` would be meaningless: the composed output is a
+    dollar, and the assumptions stay on the pure branch records where each
+    describes a structure some tenant actually signed."""
 
     for source_file in _leasing_source_files():
         referenced = _referenced_names(
             ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
         )
         for forbidden in (
-            "expected_expense_recovery",
-            "expected_recovery",
-            "weighted_recovery",
-            "recursive_expense_recovery",
-            "accumulated_recovery",
+            "expected_lease_type",
+            "weighted_lease_type",
+            "expected_recovery_basis",
+            "weighted_recovery_basis",
+            "expected_expense_stop",
+            "expected_expense_stop_psf",
+            "weighted_expense_stop_psf",
+            "expected_monthly_expense_stop_dollars",
+            "expected_tenant_pro_rata_share",
+            "expected_tenant_recoverable_expense_share",
+            "synthetic_successor",
+            "synthetic_recovery_lease",
+        ):
+            assert forbidden not in referenced, (
+                f"{source_file.name} references {forbidden!r}; only a composed "
+                "recovery dollar is financially meaningful"
+            )
+
+    # And neither composed result declares such a field.
+    for class_name in ("ExpectedRolloverRecovery", "RecursiveRolloverRecovery"):
+        declared = next(
+            node
+            for node in ast.walk(_contracts_tree())
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        )
+        fields = {
+            node.target.id
+            for node in declared.body
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+        }
+        for forbidden in fields:
+            assert not (
+                forbidden.startswith("expected_")
+                and forbidden.removeprefix("expected_") in _UNWEIGHTABLE_RECOVERY_NAMES
+            ), f"{class_name} declares {forbidden!r}, a weighted assumption"
+
+
+def test_the_composers_add_no_recovery_formula_of_their_own() -> None:
+    """Guardrails 13-15. The Modified Gross clip, the NNN rule and the Gross
+    zero remain singular. D3.4 composes finished schedules and must not clip,
+    re-derive a share, or re-apply a stop."""
+
+    for name in _D34_COMPOSER_NAMES:
+        builder = _recoveries_fn(name)
+        called = {
+            node.func.id
+            for node in ast.walk(builder)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "max" not in called, (
+            f"{name} clips a value; the Modified Gross clip is singular"
+        )
+        assert "monthly_expense_stop_dollars" not in called, (
+            f"{name} recomputes an expense stop"
+        )
+        assert "tenant_pro_rata_share" not in called, (
+            f"{name} recomputes a pro-rata share"
+        )
+        assert "monthly_expense_recovery" not in called, (
+            f"{name} calls the per-month formula directly; it composes "
+            "finished schedules"
+        )
+
+
+def test_the_composers_duplicate_no_d2_timing_or_pricing_formula() -> None:
+    """**The reconstruction rule.** D3.4 rebuilds a successor through the same
+    D2 engine rather than reproducing ``c = e + 1 + floor(D)``, term timing,
+    market pricing, the free-rent waterfall, TI or LC. Duplicating any of them
+    would create a second answer to a question D2 already owns."""
+
+    builder = _recoveries_fn("build_recursive_rollover_recovery")
+    called = {
+        node.func.id
+        for node in ast.walk(builder)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "build_successor_contribution" in called, (
+        "recursive recovery must rebuild successors through the D2 engine"
+    )
+
+    referenced = _referenced_names(_recoveries_tree())
+    for forbidden in (
+        "successor_commencement_period",
+        "successor_expiration_period_for",
+        "market_rent_psf_for_period",
+        "market_rent_psf_at_period",
+        "renewal_starting_rent_psf",
+        "new_tenant_starting_rent_psf",
+        "free_rent_abatement",
+        "tenant_improvement_amount",
+        "leasing_commission_amount",
+        "downtime_months",
+        "floor",
+    ):
+        assert forbidden not in referenced, (
+            f"{_RECOVERIES_MODULE} references {forbidden!r}; successor timing, "
+            "pricing and cost formulas belong to rollover.py"
+        )
+
+
+def test_successor_recovery_still_uses_the_occupancy_factor(  ) -> None:
+    """Guardrails 16-17, carried into composition. Every accumulated series is
+    driven by the branch's ``successor_occupancy_factor``; neither composer may
+    substitute physical occupancy or a cash factor."""
+
+    for name in _D34_COMPOSER_NAMES:
+        referenced = _referenced_names(_recoveries_fn(name))
+        for forbidden in (
+            "physical_occupancy",
+            "cash_rent_factor",
+            "free_rent",
+            "free_rent_abatement_months",
+            "cash_base_rent",
+            "contractual_base_rent",
+        ):
+            assert forbidden not in referenced, (
+                f"{name} references {forbidden!r}; recovery is driven by the "
+                "successor occupancy factor and is independent of rent"
+            )
+
+
+def test_the_known_lease_recovery_is_never_probability_weighted() -> None:
+    """**Guardrail 19.** What a sitting tenant owes before its lease expires is
+    contractual history, not a scenario. Multiplying it by ``p`` or ``1 - p``
+    would understate every month of it."""
+
+    for name in _D34_COMPOSER_NAMES:
+        builder = _recoveries_fn(name)
+        for node in ast.walk(builder):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "weighted_outcome"
+            ):
+                continue
+            operands = _referenced_names(node)
+            for forbidden in (
+                "in_place_recovery",
+                "in_place_expense_recovery",
+                "initial_schedule",
+                "known",
+            ):
+                assert forbidden not in operands, (
+                    f"{name} weights {forbidden!r}; known in-place recovery is "
+                    "deterministic and contributes once"
+                )
+
+        # And it is never multiplied by a mass either.
+        for node in ast.walk(builder):
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+                operands = _referenced_names(node)
+                if "mass" in operands or "probability_mass" in operands:
+                    assert "known" not in operands, (
+                        f"{name} scales the known lease's recovery by a "
+                        "probability mass"
+                    )
+
+
+def test_both_composed_results_assert_anti_double_counting() -> None:
+    """Guardrails 19-20. The known lease and its successors must never both
+    recover in one month, and the contracts enforce it rather than trusting
+    the builders."""
+
+    for class_name in ("ExpectedRolloverRecovery", "RecursiveRolloverRecovery"):
+        declared = next(
+            node
+            for node in ast.walk(_contracts_tree())
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        )
+        post_init = next(
+            node
+            for node in ast.walk(declared)
+            if isinstance(node, ast.FunctionDef) and node.name == "__post_init__"
+        )
+        rendered = ast.unparse(post_init)
+        assert "in_place_expense_recovery" in rendered
+        assert "expected_successor_expense_recovery" in rendered
+        assert "counted twice" in rendered, (
+            f"{class_name}.__post_init__ does not assert the non-overlap of "
+            "known and successor recovery"
+        )
+
+
+def test_no_recovery_field_was_added_to_a_d2_result() -> None:
+    """**Guardrail 21**, and the D3.3 boundary held. D2's contracts stay rent
+    and occupancy; the composed recovery lives on its own D3 result, so no D2
+    builder acquires a pool dependency."""
+
+    for class_name in ("ExpectedRollover", "RecursiveRollover", "SuccessorContribution"):
+        declared = next(
+            node
+            for node in ast.walk(_contracts_tree())
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        )
+        fields = {
+            node.target.id
+            for node in declared.body
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+        }
+        leaked = {name for name in fields if "recover" in name}
+        assert not leaked, (
+            f"{class_name} declares {sorted(leaked)}; recovery composes into a "
+            "separate D3 result so D2 stays independent of the expense pool"
+        )
+
+
+def test_no_property_or_annual_recovery_exists_at_d3_4() -> None:
+    """Guardrails 22-24. D3.5 owns lease-to-property aggregation and annual
+    totals; D4 owns the operating integration."""
+
+    for source_file in _leasing_source_files():
+        referenced = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        for forbidden in (
+            "property_expense_recovery",
+            "annual_expense_recovery",
+            "total_expense_recovery",
+            "build_property_recovery_schedule",
+            "recoverable_expense_ratio",
+            "management_fee",
+            "noi",
+            "egi",
         ):
             assert forbidden not in referenced, (
                 f"{source_file.name} references {forbidden!r}, which belongs "
-                "to D3.4"
+                "to D3.5 or D4"
             )
-
-    # The pure-branch result carries no probability of any kind.
-    schedule = next(
-        node
-        for node in ast.walk(_contracts_tree())
-        if isinstance(node, ast.ClassDef) and node.name == "SuccessorRecoverySchedule"
-    )
-    fields = {
-        node.target.id
-        for node in schedule.body
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
-    }
-    for forbidden in (
-        "renewal_probability",
-        "probability",
-        "probability_mass",
-        "expected_expense_recovery",
-    ):
-        assert forbidden not in fields, (
-            f"SuccessorRecoverySchedule declares {forbidden!r}; D3.3 is a pure "
-            "branch result and carries no probability"
-        )
-
-    # And no recovery field was added to the recursive result.
-    recursive = next(
-        node
-        for node in ast.walk(_contracts_tree())
-        if isinstance(node, ast.ClassDef) and node.name == "RecursiveRollover"
-    )
-    recursive_fields = {
-        node.target.id
-        for node in recursive.body
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
-    }
-    assert not any("recovery" in name for name in recursive_fields), (
-        "RecursiveRollover gained a recovery field; recursion over recoveries "
-        "is D3.4's"
-    )
 
 
 def test_no_property_recovery_aggregation_exists_at_d3_3() -> None:

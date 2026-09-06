@@ -176,9 +176,9 @@ def enumerate_paths(
     """
 
     from anchor.leasing.rent import build_lease_monthly_schedule
-    from anchor.leasing.rollover import _resolve_market_schedule
+    from anchor.leasing.rollover import resolve_rollover_market_schedule
 
-    schedule = _resolve_market_schedule(
+    schedule = resolve_rollover_market_schedule(
         the_suite, months=months, property_defaults=defaults, market_schedule=None
     )
     horizon = months[-1].period_index

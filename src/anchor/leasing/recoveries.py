@@ -43,19 +43,35 @@ need, and any escalation of the stop, which D3 Section 6.3 fixed nominally.
 
 from __future__ import annotations
 
-from math import isfinite
+from datetime import date
+from math import fsum, isfinite
 
 from ..engine.contracts import ensure_finite
 from .contracts import (
+    ExpectedRollover,
+    ExpectedRolloverRecovery,
     Lease,
     LeaseMonthlySchedule,
     LeaseRecoverySchedule,
     LeaseType,
+    MarketLeasingAssumptions,
     ModelMonth,
     RecoverableExpensePool,
     RecoveryBasis,
+    RecoveryContributionAudit,
+    RecursiveRollover,
+    RecursiveRolloverRecovery,
     RolloverBranchKind,
+    Suite,
+    SuccessorContribution,
     SuccessorRecoverySchedule,
+)
+from .market import MarketRentSchedule
+from .rollover import (
+    build_successor_contribution,
+    resolve_rollover_market_schedule,
+    successor_state_lease_id_stem,
+    weighted_outcome,
 )
 
 
@@ -649,4 +665,343 @@ def build_successor_recovery_schedule(
         tenant_recoverable_expense_share=tenant_share,
         full_month_expense_recovery=full_month,
         expense_recovery=recovery,
+    )
+
+
+# =============================================================================
+# D3.4 -- probability-weighted and recursive expected recovery
+#
+# Everything below composes finished branch dollars. It computes no recovery
+# formula of its own, and owns no recursion: D2.5's `weighted_outcome` is the
+# single weighting primitive and D2.6's `RecursiveRollover` is the single
+# event state machine.
+# =============================================================================
+
+
+def _successor_recovery_from_contribution(
+    contribution: SuccessorContribution,
+    *,
+    pool: RecoverableExpensePool,
+    rentable_area_sf: float,
+) -> SuccessorRecoverySchedule:
+    """Price one successor contribution's recovery. The one adapter."""
+
+    return build_successor_recovery_schedule(
+        branch=contribution.branch,
+        successor_lease=contribution.successor_lease,
+        months=contribution.months,
+        successor_occupancy_factor=contribution.successor_occupancy_factor,
+        commencement_period=contribution.commencement_period,
+        successor_expiration_period=contribution.successor_expiration_period,
+        pool=pool,
+        rentable_area_sf=rentable_area_sf,
+    )
+
+
+def _in_place_recovery(
+    lease: Lease,
+    *,
+    schedule: LeaseMonthlySchedule,
+    pool: RecoverableExpensePool,
+    rentable_area_sf: float,
+) -> LeaseRecoverySchedule:
+    """The known lease's own recoveries, at probability ``1``.
+
+    Deterministic, and never weighted. What a sitting tenant owes before its
+    lease expires is contractual history, not a scenario -- multiplying it by
+    ``p`` or ``1 - p`` would understate every month of it.
+    """
+
+    return build_lease_recovery_schedule(
+        lease, schedule=schedule, pool=pool, rentable_area_sf=rentable_area_sf
+    )
+
+
+def _combined_chain(
+    in_place: tuple[float, ...], successor: tuple[float, ...]
+) -> tuple[float, ...]:
+    """Add the known lease's recoveries to its successors'.
+
+    A plain sum is correct **because the two are structurally disjoint**: the
+    in-place lease's responsibility factor is zero once it expires, and every
+    successor schedule is zero at or before that period. The contracts assert
+    the disjointness rather than trusting it.
+    """
+
+    return tuple(
+        ensure_finite("expected_expense_recovery", known + later)
+        for known, later in zip(in_place, successor, strict=True)
+    )
+
+
+def build_expected_rollover_recovery(
+    rollover: ExpectedRollover,
+    *,
+    expiring: Lease,
+    pool: RecoverableExpensePool,
+    rentable_area_sf: float,
+) -> ExpectedRolloverRecovery:
+    """Return one suite's **first-rollover** expected recovery (D3.4).
+
+    Prices each branch's successor independently, then weights the finished
+    dollars through D2.5's ``weighted_outcome`` -- the single probability
+    primitive in the package. Reusing it rather than re-expressing
+    ``p * r + (1 - p) * n`` is what guarantees the endpoint identities: at
+    ``p = 1`` this returns the renewal recovery bit-identically and at
+    ``p = 0`` the new-tenant recovery, because the primitive short-circuits
+    both rather than relying on ``1.0 * x + 0.0 * y`` to behave.
+
+    **Only dollars are weighted.** Each branch's lease type, recovery basis,
+    expense stop, share and responsibility factor produced its own schedule
+    first; none of them is ever averaged with the other branch's. That is not
+    a stylistic preference: the Modified Gross clip is nonlinear, so weighting
+    two stops and clipping once gives a genuinely different and wrong figure
+    (FM-D3-10).
+
+    **The pool is injected here.** ``build_expected_rollover`` neither takes
+    nor needs one, so the D2 market-leasing engine stays usable with no
+    property expense schedule in existence (D3 Section 3.4, D0 Section 13.1).
+
+    ``expiring`` is the in-place lease the branches roll over, supplied because
+    an ``ExpectedRollover`` retains its *schedule* but not the lease record
+    whose structure prices it. It contributes **once**, unweighted.
+
+    **Precondition: the inputs are already validated.** Pure and
+    deterministic: no I/O, no mutation.
+    """
+
+    if rollover.months != pool.months:
+        raise ValueError(
+            "the expected rollover and the recoverable expense pool were built "
+            "against different month sequences; both must share one canonical "
+            "timeline."
+        )
+    if expiring.lease_id != rollover.expiring_lease_id:
+        raise ValueError(
+            f"lease {expiring.lease_id!r} is not the lease this rollover "
+            f"expires ({rollover.expiring_lease_id!r}); expected recovery must "
+            "describe its own chain."
+        )
+
+    renewal = build_successor_recovery_schedule(
+        branch=RolloverBranchKind.RENEWAL,
+        successor_lease=rollover.renewal_branch.successor_lease,
+        months=rollover.months,
+        successor_occupancy_factor=(
+            rollover.renewal_branch.successor_occupancy_factor
+        ),
+        commencement_period=rollover.renewal_branch.commencement_period,
+        successor_expiration_period=(
+            rollover.renewal_branch.successor_expiration_period
+        ),
+        pool=pool,
+        rentable_area_sf=rentable_area_sf,
+    )
+    new_tenant = build_successor_recovery_schedule(
+        branch=RolloverBranchKind.NEW_TENANT,
+        successor_lease=rollover.new_tenant_branch.successor_lease,
+        months=rollover.months,
+        successor_occupancy_factor=(
+            rollover.new_tenant_branch.successor_occupancy_factor
+        ),
+        commencement_period=rollover.new_tenant_branch.commencement_period,
+        successor_expiration_period=(
+            rollover.new_tenant_branch.successor_expiration_period
+        ),
+        pool=pool,
+        rentable_area_sf=rentable_area_sf,
+    )
+
+    known = _in_place_recovery(
+        expiring,
+        schedule=rollover.renewal_branch.expiring_schedule,
+        pool=pool,
+        rentable_area_sf=rentable_area_sf,
+    )
+
+    expected_successor = tuple(
+        weighted_outcome(
+            renewal_value,
+            new_tenant_value,
+            renewal_probability=rollover.renewal_probability,
+        )
+        for renewal_value, new_tenant_value in zip(
+            renewal.expense_recovery, new_tenant.expense_recovery, strict=True
+        )
+    )
+
+    return ExpectedRolloverRecovery(
+        suite_id=rollover.suite_id,
+        expiring_lease_id=rollover.expiring_lease_id,
+        renewal_probability=rollover.renewal_probability,
+        months=rollover.months,
+        renewal_recovery=renewal,
+        new_tenant_recovery=new_tenant,
+        in_place_recovery=known,
+        in_place_expense_recovery=known.expense_recovery,
+        expected_successor_expense_recovery=expected_successor,
+        expected_expense_recovery=_combined_chain(
+            known.expense_recovery, expected_successor
+        ),
+    )
+
+
+def build_recursive_rollover_recovery(
+    rollover: RecursiveRollover,
+    *,
+    suite: Suite,
+    analysis_start: date,
+    property_defaults: MarketLeasingAssumptions,
+    pool: RecoverableExpensePool,
+    rentable_area_sf: float,
+    market_schedule: MarketRentSchedule | None = None,
+) -> RecursiveRolloverRecovery:
+    """Return one suite's expected recovery across **all** generations (D3.4).
+
+    **This function contains no recursion.** It walks
+    ``rollover.transitions`` -- the authoritative event list D2.6 already
+    produced -- and attaches recovery economics to each. Which expiration
+    periods become states, which paths merge, how mass splits at an event, the
+    processing order, when the walk stops and how much mass terminates are all
+    D2.6's decisions, read here and never re-derived. There is exactly one
+    event queue in production and it is not this one.
+
+    A second state machine is the failure this design forecloses structurally.
+    Two implementations that agree today and diverge after one change would
+    give a plausible recovery figure with no authority able to say which was
+    right.
+
+    **Each transition's successor is rebuilt through the same D2 engine.**
+    ``build_successor_contribution`` is called with that transition's own
+    ``parent_expiration_period`` and ``branch``, the same suite, the same
+    resolved assumptions and the same canonical months. D3.3 proved a
+    successor's economics are a deterministic function of exactly those, so
+    the rebuild is *the same object*, not an approximation -- which is why no
+    commencement, term, market-pricing, free-rent, TI or LC formula is
+    duplicated here. The identifier comes from the recursion's own
+    ``successor_state_lease_id_stem`` and reaches no calculation.
+
+    **Accumulation weights completed dollars only:**
+
+    ```
+    expected_successor_m = sum over transitions of  q_child x recovery_m
+    ```
+
+    where ``q_child`` is read from the transition. No lease type, basis, stop,
+    share or responsibility factor is ever averaged.
+
+    **Anti-double-counting.** Every accumulated series is successor-only and
+    zero at or before its own parent's expiration, so a generation never
+    re-counts its predecessor's months. The known in-place lease contributes
+    **once**, unweighted, from ``rollover.initial_lease``.
+
+    Recovery continues through the full ``12H + 12`` window, including the
+    forward exit months: a later-generation successor recovering after the
+    hold period is real revenue and is not truncated at a sale month. A child
+    whose commencement lies beyond the horizon contributes zero rather than a
+    fabricated month.
+
+    **Precondition: the inputs are already validated.** Pure and
+    deterministic: no I/O, no mutation, no sampling.
+    """
+
+    if rollover.months != pool.months:
+        raise ValueError(
+            "the recursive rollover and the recoverable expense pool were "
+            "built against different month sequences; both must share one "
+            "canonical timeline."
+        )
+    if rollover.suite_id != suite.suite_id:
+        raise ValueError(
+            f"the rollover describes suite {rollover.suite_id!r}, not "
+            f"{suite.suite_id!r}; recovery must be priced for its own suite."
+        )
+
+    months = rollover.months
+    count = len(months)
+    schedule = resolve_rollover_market_schedule(
+        suite,
+        months=months,
+        property_defaults=property_defaults,
+        market_schedule=market_schedule,
+    )
+
+    known = _in_place_recovery(
+        rollover.initial_lease,
+        schedule=rollover.initial_schedule,
+        pool=pool,
+        rentable_area_sf=rentable_area_sf,
+    )
+
+    # One accumulator per canonical month. Contributions are added in the
+    # authoritative transition order, so the sum is deterministic.
+    expected_successor = [0.0] * count
+    contributions: list[RecoveryContributionAudit] = []
+
+    for transition in rollover.transitions:
+        contribution = build_successor_contribution(
+            suite=suite,
+            analysis_start=analysis_start,
+            months=months,
+            market_schedule=schedule,
+            parent_expiration_period=transition.parent_expiration_period,
+            branch=transition.branch,
+            lease_id_stem=successor_state_lease_id_stem(
+                rollover.expiring_lease_id, transition.parent_expiration_period
+            ),
+        )
+        recovery = _successor_recovery_from_contribution(
+            contribution, pool=pool, rentable_area_sf=rentable_area_sf
+        )
+
+        mass = transition.probability_mass
+        for index in range(count):
+            expected_successor[index] += mass * recovery.expense_recovery[index]
+
+        own_total = fsum(recovery.expense_recovery)
+        contributions.append(
+            RecoveryContributionAudit(
+                parent_expiration_period=transition.parent_expiration_period,
+                branch=transition.branch,
+                probability_mass=mass,
+                commencement_period=contribution.commencement_period,
+                successor_expiration_period=(
+                    contribution.successor_expiration_period
+                ),
+                commences_within_projection=(
+                    contribution.commences_within_projection
+                ),
+                successor_lease_type=recovery.successor_lease_type,
+                recovery_basis=recovery.recovery_basis,
+                expense_stop_psf=recovery.expense_stop_psf,
+                monthly_expense_stop_dollars=(
+                    recovery.monthly_expense_stop_dollars
+                ),
+                in_window_expense_recovery=own_total,
+                expected_expense_recovery_contribution=mass * own_total,
+            )
+        )
+
+    expected_successor_series = tuple(
+        ensure_finite("expected_successor_expense_recovery", value)
+        for value in expected_successor
+    )
+
+    return RecursiveRolloverRecovery(
+        suite_id=rollover.suite_id,
+        expiring_lease_id=rollover.expiring_lease_id,
+        renewal_probability=rollover.renewal_probability,
+        months=months,
+        rollover=rollover,
+        in_place_recovery=known,
+        in_place_expense_recovery=known.expense_recovery,
+        expected_successor_expense_recovery=expected_successor_series,
+        expected_expense_recovery=_combined_chain(
+            known.expense_recovery, expected_successor_series
+        ),
+        contributions=tuple(contributions),
+        # Mirrored from the authoritative result, never recomputed: D2.6
+        # already proves mass conservation and a second algorithm could only
+        # agree or manufacture a discrepancy.
+        terminal_probability_mass=rollover.terminal_probability_mass,
     )

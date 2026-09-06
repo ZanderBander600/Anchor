@@ -1732,3 +1732,240 @@ class SuccessorRecoverySchedule:
                     f"per model month; got {len(series)} for {expected} "
                     "months."
                 )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExpectedRolloverRecovery:
+    """One suite's **first-rollover** expected expense-recovery revenue (D3.4).
+
+    The recovery analogue of ``ExpectedRollover``, and it composes exactly the
+    way D2.5 does: two complete branch schedules, weighted once, at the
+    **output**.
+
+    ```
+    ExpectedSuccessorRecovery_m = p x RenewalRecovery_m
+                                + (1 - p) x NewTenantRecovery_m
+    ```
+
+    **Only finished dollars are weighted** (HD-D2-1, D3 Section 10.1). No lease
+    type, recovery basis, expense stop, pro-rata share or responsibility factor
+    is ever averaged. A weighted lease type is not a lease type, and
+    ``0.65 x NNN + 0.35 x GROSS`` is not a structure any tenant signs.
+
+    **The nonlinearity makes this load-bearing rather than stylistic.** The
+    Modified Gross clip is not linear in the pool, so
+
+    ```
+    E[max(0, X - S)]  !=  max(0, E[X] - E[S])
+    ```
+
+    Weighting the two branches' stops and clipping once gives a different, and
+    wrong, number -- failure mode **FM-D3-10**. Both branch schedules are
+    retained here precisely so the composed figure stays auditable back to the
+    structures that produced it.
+
+    **Three series, and the distinction between them is deliberate:**
+
+    - ``in_place_expense_recovery`` -- the **known** lease's own recoveries.
+      Deterministic, at probability ``1``, never multiplied by ``p`` or
+      ``1 - p``. What the sitting tenant owes before it expires is not a
+      scenario.
+    - ``expected_successor_expense_recovery`` -- the weighted composition
+      above. Zero at and before the parent's expiration, because both branch
+      schedules are successor-only.
+    - ``expected_expense_recovery`` -- the full lease chain, their sum. The two
+      addends are **structurally non-overlapping**: the in-place lease's
+      responsibility factor is zero after it expires and a successor's is zero
+      at or before that period, so no month is counted twice. ``__post_init__``
+      asserts it.
+
+    Deliberately absent: any "expected lease type", "expected recovery basis"
+    or "expected expense stop". Only a composed **dollar** is financially
+    meaningful; the assumptions stay on the pure branch records, where they
+    describe a structure some tenant actually signs.
+
+    Built only by ``anchor.leasing.recoveries``; this dataclass performs no
+    calculation of its own.
+    """
+
+    suite_id: str
+    expiring_lease_id: str
+    renewal_probability: float
+    months: tuple[ModelMonth, ...]
+
+    renewal_recovery: SuccessorRecoverySchedule
+    new_tenant_recovery: SuccessorRecoverySchedule
+    in_place_recovery: LeaseRecoverySchedule
+
+    in_place_expense_recovery: tuple[float, ...]
+    expected_successor_expense_recovery: tuple[float, ...]
+    expected_expense_recovery: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("in_place_expense_recovery", self.in_place_expense_recovery),
+            (
+                "expected_successor_expense_recovery",
+                self.expected_successor_expense_recovery,
+            ),
+            ("expected_expense_recovery", self.expected_expense_recovery),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"ExpectedRolloverRecovery requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+        if not 0.0 <= self.renewal_probability <= 1.0:
+            raise ValueError(
+                f"renewal_probability {self.renewal_probability!r} must be "
+                "between 0 and 1 inclusive."
+            )
+        # Anti-double-counting: the known lease and its successors never both
+        # recover in one month.
+        for month, known, successor in zip(
+            self.months,
+            self.in_place_expense_recovery,
+            self.expected_successor_expense_recovery,
+            strict=True,
+        ):
+            if known != 0.0 and successor != 0.0:
+                raise ValueError(
+                    f"period {month.period_index} carries both in-place "
+                    f"recovery {known!r} and successor recovery "
+                    f"{successor!r}; a suite has one occupant at a time and "
+                    "recovery must not be counted twice."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecoveryContributionAudit:
+    """One rollover transition's contribution to expected recovery (D3.4).
+
+    One record per **authoritative D2.6 transition**, never one per scenario
+    path: an explicit tree of ``2^r`` paths is exactly what the accepted
+    recursion architecture replaces, and D3 storing one would defeat that.
+
+    ``probability_mass`` is read from the D2 transition, never recomputed.
+    D2.6 owns which states exist, which merge, how mass splits and when the
+    walk terminates; D3 attaches recovery economics to the events D2 already
+    decided, and decides none of them itself.
+
+    ``in_window_expense_recovery`` is this successor's **own** total recovery
+    across the canonical window at probability ``1``;
+    ``expected_expense_recovery_contribution`` is that total times the mass.
+    Keeping both makes the weighting step legible: a reader can see the
+    structure's own economics and the weight applied to it separately.
+    """
+
+    parent_expiration_period: int
+    branch: RolloverBranchKind
+    probability_mass: float
+    commencement_period: int
+    successor_expiration_period: int
+    commences_within_projection: bool
+    successor_lease_type: LeaseType
+    recovery_basis: RecoveryBasis | None
+    expense_stop_psf: float | None
+    monthly_expense_stop_dollars: float | None
+    in_window_expense_recovery: float
+    expected_expense_recovery_contribution: float
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecursiveRolloverRecovery:
+    """One suite's expected expense recovery across **all** successor
+    generations (D3.4).
+
+    **It owns no recursion.** The authoritative ``RecursiveRollover`` is
+    retained whole in ``rollover`` and supplies every structural decision:
+    which expiration periods become states, which paths merge, how probability
+    mass splits at each event, the processing order, when the walk terminates,
+    and the terminal mass. D3 walks that result's ``transitions``, rebuilds
+    each successor through the **same** D2 successor engine, prices its
+    recovery, and accumulates ``mass x dollars``.
+
+    There is therefore exactly one event queue in production, and it is
+    D2.6's. A second one in ``recoveries.py`` could drift from it silently --
+    two state machines agreeing today and disagreeing after one change is the
+    failure this design forecloses structurally rather than by testing.
+
+    **Reconstruction is exact, not approximate.** D3.3 proved a successor's
+    economics are a deterministic function of ``(suite, resolved assumptions,
+    parent expiration period, branch kind, canonical months, market
+    schedule)`` and never of its predecessor. Every one of those is available
+    from the retained result and the same inputs that produced it, so
+    rebuilding a transition's successor yields the identical
+    ``SuccessorContribution`` -- which is why no timing, pricing, concession,
+    TI or LC formula is duplicated here.
+
+    ``terminal_probability_mass`` is **mirrored** from ``rollover``, not
+    recomputed. D2.6 already proves mass conservation; a second algorithm
+    could only agree or introduce a discrepancy with no authority to resolve
+    it.
+
+    The three recovery series carry the same meanings, and the same
+    non-overlap guarantee, as on ``ExpectedRolloverRecovery``: the known lease
+    contributes **once**, at probability ``1``, and every successor generation
+    contributes only its own successor-only recovery.
+
+    Built only by ``anchor.leasing.recoveries``; this dataclass performs no
+    calculation of its own.
+    """
+
+    suite_id: str
+    expiring_lease_id: str
+    renewal_probability: float
+    months: tuple[ModelMonth, ...]
+
+    rollover: RecursiveRollover
+    in_place_recovery: LeaseRecoverySchedule
+
+    in_place_expense_recovery: tuple[float, ...]
+    expected_successor_expense_recovery: tuple[float, ...]
+    expected_expense_recovery: tuple[float, ...]
+
+    contributions: tuple[RecoveryContributionAudit, ...]
+    terminal_probability_mass: float
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("in_place_expense_recovery", self.in_place_expense_recovery),
+            (
+                "expected_successor_expense_recovery",
+                self.expected_successor_expense_recovery,
+            ),
+            ("expected_expense_recovery", self.expected_expense_recovery),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"RecursiveRolloverRecovery requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+        if self.rollover.months != self.months:
+            raise ValueError(
+                "the retained rollover was built against a different month "
+                "sequence; recovery and rollover must share one canonical "
+                "timeline."
+            )
+        if len(self.contributions) != len(self.rollover.transitions):
+            raise ValueError(
+                f"got {len(self.contributions)} recovery contributions for "
+                f"{len(self.rollover.transitions)} authoritative rollover "
+                "transitions; D3 attaches recovery to the events D2 decided "
+                "and must never add or drop one."
+            )
+        for month, known, successor in zip(
+            self.months,
+            self.in_place_expense_recovery,
+            self.expected_successor_expense_recovery,
+            strict=True,
+        ):
+            if known != 0.0 and successor != 0.0:
+                raise ValueError(
+                    f"period {month.period_index} carries both in-place "
+                    f"recovery {known!r} and successor recovery "
+                    f"{successor!r}; a suite has one occupant at a time and "
+                    "recovery must not be counted twice."
+                )

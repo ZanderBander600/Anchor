@@ -609,6 +609,24 @@ def build_renewal_successor_lease(
 # =============================================================================
 
 
+def successor_state_lease_id_stem(expiring_lease_id: str, expiration_period: int) -> str:
+    """Return the deterministic, **state-derived** successor identity stem.
+
+    Factored out at D3.4 so recovery reconstruction reuses the recursion's own
+    identity rule rather than re-deriving one. It is a function of the state --
+    the originating lease's id and the expiration period -- so a merged state
+    yields one stem however many paths reached it.
+
+    **It reaches no calculation.** ``build_successor_contribution`` uses it to
+    name the successor and nothing else; every financial output is identical
+    whatever stem is supplied. It is therefore not part of the rollover state
+    (D2 Section 5.5.1), and adding an identifier to that state would be a
+    modelling error, not an improvement.
+    """
+
+    return f"{expiring_lease_id}@e{expiration_period}"
+
+
 def build_successor_contribution(
     *,
     suite: Suite,
@@ -871,13 +889,20 @@ class _BranchCore:
     )
 
 
-def _resolve_market_schedule(
+def resolve_rollover_market_schedule(
     suite: Suite,
     *,
     months: tuple[ModelMonth, ...],
     property_defaults: MarketLeasingAssumptions,
     market_schedule: MarketRentSchedule | None,
 ) -> MarketRentSchedule:
+    """Resolve the canonical market schedule a rollover prices from.
+
+    Made public at D3.4 so recovery reconstruction resolves the schedule by
+    the **same** rule the recursion used, rather than re-deriving one that
+    could drift. Behaviour is unchanged from D2.2.
+    """
+
     if market_schedule is None:
         return build_market_rent_schedule(
             suite, property_defaults=property_defaults, months=months
@@ -1036,7 +1061,7 @@ def build_renewal_branch(
     Pure and deterministic: no I/O, no mutation.
     """
 
-    schedule = _resolve_market_schedule(
+    schedule = resolve_rollover_market_schedule(
         suite,
         months=months,
         property_defaults=property_defaults,
@@ -1135,7 +1160,7 @@ def build_new_tenant_branch(
     Pure and deterministic: no I/O, no mutation.
     """
 
-    schedule = _resolve_market_schedule(
+    schedule = resolve_rollover_market_schedule(
         suite,
         months=months,
         property_defaults=property_defaults,
@@ -1450,7 +1475,7 @@ def build_expected_rollover(
     builder in this package.
     """
 
-    resolved_schedule = _resolve_market_schedule(
+    resolved_schedule = resolve_rollover_market_schedule(
         suite,
         months=months,
         property_defaults=property_defaults,
@@ -1589,7 +1614,7 @@ def build_recursive_rollover(
     Pure and deterministic: no I/O, no mutation, no sampling.
     """
 
-    schedule = _resolve_market_schedule(
+    schedule = resolve_rollover_market_schedule(
         suite,
         months=months,
         property_defaults=property_defaults,
@@ -1670,7 +1695,9 @@ def build_recursive_rollover(
                 # Derived from the STATE, never from a predecessor path, so a
                 # merged state has one identifier however many paths reached
                 # it -- and the identifier reaches no calculation.
-                lease_id_stem=f"{expiring.lease_id}@e{period}",
+                lease_id_stem=successor_state_lease_id_stem(
+                    expiring.lease_id, period
+                ),
             )
 
             for index in range(count):
