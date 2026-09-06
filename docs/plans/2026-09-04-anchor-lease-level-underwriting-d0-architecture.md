@@ -2,7 +2,7 @@
 title: Lease-Level Underwriting - D0 Architecture and Financial Conventions
 type: feat
 date: 2026-09-04
-amended: 2026-09-04
+amended: 2026-09-05
 topic: lease-level-underwriting
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
@@ -700,6 +700,12 @@ class PropertyRentRollSchedule:
 ```
 
 #### `MonthlyPropertyProjection` — the canonical projection  *(D4)*
+
+> **Amended at D4.0.** This sketch predates D2.3. Two fields change; see
+> Section 18.1's amendment block and D4.0 §5.4 / §29.3. `cash_base_rent` and
+> `absent_rent` join the flow series (EGI is built from `cash_base_rent`, not
+> from `contractual_base_rent − free_rent`), and `market_rent_psf` moves out of
+> the D4 contract to D5 presentation (**HD-D4-4**). The remaining fields stand.
 
 ```python
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1807,6 +1813,33 @@ Disclosed consequences:
 **State:**
 
 12. `occupied_area`, `vacant_area`, `physical_occupancy`, `market_rent_psf`
+
+> **Amended at D4.0 — the EGI formula in line 6 is incomplete.** Written before
+> D2.3 shipped, line 6 assumes `cash rent == contractual_base_rent − free_rent`.
+> The D2.3 concession waterfall makes that false in a **fractional downtime
+> boundary month**: there, `cash_base_rent = R × (O_m − a)` while
+> `contractual_base_rent − free_rent = R × (1 − a)`, and the two differ by
+> `R × frac(D)` — the *downtime* portion of the month, which line 6 would
+> recognise as collected revenue. On D2 §7.2's own reference case
+> (`D = 2.25`, `R = 100,000`, September) line 6 gives `25,000` where the
+> tenant paid `0`.
+>
+> **The correction, and the only change:** EGI consumes `cash_base_rent`
+> directly, and a third audit line `absent_rent` is published so the statement
+> stays additive:
+>
+> ```
+> absent_rent_m = contractual_base_rent_m − free_rent_m − cash_base_rent_m   (>= 0)
+> EGI_m         = cash_base_rent_m + expense_recoveries_m + other_income_m − credit_loss_m
+> ```
+>
+> No lease-level number changes; D1–D3 are untouched. The proof, the worked
+> case and the human decision (**HD-D4-5**) are in
+> `docs/plans/2026-09-05-anchor-lease-level-underwriting-d4-integration-architecture.md`
+> §5.4 and §33. Line 12's `market_rent_psf` is likewise revisited there
+> (**HD-D4-4**): `market.py` refuses to aggregate a rate across suites, so a
+> property-level figure is a D5 presentation concern rather than a D4 field.
+> Every other item in this section stands unchanged.
 
 ### 18.2 Renewal and replacement rent are not separate revenue lines
 
