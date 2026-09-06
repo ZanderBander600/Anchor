@@ -605,10 +605,11 @@ it does not touch `base_rent_psf`, escalation, dates, or any D1 formula.
 
 ### 9.2 Successor lease type — the significant open decision
 
-**Today's behaviour, verified in code:** `build_recursive_rollover` passes
-`lease_type=expiring.lease_type` where `expiring` is the **original in-place
-lease**, at *every* generation. So the entire rollover chain — first successor,
-fifth successor — carries the original rent roll's lease type forever.
+**Behaviour as of D3.0, verified in code and since removed at D3.3:**
+`build_recursive_rollover` passed `lease_type=expiring.lease_type` where
+`expiring` is the **original in-place lease**, at *every* generation. So the
+entire rollover chain — first successor, fifth successor — carried the original
+rent roll's lease type forever.
 
 That was harmless while `LeaseType` was inert. At D3 it becomes an economic
 assertion, and a questionable one: *"a Gross tenant vacates in year 6, and the
@@ -685,9 +686,19 @@ because their **futures are identical**. The sufficient state key
 (suite_id, expiration_period, lease_type, leased_area_sf)
 ```
 
-reducing in practice to the expiration period, because the other three are
-invariant. **D3 introduces the first economics that could break that**, so the
-question must be settled before implementation.
+reducing in practice to the expiration period. At D2 that reduction rested on
+all three non-period dimensions being **invariant**. **D3 introduces the first
+economics that could break that**, so the question must be settled before
+implementation.
+
+> **Amended at D3.3.** The invariance premise for `lease_type` is no longer
+> true, and saying otherwise would leave a false statement supporting a true
+> conclusion. Under HD-D3-1 a successor's type is resolved per branch, so a
+> renewal and a new letting may differ from each other and from their
+> predecessor. The reduction survives on the stronger ground stated below:
+> `lease_type` is not merely constant, it is **not an input to any future
+> economics**, and a quantity nothing reads cannot distinguish two states.
+> `suite_id` and `leased_area_sf` remain genuinely invariant.
 
 **The rule that preserves it, stated as binding:**
 
@@ -712,6 +723,31 @@ at the same expiration period still have identical futures.
 
 > **Conclusion: the D2.6 merge key is unchanged. `states ≤ N` and
 > `transitions ≤ 2N` still hold, and no arbitrary cap becomes necessary.**
+
+**Re-derived and asserted in code at D3.3**, as this section required, rather
+than carried forward on the D2.6 analysis:
+
+- `build_successor_contribution` lost its `lease_type` parameter. Its full
+  argument list is now `(suite, analysis_start, months, market_schedule,
+  parent_expiration_period, branch, lease_id_stem)` — no predecessor input of
+  any kind survives — and that list is asserted **exhaustively**, so widening
+  it fails a test.
+- The production queue is `dict[int, list[float]]`, keyed on the expiration
+  period alone. The annotation itself is asserted, so a key widened back to a
+  tuple carrying `lease_type` fails rather than silently multiplying states.
+- Four predecessors differing in lease type, recovery basis, expense stop,
+  rent and identity, but sharing suite, area and expiration, produce
+  **hex-identical** successor economics on both branches — dates, rent, term,
+  TI, LC, chosen successor structure and recovery dollars — and identical
+  recursion state and transition counts.
+- Chain inheritance is banned by an AST guardrail across the whole package,
+  not only at the call site that used to do it.
+
+**What changed in production to make this true**: through D2.6 every caller
+passed `lease_type=expiring.lease_type`, taken from the *original in-place
+lease*, so a whole rollover chain carried the opening rent roll's structure
+forever. That was the inheritance this section named as the design that would
+break the key. D3.3 removed it.
 
 **The design that would break it, named so it is not adopted by accident:**
 chain inheritance — a successor taking its lease type or its stop *from its
@@ -837,7 +873,7 @@ each gate a real financial claim.
 | **D3.0** | *This document* | Conventions locked; D2.6 merge key proven safe | `docs/` only |
 | **D3.1** | Recoverable pool, pro-rata share, **NNN and Gross** | The pool contract and injected series; shares summing to `1.0`; first-dollar NNN; Gross exactly zero; the responsibility factor including the fractional boundary; free rent not reducing recovery; downtime zero | new `recoveries.py` |
 | **D3.2** | **Modified Gross** + the explicit basis | `max(0, pool − stop)`; the `RecoveryBasis` seam; the missing-basis ERROR; the growth-crossing case | `recoveries.py`, `validation.py` |
-| **D3.3** | Successor recovery assumptions | Branch-specific lease type and basis (HD-D3-1/2, both decided); **the merge-key guardrail — required here, before D3.4 builds recursion on it**; renewal ≠ new-tenant structures | `contracts.py`, `rollover.py` |
+| **D3.3** | Successor recovery assumptions | Branch-specific lease type and basis (HD-D3-1/2, both decided); **the merge-key guardrail — required here, before D3.4 builds recursion on it**, and the sufficiency proof re-derived rather than cited; renewal ≠ new-tenant structures; pure-branch recovery schedules | `contracts.py`, `rollover.py`, `recoveries.py`, `validation.py` |
 | **D3.4** | Expected + recursive recoveries | The eleventh weighted series through `weighted_outcome`; recursion across generations; `p=0`/`p=1` endpoint identity; explicit-tree oracle extended | `rollover.py` |
 | **D3.5** | Property recovery aggregation + D3 closeout | Lease → property monthly recovery; annual derived solely from monthly; full D3 golden suite; guardrails | `aggregation.py`, tests |
 
