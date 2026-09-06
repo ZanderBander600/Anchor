@@ -1,7 +1,7 @@
 ---
 title: "Lease-Level Underwriting — D3 Expense Recovery Conventions"
 gate: D3.0
-status: Financially accepted at D3.0 human review; ready for D3.1
+status: D3 COMPLETE at D3.5 (D3.0-D3.5 implemented and verified); ready for final human review
 supersedes: nothing
 governed_by:
   - docs/plans/2026-09-04-anchor-lease-level-underwriting-d0-architecture.md
@@ -902,7 +902,7 @@ each gate a real financial claim.
 | **D3.2** | **Modified Gross** + the explicit basis | `max(0, pool − stop)`; the `RecoveryBasis` seam; the missing-basis ERROR; the growth-crossing case | `recoveries.py`, `validation.py` |
 | **D3.3** | Successor recovery assumptions | Branch-specific lease type and basis (HD-D3-1/2, both decided); **the merge-key guardrail — required here, before D3.4 builds recursion on it**, and the sufficiency proof re-derived rather than cited; renewal ≠ new-tenant structures; pure-branch recovery schedules | `contracts.py`, `rollover.py`, `recoveries.py`, `validation.py` |
 | **D3.4** | Expected + recursive recoveries | Composition through `weighted_outcome` on completed branch dollars; recursion across generations by consuming D2.6's authoritative transitions rather than duplicating them; `p=0`/`p=1` endpoint identity; explicit-tree recovery oracle | `contracts.py`, `recoveries.py`, `rollover.py` (one identity helper and one resolver made public) |
-| **D3.5** | Property recovery aggregation + D3 closeout | Lease → property monthly recovery; annual derived solely from monthly; full D3 golden suite; guardrails | `aggregation.py`, tests |
+| **D3.5** | Property recovery aggregation + D3 closeout | Lease → property monthly recovery; annual derived solely from monthly; full D3 golden suite; guardrails | `aggregation.py`, `contracts.py`, `validation.py`, tests |
 
 D3.1 is deliberately the largest: it establishes the pool contract and the
 responsibility factor, which everything after it reuses. D3.3 is small but is
@@ -1042,3 +1042,86 @@ clarified three rules. It changed no accepted financial convention.
 
 No D3 production code exists. **HD-D3-1 through HD-D3-4 are decided, so no human
 decision blocks any D3 gate. D3.1 may begin.**
+
+
+---
+
+## 21. D3 closeout — recorded at D3.5
+
+**Sprint D3 is complete.** D3.0 through D3.5 are implemented, and every gate
+was accepted at human financial review. `anchor.leasing` remains dark to the
+rest of Anchor: nothing outside the package changed across the sprint.
+
+### 21.1 The delivered contracts
+
+| Layer | Contract | Question it answers |
+|---|---|---|
+| Input | `RecoverableExpensePool` | What is recoverable this month, at the property? (**injected**, never built here) |
+| Known lease | `LeaseRecoverySchedule` | What does this sitting tenant reimburse? |
+| Pure branch | `SuccessorRecoverySchedule` | What would a renewal — or a new letting — reimburse? |
+| First rollover | `ExpectedRolloverRecovery` | What does one rollover reimburse in expectation? |
+| All generations | `RecursiveRolloverRecovery` | ...and across every successor generation? |
+| Aggregation seam | `SuiteRecoveryProjection` | One suite's finished dollars, and nothing else |
+| Property | `PropertyRecoverySchedule` | What does the property reimburse, monthly and annually? |
+
+`suite_recovery_projection` is the single extraction seam: any of the three
+authoritative full-chain results projects onto the same narrow boundary, so
+property aggregation has one input shape rather than one formula per result
+type. It copies an already-computed series and performs no arithmetic.
+
+### 21.2 Where each economic decision lives — exactly once
+
+The NNN rule, the Gross zero, the Modified Gross clip, the `$/SF/YEAR` → monthly
+conversion and the responsibility-factor placement are each singular in
+`recoveries.py`. Probability weighting is singular in `weighted_outcome`. The
+rollover event recursion is singular in `build_recursive_rollover`. Property
+aggregation adds a sum and nothing else. Each of those is asserted structurally,
+not merely tested.
+
+### 21.3 Failure-mode closeout
+
+All nineteen registered failure modes (Section 13) are closed and **traceable**:
+each is cited in the contract, validator, architecture guardrail or golden that
+enforces it, so the register can be walked from the document to the test that
+would fail. No failure mode is deferred.
+
+### 21.4 Carried forward — deliberately unresolved
+
+| Item | Status | D3 behaviour in the interim |
+|---|---|---|
+| **HD-D3-5** per-category recoverability | `CAN DEFER`, undecided | One aggregate pool × ratio (Section 3.1) |
+| **HD-D3-6** pro-rata override / gross-up denominator | `CAN DEFER`, undecided | Area quotient only; **no gross-up** (Section 4) |
+| **HD-D3-7** recovery abatement clauses | `CAN DEFER`, undecided | Unsupported and never inferred from free rent |
+| **HD-D3-8** authoritative pool construction | `CAN DEFER`, undecided | Pool injected; D4 supplies it |
+
+**No human decision blocks D4.** Each interim behaviour is a stated convention
+with a guardrail, not an accident.
+
+#### The initial-vacancy limitation — new, and disclosed here
+
+D2/D3 rollover begins from a **known lease's expiration**. A suite that is
+vacant at the analysis start has no lease, therefore no expiration event,
+therefore no successor chain — so **it recovers zero for the entire
+projection**, and Anchor models no lease-up for it.
+
+This is a **product limitation, not a modelling error**, and D3.5 does not
+solve it: inventing a market lease-up would mean inventing a commencement, a
+probability and a structure that no input states, which is precisely what
+Section 6.1 forbids elsewhere. It is recorded here because it is a real
+underwriting gap for a partially-vacant acquisition — exactly the case a
+value-add buyer cares most about — and because the honest zero is easy to
+mistake for a modelled result. Speculative lease-up is a candidate D4+ feature
+and needs its own human decision.
+
+The related disclosed edge remains: with **no gross-up**, a half-empty property
+recovers only about half its pool. That is the arithmetic of the chosen
+convention (Section 18.4).
+
+### 21.5 What D3 deliberately does not do
+
+D3 stops at *"monthly recovery revenue, by lease and by property"*. It builds
+no expense schedule, applies no `recoverable_expense_ratio`, computes no
+management fee, and never nets a recovery against an expense — recoveries are
+revenue on their own line (D0 Section 10.2). EGI, credit loss, NOI, exit NOI
+and the D0 Section 16.4 ordering all need the expense engine and the revenue
+build that **D4** owns.
