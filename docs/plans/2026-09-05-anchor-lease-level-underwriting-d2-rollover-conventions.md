@@ -385,7 +385,7 @@ Field-by-field, is the weighting mathematically defensible?
 | `lc_pct` | **No** | LC is `lc_pct × Σrent`, a product of two branch-correlated quantities. `E[XY] ≠ E[X]E[Y]`. Measured error −19.8% |
 | `term_months` | **No — cannot be collapsed at all** | The weighted value is generally fractional (`0.70×60 + 0.30×61 = 60.3`). D1 leases expire on month boundaries. Rounding moves the next rollover; not rounding is unrepresentable |
 | `escalation_pct` | **Yes** | `successor_escalation_pct` is a single common assumption, not branch-specific |
-| `lease_type` | **Yes** | Inherited from the expiring lease, common to both branches |
+| `lease_type` | **Yes** | Inherited from the expiring lease, common to both branches. **Superseded at D3.3**: resolved per branch from `renewal_lease_type` / `new_lease_type`, so the two branches may differ (HD-D3-1) |
 
 **Fields that cannot be safely collapsed without an additional convention:**
 `downtime_months`, `free_rent_months`, `term_months`, `lc_pct`, and the
@@ -606,6 +606,23 @@ period `e`, carrying probability mass `q`". The sufficient state key is
 and within a single suite's chain the last three are invariant, so the key
 reduces in practice to the **expiration period alone**.
 
+> **Superseded in one premise at D3.3 — the conclusion is unchanged.** The
+> reasoning below is correct as of D2, where `lease_type` was economically
+> inert and inherited, and therefore invariant along a chain. D3.3 makes
+> `lease_type` economically operative and resolves a successor's structure
+> from **branch-specific** market-leasing assumptions instead of inheritance
+> (HD-D3-1, HD-D3-2), so it is no longer chain-invariant: a renewal and a
+> new letting may differ, and neither matches its predecessor except by
+> choice.
+>
+> The merge key survives for a **stronger** reason than invariance. A
+> quantity that no future economics reads is not a state dimension at all,
+> and after D3.3 nothing in successor construction reads a predecessor's
+> lease type, recovery basis or expense stop. The key therefore remains the
+> expiration period alone. The re-derivation is D3 Section 10.2; the
+> production key is asserted in
+> `tests/test_leasing_architecture.py::test_the_production_merge_key_is_the_expiration_period_alone`.
+
 This is provable from the successor construction rather than assumed. A
 successor lease reads exactly two things from the lease it replaces: its
 `lease_id`, used only to derive an identifier, and its `lease_type`, which is
@@ -620,13 +637,27 @@ economically load-bearing input comes from elsewhere:
 | `base_rent_psf` | `MarketRentPSF(c)`, or `renewal_rent_psf` grown to `c`, or `MarketRentPSF(c) × (1 + spread)` | **No** |
 | `escalation_pct` | `successor_escalation_pct` | No |
 | `escalation_basis` | always `LEASE_ANNIVERSARY` | No |
-| `lease_type` | inherited | Invariant along the chain |
+| `lease_type` | inherited (**D2 only** — see the note above; from D3.3 it is resolved per branch) | Invariant along the chain **at D2**; from D3.3, not read from the parent at all |
 | TI, LC, downtime, free rent, term | resolved `MarketLeasingAssumptions` | No |
 
 The load-bearing row is `base_rent_psf`. **The parent's rent never reaches the
 child.** A successor prices from market at its own commencement period, so two
 paths that arrive at the same `e` — however differently they were priced, and
 whichever branch type they came from — have *identical* futures.
+
+> **Forward note, added at D3.6 — a second entry path, not a second engine.**
+> D2.6 is entered here from a *known in-place lease's* expiration. D3.6
+> proposes a second entry: a suite **vacant at the analysis start**, whose
+> deterministic first tenant is built by the same successor engine at the
+> boundary index `0` and whose expiration then seeds this same propagation at
+> mass `1.0`. Nothing in the analysis below changes — the state key, the merge
+> rule, the mass conservation and the `states <= N` / `transitions <= 2N`
+> bounds all hold unchanged, because a successor is a function of
+> `(suite, resolved assumptions, parent expiration period, branch kind,
+> months, market schedule)` and never of how its chain began. Verified in
+> code: a vacant-origin and an occupied-origin chain reaching the same
+> expiration period produce successors identical in all ten monthly series and
+> all eight scalars. See D3 conventions Section 22.
 
 **Therefore two scenario paths reaching the same expiration period may be
 merged by adding their probability masses.** Nothing else is combined: no rent,

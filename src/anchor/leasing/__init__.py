@@ -98,6 +98,18 @@ series directly, never reconstructed from expected factors, because
 ``physical_occupancy`` stays integral; the composed fractional series is
 ``expected_occupancy`` / ``expected_occupied_area_sf``. Recursion is D2.6, and
 the downstream below-NOI channel is D4.
+
+D3.1 adds tenant expense-recovery revenue for known `NNN` and `GROSS` leases.
+Given an injected ``RecoverableExpensePool`` -- D3 projects no operating
+expenses and builds no shadow expense engine, which is the D3/D4 seam --
+``recoveries.py`` computes ``factor x share x pool`` through one authoritative
+formula. The pro-rata share is leased area over rentable area on D1's exact
+basis; the economic responsibility factor comes from D1 contractual activity,
+never from rent dollars, so a zero-rent lease still recovers in full. `GROSS`
+is an explicit zero rather than a zero factor, and `MODIFIED_GROSS` is refused
+rather than silently zeroed -- it needs an explicit contractual basis, which is
+D3.2. Successor recoveries are D3.3, expected and recursive recoveries D3.4,
+and property aggregation D3.5.
 """
 
 from __future__ import annotations
@@ -107,6 +119,8 @@ from .aggregation import (
     aggregate_flow_to_annual,
     average_state_over_year,
     build_property_rent_roll_schedule,
+    build_property_recovery_schedule,
+    suite_recovery_projection,
     snapshot_state_at_year_end,
 )
 from .calendar import (
@@ -121,11 +135,19 @@ from .calendar import (
 from .contracts import (
     EscalationBasis,
     ExpectedRollover,
+    ExpectedRolloverRecovery,
+    InitialVacancyAssumptions,
+    InitialVacancyRollover,
+    InitialVacancyRolloverRecovery,
+    InitialVacancyStrategy,
     RecursiveRollover,
+    RecursiveRolloverRecovery,
     RolloverBranchKind,
     RolloverEventStateAudit,
     RolloverTransitionAudit,
     SuccessorContribution,
+    SuccessorRecoverySchedule,
+    SuiteRecoveryProjection,
     Lease,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
@@ -135,9 +157,14 @@ from .contracts import (
     MarketAssumptionSource,
     MarketLeasingAssumptions,
     MarketRentSchedule,
+    LeaseRecoverySchedule,
     ModelMonth,
     NewTenantBranch,
     PropertyRentRollSchedule,
+    PropertyRecoverySchedule,
+    RecoverableExpensePool,
+    RecoveryContributionAudit,
+    RecoveryBasis,
     RenewalBranch,
     ResolvedMarketLeasing,
     Suite,
@@ -156,6 +183,17 @@ from .leasing_costs import (
     leasing_cost_event_series,
     tenant_improvement_amount,
 )
+from .recoveries import (
+    build_lease_recovery_schedule,
+    build_successor_recovery_schedule,
+    build_expected_rollover_recovery,
+    build_recursive_rollover_recovery,
+    build_initial_vacancy_rollover_recovery,
+    lease_responsibility_factors,
+    monthly_expense_recovery,
+    monthly_expense_stop_dollars,
+    tenant_pro_rata_share,
+)
 from .rent import (
     build_lease_monthly_schedule,
     contractual_face_rent_over_full_term,
@@ -164,7 +202,9 @@ from .rent import (
 from .rollover import (
     build_expected_rollover,
     build_recursive_rollover,
+    build_initial_vacancy_rollover,
     build_successor_contribution,
+    successor_state_lease_id_stem,
     build_new_tenant_branch,
     compose_expected_rollover,
     build_renewal_branch,
@@ -181,6 +221,14 @@ from .rollover import (
     weighted_outcome,
 )
 from .validation import (
+    require_valid_recovery_inputs,
+    require_valid_property_recovery_inputs,
+    require_valid_initial_vacancy_inputs,
+    require_valid_successor_recovery_assumptions,
+    validate_recovery_inputs,
+    validate_property_recovery_inputs,
+    validate_initial_vacancy_inputs,
+    validate_successor_recovery_assumptions,
     LeaseIssueCode,
     LeaseIssueSeverity,
     LeaseValidationError,
@@ -205,7 +253,10 @@ __all__ = [
     "build_lease_monthly_schedule",
     # property aggregation (D1.3)
     "PropertyRentRollSchedule",
+    "PropertyRecoverySchedule",
     "build_property_rent_roll_schedule",
+    "build_property_recovery_schedule",
+    "suite_recovery_projection",
     "aggregate_flow_to_annual",
     "aggregate_flow_over_forward_exit_window",
     "snapshot_state_at_year_end",
@@ -248,17 +299,41 @@ __all__ = [
     "lease_contractual_term_months",
     # expected-value composition (D2.5)
     "ExpectedRollover",
+    "ExpectedRolloverRecovery",
+    "InitialVacancyAssumptions",
+    "InitialVacancyRollover",
+    "InitialVacancyRolloverRecovery",
+    "InitialVacancyStrategy",
     "weighted_outcome",
     "compose_expected_rollover",
     "build_expected_rollover",
     # recursive rollover (D2.6)
     "RolloverBranchKind",
     "SuccessorContribution",
+    "SuccessorRecoverySchedule",
+    "SuiteRecoveryProjection",
     "RolloverEventStateAudit",
     "RolloverTransitionAudit",
     "RecursiveRollover",
+    "RecursiveRolloverRecovery",
     "build_successor_contribution",
+    "successor_state_lease_id_stem",
     "build_recursive_rollover",
+    "build_initial_vacancy_rollover",
+    # expense recoveries (D3.1)
+    "RecoverableExpensePool",
+    "RecoveryContributionAudit",
+    "RecoveryBasis",
+    "LeaseRecoverySchedule",
+    "tenant_pro_rata_share",
+    "lease_responsibility_factors",
+    "monthly_expense_recovery",
+    "monthly_expense_stop_dollars",
+    "build_lease_recovery_schedule",
+    "build_successor_recovery_schedule",
+    "build_expected_rollover_recovery",
+    "build_recursive_rollover_recovery",
+    "build_initial_vacancy_rollover_recovery",
     # contracts
     "EscalationBasis",
     "Lease",
@@ -273,4 +348,12 @@ __all__ = [
     "LeaseValidationResult",
     "require_valid_lease_level_inputs",
     "validate_lease_level_inputs",
+    "require_valid_recovery_inputs",
+    "require_valid_property_recovery_inputs",
+    "require_valid_initial_vacancy_inputs",
+    "require_valid_successor_recovery_assumptions",
+    "validate_recovery_inputs",
+    "validate_property_recovery_inputs",
+    "validate_initial_vacancy_inputs",
+    "validate_successor_recovery_assumptions",
 ]

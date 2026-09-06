@@ -117,6 +117,30 @@ class LeasingCommissionMethod(StrEnum):
     PCT_OF_TOTAL_CONTRACTUAL_BASE_RENT = "pct_of_total_contractual_base_rent"
 
 
+class RecoveryBasis(StrEnum):
+    """How a Modified Gross lease's recovery threshold is expressed (D3.2).
+
+    **Exactly one member in D3**, and that is deliberate -- it is an extension
+    seam, not evidence that more methods should be added now (D3 conventions
+    Section 6.2, HD-D3-3).
+
+    ``EXPENSE_STOP_PSF`` is an explicit contractual expense stop in
+    **``$/SF/YEAR``**, held on ``Lease.expense_stop_psf``. It was chosen over a
+    calendar base year because a true base year needs the historical actual
+    expenses of a year that predates the acquisition -- data Anchor does not
+    possess -- and supporting one would tempt exactly the Hold-Year-1
+    substitution D3 Section 6.1 forbids.
+
+    A base-year amount is **reserved** as the enum's second member, to be added
+    only if a competition rent roll forces it *and* the history it needs can be
+    sourced. Adding it costs one member plus one nullable field, with no change
+    to any other ``Lease`` field and no migration -- the same seam idiom
+    ``LeasingCommissionMethod`` uses.
+    """
+
+    EXPENSE_STOP_PSF = "expense_stop_psf"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ModelMonth:
     """One canonical monthly period of the Lease-Level projection
@@ -374,6 +398,43 @@ class MarketLeasingAssumptions:
     completed monthly results. Nothing on this record is ever averaged with
     anything else on it.
 
+    **The successor recovery structure (D3.3).** ``renewal_lease_type`` and
+    ``new_lease_type`` state, per branch, what **structure** the successor
+    signs; ``renewal_recovery_basis`` / ``renewal_expense_stop_psf`` and
+    ``new_recovery_basis`` / ``new_expense_stop_psf`` state its recovery terms.
+
+    **A successor's structure is never inherited from the lease it replaces**
+    (HD-D3-1, HD-D3-2, both LOCKED at D3.0 human review). Through D2 the
+    successor carried the expiring lease's ``lease_type`` forever, which was
+    harmless only because the field was economically inert. D3 makes it
+    operative, and inheritance would then assert something no analyst chose:
+    *a Gross tenant vacates in year 6, and every replacement thereafter also
+    signs Gross, forever*. Real re-lettings routinely change structure -- a
+    legacy Gross tenant leaves and the space is re-let NNN at prevailing
+    terms. Setting ``renewal_lease_type`` to the in-place type reproduces the
+    old behaviour exactly, but now as a stated assumption rather than a
+    silent one.
+
+    **The branches may differ**, and that is the normal case: an existing
+    `GROSS` lease whose renewal is `MODIFIED_GROSS` on a negotiated stop and
+    whose new-tenant replacement is `NNN` must be representable.
+
+    **This is also what keeps the D2.6 merge key valid** (D3 Section 10.2).
+    Because a successor's structure is a function of ``(branch kind, resolved
+    assumptions, commencement period)`` and never of its predecessor, two
+    scenario paths reaching the same expiration period still face identical
+    futures -- so the recursion may continue merging on the expiration period
+    alone. Chain inheritance would put ``lease_type`` back into the merge key
+    as a live dimension and multiply the state count by the number of
+    reachable structures, buying an economic assertion nobody intended.
+
+    The recovery terms follow the same domains as ``Lease``: a
+    `MODIFIED_GROSS` branch requires a supported ``RecoveryBasis`` and an
+    ``expense_stop_psf`` in ``$/SF/YEAR``, domain ``>= 0``; an `NNN` or
+    `GROSS` branch must carry **neither**, since a stop implies Modified Gross
+    (D3 Section 5.2). Both are required *as values* -- ``None`` is stated, not
+    omitted -- for the same reason ``renewal_rent_psf`` is.
+
     **This record now describes the complete D2 field set.** D0 Section 4.5's
     inventory is fully declared: rent and growth (D2.1), the renewal branch
     (D2.2), the new-tenant branch with downtime and free rent (D2.3), TI and LC
@@ -406,6 +467,14 @@ class MarketLeasingAssumptions:
     renewal_lc_pct: float
     new_lc_pct: float
     renewal_probability: float
+
+    # --- successor recovery structure, branch-specific (D3.3) ---
+    renewal_lease_type: LeaseType
+    renewal_recovery_basis: RecoveryBasis | None
+    renewal_expense_stop_psf: float | None
+    new_lease_type: LeaseType
+    new_recovery_basis: RecoveryBasis | None
+    new_expense_stop_psf: float | None
 
 
 class MarketAssumptionSource(StrEnum):
@@ -549,6 +618,62 @@ class LeaseLevelPropertyInputs:
     rentable_area_sf: float
 
 
+class InitialVacancyStrategy(StrEnum):
+    """How a suite **vacant at the analysis start** is underwritten (D3.6).
+
+    Two members, and both are real underwriting statements rather than an
+    extension seam. The whole point of the gate is that they are different
+    claims about a deal, and that a suite must say which one it is.
+
+    ``HOLD_VACANT`` -- the analyst assumes no speculative lease-up during the
+    projection. The suite produces zero rent, zero occupancy, zero leasing
+    cost and zero recovery, deliberately.
+
+    ``MARKET_LEASE_UP`` -- the analyst assumes the space lets after an
+    explicitly stated lease-up period, after which the first tenant is an
+    ordinary market new tenant.
+
+    **There is no third state and no default.** Before D3.6 a vacant suite
+    produced exactly the ``HOLD_VACANT`` numbers whether that was intended or
+    whether lease-up assumptions were simply never supplied, and the output
+    could not tell the two apart. For a value-add acquisition -- where vacant
+    space is the entire thesis -- a silent zero is the most expensive kind of
+    wrong number. Absence is now an error, not an assumption (failure mode
+    FM-D3-20).
+    """
+
+    HOLD_VACANT = "hold_vacant"
+    MARKET_LEASE_UP = "market_lease_up"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InitialVacancyAssumptions:
+    """How one initially vacant suite is to be underwritten (D3.6).
+
+    ``initial_lease_up_months`` is the time the space is expected to sit empty
+    before its first tenant commences: months, finite, ``>= 0``, fractional
+    allowed. Required for `MARKET_LEASE_UP` and **must be absent** for
+    `HOLD_VACANT`, where a lease-up period would be a half-stated intent.
+
+    **It is emphatically not ``new_downtime_months``**, and the two may differ
+    (D3 Section 22.4). Future new-tenant downtime is a re-letting delay on
+    space a departing tenant has just vacated, with a known configuration and
+    a broker already engaged. Initial lease-up is how long space that is
+    *already* empty at acquisition takes to fill. Aliasing them would silently
+    substitute one underwriting judgement for the other, so they are separate
+    fields and neither is ever a fallback for the other (FM-D3-22).
+
+    Only the **timing** is stated here. Everything else about the first tenant
+    -- term, free rent, TI, LC, escalation, lease type and recovery terms --
+    reuses the approved new-tenant assumptions, because the first tenant *is*
+    a market new tenant. Duplicating those fields for symmetry would double the
+    assumption surface for no financial content.
+    """
+
+    strategy: InitialVacancyStrategy
+    initial_lease_up_months: float | None = None
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Suite:
     """One leasable space (D0 Section 4.3).
@@ -610,6 +735,7 @@ class Suite:
     suite_label: str | None = None
     market_rent_psf: float | None = None
     market_leasing_override: MarketLeasingAssumptions | None = None
+    initial_vacancy: InitialVacancyAssumptions | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -668,8 +794,28 @@ class Lease:
     Section 10), so there is one contractual-rent engine in the package and
     the rollover gate reimplements nothing.
 
-    **Deliberately still not declared**: ``free_rent_months`` (D2.3) and
-    ``recovery_basis`` (D3). Each waits for the gate that can produce it.
+    **``recovery_basis`` and ``expense_stop_psf`` (D3.2, additive).** Both
+    default to ``None``, so every D1 and D2 call site constructs an identical
+    lease and no earlier economics move. They carry a `MODIFIED_GROSS` lease's
+    **explicit** contractual recovery threshold, which Anchor never infers: a
+    base year or expense stop is a contract term that predates the acquisition,
+    while the buyer's first hold year is an artifact of when they bought, and
+    substituting one for the other would change recovery on every Modified
+    Gross lease in a rent roll (D3 Section 6.1).
+
+    ``expense_stop_psf`` is in **``$/SF/YEAR``**, domain ``>= 0``, and is
+    **nominally fixed** for the life of the lease: it does not grow with
+    expense growth, market growth or contractual escalation, and does not reset
+    annually or at acquisition (D3 Section 6.3, HD-D3-4).
+
+    The two fields belong to `MODIFIED_GROSS` alone. A stop on an `NNN` or
+    `GROSS` lease is a validation **ERROR** rather than a silently ignored
+    value, because *a stop implies Modified Gross* -- allowing one elsewhere
+    would make ``lease_type`` unreliable as an economic discriminator (D3
+    Section 5.2).
+
+    **Deliberately still not declared**: ``free_rent_months`` (D2.3), which
+    waits for the gate that can produce it.
     """
 
     lease_id: str
@@ -684,6 +830,8 @@ class Lease:
     tenant_name: str | None = None
     lease_start_date: date | None = None
     origin: LeaseOrigin = LeaseOrigin.IN_PLACE
+    recovery_basis: RecoveryBasis | None = None
+    expense_stop_psf: float | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1406,4 +1554,838 @@ class RecursiveRollover:
             raise ValueError(
                 f"{len(self.transitions)} transitions exceed the structural "
                 f"bound of {2 * expected}."
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecoverableExpensePool:
+    """The property's monthly recoverable operating expense, injected (D3.1).
+
+    **This is the D3/D4 seam.** D3 answers "given the pool, what does the tenant
+    reimburse"; it does **not** project operating expenses, convert the engine's
+    annual figures to monthly, apply expense growth, or apply
+    ``recoverable_expense_ratio``. D4 owns constructing this series from the
+    authoritative operating projection (D3 conventions Section 3.4).
+
+    ``recoverable_expenses[i]`` is the **total property operating expense
+    dollars eligible for tenant recovery** in ``months[i]`` -- already net of
+    everything the accepted convention excludes: the management fee, capital
+    expenditures, TI, LC and debt service (D3 Section 3.3). D3 trusts that
+    construction and deliberately cannot inspect it: the pool arrives as one
+    figure per month with no category breakdown, so no code here can infer, or
+    silently re-police, what went into it.
+
+    Domain ``>= 0`` and finite. A negative pool would be an expense credit,
+    which the accepted D3 model has no convention for, so it is refused rather
+    than given an invented meaning.
+
+    ``months`` is the exact ``ModelMonth`` tuple the pool was built against --
+    a reference to the one canonical timeline, never a second calendar. Carrying
+    it here is what lets a recovery schedule verify **month identity** rather
+    than merely matching lengths, so a pool built for a different projection
+    cannot be silently zipped against a lease.
+
+    This contract performs no calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    recoverable_expenses: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.recoverable_expenses) != len(self.months):
+            raise ValueError(
+                "RecoverableExpensePool requires one recoverable_expenses "
+                f"figure per model month; got "
+                f"{len(self.recoverable_expenses)} for {len(self.months)} "
+                "months."
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LeaseRecoverySchedule:
+    """One lease's canonical monthly expense-recovery **revenue** (D3.1).
+
+    **Recovery is revenue on its own line** (D0 Section 10.2, D3 Section 1.2).
+    It is never a reduction to contractual base rent, never a reduction to
+    property operating expenses, never a negative expense, and never a leasing
+    cost. Nothing here is netted into anything.
+
+    ``months`` is the exact canonical ``ModelMonth`` tuple, shared by reference
+    with the pool and with the lease's own D1 schedule.
+
+    ``tenant_pro_rata_share`` is ``leased_area_sf / rentable_area_sf`` on D1's
+    exact rentable-area basis (D3 Section 4.1) -- a scalar, because neither area
+    varies by month in D1-D3.
+
+    ``economic_responsibility_factor`` is the fraction of each month for which
+    this lease is economically responsible for expenses. For a known in-place
+    lease it is ``1.0`` **only while contractually active** and ``0.0`` before
+    commencement and after expiration; because D1 dates are month-aligned it is
+    never fractional for such a lease (D3 Section 7.1). It is deliberately a
+    separate concept from ``physical_occupancy``, which D2 HD-D2-2 binds to be
+    an integral month-end *state*.
+
+    ``tenant_recoverable_expense_share`` is ``share × pool`` -- the tenant's
+    arithmetic share of the pool, before responsibility is applied. It is
+    retained for audit and is reported even for a `GROSS` lease, where the
+    tenant owes none of it: the share is a fact about area, the recovery is a
+    fact about the lease.
+
+    ``expense_recovery`` is what the lease actually owes: ``factor × share ×
+    pool`` for `NNN`, exactly ``0.0`` for `GROSS`, and
+    ``factor × max(0, share × pool − monthly stop)`` for `MODIFIED_GROSS`.
+
+    **Four fields exist so a Modified Gross figure is auditable without
+    reconstructing a hidden assumption** (D3.2). Each answers a distinct
+    question:
+
+    - ``recovery_basis`` and ``expense_stop_psf`` -- *which contractual
+      threshold applied, and at what rate*. Both are ``None`` for `NNN` and
+      `GROSS`, which carry no threshold at all.
+    - ``monthly_expense_stop_dollars`` -- *the threshold in the units the
+      comparison actually uses*: ``expense_stop_psf × leased_area_sf / 12``, a
+      scalar because the stop is nominally fixed and the area does not vary.
+      ``None`` where there is no stop.
+    - ``full_month_expense_recovery`` -- *the obligation before responsibility
+      was applied*. It makes the D3 Section 7.1.1 ordering visible: the factor
+      scales this figure, and never the expense share inside the clip.
+
+    ``full_month_expense_recovery`` is meaningful for every structure -- the
+    tenant share for `NNN`, ``0.0`` for `GROSS`, the clipped excess for
+    `MODIFIED_GROSS` -- so it is a series rather than a nullable, and carries no
+    special case.
+
+    Built only by ``anchor.leasing.recoveries.build_lease_recovery_schedule``;
+    this dataclass performs no calculation of its own.
+    """
+
+    lease_id: str
+    suite_id: str
+    lease_type: LeaseType
+    months: tuple[ModelMonth, ...]
+    tenant_pro_rata_share: float
+    recovery_basis: RecoveryBasis | None
+    expense_stop_psf: float | None
+    monthly_expense_stop_dollars: float | None
+    economic_responsibility_factor: tuple[float, ...]
+    tenant_recoverable_expense_share: tuple[float, ...]
+    full_month_expense_recovery: tuple[float, ...]
+    expense_recovery: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            (
+                "economic_responsibility_factor",
+                self.economic_responsibility_factor,
+            ),
+            (
+                "tenant_recoverable_expense_share",
+                self.tenant_recoverable_expense_share,
+            ),
+            (
+                "full_month_expense_recovery",
+                self.full_month_expense_recovery,
+            ),
+            ("expense_recovery", self.expense_recovery),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"LeaseRecoverySchedule requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SuccessorRecoverySchedule:
+    """One **pure branch** successor's canonical monthly expense-recovery
+    revenue (D3.3).
+
+    The recovery analogue of ``RenewalBranch`` / ``NewTenantBranch``: the
+    deterministic answer to *"what does this suite recover if the tenant
+    renews, with certainty"*, and separately *"...if a new tenant takes the
+    space"*. It is the ``p = 1`` and ``p = 0`` endpoint, but **no probability
+    exists at D3.3** -- the weight arrives at D3.4, which must reproduce these
+    schedules bit-identically at those endpoints.
+
+    **Successor-only.** Every figure describes the successor lease alone. The
+    expiring lease's own recoveries are a `LeaseRecoverySchedule` built from
+    the in-place lease, and are never folded in here -- the same anti-double-
+    counting boundary D2.6 established for ``SuccessorContribution``.
+
+    **``branch`` is what selected the structure.** ``successor_lease_type``,
+    ``recovery_basis`` and ``expense_stop_psf`` came from that branch's own
+    resolved assumptions and **never** from the lease being replaced
+    (HD-D3-1, HD-D3-2). Recording the branch alongside them makes that
+    provenance answerable from the output alone: a reader can see *which*
+    assumption produced this structure, which is what the D2.6 merge-key
+    proof depends on (D3 Section 10.2).
+
+    **``economic_responsibility_factor`` is the branch's
+    ``successor_occupancy_factor``**, carried through unchanged -- not
+    ``physical_occupancy``, not ``cash_rent_factor``, not free rent. It is the
+    fraction of the month the successor is *contractually responsible for
+    expenses*, so it is ``0`` through downtime, fractional in the boundary
+    month a fractional ``D`` creates, and ``1`` thereafter. Physical occupancy
+    is an integral count and would report ``1`` for that boundary month,
+    over-recovering it (failure modes FM-D3-4, FM-D3-19).
+
+    **Free rent does not appear**, and its absence is the point (D2 Section
+    7.3, HD-D3-7). A rent concession is a concession against *base rent*; it
+    has no automatic effect on an expense reimbursement, and inferring one
+    would silently change every lease with free rent. Two branches identical
+    but for free rent produce identical recovery schedules here.
+
+    **Base rent does not appear either.** Recovery answers a question about
+    *expenses*: pool, share, structure and responsibility. A ``$0/SF``
+    successor recovers exactly what a ``$100/SF`` successor recovers.
+
+    Deliberately absent, and later work: probability and expected recovery
+    (D3.4), recursive accumulation across generations (D3.4), and property
+    aggregation or annual totals (D3.5).
+
+    Built only by ``anchor.leasing.recoveries``; this dataclass performs no
+    calculation of its own.
+    """
+
+    branch: RolloverBranchKind
+    suite_id: str
+    successor_lease_id: str
+    successor_lease_type: LeaseType
+    commencement_period: int
+    successor_expiration_period: int
+
+    months: tuple[ModelMonth, ...]
+    tenant_pro_rata_share: float
+    recovery_basis: RecoveryBasis | None
+    expense_stop_psf: float | None
+    monthly_expense_stop_dollars: float | None
+
+    economic_responsibility_factor: tuple[float, ...]
+    tenant_recoverable_expense_share: tuple[float, ...]
+    full_month_expense_recovery: tuple[float, ...]
+    expense_recovery: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            (
+                "economic_responsibility_factor",
+                self.economic_responsibility_factor,
+            ),
+            (
+                "tenant_recoverable_expense_share",
+                self.tenant_recoverable_expense_share,
+            ),
+            (
+                "full_month_expense_recovery",
+                self.full_month_expense_recovery,
+            ),
+            ("expense_recovery", self.expense_recovery),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"SuccessorRecoverySchedule requires one {name} figure "
+                    f"per model month; got {len(series)} for {expected} "
+                    "months."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExpectedRolloverRecovery:
+    """One suite's **first-rollover** expected expense-recovery revenue (D3.4).
+
+    The recovery analogue of ``ExpectedRollover``, and it composes exactly the
+    way D2.5 does: two complete branch schedules, weighted once, at the
+    **output**.
+
+    ```
+    ExpectedSuccessorRecovery_m = p x RenewalRecovery_m
+                                + (1 - p) x NewTenantRecovery_m
+    ```
+
+    **Only finished dollars are weighted** (HD-D2-1, D3 Section 10.1). No lease
+    type, recovery basis, expense stop, pro-rata share or responsibility factor
+    is ever averaged. A weighted lease type is not a lease type, and
+    ``0.65 x NNN + 0.35 x GROSS`` is not a structure any tenant signs.
+
+    **The nonlinearity makes this load-bearing rather than stylistic.** The
+    Modified Gross clip is not linear in the pool, so
+
+    ```
+    E[max(0, X - S)]  !=  max(0, E[X] - E[S])
+    ```
+
+    Weighting the two branches' stops and clipping once gives a different, and
+    wrong, number -- failure mode **FM-D3-10**. Both branch schedules are
+    retained here precisely so the composed figure stays auditable back to the
+    structures that produced it.
+
+    **Three series, and the distinction between them is deliberate:**
+
+    - ``in_place_expense_recovery`` -- the **known** lease's own recoveries.
+      Deterministic, at probability ``1``, never multiplied by ``p`` or
+      ``1 - p``. What the sitting tenant owes before it expires is not a
+      scenario.
+    - ``expected_successor_expense_recovery`` -- the weighted composition
+      above. Zero at and before the parent's expiration, because both branch
+      schedules are successor-only.
+    - ``expected_expense_recovery`` -- the full lease chain, their sum. The two
+      addends are **structurally non-overlapping**: the in-place lease's
+      responsibility factor is zero after it expires and a successor's is zero
+      at or before that period, so no month is counted twice. ``__post_init__``
+      asserts it.
+
+    Deliberately absent: any "expected lease type", "expected recovery basis"
+    or "expected expense stop". Only a composed **dollar** is financially
+    meaningful; the assumptions stay on the pure branch records, where they
+    describe a structure some tenant actually signs.
+
+    Built only by ``anchor.leasing.recoveries``; this dataclass performs no
+    calculation of its own.
+    """
+
+    suite_id: str
+    expiring_lease_id: str
+    renewal_probability: float
+    months: tuple[ModelMonth, ...]
+
+    renewal_recovery: SuccessorRecoverySchedule
+    new_tenant_recovery: SuccessorRecoverySchedule
+    in_place_recovery: LeaseRecoverySchedule
+
+    in_place_expense_recovery: tuple[float, ...]
+    expected_successor_expense_recovery: tuple[float, ...]
+    expected_expense_recovery: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("in_place_expense_recovery", self.in_place_expense_recovery),
+            (
+                "expected_successor_expense_recovery",
+                self.expected_successor_expense_recovery,
+            ),
+            ("expected_expense_recovery", self.expected_expense_recovery),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"ExpectedRolloverRecovery requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+        if not 0.0 <= self.renewal_probability <= 1.0:
+            raise ValueError(
+                f"renewal_probability {self.renewal_probability!r} must be "
+                "between 0 and 1 inclusive."
+            )
+        # Anti-double-counting: the known lease and its successors never both
+        # recover in one month.
+        for month, known, successor in zip(
+            self.months,
+            self.in_place_expense_recovery,
+            self.expected_successor_expense_recovery,
+            strict=True,
+        ):
+            if known != 0.0 and successor != 0.0:
+                raise ValueError(
+                    f"period {month.period_index} carries both in-place "
+                    f"recovery {known!r} and successor recovery "
+                    f"{successor!r}; a suite has one occupant at a time and "
+                    "recovery must not be counted twice."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecoveryContributionAudit:
+    """One rollover transition's contribution to expected recovery (D3.4).
+
+    One record per **authoritative D2.6 transition**, never one per scenario
+    path: an explicit tree of ``2^r`` paths is exactly what the accepted
+    recursion architecture replaces, and D3 storing one would defeat that.
+
+    ``probability_mass`` is read from the D2 transition, never recomputed.
+    D2.6 owns which states exist, which merge, how mass splits and when the
+    walk terminates; D3 attaches recovery economics to the events D2 already
+    decided, and decides none of them itself.
+
+    ``in_window_expense_recovery`` is this successor's **own** total recovery
+    across the canonical window at probability ``1``;
+    ``expected_expense_recovery_contribution`` is that total times the mass.
+    Keeping both makes the weighting step legible: a reader can see the
+    structure's own economics and the weight applied to it separately.
+    """
+
+    parent_expiration_period: int
+    branch: RolloverBranchKind
+    probability_mass: float
+    commencement_period: int
+    successor_expiration_period: int
+    commences_within_projection: bool
+    successor_lease_type: LeaseType
+    recovery_basis: RecoveryBasis | None
+    expense_stop_psf: float | None
+    monthly_expense_stop_dollars: float | None
+    in_window_expense_recovery: float
+    expected_expense_recovery_contribution: float
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecursiveRolloverRecovery:
+    """One suite's expected expense recovery across **all** successor
+    generations (D3.4).
+
+    **It owns no recursion.** The authoritative ``RecursiveRollover`` is
+    retained whole in ``rollover`` and supplies every structural decision:
+    which expiration periods become states, which paths merge, how probability
+    mass splits at each event, the processing order, when the walk terminates,
+    and the terminal mass. D3 walks that result's ``transitions``, rebuilds
+    each successor through the **same** D2 successor engine, prices its
+    recovery, and accumulates ``mass x dollars``.
+
+    There is therefore exactly one event queue in production, and it is
+    D2.6's. A second one in ``recoveries.py`` could drift from it silently --
+    two state machines agreeing today and disagreeing after one change is the
+    failure this design forecloses structurally rather than by testing.
+
+    **Reconstruction is exact, not approximate.** D3.3 proved a successor's
+    economics are a deterministic function of ``(suite, resolved assumptions,
+    parent expiration period, branch kind, canonical months, market
+    schedule)`` and never of its predecessor. Every one of those is available
+    from the retained result and the same inputs that produced it, so
+    rebuilding a transition's successor yields the identical
+    ``SuccessorContribution`` -- which is why no timing, pricing, concession,
+    TI or LC formula is duplicated here.
+
+    ``terminal_probability_mass`` is **mirrored** from ``rollover``, not
+    recomputed. D2.6 already proves mass conservation; a second algorithm
+    could only agree or introduce a discrepancy with no authority to resolve
+    it.
+
+    The three recovery series carry the same meanings, and the same
+    non-overlap guarantee, as on ``ExpectedRolloverRecovery``: the known lease
+    contributes **once**, at probability ``1``, and every successor generation
+    contributes only its own successor-only recovery.
+
+    Built only by ``anchor.leasing.recoveries``; this dataclass performs no
+    calculation of its own.
+    """
+
+    suite_id: str
+    expiring_lease_id: str
+    renewal_probability: float
+    months: tuple[ModelMonth, ...]
+
+    rollover: RecursiveRollover
+    in_place_recovery: LeaseRecoverySchedule
+
+    in_place_expense_recovery: tuple[float, ...]
+    expected_successor_expense_recovery: tuple[float, ...]
+    expected_expense_recovery: tuple[float, ...]
+
+    contributions: tuple[RecoveryContributionAudit, ...]
+    terminal_probability_mass: float
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("in_place_expense_recovery", self.in_place_expense_recovery),
+            (
+                "expected_successor_expense_recovery",
+                self.expected_successor_expense_recovery,
+            ),
+            ("expected_expense_recovery", self.expected_expense_recovery),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"RecursiveRolloverRecovery requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+        if self.rollover.months != self.months:
+            raise ValueError(
+                "the retained rollover was built against a different month "
+                "sequence; recovery and rollover must share one canonical "
+                "timeline."
+            )
+        if len(self.contributions) != len(self.rollover.transitions):
+            raise ValueError(
+                f"got {len(self.contributions)} recovery contributions for "
+                f"{len(self.rollover.transitions)} authoritative rollover "
+                "transitions; D3 attaches recovery to the events D2 decided "
+                "and must never add or drop one."
+            )
+        for month, known, successor in zip(
+            self.months,
+            self.in_place_expense_recovery,
+            self.expected_successor_expense_recovery,
+            strict=True,
+        ):
+            if known != 0.0 and successor != 0.0:
+                raise ValueError(
+                    f"period {month.period_index} carries both in-place "
+                    f"recovery {known!r} and successor recovery "
+                    f"{successor!r}; a suite has one occupant at a time and "
+                    "recovery must not be counted twice."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SuiteRecoveryProjection:
+    """One suite's finished monthly recovery dollars, and nothing else (D3.5).
+
+    **The aggregation boundary.** Property aggregation is a summation problem,
+    not another recovery calculation, so it consumes the narrowest possible
+    view of a suite: an identity, a timeline, and the completed dollars.
+
+    Deliberately **narrow**. A projection carries no lease type, no recovery
+    basis, no expense stop, no pro-rata share, no responsibility factor and no
+    probability. None of those is an input to a sum, and holding them at the
+    property layer would invite exactly the recalculation D3.5 exists to
+    avoid -- a property-level threshold, a property-average responsibility, or
+    a portfolio renewal probability, none of which is a thing.
+
+    **It computes nothing.** The dollars are copied from an authoritative D3
+    result -- a `LeaseRecoverySchedule` for a known lease, an
+    `ExpectedRolloverRecovery` for a single modelled rollover, or a
+    `RecursiveRolloverRecovery` for a full chain. Which of those produced it is
+    the caller's modelling decision; by this point the answer is already final.
+
+    A suite with no lease has **no projection**, which means zero. That is the
+    honest representation: Anchor does not synthesize a Gross lease for vacant
+    space (D1.3), and it must not synthesize a recovery schedule either.
+    """
+
+    suite_id: str
+    months: tuple[ModelMonth, ...]
+    expense_recovery: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.expense_recovery) != len(self.months):
+            raise ValueError(
+                "SuiteRecoveryProjection requires one expense_recovery figure "
+                f"per model month; got {len(self.expense_recovery)} for "
+                f"{len(self.months)} months."
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PropertyRecoverySchedule:
+    """One property's canonical monthly expense-recovery **revenue** (D3.5).
+
+    ```
+    PropertyRecovery_m = sum over included suites of SuiteRecovery_m
+    ```
+
+    **A sum, and only a sum.** Every structural decision -- NNN versus Gross
+    versus Modified Gross, the expense stop, the pro-rata share, the
+    responsibility factor, the renewal probability, the recursion -- was made
+    inside each suite's own chain and is already final. Nothing here reprices
+    anything, and there is no property-level structure of any kind.
+
+    **In particular there is no property renewal probability.** Suites roll at
+    different times, so there is no single property-level branch event to
+    weight; ``0.25`` on one suite and ``0.80`` on another do not average into
+    anything meaningful. Only completed expected dollars are summed.
+
+    **No gross-up** (D3 Section 4.2, HD-D3-6 deferred). Unrecovered expense is
+    not redistributed: a Gross tenant's share, a Modified Gross tenant's
+    below-stop amount and a vacant suite's share all simply go unrecovered.
+    In a 100,000 SF property of four equal suites -- NNN, Gross, Modified
+    Gross at a stop consuming half its share, and vacant -- a $100,000 pool
+    yields $37,500, not $100,000. That is the honest arithmetic of the chosen
+    convention and it is a disclosed sharp edge, not an omission.
+
+    **The pool is never re-read here.** A property total is never
+    ``pool x occupancy x some rate``: with a mixture of structures that figure
+    would be wrong in a way no single rate can express. The tenant schedules
+    are authoritative.
+
+    **Recovery stays revenue.** Nothing nets it against an operating expense;
+    D0 Section 10.2 puts recoveries on their own line and D4 will place that
+    line and the gross expense line separately, before NOI (FM-D3-1).
+
+    ``annual_expense_recovery`` is the chronological sum of the exact monthly
+    figures through ``aggregation.aggregate_flow_to_annual`` -- **no
+    independent annual formula** (D3 Section 16, FM-D3-9). It holds exactly
+    ``hold_period`` values, following D1's uniform ``_by_year`` shape, and the
+    twelve forward exit months are reported separately in
+    ``forward_exit_window_expense_recovery`` rather than discarded. Monthly
+    remains canonical; annual is a view of it.
+
+    Built only by ``anchor.leasing.aggregation``; this dataclass performs no
+    calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    rentable_area_sf: float
+    hold_period: int
+    suite_projections: tuple[SuiteRecoveryProjection, ...]
+
+    expense_recovery: tuple[float, ...]
+    annual_expense_recovery: tuple[float, ...]
+    forward_exit_window_expense_recovery: float
+
+    def __post_init__(self) -> None:
+        if len(self.expense_recovery) != len(self.months):
+            raise ValueError(
+                "PropertyRecoverySchedule requires one expense_recovery figure "
+                f"per model month; got {len(self.expense_recovery)} for "
+                f"{len(self.months)} months."
+            )
+        if len(self.annual_expense_recovery) != self.hold_period:
+            raise ValueError(
+                f"annual_expense_recovery holds {len(self.annual_expense_recovery)} "
+                f"values for a {self.hold_period}-year hold; D1's annual series "
+                "are uniformly one value per hold year, with the forward exit "
+                "window reported separately."
+            )
+        seen: set[str] = set()
+        for projection in self.suite_projections:
+            if projection.suite_id in seen:
+                raise ValueError(
+                    f"suite {projection.suite_id!r} appears twice in one "
+                    "property recovery aggregation; its recovery would be "
+                    "counted twice."
+                )
+            seen.add(projection.suite_id)
+            if projection.months != self.months:
+                raise ValueError(
+                    f"suite {projection.suite_id!r} was built against a "
+                    "different month sequence; one property aggregation shares "
+                    "one canonical timeline."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InitialVacancyRollover:
+    """One **initially vacant** suite's full-chain leasing economics (D3.6).
+
+    The vacant-suite counterpart to `RecursiveRollover`, and deliberately the
+    same economic shape: every monthly series carries the identical field name,
+    so D4 reads one shape whether a suite began occupied or empty.
+
+    **There is no known in-place lease, and no field could hold one.** That is
+    the structural anti-double-counting rule (D3 Section 22.9): the first
+    tenant is a *successor contribution at mass 1.0* relative to the boundary
+    index ``0``, and it already carries the vacancy months as zeros. There is
+    no D1 history to add, so nothing can be counted twice. Compare
+    `RecursiveRollover`, which does hold ``initial_lease`` and must contribute
+    it exactly once.
+
+    **`HOLD_VACANT`** returns this contract with every series zero, no
+    ``first_contribution``, no transitions and terminal mass ``1.0``. That is
+    the point of the gate: a deliberately vacant suite is now *visible* as a
+    decision rather than indistinguishable from a suite nobody underwrote
+    (FM-D3-34).
+
+    **`MARKET_LEASE_UP`** contributes the first tenant once and, if its lease
+    expires inside the horizon, seeds the **existing** D2.6 propagation at that
+    period with mass ``1.0``. Every later generation is D2.6's, unchanged.
+
+    **Probability enters at the first expiration and not before.** There is no
+    incumbent, so there is no renewal/new-tenant split at the initial event:
+    the first tenant is deterministic. ``renewal_probability`` is recorded
+    because it governs the tail, never because it weights the first tenant
+    (FM-D3-23).
+
+    ``first_contribution`` retains the deterministic first tenant whole -- its
+    lease, dates, starting rent, concessions, TI and LC -- so a reader can
+    audit the lease-up without re-deriving it. Its
+    ``parent_expiration_period`` is ``0``, the boundary immediately before
+    canonical month 1: **not** a `ModelMonth`, **not** a lease expiration, and
+    never a fabricated lease.
+
+    Built only by ``anchor.leasing.rollover.build_initial_vacancy_rollover``;
+    this dataclass performs no calculation of its own.
+    """
+
+    suite_id: str
+    strategy: InitialVacancyStrategy
+    initial_lease_up_months: float | None
+    renewal_probability: float
+    months: tuple[ModelMonth, ...]
+
+    first_contribution: SuccessorContribution | None
+
+    expected_contractual_base_rent: tuple[float, ...]
+    expected_cash_base_rent: tuple[float, ...]
+    expected_free_rent: tuple[float, ...]
+    expected_tenant_improvements: tuple[float, ...]
+    expected_leasing_commissions: tuple[float, ...]
+    expected_occupied_area_sf: tuple[float, ...]
+    expected_occupancy: tuple[float, ...]
+    expected_vacant_area_sf: tuple[float, ...]
+    expected_vacancy: tuple[float, ...]
+    expected_successor_occupancy_factor: tuple[float, ...]
+    expected_free_rent_abatement_months: tuple[float, ...]
+    expected_cash_rent_factor: tuple[float, ...]
+    expected_tenant_improvement_amount: float
+    expected_leasing_commission_amount: float
+
+    event_states: tuple[RolloverEventStateAudit, ...]
+    transitions: tuple[RolloverTransitionAudit, ...]
+    terminal_probability_mass: float
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("expected_contractual_base_rent", self.expected_contractual_base_rent),
+            ("expected_cash_base_rent", self.expected_cash_base_rent),
+            ("expected_free_rent", self.expected_free_rent),
+            ("expected_tenant_improvements", self.expected_tenant_improvements),
+            ("expected_leasing_commissions", self.expected_leasing_commissions),
+            ("expected_occupied_area_sf", self.expected_occupied_area_sf),
+            ("expected_occupancy", self.expected_occupancy),
+            ("expected_vacant_area_sf", self.expected_vacant_area_sf),
+            ("expected_vacancy", self.expected_vacancy),
+            (
+                "expected_successor_occupancy_factor",
+                self.expected_successor_occupancy_factor,
+            ),
+            (
+                "expected_free_rent_abatement_months",
+                self.expected_free_rent_abatement_months,
+            ),
+            ("expected_cash_rent_factor", self.expected_cash_rent_factor),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"InitialVacancyRollover requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+
+        if self.strategy is InitialVacancyStrategy.HOLD_VACANT:
+            if self.first_contribution is not None:
+                raise ValueError(
+                    "a HOLD_VACANT suite has no first tenant; a contribution "
+                    "here would mean speculative lease-up was modelled after "
+                    "the analyst declined it."
+                )
+            if self.initial_lease_up_months is not None:
+                raise ValueError(
+                    "a HOLD_VACANT suite states no lease-up period; a value "
+                    "here is a half-stated intent."
+                )
+            if self.transitions:
+                raise ValueError(
+                    "a HOLD_VACANT suite never rolls over; it has no lease to "
+                    "expire and no probability to split."
+                )
+            for name, series in (
+                ("expected_contractual_base_rent", self.expected_contractual_base_rent),
+                ("expected_cash_base_rent", self.expected_cash_base_rent),
+                ("expected_tenant_improvements", self.expected_tenant_improvements),
+                ("expected_leasing_commissions", self.expected_leasing_commissions),
+                ("expected_occupied_area_sf", self.expected_occupied_area_sf),
+            ):
+                if any(value != 0.0 for value in series):
+                    raise ValueError(
+                        f"a HOLD_VACANT suite must have {name} zero in every "
+                        "month; the space is deliberately not let."
+                    )
+        elif self.initial_lease_up_months is None:
+            raise ValueError(
+                "a MARKET_LEASE_UP suite requires an explicit lease-up period; "
+                "Anchor never infers one and never falls back to future "
+                "new-tenant downtime."
+            )
+
+        if self.first_contribution is not None:
+            if self.first_contribution.parent_expiration_period != 0:
+                raise ValueError(
+                    "the first tenant of an initially vacant suite is built "
+                    "from the boundary index 0, not from a lease expiration; "
+                    f"got {self.first_contribution.parent_expiration_period}."
+                )
+            if self.first_contribution.months != self.months:
+                raise ValueError(
+                    "the first contribution was built against a different "
+                    "month sequence; one suite chain shares one timeline."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InitialVacancyRolloverRecovery:
+    """An initially vacant suite's full-chain expense recovery (D3.6).
+
+    The vacant-suite counterpart to `RecursiveRolloverRecovery`, and the same
+    shape for the same reason: one reader, one contract.
+
+    ``in_place_expense_recovery`` is identically zero and exists so the three
+    series match D3.4's. There is no known in-place lease to recover anything,
+    so the full chain equals the successor series -- but keeping the shape
+    means ``suite_recovery_projection`` and every D4 reader see one contract
+    rather than two nearly-identical ones.
+
+    ``expected_successor_expense_recovery`` is the deterministic first
+    tenant's recovery at mass ``1.0`` plus every later generation's weighted
+    recovery, attached to the **same** authoritative D2 transitions D3.4 uses.
+    No recovery formula, no clip and no state machine is duplicated here.
+
+    For `HOLD_VACANT` every series is zero -- explicitly, and recorded as a
+    decision rather than as an absence (HD-D3.6-3).
+
+    Built only by ``anchor.leasing.recoveries``; this dataclass performs no
+    calculation of its own.
+    """
+
+    suite_id: str
+    strategy: InitialVacancyStrategy
+    renewal_probability: float
+    months: tuple[ModelMonth, ...]
+
+    rollover: InitialVacancyRollover
+    first_tenant_recovery: SuccessorRecoverySchedule | None
+
+    in_place_expense_recovery: tuple[float, ...]
+    expected_successor_expense_recovery: tuple[float, ...]
+    expected_expense_recovery: tuple[float, ...]
+
+    contributions: tuple[RecoveryContributionAudit, ...]
+    terminal_probability_mass: float
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("in_place_expense_recovery", self.in_place_expense_recovery),
+            (
+                "expected_successor_expense_recovery",
+                self.expected_successor_expense_recovery,
+            ),
+            ("expected_expense_recovery", self.expected_expense_recovery),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"InitialVacancyRolloverRecovery requires one {name} "
+                    f"figure per model month; got {len(series)} for "
+                    f"{expected} months."
+                )
+        if any(value != 0.0 for value in self.in_place_expense_recovery):
+            raise ValueError(
+                "an initially vacant suite has no in-place lease, so its "
+                "in-place recovery must be zero in every month; a non-zero "
+                "figure would mean a tenant was invented at the analysis "
+                "start."
+            )
+        if self.rollover.months != self.months:
+            raise ValueError(
+                "the retained rollover was built against a different month "
+                "sequence; recovery and rollover share one canonical timeline."
+            )
+        if self.strategy is InitialVacancyStrategy.HOLD_VACANT:
+            if self.first_tenant_recovery is not None:
+                raise ValueError(
+                    "a HOLD_VACANT suite has no first tenant and therefore no "
+                    "first-tenant recovery."
+                )
+            if any(value != 0.0 for value in self.expected_expense_recovery):
+                raise ValueError(
+                    "a HOLD_VACANT suite recovers nothing; the space is "
+                    "deliberately not let."
+                )
+        # One contribution per authoritative later transition, never more.
+        if len(self.contributions) != len(self.rollover.transitions):
+            raise ValueError(
+                f"got {len(self.contributions)} recovery contributions for "
+                f"{len(self.rollover.transitions)} authoritative rollover "
+                "transitions; D3 attaches recovery to the events D2 decided."
             )

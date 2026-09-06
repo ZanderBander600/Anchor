@@ -1045,9 +1045,21 @@ def test_no_contract_declares_a_d3_or_downstream_field() -> None:
     D2.1 removed the market-rent fields; D2.2 removed ``origin`` and the
     renewal-branch fields; D2.3 removed downtime and free rent; D2.4 removed TI
     and LC; D2.5 removed ``renewal_probability`` and the composed
-    expected-occupancy names. What remains banned is D3's recovery structure,
-    every downstream operating concept, and the **rejected**
-    weighted-parameter names, which no gate will ever add.
+    expected-occupancy names; D3.2 removed ``recovery_basis``, which it delivers
+    as an explicit contractual term.
+
+    ``expense_stop`` and ``base_year`` stay banned, and for different reasons
+    from the rest. ``base_year`` is a **rejected** concept, not a deferred one:
+    D3 Section 6.2 declined the calendar base year because Anchor cannot source
+    the historical actuals it needs. ``expense_stop`` is the *unqualified* name
+    -- D3.2 delivers ``expense_stop_psf``, whose suffix is what makes the
+    ``$/SF/YEAR`` dimension explicit at every call site (FM-D3-18); a bare
+    ``expense_stop`` would reintroduce exactly the units ambiguity the suffix
+    exists to prevent.
+
+    What remains banned is therefore the rest of D3's structure, every
+    downstream operating concept, and the **rejected** weighted-parameter
+    names, which no gate will ever add.
     """
 
     from anchor.leasing import contracts as contracts_module
@@ -1055,7 +1067,7 @@ def test_no_contract_declares_a_d3_or_downstream_field() -> None:
     banned = {
         "expected_rent_psf", "expected_term_months", "expected_ti_psf",
         "expected_lc_pct", "expected_downtime_months",
-        "recovery_basis", "expense_stop", "base_year",
+        "expense_stop", "base_year",
         "noi", "capex", "other_income", "operating_expenses",
         "vacancy_credit_loss_pct", "occupancy", "credit_loss_pct",
     }

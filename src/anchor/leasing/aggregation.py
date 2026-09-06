@@ -22,23 +22,38 @@ contractual-rent formula. That separation is enforced by
 rent-anchor date or explicit rent-step schedule change how a lease's monthly
 values are derived without touching a line of property aggregation.
 
-Deliberately absent, all of it later work: market rent, rollover, renewal,
-downtime, free rent, TI, LC, recoveries, lease-type economics, credit loss,
-other income, operating expenses, NOI, CapEx, exit NOI, and every acquisition,
-debt and return integration. ``LeaseType`` remains financially inert.
+**D3.5 added property expense-recovery aggregation**, and it is a summation
+layer only. Every structural decision -- lease type, expense stop, pro-rata
+share, responsibility factor, renewal probability, recursion -- was made inside
+each suite's own chain by D3.1-D3.4 and is final before it arrives here. This
+module reprices nothing, applies no probability, consults no expense pool and
+performs no gross-up.
+
+Deliberately absent, all of it later work: credit loss, other income, operating
+expenses, the management fee, EGI, NOI, CapEx, exit NOI, and every acquisition,
+debt and return integration. Recovery is a **revenue** series and is never
+netted against an expense here (D0 Section 10.2).
 """
 
 from __future__ import annotations
 
+from math import fsum
 from typing import Iterable
 
+from ..engine.contracts import ensure_finite
 from .calendar import build_model_months, projection_month_count
 from .contracts import (
+    ExpectedRolloverRecovery,
+    InitialVacancyRolloverRecovery,
     Lease,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
+    LeaseRecoverySchedule,
+    PropertyRecoverySchedule,
     PropertyRentRollSchedule,
+    RecursiveRolloverRecovery,
     Suite,
+    SuiteRecoveryProjection,
 )
 from .rent import build_lease_monthly_schedule
 from .validation import require_valid_lease_level_inputs
@@ -279,4 +294,159 @@ def build_property_rent_roll_schedule(
         occupied_area=tuple(occupied_area),
         vacant_area=tuple(vacant_area),
         physical_occupancy=tuple(physical_occupancy),
+    )
+
+
+# =============================================================================
+# D3.5 -- property expense-recovery aggregation
+#
+# A summation layer. Every structural decision was made inside each suite's own
+# chain by D3.1-D3.4 and is already final; nothing below reprices anything.
+# =============================================================================
+
+
+#: The authoritative D3 results a suite projection may be taken from. Each is a
+#: *complete* canonical recovery series for one suite's lease chain; which one
+#: applies is the caller's modelling decision, not a property-level rule.
+_AUTHORITATIVE_RECOVERY_RESULTS = (
+    "LeaseRecoverySchedule",
+    "ExpectedRolloverRecovery",
+    "RecursiveRolloverRecovery",
+    "InitialVacancyRolloverRecovery",
+)
+
+
+def suite_recovery_projection(
+    result: LeaseRecoverySchedule
+    | ExpectedRolloverRecovery
+    | RecursiveRolloverRecovery,
+) -> SuiteRecoveryProjection:
+    """Project an authoritative D3 result onto the aggregation boundary.
+
+    **The single extraction seam**, so property aggregation has one input shape
+    rather than one formula per result type. It **copies** an
+    already-calculated dollar series and computes nothing:
+
+    - `LeaseRecoverySchedule` (D3.1/D3.2) -- a known lease with no modelled
+      rollover, ``expense_recovery``;
+    - `ExpectedRolloverRecovery` (D3.4) -- one modelled rollover, the full
+      chain ``expected_expense_recovery``;
+    - `RecursiveRolloverRecovery` (D3.4) -- every successor generation, again
+      the full chain ``expected_expense_recovery``;
+    - `InitialVacancyRolloverRecovery` (D3.6) -- a suite that began **vacant**,
+      whether it was underwritten as `MARKET_LEASE_UP` (its full chain from
+      lease-up onward) or `HOLD_VACANT` (an explicit all-zero series). A
+      hold-vacant suite therefore appears in the aggregation like any other,
+      so deliberate vacancy stays visible rather than looking like a suite
+      nobody underwrote.
+
+    Both D3.4 results expose the **full chain**: the known lease's own
+    recoveries plus its successors', which the contracts prove disjoint. Taking
+    the successor-only series here would silently drop every month before the
+    first expiration.
+    """
+
+    if isinstance(result, LeaseRecoverySchedule):
+        return SuiteRecoveryProjection(
+            suite_id=result.suite_id,
+            months=result.months,
+            expense_recovery=result.expense_recovery,
+        )
+    if isinstance(
+        result,
+        ExpectedRolloverRecovery
+        | RecursiveRolloverRecovery
+        | InitialVacancyRolloverRecovery,
+    ):
+        return SuiteRecoveryProjection(
+            suite_id=result.suite_id,
+            months=result.months,
+            expense_recovery=result.expected_expense_recovery,
+        )
+    raise TypeError(
+        f"{type(result).__name__} is not an authoritative D3 recovery result; "
+        f"expected one of {', '.join(_AUTHORITATIVE_RECOVERY_RESULTS)}."
+    )
+
+
+def build_property_recovery_schedule(
+    projections: Iterable[SuiteRecoveryProjection],
+    *,
+    months: tuple[ModelMonth, ...],
+    rentable_area_sf: float,
+    hold_period: int,
+    suites: Iterable[Suite] | None = None,
+    leases: Iterable[Lease] | None = None,
+) -> PropertyRecoverySchedule:
+    """Combine suite recovery projections into one canonical property schedule.
+
+    ```
+    PropertyRecovery_m = sum over included suites of SuiteRecovery_m
+    ```
+
+    **Validates first, then sums**, following the D1.3 property entry point.
+    ``require_valid_property_recovery_inputs`` is the single authority for
+    duplicate suites, unknown suites, missing schedules and month alignment;
+    this function adds no rule of its own.
+
+    **It contains no recovery formula.** No lease type is read, no expense stop
+    applied, no responsibility factor derived, no probability weighted and no
+    pool consulted. Each suite's dollars are final before they arrive.
+
+    **Order-independent.** Projections are sorted by ``suite_id`` and each
+    month is accumulated with ``math.fsum``, so two callers passing the same
+    suites in different orders get **identical** figures rather than merely
+    close ones.
+
+    **No gross-up.** A Gross tenant's share, a Modified Gross tenant's
+    below-stop amount and a vacant suite's share are simply not recovered, and
+    are never redistributed onto the tenants who do pay (HD-D3-6, deferred).
+
+    ``suites`` and ``leases`` are optional and enable completeness checking: a
+    suite that has a lease should have a projection, and a projection for a
+    suite the property does not contain is an error. A suite with **no** lease
+    correctly has no projection -- it recovers zero, and Anchor never
+    synthesizes a schedule for vacant space.
+
+    Annual figures derive solely from the monthly series through
+    ``aggregate_flow_to_annual``, with the forward exit window reported
+    separately by ``aggregate_flow_over_forward_exit_window`` -- the same
+    chronology D1 uses, and the same refusal to discard those months.
+
+    Pure and deterministic: no I/O, no mutation.
+    """
+
+    from .validation import require_valid_property_recovery_inputs
+
+    projection_tuple = tuple(projections)
+    require_valid_property_recovery_inputs(
+        projection_tuple,
+        months=months,
+        suites=None if suites is None else tuple(suites),
+        leases=None if leases is None else tuple(leases),
+    )
+
+    # Deterministic order, so the accumulation cannot depend on the caller.
+    ordered = sorted(projection_tuple, key=lambda p: p.suite_id)
+
+    monthly = tuple(
+        ensure_finite(
+            "property expense_recovery",
+            fsum(projection.expense_recovery[index] for projection in ordered),
+        )
+        for index in range(len(months))
+    )
+
+    return PropertyRecoverySchedule(
+        months=months,
+        rentable_area_sf=rentable_area_sf,
+        hold_period=hold_period,
+        suite_projections=tuple(ordered),
+        expense_recovery=monthly,
+        annual_expense_recovery=aggregate_flow_to_annual(
+            monthly, hold_period=hold_period
+        ),
+        forward_exit_window_expense_recovery=(
+            aggregate_flow_over_forward_exit_window(monthly, hold_period=hold_period)
+        ),
     )

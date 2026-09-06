@@ -47,6 +47,8 @@ from enum import StrEnum
 from math import floor, isfinite
 from typing import Iterable
 
+from .contracts import ModelMonth  # noqa: F401  (used in signatures below)
+from .market import resolve_market_leasing
 from .calendar import (
     is_first_day_of_month,
     is_last_day_of_month,
@@ -58,8 +60,13 @@ from .contracts import (
     Lease,
     LeaseLevelPropertyInputs,
     LeaseOrigin,
+    LeaseType,
     LeasingCommissionMethod,
     MarketLeasingAssumptions,
+    RecoverableExpensePool,
+    InitialVacancyStrategy,
+    SuiteRecoveryProjection,
+    RecoveryBasis,
     Suite,
 )
 
@@ -146,6 +153,25 @@ class LeaseIssueCode(StrEnum):
     # --- probability composition (D2.5) ---
     RENEWAL_PROBABILITY_OUT_OF_DOMAIN = "RENEWAL_PROBABILITY_OUT_OF_DOMAIN"
     WEIGHTED_ROLLOVER_APPLIED = "WEIGHTED_ROLLOVER_APPLIED"
+
+    # --- expense recoveries (D3.1) ---
+    RECOVERABLE_EXPENSES_OUT_OF_DOMAIN = "RECOVERABLE_EXPENSES_OUT_OF_DOMAIN"
+    RECOVERY_POOL_NOT_ALIGNED = "RECOVERY_POOL_NOT_ALIGNED"
+    RECOVERY_SCHEDULE_NOT_ALIGNED = "RECOVERY_SCHEDULE_NOT_ALIGNED"
+    MISSING_SUITE_RECOVERY_SCHEDULE = "MISSING_SUITE_RECOVERY_SCHEDULE"
+    MISSING_INITIAL_VACANCY_TREATMENT = "MISSING_INITIAL_VACANCY_TREATMENT"
+    INITIAL_VACANCY_ON_OCCUPIED_SUITE = "INITIAL_VACANCY_ON_OCCUPIED_SUITE"
+    MISSING_INITIAL_LEASE_UP_MONTHS = "MISSING_INITIAL_LEASE_UP_MONTHS"
+    INITIAL_LEASE_UP_ON_HOLD_VACANT = "INITIAL_LEASE_UP_ON_HOLD_VACANT"
+    INITIAL_LEASE_UP_OUT_OF_DOMAIN = "INITIAL_LEASE_UP_OUT_OF_DOMAIN"
+    MISSING_MODIFIED_GROSS_RECOVERY_BASIS = (
+        "MISSING_MODIFIED_GROSS_RECOVERY_BASIS"
+    )
+    RECOVERY_BASIS_ON_NON_MODIFIED_GROSS = (
+        "RECOVERY_BASIS_ON_NON_MODIFIED_GROSS"
+    )
+    EXPENSE_STOP_OUT_OF_DOMAIN = "EXPENSE_STOP_OUT_OF_DOMAIN"
+    UNSUPPORTED_RECOVERY_BASIS = "UNSUPPORTED_RECOVERY_BASIS"
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -1463,6 +1489,635 @@ def require_valid_lease_level_inputs(
         leases,
         hold_period=hold_period,
         market_leasing=market_leasing,
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D3.1 -- expense-recovery validation
+#
+# Deliberately a SEPARATE entry point, not folded into
+# `validate_lease_level_inputs`. `MODIFIED_GROSS` is a perfectly valid lease
+# type -- D1 has captured it since D1.0 and D2 carries it through rollover
+# unchanged -- so it must not become invalid input merely because the gate that
+# prices it has not landed. It is only *recovery* that cannot yet be computed
+# for one, and that is what this validator says.
+# =============================================================================
+
+
+def validate_recovery_inputs(
+    leases: Iterable[Lease],
+    pool: RecoverableExpensePool,
+    *,
+    months: tuple[ModelMonth, ...] | None = None,
+) -> LeaseValidationResult:
+    """Validate the inputs to a D3.1 expense-recovery calculation.
+
+    Three rules, in a fixed order so the emitted sequence is reproducible: the
+    pool's own domain, its alignment to the canonical timeline, then each lease
+    in declared order.
+
+    **Pool domain** (D3 Section 3, ``RECOVERABLE_EXPENSES_OUT_OF_DOMAIN``): every
+    figure finite and ``>= 0``. A negative pool would be an expense credit, for
+    which the accepted D3 model has no convention; it is refused rather than
+    given an invented meaning.
+
+    **Alignment** (``RECOVERY_POOL_NOT_ALIGNED``): when ``months`` is supplied,
+    the pool must have been built against that exact tuple. Checking month
+    *identity* rather than length is the point -- a pool from a different
+    projection would zip cleanly and produce a plausible, wrong answer.
+
+    **Modified Gross** (D0 Section 16.2 / D3 Section 6.1). A `MODIFIED_GROSS`
+    lease must carry **both** ``recovery_basis`` and ``expense_stop_psf``; the
+    basis is never inferred from Hold Year 1, the analysis year, the acquisition
+    year or the current expense schedule, so a missing one is
+    ``MISSING_MODIFIED_GROSS_RECOVERY_BASIS`` rather than a default. A basis D3
+    does not implement is ``UNSUPPORTED_RECOVERY_BASIS``.
+
+    **A stop on `NNN` or `GROSS` is an ERROR**, not a silently ignored field
+    (``RECOVERY_BASIS_ON_NON_MODIFIED_GROSS``, D3 Section 5.2). *A stop implies
+    Modified Gross*; permitting one elsewhere would make ``lease_type``
+    unreliable as an economic discriminator and leave a financial input with no
+    effect.
+
+    **Stop domain** (``EXPENSE_STOP_OUT_OF_DOMAIN``): finite and ``>= 0``
+    wherever supplied. Zero is economically valid -- it means the lease
+    reimburses its full share -- and is not an upper-bounded quantity.
+    """
+
+    lease_tuple = tuple(leases)
+    issues: list[LeaseValidationIssue] = []
+
+    for index, amount in enumerate(pool.recoverable_expenses):
+        path = f"recoverable_expense_pool.recoverable_expenses[{index}]"
+        if not _is_finite_number(amount):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.NON_FINITE_VALUE,
+                    path,
+                    "recoverable expense must be a finite number.",
+                )
+            )
+        elif amount < 0:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.RECOVERABLE_EXPENSES_OUT_OF_DOMAIN,
+                    path,
+                    f"recoverable expense {amount!r} must be greater than or "
+                    "equal to 0; a negative pool would be an expense credit, "
+                    "which D3 has no convention for.",
+                )
+            )
+
+    if months is not None and pool.months != months:
+        issues.append(
+            _issue(
+                LeaseIssueCode.RECOVERY_POOL_NOT_ALIGNED,
+                "recoverable_expense_pool.months",
+                "the recoverable expense pool was built against a different "
+                "month sequence than the canonical projection; both must share "
+                "one timeline.",
+            )
+        )
+
+    for index, lease in enumerate(lease_tuple):
+        path = f"leases[{index}]"
+        modified_gross = lease.lease_type is LeaseType.MODIFIED_GROSS
+
+        if modified_gross:
+            if lease.recovery_basis is None or lease.expense_stop_psf is None:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.MISSING_MODIFIED_GROSS_RECOVERY_BASIS,
+                        f"{path}.recovery_basis",
+                        f"lease {lease.lease_id!r} is MODIFIED_GROSS and "
+                        "carries no explicit contractual recovery basis. A base "
+                        "year or expense stop is never inferred from Hold "
+                        "Year 1, the analysis year, the acquisition year or "
+                        "the current expense schedule; the analyst must supply "
+                        "both recovery_basis and expense_stop_psf.",
+                    )
+                )
+            elif not isinstance(lease.recovery_basis, RecoveryBasis):
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.UNSUPPORTED_RECOVERY_BASIS,
+                        f"{path}.recovery_basis",
+                        f"recovery_basis {lease.recovery_basis!r} must be a "
+                        "RecoveryBasis member.",
+                    )
+                )
+            elif lease.recovery_basis is not RecoveryBasis.EXPENSE_STOP_PSF:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.UNSUPPORTED_RECOVERY_BASIS,
+                        f"{path}.recovery_basis",
+                        f"recovery basis {lease.recovery_basis.value!r} is not "
+                        "implemented; D3 supports only EXPENSE_STOP_PSF.",
+                    )
+                )
+        elif lease.recovery_basis is not None or lease.expense_stop_psf is not None:
+            # A stop implies Modified Gross. Refused rather than ignored,
+            # because a silently-ignored financial field would make
+            # `lease_type` unreliable as an economic discriminator (D3 5.2).
+            issues.append(
+                _issue(
+                    LeaseIssueCode.RECOVERY_BASIS_ON_NON_MODIFIED_GROSS,
+                    f"{path}.recovery_basis",
+                    f"lease {lease.lease_id!r} is "
+                    f"{lease.lease_type.value} but carries a recovery basis or "
+                    "expense stop. A lease with a contractual expense stop is "
+                    "MODIFIED_GROSS in Anchor, not NNN or GROSS.",
+                )
+            )
+
+        stop = lease.expense_stop_psf
+        if stop is not None:
+            if not _is_finite_number(stop):
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.NON_FINITE_VALUE,
+                        f"{path}.expense_stop_psf",
+                        "expense_stop_psf must be a finite number.",
+                    )
+                )
+            elif stop < 0:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.EXPENSE_STOP_OUT_OF_DOMAIN,
+                        f"{path}.expense_stop_psf",
+                        f"expense_stop_psf {stop!r} must be greater than or "
+                        "equal to 0. Zero is valid and means the lease "
+                        "reimburses its full share.",
+                    )
+                )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_recovery_inputs(
+    leases: Iterable[Lease],
+    pool: RecoverableExpensePool,
+    *,
+    months: tuple[ModelMonth, ...] | None = None,
+) -> LeaseValidationResult:
+    """Validate recovery inputs and raise ``LeaseValidationError`` on any ERROR.
+
+    Returns the full result when valid, so a caller that wants both the
+    go-ahead and any warnings needs exactly one call.
+    """
+
+    result = validate_recovery_inputs(leases, pool, months=months)
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+def validate_successor_recovery_assumptions(
+    assumptions: MarketLeasingAssumptions,
+    *,
+    path: str = "market_leasing",
+) -> LeaseValidationResult:
+    """Validate the **branch-specific** successor recovery terms (D3.3).
+
+    Deliberately **separate** from ``validate_lease_level_inputs`` and from
+    ``validate_recovery_inputs``, for the reason D3.1 established: a set of
+    assumptions that cannot yet price a recovery is not thereby invalid input
+    to D1 or D2. The market-leasing record remains a legitimate D2 rollover
+    input whether or not a D3 pool exists, so an incomplete recovery term is
+    reported by the calculation that needs it and by nothing else.
+
+    Each branch is checked **independently and by the same rule**, because a
+    renewal and a new letting are separate contracts (HD-D3-2). The rule is the
+    one `Lease` already follows (D3 Section 5.2), applied per branch:
+
+    - a `MODIFIED_GROSS` branch requires a supported ``RecoveryBasis`` **and**
+      an ``expense_stop_psf``, since Anchor never infers a stop -- not from
+      Hold Year 1, the analysis year, the acquisition year, the current
+      expense schedule, and now also **not from the lease being replaced**
+      (D3 Section 6.1, FM-D3-6);
+    - an `NNN` or `GROSS` branch must carry **neither**, because a stop implies
+      Modified Gross; accepting one and ignoring it would make the branch's
+      ``lease_type`` unreliable as an economic discriminator;
+    - a stop outside ``>= 0`` and finite is an error, exactly as on a `Lease`.
+
+    The codes are the D3 Section 11 set, unchanged. A branch-specific code
+    would report the same financial defect under a second name, and the issue
+    ``path`` already names which branch failed.
+    """
+
+    issues: list[LeaseIssue] = []
+
+    for branch, lease_type, basis, stop in (
+        (
+            "renewal",
+            assumptions.renewal_lease_type,
+            assumptions.renewal_recovery_basis,
+            assumptions.renewal_expense_stop_psf,
+        ),
+        (
+            "new",
+            assumptions.new_lease_type,
+            assumptions.new_recovery_basis,
+            assumptions.new_expense_stop_psf,
+        ),
+    ):
+        field = f"{path}.{branch}"
+
+        if lease_type is LeaseType.MODIFIED_GROSS:
+            if basis is None or stop is None:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.MISSING_MODIFIED_GROSS_RECOVERY_BASIS,
+                        f"{field}_recovery_basis",
+                        f"the {branch} successor is MODIFIED_GROSS but states "
+                        "no explicit recovery basis and expense stop. Anchor "
+                        "never infers one, and never inherits one from the "
+                        "lease being replaced.",
+                    )
+                )
+            elif basis is not RecoveryBasis.EXPENSE_STOP_PSF:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.UNSUPPORTED_RECOVERY_BASIS,
+                        f"{field}_recovery_basis",
+                        f"recovery basis {basis.value!r} is not implemented; "
+                        "D3 supports only EXPENSE_STOP_PSF.",
+                    )
+                )
+        elif basis is not None or stop is not None:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.RECOVERY_BASIS_ON_NON_MODIFIED_GROSS,
+                    f"{field}_recovery_basis",
+                    f"the {branch} successor is {lease_type.value} but carries "
+                    "a recovery basis or expense stop. A successor with a "
+                    "contractual expense stop is MODIFIED_GROSS in Anchor, "
+                    "not NNN or GROSS.",
+                )
+            )
+
+        if stop is not None:
+            if not _is_finite_number(stop):
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.NON_FINITE_VALUE,
+                        f"{field}_expense_stop_psf",
+                        f"{branch}_expense_stop_psf must be a finite number.",
+                    )
+                )
+            elif stop < 0:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.EXPENSE_STOP_OUT_OF_DOMAIN,
+                        f"{field}_expense_stop_psf",
+                        f"{branch}_expense_stop_psf {stop!r} must be greater "
+                        "than or equal to 0. Zero is valid and means the "
+                        "successor reimburses its full share.",
+                    )
+                )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_successor_recovery_assumptions(
+    assumptions: MarketLeasingAssumptions,
+    *,
+    path: str = "market_leasing",
+) -> LeaseValidationResult:
+    """Validate successor recovery terms and raise on any ERROR.
+
+    Returns the full result when valid, so a caller that wants both the
+    go-ahead and any warnings needs exactly one call.
+    """
+
+    result = validate_successor_recovery_assumptions(assumptions, path=path)
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+def validate_property_recovery_inputs(
+    projections: Iterable[SuiteRecoveryProjection],
+    *,
+    months: tuple[ModelMonth, ...],
+    suites: Iterable[Suite] | None = None,
+    leases: Iterable[Lease] | None = None,
+) -> LeaseValidationResult:
+    """Validate the inputs to one property recovery aggregation (D3.5).
+
+    Leasing-scoped, and deliberately separate from
+    ``validate_lease_level_inputs``: a rent roll is valid input to D1 and D2
+    whether or not any recovery has been modelled, so a missing recovery
+    schedule is reported by the aggregation that needs it and by nothing else.
+
+    **Duplicate suites** (``DUPLICATE_SUITE_ID``) are an ERROR rather than a
+    silent sum. Two projections for one suite would double that tenant's
+    recovery revenue -- a plausible-looking overstatement with no visible
+    symptom, since the property total is a sum and nothing else constrains it.
+
+    **Month identity is checked, not length**
+    (``RECOVERY_SCHEDULE_NOT_ALIGNED``). Schedules from a different analysis
+    start, hold horizon or forward window would zip cleanly by position and
+    add up to a plausible, wrong answer. There is one canonical timeline.
+
+    **Unknown suites** (``UNKNOWN_SUITE_REFERENCE``) are an ERROR when
+    ``suites`` is supplied: a projection for space the property does not
+    contain adds revenue from nowhere.
+
+    **Missing schedules** (``MISSING_SUITE_RECOVERY_SCHEDULE``) are an ERROR
+    only when both ``suites`` and ``leases`` are supplied, because only then is
+    completeness knowable: a suite that has a lease has a tenant whose recovery
+    someone decided not to model, and silently omitting it understates the
+    property. A suite with **no** lease correctly has no projection and
+    contributes zero -- Anchor never synthesizes a schedule, or a lease, for
+    vacant space.
+
+    Issues are emitted in a deterministic order: alignment and duplication in
+    the caller's own projection order, then unknown suites, then missing ones
+    in suite order.
+    """
+
+    issues: list[LeaseIssue] = []
+    projection_tuple = tuple(projections)
+
+    seen: set[str] = set()
+    for index, projection in enumerate(projection_tuple):
+        path = f"suite_recovery[{index}]"
+
+        if projection.months != months:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.RECOVERY_SCHEDULE_NOT_ALIGNED,
+                    f"{path}.months",
+                    f"the recovery schedule for suite {projection.suite_id!r} "
+                    "was built against a different canonical month sequence; "
+                    "one property aggregation shares one timeline, and "
+                    "matching lengths are not matching months.",
+                )
+            )
+
+        if projection.suite_id in seen:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.DUPLICATE_SUITE_ID,
+                    f"{path}.suite_id",
+                    f"suite {projection.suite_id!r} has more than one recovery "
+                    "schedule in this aggregation; its recovery revenue would "
+                    "be counted twice.",
+                )
+            )
+        seen.add(projection.suite_id)
+
+    if suites is None:
+        return LeaseValidationResult(issues=tuple(issues))
+
+    suite_tuple = tuple(suites)
+    known = {suite.suite_id for suite in suite_tuple}
+
+    for index, projection in enumerate(projection_tuple):
+        if projection.suite_id not in known:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.UNKNOWN_SUITE_REFERENCE,
+                    f"suite_recovery[{index}].suite_id",
+                    f"recovery schedule references suite "
+                    f"{projection.suite_id!r}, which is not a suite of this "
+                    "property; recovery revenue cannot come from space the "
+                    "property does not contain.",
+                )
+            )
+
+    if leases is None:
+        return LeaseValidationResult(issues=tuple(issues))
+
+    tenanted = {lease.suite_id for lease in leases}
+    for suite in suite_tuple:
+        if suite.suite_id in seen:
+            continue
+
+        if suite.suite_id in tenanted:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_SUITE_RECOVERY_SCHEDULE,
+                    f"suites[{suite.suite_id}]",
+                    f"suite {suite.suite_id!r} has a lease but no recovery "
+                    "schedule in this aggregation; omitting a known tenant "
+                    "understates property recovery revenue.",
+                )
+            )
+        elif suite.initial_vacancy is not None:
+            # D3.6: a vacant suite that WAS underwritten -- either way -- owes
+            # the aggregation a projection. HOLD_VACANT contributes an
+            # explicit zero, which is how deliberate vacancy stays visible.
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_SUITE_RECOVERY_SCHEDULE,
+                    f"suites[{suite.suite_id}]",
+                    f"suite {suite.suite_id!r} is vacant with an explicit "
+                    f"{suite.initial_vacancy.strategy.value} treatment but has "
+                    "no recovery schedule in this aggregation. A suite that "
+                    "was underwritten must appear in the result, so a "
+                    "deliberate zero is distinguishable from an omission.",
+                )
+            )
+        else:
+            # D3.6: vacant and never underwritten at all. The aggregation is a
+            # future-looking gate, so this is the error the gate exists for.
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_INITIAL_VACANCY_TREATMENT,
+                    f"suites[{suite.suite_id}].initial_vacancy",
+                    f"suite {suite.suite_id!r} is vacant at the analysis start "
+                    "and states no initial-vacancy treatment, so its future "
+                    "recovery cannot be aggregated. Anchor does not assume "
+                    "vacant space stays vacant: state HOLD_VACANT or "
+                    "MARKET_LEASE_UP explicitly.",
+                )
+            )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_property_recovery_inputs(
+    projections: Iterable[SuiteRecoveryProjection],
+    *,
+    months: tuple[ModelMonth, ...],
+    suites: Iterable[Suite] | None = None,
+    leases: Iterable[Lease] | None = None,
+) -> LeaseValidationResult:
+    """Validate property recovery inputs and raise on any ERROR.
+
+    Returns the full result when valid, so a caller that wants both the
+    go-ahead and any warnings needs exactly one call.
+    """
+
+    result = validate_property_recovery_inputs(
+        projections, months=months, suites=suites, leases=leases
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+def validate_initial_vacancy_inputs(
+    suites: Iterable[Suite],
+    leases: Iterable[Lease],
+    *,
+    property_defaults: MarketLeasingAssumptions | None = None,
+    path: str = "suites",
+) -> LeaseValidationResult:
+    """Validate initial-vacancy treatments for a **future-looking** projection.
+
+    **Scoped, and deliberately not part of ``validate_lease_level_inputs``**
+    (HD-D3.6-1, accepted). D1 is a factual contractual-rent layer: a suite with
+    no lease genuinely earns zero rent today, and that is an observation rather
+    than a speculation. A bare vacant suite therefore remains valid D1 input.
+
+    The error belongs where a silent zero would be a **modelling claim** --
+    the initial-vacancy builder and property recovery aggregation. There,
+    *"this space never lets"* and *"nobody told us how this space lets"* are
+    different statements and must not produce the same output.
+
+    | Rule | Code |
+    |---|---|
+    | Vacant suite with no treatment | `MISSING_INITIAL_VACANCY_TREATMENT` |
+    | Occupied suite carrying a treatment | `INITIAL_VACANCY_ON_OCCUPIED_SUITE` |
+    | `MARKET_LEASE_UP` with no lease-up period | `MISSING_INITIAL_LEASE_UP_MONTHS` |
+    | `HOLD_VACANT` carrying a lease-up period | `INITIAL_LEASE_UP_ON_HOLD_VACANT` |
+    | Lease-up period negative or non-finite | `INITIAL_LEASE_UP_OUT_OF_DOMAIN` |
+    | First-event concession unconsumable | `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM` |
+
+    **The occupied-suite rule refuses rather than ignores.** A treatment on a
+    suite that already has a tenant is a financially meaningful field that
+    could never be read; silently dropping it would let an analyst believe
+    lease-up was modelled when the space was never empty.
+
+    **The first-event free-rent check is the subtle one.** D2 already validates
+    ``new_free_rent_months <= new_term_months - frac(new_downtime_months)``.
+    The first tenant reuses the same concession but waits
+    ``initial_lease_up_months``, so its boundary fraction is different, and a
+    grant that is consumable after a future 2.0-month downtime may be
+    unconsumable after a 2.25-month lease-up. It is re-validated against
+    ``frac(initial_lease_up_months)`` through the **same** helper, so there is
+    one over-grant rule and the concession can never be silently discarded.
+    ``property_defaults`` supplies the term and grant; when omitted the check
+    is skipped rather than guessed.
+
+    Issues are emitted in suite order, deterministically.
+    """
+
+    issues: list[LeaseIssue] = []
+    suite_tuple = tuple(suites)
+    tenanted = {lease.suite_id for lease in leases}
+
+    for suite in suite_tuple:
+        field = f"{path}[{suite.suite_id}].initial_vacancy"
+        treatment = suite.initial_vacancy
+        occupied = suite.suite_id in tenanted
+
+        if occupied:
+            if treatment is not None:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.INITIAL_VACANCY_ON_OCCUPIED_SUITE,
+                        field,
+                        f"suite {suite.suite_id!r} has a lease but carries an "
+                        "initial-vacancy treatment. The space is not vacant at "
+                        "the analysis start, so the assumption could never be "
+                        "read; it is refused rather than silently ignored.",
+                    )
+                )
+            continue
+
+        if treatment is None:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_INITIAL_VACANCY_TREATMENT,
+                    field,
+                    f"suite {suite.suite_id!r} is vacant at the analysis start "
+                    "and states no initial-vacancy treatment. Anchor does not "
+                    "assume vacant space stays vacant: state HOLD_VACANT to "
+                    "underwrite it as vacant deliberately, or MARKET_LEASE_UP "
+                    "with an explicit lease-up period.",
+                )
+            )
+            continue
+
+        lease_up = treatment.initial_lease_up_months
+
+        if treatment.strategy is InitialVacancyStrategy.HOLD_VACANT:
+            if lease_up is not None:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.INITIAL_LEASE_UP_ON_HOLD_VACANT,
+                        f"{field}.initial_lease_up_months",
+                        f"suite {suite.suite_id!r} is HOLD_VACANT but states a "
+                        f"lease-up period of {lease_up!r}. The space is "
+                        "deliberately not let, so the period would never "
+                        "apply; state one intent, not half of each.",
+                    )
+                )
+            continue
+
+        if lease_up is None:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_INITIAL_LEASE_UP_MONTHS,
+                    f"{field}.initial_lease_up_months",
+                    f"suite {suite.suite_id!r} is MARKET_LEASE_UP but states no "
+                    "initial_lease_up_months. Anchor never infers a lease-up "
+                    "period and never falls back to new_downtime_months, which "
+                    "is a different underwriting judgement.",
+                )
+            )
+            continue
+
+        if not _is_finite_number(lease_up) or lease_up < 0:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.INITIAL_LEASE_UP_OUT_OF_DOMAIN,
+                    f"{field}.initial_lease_up_months",
+                    f"initial_lease_up_months {lease_up!r} must be a finite "
+                    "number of months greater than or equal to 0. Zero is "
+                    "valid and means the space lets immediately.",
+                )
+            )
+            continue
+
+        if property_defaults is not None:
+            resolved = resolve_market_leasing(
+                suite, property_defaults=property_defaults
+            ).assumptions
+            # The first tenant reuses new_free_rent_months but waits
+            # initial_lease_up_months, so the boundary fraction differs.
+            issues.extend(
+                _validate_free_rent_over_grant(
+                    resolved,
+                    path=f"{path}[{suite.suite_id}]",
+                    branch="new",
+                    term_months=resolved.new_term_months,
+                    downtime_months=lease_up,
+                    free_rent_months=resolved.new_free_rent_months,
+                )
+            )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_initial_vacancy_inputs(
+    suites: Iterable[Suite],
+    leases: Iterable[Lease],
+    *,
+    property_defaults: MarketLeasingAssumptions | None = None,
+    path: str = "suites",
+) -> LeaseValidationResult:
+    """Validate initial-vacancy treatments and raise on any ERROR."""
+
+    result = validate_initial_vacancy_inputs(
+        suites, leases, property_defaults=property_defaults, path=path
     )
     if result.errors:
         raise LeaseValidationError(result)

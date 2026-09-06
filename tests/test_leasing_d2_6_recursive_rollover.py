@@ -81,6 +81,16 @@ def assumptions(**overrides: object) -> MarketLeasingAssumptions:
         "renewal_lc_pct": 0.0,
         "new_lc_pct": 0.0,
         "renewal_probability": 0.5,
+        # D3.3 successor recovery structure -- inert for every assertion in
+        # this module. NNN on both branches reproduces the D2 successor
+        # metadata these tests were written against, now stated explicitly
+        # rather than inherited from the expiring lease (HD-D3-1).
+        "renewal_lease_type": LeaseType.NNN,
+        "renewal_recovery_basis": None,
+        "renewal_expense_stop_psf": None,
+        "new_lease_type": LeaseType.NNN,
+        "new_recovery_basis": None,
+        "new_expense_stop_psf": None,
     }
     base.update(overrides)
     return MarketLeasingAssumptions(**base)  # type: ignore[arg-type]
@@ -166,9 +176,9 @@ def enumerate_paths(
     """
 
     from anchor.leasing.rent import build_lease_monthly_schedule
-    from anchor.leasing.rollover import _resolve_market_schedule
+    from anchor.leasing.rollover import resolve_rollover_market_schedule
 
-    schedule = _resolve_market_schedule(
+    schedule = resolve_rollover_market_schedule(
         the_suite, months=months, property_defaults=defaults, market_schedule=None
     )
     horizon = months[-1].period_index
@@ -216,7 +226,6 @@ def enumerate_paths(
                 months=months,
                 market_schedule=schedule,
                 parent_expiration_period=parent_e,
-                lease_type=expiring.lease_type,
                 branch=branch,
                 lease_id_stem=f"oracle@{parent_e}",
             )
@@ -376,7 +385,6 @@ def test_a_contribution_is_zero_at_or_before_its_parent_expiration() -> None:
                         months=months,
                     ),
                     parent_expiration_period=parent_e,
-                    lease_type=LeaseType.NNN,
                     branch=branch,
                     lease_id_stem="X",
                 )
@@ -402,7 +410,7 @@ def test_the_contract_refuses_a_contribution_that_reaches_back() -> None:
     good = build_successor_contribution(
         suite=suite(), analysis_start=JAN_START, months=months,
         market_schedule=schedule, parent_expiration_period=6,
-        lease_type=LeaseType.NNN, branch=RolloverBranchKind.RENEWAL,
+        branch=RolloverBranchKind.RENEWAL,
         lease_id_stem="X",
     )
     reaching_back = list(good.contractual_base_rent)
@@ -430,7 +438,7 @@ def test_the_contract_refuses_a_non_advancing_successor() -> None:
     good = build_successor_contribution(
         suite=suite(), analysis_start=JAN_START, months=months,
         market_schedule=schedule, parent_expiration_period=6,
-        lease_type=LeaseType.NNN, branch=RolloverBranchKind.RENEWAL,
+        branch=RolloverBranchKind.RENEWAL,
         lease_id_stem="X",
     )
 
@@ -788,7 +796,7 @@ def test_the_successor_engine_ignores_the_lease_id_stem() -> None:
     common = dict(
         suite=suite(), analysis_start=JAN_START, months=months,
         market_schedule=schedule, parent_expiration_period=8,
-        lease_type=LeaseType.NNN, branch=RolloverBranchKind.RENEWAL,
+        branch=RolloverBranchKind.RENEWAL,
     )
     a = build_successor_contribution(lease_id_stem="one", **common)
     b = build_successor_contribution(lease_id_stem="two-different", **common)
