@@ -138,6 +138,7 @@ from .contracts import (
     RolloverEventStateAudit,
     RolloverTransitionAudit,
     SuccessorContribution,
+    SuccessorRecoverySchedule,
     Lease,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
@@ -173,6 +174,7 @@ from .leasing_costs import (
 )
 from .recoveries import (
     build_lease_recovery_schedule,
+    build_successor_recovery_schedule,
     lease_responsibility_factors,
     monthly_expense_recovery,
     monthly_expense_stop_dollars,
@@ -204,7 +206,9 @@ from .rollover import (
 )
 from .validation import (
     require_valid_recovery_inputs,
+    require_valid_successor_recovery_assumptions,
     validate_recovery_inputs,
+    validate_successor_recovery_assumptions,
     LeaseIssueCode,
     LeaseIssueSeverity,
     LeaseValidationError,
@@ -278,6 +282,7 @@ __all__ = [
     # recursive rollover (D2.6)
     "RolloverBranchKind",
     "SuccessorContribution",
+    "SuccessorRecoverySchedule",
     "RolloverEventStateAudit",
     "RolloverTransitionAudit",
     "RecursiveRollover",
@@ -292,6 +297,7 @@ __all__ = [
     "monthly_expense_recovery",
     "monthly_expense_stop_dollars",
     "build_lease_recovery_schedule",
+    "build_successor_recovery_schedule",
     # contracts
     "EscalationBasis",
     "Lease",
@@ -307,5 +313,7 @@ __all__ = [
     "require_valid_lease_level_inputs",
     "validate_lease_level_inputs",
     "require_valid_recovery_inputs",
+    "require_valid_successor_recovery_assumptions",
     "validate_recovery_inputs",
+    "validate_successor_recovery_assumptions",
 ]

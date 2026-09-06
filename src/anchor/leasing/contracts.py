@@ -398,6 +398,43 @@ class MarketLeasingAssumptions:
     completed monthly results. Nothing on this record is ever averaged with
     anything else on it.
 
+    **The successor recovery structure (D3.3).** ``renewal_lease_type`` and
+    ``new_lease_type`` state, per branch, what **structure** the successor
+    signs; ``renewal_recovery_basis`` / ``renewal_expense_stop_psf`` and
+    ``new_recovery_basis`` / ``new_expense_stop_psf`` state its recovery terms.
+
+    **A successor's structure is never inherited from the lease it replaces**
+    (HD-D3-1, HD-D3-2, both LOCKED at D3.0 human review). Through D2 the
+    successor carried the expiring lease's ``lease_type`` forever, which was
+    harmless only because the field was economically inert. D3 makes it
+    operative, and inheritance would then assert something no analyst chose:
+    *a Gross tenant vacates in year 6, and every replacement thereafter also
+    signs Gross, forever*. Real re-lettings routinely change structure -- a
+    legacy Gross tenant leaves and the space is re-let NNN at prevailing
+    terms. Setting ``renewal_lease_type`` to the in-place type reproduces the
+    old behaviour exactly, but now as a stated assumption rather than a
+    silent one.
+
+    **The branches may differ**, and that is the normal case: an existing
+    `GROSS` lease whose renewal is `MODIFIED_GROSS` on a negotiated stop and
+    whose new-tenant replacement is `NNN` must be representable.
+
+    **This is also what keeps the D2.6 merge key valid** (D3 Section 10.2).
+    Because a successor's structure is a function of ``(branch kind, resolved
+    assumptions, commencement period)`` and never of its predecessor, two
+    scenario paths reaching the same expiration period still face identical
+    futures -- so the recursion may continue merging on the expiration period
+    alone. Chain inheritance would put ``lease_type`` back into the merge key
+    as a live dimension and multiply the state count by the number of
+    reachable structures, buying an economic assertion nobody intended.
+
+    The recovery terms follow the same domains as ``Lease``: a
+    `MODIFIED_GROSS` branch requires a supported ``RecoveryBasis`` and an
+    ``expense_stop_psf`` in ``$/SF/YEAR``, domain ``>= 0``; an `NNN` or
+    `GROSS` branch must carry **neither**, since a stop implies Modified Gross
+    (D3 Section 5.2). Both are required *as values* -- ``None`` is stated, not
+    omitted -- for the same reason ``renewal_rent_psf`` is.
+
     **This record now describes the complete D2 field set.** D0 Section 4.5's
     inventory is fully declared: rent and growth (D2.1), the renewal branch
     (D2.2), the new-tenant branch with downtime and free rent (D2.3), TI and LC
@@ -430,6 +467,14 @@ class MarketLeasingAssumptions:
     renewal_lc_pct: float
     new_lc_pct: float
     renewal_probability: float
+
+    # --- successor recovery structure, branch-specific (D3.3) ---
+    renewal_lease_type: LeaseType
+    renewal_recovery_basis: RecoveryBasis | None
+    renewal_expense_stop_psf: float | None
+    new_lease_type: LeaseType
+    new_recovery_basis: RecoveryBasis | None
+    new_expense_stop_psf: float | None
 
 
 class MarketAssumptionSource(StrEnum):
@@ -1591,4 +1636,99 @@ class LeaseRecoverySchedule:
                 raise ValueError(
                     f"LeaseRecoverySchedule requires one {name} figure per "
                     f"model month; got {len(series)} for {expected} months."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SuccessorRecoverySchedule:
+    """One **pure branch** successor's canonical monthly expense-recovery
+    revenue (D3.3).
+
+    The recovery analogue of ``RenewalBranch`` / ``NewTenantBranch``: the
+    deterministic answer to *"what does this suite recover if the tenant
+    renews, with certainty"*, and separately *"...if a new tenant takes the
+    space"*. It is the ``p = 1`` and ``p = 0`` endpoint, but **no probability
+    exists at D3.3** -- the weight arrives at D3.4, which must reproduce these
+    schedules bit-identically at those endpoints.
+
+    **Successor-only.** Every figure describes the successor lease alone. The
+    expiring lease's own recoveries are a `LeaseRecoverySchedule` built from
+    the in-place lease, and are never folded in here -- the same anti-double-
+    counting boundary D2.6 established for ``SuccessorContribution``.
+
+    **``branch`` is what selected the structure.** ``successor_lease_type``,
+    ``recovery_basis`` and ``expense_stop_psf`` came from that branch's own
+    resolved assumptions and **never** from the lease being replaced
+    (HD-D3-1, HD-D3-2). Recording the branch alongside them makes that
+    provenance answerable from the output alone: a reader can see *which*
+    assumption produced this structure, which is what the D2.6 merge-key
+    proof depends on (D3 Section 10.2).
+
+    **``economic_responsibility_factor`` is the branch's
+    ``successor_occupancy_factor``**, carried through unchanged -- not
+    ``physical_occupancy``, not ``cash_rent_factor``, not free rent. It is the
+    fraction of the month the successor is *contractually responsible for
+    expenses*, so it is ``0`` through downtime, fractional in the boundary
+    month a fractional ``D`` creates, and ``1`` thereafter. Physical occupancy
+    is an integral count and would report ``1`` for that boundary month,
+    over-recovering it (failure modes FM-D3-4, FM-D3-19).
+
+    **Free rent does not appear**, and its absence is the point (D2 Section
+    7.3, HD-D3-7). A rent concession is a concession against *base rent*; it
+    has no automatic effect on an expense reimbursement, and inferring one
+    would silently change every lease with free rent. Two branches identical
+    but for free rent produce identical recovery schedules here.
+
+    **Base rent does not appear either.** Recovery answers a question about
+    *expenses*: pool, share, structure and responsibility. A ``$0/SF``
+    successor recovers exactly what a ``$100/SF`` successor recovers.
+
+    Deliberately absent, and later work: probability and expected recovery
+    (D3.4), recursive accumulation across generations (D3.4), and property
+    aggregation or annual totals (D3.5).
+
+    Built only by ``anchor.leasing.recoveries``; this dataclass performs no
+    calculation of its own.
+    """
+
+    branch: RolloverBranchKind
+    suite_id: str
+    successor_lease_id: str
+    successor_lease_type: LeaseType
+    commencement_period: int
+    successor_expiration_period: int
+
+    months: tuple[ModelMonth, ...]
+    tenant_pro_rata_share: float
+    recovery_basis: RecoveryBasis | None
+    expense_stop_psf: float | None
+    monthly_expense_stop_dollars: float | None
+
+    economic_responsibility_factor: tuple[float, ...]
+    tenant_recoverable_expense_share: tuple[float, ...]
+    full_month_expense_recovery: tuple[float, ...]
+    expense_recovery: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            (
+                "economic_responsibility_factor",
+                self.economic_responsibility_factor,
+            ),
+            (
+                "tenant_recoverable_expense_share",
+                self.tenant_recoverable_expense_share,
+            ),
+            (
+                "full_month_expense_recovery",
+                self.full_month_expense_recovery,
+            ),
+            ("expense_recovery", self.expense_recovery),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"SuccessorRecoverySchedule requires one {name} figure "
+                    f"per model month; got {len(series)} for {expected} "
+                    "months."
                 )

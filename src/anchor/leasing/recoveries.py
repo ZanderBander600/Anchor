@@ -51,8 +51,11 @@ from .contracts import (
     LeaseMonthlySchedule,
     LeaseRecoverySchedule,
     LeaseType,
+    ModelMonth,
     RecoverableExpensePool,
     RecoveryBasis,
+    RolloverBranchKind,
+    SuccessorRecoverySchedule,
 )
 
 
@@ -411,62 +414,16 @@ def build_lease_recovery_schedule(
     factors = lease_responsibility_factors(
         schedule, leased_area_sf=lease.leased_area_sf
     )
-
-    # The stop is nominally fixed and the area does not vary, so this is a
-    # scalar computed once. `None` for every structure that carries no stop.
-    stop_dollars: float | None = None
-    if lease.lease_type is LeaseType.MODIFIED_GROSS:
-        if lease.recovery_basis is None or lease.expense_stop_psf is None:
-            raise ValueError(
-                f"lease {lease.lease_id!r} is MODIFIED_GROSS and carries no "
-                "explicit contractual recovery basis; Anchor never infers one. "
-                "Validate recovery inputs before building a schedule."
-            )
-        if lease.recovery_basis is not RecoveryBasis.EXPENSE_STOP_PSF:
-            raise ValueError(
-                f"recovery basis {lease.recovery_basis!r} is not implemented; "
-                "D3 supports only EXPENSE_STOP_PSF."
-            )
-        stop_dollars = monthly_expense_stop_dollars(
-            expense_stop_psf=lease.expense_stop_psf,
-            leased_area_sf=lease.leased_area_sf,
-        )
-    elif lease.expense_stop_psf is not None or lease.recovery_basis is not None:
-        raise ValueError(
-            f"lease {lease.lease_id!r} is {lease.lease_type.value} but carries "
-            "a recovery basis or expense stop; a lease with a contractual stop "
-            "is MODIFIED_GROSS."
-        )
-
-    tenant_share: list[float] = []
-    full_month: list[float] = []
-    recovery: list[float] = []
-
-    for position in range(len(months)):
-        month_share = ensure_finite(
-            "tenant_recoverable_expense_share",
-            share * pool.recoverable_expenses[position],
-        )
-        tenant_share.append(month_share)
-        # The obligation at full responsibility, then the factor -- computed by
-        # the one authoritative formula, called twice so the audit series and
-        # the recognised figure can never disagree about the clip.
-        full_month.append(
-            monthly_expense_recovery(
-                lease_type=lease.lease_type,
-                tenant_recoverable_expense_share=month_share,
-                responsibility_factor=1.0,
-                monthly_stop_dollars=stop_dollars,
-            )
-        )
-        recovery.append(
-            monthly_expense_recovery(
-                lease_type=lease.lease_type,
-                tenant_recoverable_expense_share=month_share,
-                responsibility_factor=factors[position],
-                monthly_stop_dollars=stop_dollars,
-            )
-        )
+    stop_dollars, tenant_share, full_month, recovery = _recovery_series(
+        lease_id=lease.lease_id,
+        lease_type=lease.lease_type,
+        recovery_basis=lease.recovery_basis,
+        expense_stop_psf=lease.expense_stop_psf,
+        leased_area_sf=lease.leased_area_sf,
+        share=share,
+        factors=factors,
+        pool=pool,
+    )
 
     return LeaseRecoverySchedule(
         lease_id=lease.lease_id,
@@ -478,7 +435,218 @@ def build_lease_recovery_schedule(
         expense_stop_psf=lease.expense_stop_psf,
         monthly_expense_stop_dollars=stop_dollars,
         economic_responsibility_factor=factors,
-        tenant_recoverable_expense_share=tuple(tenant_share),
-        full_month_expense_recovery=tuple(full_month),
-        expense_recovery=tuple(recovery),
+        tenant_recoverable_expense_share=tenant_share,
+        full_month_expense_recovery=full_month,
+        expense_recovery=recovery,
+    )
+
+
+def _resolve_monthly_stop(
+    *,
+    lease_id: str,
+    lease_type: LeaseType,
+    recovery_basis: RecoveryBasis | None,
+    expense_stop_psf: float | None,
+    leased_area_sf: float,
+) -> float | None:
+    """Return the monthly stop in dollars, or ``None`` where none applies.
+
+    The **one** place a contractual recovery basis is turned into a number.
+    Both the in-place builder (D3.1/D3.2) and the successor builder (D3.3)
+    reach it, so a known lease and a rollover successor cannot come to
+    different conclusions about the same terms.
+
+    The stop is nominally fixed and the area does not vary, so this is a
+    scalar computed once rather than a series (HD-D3-4).
+    """
+
+    if lease_type is LeaseType.MODIFIED_GROSS:
+        if recovery_basis is None or expense_stop_psf is None:
+            raise ValueError(
+                f"lease {lease_id!r} is MODIFIED_GROSS and carries no "
+                "explicit contractual recovery basis; Anchor never infers one. "
+                "Validate recovery inputs before building a schedule."
+            )
+        if recovery_basis is not RecoveryBasis.EXPENSE_STOP_PSF:
+            raise ValueError(
+                f"recovery basis {recovery_basis!r} is not implemented; "
+                "D3 supports only EXPENSE_STOP_PSF."
+            )
+        return monthly_expense_stop_dollars(
+            expense_stop_psf=expense_stop_psf,
+            leased_area_sf=leased_area_sf,
+        )
+
+    if expense_stop_psf is not None or recovery_basis is not None:
+        raise ValueError(
+            f"lease {lease_id!r} is {lease_type.value} but carries "
+            "a recovery basis or expense stop; a lease with a contractual stop "
+            "is MODIFIED_GROSS."
+        )
+    return None
+
+
+def _recovery_series(
+    *,
+    lease_id: str,
+    lease_type: LeaseType,
+    recovery_basis: RecoveryBasis | None,
+    expense_stop_psf: float | None,
+    leased_area_sf: float,
+    share: float,
+    factors: tuple[float, ...],
+    pool: RecoverableExpensePool,
+) -> tuple[float | None, tuple[float, ...], tuple[float, ...], tuple[float, ...]]:
+    """Return ``(monthly stop, tenant share, full-month obligation, recovery)``.
+
+    **The single recovery calculation in the package.** An in-place lease and a
+    rollover successor differ in exactly one input -- where the responsibility
+    factor comes from -- so they share this body rather than each carrying a
+    copy. A second implementation is how the two would drift, and how a branch
+    would acquire its own quietly different Modified Gross clip.
+
+    ``factors`` is supplied by the caller and never derived here: the in-place
+    builder passes D1 contractual activity, the successor builder passes the
+    branch's ``successor_occupancy_factor``.
+    """
+
+    if len(factors) != len(pool.months):
+        raise ValueError(
+            f"got {len(factors)} responsibility factors for "
+            f"{len(pool.months)} model months; both must share one canonical "
+            "timeline."
+        )
+
+    stop_dollars = _resolve_monthly_stop(
+        lease_id=lease_id,
+        lease_type=lease_type,
+        recovery_basis=recovery_basis,
+        expense_stop_psf=expense_stop_psf,
+        leased_area_sf=leased_area_sf,
+    )
+
+    tenant_share: list[float] = []
+    full_month: list[float] = []
+    recovery: list[float] = []
+
+    for position in range(len(pool.months)):
+        month_share = ensure_finite(
+            "tenant_recoverable_expense_share",
+            share * pool.recoverable_expenses[position],
+        )
+        tenant_share.append(month_share)
+        # The obligation at full responsibility, then the factor -- computed by
+        # the one authoritative formula, called twice so the audit series and
+        # the recognised figure can never disagree about the clip.
+        full_month.append(
+            monthly_expense_recovery(
+                lease_type=lease_type,
+                tenant_recoverable_expense_share=month_share,
+                responsibility_factor=1.0,
+                monthly_stop_dollars=stop_dollars,
+            )
+        )
+        recovery.append(
+            monthly_expense_recovery(
+                lease_type=lease_type,
+                tenant_recoverable_expense_share=month_share,
+                responsibility_factor=factors[position],
+                monthly_stop_dollars=stop_dollars,
+            )
+        )
+
+    return stop_dollars, tuple(tenant_share), tuple(full_month), tuple(recovery)
+
+
+def build_successor_recovery_schedule(
+    *,
+    branch: RolloverBranchKind,
+    successor_lease: Lease,
+    months: tuple[ModelMonth, ...],
+    successor_occupancy_factor: tuple[float, ...],
+    commencement_period: int,
+    successor_expiration_period: int,
+    pool: RecoverableExpensePool,
+    rentable_area_sf: float,
+) -> SuccessorRecoverySchedule:
+    """Return one **pure branch** successor's monthly recovery revenue (D3.3).
+
+    **The pool is injected here, and only here.** No D2 builder takes a
+    ``RecoverableExpensePool``: ``build_renewal_branch``,
+    ``build_new_tenant_branch`` and ``build_recursive_rollover`` remain usable
+    with no property expense input at all, exactly as they were at D2.6. D3
+    consumes a *finished* D2 branch and adds recovery economics beside it; it
+    never reaches back into rent (D3 Section 3.4, D0 Section 13.1). That
+    boundary is what keeps the market-leasing engine independent of an expense
+    schedule Anchor may not yet have.
+
+    **The structure comes from the successor lease, which got it from its own
+    branch's assumptions** (HD-D3-1, HD-D3-2). This function reads
+    ``successor_lease.lease_type``, ``.recovery_basis`` and
+    ``.expense_stop_psf`` -- the successor's own terms, resolved at
+    construction. It receives no predecessor lease and cannot read one, which
+    is what keeps future recovery economics path-independent and the D2.6
+    merge key valid (D3 Section 10.2).
+
+    **``successor_occupancy_factor`` is the responsibility factor**, taken
+    from the branch unchanged. It is *not* ``physical_occupancy``: in the
+    boundary month a fractional downtime creates, physical occupancy is the
+    integral ``1`` while the successor is responsible for only part of the
+    month. Using occupancy there would over-recover every fractional
+    commencement (FM-D3-4). It is not ``cash_rent_factor`` either -- that
+    carries free rent, which has no effect on an expense reimbursement
+    (D2 Section 7.3, FM-D3-3).
+
+    The arithmetic is the accepted D3.1/D3.2 formula, unchanged and shared:
+    ``NNN`` recovers ``O_m × share × P_m`` from the first dollar, ``GROSS``
+    recovers exactly ``0.0``, and ``MODIFIED_GROSS`` recovers
+    ``O_m × max(0, share × P_m − stop)``. There is no branch-specific variant
+    and no second clip.
+
+    **Precondition: the inputs are already validated** -- call
+    ``anchor.leasing.validation.require_valid_successor_recovery_assumptions``
+    on the resolved assumptions first, as every other builder in this package
+    expects.
+
+    Pure and deterministic: no I/O, no mutation.
+    """
+
+    if months != pool.months:
+        raise ValueError(
+            "the branch and the recoverable expense pool were built against "
+            "different month sequences; both must share one canonical "
+            "timeline."
+        )
+
+    share = tenant_pro_rata_share(
+        leased_area_sf=successor_lease.leased_area_sf,
+        rentable_area_sf=rentable_area_sf,
+    )
+    stop_dollars, tenant_share, full_month, recovery = _recovery_series(
+        lease_id=successor_lease.lease_id,
+        lease_type=successor_lease.lease_type,
+        recovery_basis=successor_lease.recovery_basis,
+        expense_stop_psf=successor_lease.expense_stop_psf,
+        leased_area_sf=successor_lease.leased_area_sf,
+        share=share,
+        factors=successor_occupancy_factor,
+        pool=pool,
+    )
+
+    return SuccessorRecoverySchedule(
+        branch=branch,
+        suite_id=successor_lease.suite_id,
+        successor_lease_id=successor_lease.lease_id,
+        successor_lease_type=successor_lease.lease_type,
+        commencement_period=commencement_period,
+        successor_expiration_period=successor_expiration_period,
+        months=months,
+        tenant_pro_rata_share=share,
+        recovery_basis=successor_lease.recovery_basis,
+        expense_stop_psf=successor_lease.expense_stop_psf,
+        monthly_expense_stop_dollars=stop_dollars,
+        economic_responsibility_factor=successor_occupancy_factor,
+        tenant_recoverable_expense_share=tenant_share,
+        full_month_expense_recovery=full_month,
+        expense_recovery=recovery,
     )

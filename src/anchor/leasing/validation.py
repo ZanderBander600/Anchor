@@ -1663,3 +1663,127 @@ def require_valid_recovery_inputs(
     if result.errors:
         raise LeaseValidationError(result)
     return result
+
+
+def validate_successor_recovery_assumptions(
+    assumptions: MarketLeasingAssumptions,
+    *,
+    path: str = "market_leasing",
+) -> LeaseValidationResult:
+    """Validate the **branch-specific** successor recovery terms (D3.3).
+
+    Deliberately **separate** from ``validate_lease_level_inputs`` and from
+    ``validate_recovery_inputs``, for the reason D3.1 established: a set of
+    assumptions that cannot yet price a recovery is not thereby invalid input
+    to D1 or D2. The market-leasing record remains a legitimate D2 rollover
+    input whether or not a D3 pool exists, so an incomplete recovery term is
+    reported by the calculation that needs it and by nothing else.
+
+    Each branch is checked **independently and by the same rule**, because a
+    renewal and a new letting are separate contracts (HD-D3-2). The rule is the
+    one `Lease` already follows (D3 Section 5.2), applied per branch:
+
+    - a `MODIFIED_GROSS` branch requires a supported ``RecoveryBasis`` **and**
+      an ``expense_stop_psf``, since Anchor never infers a stop -- not from
+      Hold Year 1, the analysis year, the acquisition year, the current
+      expense schedule, and now also **not from the lease being replaced**
+      (D3 Section 6.1, FM-D3-6);
+    - an `NNN` or `GROSS` branch must carry **neither**, because a stop implies
+      Modified Gross; accepting one and ignoring it would make the branch's
+      ``lease_type`` unreliable as an economic discriminator;
+    - a stop outside ``>= 0`` and finite is an error, exactly as on a `Lease`.
+
+    The codes are the D3 Section 11 set, unchanged. A branch-specific code
+    would report the same financial defect under a second name, and the issue
+    ``path`` already names which branch failed.
+    """
+
+    issues: list[LeaseIssue] = []
+
+    for branch, lease_type, basis, stop in (
+        (
+            "renewal",
+            assumptions.renewal_lease_type,
+            assumptions.renewal_recovery_basis,
+            assumptions.renewal_expense_stop_psf,
+        ),
+        (
+            "new",
+            assumptions.new_lease_type,
+            assumptions.new_recovery_basis,
+            assumptions.new_expense_stop_psf,
+        ),
+    ):
+        field = f"{path}.{branch}"
+
+        if lease_type is LeaseType.MODIFIED_GROSS:
+            if basis is None or stop is None:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.MISSING_MODIFIED_GROSS_RECOVERY_BASIS,
+                        f"{field}_recovery_basis",
+                        f"the {branch} successor is MODIFIED_GROSS but states "
+                        "no explicit recovery basis and expense stop. Anchor "
+                        "never infers one, and never inherits one from the "
+                        "lease being replaced.",
+                    )
+                )
+            elif basis is not RecoveryBasis.EXPENSE_STOP_PSF:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.UNSUPPORTED_RECOVERY_BASIS,
+                        f"{field}_recovery_basis",
+                        f"recovery basis {basis.value!r} is not implemented; "
+                        "D3 supports only EXPENSE_STOP_PSF.",
+                    )
+                )
+        elif basis is not None or stop is not None:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.RECOVERY_BASIS_ON_NON_MODIFIED_GROSS,
+                    f"{field}_recovery_basis",
+                    f"the {branch} successor is {lease_type.value} but carries "
+                    "a recovery basis or expense stop. A successor with a "
+                    "contractual expense stop is MODIFIED_GROSS in Anchor, "
+                    "not NNN or GROSS.",
+                )
+            )
+
+        if stop is not None:
+            if not _is_finite_number(stop):
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.NON_FINITE_VALUE,
+                        f"{field}_expense_stop_psf",
+                        f"{branch}_expense_stop_psf must be a finite number.",
+                    )
+                )
+            elif stop < 0:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.EXPENSE_STOP_OUT_OF_DOMAIN,
+                        f"{field}_expense_stop_psf",
+                        f"{branch}_expense_stop_psf {stop!r} must be greater "
+                        "than or equal to 0. Zero is valid and means the "
+                        "successor reimburses its full share.",
+                    )
+                )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_successor_recovery_assumptions(
+    assumptions: MarketLeasingAssumptions,
+    *,
+    path: str = "market_leasing",
+) -> LeaseValidationResult:
+    """Validate successor recovery terms and raise on any ERROR.
+
+    Returns the full result when valid, so a caller that wants both the
+    go-ahead and any warnings needs exactly one call.
+    """
+
+    result = validate_successor_recovery_assumptions(assumptions, path=path)
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result

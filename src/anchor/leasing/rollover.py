@@ -98,6 +98,7 @@ from .contracts import (
     RecursiveRollover,
     RenewalBranch,
     ResolvedMarketLeasing,
+    RecoveryBasis,
     RolloverBranchKind,
     RolloverEventStateAudit,
     RolloverTransitionAudit,
@@ -489,6 +490,9 @@ def build_successor_lease(
     term_months: int,
     starting_rent_psf: float,
     successor_escalation_pct: float,
+    lease_type: LeaseType,
+    recovery_basis: RecoveryBasis | None,
+    expense_stop_psf: float | None,
     lease_id_suffix: str,
 ) -> Lease:
     """Return a rollover successor as an ordinary contractual ``Lease``.
@@ -521,9 +525,14 @@ def build_successor_lease(
     also the expiring lease's area; taking it from the suite states the
     intent -- what rolls over is the *space*.
 
-    ``lease_type`` is inherited from the expiring lease (D0 Section 8.2): the
-    recovery structure is a property of how the building leases, not of which
-    tenant is in it. It stays economically inert until D3.
+    ``lease_type``, ``recovery_basis`` and ``expense_stop_psf`` are
+    **parameters, not inheritance** (HD-D3-1, HD-D3-2). Through D2 this
+    function read ``expiring.lease_type``, which was harmless only while the
+    field was economically inert; D3 makes it operative, and a successor that
+    inherited its structure would assert that a building's lease structures
+    never change. The caller resolves them from the branch's own assumptions,
+    so a renewal and a new letting can differ, and neither can be influenced
+    by the lease being replaced.
 
     ``lease_start_date`` is deliberately left ``None``. A possession date is
     informational and never enters an economic calculation; inventing one for
@@ -553,7 +562,9 @@ def build_successor_lease(
         base_rent_psf=starting_rent_psf,
         escalation_pct=successor_escalation_pct,
         escalation_basis=EscalationBasis.LEASE_ANNIVERSARY,
-        lease_type=expiring.lease_type,
+        lease_type=lease_type,
+        recovery_basis=recovery_basis,
+        expense_stop_psf=expense_stop_psf,
         origin=LeaseOrigin.SUCCESSOR,
     )
 
@@ -567,6 +578,9 @@ def build_renewal_successor_lease(
     term_months: int,
     starting_rent_psf: float,
     successor_escalation_pct: float,
+    lease_type: LeaseType,
+    recovery_basis: RecoveryBasis | None,
+    expense_stop_psf: float | None,
 ) -> Lease:
     """Return the **renewal** successor lease. See ``build_successor_lease``.
 
@@ -583,6 +597,9 @@ def build_renewal_successor_lease(
         term_months=term_months,
         starting_rent_psf=starting_rent_psf,
         successor_escalation_pct=successor_escalation_pct,
+        lease_type=lease_type,
+        recovery_basis=recovery_basis,
+        expense_stop_psf=expense_stop_psf,
         lease_id_suffix=_RENEWAL_SUCCESSOR_SUFFIX,
     )
 
@@ -599,7 +616,6 @@ def build_successor_contribution(
     months: tuple[ModelMonth, ...],
     market_schedule: MarketRentSchedule,
     parent_expiration_period: int,
-    lease_type: LeaseType,
     branch: RolloverBranchKind,
     lease_id_stem: str,
 ) -> SuccessorContribution:
@@ -610,11 +626,22 @@ def build_successor_contribution(
     fifth-generation one are constructed by identical code and cannot drift.
 
     **It takes no predecessor ``Lease``.** Its inputs are the parent's
-    expiration period, the suite, the chain-invariant ``lease_type`` and the
-    resolved assumptions -- exactly the sufficient state D2 Section 5.5.1
-    proves. A predecessor's rent, escalation, concessions, tenant or identity
-    cannot reach it even by accident, which is what makes merging two paths at
-    the same expiration period financially safe rather than merely plausible.
+    expiration period, the suite, the branch kind and the resolved assumptions
+    -- exactly the sufficient state D2 Section 5.5.1 proves. A predecessor's
+    rent, escalation, concessions, tenant, identity, **lease type, recovery
+    basis or expense stop** cannot reach it even by accident, which is what
+    makes merging two paths at the same expiration period financially safe
+    rather than merely plausible.
+
+    **D3.3 removed the last predecessor input.** ``lease_type`` was previously
+    a parameter, and every caller passed the *original in-place lease's* type,
+    so an entire rollover chain carried the opening rent roll's structure
+    forever. It is now resolved per branch from the assumptions, exactly as
+    term, downtime, free rent, TI and LC already were (HD-D3-1, HD-D3-2). The
+    D2.6 merge key survives **because** of this: a renewal successor has
+    ``renewal_lease_type`` regardless of what its parent was, so two paths
+    meeting at one expiration period still face identical futures (D3
+    Section 10.2).
 
     ``lease_id_stem`` names the successor and is **not** an economic input. The
     first rollover derives it from the expiring lease so D2.2's identifiers are
@@ -639,6 +666,10 @@ def build_successor_contribution(
         free_rent_months = assumptions.renewal_free_rent_months
         ti_psf = assumptions.renewal_ti_psf
         lc_pct = assumptions.renewal_lc_pct
+        # D3.3: the structure is this branch's own, never the predecessor's.
+        lease_type = assumptions.renewal_lease_type
+        recovery_basis = assumptions.renewal_recovery_basis
+        expense_stop_psf = assumptions.renewal_expense_stop_psf
         suffix = _RENEWAL_SUCCESSOR_SUFFIX
     else:
         term_months = assumptions.new_term_months
@@ -646,6 +677,9 @@ def build_successor_contribution(
         free_rent_months = assumptions.new_free_rent_months
         ti_psf = assumptions.new_ti_psf
         lc_pct = assumptions.new_lc_pct
+        lease_type = assumptions.new_lease_type
+        recovery_basis = assumptions.new_recovery_basis
+        expense_stop_psf = assumptions.new_expense_stop_psf
         suffix = _NEW_TENANT_SUCCESSOR_SUFFIX
 
     commencement_period = successor_commencement_period(
@@ -711,6 +745,8 @@ def build_successor_contribution(
         escalation_pct=assumptions.successor_escalation_pct,
         escalation_basis=EscalationBasis.LEASE_ANNIVERSARY,
         lease_type=lease_type,
+        recovery_basis=recovery_basis,
+        expense_stop_psf=expense_stop_psf,
         origin=LeaseOrigin.SUCCESSOR,
     )
 
@@ -888,7 +924,6 @@ def _build_branch_core(
         parent_expiration_period=lease_rent_periods(
             expiring, analysis_start=analysis_start
         )[1],
-        lease_type=expiring.lease_type,
         branch=branch,
         lease_id_stem=expiring.lease_id,
     )
@@ -1631,7 +1666,6 @@ def build_recursive_rollover(
                 months=months,
                 market_schedule=schedule,
                 parent_expiration_period=period,
-                lease_type=expiring.lease_type,
                 branch=branch,
                 # Derived from the STATE, never from a predecessor path, so a
                 # merged state has one identifier however many paths reached

@@ -95,6 +95,16 @@ def assumptions(**overrides: object) -> MarketLeasingAssumptions:
         "renewal_lc_pct": 0.02,
         "new_lc_pct": 0.06,
         "renewal_probability": 0.65,
+        # D3.3 successor recovery structure -- inert for every assertion in
+        # this module. NNN on both branches reproduces the D2 successor
+        # metadata these tests were written against, now stated explicitly
+        # rather than inherited from the expiring lease (HD-D3-1).
+        "renewal_lease_type": LeaseType.NNN,
+        "renewal_recovery_basis": None,
+        "renewal_expense_stop_psf": None,
+        "new_lease_type": LeaseType.NNN,
+        "new_recovery_basis": None,
+        "new_expense_stop_psf": None,
     }
     base.update(overrides)
     return MarketLeasingAssumptions(**base)  # type: ignore[arg-type]

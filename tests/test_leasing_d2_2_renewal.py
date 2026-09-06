@@ -94,6 +94,16 @@ def assumptions(**overrides: object) -> MarketLeasingAssumptions:
         "new_lc_pct": 0.0,
         # D2.5 probability -- inert for every assertion in this module.
         "renewal_probability": 1.0,
+        # D3.3 successor recovery structure -- inert for every assertion in
+        # this module. NNN on both branches reproduces the D2 successor
+        # metadata these tests were written against, now stated explicitly
+        # rather than inherited from the expiring lease (HD-D3-1).
+        "renewal_lease_type": LeaseType.NNN,
+        "renewal_recovery_basis": None,
+        "renewal_expense_stop_psf": None,
+        "new_lease_type": LeaseType.NNN,
+        "new_recovery_basis": None,
+        "new_expense_stop_psf": None,
     }
     base.update(overrides)
     return MarketLeasingAssumptions(**base)  # type: ignore[arg-type]
@@ -927,14 +937,28 @@ def test_the_successor_is_never_presented_as_a_known_tenant() -> None:
     assert branch.successor_lease_id == branch.successor_lease.lease_id
 
 
-def test_the_successor_inherits_structure_but_not_identity() -> None:
+def test_the_successor_takes_the_space_but_not_the_identity() -> None:
+    """Superseded form of a D2.2 assertion. Through D2 the successor inherited
+    the expiring lease's ``lease_type``, which was safe only while the field
+    was economically inert. D3.3 makes it operative and sources it from the
+    branch's own assumptions instead (HD-D3-1), so the claim worth keeping is
+    that the successor takes over the **space** -- suite, area, escalation
+    basis -- while its structure and identity come from elsewhere.
+
+    The predecessor is deliberately `MODIFIED_GROSS` here and the successor is
+    `NNN`: the two now differ, and that is the point.
+    """
+
     branch = branch_for(lease=expiring_lease(lease_type=LeaseType.MODIFIED_GROSS))
 
-    assert branch.successor_lease.lease_type is LeaseType.MODIFIED_GROSS
     assert branch.successor_lease.suite_id == "S1"
     assert branch.successor_lease.leased_area_sf == AREA
     assert branch.successor_lease.escalation_basis is EscalationBasis.LEASE_ANNIVERSARY
     assert branch.successor_lease.lease_start_date is None
+
+    # The structure is the branch assumption's, not the predecessor's.
+    assert branch.successor_lease.lease_type is LeaseType.NNN
+    assert branch.resolved.assumptions.renewal_lease_type is LeaseType.NNN
 
 
 def test_a_successor_lease_naming_a_tenant_is_a_validation_error() -> None:

@@ -1383,6 +1383,13 @@ def test_the_successor_engine_never_reads_a_predecessor_lease() -> None:
     ``build_successor_contribution`` therefore takes no predecessor ``Lease``
     at all. If a future change introduced one, the merge key would no longer be
     financially sufficient and this test must fail loudly.
+
+    **D3.3 strengthened this.** ``lease_type`` used to be a parameter, and
+    every caller supplied the *original in-place lease's* type. That was
+    sufficient only because the field was economically inert; D3 makes it
+    operative, so the parameter was removed and the structure is now resolved
+    per branch from the assumptions (HD-D3-1). The engine's parameter list is
+    asserted here in full, so re-adding any predecessor-derived input fails.
     """
 
     builder = next(
@@ -1401,7 +1408,26 @@ def test_the_successor_engine_never_reads_a_predecessor_lease() -> None:
             "must be built from state, never from its predecessor"
         )
     assert "parent_expiration_period" in parameters
-    assert "lease_type" in parameters
+    assert "branch" in parameters
+
+    # D3.3: the structure is no longer threaded in from a predecessor.
+    for removed in ("lease_type", "recovery_basis", "expense_stop_psf"):
+        assert removed not in parameters, (
+            f"build_successor_contribution accepts {removed!r}; a successor's "
+            "structure comes from its own branch's resolved assumptions, "
+            "never from the lease it replaces (HD-D3-1, HD-D3-2)"
+        )
+
+    # The sufficient state, asserted exhaustively: nothing else may enter.
+    assert parameters == {
+        "suite",
+        "analysis_start",
+        "months",
+        "market_schedule",
+        "parent_expiration_period",
+        "branch",
+        "lease_id_stem",
+    }, f"the successor engine's sufficient state changed: {sorted(parameters)}"
 
     referenced = _referenced_names(builder)
     for forbidden in (
@@ -2564,13 +2590,10 @@ def test_no_later_d3_gate_concept_exists() -> None:
             source_file.read_text(encoding="utf-8"), filename=str(source_file)
         )
         referenced = _referenced_names(tree)
+        # D3.3 delivered the six branch-specific successor recovery
+        # fields; narrowed by exactly what that gate produced. What
+        # remains banned is D3.4's composition and D3.5's aggregation.
         for forbidden in (
-            "renewal_lease_type",
-            "new_lease_type",
-            "renewal_recovery_basis",
-            "new_recovery_basis",
-            "renewal_expense_stop_psf",
-            "new_expense_stop_psf",
             "expected_expense_recovery",
             "property_expense_recovery",
             "annual_expense_recovery",
@@ -2587,4 +2610,488 @@ def test_recoveries_are_pure() -> None:
     for forbidden in ("open", "read_text", "write_text", "connect", "now", "today"):
         assert forbidden not in referenced, (
             f"recoveries.py references {forbidden!r}; it must be pure"
+        )
+
+
+# =============================================================================
+# D3.3 -- branch-specific successor recovery structure
+# =============================================================================
+
+
+def _market_tree() -> ast.AST:
+    source = (_LEASING_DIR / _MARKET_CALCULATION_MODULE).read_text(encoding="utf-8")
+    return ast.parse(source, filename=_MARKET_CALCULATION_MODULE)
+
+
+def _successor_contribution_fn() -> ast.FunctionDef:
+    return next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_successor_contribution"
+    )
+
+
+def _successor_recovery_fn() -> ast.FunctionDef:
+    return next(
+        node
+        for node in ast.walk(_recoveries_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_successor_recovery_schedule"
+    )
+
+
+_PREDECESSOR_STRUCTURE_READS = (
+    "expiring.lease_type",
+    "expiring.recovery_basis",
+    "expiring.expense_stop_psf",
+    "predecessor.lease_type",
+    "predecessor.recovery_basis",
+    "predecessor.expense_stop_psf",
+    "parent_lease.lease_type",
+    "expiring_lease.lease_type",
+)
+
+
+def test_successor_lease_type_comes_from_branch_specific_assumptions() -> None:
+    """Guardrail 1. HD-D3-1. The renewal branch reads ``renewal_lease_type``
+    and the new-tenant branch reads ``new_lease_type`` -- resolved exactly like
+    term, downtime, free rent, TI and LC already were."""
+
+    referenced = _referenced_names(_successor_contribution_fn())
+
+    assert "renewal_lease_type" in referenced
+    assert "new_lease_type" in referenced
+
+
+def test_successor_recovery_terms_come_from_branch_specific_assumptions() -> None:
+    """Guardrail 2. HD-D3-2. Each branch states its own basis and stop, so a
+    renewal can hold a negotiated stop while a new letting signs NNN."""
+
+    referenced = _referenced_names(_successor_contribution_fn())
+
+    for name in (
+        "renewal_recovery_basis",
+        "renewal_expense_stop_psf",
+        "new_recovery_basis",
+        "new_expense_stop_psf",
+    ):
+        assert name in referenced, (
+            f"build_successor_contribution does not read {name!r}; successor "
+            "recovery terms are branch-specific (HD-D3-2)"
+        )
+
+
+def test_no_predecessor_structure_is_ever_read_in_the_package() -> None:
+    """Guardrails 3, 4 and 5, and **the central D3.3 architecture guardrail**
+    (D3 Section 10.2).
+
+    Chain inheritance -- a successor taking its lease type, basis or stop from
+    the lease it replaces -- is banned outright, anywhere in the package. It is
+    not merely unrealistic: it would make future recovery economics
+    path-dependent, put ``lease_type`` back into the D2.6 merge key as a live
+    dimension, and multiply the state count by the number of reachable
+    structures. The D3 document makes this binding: if such a dependency is
+    ever introduced, the state-sufficiency proof must be re-derived and the
+    merge key re-established **before** that change merges.
+    """
+
+    for source_file in _leasing_source_files():
+        source = source_file.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(source_file))
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute):
+                continue
+            rendered = ast.unparse(node)
+            assert rendered not in _PREDECESSOR_STRUCTURE_READS, (
+                f"{source_file.name} reads {rendered!r}; a successor's "
+                "structure comes from its own branch's resolved assumptions "
+                "and is never inherited (HD-D3-1, HD-D3-2, D3 Section 10.2)"
+            )
+
+
+def test_the_successor_recovery_builder_receives_no_predecessor() -> None:
+    """Guardrails 3-5, at the recovery boundary. The D3.3 builder cannot read a
+    predecessor because none is in scope: it takes the successor lease, the
+    branch, the factor series and the pool."""
+
+    builder = _successor_recovery_fn()
+    parameters = {a.arg for a in builder.args.args} | {
+        a.arg for a in builder.args.kwonlyargs
+    }
+
+    for forbidden in (
+        "expiring",
+        "expiring_lease",
+        "predecessor",
+        "parent_lease",
+        "predecessor_recovery",
+        "recovery_history",
+    ):
+        assert forbidden not in parameters, (
+            f"build_successor_recovery_schedule accepts {forbidden!r}; "
+            "successor recovery is priced from the successor's own terms"
+        )
+
+    assert "successor_lease" in parameters
+    assert "branch" in parameters
+
+
+def test_the_production_merge_key_is_the_expiration_period_alone() -> None:
+    """Guardrails 6 and 7 -- **the actual production key, asserted**.
+
+    ``build_recursive_rollover`` keys its state queue on the integer expiration
+    period and nothing else: ``incoming`` and ``processed`` are both
+    ``dict[int, ...]``. ``suite_id`` and ``leased_area_sf`` are constant because
+    the function models one suite per call, and D3.3 removed the last
+    predecessor-derived input, so no other dimension exists to key on.
+
+    This asserts the annotation rather than citing the D2.6 Part A conceptual
+    key, so a widened key -- a tuple reintroducing ``lease_type`` -- fails
+    here and forces the sufficiency proof to be re-derived.
+    """
+
+    recursion = next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "build_recursive_rollover"
+    )
+
+    annotations = {
+        node.target.id: ast.unparse(node.annotation)
+        for node in ast.walk(recursion)
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+
+    assert annotations["incoming"] == "dict[int, list[float]]", (
+        "the rollover-event queue is keyed by expiration period alone; "
+        f"got {annotations.get('incoming')!r}"
+    )
+    assert annotations["processed"] == "dict[int, float]", (
+        f"the processed-state map changed shape: {annotations.get('processed')!r}"
+    )
+
+
+def test_successor_recovery_consumes_the_successor_occupancy_factor() -> None:
+    """Guardrails 9 and 10. FM-D3-4 and FM-D3-19.
+
+    The responsibility driver is the branch's ``successor_occupancy_factor``,
+    which is fractional in the boundary month a fractional ``D`` creates.
+    ``physical_occupancy`` is an integral count and reports ``1`` for that same
+    month, so using it would over-recover every fractional commencement.
+    """
+
+    builder = _successor_recovery_fn()
+    parameters = {a.arg for a in builder.args.kwonlyargs} | {
+        a.arg for a in builder.args.args
+    }
+
+    assert "successor_occupancy_factor" in parameters
+
+    referenced = _referenced_names(builder)
+    for forbidden in (
+        "physical_occupancy",
+        "cash_rent_factor",
+        "free_rent",
+        "free_rent_abatement_months",
+        "occupied_area",
+    ):
+        assert forbidden not in referenced, (
+            f"build_successor_recovery_schedule reads {forbidden!r}; the "
+            "responsibility driver is successor_occupancy_factor alone"
+        )
+
+
+def test_successor_recovery_never_reads_rent(  ) -> None:
+    """Guardrails 11 and 12. Recovery answers a question about *expenses*.
+    Neither base rent, market rent, nor any concession may reach the formula --
+    a ``$0/SF`` successor recovers exactly what a ``$100/SF`` successor does."""
+
+    referenced = _referenced_names(_successor_recovery_fn())
+
+    for forbidden in (
+        "base_rent_psf",
+        "starting_rent_psf",
+        "market_rent_psf",
+        "contractual_base_rent",
+        "cash_base_rent",
+        "escalation_pct",
+        "free_rent_months",
+    ):
+        assert forbidden not in referenced, (
+            f"build_successor_recovery_schedule reads {forbidden!r}; recovery "
+            "is independent of rent (FM-D3-2, FM-D3-3)"
+        )
+
+
+def test_every_recovery_formula_lives_in_the_recoveries_module() -> None:
+    """Guardrail 13. The successor builder adds no arithmetic of its own: it
+    resolves the factor source and delegates to the shared series."""
+
+    # `contracts.py` declares the field names and `validation.py` names the
+    # terms it checks; neither computes a recovery. The exemption is the same
+    # one the D3.1 netting guardrail already draws, and the delegation test
+    # below is what actually pins the arithmetic to one place.
+    exempt = {_RECOVERIES_MODULE, "contracts.py", "validation.py"}
+    for source_file in _leasing_source_files():
+        if source_file.name in exempt:
+            continue
+        names = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        for forbidden in (
+            "monthly_expense_recovery",
+            "monthly_expense_stop_dollars",
+            "tenant_recoverable_expense_share",
+            "expense_recovery",
+        ):
+            assert forbidden not in names, (
+                f"{source_file.name} references {forbidden!r}; every recovery "
+                f"formula belongs to {_RECOVERIES_MODULE}"
+            )
+
+
+def test_the_two_recovery_builders_share_one_series_implementation() -> None:
+    """Guardrail 14, extended. D3.2 proved exactly one Modified Gross clip
+    exists; D3.3 must not add a branch-specific second one. Both builders reach
+    the same ``_recovery_series`` core, which differs between them in exactly
+    one input -- where the responsibility factor comes from."""
+
+    tree = _recoveries_tree()
+
+    for builder_name in (
+        "build_lease_recovery_schedule",
+        "build_successor_recovery_schedule",
+    ):
+        builder = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == builder_name
+        )
+        called = {
+            child.func.id
+            for child in ast.walk(builder)
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+        }
+        assert "_recovery_series" in called, (
+            f"{builder_name} does not delegate to the shared recovery series"
+        )
+        assert "max" not in called, (
+            f"{builder_name} clips a value of its own; the Modified Gross clip "
+            "is singular"
+        )
+
+
+def test_d2_builders_never_require_a_recoverable_expense_pool() -> None:
+    """Guardrails 15 and 16. **The pool-injection boundary.**
+
+    The D2 market-leasing engine must stay usable with no property expense
+    input at all: D4 may not have resolved where the expense schedule comes
+    from, and D0 Section 13.1 forbids a second expense engine inside
+    ``anchor.leasing``. D3 consumes a *finished* branch and adds recovery
+    beside it; it never reaches back into rent.
+    """
+
+    tree = _rollover_tree()
+
+    for builder_name in (
+        "build_renewal_branch",
+        "build_new_tenant_branch",
+        "build_expected_rollover",
+        "build_recursive_rollover",
+        "build_successor_contribution",
+        "_build_branch_core",
+    ):
+        builder = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == builder_name
+        )
+        parameters = {a.arg for a in builder.args.args} | {
+            a.arg for a in builder.args.kwonlyargs
+        }
+        for forbidden in ("pool", "recoverable_expenses", "expense_pool"):
+            assert forbidden not in parameters, (
+                f"{builder_name} requires {forbidden!r}; the D2 rollover engine "
+                "must remain independent of D3 property expense inputs"
+            )
+
+    # And the module never names the pool contract at all.
+    assert "RecoverableExpensePool" not in _referenced_names(tree), (
+        "rollover.py references RecoverableExpensePool; the pool is injected "
+        "at the recovery boundary, not into D2"
+    )
+
+
+def test_recovery_revenue_is_never_folded_into_a_d2_rent_series() -> None:
+    """Guardrail 15, the other direction. A recovery must not be added into
+    ``cash_base_rent`` or any branch series -- it is revenue on its own line
+    (D0 Section 10.2, FM-D3-1)."""
+
+    referenced = _referenced_names(_rollover_tree())
+
+    for forbidden in (
+        "expense_recovery",
+        "recovery_revenue",
+        "tenant_recoverable_expense_share",
+        "SuccessorRecoverySchedule",
+    ):
+        assert forbidden not in referenced, (
+            f"rollover.py references {forbidden!r}; recovery revenue is "
+            f"computed in {_RECOVERIES_MODULE} and reported on its own line"
+        )
+
+
+def test_no_expected_or_recursive_recovery_exists_at_d3_3() -> None:
+    """Guardrails 17 and 18. D3.4 owns composition and recursion. D3.3
+    calculates pure branch schedules only -- no probability may touch a
+    recovery here."""
+
+    for source_file in _leasing_source_files():
+        referenced = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        for forbidden in (
+            "expected_expense_recovery",
+            "expected_recovery",
+            "weighted_recovery",
+            "recursive_expense_recovery",
+            "accumulated_recovery",
+        ):
+            assert forbidden not in referenced, (
+                f"{source_file.name} references {forbidden!r}, which belongs "
+                "to D3.4"
+            )
+
+    # The pure-branch result carries no probability of any kind.
+    schedule = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "SuccessorRecoverySchedule"
+    )
+    fields = {
+        node.target.id
+        for node in schedule.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    for forbidden in (
+        "renewal_probability",
+        "probability",
+        "probability_mass",
+        "expected_expense_recovery",
+    ):
+        assert forbidden not in fields, (
+            f"SuccessorRecoverySchedule declares {forbidden!r}; D3.3 is a pure "
+            "branch result and carries no probability"
+        )
+
+    # And no recovery field was added to the recursive result.
+    recursive = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "RecursiveRollover"
+    )
+    recursive_fields = {
+        node.target.id
+        for node in recursive.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert not any("recovery" in name for name in recursive_fields), (
+        "RecursiveRollover gained a recovery field; recursion over recoveries "
+        "is D3.4's"
+    )
+
+
+def test_no_property_recovery_aggregation_exists_at_d3_3() -> None:
+    """Guardrail 19. D3.5 owns lease-to-property aggregation and annual
+    totals, and annual figures must derive solely from monthly ones."""
+
+    for source_file in _leasing_source_files():
+        referenced = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        for forbidden in (
+            "property_expense_recovery",
+            "annual_expense_recovery",
+            "total_expense_recovery",
+            "build_property_recovery_schedule",
+        ):
+            assert forbidden not in referenced, (
+                f"{source_file.name} references {forbidden!r}, which belongs "
+                "to D3.5"
+            )
+
+
+def test_no_downstream_financial_concept_reaches_the_recovery_layer() -> None:
+    """Guardrail 20. D4 owns the connection into acquisition, debt and
+    returns, and it is made from ``anchor.engine`` toward ``anchor.leasing``,
+    never the reverse."""
+
+    referenced = _referenced_names(_recoveries_tree())
+
+    for forbidden in (
+        "noi",
+        "egi",
+        "irr",
+        "dscr",
+        "debt_yield",
+        "purchase_price",
+        "sale_proceeds",
+        "operating_expenses",
+        "management_fee",
+    ):
+        assert forbidden not in referenced, (
+            f"{_RECOVERIES_MODULE} references {forbidden!r}; D3 produces a "
+            "revenue series and integrates with nothing"
+        )
+
+
+def test_suite_rent_overrides_preserve_every_d3_successor_field() -> None:
+    """Guardrail 8. The D2.2 record-preserving fix, re-asserted for D3 fields.
+
+    ``resolve_market_leasing`` must replace **only** ``market_rent_psf`` on the
+    winning record. Rebuilding the record field by field is what silently
+    dropped newly-added fields at D2.2; the same bug would now drop a
+    successor's lease type and stop, and the resulting schedule would look
+    entirely plausible.
+    """
+
+    resolver = next(
+        node
+        for node in ast.walk(_market_tree())
+        if isinstance(node, ast.FunctionDef) and node.name == "resolve_market_leasing"
+    )
+
+    replaces = [
+        node
+        for node in ast.walk(resolver)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "replace"
+    ]
+    assert len(replaces) == 1, (
+        "the resolver must derive its record with exactly one `replace` call; "
+        f"found {len(replaces)}"
+    )
+    keywords = {kw.arg for kw in replaces[0].keywords}
+    assert keywords == {"market_rent_psf"}, (
+        "a suite override changes the market rent level and nothing else; "
+        f"this replace also sets {sorted(keywords - {'market_rent_psf'})}"
+    )
+
+    # And the resolver never names a D3 field, so it cannot drop or rewrite one.
+    referenced = _referenced_names(resolver)
+    for forbidden in (
+        "renewal_lease_type",
+        "new_lease_type",
+        "renewal_recovery_basis",
+        "new_recovery_basis",
+        "renewal_expense_stop_psf",
+        "new_expense_stop_psf",
+    ):
+        assert forbidden not in referenced, (
+            f"resolve_market_leasing names {forbidden!r}; it must carry the "
+            "whole record through untouched"
         )
