@@ -1,7 +1,7 @@
 ---
 title: "Lease-Level Underwriting — D3 Expense Recovery Conventions"
 gate: D3.0
-status: D3 COMPLETE at D3.5 (D3.0-D3.5 implemented and verified); ready for final human review
+status: D3.0-D3.5 implemented and verified; D3.6 (initial vacancy lease-up) architecture proposed at Part A, awaiting human review
 supersedes: nothing
 governed_by:
   - docs/plans/2026-09-04-anchor-lease-level-underwriting-d0-architecture.md
@@ -1048,9 +1048,14 @@ decision blocks any D3 gate. D3.1 may begin.**
 
 ## 21. D3 closeout — recorded at D3.5
 
-**Sprint D3 is complete.** D3.0 through D3.5 are implemented, and every gate
-was accepted at human financial review. `anchor.leasing` remains dark to the
-rest of Anchor: nothing outside the package changed across the sprint.
+**D3.0 through D3.5 are implemented**, and every gate was accepted at human
+financial review. `anchor.leasing` remains dark to the rest of Anchor: nothing
+outside the package changed across the sprint.
+
+> **Reopened at D3.6.** Section 21.4 disclosed one limitation — a suite vacant
+> at the analysis start recovers zero for the whole projection, with no
+> lease-up. Section 22 proposes closing it before D3 merges. Everything below
+> in Section 21 remains accurate for occupied suites and is unchanged.
 
 ### 21.1 The delivered contracts
 
@@ -1125,3 +1130,545 @@ management fee, and never nets a recovery against an expense — recoveries are
 revenue on their own line (D0 Section 10.2). EGI, credit loss, NOI, exit NOI
 and the D0 Section 16.4 ordering all need the expense engine and the revenue
 build that **D4** owns.
+
+---
+
+## 22. D3.6 — initial vacancy lease-up (Part A: architecture and proof)
+
+**Architecture and financial-convention gate only. No production code, no test,
+no change to `src/anchor/leasing/`, no change to D1, D2 or D3.0–D3.5
+economics.**
+
+Verified baseline (`3e324b3`): full backend 3583, full leasing 1810, D1 787,
+D3.1 78, D3.2 76, D3.3 56, D3.4 61, D3.5 45, architecture guardrails 140,
+Quick 217, Detailed 62.
+
+### 22.1 The limitation being closed
+
+Section 21.4 disclosed it: D2/D3 rollover begins from a **known lease's
+expiration**. A suite vacant at the analysis start has no lease, therefore no
+expiration event, therefore no successor chain — so it produces zero rent and
+zero recovery for the entire projection, and Anchor models no lease-up.
+
+That answer is correct *only* when the analyst intends to hold the space
+vacant. Today it is also what happens when lease-up assumptions were simply
+never supplied, and the two are indistinguishable in the output. For a
+value-add acquisition — the case where vacant space is the whole thesis — a
+silent zero is the most expensive kind of wrong number, because it looks like
+a modelled result.
+
+**D3.6 makes the treatment explicit.** It does not change what a
+deliberately-vacant suite produces; it makes "deliberately" a stated input.
+
+### 22.2 The two treatments — LOCKED
+
+```
+InitialVacancyStrategy.HOLD_VACANT      -- no speculative lease-up, by choice
+InitialVacancyStrategy.MARKET_LEASE_UP  -- leases after a stated lease-up period
+```
+
+A one-member enum was not an option here: the whole point is that the two
+outcomes are different underwriting statements, and a suite must say which it
+is.
+
+### 22.3 Where the assumption lives — **`Suite`**, not `MarketLeasingAssumptions`
+
+**Decision: a nullable `Suite.initial_vacancy` field holding an immutable
+`InitialVacancyAssumptions` record.**
+
+```
+class InitialVacancyStrategy(StrEnum):
+    HOLD_VACANT = "hold_vacant"
+    MARKET_LEASE_UP = "market_lease_up"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InitialVacancyAssumptions:
+    strategy: InitialVacancyStrategy
+    initial_lease_up_months: float | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Suite:
+    ...
+    initial_vacancy: InitialVacancyAssumptions | None = None
+```
+
+**Why not `MarketLeasingAssumptions`**, despite that record already existing
+and already being resolvable per suite:
+
+1. **It answers a different question.** `MarketLeasingAssumptions` describes
+   *how the market lets space* and governs **every future rollover of every
+   suite**. Initial vacancy describes **one suite's starting state**, which
+   happens once and never recurs. Putting a starting-state field on a
+   market-behaviour record makes it meaningless on every occupied suite.
+2. **Vacant suites genuinely differ.** A ground-floor retail unit and a
+   fourth-floor office suite in the same building lease up on different
+   timelines. A property-level default with a per-suite override would express
+   that, but the default has no natural value: there is no "property-wide
+   initial lease-up period" that means anything.
+3. **The all-or-nothing override rule would bite.** `MarketLeasingAssumptions`
+   requires **every** field with no defaults (D0 §24.2), enforced
+   structurally. Adding two fields there would force every existing suite-level
+   override to state an initial-lease-up assumption it does not have.
+4. **D5 has to ask a question.** The UI question is *"this suite is empty —
+   how should we underwrite it?"*, asked once per vacant suite. A field on
+   `Suite` is exactly that question in the data model.
+
+**Consequence: no property default, no suite override, no resolution
+hierarchy.** The assumption is stated per vacant suite or it is absent, and
+absent is an error (§22.10) rather than a default.
+
+### 22.4 Lease-up timing — LOCKED, and it is the D2.3 rule at period 0
+
+For a market lease-up period `L ≥ 0` (months, finite, fractional allowed):
+
+```
+c0 = 0 + 1 + floor(L)
+
+O_m = 0            for m < c0
+O_m = 1 − frac(L)  at m = c0
+O_m = 1            thereafter, while the first lease is active
+```
+
+`initial_lease_up_months` is a **distinct field** and is never
+`new_downtime_months` (LOCKED). Downtime after a *future* expiration is a
+re-letting delay on space a departing tenant just vacated; initial lease-up is
+how long empty space at acquisition takes to fill. They are different
+underwriting judgements and today they would alias onto one field.
+
+| `L` | `c0` | Months 1…c0−1 | `O` at `c0` |
+|---|---|---|---|
+| `0` | 1 | none | `1.00` |
+| `2` | 3 | 1–2 vacant | `1.00` |
+| `2.25` | 3 | 1–2 vacant | `0.75` |
+| `14` | 15 | 1–14 vacant | `1.00` |
+
+**No mid-month lease date.** The lease commences on
+`month_start(c0)`; the fraction is carried entirely by `O`, exactly as D2.3
+established. The total month-equivalents forgone is exactly `L`.
+
+### 22.5 The architecture — period 0 into the **existing** successor engine
+
+**Decision: build the first tenant with
+`build_successor_contribution(parent_expiration_period=0, branch=NEW_TENANT)`,
+and seed the existing D2.6 propagation at its expiration.**
+
+This was verified against the shipped code before being proposed, not assumed:
+
+| Probe | Result |
+|---|---|
+| `successor_commencement_period(e=0, D=L)` | returns `1 + floor(L)` — the required formula, no lower bound on `e` |
+| `build_successor_contribution(parent=0)` | **accepted unmodified** for `L ∈ {0, 2.25, 14, 60}` |
+| `O` for `L = 2.25` | `[0, 0, 0.75, 1, 1]` — exactly the rule above |
+| `physical_occupancy` at the boundary | `1.0` — integral, HD-D2-2 preserved |
+| `occupied_area` at the boundary | full suite area — integral |
+| `contractual_base_rent` at the boundary | **full** month's face rent; the fraction lands in `cash_base_rent` via `O` |
+| Market pricing, `L = 14` | `$41.20` = `$40 × 1.03¹` at `c0 = 15`, **not** the analysis-start `$40` |
+| TI / LC | TI in the first `O > 0` month; LC on full untruncated contractual term |
+| Recovery through `build_successor_recovery_schedule` | `[0, 0, 7500, 10000, 10000]` for MG at a `$10,000` stop — no new seam |
+
+**Every `SuccessorContribution` invariant holds at `parent = 0`:**
+
+- *"zero at or before the parent's expiration"* is **vacuous**: no `ModelMonth`
+  has `period_index ≤ 0`, so month 1 is free to be non-zero, which is exactly
+  what `L = 0` needs.
+- *"successor expiration strictly later than the parent's"* holds trivially,
+  since `e1 = c0 + T − 1 ≥ 1 > 0`.
+
+#### Period 0 is a boundary, not a lease
+
+`0` is **not** a `ModelMonth`, **not** a lease expiration, and **never**
+surfaced as a fake historical lease. It is the integer immediately before
+canonical month 1, and it exists so that one commencement formula serves both
+entry paths. **No fake lease, zero-day lease, dummy expiration, synthetic
+tenant or fabricated contractual rent is created anywhere** — the prohibition
+is absolute and is proposed as an architecture guardrail (§22.16).
+
+### 22.6 First-tenant economics — reuse, confirmed safe
+
+The first tenant is economically a **market new tenant**. Every economic input
+other than the lease-up *timing* reuses the approved new-tenant assumptions:
+
+| Input | Source | Safe to reuse? |
+|---|---|---|
+| Starting rent | `MarketRentPSF(c0)` | **Yes** — the market moved while the space sat empty; pricing at `c0` is the same rule every successor already follows |
+| Term | `new_term_months` | Yes |
+| Escalation | `successor_escalation_pct` | Yes |
+| Free rent | `new_free_rent_months` | Yes — D2.3 waterfall unchanged |
+| TI | `new_ti_psf` | Yes |
+| LC | `new_lc_pct`, full-term face basis | Yes |
+| Lease type | `new_lease_type` | Yes |
+| Recovery basis / stop | `new_recovery_basis`, `new_expense_stop_psf` | Yes |
+| **Lease-up delay** | **`initial_lease_up_months`** | **No — distinct field, LOCKED** |
+
+`renewal_rent_psf` and `renewal_rent_spread` are **never** consulted: there is
+no incumbent to renew. No parallel "initial TI / initial LC / initial term /
+initial structure" fields are created — inventing them for symmetry would
+double the assumption surface for no financial content, and the competition
+model changes only the *time*.
+
+### 22.7 Probability — the first tenant is deterministic
+
+There is no incumbent, so there is no renewal/new-tenant split at the initial
+event. The first tenant is a **new tenant at probability mass `1.0`**.
+`renewal_probability` is **not** applied to it and no `p·x + (1−p)·y`
+composition occurs.
+
+`p` enters at the **first lease's expiration** and not before:
+
+```
+initial vacancy ──(mass 1.0, deterministic)──▶ first tenant
+                                                    │ expires at e1
+                                                    ▼
+                                        ┌───────────┴───────────┐
+                                     p  │                       │ 1−p
+                                   renewal                 new tenant
+                                        └── existing D2.6, unchanged ──▶
+```
+
+**Mass invariants.** Before `e1`, the first-tenant path carries mass `1.0`.
+At `e1`, mass `1.0` splits into `p` and `1−p`, and D2.6's existing
+conservation applies from there. `HOLD_VACANT` creates no scenario split at
+all. If `c0 > N` no lease begins, so no rollover mass is ever created and
+terminal mass is `1.0` at the un-rolled state.
+
+### 22.8 The D2.6 handoff, and the one refactor required
+
+| First lease outcome | Behaviour |
+|---|---|
+| `c0 > N` | Vacant every month. No in-window rent, occupancy, TI, LC or recovery. **No state seeded.** |
+| `c0 ≤ N`, `e1 ≥ N` | First tenant contributes through month `N`. LC still on the **full** contractual term. **No state seeded** — D2.6 already declines to enqueue a child expiring at or beyond the horizon. |
+| `e1 < N` | First tenant contributes; **the existing propagation is seeded at `(e1, mass 1.0)`** and owns every later generation. |
+
+#### The refactor: one propagation core, two entry paths
+
+`build_recursive_rollover` today does three things in one body: (1) seeds its
+accumulators with the **in-place lease's own** monthly history, (2) seeds
+`incoming = {initial_expiration: [1.0]}`, and (3) runs the mass-propagation
+loop. Only (3) is shared.
+
+**Proposed narrow refactor** — extract (3) into an internal
+`_propagate_rollover_mass(...)` taking the suite, months, resolved
+assumptions, market schedule, renewal probability, an identifier stem root,
+and a mapping of **seed expiration periods to probability mass**; returning
+successor-only accumulations, the transition and event-state audits, and the
+terminal mass.
+
+```
+build_recursive_rollover      : in-place lease history  + _propagate({e_inplace: 1.0})
+build_initial_vacancy_rollover: first-tenant contribution + _propagate({e1: 1.0})
+```
+
+This is the **only** structural change to D2, it is behaviour-preserving by
+construction (the loop body moves unmodified), and Part B must prove D1, D2
+and D3.1–D3.5 **bit-identical** for every property containing no
+market-lease-up suite.
+
+**No second recursion engine.** Initial vacancy is a new *entry path* into the
+one production state machine, never a parallel queue. The existing D3.4
+guardrails — no `while` loop and no queue vocabulary outside `rollover.py` —
+extend unchanged, and a new guardrail asserts exactly one propagation core
+exists and that both builders call it.
+
+#### Why not simply call `build_recursive_rollover` on the first lease
+
+**Rejected, and the reason is financial.** That function treats its argument
+as a *known in-place lease*: it contributes `initial_schedule` — a plain D1
+contractual rent schedule — which has **no** lease-up vacancy, **no**
+fractional boundary factor, **no** free-rent waterfall, **no** TI and **no**
+LC. Feeding the first speculative lease in that way would silently discard
+every concession and cost that makes it speculative, and would assert the
+tenant was already in place at acquisition. The first tenant is a
+*successor*, and must be built by the successor engine.
+
+### 22.9 Anti-double-counting — the structural rule
+
+> **An initial-vacancy chain has no known in-place lease.** The first tenant is
+> a **successor contribution at mass 1.0 relative to period 0**, and it already
+> carries the vacancy months as zeros. Generations 2+ come only from the
+> propagation core, seeded once at `e1`. Therefore each of the vacancy period,
+> the first tenant, and every later successor is recognised **exactly once**,
+> and there is no lease history that could be added twice.
+
+Enforced structurally, not by inspection:
+
+- `InitialVacancyRollover` declares **no** `initial_lease` / `initial_schedule`
+  field — there is no known lease, so no field can hold one.
+- The first contribution's `parent_expiration_period` is asserted `== 0`.
+- The propagation core returns **successor-only** series, and its seed is
+  `e1`, so no generation re-counts an earlier one.
+- The existing `SuccessorContribution` invariant already forbids a child
+  contributing at or before its own parent's expiration.
+
+Verified: with `L = 2.25`, the first contribution's months 1–2 are zero in
+rent, occupied area, TI and LC; TI lands in month 3, the first `O > 0` month.
+
+### 22.10 Validation — the missing-treatment error is the point
+
+| Code | Severity | Rule |
+|---|---|---|
+| `MISSING_INITIAL_VACANCY_TREATMENT` | **ERROR** | A suite with no lease and no `initial_vacancy`. *This is the limitation being closed.* |
+| `INITIAL_VACANCY_ON_OCCUPIED_SUITE` | **ERROR** | A suite that has a lease but also carries `initial_vacancy` — a financial field that would be silently ignored |
+| `MISSING_INITIAL_LEASE_UP_MONTHS` | **ERROR** | `MARKET_LEASE_UP` without `initial_lease_up_months` |
+| `INITIAL_LEASE_UP_ON_HOLD_VACANT` | **ERROR** | `HOLD_VACANT` carrying a lease-up period — half-stated intent |
+| `INITIAL_LEASE_UP_OUT_OF_DOMAIN` | **ERROR** | `initial_lease_up_months` negative or non-finite |
+
+**Scope: a separate `validate_initial_vacancy_inputs`, not
+`validate_lease_level_inputs`** — the same discipline D3.1 established for
+recoveries. A bare vacant suite remains valid input to **D1**, where zero
+contractual rent for empty space is a fact rather than a speculation. The
+error fires at the gates that model the *future*: the initial-vacancy builder
+and property aggregation. See **HD-D3.6-1**.
+
+**No silent fallback is permitted anywhere**: a missing treatment never means
+hold-vacant, missing lease-up months never fall back to `new_downtime_months`,
+missing first-tenant structure is never inherited from a predecessor that does
+not exist, missing recovery terms are never inferred as Gross, starting rent is
+never frozen at the analysis start, and the first tenant is never
+probability-weighted.
+
+### 22.11 Result contracts
+
+**`InitialVacancyRollover`** — the full chain: vacancy, the deterministic first
+tenant, and every later expected successor generation, through `12H + 12`.
+
+Its monthly series carry **the same names as `RecursiveRollover`'s**
+(`expected_contractual_base_rent`, `expected_cash_base_rent`,
+`expected_free_rent`, `expected_tenant_improvements`,
+`expected_leasing_commissions`, `expected_occupied_area_sf`,
+`expected_occupancy`, `expected_vacant_area_sf`, `expected_vacancy`,
+`expected_successor_occupancy_factor`, `expected_free_rent_abatement_months`,
+`expected_cash_rent_factor`), so **D4 sees one economic shape** whether a suite
+began occupied or empty. It additionally retains the strategy, the lease-up
+months, and the first-tenant `SuccessorContribution` for audit, plus the event
+and transition audits and terminal mass from the propagation core.
+
+For `HOLD_VACANT` the same contract is returned with every series zero, the
+strategy recorded, no first-tenant contribution, no transitions and terminal
+mass `1.0`. One builder, one return type, and the intention is visible in the
+output.
+
+**`InitialVacancyRolloverRecovery`** — the recovery analogue, mirroring
+`RecursiveRolloverRecovery`: `expected_expense_recovery` plus the
+contribution audits. Because there is no known in-place lease, the "in-place"
+series is identically zero and the full chain equals the successor series;
+Part B should decide whether to keep the three-series shape for symmetry with
+D3.4 or collapse it (**recommend: keep it**, so `suite_recovery_projection`
+and any D4 reader see one shape).
+
+**The pool stays injected.** No D2 builder gains a `RecoverableExpensePool`
+parameter; the recovery result is produced from the finished leasing result
+plus the pool, exactly as D3.3–D3.5 established.
+
+### 22.12 D3.5 property aggregation
+
+`suite_recovery_projection` gains `InitialVacancyRolloverRecovery` as a fourth
+accepted authoritative result. Nothing else in aggregation changes: it still
+sums finished dollars, still performs no gross-up, still applies no
+probability.
+
+- **`MARKET_LEASE_UP`** → a projection carrying the suite's full-chain recovery
+  dollars.
+- **`HOLD_VACANT`** → an **explicit all-zero projection** (recommended over
+  omission), so the suite appears in `suite_projections` and a reader can see
+  it was deliberately underwritten as vacant rather than forgotten. See
+  **HD-D3.6-3**.
+
+D3.5's completeness rule extends from *"every suite with a lease"* to *"every
+suite with a lease **or** an explicit initial-vacancy treatment"*.
+`MISSING_SUITE_RECOVERY_SCHEDULE` then covers a forgotten vacant suite too.
+**No fake `LeaseRecoverySchedule` is ever synthesized.**
+
+### 22.13 State merging after the first lease — proved
+
+Once the first speculative lease expires, its event state must be
+**financially indistinguishable** from an equivalent event on an
+originally-occupied suite. Otherwise initial-state history would re-enter the
+D2.6 merge key and the state-compression architecture would break.
+
+**Proved against the shipped engine.** Two origins reaching expiration period
+14 in the same suite under the same resolved assumptions — one a vacant-suite
+first tenant (`L = 2.25`, `T = 12`), one an ordinary occupied lease — produce
+successors whose **ten monthly series and eight scalars are all identical**,
+on both branches:
+
+```
+renewal      10/10 series identical, 8/8 scalars identical
+new_tenant   10/10 series identical, 8/8 scalars identical
+only difference: the lease_id label, already proven inert
+```
+
+This follows from D3.3's result: a successor is a function of
+`(suite, resolved assumptions, parent expiration period, branch kind, months,
+market schedule)` and of nothing else. None of those carries initial-state
+history. **The D2.6 merge key remains the expiration period alone.**
+
+### 22.14 Computational complexity
+
+One deterministic first-tenant contribution, then at most **one** seed state
+into the existing propagation. States stay bounded by `N` and transitions by
+`2N`, unchanged. No path tree, no new cap, no explosion — an initially vacant
+suite costs one extra contribution over an occupied one.
+
+### 22.15 Hand-worked cases
+
+Frame: `analysis_start = 2027-01-01`, 20,000 SF suite in a 100,000 SF property
+(share `0.20`), `H = 3` so `N = 48`. Market `$40.00/SF/YR` growing `3%`
+annually on analysis-start anniversaries. Monthly recoverable pool `$100,000`,
+so the tenant share is `$20,000/month`.
+
+**CASE A — `HOLD_VACANT`.** Every month: face rent `0`, cash rent `0`, free
+rent `0`, TI `0`, LC `0`, occupied area `0`, occupancy `0`, recovery `0`. No
+lease object, no transitions, terminal mass `1.0`. Identical numbers to
+today's silent result — but now a stated assumption, visible in the output.
+
+**CASE B — `MARKET_LEASE_UP`, `L = 0`.** `c0 = 1`, `O_1 = 1.0`. Verified: the
+first tenant commences 2027-01-01, `e1 = 12` for `T = 12`, starting rent
+`$40.0000` (Month 1 market, no step yet), TI `$1,000,000` at `$50/SF`, LC
+`$48,000` = `6% × $800,000` full-term face.
+
+**CASE C — `L = 2.25`.** `c0 = 3`. Verified `O = [0, 0, 0.75, 1, 1, …]`.
+Months 1–2 fully vacant. Month 3: physical occupancy `1`, occupied area
+`20,000 SF`, face rent the **full** `$66,667`, cash rent `0.75 × $66,667 =
+$50,000`. The fraction is economic, never physical, never a mid-month date.
+
+**CASE D — market step.** `L = 14` → `c0 = 15`, in hold year 2. Verified
+starting rent `$41.2000 = $40 × 1.03¹`, **not** `$40`. Market rent moves while
+the space sits empty.
+
+**CASE E — lease-up vs future downtime.** `initial_lease_up_months = 6`,
+`new_downtime_months = 2`. First tenant waits **6** months (`c0 = 7`); a
+replacement after a future expiration waits **2** (`c = e + 3`). Confirmed
+these alias onto one field today, which is why the distinct field is required.
+
+**CASE F — free rent + TI + LC.** `L = 2.25`, `F = 2.5`. Verified:
+
+| Month | `O` | abatement | cash factor | face | cash |
+|---|---|---|---|---|---|
+| 1 | 0 | 0 | 0 | 0 | 0 |
+| 2 | 0 | 0 | 0 | 0 | 0 |
+| 3 | 0.75 | 0.75 | 0 | 66,667 | 0 |
+| 4 | 1 | 1.00 | 0 | 66,667 | 0 |
+| 5 | 1 | 0.75 | 0.25 | 66,667 | 16,667 |
+| 6 | 1 | 0 | 1.00 | 66,667 | 66,667 |
+
+Vacancy and free rent stay **distinct**: months 1–2 have no tenant and consume
+no abatement; month 3 has a tenant present for 0.75 of the month who consumes
+0.75 of the 2.5-month grant. TI lands in month 3 — the first `O > 0` month —
+and LC on the full contractual face rent.
+
+**CASE G — first tenant Modified Gross.** `new_lease_type = MODIFIED_GROSS`,
+stop `$6.00/SF/YR` on 20,000 SF = `$10,000/month`; tenant share `$20,000`.
+Verified recovery `[0, 0, 7500, 10000, 10000, …]` — zero during vacancy,
+`0.75 × max(0, 20,000 − 10,000)` at the boundary with the factor **outside**
+the clip, then the full `$10,000`. No initial-vacancy recovery formula exists.
+
+**CASE H — expiry inside horizon, then `p`.** `L = 2` (`c0 = 3`), `T = 12`
+→ `e1 = 14 < 48`. Periods 3–14: first tenant, mass `1.0`, no `p` anywhere.
+At period 14 mass `1.0` splits `0.60 / 0.40`, and D2.6 owns everything after.
+
+**CASE I — term beyond horizon.** `L = 0`, `T = 120` → `c0 = 1`,
+`e1 = 120 > 48`. Verified: contributes through month 48 (`$70,747` in month
+48 with escalation), LC basis `$8,759,777` on the **full** term versus
+`$3,297,286` of in-window face rent — untruncated, as D2.4 requires. No state
+seeded, no recursion.
+
+**CASE J — commencement beyond horizon.** `L = 60` → `c0 = 61 > 48`. Verified
+every in-window series is zero: rent, cash, occupied area, TI, LC. No state
+seeded. Lease-up is never moved earlier and no `ModelMonth` is fabricated.
+
+**CASE K — expiry in the forward exit window.** `e1` in months `12H+1 … 12H+12`
+is still `< N`, so the state is seeded and later successors contribute in the
+remaining forward months. **No sale-month cutoff** — the same rule D3.4 already
+follows.
+
+**CASE L — mixed property.** Suite A occupied NNN; Suite B vacant
+`MARKET_LEASE_UP`; Suite C vacant `HOLD_VACANT`; Suite D occupied Gross.
+Property recovery sums A's chain, B's full chain, C's explicit zeros and D's
+zeros. Every suite appears in the aggregation audit; **none disappears
+silently**.
+
+**CASE M — future state is origin-independent.** Proved in §22.13 against the
+shipped engine: identical successors from a vacant-origin and an
+occupied-origin chain reaching the same period.
+
+### 22.16 Failure modes — D3.6 additions
+
+| ID | Failure | Detection |
+|---|---|---|
+| **FM-D3-20** | A vacant suite silently stays vacant because assumptions were never supplied | `MISSING_INITIAL_VACANCY_TREATMENT` ERROR; hold-vacant must be *stated* |
+| **FM-D3-21** | A fake / zero-day / expired dummy lease used as the entry state | Guardrail: no `Lease` is constructed with a fabricated expiration; `InitialVacancyRollover` declares no in-place lease field |
+| **FM-D3-22** | Initial lease-up silently reusing `new_downtime_months` | Distinct field; CASE E golden with `6` vs `2` |
+| **FM-D3-23** | The first tenant probability-weighted | Guardrail: `weighted_outcome` never reached with the first contribution; CASE H |
+| **FM-D3-24** | Market rent frozen at analysis start for the first tenant | CASE D — `$41.20`, not `$40.00` |
+| **FM-D3-25** | The fractional boundary published as fractional *physical* occupancy | CASE C — physical `1`, economic `0.75`; extends FM-D2-19 |
+| **FM-D3-26** | Initial vacancy and free rent conflated | CASE F table |
+| **FM-D3-27** | First TI or LC omitted, or LC truncated to the projection | CASES B, F, I |
+| **FM-D3-28** | Recovery charged during initial vacancy | CASE G — zero before `c0` |
+| **FM-D3-29** | The first lease counted twice — as both a contribution and known history | §22.9 structural rule; no in-place field exists to hold it |
+| **FM-D3-30** | The first lease fed into `build_recursive_rollover`, losing its concessions and costs | §22.8 rejection; guardrail that the initial-vacancy builder does not call it |
+| **FM-D3-31** | A second, vacancy-specific recursion engine | Guardrail: exactly one propagation core; both builders call it |
+| **FM-D3-32** | Initial-vacancy history contaminating future D2.6 state merging | CASE M / §22.13 |
+| **FM-D3-33** | Recovery or recursion truncated at the sale month | CASE K |
+| **FM-D3-34** | `HOLD_VACANT` indistinguishable from missing assumptions | Distinct enum member, recorded on the result, and an explicit all-zero projection |
+
+### 22.17 Human decisions
+
+| ID | Question | Options | Recommended | Why | Consequence | Blocks Part B? |
+|---|---|---|---|---|---|---|
+| **HD-D3.6-1** | Should a bare vacant suite (no treatment) be an ERROR in the **general** D1 validator, or only at the gates that model the future? | A: general `validate_lease_level_inputs` — every existing caller must now state a treatment. B: scoped `validate_initial_vacancy_inputs`, used by the initial-vacancy builder and property aggregation | **B** | D1 is contractual rent: zero for empty space is a *fact*, not a speculation, and A would break every existing D1 call site and test for no financial gain. B places the error precisely where a silent zero would be a *modelling* claim. Mirrors the D3.1 scoping decision exactly | B keeps D1 bit-identical; the guarantee is slightly narrower — a D1-only caller can still aggregate a bare vacant suite | **No** — recommendation is safe either way |
+| **HD-D3.6-2** | When `c0 > N`, should the first-tenant contribution be built at all? | A: build it; every in-window series is already zero, and the full-term metadata records *why* nothing appears. B: skip construction and return zeros directly | **A** | Verified all in-window series are zero, so A and B are financially identical. A is auditable — a reader can see the lease-up period pushed commencement to period 61 — and it needs no branch in the builder, so there is no second code path to keep correct | A retains a `SuccessorContribution` whose in-window contribution is zero; Part B must assert that zero rather than assume it | **No** |
+| **HD-D3.6-3** | Should `HOLD_VACANT` produce an explicit all-zero recovery projection, or no projection at all? | A: explicit all-zero projection. B: no projection, as for a suite with no lease today | **A** | The whole gate is about making deliberate vacancy *visible*. Under B a hold-vacant suite is indistinguishable in the aggregation audit from one nobody thought about — the exact failure D3.6 exists to close (FM-D3-34) | A means `suite_projections` lists every suite; D3.5's completeness rule extends to vacant suites carrying a treatment | **No** |
+
+**No decision blocks Part B.** Each recommendation is implementable as stated
+and none changes the locked timing, probability or reuse rules.
+
+### 22.18 Part B implementation plan
+
+1. **`contracts.py`** — `InitialVacancyStrategy`, `InitialVacancyAssumptions`,
+   `Suite.initial_vacancy`, `InitialVacancyRollover`,
+   `InitialVacancyRolloverRecovery`.
+2. **`rollover.py`** — extract `_propagate_rollover_mass` from
+   `build_recursive_rollover` (behaviour-preserving); add
+   `build_initial_vacancy_rollover` calling the successor engine at
+   `parent_expiration_period = 0` and seeding the core at `e1`.
+3. **`recoveries.py`** — `build_initial_vacancy_rollover_recovery`, reusing
+   `build_successor_recovery_schedule` and the existing `_recovery_series`
+   core. No new formula.
+4. **`aggregation.py`** — `suite_recovery_projection` accepts the new result;
+   extend D3.5 completeness to vacant suites carrying a treatment.
+5. **`validation.py`** — the five codes in §22.10, in a scoped validator.
+6. **Tests** — a new `tests/test_leasing_d3_6_initial_vacancy.py` with CASES
+   A–M as goldens, plus a **test-only explicit chain oracle** (§22.19).
+7. **Architecture guardrails** — one propagation core and both builders using
+   it; no fake lease construction; the first contribution never weighted; no
+   aliasing of `new_downtime_months`; no in-place field on the vacancy result.
+8. **Mutation tests** — at minimum: first tenant probability-weighted; lease-up
+   aliased to `new_downtime_months`; market rent frozen at analysis start;
+   fractional boundary applied to physical occupancy; first lease counted
+   twice; a separate vacancy queue; recovery charged during vacancy;
+   `HOLD_VACANT` silently equal to a missing treatment.
+9. **Bit-identity proof** — D1, D2 and D3.1–D3.5 hex-identical against
+   `3e324b3` for every property with no market-lease-up suite.
+10. **Docs** — convert this section from *proposed* to *implemented* at
+    closeout, and update Section 21.4 to record the limitation as closed.
+
+### 22.19 The explicit-chain oracle (test only)
+
+For a short horizon, enumerate the complete scenario chain independently:
+vacancy → deterministic first tenant → one or two renewal/new splits, pricing
+each path with the D3 formulas and weighting by its own path probability.
+Compare against production within the accepted `rel 1e-12 / abs 1e-9`. It is
+the same idiom as D3.4's recovery oracle, extended by one deterministic step
+at the front, and it stays **test-only** — an explicit path tree is exactly
+what the accepted architecture replaces.
+
+### 22.20 Non-goals
+
+D3.6 does not implement NOI, EGI, the management fee, property expense
+construction, `recoverable_expense_ratio`, or any acquisition, debt or returns
+integration; nor gross-up, recovery abatements, per-category recoverability,
+tenant-specific leasing probability, stochastic or phased lease-up, multiple
+competing tenants, or partial-floor demising. The interim behaviours recorded
+in §21.4 for HD-D3-5 through HD-D3-8 are unchanged.

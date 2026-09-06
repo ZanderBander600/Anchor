@@ -645,6 +645,20 @@ child.** A successor prices from market at its own commencement period, so two
 paths that arrive at the same `e` — however differently they were priced, and
 whichever branch type they came from — have *identical* futures.
 
+> **Forward note, added at D3.6 — a second entry path, not a second engine.**
+> D2.6 is entered here from a *known in-place lease's* expiration. D3.6
+> proposes a second entry: a suite **vacant at the analysis start**, whose
+> deterministic first tenant is built by the same successor engine at the
+> boundary index `0` and whose expiration then seeds this same propagation at
+> mass `1.0`. Nothing in the analysis below changes — the state key, the merge
+> rule, the mass conservation and the `states <= N` / `transitions <= 2N`
+> bounds all hold unchanged, because a successor is a function of
+> `(suite, resolved assumptions, parent expiration period, branch kind,
+> months, market schedule)` and never of how its chain began. Verified in
+> code: a vacant-origin and an occupied-origin chain reaching the same
+> expiration period produce successors identical in all ten monthly series and
+> all eight scalars. See D3 conventions Section 22.
+
 **Therefore two scenario paths reaching the same expiration period may be
 merged by adding their probability masses.** Nothing else is combined: no rent,
 no term, no date, no rate. Merging probability mass is not the rejected
