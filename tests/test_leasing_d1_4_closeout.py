@@ -1064,12 +1064,27 @@ def test_no_contract_declares_a_d3_or_downstream_field() -> None:
 
     from anchor.leasing import contracts as contracts_module
 
+    # D4.1 delivers ``LeaseLevelOperatingInputs``, whose contract (D4
+    # Section 9.2) declares ``other_income`` and ``credit_loss_pct``. Both are
+    # financially INERT at D4.1 -- no expense or pool figure moves when either
+    # changes, which ``tests/test_leasing_d4_1_expenses.py`` asserts directly
+    # -- and D4.3 is the gate that computes with them. They leave the banned
+    # set the same way every earlier gate's fields did: when the gate that
+    # owns them lands.
+    #
+    # ``vacancy_credit_loss_pct`` and ``occupancy`` never leave it. They are
+    # not deferred but **rejected** for Lease-Level (G-M14): physical vacancy
+    # is modeled per suite per month, and a second, blanket mechanism would
+    # double-count it. ``noi``, ``capex`` and ``operating_expenses`` stay
+    # banned as bare names through D4.1 -- the schedule delivers
+    # ``fixed_operating_expenses`` and ``other_operating_expenses``, which are
+    # distinct identifiers, and NOI and CapEx belong to later gates.
     banned = {
         "expected_rent_psf", "expected_term_months", "expected_ti_psf",
         "expected_lc_pct", "expected_downtime_months",
         "expense_stop", "base_year",
-        "noi", "capex", "other_income", "operating_expenses",
-        "vacancy_credit_loss_pct", "occupancy", "credit_loss_pct",
+        "noi", "capex", "operating_expenses",
+        "vacancy_credit_loss_pct", "occupancy",
     }
 
     for name in dir(contracts_module):

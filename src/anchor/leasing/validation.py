@@ -58,6 +58,7 @@ from .calendar import (
 from .contracts import (
     EscalationBasis,
     Lease,
+    LeaseLevelOperatingInputs,
     LeaseLevelPropertyInputs,
     LeaseOrigin,
     LeaseType,
@@ -172,6 +173,18 @@ class LeaseIssueCode(StrEnum):
     )
     EXPENSE_STOP_OUT_OF_DOMAIN = "EXPENSE_STOP_OUT_OF_DOMAIN"
     UNSUPPORTED_RECOVERY_BASIS = "UNSUPPORTED_RECOVERY_BASIS"
+
+    # --- property operating inputs (D4.1) ---
+    PROPERTY_EXPENSE_OUT_OF_DOMAIN = "PROPERTY_EXPENSE_OUT_OF_DOMAIN"
+    EXPENSE_GROWTH_OUT_OF_DOMAIN = "EXPENSE_GROWTH_OUT_OF_DOMAIN"
+    RECOVERABLE_EXPENSE_RATIO_OUT_OF_DOMAIN = (
+        "RECOVERABLE_EXPENSE_RATIO_OUT_OF_DOMAIN"
+    )
+    OTHER_INCOME_OUT_OF_DOMAIN = "OTHER_INCOME_OUT_OF_DOMAIN"
+    OTHER_INCOME_GROWTH_OUT_OF_DOMAIN = "OTHER_INCOME_GROWTH_OUT_OF_DOMAIN"
+    MANAGEMENT_FEE_OUT_OF_DOMAIN = "MANAGEMENT_FEE_OUT_OF_DOMAIN"
+    CREDIT_LOSS_OUT_OF_DOMAIN = "CREDIT_LOSS_OUT_OF_DOMAIN"
+    UNUSUALLY_HIGH_CREDIT_LOSS = "UNUSUALLY_HIGH_CREDIT_LOSS"
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -2119,6 +2132,316 @@ def require_valid_initial_vacancy_inputs(
     result = validate_initial_vacancy_inputs(
         suites, leases, property_defaults=property_defaults, path=path
     )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D4.1 -- property operating inputs
+#
+# Deliberately separate from ``validate_lease_level_inputs``, for the reason
+# D3.1 established for recovery inputs: a rent roll that carries no property
+# operating assumptions is not thereby invalid input to D1, D2 or D3. The
+# market-leasing engine remains usable before any expense schedule exists, so
+# an operating-input defect is reported by the calculation that needs it and by
+# nothing else.
+#
+# The domains below are the *identical* domains ``anchor.validation`` already
+# applies to the same six Detailed concepts, reproduced here under the
+# leasing-scoped ERROR/WARNING architecture (HD-6) rather than by importing or
+# modifying the global validator -- which D4 Section 9.2 requires be left
+# untouched, since it owns the API boundary for Quick and Detailed and the
+# Lease-Level API boundary is D5.
+# =============================================================================
+
+
+#: The five eligible fixed property expense lines, in the order
+#: ``MonthlyPropertyExpenseSchedule`` declares them, so validation issues are
+#: emitted in the same canonical order the schedule accumulates them.
+_FIXED_EXPENSE_FIELDS: tuple[str, ...] = (
+    "property_taxes",
+    "insurance",
+    "utilities",
+    "repairs_maintenance",
+    "other_operating_expenses",
+)
+
+#: Above this, a Lease-Level credit-loss allowance is more likely a Detailed
+#: ``vacancy_credit_loss_pct`` carried across by mistake than a genuine bad-debt
+#: assumption (D0 Section 15.4). Physical vacancy is already modeled per suite
+#: per month, so it must not be inside this percentage a second time.
+_UNUSUAL_CREDIT_LOSS_THRESHOLD = 0.10
+
+
+def _validate_ratio_field(
+    value: object, *, code: LeaseIssueCode, path: str, label: str
+) -> list[LeaseValidationIssue]:
+    """Finite and ``0 <= x <= 1``."""
+
+    if not _is_finite_number(value):
+        return [
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                path,
+                f"{label} must be a finite number.",
+            )
+        ]
+    if not 0 <= value <= 1:
+        return [
+            _issue(
+                code,
+                path,
+                f"{label} {value!r} must be between 0 and 1, inclusive.",
+            )
+        ]
+    return []
+
+
+def _validate_growth_field(
+    value: object, *, code: LeaseIssueCode, path: str, label: str
+) -> list[LeaseValidationIssue]:
+    """Finite and ``> -1`` -- the exact Detailed growth domain.
+
+    No upper bound, and negative growth is permitted: a building whose taxes
+    are being appealed downward is ordinary. ``g <= -1`` is refused because
+    ``(1 + g)`` is then non-positive, which either collapses every later year
+    to exactly zero (``g == -1``) or flips its sign every year (``g < -1``) --
+    neither is meaningful for a compounding dollar amount. This is the same
+    reasoning, and the same boundary, ``anchor.validation`` records for
+    ``expense_growth`` and ``revenue_growth``.
+    """
+
+    if not _is_finite_number(value):
+        return [
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                path,
+                f"{label} must be a finite number.",
+            )
+        ]
+    if not value > -1:
+        return [
+            _issue(
+                code,
+                path,
+                f"{label} {value!r} must be greater than -1; at or below -1 a "
+                "compounding amount collapses to zero or flips sign each year.",
+            )
+        ]
+    return []
+
+
+def _validate_non_negative_dollars(
+    value: object, *, code: LeaseIssueCode, path: str, label: str
+) -> list[LeaseValidationIssue]:
+    """Finite and ``>= 0`` -- the exact Detailed expense/other-income domain.
+
+    Zero is valid and economically meaningful: a building with no separately
+    metered utilities carries ``utilities = 0.0``. Negative is refused; a
+    negative annual operating expense is an expense credit, for which the
+    accepted model has no convention, exactly as D3 refuses a negative pool.
+    """
+
+    if not _is_finite_number(value):
+        return [
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                path,
+                f"{label} must be a finite number.",
+            )
+        ]
+    if value < 0:
+        return [
+            _issue(
+                code,
+                path,
+                f"{label} {value!r} must be greater than or equal to 0.",
+            )
+        ]
+    return []
+
+
+def validate_recoverable_expense_ratio(
+    recoverable_expense_ratio: object,
+    *,
+    path: str = "operating_inputs.recoverable_expense_ratio",
+) -> LeaseValidationResult:
+    """Validate a standalone ``recoverable_expense_ratio`` (D4.1).
+
+    Finite and ``0 <= x <= 1`` (D0 Section 4.6). Both endpoints are valid and
+    meaningful: ``0.0`` is a property whose expenses are wholly the landlord's,
+    ``1.0`` a fully recoverable expense structure.
+
+    **No silent clipping.** A ratio outside the domain is an ERROR, never
+    clamped to the nearest endpoint -- clamping would turn an analyst's typo
+    (``60`` meaning 60%) into a plausible, wrong model.
+
+    Exists because ``expenses.build_recoverable_expense_pool`` takes the ratio
+    as a bare scalar alongside an already-built schedule, so it needs a guard
+    of its own. It shares ``_validate_ratio_field`` with
+    ``validate_lease_level_operating_inputs`` below, so there is exactly one
+    rule with two entry points rather than two rules that could drift.
+    """
+
+    return LeaseValidationResult(
+        issues=tuple(
+            _validate_ratio_field(
+                recoverable_expense_ratio,
+                code=LeaseIssueCode.RECOVERABLE_EXPENSE_RATIO_OUT_OF_DOMAIN,
+                path=path,
+                label="recoverable_expense_ratio",
+            )
+        )
+    )
+
+
+def require_valid_recoverable_expense_ratio(
+    recoverable_expense_ratio: object,
+    *,
+    path: str = "operating_inputs.recoverable_expense_ratio",
+) -> LeaseValidationResult:
+    """Validate a standalone ratio and raise ``LeaseValidationError`` on any
+    ERROR."""
+
+    result = validate_recoverable_expense_ratio(
+        recoverable_expense_ratio, path=path
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+def validate_lease_level_operating_inputs(
+    operating_inputs: LeaseLevelOperatingInputs,
+    *,
+    path: str = "operating_inputs",
+) -> LeaseValidationResult:
+    """Validate one ``LeaseLevelOperatingInputs`` (D4.1).
+
+    Rules are evaluated in a **fixed order** so the emitted sequence is
+    reproducible and never depends on ``dict`` iteration, ``set`` iteration or
+    the caller: the five fixed expense lines in
+    ``MonthlyPropertyExpenseSchedule``'s declared order, then
+    ``expense_growth``, then ``recoverable_expense_ratio``, then the revenue
+    and rate fields D4.3 will consume, then the credit-loss warning last.
+
+    **Every field is validated, including the four this gate does not use.**
+    ``other_income``, ``other_income_growth``, ``management_fee_pct`` and
+    ``credit_loss_pct`` are declared on the contract by D4 Section 9.2 and are
+    financially inert until D4.3 -- but an accepted field that nothing checks
+    is a hole, and a negative ``other_income`` should be refused when it is
+    supplied, not two gates later. Validating a value is not calculating with
+    it: no D4.1 output changes when any of the four changes.
+
+    Domains, each identical to the one ``anchor.validation`` applies to the
+    same Detailed concept:
+
+    - the five fixed expense lines and ``other_income`` -- finite, ``>= 0``
+    - ``expense_growth`` and ``other_income_growth`` -- finite, ``> -1``
+    - ``management_fee_pct``, ``credit_loss_pct`` and
+      ``recoverable_expense_ratio`` -- finite, ``0 <= x <= 1``
+
+    **One WARNING** (D0 Section 15.4): ``UNUSUALLY_HIGH_CREDIT_LOSS`` above
+    10%. Lease-Level's ``credit_loss_pct`` covers **bad debt only** -- physical
+    vacancy is modeled explicitly, per suite, per month -- so a figure at
+    Detailed's blended ``vacancy_credit_loss_pct`` magnitude usually means the
+    two were confused and vacancy is about to be counted twice. It is a
+    warning, not an error: a genuinely high bad-debt assumption is computable
+    and defensible, and Anchor never downgrades a mathematically invalid input
+    to a warning nor upgrades a merely unusual one to an error.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+
+    for name in _FIXED_EXPENSE_FIELDS:
+        issues.extend(
+            _validate_non_negative_dollars(
+                getattr(operating_inputs, name),
+                code=LeaseIssueCode.PROPERTY_EXPENSE_OUT_OF_DOMAIN,
+                path=f"{path}.{name}",
+                label=name,
+            )
+        )
+
+    issues.extend(
+        _validate_growth_field(
+            operating_inputs.expense_growth,
+            code=LeaseIssueCode.EXPENSE_GROWTH_OUT_OF_DOMAIN,
+            path=f"{path}.expense_growth",
+            label="expense_growth",
+        )
+    )
+    issues.extend(
+        _validate_ratio_field(
+            operating_inputs.recoverable_expense_ratio,
+            code=LeaseIssueCode.RECOVERABLE_EXPENSE_RATIO_OUT_OF_DOMAIN,
+            path=f"{path}.recoverable_expense_ratio",
+            label="recoverable_expense_ratio",
+        )
+    )
+    issues.extend(
+        _validate_non_negative_dollars(
+            operating_inputs.other_income,
+            code=LeaseIssueCode.OTHER_INCOME_OUT_OF_DOMAIN,
+            path=f"{path}.other_income",
+            label="other_income",
+        )
+    )
+    issues.extend(
+        _validate_growth_field(
+            operating_inputs.other_income_growth,
+            code=LeaseIssueCode.OTHER_INCOME_GROWTH_OUT_OF_DOMAIN,
+            path=f"{path}.other_income_growth",
+            label="other_income_growth",
+        )
+    )
+    issues.extend(
+        _validate_ratio_field(
+            operating_inputs.management_fee_pct,
+            code=LeaseIssueCode.MANAGEMENT_FEE_OUT_OF_DOMAIN,
+            path=f"{path}.management_fee_pct",
+            label="management_fee_pct",
+        )
+    )
+    credit_loss_issues = _validate_ratio_field(
+        operating_inputs.credit_loss_pct,
+        code=LeaseIssueCode.CREDIT_LOSS_OUT_OF_DOMAIN,
+        path=f"{path}.credit_loss_pct",
+        label="credit_loss_pct",
+    )
+    issues.extend(credit_loss_issues)
+
+    if not credit_loss_issues and (
+        operating_inputs.credit_loss_pct > _UNUSUAL_CREDIT_LOSS_THRESHOLD
+    ):
+        issues.append(
+            _issue(
+                LeaseIssueCode.UNUSUALLY_HIGH_CREDIT_LOSS,
+                f"{path}.credit_loss_pct",
+                f"credit_loss_pct {operating_inputs.credit_loss_pct!r} exceeds "
+                "10%. Lease-Level credit loss covers bad debt only; physical "
+                "vacancy is already modeled per suite per month, so a Detailed "
+                "vacancy_credit_loss_pct must not be carried across here.",
+                LeaseIssueSeverity.WARNING,
+            )
+        )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_lease_level_operating_inputs(
+    operating_inputs: LeaseLevelOperatingInputs,
+    *,
+    path: str = "operating_inputs",
+) -> LeaseValidationResult:
+    """Validate property operating inputs and raise on any ERROR.
+
+    Returns the full result when valid, so a caller wanting both the go-ahead
+    and any warnings needs exactly one call.
+    """
+
+    result = validate_lease_level_operating_inputs(operating_inputs, path=path)
     if result.errors:
         raise LeaseValidationError(result)
     return result

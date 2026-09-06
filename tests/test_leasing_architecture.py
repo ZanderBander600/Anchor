@@ -261,11 +261,22 @@ _MARKET_BEARING_FIELDS = frozenset({"market_rent_psf", "market_rent_growth"})
 #: That is the mechanical form of D2 Section 10 -- two different clocks.
 _MARKET_CALCULATION_MODULE = "market.py"
 
-#: Exponentiation is compound growth, and both formulas need it: contractual
-#: escalation ``(1 + escalation_pct) ** k`` and market step growth
-#: ``(1 + market_rent_growth) ** k``. It stays banned everywhere else.
+#: The one module permitted to perform property fixed-expense growth (D4.1),
+#: on the identical principle: ``expenses.py`` owns
+#: ``Year1Amount * (1 + expense_growth) ** (y - 1)`` and nothing else in the
+#: package may reproduce it (HD-D4-1's single-implementation condition).
+_EXPENSE_CALCULATION_MODULE = "expenses.py"
+
+#: Exponentiation is compound growth, and three formulas need it: contractual
+#: escalation ``(1 + escalation_pct) ** k``, market step growth
+#: ``(1 + market_rent_growth) ** k``, and D4.1's annual property expense growth
+#: ``(1 + expense_growth) ** (y - 1)``. It stays banned everywhere else.
 _EXPONENTIATION_PERMITTED_MODULES = frozenset(
-    {_RENT_CALCULATION_MODULE, _MARKET_CALCULATION_MODULE}
+    {
+        _RENT_CALCULATION_MODULE,
+        _MARKET_CALCULATION_MODULE,
+        _EXPENSE_CALCULATION_MODULE,
+    }
 )
 
 
@@ -341,17 +352,19 @@ def test_the_rent_module_is_the_only_one_that_touches_rent_fields() -> None:
     ), f"{rent_module} must contain the compound-escalation term"
 
 
-def test_leasing_package_contains_only_the_gate_d3_1_modules() -> None:
+def test_leasing_package_contains_only_the_gate_d4_1_modules() -> None:
     """D0 Gate D1.0 files, plus D1.1's ``calendar.py``, D1.2's ``rent.py``,
     D1.3's ``aggregation.py``, D2.1's ``market.py``, D2.2/D2.3's
-    ``rollover.py``, D2.4's ``leasing_costs.py`` and D3.1's ``recoveries.py``
-    (D3 conventions Section 14)."""
+    ``rollover.py``, D2.4's ``leasing_costs.py``, D3.1's ``recoveries.py``
+    (D3 conventions Section 14) and D4.1's ``expenses.py``
+    (D4 Section 27.1)."""
 
     assert {path.name for path in _leasing_source_files()} == {
         "__init__.py",
         "aggregation.py",
         "calendar.py",
         "contracts.py",
+        "expenses.py",
         "leasing_costs.py",
         "market.py",
         "recoveries.py",
@@ -2248,7 +2261,16 @@ def test_recovery_is_never_netted_against_the_pool_or_added_to_rent() -> None:
         names = _referenced_names(
             ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
         )
-        for forbidden in ("expense_recovery", "recoverable_expenses"):
+        # D4.1's ``expenses.py`` CONSTRUCTS the pool, so it necessarily names
+        # ``recoverable_expenses`` -- that is the whole of HD-D3-8: D3 injects,
+        # D4 supplies. It must still never name ``expense_recovery``, which is
+        # tenant revenue and is D3's alone. The pool is property-level
+        # *eligibility*; a recovery is what a tenant reimburses, and blurring
+        # the two is exactly how D4 would come to recalculate D3.
+        forbidden_names = ("expense_recovery", "recoverable_expenses")
+        if source_file.name == _EXPENSE_CALCULATION_MODULE:
+            forbidden_names = ("expense_recovery",)
+        for forbidden in forbidden_names:
             assert forbidden not in names, (
                 f"{source_file} references {forbidden!r}; recovery revenue "
                 f"belongs to {_RECOVERIES_MODULE}"
@@ -3789,39 +3811,84 @@ def test_the_forward_exit_window_is_preserved(  ) -> None:
     assert "forward_exit_window_expense_recovery" in fields
 
 
-def test_no_operating_or_downstream_concept_reaches_d3() -> None:
-    """**Guardrails 21-25, the D3 closeout.** D3 stops at "monthly recovery
-    revenue, by lease and by property". The expense pool stays injected, and
-    every operating and downstream concept belongs to D4."""
+#: The three modules D4.1 gave property-expense vocabulary to: the contract
+#: declarations, the projection itself, and its leasing-scoped validation.
+#: Every other module in the package -- every D1-D3 calculator -- keeps the
+#: full ban, which is what proves ``recoveries.py`` still calculates no
+#: property expense and D4 did not reach backwards into D3.
+_D4_1_PROPERTY_EXPENSE_MODULES = frozenset(
+    {"contracts.py", _EXPENSE_CALCULATION_MODULE, "validation.py"}
+)
+
+#: Property operating vocabulary D4.1 legitimately owns (D4 Sections 9.2,
+#: 10, 12). Permitted only in the three modules above.
+_D4_1_PROPERTY_EXPENSE_NAMES = (
+    "recoverable_expense_ratio",
+    "property_taxes",
+    "insurance",
+    "utilities",
+    "repairs_maintenance",
+    "other_income",
+)
+
+#: Concepts no leasing module may name at D4.1, anywhere -- including the D4.1
+#: modules themselves. Each belongs to a later gate, and each absence is a
+#: scope proof: ``management_fee`` and ``credit_loss`` and ``egi`` and ``noi``
+#: are D4.3's, ``capex`` stays on ``AcquisitionTerms``, ``exit_noi`` is D4.4's,
+#: and the return metrics are the shared engine's and are never Lease-Level's.
+#: Note these are matched as exact identifiers, so ``management_fee_pct`` and
+#: ``credit_loss_pct`` -- inert declared fields D4.1 validates but never
+#: computes with -- do not collide with the ``management_fee`` and
+#: ``credit_loss`` DOLLAR concepts banned here.
+_DOWNSTREAM_NAMES_BANNED_THROUGH_D4_1 = (
+    "management_fee",
+    "total_operating_expenses",
+    "operating_expenses",
+    "egi",
+    "effective_gross_income",
+    "noi",
+    "exit_noi",
+    "credit_loss",
+    "capex",
+    "irr",
+    "dscr",
+    "debt_yield",
+    "purchase_price",
+    "sale_proceeds",
+)
+
+
+def test_no_downstream_concept_reaches_the_leasing_package_at_d4_1() -> None:
+    """**D3 guardrails 21-25, narrowed at D4.1.** D3 stopped at "monthly
+    recovery revenue, by lease and by property" and integrated with nothing.
+    D4.1 adds exactly one thing: the property fixed-expense projection and the
+    recoverable pool it feeds. Everything downstream of that -- the management
+    fee, credit loss, EGI, NOI, exit NOI, CapEx and every return metric --
+    still belongs to a later gate and appears nowhere in the package.
+
+    The narrowing is deliberately module-scoped rather than removed: property
+    expense vocabulary is permitted **only** in the three D4.1 modules, so
+    ``recoveries.py`` naming a property tax would still fail, which is D4.1
+    guardrail 22 (recoveries does not calculate property expenses)."""
 
     for source_file in _leasing_source_files():
         referenced = _referenced_names(
             ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
         )
-        for forbidden in (
-            "recoverable_expense_ratio",
-            "management_fee",
-            "total_operating_expenses",
-            "operating_expenses",
-            "property_taxes",
-            "insurance",
-            "utilities",
-            "repairs_maintenance",
-            "egi",
-            "noi",
-            "exit_noi",
-            "credit_loss",
-            "other_income",
-            "capex",
-            "irr",
-            "dscr",
-            "debt_yield",
-            "purchase_price",
-            "sale_proceeds",
-        ):
+
+        if source_file.name not in _D4_1_PROPERTY_EXPENSE_MODULES:
+            for forbidden in _D4_1_PROPERTY_EXPENSE_NAMES:
+                assert forbidden not in referenced, (
+                    f"{source_file.name} references {forbidden!r}; property "
+                    "operating expenses belong to "
+                    f"{sorted(_D4_1_PROPERTY_EXPENSE_MODULES)}"
+                )
+
+        for forbidden in _DOWNSTREAM_NAMES_BANNED_THROUGH_D4_1:
             assert forbidden not in referenced, (
-                f"{source_file.name} references {forbidden!r}; D3 produces a "
-                "recovery revenue series and integrates with nothing"
+                f"{source_file.name} references {forbidden!r}; that concept "
+                "belongs to a gate after D4.1 and exists nowhere in the "
+                "leasing package"
             )
 
 
@@ -4234,3 +4301,484 @@ def test_initial_vacancy_history_cannot_enter_the_future_state() -> None:
             f"build_successor_contribution accepts {forbidden!r}; how a chain "
             "began must not reach its future"
         )
+
+
+# =============================================================================
+# D4.1 -- property fixed expenses and the recoverable pool
+#
+# Thirty-three guardrails, restating D4 Sections 10, 12 and 27.1. The scope
+# proofs (no EGI, no NOI, no management fee, no CapEx, no returns) live in
+# ``test_no_downstream_concept_reaches_the_leasing_package_at_d4_1`` above,
+# which bans those identifiers package-wide.
+# =============================================================================
+
+
+def _expenses_tree() -> ast.AST:
+    source_file = _LEASING_DIR / _EXPENSE_CALCULATION_MODULE
+    return ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+
+
+def _expenses_fn(name: str) -> ast.FunctionDef:
+    return next(
+        node
+        for node in ast.walk(_expenses_tree())
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+
+
+def test_the_expense_module_is_the_only_one_that_grows_a_property_expense() -> None:
+    """**HD-D4-1's single-implementation condition.** Mirroring the Detailed
+    formula rather than extracting a shared helper was approved only on the
+    guarantee that the duplication never multiplies. Exactly one Lease-Level
+    implementation of ``Year1Amount * (1 + expense_growth) ** (y - 1)``
+    exists, and it lives here."""
+
+    expenses = _expenses_tree()
+
+    assert any(
+        isinstance(node, ast.FunctionDef) and node.name == "annual_expense_amount"
+        for node in ast.walk(expenses)
+    ), "expenses.py must hold the annual growth helper"
+    assert any(
+        isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+        for node in ast.walk(expenses)
+    ), "expenses.py must contain the compound-growth term"
+
+    # The ban is on the *arithmetic*, not on the name: ``contracts.py`` must
+    # declare ``expense_growth`` and ``validation.py`` must check its domain.
+    # Neither may compute with it -- exactly the shape the existing
+    # ``_RENT_BEARING_FIELDS`` guardrail uses for contractual rent.
+    for source_file in _leasing_source_files():
+        if source_file.name == _EXPENSE_CALCULATION_MODULE:
+            continue
+        tree = ast.parse(
+            source_file.read_text(encoding="utf-8"), filename=str(source_file)
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.BinOp):
+                continue
+            leaked = _referenced_names(node) & {
+                "expense_growth",
+                "annual_expense_amount",
+            }
+            assert not leaked, (
+                f"{source_file.name} performs arithmetic on {sorted(leaked)}; "
+                f"property expense growth belongs to "
+                f"{_EXPENSE_CALCULATION_MODULE} alone"
+            )
+
+
+def test_the_pool_builder_does_not_reproduce_expense_growth() -> None:
+    """**Guardrail 18.** The pool derives from the *completed* monthly
+    schedule. A second growth calculation here is exactly how the pool would
+    come to disagree with the expense line it is a fraction of (FM-D4-40)."""
+
+    builder = _expenses_fn("build_recoverable_expense_pool")
+    referenced = _referenced_names(builder)
+
+    for forbidden in (
+        "annual_expense_amount",
+        "_growth_factor",
+        "expense_growth",
+        "hold_year",
+        "property_taxes",
+        "insurance",
+        "utilities",
+        "repairs_maintenance",
+        "other_operating_expenses",
+    ):
+        assert forbidden not in referenced, (
+            f"build_recoverable_expense_pool references {forbidden!r}; it "
+            "consumes the finished schedule and recalculates nothing"
+        )
+
+    assert not any(
+        isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+        for node in ast.walk(builder)
+    ), "the pool builder contains compound growth; it must not"
+
+
+def test_the_pool_reads_exactly_the_completed_fixed_expense_total() -> None:
+    """**Guardrail 19.** The monthly schedule is canonical: the pool is a
+    fraction of ``fixed_operating_expenses``, which is itself the sum of the
+    five eligible lines computed once."""
+
+    referenced = _referenced_names(_expenses_fn("build_recoverable_expense_pool"))
+
+    assert "fixed_operating_expenses" in referenced
+    assert "recoverable_expense_ratio" in referenced
+
+
+def test_the_pool_uses_exactly_the_five_eligible_lines() -> None:
+    """**Guardrails 4-10.** Eligibility is structural, not a subtraction:
+    ``MonthlyPropertyExpenseSchedule`` contains exactly the five eligible
+    lines plus their total, so nothing excluded can reach the pool."""
+
+    from anchor.leasing import FIXED_EXPENSE_LINES
+
+    assert FIXED_EXPENSE_LINES == (
+        "property_taxes",
+        "insurance",
+        "utilities",
+        "repairs_maintenance",
+        "other_operating_expenses",
+    )
+
+    schedule = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef)
+        and node.name == "MonthlyPropertyExpenseSchedule"
+    )
+    fields = [
+        node.target.id
+        for node in schedule.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    ]
+
+    assert fields == [
+        "months",
+        "property_taxes",
+        "insurance",
+        "utilities",
+        "repairs_maintenance",
+        "other_operating_expenses",
+        "fixed_operating_expenses",
+    ]
+
+
+def test_the_pool_is_not_derived_by_subtracting_a_management_fee() -> None:
+    """**Guardrail 4.** D4 Section 12.1 makes the expanded five-line form the
+    authority. A ``total_operating_expenses - management_fee`` shortcut would
+    also be wrong at this gate, where neither quantity exists."""
+
+    builder = _expenses_fn("build_recoverable_expense_pool")
+
+    for node in ast.walk(builder):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
+            pytest.fail(
+                "build_recoverable_expense_pool subtracts something; the pool "
+                "is a ratio of the completed eligible total, never a residual"
+            )
+
+
+def test_no_per_category_recovery_ratio_exists() -> None:
+    """**Guardrail 11.** One global ``recoverable_expense_ratio`` applied to
+    the total eligible pool. Per-category recoverability is HD-D3-5, deferred."""
+
+    for source_file in _leasing_source_files():
+        referenced = _referenced_names(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        for forbidden in (
+            "tax_recovery_ratio",
+            "insurance_recovery_ratio",
+            "utility_recovery_ratio",
+            "cam_recovery_ratio",
+            "category_recovery_ratio",
+            "recoverable_ratios",
+        ):
+            assert forbidden not in referenced, (
+                f"{source_file.name} references {forbidden!r}; D4.1 has one "
+                "global ratio and per-category recoverability is deferred"
+            )
+
+
+def test_property_expenses_are_never_scaled_by_occupancy() -> None:
+    """**Guardrails 12 and 13.** A fully vacant building still pays its taxes.
+    The independence is structural: neither builder admits an occupancy, an
+    area, a suite or a lease."""
+
+    import inspect as _inspect
+
+    from anchor.leasing import (
+        build_property_expense_schedule,
+        build_recoverable_expense_pool,
+    )
+
+    forbidden_parameters = {
+        "suite",
+        "suites",
+        "lease",
+        "leases",
+        "occupancy",
+        "physical_occupancy",
+        "occupied_area",
+        "vacant_area",
+        "rentable_area_sf",
+        "vacancy",
+        "vacancy_rate",
+    }
+    for builder in (build_property_expense_schedule, build_recoverable_expense_pool):
+        parameters = set(_inspect.signature(builder).parameters)
+        leaked = parameters & forbidden_parameters
+        assert not leaked, f"{builder.__name__} accepts {sorted(leaked)}"
+
+    referenced = _referenced_names(_expenses_tree())
+    for forbidden in (
+        "occupancy",
+        "physical_occupancy",
+        "occupied_area",
+        "vacant_area",
+        "vacancy",
+        "vacancy_rate",
+        "leased_area_sf",
+        "rentable_area_sf",
+        "Suite",
+        "Lease",
+        "gross_up",
+    ):
+        assert forbidden not in referenced, (
+            f"{_EXPENSE_CALCULATION_MODULE} references {forbidden!r}; fixed "
+            "property expenses do not vary with occupancy"
+        )
+
+
+def test_no_expense_seasonality_or_monthly_compounding_exists() -> None:
+    """**Guardrails 14, 15 and 16.** Level allocation inside each model year;
+    growth steps on the model anniversary derived from ``hold_year``, never on
+    a calendar month."""
+
+    referenced = _referenced_names(_expenses_tree())
+
+    for forbidden in (
+        "seasonality",
+        "seasonal_factors",
+        "true_up",
+        "accrual",
+        "payment_schedule",
+        "monthly_growth",
+        "monthly_rate",
+        "compound_monthly",
+        "january",
+        "calendar_year",
+    ):
+        assert forbidden not in referenced, (
+            f"{_EXPENSE_CALCULATION_MODULE} references {forbidden!r}; D4.1 is "
+            "a level monthly projection with annual-step growth"
+        )
+
+    # The growth exponent is a whole model year, never a fractional month.
+    for node in ast.walk(_expenses_fn("annual_expense_amount")):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            operands = _referenced_names(node)
+            assert "month" not in operands and "period_index" not in operands, (
+                "the growth exponent must be a model year, not a month"
+            )
+
+
+def test_the_growth_step_is_driven_by_hold_year_not_a_calendar_month() -> None:
+    """**Guardrail 16**, positively: the schedule builder reads
+    ``month.hold_year`` and never ``month_start.month``."""
+
+    builder = _expenses_fn("build_property_expense_schedule")
+    referenced = _referenced_names(builder)
+
+    assert "hold_year" in referenced
+    assert "month_start" not in referenced
+
+
+def test_the_expense_module_reuses_the_existing_d3_pool_contract() -> None:
+    """**Guardrail 20.** D4 constructs the input D3 already consumes; no
+    parallel pool type exists (HD-D3-8)."""
+
+    referenced = _referenced_names(_expenses_tree())
+
+    assert "RecoverableExpensePool" in referenced
+    for forbidden in (
+        "D4RecoverableExpensePool",
+        "MonthlyRecoverableExpensePool",
+        "PropertyRecoveryPool",
+        "RecoverablePool",
+    ):
+        assert forbidden not in referenced, (
+            f"{_EXPENSE_CALCULATION_MODULE} defines {forbidden!r}; the D3 "
+            "RecoverableExpensePool is reused unmodified"
+        )
+
+    defined = {
+        node.name
+        for node in ast.walk(_expenses_tree())
+        if isinstance(node, ast.ClassDef)
+    }
+    assert not defined, (
+        f"{_EXPENSE_CALCULATION_MODULE} defines contracts {sorted(defined)}; "
+        "every Lease-Level contract lives in contracts.py"
+    )
+
+
+def test_the_expense_module_imports_no_recovery_calculator() -> None:
+    """**Guardrail 21.** The dependency is one-way: fixed expenses feed the
+    pool, the pool feeds D3's recoveries. ``expenses.py`` must not reach
+    forward into the calculator that consumes it."""
+
+    source_file = _LEASING_DIR / _EXPENSE_CALCULATION_MODULE
+    names = _imported_module_names(source_file)
+
+    assert not any(
+        name.endswith("recoveries") or name.endswith("aggregation")
+        for name in names
+    ), f"{_EXPENSE_CALCULATION_MODULE} imports a recovery calculator"
+
+    referenced = _referenced_names(_expenses_tree())
+    for forbidden in (
+        "build_lease_recovery_schedule",
+        "monthly_expense_recovery",
+        "tenant_pro_rata_share",
+        "lease_responsibility_factors",
+        "monthly_expense_stop_dollars",
+        "expense_stop_psf",
+        "recovery_basis",
+        "LeaseType",
+        "RecoveryBasis",
+    ):
+        assert forbidden not in referenced, (
+            f"{_EXPENSE_CALCULATION_MODULE} references {forbidden!r}; what a "
+            "tenant reimburses is D3's, and the pool says nothing about it"
+        )
+
+
+def test_the_recovery_module_calculates_no_property_expense() -> None:
+    """**Guardrail 22**, the mirror image. D3 was built against an injected
+    pool and D4 supplying that pool changes nothing about it."""
+
+    referenced = _referenced_names(_recoveries_tree())
+
+    for forbidden in (
+        "property_taxes",
+        "insurance",
+        "utilities",
+        "repairs_maintenance",
+        "other_operating_expenses",
+        "fixed_operating_expenses",
+        "expense_growth",
+        "recoverable_expense_ratio",
+        "annual_expense_amount",
+        "build_property_expense_schedule",
+    ):
+        assert forbidden not in referenced, (
+            f"{_RECOVERIES_MODULE} references {forbidden!r}; D3 consumes a "
+            "finished pool and projects no expense"
+        )
+
+    names = _imported_module_names(_LEASING_DIR / _RECOVERIES_MODULE)
+    assert not any(name.endswith("expenses") for name in names), (
+        f"{_RECOVERIES_MODULE} imports the expense projector; the pool is "
+        "injected, not fetched"
+    )
+
+
+def test_no_property_rent_or_revenue_aggregation_exists_at_d4_1() -> None:
+    """**Guardrails 24 and 25.** Property rent aggregation is D4.2; other
+    income and every revenue line are D4.3. Neither exists yet."""
+
+    referenced = _referenced_names(_expenses_tree())
+
+    for forbidden in (
+        "cash_base_rent",
+        "contractual_base_rent",
+        "free_rent",
+        "absent_rent",
+        "tenant_improvements",
+        "leasing_commissions",
+        "suite_operating_projection",
+        "build_property_operating_schedule",
+        "MonthlyPropertyProjection",
+        "AnnualOperatingProjection",
+        "OperatingCapitalSchedule",
+    ):
+        assert forbidden not in referenced, (
+            f"{_EXPENSE_CALCULATION_MODULE} references {forbidden!r}; that is "
+            "D4.2 or later"
+        )
+
+
+def test_the_operating_input_contract_lives_with_property_economics() -> None:
+    """D4 Section 9.2: property operating assumptions are not lease-market
+    assumptions. Nothing was added to ``MarketLeasingAssumptions``, ``Suite``,
+    ``Lease`` or ``InitialVacancyAssumptions``."""
+
+    tree = _contracts_tree()
+    expense_fields = {
+        "property_taxes",
+        "insurance",
+        "utilities",
+        "repairs_maintenance",
+        "other_operating_expenses",
+        "expense_growth",
+        "recoverable_expense_ratio",
+        "management_fee_pct",
+        "other_income",
+        "other_income_growth",
+        "credit_loss_pct",
+    }
+
+    for class_name in (
+        "MarketLeasingAssumptions",
+        "Suite",
+        "Lease",
+        "InitialVacancyAssumptions",
+        "LeaseLevelPropertyInputs",
+    ):
+        node = next(
+            candidate
+            for candidate in ast.walk(tree)
+            if isinstance(candidate, ast.ClassDef) and candidate.name == class_name
+        )
+        fields = {
+            entry.target.id
+            for entry in node.body
+            if isinstance(entry, ast.AnnAssign) and isinstance(entry.target, ast.Name)
+        }
+        leaked = fields & expense_fields
+        assert not leaked, (
+            f"{class_name} declares {sorted(leaked)}; property operating "
+            "assumptions belong on LeaseLevelOperatingInputs"
+        )
+
+
+def test_no_vacancy_or_occupancy_field_reaches_the_operating_contract() -> None:
+    """**G-M14 at D4.1.** Lease-Level declares no ``occupancy`` and no
+    ``vacancy_credit_loss_pct``: physical vacancy is modeled per suite per
+    month and a second mechanism is structurally absent."""
+
+    node = next(
+        candidate
+        for candidate in ast.walk(_contracts_tree())
+        if isinstance(candidate, ast.ClassDef)
+        and candidate.name == "LeaseLevelOperatingInputs"
+    )
+    fields = {
+        entry.target.id
+        for entry in node.body
+        if isinstance(entry, ast.AnnAssign) and isinstance(entry.target, ast.Name)
+    }
+
+    for forbidden in (
+        "occupancy",
+        "vacancy",
+        "vacancy_rate",
+        "vacancy_credit_loss_pct",
+        "gross_potential_rent",
+        "revenue_growth",
+    ):
+        assert forbidden not in fields, (
+            f"LeaseLevelOperatingInputs declares {forbidden!r}; that is either "
+            "a second vacancy mechanism or a Detailed-only input"
+        )
+
+
+def test_d4_1_did_not_reach_outside_the_leasing_package() -> None:
+    """**Guardrails 29-33.** D4.1 is entirely inside ``anchor.leasing``. The
+    integration bridge is D4.5 and belongs to ``anchor.analysis``; no engine,
+    analysis, deals, ingestion or AI file changes at this gate."""
+
+    source_file = _LEASING_DIR / _EXPENSE_CALCULATION_MODULE
+    names = _imported_module_names(source_file)
+
+    for name in names:
+        if name.startswith("anchor.") and not name.startswith("anchor.leasing"):
+            assert name in _PERMITTED_ANCHOR_IMPORTS, (
+                f"{_EXPENSE_CALCULATION_MODULE} imports {name!r}; D4.1 stays "
+                "inside anchor.leasing"
+            )

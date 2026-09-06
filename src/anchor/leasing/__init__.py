@@ -110,6 +110,19 @@ is an explicit zero rather than a zero factor, and `MODIFIED_GROSS` is refused
 rather than silently zeroed -- it needs an explicit contractual basis, which is
 D3.2. Successor recoveries are D3.3, expected and recursive recoveries D3.4,
 and property aggregation D3.5.
+
+D4.1 closes the D3/D4 seam. ``expenses.py`` projects the five fixed property
+operating expense lines onto the canonical monthly timeline -- annual step
+growth on analysis-start anniversaries, then a level ``/ 12`` inside each model
+year -- and builds the ``RecoverableExpensePool`` D3 has consumed as an
+injected input since D3.1 (HD-D3-8, resolved: D3 injects, D4 supplies). The
+pool is ``recoverable_expense_ratio`` times the completed five-line total, and
+the management fee is structurally absent from that total, which is what makes
+the whole property build one deterministic pass with no fixed-point solve. The
+builder takes no suite, lease, area or occupancy, so a fully vacant building
+incurs exactly the same fixed expenses as a fully leased one. Revenue, credit
+loss, the management fee, EGI and NOI are D4.3; nothing here computes tenant
+recovery revenue, which remains D3's.
 """
 
 from __future__ import annotations
@@ -149,6 +162,7 @@ from .contracts import (
     SuccessorRecoverySchedule,
     SuiteRecoveryProjection,
     Lease,
+    LeaseLevelOperatingInputs,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
     LeaseOrigin,
@@ -159,6 +173,7 @@ from .contracts import (
     MarketRentSchedule,
     LeaseRecoverySchedule,
     ModelMonth,
+    MonthlyPropertyExpenseSchedule,
     NewTenantBranch,
     PropertyRentRollSchedule,
     PropertyRecoverySchedule,
@@ -168,6 +183,12 @@ from .contracts import (
     RenewalBranch,
     ResolvedMarketLeasing,
     Suite,
+)
+from .expenses import (
+    FIXED_EXPENSE_LINES,
+    annual_expense_amount,
+    build_property_expense_schedule,
+    build_recoverable_expense_pool,
 )
 from .market import (
     build_market_rent_schedule,
@@ -221,6 +242,10 @@ from .rollover import (
     weighted_outcome,
 )
 from .validation import (
+    require_valid_lease_level_operating_inputs,
+    require_valid_recoverable_expense_ratio,
+    validate_lease_level_operating_inputs,
+    validate_recoverable_expense_ratio,
     require_valid_recovery_inputs,
     require_valid_property_recovery_inputs,
     require_valid_initial_vacancy_inputs,
@@ -334,6 +359,17 @@ __all__ = [
     "build_expected_rollover_recovery",
     "build_recursive_rollover_recovery",
     "build_initial_vacancy_rollover_recovery",
+    # property operating expenses and the recoverable pool (D4.1)
+    "LeaseLevelOperatingInputs",
+    "MonthlyPropertyExpenseSchedule",
+    "FIXED_EXPENSE_LINES",
+    "annual_expense_amount",
+    "build_property_expense_schedule",
+    "build_recoverable_expense_pool",
+    "validate_lease_level_operating_inputs",
+    "require_valid_lease_level_operating_inputs",
+    "validate_recoverable_expense_ratio",
+    "require_valid_recoverable_expense_ratio",
     # contracts
     "EscalationBasis",
     "Lease",

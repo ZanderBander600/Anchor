@@ -2389,3 +2389,166 @@ class InitialVacancyRolloverRecovery:
                 f"{len(self.rollover.transitions)} authoritative rollover "
                 "transitions; D3 attaches recovery to the events D2 decided."
             )
+
+
+# =============================================================================
+# D4.1 -- property operating inputs and the canonical monthly expense schedule
+#
+# Property economics, deliberately separate from lease and market-leasing
+# economics. Nothing below describes how space re-lets; it describes what the
+# building costs to run.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LeaseLevelOperatingInputs:
+    """The property operating assumptions for one Lease-Level deal (D4.1).
+
+    Restates D0 Section 4.6 and D4 Section 9.2 exactly. **These are PROPERTY
+    OPERATING assumptions, not lease-market assumptions.** Nothing here belongs
+    on ``MarketLeasingAssumptions``, which describes how space re-lets, on
+    ``Suite``, or on ``Lease``: a property tax bill is a fact about the
+    building, identical for every tenant, and putting it on a lease would
+    invite per-lease tax rates the aggregate model does not support.
+
+    **Why this is a separate contract from ``DetailedOperatingInputs``**
+    (D0 Section 3.3, D4 Section 9.1). Detailed requires
+    ``gross_potential_rent``, ``vacancy_credit_loss_pct`` and
+    ``revenue_growth``. In Lease-Level the first is an *output*, the second is
+    a forbidden second vacancy mechanism (G-M14 -- physical vacancy is already
+    modeled per suite per month), and the third does not exist, because rent
+    growth arrives through contractual escalation and market-rent growth at
+    rollover. Reusing that contract would mean fabricating three values. The
+    six expense *concepts* and their *formulas* are reused unchanged; only the
+    input container differs, exactly as ``AcquisitionTerms`` was introduced
+    alongside ``AcquisitionInputs`` rather than merging them.
+
+    **Units.** ``other_income`` and the five fixed expense lines are
+    **Year-1 annual property dollars** -- never monthly, never ``$/SF``, never
+    per occupied or per leased SF. ``other_income_growth``, ``expense_growth``,
+    ``management_fee_pct``, ``credit_loss_pct`` and
+    ``recoverable_expense_ratio`` are decimals, not percentages.
+
+    **Domains** (enforced by
+    ``anchor.leasing.validation.validate_lease_level_operating_inputs``, never
+    here -- this contract performs no validation and no calculation):
+
+    - ``other_income`` -- finite, ``>= 0``
+    - ``other_income_growth`` -- finite, ``> -1``
+    - ``credit_loss_pct`` -- finite, ``0 <= x <= 1``
+    - ``property_taxes`` -- finite, ``>= 0``
+    - ``insurance`` -- finite, ``>= 0``
+    - ``utilities`` -- finite, ``>= 0``
+    - ``repairs_maintenance`` -- finite, ``>= 0``
+    - ``other_operating_expenses`` -- finite, ``>= 0``
+    - ``management_fee_pct`` -- finite, ``0 <= x <= 1``
+    - ``expense_growth`` -- finite, ``> -1``
+    - ``recoverable_expense_ratio`` -- finite, ``0 <= x <= 1``
+
+    The five expense domains and both growth domains are the *identical*
+    domains ``anchor.validation`` already applies to the same six Detailed
+    concepts, reproduced under the leasing-scoped severity architecture
+    (HD-6) rather than by importing or modifying the global validator.
+    ``expense_growth`` in particular is ``> -1`` with **no upper bound**:
+    negative expense growth is permitted, ``-1`` and below is not, because
+    ``(1 + g) <= 0`` either collapses every later year to zero or flips its
+    sign every year.
+
+    ``recoverable_expense_ratio`` carries **no default** (D4 Section 9.3): a
+    default of ``1.0`` would silently make every eligible expense recoverable
+    and a default of ``0.0`` would silently zero every `NNN` recovery. A
+    Lease-Level deal states it. ``credit_loss_pct`` defaults to ``0.0``, the
+    D0-locked economically neutral value.
+
+    **Which fields D4.1 actually consumes.** Only ``property_taxes``,
+    ``insurance``, ``utilities``, ``repairs_maintenance``,
+    ``other_operating_expenses``, ``expense_growth`` and
+    ``recoverable_expense_ratio``. ``other_income``, ``other_income_growth``,
+    ``credit_loss_pct`` and ``management_fee_pct`` are declared here because
+    D4 Section 9.2 defines the contract as a whole, and they are **financially
+    inert at this gate**: no D4.1 output changes when any of them changes,
+    which ``tests/test_leasing_d4_1_expenses.py`` asserts directly. Revenue,
+    credit loss, the management fee, EGI and NOI are D4.3.
+    """
+
+    # --- revenue (declared here; financially inert until D4.3) ---
+    other_income: float
+    other_income_growth: float
+    credit_loss_pct: float = 0.0
+
+    # --- the five fixed expense lines, Year-1 annual dollars ---
+    property_taxes: float
+    insurance: float
+    utilities: float
+    repairs_maintenance: float
+    other_operating_expenses: float
+
+    # --- rates ---
+    management_fee_pct: float
+    expense_growth: float
+    recoverable_expense_ratio: float
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MonthlyPropertyExpenseSchedule:
+    """The property's canonical monthly fixed operating expenses (D4.1).
+
+    One dollar figure per canonical ``ModelMonth``, for each of the five
+    eligible fixed expense lines, plus their monthly total. The schedule spans
+    the **whole** canonical projection -- the ``12H`` hold months **and** the
+    twelve forward exit months -- because the forward window is part of the
+    authoritative property expense projection (D0 Section 17.1): the exit NOI
+    a later gate computes must see the expenses that forward year actually
+    incurs, grown to model year ``H + 1``.
+
+    **Monthly is authoritative.** There is no annual field here, and no annual
+    figure is ever derived from anywhere but these monthly values (guardrails
+    G-M2, G-M3). ``fixed_operating_expenses`` is the sum of the five lines in
+    the declared order below, computed once by
+    ``anchor.leasing.expenses.build_property_expense_schedule`` and reused --
+    never recomputed by a consumer.
+
+    **What is deliberately absent, and why.** The management fee is not a fixed
+    line: it is percentage-derived from EGI, its exclusion from the recoverable
+    pool is what makes the pool computable in one pass with no fixed-point
+    solve (D0 Section 16.3, D4 Section 13), and it belongs to D4.3. CapEx is
+    not here either -- ``AcquisitionTerms.annual_capex_reserve`` remains its
+    single authority, and a second monthly series is exactly how it would come
+    to be subtracted twice (D4 Section 18.2). TI, LC, debt service, acquisition
+    costs, financing fees and disposition costs are below-NOI or transaction
+    items and are not property operating expenses at all.
+
+    **Expenses do not scale with occupancy.** A fully vacant building still
+    incurs its taxes, insurance and utilities, so nothing that produced this
+    schedule read an occupancy, an area, a lease or a suite. That is asserted
+    structurally rather than by convention: the builder's signature admits no
+    such input.
+
+    Built only by ``anchor.leasing.expenses.build_property_expense_schedule``;
+    this dataclass performs no calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    property_taxes: tuple[float, ...]
+    insurance: tuple[float, ...]
+    utilities: tuple[float, ...]
+    repairs_maintenance: tuple[float, ...]
+    other_operating_expenses: tuple[float, ...]
+    fixed_operating_expenses: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("property_taxes", self.property_taxes),
+            ("insurance", self.insurance),
+            ("utilities", self.utilities),
+            ("repairs_maintenance", self.repairs_maintenance),
+            ("other_operating_expenses", self.other_operating_expenses),
+            ("fixed_operating_expenses", self.fixed_operating_expenses),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"MonthlyPropertyExpenseSchedule requires one {name} "
+                    f"figure per model month; got {len(series)} for "
+                    f"{expected} months."
+                )
