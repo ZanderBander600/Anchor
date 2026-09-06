@@ -79,6 +79,8 @@ one successor and never rolls it over.
 from __future__ import annotations
 
 from datetime import date
+from collections.abc import Mapping
+from dataclasses import dataclass
 from math import floor, fsum, isfinite
 
 from ..engine.contracts import ensure_finite
@@ -86,6 +88,9 @@ from .calendar import last_day_of_month, month_start_for_index
 from .contracts import (
     EscalationBasis,
     ExpectedRollover,
+    InitialVacancyAssumptions,
+    InitialVacancyRollover,
+    InitialVacancyStrategy,
     Lease,
     LeaseMonthlySchedule,
     LeaseOrigin,
@@ -130,6 +135,11 @@ from .rent import (
 #: suite are never confused in an audit trail.
 _RENEWAL_SUCCESSOR_SUFFIX = "::renewal"
 _NEW_TENANT_SUCCESSOR_SUFFIX = "::new"
+
+#: Names the deterministic first tenant of an initially vacant suite.
+#: Derived from the suite, reaches no calculation, and is never a lease
+#: expiration -- see ``_INITIAL_VACANCY_BOUNDARY_PERIOD``.
+_INITIAL_VACANCY_LEASE_ID_STEM = "::initial"
 
 
 # =============================================================================
@@ -636,6 +646,7 @@ def build_successor_contribution(
     parent_expiration_period: int,
     branch: RolloverBranchKind,
     lease_id_stem: str,
+    event_downtime_months: float | None = None,
 ) -> SuccessorContribution:
     """Return one successor's own economics, computed from a rollover *state*.
 
@@ -673,6 +684,22 @@ def build_successor_contribution(
 
     The returned series are **successor-only** and are zero in every period at
     or before ``parent_expiration_period`` -- the contract asserts it.
+
+    **``event_downtime_months`` is the D3.6 timing seam, and only that.** When
+    ``None`` -- which is every D2 call site and every recursive generation --
+    the branch resolves its own downtime from the assumptions exactly as
+    before, so D2 economics are untouched. When supplied it overrides the
+    delay **for this one event**, which is how an initially vacant suite states
+    a lease-up period distinct from future re-letting downtime (D3 Section
+    22.4, HD-D3.6 locked).
+
+    It overrides **timing only**. Term, free rent, TI, LC, escalation, lease
+    type and recovery terms still come from the branch's own assumptions, and
+    the resolved assumptions object is never mutated or replaced -- so an
+    initial lease-up period cannot leak into any later recursive new-tenant
+    event. It is not a predecessor input and carries no path history: two
+    callers passing the same value at the same ``(parent_expiration_period,
+    branch)`` get identical economics, so the D2.6 merge key is unaffected.
     """
 
     resolved = market_schedule.resolved
@@ -699,6 +726,11 @@ def build_successor_contribution(
         recovery_basis = assumptions.new_recovery_basis
         expense_stop_psf = assumptions.new_expense_stop_psf
         suffix = _NEW_TENANT_SUCCESSOR_SUFFIX
+
+    if event_downtime_months is not None:
+        # D3.6: this event's own delay, never a second timing formula and
+        # never written back onto the assumptions.
+        downtime_months = event_downtime_months
 
     commencement_period = successor_commencement_period(
         expiration_period=parent_expiration_period, downtime_months=downtime_months
@@ -1554,6 +1586,231 @@ def _child_masses(
     )
 
 
+@dataclass(slots=True)
+class _RolloverAccumulator:
+    """Mutable monthly accumulators for one suite's expected economics.
+
+    Deliberately mutable and deliberately *passed in already seeded*. The
+    propagation core adds each successor's weighted contribution with ``+=`` in
+    a fixed order, and a caller that has its own history to contribute seeds
+    these lists with it **before** calling. That keeps the exact sequence of
+    floating-point additions identical to the pre-D3.6 implementation -- the
+    extraction is bit-preserving by construction, not by argument, because
+    ``a + b + c`` and ``(b + c) + a`` are not the same IEEE-754 value.
+    """
+
+    face: list[float]
+    cash: list[float]
+    free_rent: list[float]
+    tenant_improvements: list[float]
+    leasing_commissions: list[float]
+    occupied_area: list[float]
+    occupancy_factor: list[float]
+    abatement_months: list[float]
+    cash_factor: list[float]
+    ti_total_parts: list[float]
+    lc_total_parts: list[float]
+
+    @classmethod
+    def zeros(cls, count: int) -> "_RolloverAccumulator":
+        return cls(
+            face=[0.0] * count,
+            cash=[0.0] * count,
+            free_rent=[0.0] * count,
+            tenant_improvements=[0.0] * count,
+            leasing_commissions=[0.0] * count,
+            occupied_area=[0.0] * count,
+            occupancy_factor=[0.0] * count,
+            abatement_months=[0.0] * count,
+            cash_factor=[0.0] * count,
+            ti_total_parts=[],
+            lc_total_parts=[],
+        )
+
+    def add(self, contribution: SuccessorContribution, mass: float) -> None:
+        """Accumulate ``mass x contribution``, in the canonical field order."""
+
+        for index in range(len(self.face)):
+            self.face[index] += mass * contribution.contractual_base_rent[index]
+            self.cash[index] += mass * contribution.cash_base_rent[index]
+            self.free_rent[index] += mass * contribution.free_rent[index]
+            self.tenant_improvements[index] += (
+                mass * contribution.tenant_improvements[index]
+            )
+            self.leasing_commissions[index] += (
+                mass * contribution.leasing_commissions[index]
+            )
+            self.occupied_area[index] += mass * contribution.occupied_area[index]
+            self.occupancy_factor[index] += (
+                mass * contribution.successor_occupancy_factor[index]
+            )
+            self.abatement_months[index] += (
+                mass * contribution.free_rent_abatement_months[index]
+            )
+            self.cash_factor[index] += mass * contribution.cash_rent_factor[index]
+
+        self.ti_total_parts.append(mass * contribution.tenant_improvement_amount)
+        self.lc_total_parts.append(mass * contribution.leasing_commission_amount)
+
+
+@dataclass(frozen=True, slots=True)
+class _Propagation:
+    """What the shared propagation core reports back to its caller."""
+
+    event_states: tuple[RolloverEventStateAudit, ...]
+    transitions: tuple[RolloverTransitionAudit, ...]
+    terminal_probability_mass: float
+
+
+def _propagate_rollover_mass(
+    accumulator: _RolloverAccumulator,
+    *,
+    suite: Suite,
+    analysis_start: date,
+    months: tuple[ModelMonth, ...],
+    market_schedule: MarketRentSchedule,
+    renewal_probability: float,
+    seeds: Mapping[int, float],
+    lease_id_stem_root: str,
+) -> _Propagation:
+    """Propagate probability mass over rollover-event states (D2 Section 5.5).
+
+    **The single production rollover state machine.** Extracted at D3.6 so two
+    entry paths can share it: ``build_recursive_rollover`` seeds it at a known
+    in-place lease's expiration, and ``build_initial_vacancy_rollover`` seeds
+    it at the first speculative tenant's expiration. There is no second queue,
+    no vacancy-specific recursion and no parallel implementation -- initial
+    vacancy is a new *entry path*, not a new engine.
+
+    ``seeds`` maps an expiration period to the probability mass arriving
+    there. Both current callers supply exactly one seed at mass ``1.0``; the
+    mapping shape exists because the state key is a period and merging masses
+    is what this loop already does, so accepting several costs nothing and
+    invents nothing.
+
+    The algorithm is unchanged from D2.6:
+
+    1. States are processed in **ascending expiration period**. Every child
+       expires strictly later than its parent, so processing ``e`` can never
+       create a state at or before ``e`` -- a state's mass is complete before
+       it is processed and one pass suffices.
+    2. Each processed state splits its mass across the two branches, builds
+       each successor's **own** economics, and accumulates
+       ``mass x contribution``. A whole branch is never added: a branch carries
+       its expiring lease's history and adding one per event would re-count it.
+    3. A child expiring inside the window is enqueued, **merging** with any
+       other path reaching the same period, because their futures are
+       identical (D2 Section 5.5.1). A child at or beyond the horizon is
+       contributed but not enqueued.
+
+    **Merging combines probability mass and nothing else.** No rent, term,
+    date or rate is ever averaged.
+
+    ``lease_id_stem_root`` names successors deterministically from the state
+    and reaches no calculation.
+
+    Pure apart from the accumulator it is given, which it mutates in the
+    caller's own order.
+    """
+
+    horizon = months[-1].period_index
+    incoming: dict[int, list[float]] = {
+        period: [mass] for period, mass in seeds.items()
+    }
+    processed: dict[int, float] = {}
+    transitions: list[RolloverTransitionAudit] = []
+    terminal_parts: list[float] = []
+
+    while True:
+        pending = sorted(
+            period
+            for period in incoming
+            if period not in processed and 1 <= period < horizon
+        )
+        if not pending:
+            break
+        period = pending[0]
+        mass = fsum(incoming[period])
+        processed[period] = mass
+
+        for branch, child_mass in _child_masses(
+            mass, renewal_probability=renewal_probability
+        ):
+            contribution = build_successor_contribution(
+                suite=suite,
+                analysis_start=analysis_start,
+                months=months,
+                market_schedule=market_schedule,
+                parent_expiration_period=period,
+                branch=branch,
+                # Derived from the STATE, never from a predecessor path, so a
+                # merged state has one identifier however many paths reached
+                # it -- and the identifier reaches no calculation.
+                lease_id_stem=successor_state_lease_id_stem(
+                    lease_id_stem_root, period
+                ),
+            )
+
+            accumulator.add(contribution, child_mass)
+
+            transitions.append(
+                RolloverTransitionAudit(
+                    parent_expiration_period=period,
+                    branch=branch,
+                    probability_mass=child_mass,
+                    commencement_period=contribution.commencement_period,
+                    successor_expiration_period=(
+                        contribution.successor_expiration_period
+                    ),
+                    commences_within_projection=(
+                        contribution.commences_within_projection
+                    ),
+                    starting_rent_psf=contribution.starting_rent_psf,
+                    term_months=contribution.term_months,
+                    tenant_improvement_amount=contribution.tenant_improvement_amount,
+                    leasing_commission_amount=contribution.leasing_commission_amount,
+                )
+            )
+
+            child_expiration = contribution.successor_expiration_period
+            if child_expiration <= period:
+                # Unreachable: c = e + 1 + floor(D) and last = c + T - 1 with
+                # D >= 0 and T >= 1 give last >= e + 1. Asserted anyway, because
+                # a violation would mean the propagation could not terminate.
+                raise ValueError(
+                    f"rollover time did not advance: a successor of the state "
+                    f"expiring at {period} itself expires at "
+                    f"{child_expiration}."
+                )
+            if child_expiration < horizon:
+                incoming.setdefault(child_expiration, []).append(child_mass)
+            else:
+                terminal_parts.append(child_mass)
+
+    # Seed mass that never rolled at all: the seeding event already lies at or
+    # beyond the horizon, so no rollover from it can affect a canonical month.
+    for period in seeds:
+        if period not in processed:
+            terminal_parts.append(fsum(incoming[period]))
+
+    event_states = tuple(
+        RolloverEventStateAudit(
+            expiration_period=period,
+            probability_mass=(
+                processed[period] if period in processed else fsum(incoming[period])
+            ),
+            processed=period in processed,
+        )
+        for period in sorted(incoming)
+    )
+
+    return _Propagation(
+        event_states=event_states,
+        transitions=tuple(transitions),
+        terminal_probability_mass=fsum(terminal_parts),
+    )
+
+
 def build_recursive_rollover(
     expiring: Lease,
     *,
@@ -1640,17 +1897,11 @@ def build_recursive_rollover(
     )
     suite_area = suite.suite_area_sf
 
-    face = list(initial_schedule.contractual_base_rent)
-    cash = list(initial_schedule.contractual_base_rent)
-    free_rent = [0.0] * count
-    tenant_improvements = [0.0] * count
-    leasing_commissions = [0.0] * count
-    occupied_area = list(initial_schedule.occupied_area)
-    occupancy_factor = [0.0] * count
-    abatement_months = [0.0] * count
-    cash_factor = [0.0] * count
-    ti_total_parts: list[float] = []
-    lc_total_parts: list[float] = []
+    accumulator = _RolloverAccumulator.zeros(count)
+    # The known lease's own history, contributed ONCE and never weighted.
+    accumulator.face[:] = initial_schedule.contractual_base_rent
+    accumulator.cash[:] = initial_schedule.contractual_base_rent
+    accumulator.occupied_area[:] = initial_schedule.occupied_area
 
     _, initial_expiration = lease_rent_periods(expiring, analysis_start=analysis_start)
     if initial_expiration < 1:
@@ -1660,120 +1911,21 @@ def build_recursive_rollover(
             "lease of this deal and cannot seed a rollover."
         )
 
-    # --- 2. propagate probability mass over rollover-event states ---------
-    #
-    # `incoming` maps an expiration period to the mass contributions that
-    # reached it, kept as a list so the sum is taken once, deterministically,
-    # over a fixed insertion order.
-    incoming: dict[int, list[float]] = {initial_expiration: [1.0]}
-    processed: dict[int, float] = {}
-    transitions: list[RolloverTransitionAudit] = []
-    terminal_parts: list[float] = []
-
-    while True:
-        pending = sorted(
-            period
-            for period in incoming
-            if period not in processed and 1 <= period < horizon
-        )
-        if not pending:
-            break
-        period = pending[0]
-        mass = fsum(incoming[period])
-        processed[period] = mass
-
-        for branch, child_mass in _child_masses(
-            mass, renewal_probability=renewal_probability
-        ):
-            contribution = build_successor_contribution(
-                suite=suite,
-                analysis_start=analysis_start,
-                months=months,
-                market_schedule=schedule,
-                parent_expiration_period=period,
-                branch=branch,
-                # Derived from the STATE, never from a predecessor path, so a
-                # merged state has one identifier however many paths reached
-                # it -- and the identifier reaches no calculation.
-                lease_id_stem=successor_state_lease_id_stem(
-                    expiring.lease_id, period
-                ),
-            )
-
-            for index in range(count):
-                face[index] += child_mass * contribution.contractual_base_rent[index]
-                cash[index] += child_mass * contribution.cash_base_rent[index]
-                free_rent[index] += child_mass * contribution.free_rent[index]
-                tenant_improvements[index] += (
-                    child_mass * contribution.tenant_improvements[index]
-                )
-                leasing_commissions[index] += (
-                    child_mass * contribution.leasing_commissions[index]
-                )
-                occupied_area[index] += child_mass * contribution.occupied_area[index]
-                occupancy_factor[index] += (
-                    child_mass * contribution.successor_occupancy_factor[index]
-                )
-                abatement_months[index] += (
-                    child_mass * contribution.free_rent_abatement_months[index]
-                )
-                cash_factor[index] += child_mass * contribution.cash_rent_factor[index]
-
-            ti_total_parts.append(child_mass * contribution.tenant_improvement_amount)
-            lc_total_parts.append(child_mass * contribution.leasing_commission_amount)
-
-            transitions.append(
-                RolloverTransitionAudit(
-                    parent_expiration_period=period,
-                    branch=branch,
-                    probability_mass=child_mass,
-                    commencement_period=contribution.commencement_period,
-                    successor_expiration_period=(
-                        contribution.successor_expiration_period
-                    ),
-                    commences_within_projection=(
-                        contribution.commences_within_projection
-                    ),
-                    starting_rent_psf=contribution.starting_rent_psf,
-                    term_months=contribution.term_months,
-                    tenant_improvement_amount=contribution.tenant_improvement_amount,
-                    leasing_commission_amount=contribution.leasing_commission_amount,
-                )
-            )
-
-            child_expiration = contribution.successor_expiration_period
-            if child_expiration <= period:
-                # Unreachable: c = e + 1 + floor(D) and last = c + T - 1 with
-                # D >= 0 and T >= 1 give last >= e + 1. Asserted anyway, because
-                # a violation would mean the propagation could not terminate.
-                raise ValueError(
-                    f"rollover time did not advance: a successor of the state "
-                    f"expiring at {period} itself expires at "
-                    f"{child_expiration}."
-                )
-            if child_expiration < horizon:
-                incoming.setdefault(child_expiration, []).append(child_mass)
-            else:
-                terminal_parts.append(child_mass)
-
-    # Mass that never rolled at all: the in-place lease already expires at or
-    # beyond the horizon, so no rollover can affect a canonical month.
-    if initial_expiration not in processed:
-        terminal_parts.append(fsum(incoming[initial_expiration]))
+    # --- 2. the shared propagation core, seeded at the known expiration ---
+    propagation = _propagate_rollover_mass(
+        accumulator,
+        suite=suite,
+        analysis_start=analysis_start,
+        months=months,
+        market_schedule=schedule,
+        renewal_probability=renewal_probability,
+        seeds={initial_expiration: 1.0},
+        lease_id_stem_root=expiring.lease_id,
+    )
 
     # --- 3. derived series and the bounded audit --------------------------
+    occupied_area = accumulator.occupied_area
     expected_occupancy = tuple(occupied / suite_area for occupied in occupied_area)
-
-    event_states = tuple(
-        RolloverEventStateAudit(
-            expiration_period=period,
-            probability_mass=(
-                processed[period] if period in processed else fsum(incoming[period])
-            ),
-            processed=period in processed,
-        )
-        for period in sorted(incoming)
-    )
 
     return RecursiveRollover(
         suite_id=suite.suite_id,
@@ -1782,23 +1934,208 @@ def build_recursive_rollover(
         months=months,
         initial_lease=expiring,
         initial_schedule=initial_schedule,
-        expected_contractual_base_rent=tuple(face),
-        expected_cash_base_rent=tuple(cash),
-        expected_free_rent=tuple(free_rent),
-        expected_tenant_improvements=tuple(tenant_improvements),
-        expected_leasing_commissions=tuple(leasing_commissions),
+        expected_contractual_base_rent=tuple(accumulator.face),
+        expected_cash_base_rent=tuple(accumulator.cash),
+        expected_free_rent=tuple(accumulator.free_rent),
+        expected_tenant_improvements=tuple(accumulator.tenant_improvements),
+        expected_leasing_commissions=tuple(accumulator.leasing_commissions),
         expected_occupied_area_sf=tuple(occupied_area),
         expected_occupancy=expected_occupancy,
         expected_vacant_area_sf=tuple(
             suite_area - occupied for occupied in occupied_area
         ),
         expected_vacancy=tuple(1.0 - occupancy for occupancy in expected_occupancy),
-        expected_successor_occupancy_factor=tuple(occupancy_factor),
-        expected_free_rent_abatement_months=tuple(abatement_months),
-        expected_cash_rent_factor=tuple(cash_factor),
-        expected_tenant_improvement_amount=fsum(ti_total_parts),
-        expected_leasing_commission_amount=fsum(lc_total_parts),
-        event_states=event_states,
-        transitions=tuple(transitions),
-        terminal_probability_mass=fsum(terminal_parts),
+        expected_successor_occupancy_factor=tuple(accumulator.occupancy_factor),
+        expected_free_rent_abatement_months=tuple(accumulator.abatement_months),
+        expected_cash_rent_factor=tuple(accumulator.cash_factor),
+        expected_tenant_improvement_amount=fsum(accumulator.ti_total_parts),
+        expected_leasing_commission_amount=fsum(accumulator.lc_total_parts),
+        event_states=propagation.event_states,
+        transitions=propagation.transitions,
+        terminal_probability_mass=propagation.terminal_probability_mass,
+    )
+
+
+# =============================================================================
+# D3.6 -- initial vacancy lease-up
+#
+# A second ENTRY PATH into the machinery above, never a second engine. The
+# first tenant is built by `build_successor_contribution` from the boundary
+# index 0, and its expiration seeds the same `_propagate_rollover_mass` core
+# the occupied path uses.
+# =============================================================================
+
+
+#: The boundary immediately before canonical month 1.
+#:
+#: **It is not a `ModelMonth`, not a lease expiration, and not a lease.** No
+#: `ModelMonth` carries index 0, no contract exposes it as an expiration, and
+#: nothing constructs a lease at it. It exists so that one commencement
+#: formula -- ``c = e + 1 + floor(D)`` -- serves both entry paths: at ``e = 0``
+#: it yields ``c0 = 1 + floor(L)``, which is exactly the accepted
+#: initial-vacancy timing (D3 Section 22.4). Anchor never fabricates a
+#: predecessor, a zero-day lease, a synthetic tenant or an expired dummy to
+#: represent vacant space (failure mode FM-D3-21).
+_INITIAL_VACANCY_BOUNDARY_PERIOD = 0
+
+
+def build_initial_vacancy_rollover(
+    suite: Suite,
+    *,
+    analysis_start: date,
+    months: tuple[ModelMonth, ...],
+    property_defaults: MarketLeasingAssumptions,
+    market_schedule: MarketRentSchedule | None = None,
+) -> InitialVacancyRollover:
+    """Return an **initially vacant** suite's full-chain leasing economics.
+
+    **Precondition: the inputs are already validated** -- call
+    ``anchor.leasing.validation.require_valid_initial_vacancy_inputs`` first.
+    A suite reaching here with no ``initial_vacancy`` treatment is a
+    programming error, not a modelling default, and it raises rather than
+    quietly holding the space vacant (D3 Section 22.10, FM-D3-20).
+
+    **`HOLD_VACANT`** returns an all-zero chain: no lease, no contribution, no
+    transition, no probability split, terminal mass ``1.0``. The strategy is
+    recorded on the result so deliberate vacancy is auditable and can never be
+    confused with a suite nobody underwrote.
+
+    **`MARKET_LEASE_UP`** does three things, in order:
+
+    1. Builds the **deterministic first tenant** through
+       ``build_successor_contribution`` at
+       ``parent_expiration_period = 0``, passing
+       ``event_downtime_months = initial_lease_up_months``. That reuses the one
+       authoritative timing formula, so ``c0 = 1 + floor(L)`` and the boundary
+       month carries ``1 - frac(L)`` -- the D2.3 rule, unchanged. Every other
+       economic term is the branch's own new-tenant assumption: term, free
+       rent through the same waterfall, TI, LC on the full untruncated
+       contractual face rent, escalation, lease type and recovery terms. The
+       first tenant *is* a market new tenant, priced at ``MarketRentPSF(c0)``,
+       so market growth during the vacancy is picked up rather than frozen at
+       the analysis start (FM-D3-24).
+    2. Accumulates that contribution **once**, at probability mass ``1.0``.
+       There is no incumbent, so there is no renewal branch and no split: the
+       first tenant is deterministic and is never weighted by
+       ``renewal_probability`` (FM-D3-23).
+    3. Seeds the **existing** ``_propagate_rollover_mass`` core at the first
+       lease's expiration with mass ``1.0``, if that expiration falls inside
+       the horizon. From there every rule is D2.6's, unchanged -- including
+       that ``p`` splits the mass at that event and nowhere earlier.
+
+    **Anti-double-counting is structural.** The first tenant is a
+    *successor-only* contribution that already carries the vacancy months as
+    zeros, and there is no in-place lease to add -- ``InitialVacancyRollover``
+    declares no field that could hold one. Later generations come only from
+    the core, seeded once.
+
+    **Commencement beyond the horizon.** When ``c0 > N`` the contribution is
+    still built and retained for audit: every in-window series is already zero
+    by construction, so a reader can see *why* nothing appears rather than
+    facing an unexplained blank. No state is seeded, no ``ModelMonth`` is
+    fabricated and no event is moved earlier.
+
+    Pure and deterministic: no I/O, no mutation, no sampling.
+    """
+
+    if not months:
+        raise ValueError("an initial-vacancy rollover requires a canonical timeline.")
+
+    treatment = suite.initial_vacancy
+    if treatment is None:
+        raise ValueError(
+            f"suite {suite.suite_id!r} has no lease and no initial-vacancy "
+            "treatment. Anchor does not assume vacant space stays vacant: "
+            "state HOLD_VACANT or MARKET_LEASE_UP explicitly, and validate "
+            "inputs before building a projection."
+        )
+
+    schedule = resolve_rollover_market_schedule(
+        suite,
+        months=months,
+        property_defaults=property_defaults,
+        market_schedule=market_schedule,
+    )
+    assumptions = schedule.resolved.assumptions
+    renewal_probability = assumptions.renewal_probability
+    if not 0.0 <= renewal_probability <= 1.0:
+        raise ValueError(
+            f"renewal_probability {renewal_probability!r} must be between 0 "
+            "and 1 inclusive."
+        )
+
+    count = len(months)
+    suite_area = suite.suite_area_sf
+    accumulator = _RolloverAccumulator.zeros(count)
+    first_contribution: SuccessorContribution | None = None
+    propagation = _Propagation(
+        event_states=(), transitions=(), terminal_probability_mass=1.0
+    )
+
+    if treatment.strategy is InitialVacancyStrategy.MARKET_LEASE_UP:
+        if treatment.initial_lease_up_months is None:
+            raise ValueError(
+                f"suite {suite.suite_id!r} is MARKET_LEASE_UP but states no "
+                "initial_lease_up_months. Anchor never infers a lease-up "
+                "period and never falls back to new_downtime_months."
+            )
+
+        first_contribution = build_successor_contribution(
+            suite=suite,
+            analysis_start=analysis_start,
+            months=months,
+            market_schedule=schedule,
+            parent_expiration_period=_INITIAL_VACANCY_BOUNDARY_PERIOD,
+            branch=RolloverBranchKind.NEW_TENANT,
+            lease_id_stem=f"{suite.suite_id}{_INITIAL_VACANCY_LEASE_ID_STEM}",
+            event_downtime_months=treatment.initial_lease_up_months,
+        )
+        # Deterministic: mass 1.0, contributed once, never weighted by p.
+        accumulator.add(first_contribution, 1.0)
+
+        first_expiration = first_contribution.successor_expiration_period
+        horizon = months[-1].period_index
+        if first_expiration < horizon:
+            propagation = _propagate_rollover_mass(
+                accumulator,
+                suite=suite,
+                analysis_start=analysis_start,
+                months=months,
+                market_schedule=schedule,
+                renewal_probability=renewal_probability,
+                seeds={first_expiration: 1.0},
+                lease_id_stem_root=(
+                    f"{suite.suite_id}{_INITIAL_VACANCY_LEASE_ID_STEM}"
+                ),
+            )
+
+    occupied_area = accumulator.occupied_area
+    expected_occupancy = tuple(occupied / suite_area for occupied in occupied_area)
+
+    return InitialVacancyRollover(
+        suite_id=suite.suite_id,
+        strategy=treatment.strategy,
+        initial_lease_up_months=treatment.initial_lease_up_months,
+        renewal_probability=renewal_probability,
+        months=months,
+        first_contribution=first_contribution,
+        expected_contractual_base_rent=tuple(accumulator.face),
+        expected_cash_base_rent=tuple(accumulator.cash),
+        expected_free_rent=tuple(accumulator.free_rent),
+        expected_tenant_improvements=tuple(accumulator.tenant_improvements),
+        expected_leasing_commissions=tuple(accumulator.leasing_commissions),
+        expected_occupied_area_sf=tuple(occupied_area),
+        expected_occupancy=expected_occupancy,
+        expected_vacant_area_sf=tuple(
+            suite_area - occupied for occupied in occupied_area
+        ),
+        expected_vacancy=tuple(1.0 - occupancy for occupancy in expected_occupancy),
+        expected_successor_occupancy_factor=tuple(accumulator.occupancy_factor),
+        expected_free_rent_abatement_months=tuple(accumulator.abatement_months),
+        expected_cash_rent_factor=tuple(accumulator.cash_factor),
+        expected_tenant_improvement_amount=fsum(accumulator.ti_total_parts),
+        expected_leasing_commission_amount=fsum(accumulator.lc_total_parts),
+        event_states=propagation.event_states,
+        transitions=propagation.transitions,
+        terminal_probability_mass=propagation.terminal_probability_mass,
     )

@@ -50,6 +50,9 @@ from ..engine.contracts import ensure_finite
 from .contracts import (
     ExpectedRollover,
     ExpectedRolloverRecovery,
+    InitialVacancyRollover,
+    InitialVacancyRolloverRecovery,
+    InitialVacancyStrategy,
     Lease,
     LeaseMonthlySchedule,
     LeaseRecoverySchedule,
@@ -62,6 +65,7 @@ from .contracts import (
     RecursiveRollover,
     RecursiveRolloverRecovery,
     RolloverBranchKind,
+    RolloverTransitionAudit,
     Suite,
     SuccessorContribution,
     SuccessorRecoverySchedule,
@@ -936,18 +940,85 @@ def build_recursive_rollover_recovery(
     # One accumulator per canonical month. Contributions are added in the
     # authoritative transition order, so the sum is deterministic.
     expected_successor = [0.0] * count
+    contributions = _attach_recovery_to_transitions(
+        expected_successor,
+        transitions=rollover.transitions,
+        suite=suite,
+        analysis_start=analysis_start,
+        months=months,
+        market_schedule=schedule,
+        lease_id_stem_root=rollover.expiring_lease_id,
+        pool=pool,
+        rentable_area_sf=rentable_area_sf,
+    )
+
+    expected_successor_series = tuple(
+        ensure_finite("expected_successor_expense_recovery", value)
+        for value in expected_successor
+    )
+
+    return RecursiveRolloverRecovery(
+        suite_id=rollover.suite_id,
+        expiring_lease_id=rollover.expiring_lease_id,
+        renewal_probability=rollover.renewal_probability,
+        months=months,
+        rollover=rollover,
+        in_place_recovery=known,
+        in_place_expense_recovery=known.expense_recovery,
+        expected_successor_expense_recovery=expected_successor_series,
+        expected_expense_recovery=_combined_chain(
+            known.expense_recovery, expected_successor_series
+        ),
+        contributions=tuple(contributions),
+        # Mirrored from the authoritative result, never recomputed: D2.6
+        # already proves mass conservation and a second algorithm could only
+        # agree or manufacture a discrepancy.
+        terminal_probability_mass=rollover.terminal_probability_mass,
+    )
+
+
+def _attach_recovery_to_transitions(
+    expected_successor: list[float],
+    *,
+    transitions: tuple[RolloverTransitionAudit, ...],
+    suite: Suite,
+    analysis_start: date,
+    months: tuple[ModelMonth, ...],
+    market_schedule: MarketRentSchedule,
+    lease_id_stem_root: str,
+    pool: RecoverableExpensePool,
+    rentable_area_sf: float,
+) -> tuple[RecoveryContributionAudit, ...]:
+    """Attach recovery economics to authoritative D2 transitions (D3.4/D3.6).
+
+    **The single recursive-recovery attachment in the package.** Extracted at
+    D3.6 so the occupied path and the initial-vacancy path share it: there is
+    one D2 state machine and one way of pricing the events it produced.
+
+    It **decides nothing structural**. Which events exist, how mass splits, the
+    ordering and the terminal mass are all read from ``transitions``, which D2
+    already produced. Each transition's successor is rebuilt through the same
+    D2 engine -- so no timing, pricing, concession, TI or LC formula is
+    duplicated -- and only completed recovery **dollars** are weighted.
+
+    ``expected_successor`` is mutated in transition order, so the sequence of
+    floating-point additions is the caller's own and the extraction is
+    bit-preserving.
+    """
+
+    count = len(months)
     contributions: list[RecoveryContributionAudit] = []
 
-    for transition in rollover.transitions:
+    for transition in transitions:
         contribution = build_successor_contribution(
             suite=suite,
             analysis_start=analysis_start,
             months=months,
-            market_schedule=schedule,
+            market_schedule=market_schedule,
             parent_expiration_period=transition.parent_expiration_period,
             branch=transition.branch,
             lease_id_stem=successor_state_lease_id_stem(
-                rollover.expiring_lease_id, transition.parent_expiration_period
+                lease_id_stem_root, transition.parent_expiration_period
             ),
         )
         recovery = _successor_recovery_from_contribution(
@@ -982,26 +1053,111 @@ def build_recursive_rollover_recovery(
             )
         )
 
+    return tuple(contributions)
+
+
+def build_initial_vacancy_rollover_recovery(
+    rollover: InitialVacancyRollover,
+    *,
+    suite: Suite,
+    analysis_start: date,
+    property_defaults: MarketLeasingAssumptions,
+    pool: RecoverableExpensePool,
+    rentable_area_sf: float,
+    market_schedule: MarketRentSchedule | None = None,
+) -> InitialVacancyRolloverRecovery:
+    """Return an initially vacant suite's full-chain recovery (D3.6).
+
+    The vacant-suite counterpart to ``build_recursive_rollover_recovery``, and
+    it reuses everything: the deterministic first tenant is priced by the same
+    ``build_successor_recovery_schedule``, and every later generation by the
+    same ``_attach_recovery_to_transitions`` walking the same authoritative D2
+    transitions. No recovery formula, no clip and no state machine is
+    duplicated for vacancy.
+
+    **The pool is injected here, as always.** No D2 builder takes one, so the
+    market-leasing engine and ``build_initial_vacancy_rollover`` both remain
+    usable with no property expense schedule in existence.
+
+    **Recovery is zero during initial vacancy** -- not by a special rule, but
+    because the first tenant's responsibility factor is zero before it
+    commences, and the accepted formula multiplies by that factor. At the
+    fractional boundary it recovers ``O x`` the full obligation, with the
+    factor **outside** the Modified Gross clip. Free rent never reduces it.
+
+    For `HOLD_VACANT` every series is zero, explicitly: there is no tenant, so
+    there is nothing to reimburse.
+
+    **Precondition: the inputs are already validated.** Pure and
+    deterministic.
+    """
+
+    if rollover.months != pool.months:
+        raise ValueError(
+            "the initial-vacancy rollover and the recoverable expense pool "
+            "were built against different month sequences; both must share "
+            "one canonical timeline."
+        )
+    if rollover.suite_id != suite.suite_id:
+        raise ValueError(
+            f"the rollover describes suite {rollover.suite_id!r}, not "
+            f"{suite.suite_id!r}; recovery must be priced for its own suite."
+        )
+
+    months = rollover.months
+    count = len(months)
+    schedule = resolve_rollover_market_schedule(
+        suite,
+        months=months,
+        property_defaults=property_defaults,
+        market_schedule=market_schedule,
+    )
+
+    expected_successor = [0.0] * count
+    first_tenant_recovery: SuccessorRecoverySchedule | None = None
+
+    if rollover.first_contribution is not None:
+        first_tenant_recovery = _successor_recovery_from_contribution(
+            rollover.first_contribution, pool=pool, rentable_area_sf=rentable_area_sf
+        )
+        # Deterministic: mass 1.0, added once, never weighted by p.
+        for index in range(count):
+            expected_successor[index] += (
+                1.0 * first_tenant_recovery.expense_recovery[index]
+            )
+
+    contributions = _attach_recovery_to_transitions(
+        expected_successor,
+        transitions=rollover.transitions,
+        suite=suite,
+        analysis_start=analysis_start,
+        months=months,
+        market_schedule=schedule,
+        lease_id_stem_root=f"{suite.suite_id}::initial",
+        pool=pool,
+        rentable_area_sf=rentable_area_sf,
+    )
+
     expected_successor_series = tuple(
         ensure_finite("expected_successor_expense_recovery", value)
         for value in expected_successor
     )
+    # An initially vacant suite has no in-place lease, so this is zero by
+    # construction. The shape is kept so every reader sees one contract.
+    in_place = tuple([0.0] * count)
 
-    return RecursiveRolloverRecovery(
+    return InitialVacancyRolloverRecovery(
         suite_id=rollover.suite_id,
-        expiring_lease_id=rollover.expiring_lease_id,
+        strategy=rollover.strategy,
         renewal_probability=rollover.renewal_probability,
         months=months,
         rollover=rollover,
-        in_place_recovery=known,
-        in_place_expense_recovery=known.expense_recovery,
+        first_tenant_recovery=first_tenant_recovery,
+        in_place_expense_recovery=in_place,
         expected_successor_expense_recovery=expected_successor_series,
         expected_expense_recovery=_combined_chain(
-            known.expense_recovery, expected_successor_series
+            in_place, expected_successor_series
         ),
-        contributions=tuple(contributions),
-        # Mirrored from the authoritative result, never recomputed: D2.6
-        # already proves mass conservation and a second algorithm could only
-        # agree or manufacture a discrepancy.
+        contributions=contributions,
         terminal_probability_mass=rollover.terminal_probability_mass,
     )

@@ -48,6 +48,7 @@ from math import floor, isfinite
 from typing import Iterable
 
 from .contracts import ModelMonth  # noqa: F401  (used in signatures below)
+from .market import resolve_market_leasing
 from .calendar import (
     is_first_day_of_month,
     is_last_day_of_month,
@@ -63,6 +64,7 @@ from .contracts import (
     LeasingCommissionMethod,
     MarketLeasingAssumptions,
     RecoverableExpensePool,
+    InitialVacancyStrategy,
     SuiteRecoveryProjection,
     RecoveryBasis,
     Suite,
@@ -157,6 +159,11 @@ class LeaseIssueCode(StrEnum):
     RECOVERY_POOL_NOT_ALIGNED = "RECOVERY_POOL_NOT_ALIGNED"
     RECOVERY_SCHEDULE_NOT_ALIGNED = "RECOVERY_SCHEDULE_NOT_ALIGNED"
     MISSING_SUITE_RECOVERY_SCHEDULE = "MISSING_SUITE_RECOVERY_SCHEDULE"
+    MISSING_INITIAL_VACANCY_TREATMENT = "MISSING_INITIAL_VACANCY_TREATMENT"
+    INITIAL_VACANCY_ON_OCCUPIED_SUITE = "INITIAL_VACANCY_ON_OCCUPIED_SUITE"
+    MISSING_INITIAL_LEASE_UP_MONTHS = "MISSING_INITIAL_LEASE_UP_MONTHS"
+    INITIAL_LEASE_UP_ON_HOLD_VACANT = "INITIAL_LEASE_UP_ON_HOLD_VACANT"
+    INITIAL_LEASE_UP_OUT_OF_DOMAIN = "INITIAL_LEASE_UP_OUT_OF_DOMAIN"
     MISSING_MODIFIED_GROSS_RECOVERY_BASIS = (
         "MISSING_MODIFIED_GROSS_RECOVERY_BASIS"
     )
@@ -1888,15 +1895,46 @@ def validate_property_recovery_inputs(
 
     tenanted = {lease.suite_id for lease in leases}
     for suite in suite_tuple:
-        if suite.suite_id in tenanted and suite.suite_id not in seen:
+        if suite.suite_id in seen:
+            continue
+
+        if suite.suite_id in tenanted:
             issues.append(
                 _issue(
                     LeaseIssueCode.MISSING_SUITE_RECOVERY_SCHEDULE,
                     f"suites[{suite.suite_id}]",
                     f"suite {suite.suite_id!r} has a lease but no recovery "
                     "schedule in this aggregation; omitting a known tenant "
-                    "understates property recovery revenue. A suite with no "
-                    "lease correctly has none and recovers zero.",
+                    "understates property recovery revenue.",
+                )
+            )
+        elif suite.initial_vacancy is not None:
+            # D3.6: a vacant suite that WAS underwritten -- either way -- owes
+            # the aggregation a projection. HOLD_VACANT contributes an
+            # explicit zero, which is how deliberate vacancy stays visible.
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_SUITE_RECOVERY_SCHEDULE,
+                    f"suites[{suite.suite_id}]",
+                    f"suite {suite.suite_id!r} is vacant with an explicit "
+                    f"{suite.initial_vacancy.strategy.value} treatment but has "
+                    "no recovery schedule in this aggregation. A suite that "
+                    "was underwritten must appear in the result, so a "
+                    "deliberate zero is distinguishable from an omission.",
+                )
+            )
+        else:
+            # D3.6: vacant and never underwritten at all. The aggregation is a
+            # future-looking gate, so this is the error the gate exists for.
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_INITIAL_VACANCY_TREATMENT,
+                    f"suites[{suite.suite_id}].initial_vacancy",
+                    f"suite {suite.suite_id!r} is vacant at the analysis start "
+                    "and states no initial-vacancy treatment, so its future "
+                    "recovery cannot be aggregated. Anchor does not assume "
+                    "vacant space stays vacant: state HOLD_VACANT or "
+                    "MARKET_LEASE_UP explicitly.",
                 )
             )
 
@@ -1918,6 +1956,168 @@ def require_valid_property_recovery_inputs(
 
     result = validate_property_recovery_inputs(
         projections, months=months, suites=suites, leases=leases
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+def validate_initial_vacancy_inputs(
+    suites: Iterable[Suite],
+    leases: Iterable[Lease],
+    *,
+    property_defaults: MarketLeasingAssumptions | None = None,
+    path: str = "suites",
+) -> LeaseValidationResult:
+    """Validate initial-vacancy treatments for a **future-looking** projection.
+
+    **Scoped, and deliberately not part of ``validate_lease_level_inputs``**
+    (HD-D3.6-1, accepted). D1 is a factual contractual-rent layer: a suite with
+    no lease genuinely earns zero rent today, and that is an observation rather
+    than a speculation. A bare vacant suite therefore remains valid D1 input.
+
+    The error belongs where a silent zero would be a **modelling claim** --
+    the initial-vacancy builder and property recovery aggregation. There,
+    *"this space never lets"* and *"nobody told us how this space lets"* are
+    different statements and must not produce the same output.
+
+    | Rule | Code |
+    |---|---|
+    | Vacant suite with no treatment | `MISSING_INITIAL_VACANCY_TREATMENT` |
+    | Occupied suite carrying a treatment | `INITIAL_VACANCY_ON_OCCUPIED_SUITE` |
+    | `MARKET_LEASE_UP` with no lease-up period | `MISSING_INITIAL_LEASE_UP_MONTHS` |
+    | `HOLD_VACANT` carrying a lease-up period | `INITIAL_LEASE_UP_ON_HOLD_VACANT` |
+    | Lease-up period negative or non-finite | `INITIAL_LEASE_UP_OUT_OF_DOMAIN` |
+    | First-event concession unconsumable | `FREE_RENT_EXCEEDS_OCCUPIABLE_TERM` |
+
+    **The occupied-suite rule refuses rather than ignores.** A treatment on a
+    suite that already has a tenant is a financially meaningful field that
+    could never be read; silently dropping it would let an analyst believe
+    lease-up was modelled when the space was never empty.
+
+    **The first-event free-rent check is the subtle one.** D2 already validates
+    ``new_free_rent_months <= new_term_months - frac(new_downtime_months)``.
+    The first tenant reuses the same concession but waits
+    ``initial_lease_up_months``, so its boundary fraction is different, and a
+    grant that is consumable after a future 2.0-month downtime may be
+    unconsumable after a 2.25-month lease-up. It is re-validated against
+    ``frac(initial_lease_up_months)`` through the **same** helper, so there is
+    one over-grant rule and the concession can never be silently discarded.
+    ``property_defaults`` supplies the term and grant; when omitted the check
+    is skipped rather than guessed.
+
+    Issues are emitted in suite order, deterministically.
+    """
+
+    issues: list[LeaseIssue] = []
+    suite_tuple = tuple(suites)
+    tenanted = {lease.suite_id for lease in leases}
+
+    for suite in suite_tuple:
+        field = f"{path}[{suite.suite_id}].initial_vacancy"
+        treatment = suite.initial_vacancy
+        occupied = suite.suite_id in tenanted
+
+        if occupied:
+            if treatment is not None:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.INITIAL_VACANCY_ON_OCCUPIED_SUITE,
+                        field,
+                        f"suite {suite.suite_id!r} has a lease but carries an "
+                        "initial-vacancy treatment. The space is not vacant at "
+                        "the analysis start, so the assumption could never be "
+                        "read; it is refused rather than silently ignored.",
+                    )
+                )
+            continue
+
+        if treatment is None:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_INITIAL_VACANCY_TREATMENT,
+                    field,
+                    f"suite {suite.suite_id!r} is vacant at the analysis start "
+                    "and states no initial-vacancy treatment. Anchor does not "
+                    "assume vacant space stays vacant: state HOLD_VACANT to "
+                    "underwrite it as vacant deliberately, or MARKET_LEASE_UP "
+                    "with an explicit lease-up period.",
+                )
+            )
+            continue
+
+        lease_up = treatment.initial_lease_up_months
+
+        if treatment.strategy is InitialVacancyStrategy.HOLD_VACANT:
+            if lease_up is not None:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.INITIAL_LEASE_UP_ON_HOLD_VACANT,
+                        f"{field}.initial_lease_up_months",
+                        f"suite {suite.suite_id!r} is HOLD_VACANT but states a "
+                        f"lease-up period of {lease_up!r}. The space is "
+                        "deliberately not let, so the period would never "
+                        "apply; state one intent, not half of each.",
+                    )
+                )
+            continue
+
+        if lease_up is None:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_INITIAL_LEASE_UP_MONTHS,
+                    f"{field}.initial_lease_up_months",
+                    f"suite {suite.suite_id!r} is MARKET_LEASE_UP but states no "
+                    "initial_lease_up_months. Anchor never infers a lease-up "
+                    "period and never falls back to new_downtime_months, which "
+                    "is a different underwriting judgement.",
+                )
+            )
+            continue
+
+        if not _is_finite_number(lease_up) or lease_up < 0:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.INITIAL_LEASE_UP_OUT_OF_DOMAIN,
+                    f"{field}.initial_lease_up_months",
+                    f"initial_lease_up_months {lease_up!r} must be a finite "
+                    "number of months greater than or equal to 0. Zero is "
+                    "valid and means the space lets immediately.",
+                )
+            )
+            continue
+
+        if property_defaults is not None:
+            resolved = resolve_market_leasing(
+                suite, property_defaults=property_defaults
+            ).assumptions
+            # The first tenant reuses new_free_rent_months but waits
+            # initial_lease_up_months, so the boundary fraction differs.
+            issues.extend(
+                _validate_free_rent_over_grant(
+                    resolved,
+                    path=f"{path}[{suite.suite_id}]",
+                    branch="new",
+                    term_months=resolved.new_term_months,
+                    downtime_months=lease_up,
+                    free_rent_months=resolved.new_free_rent_months,
+                )
+            )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_initial_vacancy_inputs(
+    suites: Iterable[Suite],
+    leases: Iterable[Lease],
+    *,
+    property_defaults: MarketLeasingAssumptions | None = None,
+    path: str = "suites",
+) -> LeaseValidationResult:
+    """Validate initial-vacancy treatments and raise on any ERROR."""
+
+    result = validate_initial_vacancy_inputs(
+        suites, leases, property_defaults=property_defaults, path=path
     )
     if result.errors:
         raise LeaseValidationError(result)

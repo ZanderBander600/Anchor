@@ -618,6 +618,62 @@ class LeaseLevelPropertyInputs:
     rentable_area_sf: float
 
 
+class InitialVacancyStrategy(StrEnum):
+    """How a suite **vacant at the analysis start** is underwritten (D3.6).
+
+    Two members, and both are real underwriting statements rather than an
+    extension seam. The whole point of the gate is that they are different
+    claims about a deal, and that a suite must say which one it is.
+
+    ``HOLD_VACANT`` -- the analyst assumes no speculative lease-up during the
+    projection. The suite produces zero rent, zero occupancy, zero leasing
+    cost and zero recovery, deliberately.
+
+    ``MARKET_LEASE_UP`` -- the analyst assumes the space lets after an
+    explicitly stated lease-up period, after which the first tenant is an
+    ordinary market new tenant.
+
+    **There is no third state and no default.** Before D3.6 a vacant suite
+    produced exactly the ``HOLD_VACANT`` numbers whether that was intended or
+    whether lease-up assumptions were simply never supplied, and the output
+    could not tell the two apart. For a value-add acquisition -- where vacant
+    space is the entire thesis -- a silent zero is the most expensive kind of
+    wrong number. Absence is now an error, not an assumption (failure mode
+    FM-D3-20).
+    """
+
+    HOLD_VACANT = "hold_vacant"
+    MARKET_LEASE_UP = "market_lease_up"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InitialVacancyAssumptions:
+    """How one initially vacant suite is to be underwritten (D3.6).
+
+    ``initial_lease_up_months`` is the time the space is expected to sit empty
+    before its first tenant commences: months, finite, ``>= 0``, fractional
+    allowed. Required for `MARKET_LEASE_UP` and **must be absent** for
+    `HOLD_VACANT`, where a lease-up period would be a half-stated intent.
+
+    **It is emphatically not ``new_downtime_months``**, and the two may differ
+    (D3 Section 22.4). Future new-tenant downtime is a re-letting delay on
+    space a departing tenant has just vacated, with a known configuration and
+    a broker already engaged. Initial lease-up is how long space that is
+    *already* empty at acquisition takes to fill. Aliasing them would silently
+    substitute one underwriting judgement for the other, so they are separate
+    fields and neither is ever a fallback for the other (FM-D3-22).
+
+    Only the **timing** is stated here. Everything else about the first tenant
+    -- term, free rent, TI, LC, escalation, lease type and recovery terms --
+    reuses the approved new-tenant assumptions, because the first tenant *is*
+    a market new tenant. Duplicating those fields for symmetry would double the
+    assumption surface for no financial content.
+    """
+
+    strategy: InitialVacancyStrategy
+    initial_lease_up_months: float | None = None
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Suite:
     """One leasable space (D0 Section 4.3).
@@ -679,6 +735,7 @@ class Suite:
     suite_label: str | None = None
     market_rent_psf: float | None = None
     market_leasing_override: MarketLeasingAssumptions | None = None
+    initial_vacancy: InitialVacancyAssumptions | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2096,3 +2153,239 @@ class PropertyRecoverySchedule:
                     "different month sequence; one property aggregation shares "
                     "one canonical timeline."
                 )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InitialVacancyRollover:
+    """One **initially vacant** suite's full-chain leasing economics (D3.6).
+
+    The vacant-suite counterpart to `RecursiveRollover`, and deliberately the
+    same economic shape: every monthly series carries the identical field name,
+    so D4 reads one shape whether a suite began occupied or empty.
+
+    **There is no known in-place lease, and no field could hold one.** That is
+    the structural anti-double-counting rule (D3 Section 22.9): the first
+    tenant is a *successor contribution at mass 1.0* relative to the boundary
+    index ``0``, and it already carries the vacancy months as zeros. There is
+    no D1 history to add, so nothing can be counted twice. Compare
+    `RecursiveRollover`, which does hold ``initial_lease`` and must contribute
+    it exactly once.
+
+    **`HOLD_VACANT`** returns this contract with every series zero, no
+    ``first_contribution``, no transitions and terminal mass ``1.0``. That is
+    the point of the gate: a deliberately vacant suite is now *visible* as a
+    decision rather than indistinguishable from a suite nobody underwrote
+    (FM-D3-34).
+
+    **`MARKET_LEASE_UP`** contributes the first tenant once and, if its lease
+    expires inside the horizon, seeds the **existing** D2.6 propagation at that
+    period with mass ``1.0``. Every later generation is D2.6's, unchanged.
+
+    **Probability enters at the first expiration and not before.** There is no
+    incumbent, so there is no renewal/new-tenant split at the initial event:
+    the first tenant is deterministic. ``renewal_probability`` is recorded
+    because it governs the tail, never because it weights the first tenant
+    (FM-D3-23).
+
+    ``first_contribution`` retains the deterministic first tenant whole -- its
+    lease, dates, starting rent, concessions, TI and LC -- so a reader can
+    audit the lease-up without re-deriving it. Its
+    ``parent_expiration_period`` is ``0``, the boundary immediately before
+    canonical month 1: **not** a `ModelMonth`, **not** a lease expiration, and
+    never a fabricated lease.
+
+    Built only by ``anchor.leasing.rollover.build_initial_vacancy_rollover``;
+    this dataclass performs no calculation of its own.
+    """
+
+    suite_id: str
+    strategy: InitialVacancyStrategy
+    initial_lease_up_months: float | None
+    renewal_probability: float
+    months: tuple[ModelMonth, ...]
+
+    first_contribution: SuccessorContribution | None
+
+    expected_contractual_base_rent: tuple[float, ...]
+    expected_cash_base_rent: tuple[float, ...]
+    expected_free_rent: tuple[float, ...]
+    expected_tenant_improvements: tuple[float, ...]
+    expected_leasing_commissions: tuple[float, ...]
+    expected_occupied_area_sf: tuple[float, ...]
+    expected_occupancy: tuple[float, ...]
+    expected_vacant_area_sf: tuple[float, ...]
+    expected_vacancy: tuple[float, ...]
+    expected_successor_occupancy_factor: tuple[float, ...]
+    expected_free_rent_abatement_months: tuple[float, ...]
+    expected_cash_rent_factor: tuple[float, ...]
+    expected_tenant_improvement_amount: float
+    expected_leasing_commission_amount: float
+
+    event_states: tuple[RolloverEventStateAudit, ...]
+    transitions: tuple[RolloverTransitionAudit, ...]
+    terminal_probability_mass: float
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("expected_contractual_base_rent", self.expected_contractual_base_rent),
+            ("expected_cash_base_rent", self.expected_cash_base_rent),
+            ("expected_free_rent", self.expected_free_rent),
+            ("expected_tenant_improvements", self.expected_tenant_improvements),
+            ("expected_leasing_commissions", self.expected_leasing_commissions),
+            ("expected_occupied_area_sf", self.expected_occupied_area_sf),
+            ("expected_occupancy", self.expected_occupancy),
+            ("expected_vacant_area_sf", self.expected_vacant_area_sf),
+            ("expected_vacancy", self.expected_vacancy),
+            (
+                "expected_successor_occupancy_factor",
+                self.expected_successor_occupancy_factor,
+            ),
+            (
+                "expected_free_rent_abatement_months",
+                self.expected_free_rent_abatement_months,
+            ),
+            ("expected_cash_rent_factor", self.expected_cash_rent_factor),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"InitialVacancyRollover requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+
+        if self.strategy is InitialVacancyStrategy.HOLD_VACANT:
+            if self.first_contribution is not None:
+                raise ValueError(
+                    "a HOLD_VACANT suite has no first tenant; a contribution "
+                    "here would mean speculative lease-up was modelled after "
+                    "the analyst declined it."
+                )
+            if self.initial_lease_up_months is not None:
+                raise ValueError(
+                    "a HOLD_VACANT suite states no lease-up period; a value "
+                    "here is a half-stated intent."
+                )
+            if self.transitions:
+                raise ValueError(
+                    "a HOLD_VACANT suite never rolls over; it has no lease to "
+                    "expire and no probability to split."
+                )
+            for name, series in (
+                ("expected_contractual_base_rent", self.expected_contractual_base_rent),
+                ("expected_cash_base_rent", self.expected_cash_base_rent),
+                ("expected_tenant_improvements", self.expected_tenant_improvements),
+                ("expected_leasing_commissions", self.expected_leasing_commissions),
+                ("expected_occupied_area_sf", self.expected_occupied_area_sf),
+            ):
+                if any(value != 0.0 for value in series):
+                    raise ValueError(
+                        f"a HOLD_VACANT suite must have {name} zero in every "
+                        "month; the space is deliberately not let."
+                    )
+        elif self.initial_lease_up_months is None:
+            raise ValueError(
+                "a MARKET_LEASE_UP suite requires an explicit lease-up period; "
+                "Anchor never infers one and never falls back to future "
+                "new-tenant downtime."
+            )
+
+        if self.first_contribution is not None:
+            if self.first_contribution.parent_expiration_period != 0:
+                raise ValueError(
+                    "the first tenant of an initially vacant suite is built "
+                    "from the boundary index 0, not from a lease expiration; "
+                    f"got {self.first_contribution.parent_expiration_period}."
+                )
+            if self.first_contribution.months != self.months:
+                raise ValueError(
+                    "the first contribution was built against a different "
+                    "month sequence; one suite chain shares one timeline."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InitialVacancyRolloverRecovery:
+    """An initially vacant suite's full-chain expense recovery (D3.6).
+
+    The vacant-suite counterpart to `RecursiveRolloverRecovery`, and the same
+    shape for the same reason: one reader, one contract.
+
+    ``in_place_expense_recovery`` is identically zero and exists so the three
+    series match D3.4's. There is no known in-place lease to recover anything,
+    so the full chain equals the successor series -- but keeping the shape
+    means ``suite_recovery_projection`` and every D4 reader see one contract
+    rather than two nearly-identical ones.
+
+    ``expected_successor_expense_recovery`` is the deterministic first
+    tenant's recovery at mass ``1.0`` plus every later generation's weighted
+    recovery, attached to the **same** authoritative D2 transitions D3.4 uses.
+    No recovery formula, no clip and no state machine is duplicated here.
+
+    For `HOLD_VACANT` every series is zero -- explicitly, and recorded as a
+    decision rather than as an absence (HD-D3.6-3).
+
+    Built only by ``anchor.leasing.recoveries``; this dataclass performs no
+    calculation of its own.
+    """
+
+    suite_id: str
+    strategy: InitialVacancyStrategy
+    renewal_probability: float
+    months: tuple[ModelMonth, ...]
+
+    rollover: InitialVacancyRollover
+    first_tenant_recovery: SuccessorRecoverySchedule | None
+
+    in_place_expense_recovery: tuple[float, ...]
+    expected_successor_expense_recovery: tuple[float, ...]
+    expected_expense_recovery: tuple[float, ...]
+
+    contributions: tuple[RecoveryContributionAudit, ...]
+    terminal_probability_mass: float
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("in_place_expense_recovery", self.in_place_expense_recovery),
+            (
+                "expected_successor_expense_recovery",
+                self.expected_successor_expense_recovery,
+            ),
+            ("expected_expense_recovery", self.expected_expense_recovery),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"InitialVacancyRolloverRecovery requires one {name} "
+                    f"figure per model month; got {len(series)} for "
+                    f"{expected} months."
+                )
+        if any(value != 0.0 for value in self.in_place_expense_recovery):
+            raise ValueError(
+                "an initially vacant suite has no in-place lease, so its "
+                "in-place recovery must be zero in every month; a non-zero "
+                "figure would mean a tenant was invented at the analysis "
+                "start."
+            )
+        if self.rollover.months != self.months:
+            raise ValueError(
+                "the retained rollover was built against a different month "
+                "sequence; recovery and rollover share one canonical timeline."
+            )
+        if self.strategy is InitialVacancyStrategy.HOLD_VACANT:
+            if self.first_tenant_recovery is not None:
+                raise ValueError(
+                    "a HOLD_VACANT suite has no first tenant and therefore no "
+                    "first-tenant recovery."
+                )
+            if any(value != 0.0 for value in self.expected_expense_recovery):
+                raise ValueError(
+                    "a HOLD_VACANT suite recovers nothing; the space is "
+                    "deliberately not let."
+                )
+        # One contribution per authoritative later transition, never more.
+        if len(self.contributions) != len(self.rollover.transitions):
+            raise ValueError(
+                f"got {len(self.contributions)} recovery contributions for "
+                f"{len(self.rollover.transitions)} authoritative rollover "
+                "transitions; D3 attaches recovery to the events D2 decided."
+            )

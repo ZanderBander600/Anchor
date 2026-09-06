@@ -919,6 +919,12 @@ def test_golden_11_the_successor_engine_takes_no_predecessor_at_all() -> None:
         "parent_expiration_period",
         "branch",
         "lease_id_stem",
+        # D3.6 added exactly one: this event's own delay, defaulting to None so
+        # every D2 call site is unchanged. It is a timing input, not a
+        # predecessor -- two callers passing the same value at the same
+        # (parent_expiration_period, branch) get identical economics, so the
+        # merge key is unaffected.
+        "event_downtime_months",
     }
 
 

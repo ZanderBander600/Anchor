@@ -44,6 +44,7 @@ from ..engine.contracts import ensure_finite
 from .calendar import build_model_months, projection_month_count
 from .contracts import (
     ExpectedRolloverRecovery,
+    InitialVacancyRolloverRecovery,
     Lease,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
@@ -311,6 +312,7 @@ _AUTHORITATIVE_RECOVERY_RESULTS = (
     "LeaseRecoverySchedule",
     "ExpectedRolloverRecovery",
     "RecursiveRolloverRecovery",
+    "InitialVacancyRolloverRecovery",
 )
 
 
@@ -330,7 +332,13 @@ def suite_recovery_projection(
     - `ExpectedRolloverRecovery` (D3.4) -- one modelled rollover, the full
       chain ``expected_expense_recovery``;
     - `RecursiveRolloverRecovery` (D3.4) -- every successor generation, again
-      the full chain ``expected_expense_recovery``.
+      the full chain ``expected_expense_recovery``;
+    - `InitialVacancyRolloverRecovery` (D3.6) -- a suite that began **vacant**,
+      whether it was underwritten as `MARKET_LEASE_UP` (its full chain from
+      lease-up onward) or `HOLD_VACANT` (an explicit all-zero series). A
+      hold-vacant suite therefore appears in the aggregation like any other,
+      so deliberate vacancy stays visible rather than looking like a suite
+      nobody underwrote.
 
     Both D3.4 results expose the **full chain**: the known lease's own
     recoveries plus its successors', which the contracts prove disjoint. Taking
@@ -344,7 +352,12 @@ def suite_recovery_projection(
             months=result.months,
             expense_recovery=result.expense_recovery,
         )
-    if isinstance(result, ExpectedRolloverRecovery | RecursiveRolloverRecovery):
+    if isinstance(
+        result,
+        ExpectedRolloverRecovery
+        | RecursiveRolloverRecovery
+        | InitialVacancyRolloverRecovery,
+    ):
         return SuiteRecoveryProjection(
             suite_id=result.suite_id,
             months=result.months,

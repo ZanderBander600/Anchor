@@ -1432,6 +1432,10 @@ def test_the_successor_engine_never_reads_a_predecessor_lease() -> None:
         "parent_expiration_period",
         "branch",
         "lease_id_stem",
+        # D3.6: this event's own delay, defaulting to None. A timing input,
+        # not a predecessor one -- see test_the_initial_lease_up_seam_is_
+        # timing_only below.
+        "event_downtime_months",
     }, f"the successor engine's sufficient state changed: {sorted(parameters)}"
 
     referenced = _referenced_names(builder)
@@ -1486,13 +1490,23 @@ def test_the_recursion_accumulates_contributions_never_branches() -> None:
     lease's history; adding one per event would re-count it once per
     generation. The recursion must reach only ``SuccessorContribution``."""
 
+    # D3.6 moved the propagation loop into the shared core, so the successor
+    # engine is reached from there. Both are checked: neither the recursion nor
+    # the core may reach a whole branch.
+    tree = _rollover_tree()
     recursion = next(
         node
-        for node in ast.walk(_rollover_tree())
+        for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
         and node.name == "build_recursive_rollover"
     )
-    referenced = _referenced_names(recursion)
+    core = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_propagate_rollover_mass"
+    )
+    referenced = _referenced_names(recursion) | _referenced_names(core)
 
     assert "build_successor_contribution" in referenced
     for forbidden in (
@@ -2779,11 +2793,15 @@ def test_the_production_merge_key_is_the_expiration_period_alone() -> None:
     here and forces the sufficiency proof to be re-derived.
     """
 
+    # D3.6: the queue moved into the shared propagation core. The key itself
+    # is unchanged -- still the expiration period alone -- and asserting it on
+    # the core covers BOTH entry paths at once, since neither builder owns a
+    # queue of its own.
     recursion = next(
         node
         for node in ast.walk(_rollover_tree())
         if isinstance(node, ast.FunctionDef)
-        and node.name == "build_recursive_rollover"
+        and node.name == "_propagate_rollover_mass"
     )
 
     annotations = {
@@ -3068,8 +3086,13 @@ def test_recursive_recovery_consumes_the_authoritative_transitions() -> None:
     the terminal mass are all read from the retained ``RecursiveRollover``,
     never re-derived."""
 
+    # D3.6 moved the transition walk into the shared attachment helper, so
+    # both recovery entry paths use it. Checking builder + helper together
+    # covers the occupied path and the initial-vacancy path at once.
     builder = _recoveries_fn("build_recursive_rollover_recovery")
-    rendered = ast.unparse(builder)
+    rendered = ast.unparse(builder) + ast.unparse(
+        _recoveries_fn("_attach_recovery_to_transitions")
+    )
 
     assert "rollover.transitions" in rendered, (
         "recursive recovery must iterate the authoritative D2 transition list"
@@ -3222,10 +3245,13 @@ def test_the_composers_duplicate_no_d2_timing_or_pricing_formula() -> None:
     market pricing, the free-rent waterfall, TI or LC. Duplicating any of them
     would create a second answer to a question D2 already owns."""
 
-    builder = _recoveries_fn("build_recursive_rollover_recovery")
     called = {
         node.func.id
-        for node in ast.walk(builder)
+        for name in (
+            "build_recursive_rollover_recovery",
+            "_attach_recovery_to_transitions",
+        )
+        for node in ast.walk(_recoveries_fn(name))
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "build_successor_contribution" in called, (
@@ -3817,4 +3843,394 @@ def test_recovery_revenue_is_never_netted_against_an_expense() -> None:
     for forbidden in ("net_operating_expenses", "expenses_net_of_recoveries"):
         assert forbidden not in referenced, (
             f"{_AGGREGATION_MODULE} references {forbidden!r}; D3 never nets"
+        )
+
+
+# =============================================================================
+# D3.6 -- initial vacancy lease-up
+# =============================================================================
+
+
+def _rollover_fn(name: str) -> ast.FunctionDef:
+    return next(
+        node
+        for node in ast.walk(_rollover_tree())
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+
+
+def test_exactly_one_probability_mass_state_machine_exists() -> None:
+    """**Guardrails 15-17, and the central D3.6 architecture rule.**
+
+    Initial vacancy is a new *entry path* into D2.6, never a second engine. The
+    recursion is recognised by its shape -- a ``while`` loop over a mutable
+    pending set -- and exactly one function in the package may have it.
+    """
+
+    loops = [
+        node.name
+        for source_file in _leasing_source_files()
+        for node in ast.walk(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        if isinstance(node, ast.FunctionDef)
+        and any(isinstance(child, ast.While) for child in ast.walk(node))
+    ]
+
+    assert loops == ["_propagate_rollover_mass"], (
+        f"expected exactly one propagation loop; found {loops}"
+    )
+
+
+def test_both_entry_paths_use_the_same_propagation_core() -> None:
+    """Guardrail 16. The occupied path and the initial-vacancy path must reach
+    the same core, so neither can drift from the other."""
+
+    for builder in ("build_recursive_rollover", "build_initial_vacancy_rollover"):
+        called = {
+            node.func.id
+            for node in ast.walk(_rollover_fn(builder))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "_propagate_rollover_mass" in called, (
+            f"{builder} does not use the shared propagation core"
+        )
+
+
+def test_the_vacancy_builder_owns_no_queue_of_its_own() -> None:
+    """Guardrail 17. No pending set, no frontier, no heap."""
+
+    referenced = _referenced_names(_rollover_fn("build_initial_vacancy_rollover"))
+
+    for forbidden in (
+        "incoming",
+        "pending",
+        "processed",
+        "frontier",
+        "heapq",
+        "heappush",
+        "deque",
+        "_child_masses",
+        "terminal_parts",
+    ):
+        assert forbidden not in referenced, (
+            f"build_initial_vacancy_rollover references {forbidden!r}; the "
+            "rollover queue belongs to _propagate_rollover_mass alone"
+        )
+
+
+def test_the_vacancy_builder_never_treats_the_first_lease_as_known_history() -> None:
+    """**Guardrail 18**, and the architecture Part A rejected explicitly.
+
+    ``build_recursive_rollover`` contributes a plain D1 schedule for a *known*
+    lease -- no lease-up vacancy, no fractional boundary, no free-rent
+    waterfall, no TI, no LC. Routing the first speculative tenant through it
+    would silently discard every concession and cost that makes it
+    speculative, and would assert the tenant was already in place at
+    acquisition.
+    """
+
+    builder = _rollover_fn("build_initial_vacancy_rollover")
+    called = {
+        node.func.id
+        for node in ast.walk(builder)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "build_successor_contribution" in called, (
+        "the first tenant must be built by the successor engine"
+    )
+    for forbidden in (
+        "build_recursive_rollover",
+        "build_lease_monthly_schedule",
+        "build_expected_rollover",
+        "build_renewal_branch",
+        "build_new_tenant_branch",
+    ):
+        assert forbidden not in called, (
+            f"build_initial_vacancy_rollover calls {forbidden!r}; the first "
+            "speculative tenant is a successor, not known in-place history"
+        )
+
+
+def test_no_lease_is_fabricated_for_initial_vacancy() -> None:
+    """**Guardrails 2 and 25.** FM-D3-21. Vacant space is a legitimate starting
+    state, not a lease. Nothing constructs a `Lease` in the vacancy builder,
+    and the result contract holds no in-place lease field that could carry
+    one."""
+
+    builder = _rollover_fn("build_initial_vacancy_rollover")
+    constructed = {
+        node.func.id
+        for node in ast.walk(builder)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "Lease" not in constructed, (
+        "build_initial_vacancy_rollover constructs a Lease; vacant space is "
+        "never represented by a fabricated, zero-day or expired dummy lease"
+    )
+
+    declared = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "InitialVacancyRollover"
+    )
+    fields = {
+        node.target.id
+        for node in declared.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    for forbidden in ("initial_lease", "initial_schedule", "expiring_lease_id"):
+        assert forbidden not in fields, (
+            f"InitialVacancyRollover declares {forbidden!r}; an initially "
+            "vacant suite has no known lease, and a field able to hold one is "
+            "how the first tenant would get counted twice"
+        )
+
+
+def test_period_zero_is_a_named_boundary_and_never_a_model_month() -> None:
+    """**Guardrail 1.** ``0`` is the instant before canonical month 1. It is
+    named once, used once, and never becomes a month or an expiration."""
+
+    referenced = _referenced_names(_rollover_fn("build_initial_vacancy_rollover"))
+    assert "_INITIAL_VACANCY_BOUNDARY_PERIOD" in referenced, (
+        "the vacancy entry point must use the named boundary constant rather "
+        "than a bare 0"
+    )
+
+    # The canonical calendar never mints a period 0.
+    calendar = ast.parse(
+        (_LEASING_DIR / "calendar.py").read_text(encoding="utf-8"),
+        filename="calendar.py",
+    )
+    starts = [
+        node
+        for node in ast.walk(calendar)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "range"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == 0
+    ]
+    assert not starts, "the canonical month calendar starts at period 1, not 0"
+
+
+def test_initial_lease_up_and_future_downtime_cannot_alias() -> None:
+    """**Guardrails 5, 6 and 7.** FM-D3-22. They are different underwriting
+    judgements, live on different records, and neither is a fallback for the
+    other."""
+
+    # The vacancy builder reads the lease-up field and never the downtime one.
+    referenced = _referenced_names(_rollover_fn("build_initial_vacancy_rollover"))
+    assert "initial_lease_up_months" in referenced
+    assert "new_downtime_months" not in referenced, (
+        "build_initial_vacancy_rollover reads new_downtime_months; the first "
+        "tenant waits its own lease-up period"
+    )
+
+    # And no module ever assigns one from the other.
+    for source_file in _leasing_source_files():
+        rendered = ast.unparse(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        for alias in (
+            "initial_lease_up_months = assumptions.new_downtime_months",
+            "initial_lease_up_months = new_downtime_months",
+            "new_downtime_months = initial_lease_up_months",
+            "initial_lease_up_months or new_downtime_months",
+            "new_downtime_months or initial_lease_up_months",
+        ):
+            assert alias not in rendered, (
+                f"{source_file.name} aliases {alias!r}; the two assumptions "
+                "are never substituted for one another"
+            )
+
+
+def test_the_timing_seam_overrides_timing_only() -> None:
+    """**Guardrail 8.** One commencement formula serves both entry paths. The
+    seam replaces the *delay* for a single event and never the term, the
+    concession, the costs or the structure -- and it never writes back onto
+    the resolved assumptions, so a lease-up period cannot leak into a later
+    recursive event."""
+
+    engine = _rollover_fn("build_successor_contribution")
+    rendered = ast.unparse(engine)
+
+    assert "downtime_months = event_downtime_months" in rendered, (
+        "the seam must override the delay, and nothing else"
+    )
+    for forbidden in (
+        "term_months = event_",
+        "free_rent_months = event_",
+        "ti_psf = event_",
+        "lc_pct = event_",
+        "lease_type = event_",
+        "replace(assumptions",
+    ):
+        assert forbidden not in rendered, (
+            f"build_successor_contribution contains {forbidden!r}; the D3.6 "
+            "seam is timing-only and never rewrites the resolved assumptions"
+        )
+
+    # `assumptions` is bound once, from the resolved record, and never
+    # rebound -- so a lease-up period cannot be written back onto the
+    # assumptions and leak into a later recursive event.
+    rebinds = [
+        node
+        for node in ast.walk(engine)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "assumptions"
+            for target in node.targets
+        )
+    ]
+    assert len(rebinds) == 1, (
+        f"`assumptions` is assigned {len(rebinds)} times in the successor "
+        "engine; it is resolved once and never rewritten"
+    )
+    assert ast.unparse(rebinds[0].value) == "resolved.assumptions"
+
+    # Exactly one commencement formula exists, and both paths reach it.
+    commencement = [
+        source_file.name
+        for source_file in _leasing_source_files()
+        for node in ast.walk(
+            ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
+        )
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "successor_commencement_period"
+    ]
+    assert commencement == [_ROLLOVER_MODULE]
+
+
+def test_the_first_tenant_is_never_probability_weighted() -> None:
+    """**Guardrails 13 and 14.** FM-D3-23. There is no incumbent, so there is
+    no renewal branch at the initial event and ``renewal_probability`` cannot
+    reach the first contribution."""
+
+    builder = _rollover_fn("build_initial_vacancy_rollover")
+
+    # The first contribution is added at a literal mass of 1.0.
+    added = [
+        node
+        for node in ast.walk(builder)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add"
+    ]
+    assert len(added) == 1, "the first tenant is contributed exactly once"
+    mass = added[0].args[1]
+    assert isinstance(mass, ast.Constant) and mass.value == 1.0, (
+        "the first tenant is deterministic and is added at mass 1.0"
+    )
+
+    # It is built on the new-tenant branch, never a renewal.
+    rendered = ast.unparse(builder)
+    assert "RolloverBranchKind.NEW_TENANT" in rendered
+    assert "RolloverBranchKind.RENEWAL" not in rendered, (
+        "a renewal branch at the initial event would renew nobody"
+    )
+    assert "weighted_outcome" not in rendered
+    assert "_child_masses" not in rendered
+
+
+def test_a_missing_treatment_never_defaults_to_hold_vacant() -> None:
+    """**Guardrails 3 and 4.** FM-D3-20 and FM-D3-34, the point of the gate.
+    Absence raises; it never resolves to a strategy."""
+
+    builder = _rollover_fn("build_initial_vacancy_rollover")
+    rendered = ast.unparse(builder)
+
+    assert "raise ValueError" in rendered
+    for forbidden in (
+        "InitialVacancyStrategy.HOLD_VACANT if",
+        "or InitialVacancyStrategy.HOLD_VACANT",
+        "initial_vacancy or ",
+        "strategy = InitialVacancyStrategy.HOLD_VACANT",
+    ):
+        assert forbidden not in rendered, (
+            f"build_initial_vacancy_rollover contains {forbidden!r}; a missing "
+            "treatment is incomplete underwriting, not a default"
+        )
+
+    # And the strategy on the result is read from the treatment, not chosen.
+    assert "treatment.strategy" in rendered
+
+
+def test_hold_vacant_creates_no_lease_probability_or_leasing_cost() -> None:
+    """**Guardrail 25.** Enforced by the contract, so a builder bug cannot
+    present speculative lease-up under a hold-vacant label."""
+
+    declared = next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "InitialVacancyRollover"
+    )
+    post_init = next(
+        node
+        for node in ast.walk(declared)
+        if isinstance(node, ast.FunctionDef) and node.name == "__post_init__"
+    )
+    rendered = ast.unparse(post_init)
+
+    assert "HOLD_VACANT" in rendered
+    assert "first_contribution is not None" in rendered
+    assert "self.transitions" in rendered
+
+
+def test_the_vacancy_recovery_reuses_the_one_attachment_and_pool_boundary() -> None:
+    """**Guardrails 22 and 23.** The pool stays injected outside D2, and later
+    generations are priced by the same attachment helper D3.4 uses."""
+
+    builder = _recoveries_fn("build_initial_vacancy_rollover_recovery")
+    called = {
+        node.func.id
+        for node in ast.walk(builder)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "_attach_recovery_to_transitions" in called, (
+        "vacancy recovery must reuse the one recursive-recovery attachment"
+    )
+    assert "max" not in called, "the Modified Gross clip is singular"
+
+    referenced = _referenced_names(builder)
+    for forbidden in ("physical_occupancy", "cash_rent_factor", "free_rent"):
+        assert forbidden not in referenced, (
+            f"vacancy recovery references {forbidden!r}; recovery is driven by "
+            "the successor occupancy factor and never by a concession"
+        )
+
+    # No D2 builder gained a pool.
+    for name in ("build_initial_vacancy_rollover", "build_recursive_rollover"):
+        parameters = {
+            a.arg for a in _rollover_fn(name).args.args
+        } | {a.arg for a in _rollover_fn(name).args.kwonlyargs}
+        for forbidden in ("pool", "expense_pool", "recoverable_expenses"):
+            assert forbidden not in parameters, (
+                f"{name} requires {forbidden!r}; the pool is injected at the "
+                "recovery boundary"
+            )
+
+
+def test_initial_vacancy_history_cannot_enter_the_future_state() -> None:
+    """**Guardrail 21.** FM-D3-32. The successor engine takes no origin
+    marker, so a child of the first speculative lease is indistinguishable
+    from a child of an occupied one."""
+
+    parameters = {
+        a.arg for a in _rollover_fn("build_successor_contribution").args.kwonlyargs
+    }
+
+    for forbidden in (
+        "initial_vacancy",
+        "strategy",
+        "was_initially_vacant",
+        "initial_lease_up_months",
+        "origin",
+    ):
+        assert forbidden not in parameters, (
+            f"build_successor_contribution accepts {forbidden!r}; how a chain "
+            "began must not reach its future"
         )

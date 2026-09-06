@@ -764,10 +764,14 @@ def test_a_missing_schedule_for_a_tenanted_suite_is_refused() -> None:
     suites = [suite(s) for s in ("A", "B", "C", "D")]
     projections = [suite_recovery_projection(r) for r in _four_suite_results()]
 
+    # D3.6: suite D is vacant and carries no treatment, so completeness now
+    # also reports it. This assertion is about the *tenanted* suites.
     complete = validate_property_recovery_inputs(
         projections, months=months(), suites=suites, leases=leases
     )
-    assert complete.is_valid
+    assert LeaseIssueCode.MISSING_SUITE_RECOVERY_SCHEDULE not in [
+        i.code for i in complete.issues
+    ]
 
     incomplete = validate_property_recovery_inputs(
         projections[:2], months=months(), suites=suites, leases=leases
@@ -781,19 +785,18 @@ def test_a_missing_schedule_for_a_tenanted_suite_is_refused() -> None:
     assert "C" in issue.path
 
 
-def test_a_vacant_suite_needs_no_schedule_and_recovers_zero() -> None:
-    """**The vacancy rule.** Suite D has no lease, so it correctly has no
-    projection. Anchor never synthesizes a Gross lease for vacant space
-    (D1.3), and must not synthesize a recovery schedule either."""
+def test_a_vacant_suite_still_recovers_zero_without_a_schedule() -> None:
+    """Superseded in one respect at D3.6. Anchor still never synthesizes a
+    lease or a recovery schedule for vacant space, and a suite with no
+    projection still contributes zero -- that arithmetic is unchanged.
 
-    leases = [
-        lease("A"),
-        lease("B", lease_type=LeaseType.GROSS),
-        lease("C", lease_type=LeaseType.MODIFIED_GROSS, stop_psf=STOP_PSF),
-    ]
-    suites = [suite(s) for s in ("A", "B", "C", "D")]
+    What D3.6 added is that a *future-looking* aggregation now also asks
+    whether the vacancy was underwritten at all: see
+    ``test_a_vacant_suite_with_no_treatment_is_refused``. Here the suites are
+    not supplied, so no completeness question arises.
+    """
 
-    prop = aggregate(_four_suite_results(), suites=suites, leases=leases)
+    prop = aggregate(_four_suite_results())
 
     assert "D" not in {p.suite_id for p in prop.suite_projections}
     assert prop.expense_recovery[0] == strict(37_500.0)

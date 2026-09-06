@@ -1,7 +1,7 @@
 ---
 title: "Lease-Level Underwriting — D3 Expense Recovery Conventions"
 gate: D3.0
-status: D3.0-D3.5 implemented and verified; D3.6 (initial vacancy lease-up) architecture proposed at Part A, awaiting human review
+status: D3 COMPLETE -- D3.0 through D3.6 implemented and verified; ready for final human review
 supersedes: nothing
 governed_by:
   - docs/plans/2026-09-04-anchor-lease-level-underwriting-d0-architecture.md
@@ -1052,10 +1052,12 @@ decision blocks any D3 gate. D3.1 may begin.**
 financial review. `anchor.leasing` remains dark to the rest of Anchor: nothing
 outside the package changed across the sprint.
 
-> **Reopened at D3.6.** Section 21.4 disclosed one limitation — a suite vacant
-> at the analysis start recovers zero for the whole projection, with no
-> lease-up. Section 22 proposes closing it before D3 merges. Everything below
-> in Section 21 remains accurate for occupied suites and is unchanged.
+> **Closed at D3.6.** Section 21.4 disclosed one limitation — a suite vacant
+> at the analysis start recovered zero for the whole projection, with no
+> lease-up and no way to say whether that was intended. Section 22 is now
+> **implemented**: an initially vacant suite states `HOLD_VACANT` or
+> `MARKET_LEASE_UP` explicitly, and stating neither is an error at every
+> future-looking gate. Everything else in Section 21 is unchanged.
 
 ### 21.1 The delivered contracts
 
@@ -1102,25 +1104,44 @@ would fail. No failure mode is deferred.
 **No human decision blocks D4.** Each interim behaviour is a stated convention
 with a guardrail, not an accident.
 
-#### The initial-vacancy limitation — new, and disclosed here
+#### The initial-vacancy limitation — **closed at D3.6**
 
-D2/D3 rollover begins from a **known lease's expiration**. A suite that is
-vacant at the analysis start has no lease, therefore no expiration event,
-therefore no successor chain — so **it recovers zero for the entire
-projection**, and Anchor models no lease-up for it.
+This section originally recorded a product limitation: D2/D3 rollover begins
+from a **known lease's expiration**, so a suite vacant at the analysis start
+had no expiration event, no successor chain, and recovered zero for the entire
+projection with no lease-up modelled.
 
-This is a **product limitation, not a modelling error**, and D3.5 does not
-solve it: inventing a market lease-up would mean inventing a commencement, a
-probability and a structure that no input states, which is precisely what
-Section 6.1 forbids elsewhere. It is recorded here because it is a real
-underwriting gap for a partially-vacant acquisition — exactly the case a
-value-add buyer cares most about — and because the honest zero is easy to
-mistake for a modelled result. Speculative lease-up is a candidate D4+ feature
-and needs its own human decision.
+**D3.6 closed it.** An initially vacant suite now states its treatment
+explicitly on `Suite.initial_vacancy`:
 
-The related disclosed edge remains: with **no gross-up**, a half-empty property
-recovers only about half its pool. That is the arithmetic of the chosen
-convention (Section 18.4).
+- **`HOLD_VACANT`** — the same zero economics as before, but now a *stated
+  assumption* recorded on the result and visible in the property aggregation;
+- **`MARKET_LEASE_UP`** — the space lets after an explicit
+  `initial_lease_up_months`, the first tenant is a deterministic market new
+  tenant, and its eventual expiration enters the existing D2.6 recursion.
+
+**Stating neither is an ERROR** at every future-looking gate — the
+initial-vacancy builder and property recovery aggregation
+(`MISSING_INITIAL_VACANCY_TREATMENT`). D1 is unchanged: a bare vacant suite is
+still valid there, because zero contractual rent for empty space is an
+observation rather than a speculation (HD-D3.6-1).
+
+Section 22 carries the full conventions, the worked cases and the failure
+modes.
+
+**Two limitations remain, and both are honest consequences of accepted
+conventions rather than gaps:**
+
+1. **No gross-up** (HD-D3-6, deferred). A half-empty property recovers only
+   about half its pool, because unrecovered expense is never redistributed
+   onto the tenants who do pay (Section 18.4). With `MARKET_LEASE_UP` now
+   available, a vacant suite's *own* recovery can begin once it lets — but
+   during the lease-up period its share of the pool is still simply
+   unrecovered.
+2. **Lease-up is deterministic.** `MARKET_LEASE_UP` states one lease-up
+   period, not a distribution over several. Stochastic or phased lease-up,
+   multiple competing tenants and partial-floor demising all remain non-goals
+   (Section 22.20).
 
 ### 21.5 What D3 deliberately does not do
 
@@ -1133,15 +1154,33 @@ build that **D4** owns.
 
 ---
 
-## 22. D3.6 — initial vacancy lease-up (Part A: architecture and proof)
+## 22. D3.6 — initial vacancy lease-up
 
-**Architecture and financial-convention gate only. No production code, no test,
-no change to `src/anchor/leasing/`, no change to D1, D2 or D3.0–D3.5
-economics.**
+**Part A** (architecture and proof) was accepted at human review. **Part B is
+implemented**: the conventions below are production behaviour, verified by 61
+goldens in `tests/test_leasing_d3_6_initial_vacancy.py`, 13 architecture
+guardrails and 15 mutants.
 
-Verified baseline (`3e324b3`): full backend 3583, full leasing 1810, D1 787,
+Part A's baseline was `3e324b3`: full backend 3583, full leasing 1810, D1 787,
 D3.1 78, D3.2 76, D3.3 56, D3.4 61, D3.5 45, architecture guardrails 140,
-Quick 217, Detailed 62.
+Quick 217, Detailed 62. After Part B: full backend 3657, full leasing 1884,
+architecture guardrails 153, with every earlier gate's count unchanged and D1,
+D2 and D3.1–D3.5 economics **bit-identical** (300 series, 9,740 values).
+
+**What Part B changed relative to Part A's proposal**, and nothing else:
+
+- the D2.6 propagation loop was extracted into `_propagate_rollover_mass`
+  exactly as designed. The accumulators are passed **in already seeded** so the
+  sequence of floating-point additions is unchanged by construction — the
+  refactor is bit-preserving rather than merely intended to be;
+- the timing seam is an explicit `event_downtime_months` parameter on
+  `build_successor_contribution`, defaulting to `None`. Part A left the seam's
+  shape open; an explicit parameter was chosen over an assumptions adapter
+  because it overrides **timing only**, is structurally confined to the one
+  call that passes it, and cannot write back onto the resolved assumptions;
+- D3.4's transition walk was factored into `_attach_recovery_to_transitions`,
+  so the occupied and vacant recovery paths share one attachment as well as one
+  state machine.
 
 ### 22.1 The limitation being closed
 
