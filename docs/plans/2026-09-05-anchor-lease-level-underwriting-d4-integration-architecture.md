@@ -39,16 +39,42 @@ This document inherits and revises nothing in:
 - `docs/plans/2026-09-05-anchor-lease-level-underwriting-d2-rollover-conventions.md` (D2)
 - `docs/plans/2026-09-05-anchor-lease-level-underwriting-d3-recovery-conventions.md` (D3)
 
-**One exception, and it is the headline finding of this gate.** D4 inspection
-revealed an *active arithmetic contradiction* between D0 Section 18.1's EGI
-formula and the D2.3 concession mechanics that shipped. The contradiction, its
-proof, and the narrow correction are Section 5.4 and **HD-D4-5**. A single
-dated amendment block has been added to D0 Section 18.1 and Section 4.7
-pointing here. Nothing else in D0 is touched, and no prior decision is
-rewritten.
+**Two exceptions, both narrow, both amended in D0 by dated blocks pointing
+here:**
 
-**Classification: D4.0 HAS BLOCKING HUMAN DECISIONS** — seven, listed in
-Section 33, of which three block D4.1/D4.2 and four block later gates.
+1. D4 inspection revealed an *active arithmetic contradiction* between D0
+   Section 18.1's EGI formula and the D2.3 concession mechanics that shipped.
+   The contradiction, its proof and the approved correction are Section 5.4
+   (**HD-D4-5**, approved).
+2. D0 Section 3.5 and Appendix A place Lease-Level orchestration in
+   `anchor.engine.acquisition`. Human review **rejected** that direction: the
+   shared engine must stay operating-mode agnostic. Orchestration moves to a
+   Lease-Level analysis/integration layer (Section 27, approved directive).
+
+Nothing else in D0 is touched, and no prior decision is rewritten.
+
+## Human Financial Review — amendment of 2026-09-05
+
+**This document has been amended following human financial review of D4.0.**
+All seven `HD-D4` decisions are now **decided**. One prior recommendation was
+**rejected and replaced** (HD-D4-7), one recommendation was **narrowed**
+(absent rent, Section 5.4), and one architectural direction inherited from D0
+was **corrected** (Section 27). Section 33 is the authoritative decision
+register.
+
+| Decision | Outcome |
+|---|---|
+| **HD-D4-1** expense-growth helper | **APPROVED** — mirror, conditional on an exact-equivalence guardrail |
+| **HD-D4-2** management-fee basis | **APPROVED** — `pct x EGI`, recoveries included, after credit loss |
+| **HD-D4-3** TI/LC in owner cash flow | **APPROVED** — below NOI, months `1..12H` only |
+| **HD-D4-4** property `market_rent_psf` | **APPROVED** — not a D4 field |
+| **HD-D4-5** EGI correction | **APPROVED** — EGI consumes `cash_base_rent` |
+| **HD-D4-6** credit loss | **APPROVED** — D0 convention carried, default `0.0` |
+| **HD-D4-7** negative exit NOI | **REJECTED AND REPLACED** — scoped Lease-Level validation **ERROR**, not a warning |
+| Dependency direction | **CORRECTED** — integration layer owns orchestration; engine stays generic |
+
+**Classification: A — D4.0 FINANCIALLY ACCEPTED, READY FOR D4.1.** No
+unresolved human financial decision blocks any D4 gate.
 
 ---
 
@@ -72,14 +98,15 @@ D4 creates **no** `LeaseLevelReturnsEngine`, **no** `LeaseLevelDebtEngine`,
 acquisition/debt/returns framework, entered at exactly one function:
 `analyze_acquisition_from_operating_projection`.
 
-### 1.2 The five findings that matter most
+### 1.2 The six findings that matter most
 
 1. **D0 Section 18.1's EGI formula is arithmetically wrong wherever fractional
    downtime exists.** `cash_base_rent != contractual_base_rent - free_rent` in
    a fractional commencement month, because the two series differ by the
    *downtime* portion of that month, not only by the abatement. Proven in
-   Section 5.4. D4's EGI must consume `cash_base_rent` directly and publish a
-   third line so the statement stays additive. (**HD-D4-5**)
+   Section 5.4. **Approved (HD-D4-5): D4's EGI consumes `cash_base_rent`
+   directly**, and never reconstructs cash rent from contractual rent and
+   concessions.
 
 2. **There is no property-level operating aggregator.** D3.5 built
    `build_property_recovery_schedule` for recoveries, but nothing aggregates
@@ -94,10 +121,10 @@ acquisition/debt/returns framework, entered at exactly one function:
    G-1.** `anchor.leasing` may import only `anchor.contracts` and
    `anchor.engine.contracts`; `anchor.engine.operating_projection` is on the
    forbidden list. A shared growth helper therefore cannot live where D0
-   assumed. D0 Section 13.1's own stated fallback — a documented mirror in
-   `anchor/leasing/expenses.py` — becomes the recommendation, which has the
-   side benefit of making **G-2 trivially true** (Detailed is not touched at
-   all). (**HD-D4-1**)
+   assumed. **Approved (HD-D4-1): mirror in `anchor/leasing/expenses.py`**,
+   which is D0 Section 13.1's own stated fallback and makes **G-2 trivially
+   true** (Detailed is not touched at all). The approval is conditional on the
+   exact-equivalence guardrail of Section 10.6.
 
 4. **The management-fee circularity is provably absent**, not merely avoided by
    convention. Because the management fee is excluded from the recoverable
@@ -109,7 +136,18 @@ acquisition/debt/returns framework, entered at exactly one function:
    Lease-Level distributions unless TI/LC enter them.** `returns.py` already
    subtracts `capex_by_year` from `RLCF_y` and `RUCF_y`; TI and LC are the same
    class of below-NOI property capital. Omitting them would report a
-   cash-on-cash return the property does not earn. (**HD-D4-3**)
+   cash-on-cash return the property does not earn. **Approved (HD-D4-3): TI and
+   LC reduce owner investment cash flow in months `1..12H`**, and reduce NOI,
+   exit NOI, the DSCR numerator and the debt-yield numerator in no month.
+
+6. **The shared engine must not learn what a Suite is.** D0 Section 3.5 and
+   Appendix A would have `anchor.engine.acquisition` import `anchor.leasing`
+   and own Lease-Level orchestration. Human review corrected this: the engine
+   gains only *generic* additive support (an optional
+   `OperatingCapitalSchedule`), and a **Lease-Level analysis/integration
+   layer** — `src/anchor/analysis/lease_level.py` — imports leasing, builds the
+   projection, and invokes the generic engine. `analyze_acquisition_from_
+   operating_projection` stays operating-mode agnostic (Section 27).
 
 ### 1.3 Locked-by-inspection summary
 
@@ -132,6 +170,7 @@ being decided now.
 | Exit NOI | `sum(noi[m] for m in 12H+1..12H+12)` | D0 17.1, G-11 |
 | Forward-window TI/LC | Neither a seller cash flow nor a reduction to exit NOI; disclosed only | D0 17.4 |
 | Exit value | `exit_noi / exit_cap_rate`, unchanged | `acquisition.py` |
+| Going-in cap rate | Year-1 NOI / purchase price — one shared convention, verified bit-identical across Quick and Detailed | `noi.py`, `operating_projection.py`, Section 20.4 |
 | DSCR | `NOI_y / ADS_y`, unchanged | `returns.py` |
 | IRR timing | Annual, `H+1` points, unchanged | `returns.py`, G-6 |
 
@@ -487,7 +526,7 @@ LeaseLevelOperatingInputs                                     (D4.1, new)
         |                                              v
         |                                    PropertyOperatingSchedule
         |                                     (cash rent, contractual rent,
-        |                                      free rent, absent rent, TI, LC,
+        |                                      free rent, TI, LC,
         |                                      occupied area)
         |                                              |
         +----------------------+-----------------------+
@@ -537,45 +576,46 @@ parameter, neutral by default.
 For every canonical month `m` in `1 .. 12H + 12`:
 
 ```
- 1  contractual_base_rent_m     <- property aggregate of suite chains (audit line)
- 2  absent_rent_m               <- rent forgone to downtime/vacancy    (audit line)
- 3  free_rent_m                 <- concession abatement, positive      (audit line)
- 4  cash_base_rent_m            <- AUTHORITATIVE cash revenue
-                                   identity: 1 - 2 - 3 == 4            (asserted)
- 5  expense_recovery_m          <- PropertyRecoverySchedule.expense_recovery
- 6  other_income_m              <- other_income_y / 12
- 7  credit_loss_m               <- credit_loss_pct * (4 + 5)
- 8  effective_gross_income_m    =  4 + 5 + 6 - 7
- 9  property_taxes_m            \
-10  insurance_m                  |
-11  utilities_m                  |  each = Line_1 * (1+expense_growth)^(y-1) / 12
-12  repairs_maintenance_m        |
-13  other_operating_expenses_m  /
-14  fixed_operating_expenses_m  =  9 + 10 + 11 + 12 + 13
-15  management_fee_m            =  8 * management_fee_pct
-16  total_operating_expenses_m  =  14 + 15
-17  noi_m                       =  8 - 16
+ 1  contractual_base_rent_m     <- property aggregate of suite chains (AUDIT ONLY)
+ 2  free_rent_m                 <- concession abatement, positive     (AUDIT ONLY)
+ 3  cash_base_rent_m            <- AUTHORITATIVE revenue, consumed DIRECTLY
+                                   from the D2/D3 chains; never reconstructed
+ 4  expense_recovery_m          <- PropertyRecoverySchedule.expense_recovery
+ 5  other_income_m              <- other_income_y / 12
+ 6  credit_loss_m               =  credit_loss_pct * (3 + 4)
+ 7  effective_gross_income_m    =  3 + 4 + 5 - 6
+ 8  property_taxes_m            \
+ 9  insurance_m                  |
+10  utilities_m                  |  each = Line_1 * (1+expense_growth)^(y-1) / 12
+11  repairs_maintenance_m        |
+12  other_operating_expenses_m  /
+13  fixed_operating_expenses_m  =  8 + 9 + 10 + 11 + 12
+14  management_fee_m            =  7 * management_fee_pct
+15  total_operating_expenses_m  =  13 + 14
+16  noi_m                       =  7 - 15
 --- BELOW NOI, never touching any line above ---
-18  tenant_improvements_m       <- property aggregate of suite chains
-19  leasing_commissions_m       <- property aggregate of suite chains
+17  tenant_improvements_m       <- property aggregate of suite chains
+18  leasing_commissions_m       <- property aggregate of suite chains
 --- STATE ---
-20  occupied_area_m, vacant_area_m, physical_occupancy_m
+19  occupied_area_m, vacant_area_m, physical_occupancy_m
 --- AUDIT ---
-21  recoverable_expense_pool_m  =  (14) * recoverable_expense_ratio
+20  recoverable_expense_pool_m  =  (13) * recoverable_expense_ratio
 ```
 
-Compared with the candidate stack in the D4.0 brief, the repository's accepted
-economics differ in exactly two places, and both are corrections rather than
-preferences:
+**Lines 1 and 2 are audit lines and feed nothing.** EGI reads line 3 and never
+lines 1 or 2. This is the whole substance of HD-D4-5: the authoritative revenue
+figure is the one D2/D3 already computed, and D4 copies it.
 
-- **Line 2 (`absent_rent`) exists.** The brief's stack has no such line, and
-  without it lines 1, 3 and 4 do not reconcile (Section 5.4).
-- **Credit loss is line 7, based on `4 + 5`, not on gross rent.** D0
+Compared with the candidate stack in the D4.0 brief, the repository's accepted
+economics differ in exactly one place, and it is a correction rather than a
+preference:
+
+- **Credit loss is line 6, based on `3 + 4`, not on gross rent.** D0
   Section 15.4 binds the base to "base rent net of free rent, plus
   recoveries" — explicitly *not* Detailed's gross-potential-rent base, and
   explicitly excluding other income (D0 Section 14).
 
-CapEx is deliberately **not** in this stack. See Section 20.
+CapEx is deliberately **not** in this stack. See Section 18.
 
 ### 5.4 Contractual vs cash base rent — the correction
 
@@ -632,27 +672,55 @@ which the tenant is present for three-quarters of the month and pays nothing at
 all. The `25,000` is the *downtime* quarter — space that was vacant — being
 silently counted as collected rent.
 
-**Correction (HD-D4-5).** D4 publishes `cash_base_rent` as the authoritative
-revenue line and adds `absent_rent` so the statement remains additive and
-auditable:
+**Correction — APPROVED at human financial review (HD-D4-5).**
 
-```
-absent_rent_m = contractual_base_rent_m - free_rent_m - cash_base_rent_m
-```
-
-`absent_rent_m >= 0` always, is exactly `0` for every suite with no fractional
-downtime, and is asserted to reconcile at `abs=1e-9` in every month
-(guardrail **G-D4-1**). It is computed per suite and summed, never as a
-property-level residual, so a sign error in one suite cannot be masked by
-another.
+> Lease-Level EGI must consume `cash_base_rent`, **not**
+> `contractual_base_rent - free_rent`. Fractional downtime means contractual
+> face rent can exist for a portion of a canonical month during which the
+> tenant is not economically responsible. The D2/D3 `cash_base_rent` series
+> already incorporates the successor occupancy factor, downtime, the fractional
+> boundary and the free-rent waterfall, and is therefore the authoritative
+> revenue amount. Contractual base rent and free rent remain audit lines.
+> **D4 does not independently reconstruct cash rent.**
 
 Two properties of this correction worth stating:
 
-1. **It changes no lease-level number.** Every D1–D3 series is untouched; only
-   the property statement's presentation and the EGI formula change.
+1. **It changes no lease-level number.** Every D1–D3 series is untouched. Only
+   which existing series the property statement reads changes.
 2. **It is arithmetically forced, not a modelling preference.** There is no
    defensible reading in which the downtime quarter of a boundary month is
    collected revenue.
+
+### 5.4.1 "Absent rent" — an explanatory concept, not a financial assumption
+
+The quantity that explains the gap is worth naming so a reader can follow the
+arithmetic:
+
+```
+absent_rent_m == contractual_base_rent_m - free_rent_m - cash_base_rent_m
+              == the portion of the month during which no tenant was in
+                 economic possession   (>= 0 always; exactly 0 wherever no
+                 fractional downtime occurs)
+```
+
+**Its status, fixed at human review:**
+
+- It is an **explanatory reconciliation concept**. It is **not** a new
+  financial assumption, **not** an input, and **not** a new modelling
+  primitive.
+- **EGI is never computed through it.** The authoritative implementation reads
+  `cash_base_rent` directly. There is no
+  `contractual - absent_rent - free_rent` path anywhere in D4.
+- It is **not** a required field on any D4 contract. Section 29.3's
+  `MonthlyPropertyProjection` does not declare it.
+- It survives as a **guardrail assertion** (**G-D4-1**): a D4.2 test asserts,
+  per suite and per month, that
+  `contractual_base_rent - free_rent - cash_base_rent >= 0` and that it is
+  exactly `0.0` whenever every modeled downtime is integral. That test consumes
+  three series that already exist; it introduces no field and no assumption.
+- If a D5 operating-statement UI needs the displayed statement to foot
+  visually, the line can be derived at the presentation boundary from the three
+  published series. That is a D5 decision, not a D4 contract.
 
 ### 5.5 Exact EGI formula
 
@@ -668,8 +736,13 @@ credit_loss_m = credit_loss_pct * (cash_base_rent_m + expense_recovery_m)
 With the default `credit_loss_pct = 0.0`, `credit_loss_m` is exactly `0.0` and
 `EGI_m = cash_base_rent_m + expense_recovery_m + other_income_m`.
 
-**Never** `contractual_base_rent` in place of `cash_base_rent`. **Never** a
-second free-rent subtraction. **Never** a physical-vacancy factor.
+`cash_base_rent_m` is **copied** from the property operating aggregate, which
+in turn sums the suite chains' own `expected_cash_base_rent`. It is never
+derived, re-derived, reconstructed or adjusted inside D4.
+
+**Never** `contractual_base_rent` in place of `cash_base_rent`. **Never**
+`contractual_base_rent - free_rent`. **Never** a second free-rent subtraction.
+**Never** a physical-vacancy factor.
 
 ### 5.6 Exact NOI formula
 
@@ -743,7 +816,19 @@ An analyst migrating a Detailed deal must not carry a 7%
 | **B** | Explicit credit-loss-only assumption, `credit_loss_pct`, default `0.0` | **RECOMMENDED** |
 | **C** | Reuse a combined vacancy/credit-loss input with separated semantics | Rejected — impossible; the Detailed field is not separable (Section 6.2), and reuse re-creates the double-count |
 
-### 7.2 Recommendation: B, exactly as D0 already locked it
+### 7.2 Decision: B — APPROVED at human financial review
+
+> Carry the D0 Lease-Level credit-loss convention:
+>
+> ```
+> credit_loss_m = credit_loss_pct * (cash_base_rent_m + expense_recovery_m)
+> ```
+>
+> Other income is **excluded** from the credit-loss base. The default remains
+> `0.0`. **Physical vacancy is not included in this percentage** — it has
+> already been modeled through Suite leasing economics.
+
+The reasoning that supported the recommendation is retained below.
 
 **This is not a new assumption and it is not theoretical completeness.** D0
 Section 4.6 declares the field, Section 15.3 places it in the five-vacancy-
@@ -773,9 +858,7 @@ the management fee applies to revenue net of credit loss. This matches Detailed,
 where `management_fee = egi_y * pct` and `egi_y` is already net of
 `vacancy_credit_loss_y`.
 
-**Status: not a blocking human decision.** Recorded as **HD-D4-6** at
-`CONFIRM ONLY` severity, because a reviewer may legitimately wish to restate
-that D0's lock still stands now that the code exists.
+**Status: DECIDED (HD-D4-6, approved).** Blocks nothing.
 
 ---
 
@@ -953,8 +1036,46 @@ forbids.
 comment "Mirrors `engine/noi.py`'s `_growth_factor` exactly, for the same
 reason".
 
-Lease-Level needs the identical behaviour. Where that helper should live is
-**HD-D4-1** (Section 33).
+Lease-Level needs the identical behaviour. Where that helper lives was
+**HD-D4-1**, now approved as a mirror in `anchor/leasing/expenses.py`
+(Section 33).
+
+### 10.6 The exact-equivalence guardrail — the condition on HD-D4-1
+
+The approval to mirror rather than extract is **conditional**. It is a tactical
+duplication, not permission for formula drift, and D4.1 carries this obligation:
+
+> **G-D4-5 (required at D4.1).** For identical Year-1 amount, identical
+> `expense_growth` and identical hold-year index, the Lease-Level annual
+> expense amount must be **bit-identical** to the value the existing Detailed
+> convention produces.
+
+Asserted, not approximated:
+
+```
+for each of the five expense lines, for y in 1..H+1:
+    lease_level_annual_y   = line_1 * _growth_factor(expense_growth, y - 1)
+    detailed_annual_y      = build_detailed_operating_projection(...)._by_year[y-1]
+    assert lease_level_annual_y.hex() == detailed_annual_y.hex()
+```
+
+using `float.hex()` rather than `==` so the comparison is exact and a failure
+report shows the differing bits. The sweep covers `expense_growth` in
+`{0.0, 0.03, -0.5, 0.17}` and the overflow path, so the `OverflowError -> inf`
+behaviour is proven equivalent too, not merely the ordinary case.
+
+Golden case 14 asserts the same equivalence at the *aggregate* level: the
+twelve monthly Lease-Level values for a hold year sum to the Detailed annual
+figure at `abs=1e-9`. Both assertions are required — the `hex()` test proves
+the growth factor, the sum test proves the `/12` monthly spread.
+
+**One implementation only.** After D4.1 the repository contains exactly three
+copies of `_growth_factor` (`noi.py`, `operating_projection.py`,
+`leasing/expenses.py`), each carrying the mirror comment. **No further
+duplicate expense-growth implementation is permitted**, in `anchor.leasing` or
+anywhere else; a fourth copy is a review-blocking defect. **G-D4-6** asserts by
+AST that no module outside those three defines a growth-factor function or
+inlines `(1 + <growth>) ** <exponent>`.
 
 ### 10.5 No seasonality — accepted and stated explicitly
 
@@ -1189,7 +1310,7 @@ D0 Section 16.4's eight-step ordering is therefore not merely *a* convention
 that works — it is the topological order of a DAG, and it is the only one:
 
 ```
-1. cash base rent, free rent, absent rent, other income   (independent)
+1. cash base rent, free rent, other income                (independent)
 2. the five fixed expense lines                           (independent)
 3. recoverable_expense_pool_m                             (from 2)
 4. per-lease and per-suite recoveries, then the property sum (from 3)
@@ -1231,10 +1352,21 @@ solve and would need its own human decision.
 | Effect on NOI | Lower NOI in a NNN building | Higher NOI in a NNN building |
 | Risk | A fully-NNN building pays a fee on money that passes through | A silent divergence between two Anchor modes |
 
-### 14.2 Recommendation: A
+### 14.2 Decision: A — APPROVED at human financial review
 
-**Recommended: the management fee is `management_fee_pct * EGI_m`, with EGI
-including expense recoveries.**
+> The Lease-Level management fee basis is `management_fee_pct x EGI`, where
+> EGI includes **cash base rent, expense recoveries and other income**, after
+> the approved credit-loss deduction:
+>
+> ```
+> management_fee_m = management_fee_pct
+>                  * (cash_base_rent_m + expense_recovery_m + other_income_m
+>                     - credit_loss_m)
+> ```
+>
+> **No separate management-fee convention exists for Lease-Level.** The
+> recoverable expense pool excludes the management fee, so no recovery/fee
+> circularity exists (Section 13).
 
 Reasoning, in priority order:
 
@@ -1268,10 +1400,10 @@ fee at 3% on 255,000 = 7,650    <- Option B
 difference           3,000 per month = 36,000 per year
 ```
 
-At a 6.5% exit cap that difference is roughly `554,000` of exit value. It is
-financially meaningful, which is why it is recorded as **HD-D4-2** at
-`CONFIRM ONLY` severity rather than silently adopted — the recommendation is
-firm, but the reviewer should see the number.
+At a 6.5% exit cap that difference is roughly `554,000` of exit value. It was
+surfaced rather than silently adopted precisely because it is material; the
+reviewer saw the number and approved Option A. **Status: DECIDED (HD-D4-2,
+approved).**
 
 ---
 
@@ -1337,11 +1469,20 @@ physical_occupancy_at_year_end        = snapshot_state_at_year_end(monthly, H)
 average_physical_occupancy_over_year  = average_state_over_year(monthly, H)
 ```
 
-**Recommendation: publish both; the headline / default reported metric is the
-annual average.** Average physical occupancy is what an analyst quotes, and a
-year-end snapshot alone would hide an eleven-month vacancy that re-let in
-December. Publishing both costs one tuple and removes all ambiguity, which is
-the point of G-M6's naming rule.
+**CONFIRMED at human financial review:**
+
+> **Headline annual physical occupancy = the arithmetic average of the twelve
+> canonical monthly physical-occupancy values in that hold year.**
+> `physical_occupancy_at_year_end` is **retained** alongside it, as the
+> contract calls for.
+>
+> Both are **descriptive state views. Neither calculates a vacancy
+> deduction.**
+
+Average physical occupancy is what an analyst quotes, and a year-end snapshot
+alone would hide an eleven-month vacancy that re-let in December. Publishing
+both costs one tuple and removes all ambiguity, which is the point of G-M6's
+naming rule.
 
 **No ambiguous annual occupancy exists anywhere in the contract**: every
 annual state field name begins with `average_` or ends with `_at_year_end`.
@@ -1369,6 +1510,17 @@ produce. **Deferred to D5 as a presentation concern**, if wanted at all.
 ---
 
 ## 17. Below-NOI Channel — the Central Architecture Decision
+
+**APPROVED at human financial review (HD-D4-3).**
+
+> Tenant Improvements and Leasing Commissions are **owner property cash
+> outflows**. During hold months they **must reduce investment cash flow**.
+>
+> They remain **BELOW NOI**. They do **not** reduce NOI, exit NOI, the DSCR
+> numerator or the debt-yield numerator. They are **not** acquisition costs and
+> **not** the CapEx reserve.
+>
+> Only **Months `1..12H`** are seller/owner cash outflows.
 
 ### 17.1 What must flow
 
@@ -1438,8 +1590,14 @@ DSCR_y        = NOI_y / ADS_y                              (UNCHANGED -- Section
 debt_yield    = NOI_1 / loan_amount                        (UNCHANGED)
 ```
 
-`RLCF` and `RUCF` are **HD-D4-3** because including TI/LC changes reported
-cash-on-cash and cumulative distributions. See Section 33.
+`RLCF` and `RUCF` were the substance of **HD-D4-3**, because including TI/LC
+changes reported cash-on-cash and cumulative distributions. **Approved**: they
+are owner cash outflows and reduce owner cash flow. `DSCR_y` and
+`year_1_debt_yield` are explicitly excluded from the change.
+
+The engine remains **generic** throughout: it receives an
+`OperatingCapitalSchedule` and subtracts it. It never learns where the numbers
+came from (Section 27).
 
 ### 17.5 `AcquisitionResults` exposure
 
@@ -1467,6 +1625,13 @@ reduced by either new series.
 ---
 
 ## 18. CapEx Treatment
+
+**CONFIRMED at human financial review.**
+
+> `annual_capex_reserve` remains **authoritative on `AcquisitionTerms`**.
+> Do not create a second monthly CapEx series in `MonthlyPropertyProjection`.
+> D4 may expose CapEx later for presentation through an adapter if needed, but
+> **there must remain one financial authority. No double subtraction.**
 
 ### 18.1 The two options
 
@@ -1499,15 +1664,18 @@ It is NOT a member of MonthlyPropertyProjection's flow series that feed the
 annual adapter, and no annual figure is ever derived from it.
 ```
 
-**Recommendation: omit the monthly CapEx line from `MonthlyPropertyProjection`
-in D4 entirely.** It is not needed by any D4 calculation, and every line that
-exists in the canonical projection is a line the annual adapter might one day
-be tempted to sum. Adding it in D5 as a display-only field, clearly outside the
-adapter's input set, is strictly safer.
+**Confirmed: the monthly CapEx line is omitted from
+`MonthlyPropertyProjection` in D4 entirely.** It is not needed by any D4
+calculation, and every line that exists in the canonical projection is a line
+the annual adapter might one day be tempted to sum. A D5 presentation adapter
+may derive `annual_capex_reserve / 12.0` for display, clearly outside the
+adapter's input set.
 
 This is the **only** defence against **FM-D4-24** (CapEx subtracted twice) that
 does not rely on discipline: the double-count cannot occur if the second series
-does not exist.
+does not exist. There is exactly one CapEx financial authority —
+`terms.annual_capex_reserve`, consumed once per hold year by
+`calculate_capex_by_year` — in all three modes.
 
 ### 18.3 CapEx is not in NOI, ever
 
@@ -1580,7 +1748,7 @@ accumulated in strictly ascending period order, through the existing
 
 ```
 cash_base_rent_by_year, contractual_base_rent_by_year, free_rent_by_year,
-absent_rent_by_year, expense_recoveries_by_year, other_income_by_year,
+expense_recoveries_by_year, other_income_by_year,
 credit_loss_by_year, effective_gross_income_by_year,
 property_taxes_by_year, insurance_by_year, utilities_by_year,
 repairs_maintenance_by_year, other_operating_expenses_by_year,
@@ -1622,7 +1790,82 @@ going_in_cap_rate           = noi_by_year[0] / purchase_price
 anything** (D0 Section 17.4). It is read by no engine calculation, which
 Section 21.3 proves is required.
 
-### 20.4 There is no independent annual model
+### 20.4 Going-in cap rate — one shared convention, verified
+
+The D4.0 final report did not surface this explicitly. It is recorded here in
+full, from inspection of the shipped code.
+
+**Quick** — `engine/noi.py`:
+
+```python
+def calculate_going_in_cap_rate(*, current_noi: float, purchase_price: float) -> float:
+    going_in_cap_rate = current_noi / purchase_price
+    return ensure_finite("going_in_cap_rate", going_in_cap_rate)
+```
+
+**Detailed** — `engine/operating_projection.py`:
+
+```python
+going_in_cap_rate = ensure_finite(
+    "going_in_cap_rate", noi_by_year[0] / purchase_price
+)
+```
+
+**Are they the same convention?** Yes — and not merely "equivalent in spirit".
+In Quick, `calculate_noi_by_year` gives
+`noi_by_year[0] = current_noi * _growth_factor(noi_growth, 0)
+= current_noi * 1.0 = current_noi` exactly (multiplication by `1.0` is exact in
+IEEE-754), with a zero short-circuit that returns `0.0` where
+`current_noi == 0.0` — also equal. So Quick's `current_noi / purchase_price`
+**is** `noi_by_year[0] / purchase_price`.
+
+Verified empirically at `66cb6b7` across the cross-product of
+`current_noi in {0.0, 1.0, 1234567.89, -500000.0, 1e-9, 7.3}`,
+`noi_growth in {0.0, 0.03, -0.5, 0.17}` and
+`purchase_price in {1e6, 4e7, 987654321.0}`: `going_in_cap_rate.hex()` equals
+`(noi_by_year[0] / purchase_price).hex()` in **every** case. No mismatches.
+
+`engine/contracts.py` independently records the same fact, describing
+`going_in_cap_rate` as "Kept as a field here (rather than re-derived downstream
+from `noi_by_year[0] / purchase_price`, which is mathematically equivalent)".
+
+**Conclusion: Quick and Detailed do not differ. There is exactly one Anchor
+convention, and it is:**
+
+```
+going_in_cap_rate = Year-1 NOI / purchase_price
+```
+
+**No elevation to human financial decision is required**, because there is no
+difference to elevate.
+
+**Lease-Level follows it unchanged:**
+
+```
+going_in_cap_rate = noi_by_year[0] / purchase_price
+                  = ( sum of noi_m for m in 1..12 ) / purchase_price
+```
+
+Identical to Detailed's expression, reading the same field of the same derived
+annual projection. **No new going-in-cap definition is invented.**
+`purchase_price` arrives from `AcquisitionTerms` through the integration layer
+(Section 27), exactly as it reaches
+`build_detailed_operating_projection(..., purchase_price=terms.purchase_price)`
+today.
+
+**One disclosed consequence, which is a property of the mode and not of the
+formula.** Quick's `current_noi` is an as-is in-place figure supplied by the
+analyst. Lease-Level's Year-1 NOI is a *modeled* first-year result that already
+reflects lease-up, downtime, free rent and expense growth. For a building with
+significant Year-1 vacancy the Lease-Level going-in cap rate will therefore sit
+well below the Quick figure an analyst might quote for the same asset, and for
+a deeply vacant building it can be zero or negative. **That is the honest
+answer to "what does this property earn in Year 1 relative to price", and no
+floor, substitution or normalization is applied.** Unlike `exit_noi`
+(Section 21.6), a non-positive going-in cap rate capitalizes nothing and is
+therefore reported as-is rather than refused. Golden case 27 pins it.
+
+### 20.5 There is no independent annual model
 
 Every annual figure above is produced by one of the three reducers, each of
 which takes a canonical monthly tuple and nothing else. No annual value is ever
@@ -1710,25 +1953,85 @@ net_sale_proceeds = gross_exit_value - disposition_costs - remaining_loan_balanc
 **Lease-Level changes the SOURCE of `exit_noi`, never the capitalization
 convention.** `calculate_exit_value` is not modified.
 
-### 21.6 Negative NOI and negative exit value
+### 21.6 Negative NOI, and a non-positive forward exit NOI
 
-Lease-Level must permit negative monthly NOI: a fully vacant property still
-incurs its fixed operating expenses (Section 25). **NOI is never floored at
-zero, at any resolution.**
+**Negative NOI is valid and is never floored.** A fully vacant property still
+incurs its fixed operating expenses (Section 25). Specifically:
 
-Inspected behaviour with a negative `exit_noi`:
+| Quantity | Non-positive value permitted? |
+|---|---|
+| Monthly NOI, any month | **Yes** — valid, reported as-is |
+| Annual hold-period NOI, any hold year | **Yes** — valid, reported as-is |
+| `going_in_cap_rate` | **Yes** — capitalizes nothing (Section 20.4) |
+| **Forward exit NOI used for cap-rate terminal valuation** | **No** — see below |
 
-- `calculate_exit_value` returns a negative value; `ensure_finite` passes it.
-- `calculate_disposition_costs` returns a negative number (a credit), which is
-  economically meaningless.
-- `net_sale_proceeds` becomes strongly negative.
-- The IRR solver's `_is_valid_irr_series` will typically reject the series and
-  return `None` rather than crash.
+**HD-D4-7 — the prior warning-only recommendation was REJECTED and REPLACED at
+human financial review.**
 
-**No floor is invented.** The recommendation is a leasing-scoped WARNING,
-`NEGATIVE_FORWARD_EXIT_NOI`, raised at D4.4 when
-`exit_noi <= 0`, with the engine's existing behaviour unchanged. Recorded as
-**HD-D4-7**.
+> For Lease-Level acquisition analysis using an exit-capitalization method,
+> `exit_noi` **must be `> 0`**. If `exit_noi <= 0`, the cap-rate terminal
+> valuation is not financially meaningful, and Anchor raises a **scoped
+> Lease-Level validation ERROR**.
+
+The reasoning is that `exit_value = exit_noi / exit_cap_rate` is only a
+valuation when the numerator is an income stream. Dividing a loss by a cap rate
+does not produce a price a buyer would pay; it produces an artefact whose
+magnitude is driven by the cap rate in the wrong direction (a *lower* cap rate
+makes the "value" *more* negative). Reporting that number, and then an IRR
+derived from it, would be worse than refusing.
+
+**Required behaviour, exactly:**
+
+```
+DO   raise a scoped Lease-Level validation ERROR when exit_noi <= 0.
+DO   leave negative monthly NOI valid.
+DO   leave negative annual hold-period NOI valid.
+
+DO NOT floor exit NOI at zero.
+DO NOT capitalize a negative NOI into a negative property value.
+DO NOT silently continue the returns calculation.
+DO NOT change existing Quick behaviour.
+DO NOT change existing Detailed behaviour.
+DO NOT change calculate_exit_value globally.
+```
+
+**Placement — the Lease-Level acquisition/integration boundary.** The check
+runs in `anchor/analysis/lease_level.py` (Section 27), immediately before the
+generic engine is invoked, and therefore before `calculate_exit_value` is ever
+reached:
+
+```
+build the MonthlyPropertyProjection            (may contain negative NOI)
+derive the AnnualOperatingProjection           (may contain negative NOI,
+                                                and may carry exit_noi <= 0)
+--> require_capitalizable_exit_noi(annual)     <-- ERROR raised HERE
+invoke analyze_acquisition_from_operating_projection(...)
+```
+
+Two consequences of this placement, both deliberate:
+
+1. **The operating projection of a distressed building is still fully
+   inspectable.** `MonthlyPropertyProjection` and `AnnualOperatingProjection`
+   construct successfully with a non-positive `exit_noi`; only *valuing* the
+   asset by cap rate is refused. An analyst can look at exactly why the
+   forward year is negative.
+2. **The generic engine is untouched.** `calculate_exit_value` keeps its
+   current behaviour for every caller, so Quick and Detailed are unaffected —
+   which is what G-2 requires.
+
+The ERROR code (`NON_POSITIVE_FORWARD_EXIT_NOI`) is declared in
+`anchor/leasing/validation.py`, keeping one leasing validation authority, and
+is *invoked* from the integration layer. Implemented at gate **D4.5**, the gate
+that creates that boundary.
+
+**A future alternative-valuation seam — documented, not implemented.** A
+property whose forward twelve months are genuinely negative can still have
+value: the standard answers are a discounted-cash-flow terminal value over a
+longer forward horizon, or a stabilized-NOI terminal value using an
+analyst-supplied stabilized figure with its own explicit assumption and label.
+Either would attach as an alternative terminal-value strategy alongside the
+cap-rate method rather than by relaxing this rule. **Both are out of scope for
+all of D4** and neither is designed here.
 
 ---
 
@@ -1916,10 +2219,92 @@ places the crossing in Hold Year 4 with an exact hand-computed figure.
 
 ## 27. Module Boundary and Dependency Graph
 
+**CORRECTED at human financial review.** The D4.0 draft proposed that
+`anchor.engine.acquisition` import `anchor.leasing` and own Lease-Level
+orchestration — the direction D0 Section 3.5 and Appendix A had assumed. That
+is **rejected**:
+
+> Do **not** make `src/anchor/engine/acquisition.py` the owner of
+> Lease-Level-specific orchestration importing the full `anchor.leasing`
+> package. **Keep the shared acquisition engine generic.**
+>
+> ```
+> anchor.leasing
+>         |  produces deterministic Lease-Level operating outputs
+>         v
+> Lease-Level analysis / integration layer
+>         |  imports those outputs and invokes
+>         v
+> the generic acquisition engine
+>         |
+>         v
+> debt / returns
+> ```
+>
+> The generic engine may gain **generic** additive support such as
+> `OperatingCapitalSchedule` and an optional operating-capital argument. But
+> `engine/acquisition.py` must not need to understand Suites, Leases,
+> rollover, recoveries, initial vacancy or Lease-Level projection
+> construction, and
+> `analyze_acquisition_from_operating_projection` **must remain
+> operating-mode agnostic**.
+
+Section 27.0 selects the integration module; the rest of this section is
+restated under that correction.
+
+### 27.0 Where the integration layer belongs — `anchor.analysis`
+
+**Selected: `src/anchor/analysis/lease_level.py`.** This is an existing
+integration module and the repository justifies it directly, rather than it
+being a new layer invented for D4.
+
+`src/anchor/analysis/__init__.py` states its own role verbatim:
+
+```
+Sits above the frozen Phase 2 engine (``anchor.engine``) and below the
+FastAPI adapter (``anchor.api``):
+
+    financial engine
+          ^
+    analysis/sensitivity, analysis/break_even
+          ^
+        FastAPI
+          ^
+         React
+
+This package never reproduces or algebraically rearranges a financial
+formula -- every sensitivity scenario and every break-even candidate is
+evaluated by calling ``analyze_acquisition``/``analyze_detailed_acquisition_
+with_projection`` and reading a field off its result.
+```
+
+Four properties make it the right home, each verified by inspection at
+`66cb6b7`:
+
+| Property | Evidence |
+|---|---|
+| It already sits **above** the engine and **below** the API | its own module docstring, above |
+| It already **imports the engine** rather than being imported by it | `break_even.py` and `sensitivity.py` both `from ..engine import (...)` |
+| It already **orchestrates without owning formulas** — exactly the Lease-Level integration role | "never reproduces or algebraically rearranges a financial formula ... every candidate is evaluated by calling `analyze_acquisition` / `analyze_detailed_acquisition_with_projection`" |
+| It already handles **per-mode** orchestration | `SUPPORTED_ASSUMPTIONS` vs `DETAILED_SUPPORTED_ASSUMPTIONS`, `_build_detailed_scenario_terms`, `build_standard_detailed_presets` |
+
+Alternatives considered and rejected:
+
+| Candidate | Why not |
+|---|---|
+| `engine/acquisition.py` | The rejected direction. Makes the shared engine lease-aware |
+| A new top-level `anchor/lease_level/` package | A whole package whose content is one orchestration function, when a module in an existing integration layer does it |
+| `anchor/api.py` | D5, and an HTTP adapter is not an analysis layer |
+| `anchor/deals/` | Persistence, D5 |
+
+`analysis/lease_level.py` also becomes the natural home for D4.6's Lease-Level
+sensitivity and break-even work, which sits beside `sensitivity.py` and
+`break_even.py` in the same package.
+
 ### 27.1 The recommended placement
 
 ```
-src/anchor/leasing/
+src/anchor/leasing/                      -- PRODUCES operating outputs
     expenses.py      NEW (D4.1)  monthly property expense schedule;
                                  recoverable pool construction
     aggregation.py   EXTENDED (D4.2)  suite_operating_projection();
@@ -1927,64 +2312,156 @@ src/anchor/leasing/
     projection.py    NEW (D4.3/D4.4)  MonthlyPropertyProjection; the EGI/NOI
                                  stack; aggregate_monthly_to_annual();
                                  AnnualOperatingProjection
-    contracts.py     EXTENDED  LeaseLevelOperatingInputs and the new results
-    validation.py    EXTENDED  operating-input domain rules and warnings
+    contracts.py     EXTENDED  LeaseLevelOperatingInputs and the new schedules
+    validation.py    EXTENDED  operating-input domain rules; the ERROR and
+                                 WARNING codes
+
+src/anchor/analysis/                     -- INTEGRATES
+    lease_level.py   NEW (D4.5)  the Lease-Level orchestration entry point;
+                                 the exit-NOI capitalizability check;
+                                 OperatingCapitalSchedule assembly
+    contracts.py     EXTENDED (D4.5/D4.6)  LeaseLevelAcquisitionResults;
+                                 StandardLeaseLevelSensitivityPresets
+
+src/anchor/engine/                       -- STAYS GENERIC
+    contracts.py     EXTENDED (D4.5)  OperatingCapitalSchedule; two additive
+                                 AcquisitionResults fields
+    acquisition.py   EXTENDED (D4.5)  one optional generic parameter; TI/LC
+                                 terms in the two cash-flow builders.
+                                 NO import of anchor.leasing. NO Suite, Lease,
+                                 rollover, recovery or projection knowledge
+    returns.py       EXTENDED (D4.5)  optional generic below-NOI terms on the
+                                 two recurring-cash-flow builders
 ```
 
-This matches D0 Section 3.5's declared layout (`expenses.py`, `projection.py`)
-with one refinement: **suite-to-property summation stays in `aggregation.py`**,
-because that module already owns exactly this responsibility for D1.3 and D3.5
-and already carries the "reprices nothing" guardrail. `projection.py` owns the
-statement arithmetic and nothing else.
+This matches D0 Section 3.5's declared layout for the *leasing* modules
+(`expenses.py`, `projection.py`) with two refinements:
 
-### 27.2 A or B — where does the property operating projection live?
+1. **Suite-to-property summation stays in `aggregation.py`**, because that
+   module already owns exactly this responsibility for D1.3 and D3.5 and
+   already carries the "reprices nothing" guardrail. `projection.py` owns the
+   statement arithmetic and nothing else.
+2. **Orchestration leaves the engine.** D0 Section 3.5's closing line — "At D4,
+   `anchor.engine.acquisition` imports `anchor.leasing` — never the reverse" —
+   is superseded; see the amendment block added to D0 Section 3.5.
 
-| Option | Verdict |
-|---|---|
-| **A** — inside `anchor.leasing`, adapted outward | **RECOMMENDED** |
-| **B** — at a separate analysis/integration layer that imports leasing | Rejected |
+### 27.2 Where the property operating projection lives, and who orchestrates
 
-**Why A.** The property operating projection is built entirely from leasing
-outputs plus one leasing input contract. Everything it needs is already inside
-`anchor.leasing`, and `AnnualOperatingProjection` satisfies
-`OperatingProjectionLike` **structurally** — it does not even need to import
-the Protocol. A new integration package would import leasing, re-export leasing
-concepts, and add a layer whose only content is a function call.
+These are two separate questions, and the answers differ.
 
-**The bridge is still made in the required direction.** `anchor.leasing`
-produces the projection; `anchor.engine.acquisition` imports `anchor.leasing`
-to obtain it. D1–D3's isolation guarantee (nothing imports leasing) is replaced
-at D4 by the weaker, still-acyclic guarantee: **only
-`anchor.engine.acquisition` imports leasing, and leasing imports no engine
-module except `anchor.engine.contracts`.**
+**Where the projection is built: inside `anchor.leasing`.** It is constructed
+entirely from leasing outputs plus one leasing input contract. Everything it
+needs is already in the package, and `AnnualOperatingProjection` satisfies
+`OperatingProjectionLike` **structurally** — it never imports the Protocol.
+
+**Who orchestrates: `anchor.analysis.lease_level`.** It imports the finished
+leasing outputs, validates the capitalizability of `exit_noi`, assembles the
+generic `OperatingCapitalSchedule`, and calls the generic engine.
+
+The permitted imports of the integration layer:
+
+```
+anchor.leasing              (the operating outputs)
+anchor.engine.acquisition   (analyze_acquisition_from_operating_projection)
+anchor.engine.contracts     (OperatingCapitalSchedule, AcquisitionResults)
+anchor.contracts            (AcquisitionTerms, OperatingMode)
+```
+
+**What `anchor.leasing` may import is unchanged from D1–D3**:
+`anchor.engine.contracts` and `anchor.contracts` only. In fact D4 can leave the
+package needing only the first: `aggregate_monthly_to_annual` takes
+`hold_period: int` and `purchase_price: float` as plain scalars, mirroring
+`build_detailed_operating_projection(inputs, *, hold_period, purchase_price)`
+exactly, so leasing never needs to see an `AcquisitionTerms`. The integration
+layer unpacks it. `_PERMITTED_ANCHOR_IMPORTS` therefore needs **no** change.
+
+**What this buys.** The engine's isolation from leasing is not weakened at all
+— it is *preserved in full*. `test_importing_anchor_engine_does_not_pull_in_
+anchor_leasing` survives **unchanged**, and `anchor.engine` never acquires a
+leasing dependency, transitively or otherwise. Only one file in one package
+gains the edge.
 
 ### 27.3 The dependency graph
 
+The intended high-level direction, as approved:
+
 ```
-                       anchor.contracts
-                    (AcquisitionInputs, AcquisitionTerms,
-                     DetailedOperatingInputs, OperatingMode)
-                              ^          ^
-                              |          |
-              anchor.engine.contracts    |
-        (ensure_finite, OperatingProjectionLike,
-         NoiForecast, OperatingProjection, CapitalStack,
-         DebtSchedule, AcquisitionResults, ...)
-                    ^                     ^
-                    |  (permitted)        |
-    +---------------+---------+           |
-    |                         |           |
-anchor.leasing.*        anchor.engine.noi |
-    |                   anchor.engine.debt
-    |                   anchor.engine.returns
-    |                   anchor.engine.operating_projection
-    |                         |           |
-    |                         v           v
-    +----------------> anchor.engine.acquisition        <-- D4: the ONE new edge
+anchor.leasing
+        |
+        v
+Lease-Level analysis / integration      (anchor.analysis.lease_level)
+        |
+        v
+generic acquisition engine              (anchor.engine.acquisition)
+        |
+        v
+debt / returns                          (anchor.engine.debt, .returns)
+```
+
+In full, with the shared low-level contract modules shown as what they are —
+established leaf dependencies that everything may read, and that import
+nothing themselves:
+
+```
+LEAF CONTRACT MODULES (no outgoing dependencies; read by every layer)
+
+    anchor.contracts                     anchor.engine.contracts
+    AcquisitionInputs                    ensure_finite / NonFiniteResultError
+    AcquisitionTerms                     OperatingProjectionLike (Protocol)
+    DetailedOperatingInputs              NoiForecast, OperatingProjection
+    OperatingMode                        CapitalStack, DebtSchedule
+                                         AcquisitionResults
+                                         OperatingCapitalSchedule   (D4.5, generic)
+          ^                                    ^         ^
+          |                                    |         |
+- - - - - | - - - - - - - - - - - - - - - - - -|- - - - -|- - - - - - - - - - -
+          |                                    |         |
+PRODUCER LAYER                                 |         |
+          |                                    |         |
+    anchor.leasing.*  ---------------------------+       |
+      calendar -> rent / market / leasing_costs           |
+      -> rollover -> recoveries                           |
+      expenses (D4.1) -> aggregation (D4.2)               |
+      -> projection (D4.3/D4.4)                           |
+      produces AnnualOperatingProjection                  |
+      (satisfies OperatingProjectionLike STRUCTURALLY,    |
+       importing nothing to do so)                        |
+          |                                               |
+          |                          anchor.engine.noi ---+
+          |                          anchor.engine.debt
+          |                          anchor.engine.returns
+          |                          anchor.engine.operating_projection
+          |                                    |
+- - - - - | - - - - - - - - - - - - - - - - - -|- - - - - - - - - - - - - - - -
+          |                                    v
+GENERIC ENGINE                    anchor.engine.acquisition
+          |                       (operating-mode AGNOSTIC; imports NO leasing)
+          |                                    ^
+- - - - - | - - - - - - - - - - - - - - - - - -|- - - - - - - - - - - - - - - -
+          |                                    |
+INTEGRATION LAYER                              |
+          |                                    |
+          +----> anchor.analysis.lease_level --+          <-- D4: the ONE new edge
+                 anchor.analysis.sensitivity   |               into anchor.leasing
+                 anchor.analysis.break_even ---+
                               ^
+- - - - - - - - - - - - - - - | - - - - - - - - - - - - - - - - - - - - - - - -
                               |
-              anchor.analysis, anchor.deals, anchor.api, anchor.ai, anchor.cli
+ADAPTERS (D5)     anchor.api, anchor.deals, anchor.ai, anchor.cli
 ```
+
+**Every edge points one way.** The only new package-level edge introduced by D4
+is `anchor.analysis -> anchor.leasing`. There is no edge from `anchor.leasing`
+into `anchor.engine.acquisition`, none from `anchor.engine.acquisition` into
+`anchor.leasing`, and therefore no bidirectional orchestration dependency
+anywhere: the acyclicity claim is structural, not aspirational.
+
+Reading the two contract modules as leaf dependencies is the existing,
+established pattern — `anchor.leasing.aggregation` already imports
+`anchor.engine.contracts` for `ensure_finite` at D1.3, and every engine module
+already imports `anchor.contracts`. D4 adds `OperatingCapitalSchedule` to
+`anchor.engine.contracts` as a **generic** contract carrying no lease-level
+vocabulary, so the leaf stays a leaf.
 
 Inside `anchor.leasing` (all edges downward, no cycles):
 
@@ -2016,21 +2493,46 @@ calendar  rent  market  leasing_costs  validation
 them independent, which is what lets the market-leasing engine remain usable
 before any expense schedule exists.
 
-### 27.4 Guardrail changes required at D4
+### 27.4 Generic engine responsibilities, stated as a boundary
+
+| The generic engine **is** responsible for | The generic engine is **not** responsible for |
+|---|---|
+| Capital stack, debt schedule | Building any operating projection |
+| Exit value, disposition costs, net sale proceeds | Knowing which mode produced one |
+| CapEx from `terms.annual_capex_reserve` | Suites, Leases, rollover, recoveries, initial vacancy |
+| Subtracting a supplied `OperatingCapitalSchedule` | Knowing that its components are TI and LC, or that leases exist |
+| Unlevered / levered cash flows, IRR, EM, DSCR, owner metrics | Validating that `exit_noi` is capitalizable (Section 21.6) |
+| Being called identically by all three modes | Importing `anchor.leasing`, ever |
+
+`analyze_acquisition_from_operating_projection` therefore keeps a signature
+whose every parameter is mode-agnostic: an `OperatingProjectionLike`, an
+`AcquisitionTerms`, and an optional generic `OperatingCapitalSchedule`.
+**G-D4-7** asserts by AST that `engine/acquisition.py`, `engine/returns.py` and
+`engine/debt.py` reference none of `Suite`, `Lease`, `rollover`, `recovery`,
+`leasing`, `tenant_improvement` or `leasing_commission` outside the two field
+names on the generic schedule.
+
+### 27.5 Guardrail changes required at D4
 
 `tests/test_leasing_architecture.py` currently asserts that **no** package
-imports `anchor.leasing`. At D4.5 that assertion narrows:
+imports `anchor.leasing`. At D4.5 that assertion narrows by exactly one file:
 
 ```
-_FORBIDDEN_LEASING_IMPORTS stays exactly as it is.
-_PERMITTED_ANCHOR_IMPORTS stays {anchor.engine.contracts, anchor.contracts}
-    (unless HD-D4-1 resolves to option B, which widens it by one name).
-test_no_existing_package_imports_anchor_leasing narrows to permit exactly
-    src/anchor/engine/acquisition.py, and continues to forbid every other
-    file in engine/, analysis/, deals/, ai/, ingestion/ and the top level.
-test_importing_anchor_engine_does_not_pull_in_anchor_leasing is REPLACED by
-    an assertion that importing anchor.engine.debt / .noi / .returns /
-    .operating_projection alone still does not pull in anchor.leasing.
+_FORBIDDEN_LEASING_IMPORTS      unchanged.
+_PERMITTED_ANCHOR_IMPORTS       unchanged -- {anchor.engine.contracts,
+                                anchor.contracts} -- HD-D4-1 resolved to the
+                                mirror, which widens nothing.
+
+test_no_existing_package_imports_anchor_leasing
+    narrows to permit exactly  src/anchor/analysis/lease_level.py,
+    and continues to forbid EVERY file in engine/, deals/, ai/, ingestion/,
+    the top level, and every other file in analysis/.
+
+test_importing_anchor_engine_does_not_pull_in_anchor_leasing
+    UNCHANGED, and still passing. Under the corrected direction the engine
+    never imports leasing at all, so this guardrail is preserved in full
+    rather than replaced -- which is a strictly stronger outcome than the
+    D4.0 draft's proposal.
 ```
 
 The narrowing is itself a deliverable of D4.5 and must be reviewed as such —
@@ -2094,7 +2596,7 @@ LeaseLevelOperatingInputs                                     [D4.1 NEW]
         v
   SuiteOperatingProjection                                    [D4.2 NEW]
     suite_id, months, contractual_base_rent, cash_base_rent, free_rent,
-    absent_rent, tenant_improvements, leasing_commissions, occupied_area
+    tenant_improvements, leasing_commissions, occupied_area
         |
         |  build_property_operating_schedule()                [D4.2 NEW]
         v
@@ -2118,18 +2620,30 @@ LeaseLevelOperatingInputs                                     [D4.1 NEW]
     noi_by_year, exit_noi, going_in_cap_rate   <-- OperatingProjectionLike
     + line items, state fields, exit_window_leasing_costs
         |
-        |  OperatingCapitalSchedule(                          [D4.5 NEW]
+========|=================================================================
+        |   everything above is anchor.leasing
+        |   everything below is anchor.analysis.lease_level  [D4.5 NEW]
+========|=================================================================
+        |
+        |  require_capitalizable_exit_noi(annual)             [HD-D4-7]
+        |     -> ERROR if exit_noi <= 0, BEFORE the engine is invoked
+        |
+        |  OperatingCapitalSchedule(                          [D4.5 NEW, generic]
         |      tenant_improvements_by_year=annual.tenant_improvements_by_year,
         |      leasing_commissions_by_year=annual.leasing_commissions_by_year)
         v
   analyze_acquisition_from_operating_projection(annual, terms, operating_capital)
-        |
+        |         ^
+        |         +-- anchor.engine.acquisition, operating-mode AGNOSTIC.
+        |             It sees an OperatingProjectionLike, an AcquisitionTerms
+        |             and two below-NOI tuples. It does not know a Suite exists.
         v
   AcquisitionResults
         |
         v
   LeaseLevelAcquisitionResults(                               [D4.5 NEW]
       monthly_projection, annual_projection, results)
+      -- in anchor/analysis/contracts.py, beside its orchestrator
 ```
 
 ---
@@ -2146,13 +2660,26 @@ LeaseLevelOperatingInputs                                     [D4.1 NEW]
 | `PropertyOperatingSchedule` | D4.2 | The summed rollover-aware property rent / concession / leasing-cost / area series |
 | `MonthlyPropertyProjection` | D4.3 | The canonical monthly statement (D0 Section 4.7) |
 | `AnnualOperatingProjection` | D4.4 | The derived annual view; satisfies `OperatingProjectionLike` |
-| `LeaseLevelAcquisitionResults` | D4.5 | The result envelope, mirroring `DetailedAcquisitionResults` |
 
 ### 29.2 New contract, in `anchor/engine/contracts.py`
 
 | Contract | Gate | Purpose |
 |---|---|---|
-| `OperatingCapitalSchedule` | D4.5 | The neutral below-NOI channel (Section 17.2) |
+| `OperatingCapitalSchedule` | D4.5 | The **generic** below-NOI channel (Section 17.2). Carries no lease-level vocabulary and no leasing import, so the engine's leaf contract module stays a leaf |
+
+### 29.2a New contract, in `anchor/analysis/contracts.py`
+
+| Contract | Gate | Purpose |
+|---|---|---|
+| `LeaseLevelAcquisitionResults` | D4.5 | The result envelope: `monthly_projection`, `annual_projection`, `results` |
+| `StandardLeaseLevelSensitivityPresets` | D4.6 | Mirrors `StandardDetailedSensitivityPresets` |
+
+**Why the envelope moved out of `engine/contracts.py`.** `DetailedAcquisitionResults`
+lives beside its orchestrator (`engine/acquisition.py`), and the rule is the
+same here: **an envelope lives with the layer that assembles it.** Since
+`analysis/lease_level.py` orchestrates, `analysis/contracts.py` holds the
+envelope — and the engine's contract module never acquires a field typed as a
+Lease-Level projection.
 
 ### 29.3 The minimum `MonthlyPropertyProjection`
 
@@ -2165,10 +2692,9 @@ class MonthlyPropertyProjection:
     months: tuple[ModelMonth, ...]                    # 12H + 12
 
     # --- revenue, above NOI ---
-    contractual_base_rent: tuple[float, ...]          # audit
-    absent_rent: tuple[float, ...]                    # audit  (Section 5.4)
-    free_rent: tuple[float, ...]                      # audit
-    cash_base_rent: tuple[float, ...]                 # AUTHORITATIVE
+    contractual_base_rent: tuple[float, ...]          # audit only, feeds nothing
+    free_rent: tuple[float, ...]                      # audit only, feeds nothing
+    cash_base_rent: tuple[float, ...]                 # AUTHORITATIVE; EGI reads THIS
     expense_recovery: tuple[float, ...]               # from D3.5, verbatim
     other_income: tuple[float, ...]
     credit_loss: tuple[float, ...]
@@ -2208,8 +2734,9 @@ class MonthlyPropertyProjection:
 
 | Field | Why excluded |
 |---|---|
-| `capex` | Section 18.2 — its existence invites a double-count and no D4 calculation needs it |
-| `market_rent_psf` | `market.py` refuses to aggregate a rate across suites; a property figure is an area-weighted **presentation** concern. **HD-D4-4** |
+| `absent_rent` | **HD-D4-5 as approved.** An explanatory reconciliation concept, not a financial assumption and not a contract field (Section 5.4.1). It survives as guardrail **G-D4-1** over three series that already exist |
+| `capex` | Section 18.2 — its existence invites a double-count and no D4 calculation needs it. **Confirmed at human review** |
+| `market_rent_psf` | **HD-D4-4 approved:** not required to calculate EGI, NOI, exit NOI, cash flow or returns. `market.py` refuses to aggregate a rate across suites; presentation/analytics may be addressed at D5 |
 | `rollover_events` | D2.6 already publishes `event_states` / `transitions` per suite, which is the audit surface D0 Section 4.7's `RolloverEvent` sketch anticipated. Duplicating it at property level would create a second event list |
 | `economic_occupancy` | Section 16.4 — a calculation factor, not a KPI |
 | `gross_potential_rent` | Not a Lease-Level concept; it is a Detailed *input* |
@@ -2227,12 +2754,12 @@ every gate smaller, not larger:
 | Gate | Content | Files |
 |---|---|---|
 | **D4.0** | This document. Architecture, financial conventions, HD register, goldens, failure modes | docs only |
-| **D4.1** | `LeaseLevelOperatingInputs`; `MonthlyPropertyExpenseSchedule`; monthly fixed-expense build with anniversary growth; `build_recoverable_expense_pool` closing HD-D3-8; leasing-scoped validation | `leasing/contracts.py`, new `leasing/expenses.py`, `leasing/validation.py` |
-| **D4.2** | `SuiteOperatingProjection`; `build_property_operating_schedule`; the `absent_rent` identity; area-based occupancy. **The gap D0 did not schedule** | `leasing/contracts.py`, `leasing/aggregation.py` |
-| **D4.3** | `MonthlyPropertyProjection`: other income, credit loss, EGI, management fee, NOI. The fixed 8-step order asserted | `leasing/contracts.py`, new `leasing/projection.py` |
+| **D4.1** | `LeaseLevelOperatingInputs`; `MonthlyPropertyExpenseSchedule`; monthly fixed-expense build with anniversary growth; `build_recoverable_expense_pool` closing HD-D3-8; leasing-scoped validation. **G-D4-5 exact-equivalence, G-D4-6 single-implementation** (the condition on HD-D4-1) | `leasing/contracts.py`, new `leasing/expenses.py`, `leasing/validation.py` |
+| **D4.2** | `SuiteOperatingProjection`; `build_property_operating_schedule`; area-based occupancy; the **G-D4-1** reconciliation assertion over `contractual`/`free_rent`/`cash` | `leasing/contracts.py`, `leasing/aggregation.py` |
+| **D4.3** | `MonthlyPropertyProjection`: other income, credit loss, EGI (reading `cash_base_rent` directly), management fee, NOI. The fixed 8-step order asserted | `leasing/contracts.py`, new `leasing/projection.py` |
 | **D4.4** | `AnnualOperatingProjection` derived solely by `aggregate_monthly_to_annual`; `exit_noi`; `exit_window_leasing_costs`; `going_in_cap_rate`. **G-M4, G-M12, G-11** | `leasing/projection.py`, `leasing/contracts.py` |
-| **D4.5** | **The one downstream change.** `OperatingCapitalSchedule`; the engine parameter; the five wiring points; `OperatingMode.LEASE_LEVEL`; `analyze_lease_level_acquisition_with_projection`; `LeaseLevelAcquisitionResults`; the guardrail narrowing. **G-2, G-3, G-6, G-12, G-M11** | `engine/contracts.py`, `engine/acquisition.py`, `engine/returns.py`, `contracts.py`, `tests/test_leasing_architecture.py` |
-| **D4.6** | Sensitivity and break-even over the same four `AcquisitionTerms` dimensions Detailed uses, via `dataclasses.replace` | `analysis/sensitivity.py`, `analysis/contracts.py` |
+| **D4.5** | **The integration gate.** New `analysis/lease_level.py` orchestrator; the HD-D4-7 exit-NOI ERROR at that boundary; `LeaseLevelAcquisitionResults`; `OperatingMode.LEASE_LEVEL`. In the engine, **generic additive support only**: `OperatingCapitalSchedule`, the optional parameter, the five wiring points. The guardrail narrowing. **G-2, G-3, G-6, G-12, G-M11, G-D4-7** | new `analysis/lease_level.py`, `analysis/contracts.py`, `engine/contracts.py`, `engine/acquisition.py`, `engine/returns.py`, `contracts.py`, `tests/test_leasing_architecture.py` |
+| **D4.6** | Sensitivity and break-even over the same four `AcquisitionTerms` dimensions Detailed uses, via `dataclasses.replace` | `analysis/lease_level.py`, `analysis/sensitivity.py`, `analysis/contracts.py` |
 | **D4.7** | End-to-end golden with real expenses; three-mode convergence proof; full regression; D4 closeout | tests + docs |
 
 ### 30.2 Why this ordering
@@ -2240,13 +2767,20 @@ every gate smaller, not larger:
 - **D4.1 before everything** because the pool is an input to D3's recovery
   builders, and every later gate needs a real expense schedule to test against.
 - **D4.2 before D4.3** because the statement cannot be assembled from series
-  that do not exist yet, and because the `absent_rent` identity (Section 5.4)
-  must be proven on its own before EGI depends on it.
+  that do not exist yet, and because the cash-rent reconciliation (Section
+  5.4.1, G-D4-1) must be proven on its own before EGI reads `cash_base_rent`.
 - **D4.4 before D4.5** because `exit_noi` must be provably correct before it
-  reaches a valuation.
+  reaches a valuation — and because D4.5 is the gate that refuses to capitalize
+  a non-positive one.
 - **D4.5 last among the engine gates** so that exactly one gate carries the
-  bit-identity obligation and the guardrail narrowing, and it can be reviewed
-  as a unit.
+  bit-identity obligation, the new integration layer and the guardrail
+  narrowing, and it can be reviewed as a unit.
+
+**Note on HD-D4-7's gate.** The decision unblocks D4.4, but its *implementation*
+lands at D4.5, because the check belongs at the acquisition/integration
+boundary and that boundary does not exist until D4.5. D4.4 may therefore
+construct an `AnnualOperatingProjection` carrying `exit_noi <= 0`; nothing
+values it.
 - **D4.6 after D4.5** because sensitivity re-runs the whole pipeline and needs
   it to exist.
 
@@ -2318,8 +2852,8 @@ Year 4 monthly fixed        = 100,000 * 1.03^3 = 109,272.70
 | **4** | **Partially vacant** | S1 NNN occupied, S2 `HOLD_VACANT`, `rho = 1.00` | `cash 150,000`; `recovery = 0.6 x 100,000 = 60,000`; `occupied_area 60,000`; `physical_occupancy 0.60`; `fixed 100,000` **unchanged**; `EGI 215,000`; `fee 6,450`; **`NOI 108,550`**. The `40,000` unrecovered pool share is the landlord's |
 | **5** | **Fully vacant, negative NOI** | Both suites `HOLD_VACANT` | `cash 0`; `recovery 0`; `occupancy 0.0`; `OI 5,000`; `EGI 5,000`; `fixed 100,000`; `fee 150`; `total opex 100,150`; **`NOI -95,150`** per Year-1 month. Not floored |
 | **6** | **Initial vacancy MARKET_LEASE_UP** | S2 `MARKET_LEASE_UP`, `initial_lease_up_months = 6`; S1 NNN | Months 1-6: S2 contributes `0` rent, `0` recovery, `0` occupied area; from month 7 its chain economics appear. Property occupancy steps `0.60 -> 1.00` |
-| **7** | **Free rent affects cash rent once** | A successor with 3 months free rent, integral downtime | In each abated month `contractual_base_rent = R`, `free_rent = R`, `absent_rent = 0`, `cash_base_rent = 0`, and `EGI` excludes `R` exactly once. Doubling `free_rent_months` must not change `contractual_base_rent` in any month |
-| **7b** | **Fractional downtime identity** | D2 Section 7.2 reference case: `D = 2.25`, free rent `2.5`, `R = 100,000` | September: `contractual 100,000`, `free_rent 75,000`, **`absent_rent 25,000`**, `cash_base_rent 0`. Asserts `contractual - absent - free == cash` at `abs=1e-9`, and asserts the D0 18.1 formula would have produced `25,000` (the regression this golden exists to prevent) |
+| **7** | **Free rent affects cash rent once** | A successor with 3 months free rent, integral downtime | In each abated month `contractual_base_rent = R`, `free_rent = R`, `cash_base_rent = 0`, and `EGI` excludes `R` exactly once (integral downtime, so `contractual - free_rent == cash` holds here). Doubling `free_rent_months` must not change `contractual_base_rent` in any month |
+| **7b** | **Fractional downtime — EGI reads cash rent** | D2 Section 7.2 reference case: `D = 2.25`, free rent `2.5`, `R = 100,000` | September: `contractual 100,000`, `free_rent 75,000`, `cash_base_rent 0`. **`EGI` contains `0` of base rent that month**, not `25,000`. Asserts (a) EGI equals `cash + recovery + OI - CL` exactly; (b) `contractual - free_rent - cash == 25,000 >= 0` as the G-D4-1 reconciliation; (c) the rejected D0 18.1 expression would have given `25,000` — the regression this golden exists to prevent |
 | **8** | **TI below NOI** | Any TI event in a hold month | Doubling `renewal_ti_psf` and `new_ti_psf` leaves every `noi` month, `noi_by_year`, `exit_noi`, `going_in_cap_rate`, `dscr_by_year` and `year_1_debt_yield` **bit-identical**; `unlevered_cash_flows`, `levered_cash_flows` and both IRRs change |
 | **9** | **LC below NOI** | Same, for `renewal_lc_pct` / `new_lc_pct` | Same assertions |
 | **10** | **Recoveries separate from expenses** | Case 1 | `expense_recovery` and `total_operating_expenses` are both reported at full gross; no field equals a netted difference. Also asserts `(total_opex - fee) * rho == recoverable_expense_pool` (the two pool forms agree) |
@@ -2339,11 +2873,16 @@ Year 4 monthly fixed        = 100,000 * 1.03^3 = 109,272.70
 | **24** | **Detailed unchanged** | The existing Detailed golden | Bit-identical after every D4 gate, same mechanism |
 | **25** | **Lease-Level annual adapter deterministic** | Any case, built twice from the same inputs, with suites supplied in two different orders | Every field of `AnnualOperatingProjection` **value-equal**, and every monthly series byte-identical. Proves the `fsum` + sorted-suite ordering holds for the operating aggregate as it already does for recoveries |
 
-### 31.3 Additional case for the negative-exit edge
+### 31.3 Additional cases from human financial review
 
 | # | Case | Expected |
 |---|---|---|
-| **26** | Fully vacant through the forward window (case 5 extended) | `exit_noi < 0`; `exit_value < 0`; `NEGATIVE_FORWARD_EXIT_NOI` WARNING raised; no floor applied anywhere; IRR returns `None` rather than raising |
+| **26** | **Non-positive forward exit NOI** — fully vacant through the forward window (case 5 extended) | The `MonthlyPropertyProjection` and `AnnualOperatingProjection` **build successfully** with negative monthly NOI, negative `noi_by_year` entries and `exit_noi < 0`. `analyze_lease_level_acquisition_with_projection` then raises a scoped Lease-Level validation **ERROR** (`NON_POSITIVE_FORWARD_EXIT_NOI`) **before** `calculate_exit_value` is called. Asserts: no `exit_value` is produced; `exit_noi` is not floored; `calculate_exit_value` is never invoked (spy); and the same `AcquisitionTerms` through Quick and Detailed is **unaffected** |
+| **26b** | Boundary at exactly zero | `exit_noi == 0.0` also raises. The rule is `> 0`, not `>= 0` |
+| **27** | **Going-in cap rate convention** | `lease_level.going_in_cap_rate == noi_by_year[0] / purchase_price`, asserted with `float.hex()`. For a Quick deal whose `current_noi` equals the Lease-Level Year-1 NOI and the same `purchase_price`, the two `going_in_cap_rate` values are **bit-identical** — one convention, three modes |
+| **27b** | Negative Year-1 NOI going-in | A heavily vacant Year 1 gives a negative `going_in_cap_rate`, **reported as-is**. Unlike `exit_noi` it capitalizes nothing, so it is not refused, not floored and not substituted |
+| **28** | **Expense-growth exact equivalence** (the HD-D4-1 condition) | For each of the five lines and `y in 1..H+1`, the Lease-Level annual amount is **bit-identical** (`float.hex()`) to the Detailed convention, swept over `expense_growth in {0.0, 0.03, -0.5, 0.17}` plus the overflow path. **G-D4-5** |
+| **29** | **Engine stays mode-agnostic** | AST: `engine/acquisition.py`, `engine/returns.py` and `engine/debt.py` import no `anchor.leasing` module and name no lease-level concept; `import anchor.engine` in a fresh subprocess still leaves `anchor.leasing` out of `sys.modules`. **G-D4-7** |
 
 ---
 
@@ -2354,6 +2893,7 @@ Year 4 monthly fixed        = 100,000 * 1.03^3 = 109,272.70
 | **FM-D4-1** | Physical vacancy applied twice (a vacancy % on top of modeled vacancy) | G-M14: no Lease-Level contract declares `vacancy_credit_loss_pct` or `occupancy`; golden 4 |
 | **FM-D4-2** | Free rent deducted twice (once inside `cash_base_rent`, again from it) | Golden 7: `EGI` excludes the abated rent exactly once; identity assertion in golden 7b |
 | **FM-D4-3** | Contractual **and** cash base rent both counted in EGI | AST test: the EGI expression references `cash_base_rent` and never `contractual_base_rent` |
+| **FM-D4-3b** | EGI **reconstructed** as `contractual - free_rent` (or as `contractual - absent_rent - free_rent`) instead of reading `cash_base_rent` | Golden 7b; the same AST test — the EGI expression must contain no subtraction of `free_rent` at all |
 | **FM-D4-4** | Recoveries netted against expenses | Golden 10: both lines reported gross; no field equals a netted difference |
 | **FM-D4-5** | Recoveries recalculated inside D4 | G-D4-4: the property operating aggregator may not name a lease type, stop, share, factor, probability or the pool |
 | **FM-D4-6** | Recoverable pool includes the management fee | Section 12.1's expanded five-line form; golden 10 asserts both pool forms agree |
@@ -2386,18 +2926,38 @@ Year 4 monthly fixed        = 100,000 * 1.03^3 = 109,272.70
 | **FM-D4-33** | Duplicate recovery revenue (a suite counted twice, or in-place plus chain) | D3.5's completeness checking and sorted-suite `fsum`; golden 25 |
 | **FM-D4-34** | Initial-vacancy rent omitted from forward NOI | Golden 19: a `MARKET_LEASE_UP` suite leasing before exit raises `exit_noi` |
 | **FM-D4-35** | Monthly / annual divergence in any published series | G-M4 asserted on real projections, every flow metric, every year |
-| **FM-D4-36** | `absent_rent` computed as a property-level residual, masking a per-suite sign error | D4.2 computes it per suite and sums; a test perturbs one suite and asserts the identity fails loudly if the per-suite value is wrong |
+| **FM-D4-36** | A non-positive `exit_noi` capitalized into a negative property value, or floored at zero, or silently carried into the returns calculation | Golden 26 / 26b: a scoped Lease-Level ERROR is raised at the integration boundary and `calculate_exit_value` is never invoked |
+| **FM-D4-37** | The exit-NOI rule leaks into the shared engine, changing Quick or Detailed behaviour | Golden 26 asserts Quick and Detailed are unaffected for the same terms; `calculate_exit_value` is unmodified |
+| **FM-D4-38** | Negative monthly or annual hold-period NOI wrongly rejected as an error | Goldens 4, 5: they must build and report successfully. Only the forward NOI used for cap-rate valuation is restricted |
+| **FM-D4-39** | `engine/acquisition.py` acquires Lease-Level knowledge (imports `anchor.leasing`, or names a Suite/Lease/rollover/recovery concept) | **G-D4-7** / golden 29, including the unchanged fresh-subprocess `sys.modules` check |
+| **FM-D4-40** | A fourth expense-growth implementation appears, or the mirrored helper drifts from Detailed | **G-D4-5** (`float.hex()` equivalence) and **G-D4-6** (AST single-implementation); golden 28 |
+| **FM-D4-41** | Lease-Level invents its own going-in cap-rate definition, or substitutes an in-place NOI for the modeled Year-1 NOI | Golden 27 / 27b: `noi_by_year[0] / purchase_price`, bit-identical to the shared convention |
+| **FM-D4-42** | `absent_rent` promoted from an explanatory reconciliation into an input, an assumption or an EGI term | Section 5.4.1; it is absent from every contract in Section 29, and FM-D4-3b's AST test |
 
-**Count: 36.**
+**Count: 42.**
 
 ---
 
 ## 33. Human Decisions — HD-D4 Register
 
-Decisions already answered by D0/D2/D3 or by shipped code are **not** restated
-here as open questions. Seven items remain.
+**All seven items are DECIDED as of the 2026-09-05 human financial review.**
+Six were approved as recommended; **HD-D4-7 was rejected and replaced**. One
+architectural direction inherited from D0 was additionally corrected
+(Section 27). Decisions already answered by D0/D2/D3 or by shipped code are not
+restated here as open questions.
 
-### HD-D4-1 — Where the expense-growth helper lives *(blocks D4.1)*
+| ID | Outcome | Blocks |
+|---|---|---|
+| HD-D4-1 | **APPROVED** (conditional on G-D4-5/G-D4-6) | nothing |
+| HD-D4-2 | **APPROVED** | nothing |
+| HD-D4-3 | **APPROVED** | nothing |
+| HD-D4-4 | **APPROVED** | nothing |
+| HD-D4-5 | **APPROVED** (narrowed: absent rent is explanatory only) | nothing |
+| HD-D4-6 | **APPROVED** | nothing |
+| HD-D4-7 | **REJECTED AND REPLACED** — scoped validation ERROR | nothing |
+| Dependency direction | **CORRECTED** — integration layer owns orchestration | nothing |
+
+### HD-D4-1 — Where the expense-growth helper lives — **APPROVED**
 
 **Question.** D0 Section 13.1 states a bias toward extracting a shared,
 pure expense-growth helper rather than writing a second copy of
@@ -2412,7 +2972,23 @@ where D0 assumed it would live. Where does it go?
 | Duplication | A third copy of a 6-line overflow-safe helper | One copy |
 | Precedent | `operating_projection.py` already mirrors `noi.py` deliberately, with a comment saying so | None |
 
-**Recommended: A.** The blocking fact is that `anchor.leasing` may import only
+**DECISION: A — APPROVED.**
+
+> For D4, mirror the existing Detailed annual expense-growth formula in the
+> Lease-Level operating-expense module rather than refactoring Detailed. The
+> formula is narrow and deterministic, D4 must preserve Detailed
+> bit-identically, and extracting a shared helper would expand the regression
+> surface for no immediate financial benefit.
+>
+> **Conditional on an exact-equivalence guardrail (Section 10.6):** for
+> identical Year-1 amount, `expense_growth` and hold-year index, the
+> Lease-Level annual expense amount must be bit/hex identical to the Detailed
+> convention wherever the same arithmetic is expected.
+>
+> **No additional duplicated expense-growth implementations are permitted.**
+> This is a tactical duplication, not permission for formula drift.
+
+The blocking fact was that `anchor.leasing` may import only
 `anchor.contracts` and `anchor.engine.contracts`;
 `anchor.engine.operating_projection` is on `_FORBIDDEN_LEASING_IMPORTS`. Option
 B therefore requires either putting arithmetic into `engine/contracts.py`
@@ -2422,18 +2998,21 @@ prove Detailed bit-identical. D0 Section 13.1 names A as its own explicit
 fallback.
 
 **Financial reasoning.** The duplication risk is that the two copies diverge.
-That risk is retired by **golden 14**, which asserts Lease-Level's hold-year
-expense sums equal Detailed's `_by_year` values at `abs=1e-9` for identical
-inputs. A test is a stronger guarantee than shared code, because it catches
-divergence in the *result* rather than only in the *implementation*.
+That risk is retired by **G-D4-5** (bit/hex identity of the annual amount) and
+**golden 14** (the twelve monthly values sum to Detailed's annual figure at
+`abs=1e-9`). A test is a stronger guarantee than shared code, because it
+catches divergence in the *result* rather than only in the *implementation*.
 
 **Architecture consequence.** `anchor/leasing/expenses.py` carries a private
 `_growth_factor` with the same mirror comment `operating_projection.py`
 already carries. No file outside `anchor.leasing` is touched at D4.1.
+`_PERMITTED_ANCHOR_IMPORTS` is unchanged.
+
+**Blocks nothing. D4.1 may begin.**
 
 ---
 
-### HD-D4-2 — Management-fee basis *(blocks D4.3)* — **CONFIRM ONLY**
+### HD-D4-2 — Management-fee basis — **APPROVED**
 
 **Question.** Does the Lease-Level management fee apply to total EGI including
 expense recoveries, or to EGI excluding reimbursements?
@@ -2441,24 +3020,24 @@ expense recoveries, or to EGI excluding reimbursements?
 **Option A.** `fee = pct * (cash_base_rent + expense_recovery + other_income - credit_loss)`
 **Option B.** `fee = pct * (cash_base_rent + other_income - credit_loss)`
 
-**Recommended: A.** Reasoning in Section 14.2. It preserves the existing
-Anchor sentence ("percent of EGI") across all modes, it is what D0 Sections
-13.2 and 16.4 already lock, it is the conservative (lower-NOI) answer, and B
-would require an input Anchor does not have.
+**DECISION: A — APPROVED.** `management_fee_pct x EGI`, EGI including cash base
+rent, expense recoveries and other income, after the approved credit-loss
+deduction. **No separate management-fee convention exists for Lease-Level.**
+Reasoning in Section 14.2. The recoverable pool excludes the fee, so no
+recovery/fee circularity exists (Section 13).
 
 **Financial magnitude.** For golden case 1: `10,650` vs `7,650` per month —
 `36,000` per year, roughly `554,000` of exit value at a 6.5% cap.
 
-**Architecture consequence.** None under A: the fee is one multiplication
-against the already-computed `EGI_m`. Under B, EGI would need a second
-"fee-basis EGI" field, which would be a genuinely new concept.
+**Architecture consequence.** None: the fee is one multiplication against the
+already-computed `EGI_m`. Under B, EGI would have needed a second "fee-basis
+EGI" field, a genuinely new concept.
 
-**Why it is listed.** The magnitude is material enough that the reviewer should
-confirm the lock rather than inherit it silently.
+**Blocks nothing.**
 
 ---
 
-### HD-D4-3 — Do TI and LC enter the Owner Return Metrics recurring series? *(blocks D4.5)*
+### HD-D4-3 — Do TI and LC enter owner cash flow? — **APPROVED**
 
 **Question.** `calculate_recurring_levered_cash_flows` and
 `calculate_recurring_unlevered_cash_flows` currently compute
@@ -2467,7 +3046,13 @@ confirm the lock rather than inherit it silently.
 **Option A — yes.** `RLCF_y = NOI_y - CapEx_y - TI_y - LC_y - ADS_y`.
 **Option B — no.** Leave the recurring series NOI-and-CapEx only.
 
-**Recommended: A.**
+**DECISION: A — APPROVED.**
+
+> TI and LC are owner property cash outflows. During hold months they **must
+> reduce investment cash flow**. They remain **below NOI** and do not reduce
+> NOI, exit NOI, the DSCR numerator or the debt-yield numerator. They are not
+> acquisition costs and not the CapEx reserve. **Only Months `1..12H` are
+> seller/owner cash outflows.**
 
 **Financial reasoning.** The recurring series feed Levered Cash-on-Cash Return,
 Unlevered Cash Yield and Cumulative Operating Distributions — figures that
@@ -2482,16 +3067,16 @@ definition of "recurring".
 **Architecture consequence.** Both functions take an additional
 `operating_capital_by_year` (or the two component tuples) with an all-zeros
 default, so Quick and Detailed remain bit-identical.
-`calculate_owner_return_metrics` passes it through. `year_1_debt_yield` is
-**not** affected — it is NOI-based by definition.
+`calculate_owner_return_metrics` passes it through. `year_1_debt_yield` and
+`calculate_dscr_by_year` are **not** affected — both are NOI-based by
+definition. The engine receives a generic `OperatingCapitalSchedule` and never
+learns what produced it.
 
-**Why it blocks.** It changes reported returns for Lease-Level only, and the
-metric names ("Cash-on-Cash", "Cumulative Operating Distributions") are
-owner-facing.
+**Blocks nothing.**
 
 ---
 
-### HD-D4-4 — Property-level `market_rent_psf` on the monthly projection *(blocks D4.3)* — low materiality
+### HD-D4-4 — Property-level `market_rent_psf` on the monthly projection — **APPROVED**
 
 **Question.** D0 Section 4.7 lists `market_rent_psf: tuple[float, ...]` as a
 state field on `MonthlyPropertyProjection`. `market.py` explicitly refuses to
@@ -2503,18 +3088,23 @@ envelope and leave any property figure to D5 presentation.**
 **Option B — publish an area-weighted property rate:**
 `sum(suite_area_sf * market_rent_psf_suite) / rentable_area_sf`.
 
-**Recommended: A.** It is descriptive, no D4 calculation consumes it, and D4's
-contract rule is "no fields merely for symmetry". Publishing a blended rate
-also risks it being read as a revenue driver, which it is not.
+**DECISION: A — APPROVED.**
+
+> Do not add a property-level `market_rent_psf` KPI to D4. It is not required
+> to calculate EGI, NOI, exit NOI, cash flow or returns. Market-rent
+> presentation/analytics may be addressed in D5.
 
 **Financial reasoning.** Zero — the field affects no dollar in the model.
 
 **Architecture consequence.** A narrow amendment to D0 Section 4.7's field
-sketch, recorded in the same amendment block as HD-D4-5.
+sketch, recorded in the same amendment block as HD-D4-5. Per-suite
+`MarketRentSchedule`s remain available on the envelope for D5 to present.
+
+**Blocks nothing.**
 
 ---
 
-### HD-D4-5 — The D0 Section 18.1 EGI-formula correction *(blocks D4.3)*
+### HD-D4-5 — The D0 Section 18.1 EGI-formula correction — **APPROVED**
 
 **Question.** D0 Section 18.1 defines `EGI = contractual_base_rent - free_rent
 + recoveries + other_income - credit_loss`. Section 5.4 proves that expression
@@ -2522,12 +3112,24 @@ is not equal to the cash revenue the shipped leasing engine produces whenever a
 successor commences on a fractional downtime boundary, overstating revenue by
 `R * frac(D)` in that month. Is the correction approved?
 
-**Option A — approve.** EGI consumes `cash_base_rent` directly; a third
-`absent_rent` audit line is published so the statement stays additive; D0
+**Option A — approve.** EGI consumes `cash_base_rent` directly; D0
 Section 18.1 receives a dated amendment block.
 **Option B — reject and keep D0's formula.**
 
-**Recommended: A.**
+**DECISION: A — APPROVED, and narrowed.**
+
+> Lease-Level EGI must consume `cash_base_rent`, not
+> `contractual_base_rent - free_rent`. The D2/D3 cash-base-rent series already
+> incorporates the successor occupancy factor, downtime, the fractional
+> boundary and the free-rent waterfall, and is therefore the authoritative
+> revenue amount. Contractual base rent and free rent remain audit lines.
+> **Do not independently reconstruct cash rent in D4.**
+>
+> **Narrowing (Section 5.4.1):** "absent rent" is an **explanatory
+> reconciliation concept**, not a new financial assumption. D4 is **not**
+> required to compute EGI through `contractual - absent - free`, and
+> `absent_rent` is **not** a field on any D4 contract. It survives only as
+> guardrail G-D4-1 over three series that already exist.
 
 **Financial reasoning.** B recognises, as collected revenue, rent for a period
 in which the space was **vacant**. In the D2 Section 7.2 reference case that is
@@ -2536,77 +3138,133 @@ rent, flowing straight into EGI, the management fee, NOI, and (if the month
 falls in the forward window) into exit value at roughly 15x. There is no
 reading under which it is correct.
 
-**Architecture consequence.** One extra series on
-`SuiteOperatingProjection`, `PropertyOperatingSchedule` and
-`MonthlyPropertyProjection`; one identity assertion (**G-D4-1**); a dated
-amendment block on D0 Sections 18.1 and 4.7. **No lease-level number changes**
-— D1–D3 are untouched.
+**Architecture consequence.** *No* new contract field. One guardrail assertion
+(**G-D4-1**) over `contractual_base_rent`, `free_rent` and `cash_base_rent`,
+all of which already exist; one AST test (FM-D4-3b) that EGI reads
+`cash_base_rent` and subtracts no concession; a dated amendment block on D0
+Sections 18.1 and 4.7. **No lease-level number changes** — D1–D3 are untouched.
 
-**Why it blocks.** It amends a D0 convention that was approved after human
-financial review. The arithmetic is not in doubt; the sign-off is required.
+**Blocks nothing. D4.2 and D4.3 may proceed.**
 
 ---
 
-### HD-D4-6 — Credit loss in D4 *(blocks D4.3)* — **CONFIRM ONLY**
+### HD-D4-6 — Credit loss in D4 — **APPROVED**
 
 **Question.** Does Lease-Level D4 carry `credit_loss_pct` now, or defer it?
 
-**Recommended: carry it, exactly as D0 Sections 4.6 / 15.3 / 15.4 lock it** —
-optional, default `0.0`, applied to `cash_base_rent + expense_recovery`, never
-to other income, with an `UNUSUALLY_HIGH_CREDIT_LOSS` WARNING above 10% and a
-UI label reading "Credit Loss", never "Vacancy & Credit Loss".
+**DECISION: carry it — APPROVED**, exactly as D0 Sections 4.6 / 15.3 / 15.4
+lock it:
+
+```
+credit_loss_m = credit_loss_pct * (cash_base_rent_m + expense_recovery_m)
+```
+
+optional, default `0.0`, **other income excluded** from the base, with an
+`UNUSUALLY_HIGH_CREDIT_LOSS` WARNING above 10% and a UI label reading "Credit
+Loss", never "Vacancy & Credit Loss". **Physical vacancy is not included in
+this percentage** — it is already modeled through Suite leasing economics.
 
 **Financial reasoning.** Section 7.2. At the default it is economically
 neutral, so it is not theoretical completeness; it is the only remaining
 revenue-risk lever, and removing it now is more disruptive than keeping it.
 
 **Architecture consequence.** One field, one multiply, one validation warning.
-Deferring it would mean amending D0 and revisiting D5's API, schema and UI.
+Deferring it would have meant amending D0 and revisiting D5's API, schema and
+UI.
+
+**Blocks nothing.**
 
 ---
 
-### HD-D4-7 — Behaviour when forward exit NOI is negative *(blocks D4.4)*
+### HD-D4-7 — Behaviour when forward exit NOI is non-positive — **REJECTED AND REPLACED**
 
 **Question.** A deliberately vacant or high-expense property can produce
 `exit_noi <= 0`, which capitalises to a negative exit value. What should Anchor
 do?
 
-**Option A — WARNING, no engine change.** Raise a leasing-scoped
-`NEGATIVE_FORWARD_EXIT_NOI` WARNING; `calculate_exit_value` behaves exactly as
-today.
-**Option B — ERROR.** Refuse to produce results.
+**Option A — WARNING, no engine change** *(the D4.0 recommendation)*.
+**Option B — scoped Lease-Level validation ERROR.**
 **Option C — floor `exit_noi` at zero.**
 
-**Recommended: A.**
+**DECISION: A REJECTED. B — APPROVED.**
 
-**Financial reasoning.** C invents a convention and would silently value a
-loss-making building at zero rather than negatively, hiding the very result the
-analyst needs to see. B is too strong: a negative forward NOI is a legitimate
-intermediate state in a heavy-lease-up scenario, and Anchor's existing
-non-finite policy refuses only values that are *undefined*, not values that are
-merely bad. A preserves the disclosed sharp edge without inventing a floor —
-consistent with how the engine already permits negative NOI, negative cash
-flows and `None` IRRs rather than clamping.
+> For Lease-Level acquisition analysis using an exit-capitalization method,
+> `exit_noi` **must be `> 0`**. If `exit_noi <= 0` the cap-rate terminal
+> valuation is not financially meaningful, and Anchor raises a **scoped
+> Lease-Level validation ERROR**.
+>
+> Do **not** floor exit NOI at zero. Do **not** capitalize a negative NOI into
+> a negative property value. Do **not** silently continue the returns
+> calculation. Do **not** change Quick behaviour, Detailed behaviour, or
+> `calculate_exit_value` globally.
+>
+> The validation belongs at the **Lease-Level acquisition/integration
+> boundary**, before the shared exit-cap calculation is invoked.
+>
+> Negative NOI during individual hold months remains valid. Negative annual
+> hold-period NOI remains valid. The restriction applies specifically to the
+> **forward NOI used for cap-rate terminal valuation**.
 
-**Architecture consequence.** One WARNING code in
-`anchor/leasing/validation.py`; no change to `acquisition.py`. Golden 26
-documents the observed behaviour, including `IRR -> None`.
+**Why the recommendation was wrong.** Option A treated a non-positive exit NOI
+as a *disclosure* problem. It is a *validity* problem:
+`exit_value = exit_noi / exit_cap_rate` is a valuation only when the numerator
+is an income stream. With a negative numerator the expression behaves
+perversely — a *lower* cap rate makes the "value" *more* negative — and it
+then propagates into `net_sale_proceeds`, both cash-flow series and both IRRs.
+Warning about a number while still reporting it, and reporting returns derived
+from it, is worse than refusing.
+
+**Architecture consequence.** One ERROR code
+(`NON_POSITIVE_FORWARD_EXIT_NOI`) declared in `anchor/leasing/validation.py`,
+invoked from `anchor/analysis/lease_level.py` immediately before the engine
+call. **No change to `acquisition.py`'s `calculate_exit_value`**, so Quick and
+Detailed are provably unaffected (G-2). Implemented at gate D4.5, which creates
+that boundary. Goldens 26 and 26b. A future alternative-valuation seam is
+documented in Section 21.6 and deliberately not implemented.
+
+**Blocks nothing.**
+
+---
+
+### HD-D4-8 — Dependency direction *(recorded as a decision, not an open question)* — **CORRECTED**
+
+**Question.** Should `anchor.engine.acquisition` import `anchor.leasing` and
+own Lease-Level orchestration, as D0 Section 3.5 and Appendix A assumed?
+
+**DECISION: no — CORRECTED at human financial review.** The shared acquisition
+engine stays generic; a Lease-Level analysis/integration layer
+(`src/anchor/analysis/lease_level.py`) imports the leasing outputs and invokes
+it. `analyze_acquisition_from_operating_projection` remains operating-mode
+agnostic. Full statement, module selection and the revised graph: Section 27.
+
+**Architecture consequence.** `engine/acquisition.py` gains only a generic
+optional parameter and never imports leasing;
+`test_importing_anchor_engine_does_not_pull_in_anchor_leasing` survives
+unchanged; the D0 Section 3.5 / Appendix A direction is amended by a dated
+block. **Blocks nothing.**
 
 ---
 
 ### 33.1 Which decisions block which gate
 
-| HD | Blocks | Severity |
-|---|---|---|
-| **HD-D4-1** expense-growth helper | **D4.1** | Decision required |
-| **HD-D4-5** EGI-formula correction | **D4.2 / D4.3** | Decision required (amends locked D0) |
-| **HD-D4-4** property `market_rent_psf` | **D4.3** | Decision required, low materiality |
-| **HD-D4-2** management-fee basis | D4.3 | Confirm only |
-| **HD-D4-6** credit loss | D4.3 | Confirm only |
-| **HD-D4-7** negative exit NOI | D4.4 | Decision required |
-| **HD-D4-3** TI/LC in recurring returns | D4.5 | Decision required |
+**None.** Every HD-D4 item is decided.
 
-**D4.1 can begin on HD-D4-1 alone.** D4.2 additionally needs HD-D4-5.
+| Gate | Blocking human financial decisions |
+|---|---|
+| **D4.1** | **none** |
+| D4.2 | none |
+| D4.3 | none |
+| D4.4 | none |
+| D4.5 | none |
+| D4.6 | none |
+| D4.7 | none |
+
+**D4.1 may begin.** It concerns only the canonical monthly property fixed
+operating expenses and the recoverable expense pool. It requires no NOI, no
+management fee, no credit loss, no TI/LC engine integration and no exit value —
+so none of the decisions that touch those concepts is even reachable from it.
+Its own condition, HD-D4-1, is approved, and its guardrails (G-D4-5, G-D4-6)
+are specified in Section 10.6.
 
 ---
 
@@ -2625,7 +3283,7 @@ documents the observed behaviour, including `IRR -> None`.
 
 | ID | Item | Status |
 |---|---|---|
-| **HD-1** | Below-NOI variable capital-cost channel | **RESOLVED at D4.0** — `OperatingCapitalSchedule`, Section 17.2. Ratified as **HD-D4-3**'s architecture consequence |
+| **HD-1** | Below-NOI variable capital-cost channel | **RESOLVED at D4.0, approved at human review** — `OperatingCapitalSchedule`, Section 17.2; ratified by **HD-D4-3** |
 | **HD-8** | Evidence status vs data provenance | Still D5 |
 
 ### 34.3 Deferred by this gate
@@ -2635,6 +3293,9 @@ documents the observed behaviour, including `IRR -> None`.
 | General vacancy reserve / structural vacancy top-up | D0 Section 15.5. Post-D4, and only ever as `max(0, target - modeled)` |
 | Economic occupancy as a reported KPI | Section 16.4 — a calculation factor, not a KPI. D5 presentation if wanted |
 | Monthly IRR / monthly return timing | Section 23 — needs its own decision |
+| **Alternative terminal-valuation methods** (DCF terminal value; stabilized-NOI terminal value with an explicit analyst-supplied figure) | Section 21.6 — the seam a property with a non-positive forward NOI would need. **Documented, not implemented in D4**, and never a route to relaxing the HD-D4-7 rule |
+| A property-level `market_rent_psf` / market-rent analytics | **HD-D4-4** — D5 presentation |
+| An `absent_rent` display line on the operating statement | Section 5.4.1 — derivable at the D5 presentation boundary from three published series; never a D4 contract field |
 | Monthly debt-service view | Only if it requires zero economic change (D0 Section 5.8, G-M11) |
 | Extracting a shared property-expense contract from `DetailedOperatingInputs` | Section 9.1 Option B — a pure Detailed refactor on its own merits, post-D4 |
 | Expense seasonality, true-ups, accrual schedules | Section 10.5 — changes nothing at annual resolution |
@@ -2651,8 +3312,9 @@ surface at once.
 
 | File | Gate | Content |
 |---|---|---|
-| `src/anchor/leasing/expenses.py` | D4.1 | Monthly fixed-expense build; `build_recoverable_expense_pool`; a mirrored `_growth_factor` (HD-D4-1 A) |
+| `src/anchor/leasing/expenses.py` | D4.1 | Monthly fixed-expense build; `build_recoverable_expense_pool`; a mirrored `_growth_factor` (HD-D4-1, approved) |
 | `src/anchor/leasing/projection.py` | D4.3 / D4.4 | `build_monthly_property_projection`; `aggregate_monthly_to_annual` |
+| **`src/anchor/analysis/lease_level.py`** | **D4.5** | **The Lease-Level orchestrator.** Imports `anchor.leasing`, runs `require_capitalizable_exit_noi`, assembles the generic `OperatingCapitalSchedule`, calls `analyze_acquisition_from_operating_projection`, returns `LeaseLevelAcquisitionResults`. **This is where Lease-Level knowledge stops** — nothing in `anchor.engine` sees past the generic contracts |
 | `tests/test_leasing_d4_1_expenses.py` | D4.1 | |
 | `tests/test_leasing_d4_2_property_operating.py` | D4.2 | |
 | `tests/test_leasing_d4_3_projection.py` | D4.3 | |
@@ -2666,16 +3328,16 @@ surface at once.
 | File | Gate | Change | Why |
 |---|---|---|---|
 | `src/anchor/leasing/contracts.py` | D4.1–D4.5 | Seven new dataclasses (Section 29) | Every Lease-Level contract lives here (D0 3.5) |
-| `src/anchor/leasing/validation.py` | D4.1, D4.4 | `validate_lease_level_operating_inputs`; `UNUSUALLY_HIGH_CREDIT_LOSS`; `NEGATIVE_FORWARD_EXIT_NOI` | Leasing-scoped severity (HD-6); one validation authority |
+| `src/anchor/leasing/validation.py` | D4.1, D4.5 | `validate_lease_level_operating_inputs`; the `UNUSUALLY_HIGH_CREDIT_LOSS` WARNING; the `NON_POSITIVE_FORWARD_EXIT_NOI` ERROR (declared here, **invoked** from the integration layer) | Leasing-scoped severity (HD-6); one validation authority |
 | `src/anchor/leasing/aggregation.py` | D4.2 | `suite_operating_projection`, `build_property_operating_schedule` | This module already owns suite-to-property summation (D1.3, D3.5) and already carries the "reprices nothing" guardrail |
 | `src/anchor/leasing/__init__.py` | D4.1–D4.4 | New public exports | Public entry points only |
-| **`src/anchor/engine/contracts.py`** | **D4.5** | `OperatingCapitalSchedule`; two new `AcquisitionResults` fields | The below-NOI channel must be a shared contract, because both `acquisition.py` and `returns.py` consume it; `AcquisitionResults` must report TI/LC by year or the analyst cannot audit the cash flow. Additive: no existing field changes meaning, and `noi_by_year` is never reduced by either |
-| **`src/anchor/engine/acquisition.py`** | **D4.5** | One optional parameter on `analyze_acquisition_from_operating_projection`; TI/LC terms in both cash-flow builders; `analyze_lease_level_acquisition_with_projection`; `LeaseLevelAcquisitionResults` assembly; `import anchor.leasing` | This is **the one downstream change** D0 Appendix A anticipated. It is where the three producers converge, so it is the only place the channel can enter without duplicating the engine |
-| **`src/anchor/engine/returns.py`** | **D4.5** | Optional below-NOI terms on `calculate_recurring_levered_cash_flows` and `calculate_recurring_unlevered_cash_flows`; pass-through in `calculate_owner_return_metrics` | **HD-D4-3.** Without this the Owner Return Metrics would report distributions the owner never received. `calculate_dscr_by_year` and `calculate_year_1_debt_yield` are **not** touched — both stay NOI-based (Section 22) |
+| **`src/anchor/engine/contracts.py`** | **D4.5** | `OperatingCapitalSchedule`; two new `AcquisitionResults` fields | The below-NOI channel must be a shared contract, because both `acquisition.py` and `returns.py` consume it; `AcquisitionResults` must report TI/LC by year or the analyst cannot audit the cash flow. **Generic**: the contract names two below-NOI components and no lease-level concept, so this leaf module gains no leasing dependency. Additive: no existing field changes meaning, and `noi_by_year` is never reduced by either |
+| **`src/anchor/engine/acquisition.py`** | **D4.5** | **Generic additive support only:** one optional `operating_capital` parameter on `analyze_acquisition_from_operating_projection`, and the below-NOI terms in both cash-flow builders. **No `import anchor.leasing`. No Lease-Level entry point. No Suite/Lease/rollover/recovery vocabulary** | It is where the three producers converge, so it is the only place the generic channel can enter without duplicating the engine. Orchestration is deliberately *not* here — see Section 27 and the D0 Section 3.5 amendment |
+| **`src/anchor/engine/returns.py`** | **D4.5** | Optional generic below-NOI terms on `calculate_recurring_levered_cash_flows` and `calculate_recurring_unlevered_cash_flows`; pass-through in `calculate_owner_return_metrics` | **HD-D4-3.** Without this the Owner Return Metrics would report distributions the owner never received. `calculate_dscr_by_year` and `calculate_year_1_debt_yield` are **not** touched — both stay NOI-based (Section 22) |
 | `src/anchor/contracts.py` | D4.5 | `OperatingMode.LEASE_LEVEL` | D0 Appendix A |
+| **`src/anchor/analysis/contracts.py`** | **D4.5 / D4.6** | `LeaseLevelAcquisitionResults`; `StandardLeaseLevelSensitivityPresets` | An envelope lives with the layer that assembles it (Section 29.2a); the presets mirror `StandardDetailedSensitivityPresets` |
 | `src/anchor/analysis/sensitivity.py` | D4.6 | `LEASE_LEVEL_SUPPORTED_ASSUMPTIONS` + the four scenario builders | Mirrors the Detailed pattern exactly; no new dimension |
-| `src/anchor/analysis/contracts.py` | D4.6 | `StandardLeaseLevelSensitivityPresets` | Mirrors `StandardDetailedSensitivityPresets` |
-| `tests/test_leasing_architecture.py` | D4.5 | Narrow `test_no_existing_package_imports_anchor_leasing` to permit `engine/acquisition.py`; replace the fresh-subprocess assertion | Section 27.4. Reviewed as a deliverable, never loosened silently |
+| `tests/test_leasing_architecture.py` | D4.5 | Narrow `test_no_existing_package_imports_anchor_leasing` to permit exactly `analysis/lease_level.py`. `test_importing_anchor_engine_does_not_pull_in_anchor_leasing` and `_PERMITTED_ANCHOR_IMPORTS` **unchanged** | Section 27.5. Reviewed as a deliverable, never loosened silently. Under the corrected direction the engine's isolation is preserved in full rather than replaced |
 | `src/anchor/engine/operating_projection.py` | — | **No change** under HD-D4-1 option A | This is what makes G-2 trivially true |
 
 ### 35.3 Explicitly out of scope for all of D4
@@ -2687,33 +3349,69 @@ surface at once.
 
 ## 36. Consistency Audit
 
+### 36.1 Structural checks
+
 | Check | Result |
 |---|---|
-| Does any recommendation change Quick's formulas? | **No.** |
-| Does any recommendation change Detailed's formulas? | **No** (HD-D4-1 option A). |
-| Does any recommendation change debt formulas? | **No.** |
-| Does any recommendation change exit capitalization? | **No** — only the source of `exit_noi`. |
-| Does any recommendation change DSCR or debt yield? | **No.** |
-| Does any recommendation create a second returns engine? | **No** — one optional parameter on the existing function. |
-| Does any recommendation create a cycle in the module graph? | **No** — Section 27.3. |
-| Does any recommendation reopen a locked D0/D2/D3 decision? | **One**: D0 Section 18.1's EGI formula, as HD-D4-5, on proven arithmetic grounds. |
-| Does any recommendation defer something D0 required at D4? | **No.** Every D0 D4 obligation is scheduled in Section 30.1. |
+| Does any decision change Quick's formulas? | **No.** |
+| Does any decision change Detailed's formulas? | **No** — HD-D4-1 approved the mirror, so `operating_projection.py` is untouched. |
+| Does any decision change debt formulas? | **No.** |
+| Does any decision change exit capitalization? | **No** — only the source of `exit_noi`, plus a Lease-Level-scoped precondition *outside* the engine. |
+| Does any decision change DSCR or debt yield? | **No.** |
+| Does any decision create a second returns engine? | **No** — one optional generic parameter on the existing function. |
+| Does any decision create a cycle in the module graph? | **No** — Section 27.3. One new edge, `anchor.analysis -> anchor.leasing`. |
+| Does the engine gain lease-level knowledge? | **No** — corrected; Section 27.4, G-D4-7. |
+| Does any decision reopen a locked D0/D2/D3 decision? | **Two**, both amended by dated blocks: D0 Section 18.1's EGI formula (HD-D4-5, proven arithmetic) and D0 Section 3.5 / Appendix A's dependency direction (HD-D4-8). |
+| Does any decision defer something D0 required at D4? | **No.** Every D0 D4 obligation is scheduled in Section 30.1. |
 | Does D4.0 write production code? | **No.** |
 | Is `recoverable_expense_ratio` given a silent default? | **No** — Section 9.3. |
 | Is every annual state field name G-M6 compliant? | **Yes** — Section 20.2. |
 | Are the D2.6 merge-key premises disturbed? | **No** — D4 adds no successor input; the pool is path-independent (D3 Section 10.2). |
 
+### 36.2 Term-by-term audit of every active statement
+
+Each term was swept across the whole document; every **active** statement now
+agrees with the decisions of 2026-09-05. Rejected alternatives survive only
+where explicitly labelled as rejected.
+
+| Term | Active statement | Where |
+|---|---|---|
+| `cash_base_rent` | Authoritative revenue; consumed directly from the D2/D3 chains; EGI reads this and only this; never reconstructed | 1.2, 1.3, 5.3, 5.4, 5.5, 29.3 |
+| `contractual_base_rent` | **Audit only, feeds nothing** | 5.3, 5.5, 29.3 |
+| free rent | **Audit only, feeds nothing**; already inside `cash_base_rent`; never subtracted a second time | 5.3, 5.5, 29.3 |
+| absent rent | **Explanatory reconciliation concept only.** Not an assumption, not an input, not a contract field. Survives as guardrail G-D4-1 | 5.4.1, 29.3, FM-D4-42 |
+| management fee | `management_fee_pct x EGI`, EGI including recoveries and other income, after credit loss; one convention across modes | 5.3, 5.6, 13, 14.2, 33 |
+| credit loss | `credit_loss_pct x (cash_base_rent + expense_recovery)`; other income excluded; default `0.0`; contains no physical vacancy | 5.5, 7.2, 33 |
+| negative exit NOI | Scoped Lease-Level validation **ERROR** at the integration boundary. No floor, no negative capitalization, no silent continuation | 21.6, 31.3, 33, FM-D4-36/37/38 |
+| `calculate_exit_value` | **Unmodified**, globally. Quick and Detailed unaffected | 21.5, 21.6, 33, 35.2 |
+| `engine/acquisition.py` | Generic additive support only. No `anchor.leasing` import, no orchestration, no lease-level vocabulary. `analyze_acquisition_from_operating_projection` stays mode-agnostic | 27, 27.4, 35.2, G-D4-7 |
+| `anchor.leasing` | Produces operating outputs. Imported by exactly one file, `analysis/lease_level.py`. Its own permitted imports are unchanged | 27.0, 27.2, 27.3, 27.5 |
+| `OperatingCapitalSchedule` | **Generic** below-NOI channel on `engine/contracts.py`; absent ⇒ Quick/Detailed bit-identical; assembled by the integration layer | 17.2, 17.3, 29.2, 35.2 |
+| CapEx | One authority: `terms.annual_capex_reserve` → `capex_by_year`. No monthly series in `MonthlyPropertyProjection`. No double subtraction | 18, 18.2, 29.3, FM-D4-24 |
+| `going_in_cap_rate` | Year-1 NOI / purchase price — one shared convention, Quick and Detailed verified bit-identical; Lease-Level follows it unchanged | 1.3, 20.4, 31.3 |
+
+**Result: no contradiction found.** The three statements the review changed —
+the absent-rent narrowing, the exit-NOI ERROR and the dependency direction —
+were propagated to every section that referenced them, including the stack, the
+contract inventory, the gate plan, the goldens, the failure-mode register and
+the implementation-surface forecast.
+
 ---
 
 ## 37. Final Classification
 
-**B — D4.0 HAS BLOCKING HUMAN DECISIONS.**
+**A — D4.0 FINANCIALLY ACCEPTED, READY FOR D4.1.**
 
-The architecture is coherent, the financial conventions are complete, the
-circularity proof holds, and the gate plan is implementable. Five of the seven
-open items have firm recommendations with stated reasoning; two are
-confirm-only. **HD-D4-5** is the one that genuinely requires financial sign-off,
-because it corrects a formula in a document that was itself approved after
-human financial review.
+The architecture is coherent, the financial conventions are complete and
+approved, the circularity proof holds, the dependency graph is acyclic with the
+shared engine kept generic, and the gate plan is implementable.
 
-**D4.1 is unblocked the moment HD-D4-1 is answered.**
+**All seven HD-D4 decisions are decided.** Six were approved; HD-D4-7 was
+rejected and replaced with a stricter rule; the dependency direction inherited
+from D0 was corrected. **No unresolved human financial decision blocks any D4
+gate.**
+
+**D4.1 may begin.** Its scope — canonical monthly property fixed operating
+expenses and the recoverable expense pool — reaches none of the concepts the
+remaining decisions touch, and its own condition (HD-D4-1) is approved with its
+guardrails specified in Section 10.6.

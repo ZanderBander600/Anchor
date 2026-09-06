@@ -495,6 +495,39 @@ Enforced by `tests/test_leasing_architecture.py` (**G-1**).
 
 At D4, `anchor.engine.acquisition` imports `anchor.leasing` — never the reverse.
 
+> **Amended at D4.0** (corrected at human financial review, 2026-09-05). The
+> line above, and Appendix A's row placing
+> `analyze_lease_level_acquisition_with_projection` in
+> `engine/acquisition.py`, are **superseded**. Making the shared acquisition
+> engine import `anchor.leasing` would make it operating-mode aware; it must
+> stay generic.
+>
+> **The approved direction:**
+>
+> ```
+> anchor.leasing  ->  Lease-Level analysis/integration layer
+>                 ->  generic acquisition engine  ->  debt / returns
+> ```
+>
+> Orchestration moves to `src/anchor/analysis/lease_level.py`, which is an
+> existing integration layer (its package docstring already places it above the
+> engine and below the API, and it already orchestrates by *calling*
+> `analyze_acquisition` / `analyze_detailed_acquisition_with_projection`). It
+> imports `anchor.leasing`, `anchor.engine.acquisition` and
+> `anchor.engine.contracts`.
+>
+> `anchor.engine.acquisition` gains only **generic** additive support (an
+> optional `OperatingCapitalSchedule` argument) and **never imports
+> `anchor.leasing`**;
+> `analyze_acquisition_from_operating_projection` remains operating-mode
+> agnostic. `anchor.leasing`'s own permitted imports are unchanged, and
+> `tests/test_leasing_architecture.py::
+> test_importing_anchor_engine_does_not_pull_in_anchor_leasing` survives
+> **unchanged** rather than being replaced — the engine's isolation is
+> preserved in full. Full statement and the revised graph:
+> `docs/plans/2026-09-05-anchor-lease-level-underwriting-d4-integration-architecture.md`
+> §27 and **HD-D4-8**.
+
 ---
 
 ## 4. Domain Contracts
@@ -701,11 +734,13 @@ class PropertyRentRollSchedule:
 
 #### `MonthlyPropertyProjection` — the canonical projection  *(D4)*
 
-> **Amended at D4.0.** This sketch predates D2.3. Two fields change; see
-> Section 18.1's amendment block and D4.0 §5.4 / §29.3. `cash_base_rent` and
-> `absent_rent` join the flow series (EGI is built from `cash_base_rent`, not
-> from `contractual_base_rent − free_rent`), and `market_rent_psf` moves out of
-> the D4 contract to D5 presentation (**HD-D4-4**). The remaining fields stand.
+> **Amended at D4.0** (approved at human financial review, 2026-09-05). This
+> sketch predates D2.3. Two changes; see Section 18.1's amendment block and
+> D4.0 §5.4 / §29.3. `cash_base_rent` joins the flow series and EGI is built
+> from it, not from `contractual_base_rent − free_rent`; `market_rent_psf`
+> moves out of the D4 contract to D5 presentation (**HD-D4-4**). No
+> `absent_rent` field is added — that quantity is explanatory only. The
+> remaining fields stand.
 
 ```python
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1824,14 +1859,18 @@ Disclosed consequences:
 > (`D = 2.25`, `R = 100,000`, September) line 6 gives `25,000` where the
 > tenant paid `0`.
 >
-> **The correction, and the only change:** EGI consumes `cash_base_rent`
-> directly, and a third audit line `absent_rent` is published so the statement
-> stays additive:
+> **The correction, and the only change (APPROVED at human financial review,
+> 2026-09-05):** EGI consumes `cash_base_rent` directly.
 >
 > ```
-> absent_rent_m = contractual_base_rent_m − free_rent_m − cash_base_rent_m   (>= 0)
-> EGI_m         = cash_base_rent_m + expense_recoveries_m + other_income_m − credit_loss_m
+> EGI_m = cash_base_rent_m + expense_recoveries_m + other_income_m − credit_loss_m
 > ```
+>
+> `contractual_base_rent` and `free_rent` remain **audit lines that feed
+> nothing**. D4 never reconstructs cash rent from them. The gap
+> `contractual − free_rent − cash_base_rent` is an **explanatory reconciliation
+> concept** ("absent rent"), not a new financial assumption and not a contract
+> field; it survives only as a guardrail assertion.
 >
 > No lease-level number changes; D1–D3 are untouched. The proof, the worked
 > case and the human decision (**HD-D4-5**) are in
