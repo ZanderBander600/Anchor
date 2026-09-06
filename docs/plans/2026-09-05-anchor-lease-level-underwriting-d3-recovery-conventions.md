@@ -672,9 +672,36 @@ extra force here, because `max(0, …)` in the Modified Gross formula is not eve
 linear in the pool: `E[max(0, X − s)] ≠ max(0, E[X] − s)` in general. Weighting
 before the `max` is failure mode **FM-D3-10**.
 
-The recovery series simply becomes an eleventh weighted series on
-`ExpectedRollover` and `RecursiveRollover`, composed by the existing
-`weighted_outcome` primitive. No new weighting rule is introduced.
+The composition reuses the existing `weighted_outcome` primitive, and **no
+new weighting rule is introduced** — that part is unchanged and is what the
+section is really about.
+
+> **Amended at D3.4 — where the composed series lives.** This section
+> originally said the recovery series "becomes an eleventh weighted series on
+> `ExpectedRollover` and `RecursiveRollover`". That placement is no longer
+> available, and the reason is an architecture decision taken after it was
+> written.
+>
+> D3.1 §3.4 and D3.3 established that the recoverable expense pool is
+> **injected at the recovery boundary**: no D2 builder accepts a
+> `RecoverableExpensePool`, so the market-leasing engine stays usable before
+> any property expense schedule exists — which is the whole point of the
+> injected-pool contract (HD-D3-8), and is now enforced by an architecture
+> guardrail. Adding a recovery field to `ExpectedRollover` or
+> `RecursiveRollover` would force `build_expected_rollover` and
+> `build_recursive_rollover` to take a pool, reversing that decision.
+>
+> D3.4 therefore composes into **separate D3 result contracts** —
+> `ExpectedRolloverRecovery` and `RecursiveRolloverRecovery` — each retaining
+> the authoritative D2 result rather than modifying it. The financial content
+> is exactly what this section specifies: pure branch schedules, weighted once,
+> on completed dollars, through the one primitive. Only the field's address
+> changed.
+>
+> `RecursiveRolloverRecovery` owns **no recursion**. It walks the retained
+> `RecursiveRollover`'s `transitions` — the authoritative event list — rebuilds
+> each successor through the same D2 engine, and accumulates
+> `mass × dollars`. There is one production event queue and it is D2.6's.
 
 ### 10.2 D2.6 merge-key compatibility — the critical analysis
 
@@ -874,7 +901,7 @@ each gate a real financial claim.
 | **D3.1** | Recoverable pool, pro-rata share, **NNN and Gross** | The pool contract and injected series; shares summing to `1.0`; first-dollar NNN; Gross exactly zero; the responsibility factor including the fractional boundary; free rent not reducing recovery; downtime zero | new `recoveries.py` |
 | **D3.2** | **Modified Gross** + the explicit basis | `max(0, pool − stop)`; the `RecoveryBasis` seam; the missing-basis ERROR; the growth-crossing case | `recoveries.py`, `validation.py` |
 | **D3.3** | Successor recovery assumptions | Branch-specific lease type and basis (HD-D3-1/2, both decided); **the merge-key guardrail — required here, before D3.4 builds recursion on it**, and the sufficiency proof re-derived rather than cited; renewal ≠ new-tenant structures; pure-branch recovery schedules | `contracts.py`, `rollover.py`, `recoveries.py`, `validation.py` |
-| **D3.4** | Expected + recursive recoveries | The eleventh weighted series through `weighted_outcome`; recursion across generations; `p=0`/`p=1` endpoint identity; explicit-tree oracle extended | `rollover.py` |
+| **D3.4** | Expected + recursive recoveries | Composition through `weighted_outcome` on completed branch dollars; recursion across generations by consuming D2.6's authoritative transitions rather than duplicating them; `p=0`/`p=1` endpoint identity; explicit-tree recovery oracle | `contracts.py`, `recoveries.py`, `rollover.py` (one identity helper and one resolver made public) |
 | **D3.5** | Property recovery aggregation + D3 closeout | Lease → property monthly recovery; annual derived solely from monthly; full D3 golden suite; guardrails | `aggregation.py`, tests |
 
 D3.1 is deliberately the largest: it establishes the pool contract and the
