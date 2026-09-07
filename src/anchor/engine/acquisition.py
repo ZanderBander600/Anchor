@@ -21,6 +21,7 @@ from .contracts import (
     AcquisitionCashFlows,
     AcquisitionResults,
     DetailedAcquisitionResults,
+    OperatingCapitalSchedule,
     OperatingProjectionLike,
     ensure_finite,
 )
@@ -73,6 +74,59 @@ def calculate_capex_by_year(
     )
 
 
+def calculate_operating_capital_by_year(
+    *, operating_capital: OperatingCapitalSchedule | None, hold_period: int
+) -> tuple[float, ...]:
+    """Return ``(OpCap_1, .., OpCap_H)`` -- the total below-NOI operating
+    capital outflow in each hold year (D4 Section 17.4).
+
+    ``OpCap_y = TI_y + LC_y``. **The single authority for that total.** The
+    components are summed once, here, in one order, so every consumer -- both
+    cash-flow series and both recurring owner-return series -- subtracts the
+    identical completed figure and no two of them can disagree. Nothing
+    downstream re-adds ``tenant_improvements_by_year`` to
+    ``leasing_commissions_by_year``.
+
+    ``operating_capital is None`` means no variable below-NOI capital, and
+    materialises as all zeros of length ``hold_period`` -- exactly the shape
+    and the neutrality ``calculate_capex_by_year`` already has. Subtracting
+    ``0.0`` from a finite float is exact in IEEE-754, so every caller's prior
+    arithmetic is preserved bit for bit; that identity is asserted directly
+    against the pre-channel results rather than assumed.
+
+    A schedule whose length disagrees with ``hold_period`` is rejected: it
+    would otherwise be zipped short and silently drop a year's capital. The
+    schedule's own domain (finite, ``>= 0``) is enforced by
+    ``OperatingCapitalSchedule`` at construction, so it is not re-checked here.
+
+    This is generic. It knows the dollars are below NOI and annual, and
+    nothing else -- not that they are leasing costs, and not what produced
+    them.
+    """
+
+    if operating_capital is None:
+        return tuple(0.0 for _ in range(hold_period))
+
+    tenant_improvements = operating_capital.tenant_improvements_by_year
+    leasing_commissions = operating_capital.leasing_commissions_by_year
+    if len(tenant_improvements) != hold_period:
+        raise ValueError(
+            f"an OperatingCapitalSchedule for a {hold_period}-year hold "
+            f"requires {hold_period} annual figures; got "
+            f"{len(tenant_improvements)}. Hold years 1..H only -- a "
+            "forward-window capital event is not a seller cash flow and is "
+            "excluded before the engine boundary."
+        )
+
+    return tuple(
+        ensure_finite(
+            f"operating_capital_by_year[{year}]",
+            tenant_improvements[year] + leasing_commissions[year],
+        )
+        for year in range(hold_period)
+    )
+
+
 def calculate_net_sale_proceeds(
     *,
     exit_value: float,
@@ -96,23 +150,35 @@ def calculate_unlevered_cash_flows(
     acquisition_costs: float = 0.0,
     disposition_costs: float = 0.0,
     capex_by_year: tuple[float, ...] = (),
+    operating_capital_by_year: tuple[float, ...] = (),
 ) -> tuple[float, ...]:
     """Return ``(UCF_0, UCF_1, ..., UCF_H)``, length ``H + 1``.
 
     ``UCF_0 = -(purchase_price + acquisition_costs)``; ``UCF_y = NOI_y -
-    CapEx_y`` for ``1 <= y < H``; ``UCF_H = NOI_H - CapEx_H + exit_value -
-    disposition_costs``. At the Gate 2/3 neutral defaults (all cost terms
-    ``0.0``, ``capex_by_year`` empty/all-zero), this reduces to exactly the
+    CapEx_y - OpCap_y`` for ``1 <= y < H``; ``UCF_H = NOI_H - CapEx_H -
+    OpCap_H + exit_value - disposition_costs``. At the Gate 2/3 and D4.5A
+    neutral defaults (all cost terms ``0.0``, ``capex_by_year`` and
+    ``operating_capital_by_year`` empty/all-zero), this reduces to exactly the
     V1 formulas. No debt term appears anywhere in this series (a financing
     fee, being debt-related, never appears in the unlevered series
     either), and ``exit_noi`` (already folded into ``exit_value``) is never
     added again as a separate operating cash flow. CapEx may exceed NOI in
     any year, producing a negative entry -- it is never capped or
     rejected.
+
+    D4.5A: ``operating_capital_by_year`` is the completed ``TI + LC`` total
+    from ``calculate_operating_capital_by_year``, subtracted **once**, beside
+    CapEx and never merged with it. It is a recurring hold-period property
+    outflow, so it reduces the final year's cash flow as well -- alongside the
+    sale, never out of the sale proceeds, which are a separate terminal
+    event.
     """
 
     hold_period = len(noi_by_year)
     capex = capex_by_year or tuple(0.0 for _ in range(hold_period))
+    operating_capital = operating_capital_by_year or tuple(
+        0.0 for _ in range(hold_period)
+    )
 
     cash_flows = [
         ensure_finite(
@@ -120,12 +186,13 @@ def calculate_unlevered_cash_flows(
         )
     ]
     for year in range(1, hold_period):
-        ucf_y = noi_by_year[year - 1] - capex[year - 1]
+        ucf_y = noi_by_year[year - 1] - capex[year - 1] - operating_capital[year - 1]
         cash_flows.append(ensure_finite(f"unlevered_cash_flows[{year}]", ucf_y))
 
     ucf_h = (
         noi_by_year[hold_period - 1]
         - capex[hold_period - 1]
+        - operating_capital[hold_period - 1]
         + exit_value
         - disposition_costs
     )
@@ -141,32 +208,48 @@ def calculate_levered_cash_flows(
     annual_debt_service: tuple[float, ...],
     net_sale_proceeds: float,
     capex_by_year: tuple[float, ...] = (),
+    operating_capital_by_year: tuple[float, ...] = (),
 ) -> tuple[float, ...]:
     """Return ``(LCF_0, LCF_1, ..., LCF_H)``, length ``H + 1``.
 
-    ``LCF_0 = -initial_equity``; ``LCF_y = NOI_y - ADS_y - CapEx_y`` for
-    ``1 <= y < H``; ``LCF_H = NOI_H - ADS_H - CapEx_H + net_sale_proceeds``.
-    The already-computed ``net_sale_proceeds`` (Phase 2C) is used directly
-    for the sale component of ``LCF_H`` rather than re-expanding
-    ``exit_value - remaining_loan_balance`` inline, so the single computed
-    value is reused rather than recomputed. At the Gate 3 neutral default
-    (``capex_by_year`` empty/all-zero), this reduces to exactly the prior
-    formulas. CapEx may exceed the year's operating cash flow, producing a
-    negative entry -- it is never capped or rejected.
+    ``LCF_0 = -initial_equity``; ``LCF_y = NOI_y - ADS_y - CapEx_y -
+    OpCap_y`` for ``1 <= y < H``; ``LCF_H = NOI_H - ADS_H - CapEx_H -
+    OpCap_H + net_sale_proceeds``. The already-computed ``net_sale_proceeds``
+    (Phase 2C) is used directly for the sale component of ``LCF_H`` rather
+    than re-expanding ``exit_value - remaining_loan_balance`` inline, so the
+    single computed value is reused rather than recomputed. At the Gate 3 and
+    D4.5A neutral defaults (``capex_by_year`` and ``operating_capital_by_year``
+    empty/all-zero), this reduces to exactly the prior formulas. CapEx may
+    exceed the year's operating cash flow, producing a negative entry -- it is
+    never capped or rejected.
+
+    D4.5A: operating capital is an **equity** outflow, never financed. It
+    reduces the levered cash flow directly and changes no debt term: the
+    annual debt service, the amortization schedule and the remaining balance
+    are all functions of ``AcquisitionTerms`` alone and are untouched by it.
     """
 
     hold_period = len(noi_by_year)
     capex = capex_by_year or tuple(0.0 for _ in range(hold_period))
+    operating_capital = operating_capital_by_year or tuple(
+        0.0 for _ in range(hold_period)
+    )
 
     cash_flows = [ensure_finite("levered_cash_flows[0]", -initial_equity)]
     for year in range(1, hold_period):
-        lcf_y = noi_by_year[year - 1] - annual_debt_service[year - 1] - capex[year - 1]
+        lcf_y = (
+            noi_by_year[year - 1]
+            - annual_debt_service[year - 1]
+            - capex[year - 1]
+            - operating_capital[year - 1]
+        )
         cash_flows.append(ensure_finite(f"levered_cash_flows[{year}]", lcf_y))
 
     lcf_h = (
         noi_by_year[hold_period - 1]
         - annual_debt_service[hold_period - 1]
         - capex[hold_period - 1]
+        - operating_capital[hold_period - 1]
         + net_sale_proceeds
     )
     cash_flows.append(ensure_finite(f"levered_cash_flows[{hold_period}]", lcf_h))
@@ -242,6 +325,7 @@ def calculate_acquisition_cash_flows(inputs: AcquisitionInputs) -> AcquisitionCa
 def analyze_acquisition_from_operating_projection(
     operating_projection: OperatingProjectionLike,
     terms: AcquisitionTerms,
+    operating_capital: OperatingCapitalSchedule | None = None,
 ) -> AcquisitionResults:
     """The single authoritative downstream acquisition/debt/returns
     calculation path (``docs/detailed_operating_model_v2_1_architecture.md``
@@ -282,6 +366,9 @@ def analyze_acquisition_from_operating_projection(
         annual_capex_reserve=terms.annual_capex_reserve,
         hold_period=terms.hold_period,
     )
+    operating_capital_by_year = calculate_operating_capital_by_year(
+        operating_capital=operating_capital, hold_period=terms.hold_period
+    )
     unlevered_cash_flows = calculate_unlevered_cash_flows(
         purchase_price=terms.purchase_price,
         noi_by_year=operating_projection.noi_by_year,
@@ -289,6 +376,7 @@ def analyze_acquisition_from_operating_projection(
         acquisition_costs=capital_stack.acquisition_costs,
         disposition_costs=disposition_costs,
         capex_by_year=capex_by_year,
+        operating_capital_by_year=operating_capital_by_year,
     )
     levered_cash_flows = calculate_levered_cash_flows(
         initial_equity=capital_stack.initial_equity,
@@ -296,6 +384,7 @@ def analyze_acquisition_from_operating_projection(
         annual_debt_service=debt_schedule.annual_debt_service,
         net_sale_proceeds=net_sale_proceeds,
         capex_by_year=capex_by_year,
+        operating_capital_by_year=operating_capital_by_year,
     )
 
     return_metrics = calculate_return_metrics(
@@ -312,6 +401,7 @@ def analyze_acquisition_from_operating_projection(
         acquisition_costs=capital_stack.acquisition_costs,
         initial_equity=capital_stack.initial_equity,
         loan_amount=capital_stack.loan_amount,
+        operating_capital_by_year=operating_capital_by_year,
     )
 
     return AcquisitionResults(
@@ -325,6 +415,16 @@ def analyze_acquisition_from_operating_projection(
         remaining_loan_balance=debt_schedule.remaining_loan_balance,
         noi_by_year=operating_projection.noi_by_year,
         capex_by_year=capex_by_year,
+        tenant_improvements_by_year=(
+            operating_capital.tenant_improvements_by_year
+            if operating_capital is not None
+            else tuple(0.0 for _ in range(terms.hold_period))
+        ),
+        leasing_commissions_by_year=(
+            operating_capital.leasing_commissions_by_year
+            if operating_capital is not None
+            else tuple(0.0 for _ in range(terms.hold_period))
+        ),
         exit_noi=operating_projection.exit_noi,
         exit_value=exit_value,
         disposition_costs=disposition_costs,
