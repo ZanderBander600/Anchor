@@ -34,6 +34,17 @@ from .ai import (
 )
 from .analysis import (
     InvalidBreakEvenTargetError,
+    LeaseLevelAcquisitionResults,
+    LeaseValidationError,
+    OneWaySensitivityResult,
+    ParsedLeaseLevelInputs,
+    SensitivityTargetShadowedBySuiteOverrideError,
+    analyze_lease_level_acquisition_with_projection,
+    parse_lease_level_inputs,
+    run_detailed_one_way_sensitivity,
+    run_lease_level_one_way_sensitivity,
+    run_lease_level_two_way_sensitivity,
+    run_one_way_sensitivity,
     ReturnHurdleMetric,
     StandardBreakEvenAnalysis,
     StandardDetailedBreakEvenAnalysis,
@@ -207,6 +218,41 @@ def _validation_error_detail(error: InputValidationError) -> list[dict[str, Any]
     ]
 
 
+def _lease_validation_error_detail(error: LeaseValidationError) -> list[dict[str, Any]]:
+    """D5.3: a ``LeaseValidationError`` as a structured 422 detail.
+
+    The Lease-Level counterpart to ``_validation_error_detail`` above, and
+    deliberately its own shape rather than a translation into the Quick/Detailed
+    one. The two streams answer different questions and carry different
+    locators: ``InputIssue`` names a flat ``field_id``, while a
+    ``LeaseValidationIssue`` names a ``path`` into a nested, variable-arity rent
+    roll (``suites[2].suite_area_sf``) and a stable ``code`` a UI can branch on.
+    Flattening either into the other would throw away exactly the part a
+    consumer needs to anchor an error to the row that caused it.
+
+    One shape serves both structural parsing and downstream domain validation,
+    per D8 -- a malformed field and an out-of-domain field reach a caller
+    identically, differing only in ``code``.
+    """
+
+    return [
+        {
+            "code": issue.code.value,
+            "path": issue.path,
+            "message": issue.message,
+            "severity": issue.severity.value,
+        }
+        for issue in error.result.issues
+    ]
+
+
+def _lease_validation_error_response(error: LeaseValidationError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=_lease_validation_error_detail(error),
+    )
+
+
 def _unsupported_operating_mode(
     operating_mode: OperatingMode, *, endpoint: str
 ) -> HTTPException:
@@ -303,8 +349,78 @@ def _analyze_quick(payload: dict[str, Any]) -> AcquisitionResults:
     return analyze_acquisition(inputs)
 
 
-@app.post("/analyze", response_model=AcquisitionResults | DetailedAcquisitionResults)
-def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults | DetailedAcquisitionResults:
+def _require_lease_level_inputs(
+    payload: dict[str, Any], *, also_owned: tuple[str, ...] = ()
+) -> ParsedLeaseLevelInputs:
+    """Reconstruct the five Lease-Level input contracts from the raw body.
+
+    Hands the payload to ``parse_lease_level_inputs`` **whole**. Pre-selecting
+    the keys it owns would silently discard a typo -- ``suite_are_sf`` beside
+    ``suite_area_sf`` -- which is precisely the failure D5.2's unknown-field
+    detection exists to catch, and the parser already knows that ``terms`` and
+    ``operating_mode`` belong to other owners.
+
+    This adapter constructs no ``Suite``, ``Lease`` or assumptions record
+    itself: doing so would put a second, untested wire format beside the
+    ratified one.
+
+    ``also_owned`` names the top-level keys *this endpoint* consumes beside the
+    Lease-Level inputs -- the row/column/metric controls a sensitivity body
+    carries. Declaring them keeps the unknown-key check live for everything
+    else, so ``row_assumtion`` is still reported rather than silently ignored.
+    """
+
+    try:
+        return parse_lease_level_inputs(payload, externally_owned_keys=also_owned)
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+
+
+def _analyze_lease_level(payload: dict[str, Any]) -> LeaseLevelAcquisitionResults:
+    """D5.3: the 'lease_level' branch of ``/analyze``.
+
+    Composes the two input owners -- shared ``AcquisitionTerms`` validation and
+    D5.2 structural parsing -- and delegates to the D4.5B entry point. It calls
+    no leasing builder, runs no month arithmetic and reads no result field: the
+    deterministic pipeline remains the sole financial authority, and this
+    function's whole job is to turn JSON into its arguments.
+
+    Returns ``LeaseLevelAcquisitionResults`` unchanged -- the monthly
+    projection, the annual projection derived from it, and the same generic
+    ``AcquisitionResults`` Quick and Detailed produce. No transport copy is
+    made, so the audit trail a caller sees is the one the engine used.
+
+    ``LeaseValidationError`` covers both phases and both surface as a structured
+    422: a malformed rent roll (D5.2) and an unanalysable one -- a mid-month
+    analysis start, an unreconciled area, ``NON_POSITIVE_FORWARD_EXIT_NOI`` --
+    reach the caller through one shape, distinguished by ``code``.
+    """
+
+    terms = _require_deal_terms(payload, mode_label="lease_level")
+    inputs = _require_lease_level_inputs(payload)
+
+    try:
+        return analyze_lease_level_acquisition_with_projection(
+            terms,
+            inputs.property_inputs,
+            inputs.suites,
+            inputs.leases,
+            market_leasing=inputs.market_leasing,
+            operating_inputs=inputs.operating_inputs,
+        )
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+
+
+@app.post(
+    "/analyze",
+    response_model=(
+        AcquisitionResults | DetailedAcquisitionResults | LeaseLevelAcquisitionResults
+    ),
+)
+def analyze(
+    payload: dict[str, Any] = Body(...),
+) -> AcquisitionResults | DetailedAcquisitionResults | LeaseLevelAcquisitionResults:
     """Detailed Operating Model V2.1 Gate 5: gains an optional
     ``operating_mode`` discriminator (``"quick"`` default / ``"detailed"``).
     A ``"quick"``/absent ``operating_mode`` request is unaffected -- the
@@ -339,10 +455,7 @@ def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults | Detaile
         case OperatingMode.DETAILED:
             return _analyze_detailed(payload)
         case OperatingMode.LEASE_LEVEL:
-            # D5.3 wires Lease-Level analysis; D5.2 owns the request parsing it needs.
-            raise _unsupported_operating_mode(
-                operating_mode, endpoint="POST /analyze"
-            )
+            return _analyze_lease_level(payload)
         case _:
             raise _unsupported_operating_mode(
                 operating_mode, endpoint="POST /analyze"
@@ -478,6 +591,74 @@ def _sensitivity_quick(payload: dict[str, Any]) -> TwoWaySensitivityResult:
         ) from None
 
 
+_TWO_WAY_FIELDS = (
+    "row_assumption",
+    "row_values",
+    "column_assumption",
+    "column_values",
+    "metric",
+)
+
+_ONE_WAY_FIELDS = ("assumption", "values", "metric")
+
+
+def _require_fields(payload: dict[str, Any], fields: tuple[str, ...]) -> None:
+    missing = [field for field in fields if field not in payload]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Missing required field(s): {', '.join(missing)}.",
+        )
+
+
+def _sensitivity_lease_level(payload: dict[str, Any]) -> TwoWaySensitivityResult:
+    """D5.3: the 'lease_level' branch of two-way ``/sensitivity``.
+
+    Delegates to the shipped D4.6B runner, which re-underwrites the complete
+    deterministic pipeline once per cell from the same immutable baseline. This
+    adapter interpolates nothing, caches nothing and evaluates no cell itself.
+
+    Candidate values stay **absolute**, exactly as the runner defines them --
+    never a relative shock. Refusals keep their identities: an unsupported
+    target, an unsupported metric, and a target shadowed by a suite override are
+    three different answers, and the last one refuses the whole run rather than
+    quietly perturbing a property default that some suite overrides anyway.
+    """
+
+    terms = _require_deal_terms(payload, mode_label="lease_level")
+    inputs = _require_lease_level_inputs(payload, also_owned=_TWO_WAY_FIELDS)
+    _require_fields(payload, _TWO_WAY_FIELDS)
+
+    try:
+        return run_lease_level_two_way_sensitivity(
+            terms,
+            inputs.property_inputs,
+            inputs.suites,
+            inputs.leases,
+            market_leasing=inputs.market_leasing,
+            operating_inputs=inputs.operating_inputs,
+            row_assumption=payload["row_assumption"],
+            row_values=payload["row_values"],
+            column_assumption=payload["column_assumption"],
+            column_values=payload["column_values"],
+            metric=payload["metric"],
+        )
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+    except SensitivityTargetShadowedBySuiteOverrideError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except (UnknownAssumptionError, UnknownMetricError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+
+
 @app.post("/sensitivity", response_model=TwoWaySensitivityResult)
 def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
     payload = dict(payload)
@@ -489,14 +670,115 @@ def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
         case OperatingMode.DETAILED:
             return _sensitivity_detailed(payload)
         case OperatingMode.LEASE_LEVEL:
-            # D5.3 wires Lease-Level sensitivity (the runners already exist internally).
-            raise _unsupported_operating_mode(
-                operating_mode, endpoint="POST /sensitivity"
-            )
+            return _sensitivity_lease_level(payload)
         case _:
             raise _unsupported_operating_mode(
                 operating_mode, endpoint="POST /sensitivity"
             )
+
+
+# =============================================================================
+# D5.3 -- one-way sensitivity
+#
+# A new endpoint rather than a dimension flag on ``/sensitivity``: adding a
+# discriminator there would change a request contract Quick and Detailed already
+# depend on, to describe a differently-shaped question. The two-way contract is
+# left exactly as shipped.
+#
+# Served for **all three** modes (D5.0 decision D3, an approved scope
+# expansion). All three one-way runners already exist and are tested; an
+# endpoint that refused Quick and Detailed would be advertising a limitation
+# that is not real, and would read as a defect rather than a boundary.
+#
+# Every mode returns the same ``OneWaySensitivityResult`` the runners return --
+# no per-mode response shape, and no reformatting here.
+# =============================================================================
+
+
+def _one_way_quick(payload: dict[str, Any]) -> OneWaySensitivityResult:
+    inputs = _require_deal_inputs(payload)
+    _require_fields(payload, _ONE_WAY_FIELDS)
+    return run_one_way_sensitivity(
+        inputs,
+        assumption=payload["assumption"],
+        values=payload["values"],
+        metric=payload["metric"],
+    )
+
+
+def _one_way_detailed(payload: dict[str, Any]) -> OneWaySensitivityResult:
+    terms = _require_deal_terms(payload)
+    detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    _require_fields(payload, _ONE_WAY_FIELDS)
+    return run_detailed_one_way_sensitivity(
+        terms,
+        detailed_operating_inputs,
+        assumption=payload["assumption"],
+        values=payload["values"],
+        metric=payload["metric"],
+    )
+
+
+def _one_way_lease_level(payload: dict[str, Any]) -> OneWaySensitivityResult:
+    terms = _require_deal_terms(payload, mode_label="lease_level")
+    inputs = _require_lease_level_inputs(payload, also_owned=_ONE_WAY_FIELDS)
+    _require_fields(payload, _ONE_WAY_FIELDS)
+    try:
+        return run_lease_level_one_way_sensitivity(
+            terms,
+            inputs.property_inputs,
+            inputs.suites,
+            inputs.leases,
+            market_leasing=inputs.market_leasing,
+            operating_inputs=inputs.operating_inputs,
+            assumption=payload["assumption"],
+            values=payload["values"],
+            metric=payload["metric"],
+        )
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+    except SensitivityTargetShadowedBySuiteOverrideError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+
+
+@app.post("/sensitivity/one-way", response_model=OneWaySensitivityResult)
+def sensitivity_one_way(
+    payload: dict[str, Any] = Body(...),
+) -> OneWaySensitivityResult:
+    """Vary one approved assumption across absolute candidate values.
+
+    Exposes the shipped one-way runners for every mode. Each performs
+    ``1 + len(values)`` complete re-underwrites -- one baseline plus one per
+    candidate -- with no caching and no shortcut, so a cell's value is always a
+    full deterministic analysis rather than an interpolation.
+    """
+
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    try:
+        match operating_mode:
+            case OperatingMode.QUICK:
+                return _one_way_quick(payload)
+            case OperatingMode.DETAILED:
+                return _one_way_detailed(payload)
+            case OperatingMode.LEASE_LEVEL:
+                return _one_way_lease_level(payload)
+            case _:
+                raise _unsupported_operating_mode(
+                    operating_mode, endpoint="POST /sensitivity/one-way"
+                )
+    except (UnknownAssumptionError, UnknownMetricError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
 
 
 def _sensitivity_presets_detailed(
@@ -1222,12 +1504,24 @@ def _require_deal_inputs(payload: dict[str, Any]) -> AcquisitionInputs:
         ) from None
 
 
-def _require_deal_terms(payload: dict[str, Any]) -> AcquisitionTerms:
+def _require_deal_terms(
+    payload: dict[str, Any], *, mode_label: str = "detailed"
+) -> AcquisitionTerms:
+    """The one shared ``AcquisitionTerms`` gate, used by Detailed and, from
+    D5.3, by Lease-Level.
+
+    Both modes deliberately share ``validate_acquisition_terms``: purchase
+    price, LTV, amortisation and the rest mean the same thing whichever engine
+    consumes them, and a Lease-Level-specific copy would be a second place for
+    those rules to drift. ``mode_label`` only names the mode in the
+    missing-object message, so Detailed's wording is unchanged.
+    """
+
     raw_terms = payload.get("terms")
     if not isinstance(raw_terms, dict):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="A 'detailed' operating_mode request must include a 'terms' object.",
+            detail=f"A {mode_label!r} operating_mode request must include a 'terms' object.",
         )
     try:
         return validate_acquisition_terms(raw_terms)

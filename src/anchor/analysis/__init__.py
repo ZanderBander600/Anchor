@@ -60,6 +60,24 @@ from .lease_level_sensitivity import (
     run_lease_level_one_way_sensitivity,
     run_lease_level_two_way_sensitivity,
 )
+# D5.3 -- the analysis package's facade over the D5.2 structural parser.
+#
+# ``api.py`` must not import ``anchor.leasing`` (HD-D4-8: the dependency
+# direction is leasing -> analysis -> engine, and the leasing architecture
+# guardrails enforce it). The parser's implementation owner stays
+# ``leasing/parsing.py``; this is a re-export, not a copy and not a second
+# parser, so the delivery layer reaches it through the same boundary it already
+# reaches ``analyze_lease_level_acquisition_with_projection`` through.
+#
+# Imported here rather than added to ``lease_level.py`` deliberately: that
+# module is the D4.5B financial bridge and is held byte-identical by the D4.6B
+# guardrails. A transport concern does not belong in it.
+# ``LeaseValidationError`` travels with them: it is what both
+# ``parse_lease_level_inputs`` and
+# ``analyze_lease_level_acquisition_with_projection`` raise, so a caller that
+# can reach the entry point but not its failure mode could not use it at all.
+from ..leasing.validation import LeaseValidationError
+from ..leasing.parsing import ParsedLeaseLevelInputs, parse_lease_level_inputs
 from .sensitivity import (
     DETAILED_SUPPORTED_ASSUMPTIONS,
     SUPPORTED_ASSUMPTIONS,
@@ -121,6 +139,11 @@ __all__ = [
     "solve_detailed_max_interest_rate",
     "build_standard_break_even_analysis",
     "build_standard_detailed_break_even_analysis",
+    # Lease-Level structural request parsing (D5.2), re-exported at D5.3 so
+    # the API can reach it without importing anchor.leasing directly.
+    "LeaseValidationError",
+    "ParsedLeaseLevelInputs",
+    "parse_lease_level_inputs",
     # Lease-Level acquisition orchestration (D4.5B)
     "LeaseLevelAcquisitionResults",
     "analyze_lease_level_acquisition_with_projection",

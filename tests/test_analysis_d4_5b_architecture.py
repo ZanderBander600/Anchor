@@ -273,9 +273,14 @@ def test_g6_the_bridge_is_the_only_lease_level_orchestrator() -> None:
             for name in _imported_module_names(path)
         )
     )
+    # D5.3 adds the delivery layer. ``api.py`` calls the bridge exactly as
+    # sensitivity does -- through the analysis facade, once per request, with no
+    # builder or engine call of its own -- so it widens the *consumer* list by
+    # one named file and leaves the ban on a second orchestrator untouched.
     assert importers == [
         "anchor/analysis/__init__.py",
         "anchor/analysis/lease_level_sensitivity.py",
+        "anchor/api.py",
     ]
 
 
@@ -1002,11 +1007,20 @@ def test_hd_d4_9_superseded_the_mode_is_published_and_parses_as_valid() -> None:
         OperatingMode("leaselevel")
 
 
-def test_hd_d4_9_the_api_rejects_the_mode_rather_than_running_quick() -> None:
-    """The behavioural half, through the real endpoint.
+def test_hd_d4_9_superseded_the_api_never_answers_lease_level_with_quick() -> None:
+    """**The behavioural half, discharged at D5.3.**
 
-    A 422 is the required outcome. The failure this guards against is a 200
-    carrying Quick results -- an answer to a question nobody asked.
+    Until D5.3 this asserted a flat 422: the mode parsed but no endpoint
+    served it. ``POST /analyze`` now *does* serve Lease-Level, so the outcome
+    under test changes -- but the failure it was written to catch does not.
+    That failure was never "a 200": it was **a 200 carrying Quick results**,
+    an answer to a question nobody asked.
+
+    Stated directly now. A Quick-shaped body labelled ``lease_level`` names
+    none of the five Lease-Level input objects, so it must be refused for
+    saying nothing the Lease-Level engine can read -- never quietly
+    underwritten with ``current_noi`` and ``noi_growth``, which that engine
+    does not have.
     """
 
     from fastapi.testclient import TestClient
@@ -1029,32 +1043,38 @@ def test_hd_d4_9_the_api_rejects_the_mode_rather_than_running_quick() -> None:
     response = TestClient(app).post("/analyze", json=payload)
 
     assert response.status_code == 422, (
-        f"POST /analyze accepted operating_mode='lease_level' with "
-        f"{response.status_code}; an unsupported mode must be refused, never "
-        "silently dispatched to Quick"
+        f"POST /analyze answered a Quick-shaped operating_mode='lease_level' "
+        f"body with {response.status_code}; it names no Lease-Level inputs, so "
+        "it must be refused rather than dispatched to Quick"
     )
-    assert "operating_mode" in response.text
 
-    # D5.1A: the refusal must be the *unsupported* one, not the unparseable one
-    # -- and above all must not carry Quick results for a Quick-shaped payload.
-    body = response.json()
-    assert "not supported by" in str(body["detail"])
+    # The assertion that has always mattered: no Quick economics came back.
     assert "levered_irr" not in response.text
+    assert "equity_multiple" not in response.text
+
+    # And the refusal explains what is actually wrong -- a missing terms
+    # object -- rather than claiming the mode is unsupported, which it no
+    # longer is.
+    assert "terms" in str(response.json()["detail"])
 
 
-def test_hd_d4_9_superseded_the_mode_is_named_but_no_capability_is_wired() -> None:
+def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> None:
     """**HD-D4-9's anti-half-wiring rule, succeeded at D5.1A.**
 
     The original banned the strings ``LEASE_LEVEL``/``lease_level`` anywhere in
     the API, persistence, ingestion or AI surfaces, because at D4 *any* mention
     would have been half-wiring: publication was supposed to land atomically.
 
-    D5.1A publishes the **mode vocabulary** and deliberately nothing else, so
-    the string ban is the wrong instrument -- refusing a mode by name requires
-    naming it. The intent survives intact and is now stated as the thing that
-    actually matters: **no Lease-Level capability is reachable.** D5.2 owns
-    request parsing, D5.3 analysis, D5.4 persistence, D5.8 AI; none may leak in
-    early behind a mode arm that merely looks wired.
+    D5.1A published the **mode vocabulary** and nothing else, so the string
+    ban became the wrong instrument -- refusing a mode by name requires naming
+    it. The intent was restated then as the thing that actually matters: no
+    capability may leak in ahead of the gate that owns it.
+
+    **Amended at D5.3**, which owns analysis and sensitivity and wires exactly
+    those. The rule is now a ledger rather than a ban: the delivery layer may
+    reach the analysis entry point and the two sensitivity runners, and must
+    still reach nothing else. D5.4 owns persistence and D5.8 owns AI, and both
+    are asserted absent below.
     """
 
     surfaces = [
@@ -1066,41 +1086,70 @@ def test_hd_d4_9_superseded_the_mode_is_named_but_no_capability_is_wired() -> No
         ),
     ]
 
-    # D5.2/D5.3: no delivery surface may reach the Lease-Level engine, its
-    # sensitivity runners, or the leasing input contracts.
+    # The delivery layer must still not construct leasing contracts itself,
+    # and must still not reach the leasing package directly: the dependency
+    # direction HD-D4-8 fixes is leasing -> analysis -> engine, so D5.3
+    # reaches the parser and the runners through the analysis facade.
     forbidden_capability = (
-        "analyze_lease_level_acquisition_with_projection",
-        "run_lease_level_one_way_sensitivity",
-        "run_lease_level_two_way_sensitivity",
-        "lease_level_sensitivity",
-        "LeaseLevelAcquisitionResults",
         "LeaseLevelPropertyInputs",
         "LeaseLevelOperatingInputs",
         "MarketLeasingAssumptions",
         "anchor.leasing",
         "from ..leasing",
+        "from .leasing",
     )
     for source_file in surfaces:
         text = source_file.read_text(encoding="utf-8")
         for forbidden in forbidden_capability:
             assert forbidden not in text, (
-                f"{source_file.name} references {forbidden!r}; D5.1A publishes "
-                "the mode vocabulary only -- capability belongs to D5.2/D5.3/"
-                "D5.4/D5.8 and must not land early"
+                f"{source_file.name} references {forbidden!r}; the delivery "
+                "layer composes analysis through anchor.analysis and "
+                "constructs no leasing contract of its own"
+            )
+
+    # D5.8: the AI layer may *name* the mode to refuse it -- D5.1A put explicit
+    # Lease-Level arms in ``ai/contracts.py`` and ``ai/presentation.py`` for
+    # exactly that -- but it must reach no Lease-Level capability.
+    for source_file in _python_files_under(_ANCHOR_DIR / "ai"):
+        text = source_file.read_text(encoding="utf-8")
+        for forbidden in (
+            "analyze_lease_level_acquisition_with_projection",
+            "run_lease_level_one_way_sensitivity",
+            "run_lease_level_two_way_sensitivity",
+            "parse_lease_level_inputs",
+            "LeaseLevelAcquisitionResults",
+        ):
+            assert forbidden not in text, (
+                f"{source_file.name} reaches {forbidden}; D5.8 owns Lease-Level AI"
             )
 
     # D5.4: no Lease-Level persistence exists yet.
     store = (_ANCHOR_DIR / "deals" / "store.py").read_text(encoding="utf-8")
+    # As with the AI layer, ``store.py`` may *name* the mode to refuse it --
+    # D5.1A gave ``duplicate_deal`` an explicit Lease-Level arm precisely so a
+    # Lease-Level deal could never be duplicated as a Detailed one. What must be
+    # absent is the capability: no table, no schema bump, no parser.
     assert "lease_level_deals" not in store
+    assert "lease_level_suites" not in store
+    assert "lease_level_leases" not in store
+    assert "parse_lease_level_inputs" not in store
     assert "_SCHEMA_VERSION = 4" in store, (
         "the persistence schema version moved; D5.4 owns schema 5"
     )
 
-    # The only Lease-Level references permitted are dispatch arms and the
-    # refusals they raise.
+    # D5.3 ledger: the API reaches exactly the approved entry points.
     api_text = (_ANCHOR_DIR / "api.py").read_text(encoding="utf-8")
     assert "case OperatingMode.LEASE_LEVEL:" in api_text
     assert "_unsupported_operating_mode" in api_text
+    for wired in (
+        "analyze_lease_level_acquisition_with_projection",
+        "run_lease_level_one_way_sensitivity",
+        "run_lease_level_two_way_sensitivity",
+        "parse_lease_level_inputs",
+    ):
+        assert wired in api_text, f"D5.3 should wire {wired}"
+    for not_yet in ("build_standard_lease_level", "lease_level_break_even"):
+        assert not_yet not in api_text, f"{not_yet} is not D5.3 to add"
 
 
 def test_hd_d4_9_superseded_the_exhaustive_dispatch_hazard_is_closed() -> None:

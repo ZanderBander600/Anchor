@@ -96,13 +96,19 @@ _AXES: dict[str, Any] = {
     "metric": "levered_irr",
 }
 
-#: (method, path, extra body). Every mode-aware endpoint, each given a body that
-#: is *otherwise completely valid* -- so a refusal can only be about the mode,
-#: never about a missing field. That is what makes "did not return Quick
-#: results" a meaningful assertion rather than an accident of a broken payload.
+#: (method, path, extra body). The mode-aware endpoints that **still refuse**
+#: Lease-Level, each given a body that is *otherwise completely valid* -- so a
+#: refusal can only be about the mode, never about a missing field. That is what
+#: makes "did not return Quick results" a meaningful assertion rather than an
+#: accident of a broken payload.
+#:
+#: **Narrowed at D5.3**, which wired ``/analyze`` and ``/sensitivity`` (and
+#: added ``/sensitivity/one-way``). Those three moved out of this table and into
+#: ``tests/test_d5_3_lease_level_api.py``, which asserts the far stronger
+#: property that replaced refusal: their numbers equal a direct call to the
+#: deterministic pipeline. Everything below is still owned by a later gate --
+#: presets and break-even permanently for D5, deals by D5.4, AI by D5.8.
 ENDPOINTS: tuple[tuple[str, str, dict[str, Any]], ...] = (
-    ("post", "/analyze", dict(QUICK_INPUTS)),
-    ("post", "/sensitivity", {"inputs": QUICK_INPUTS, **_AXES}),
     ("post", "/sensitivity/presets", {"inputs": QUICK_INPUTS}),
     ("post", "/break-even", {"inputs": QUICK_INPUTS, **_HURDLES}),
     ("post", "/ai/analysis", {"inputs": QUICK_INPUTS, **_HURDLES}),
@@ -209,6 +215,9 @@ def test_an_unknown_mode_token_is_still_an_invalid_enum(client: TestClient) -> N
     response = client.post(
         "/analyze", json={**QUICK_INPUTS, "operating_mode": "leaselevel"}
     )
+    # ``/analyze`` serves Lease-Level from D5.3, but an *unparseable* token
+    # never reaches dispatch at all -- it fails at the mode gate, exactly as
+    # before.
 
     assert response.status_code == 422
     detail = str(response.json()["detail"])
@@ -221,13 +230,22 @@ def test_an_unknown_mode_token_is_still_an_invalid_enum(client: TestClient) -> N
 def test_valid_but_unsupported_is_a_different_message_from_unparseable(
     client: TestClient,
 ) -> None:
-    """Both are 422; they must not be the *same* 422."""
+    """Both are 422; they must not be the *same* 422.
+
+    Asserted on ``/break-even`` from D5.3: ``/analyze`` now *serves*
+    Lease-Level, so it no longer produces an unsupported-mode refusal to
+    compare against. The distinction under test is unchanged -- a mode that
+    does not exist versus a real mode this endpoint does not serve -- and
+    break-even is where that second case still lives (guardrail G35).
+    """
 
     unsupported = client.post(
-        "/analyze", json={**QUICK_INPUTS, "operating_mode": "lease_level"}
+        "/break-even",
+        json={"inputs": QUICK_INPUTS, **_HURDLES, "operating_mode": "lease_level"},
     )
     unparseable = client.post(
-        "/analyze", json={**QUICK_INPUTS, "operating_mode": "leaselevel"}
+        "/break-even",
+        json={"inputs": QUICK_INPUTS, **_HURDLES, "operating_mode": "leaselevel"},
     )
 
     assert unsupported.status_code == unparseable.status_code == 422
@@ -257,13 +275,26 @@ def test_the_mode_parses_even_though_no_endpoint_serves_it() -> None:
 
 @pytest.mark.parametrize(
     ("method", "path", "body"),
-    tuple(e for e in ENDPOINTS if e[1] not in ("/ai/analysis", "/deals/does-not-exist")),
+    (
+        ("post", "/analyze", dict(QUICK_INPUTS)),
+        ("post", "/sensitivity", {"inputs": QUICK_INPUTS, **_AXES}),
+        *(
+            e
+            for e in ENDPOINTS
+            if e[1] not in ("/ai/analysis", "/deals/does-not-exist")
+        ),
+    ),
     ids=lambda v: v if isinstance(v, str) else "",
 )
 def test_quick_requests_still_succeed(
     client: TestClient, method: str, path: str, body: dict[str, Any]
 ) -> None:
-    """Absent ``operating_mode`` still means Quick, and still works."""
+    """Absent ``operating_mode`` still means Quick, and still works.
+
+    Keeps ``/analyze`` and ``/sensitivity`` in the sweep even though they left
+    the refusal table: Quick must keep working on an endpoint that grew a new
+    mode arm, which is the whole point of checking.
+    """
 
     response = _call(client, method, path, body)
     assert response.status_code == 200, response.text
@@ -617,11 +648,17 @@ def test_m1_to_m12_deleting_a_lease_level_arm_is_killed(
 def test_m13_treating_a_valid_mode_as_an_invalid_enum_is_killed(
     client: TestClient,
 ) -> None:
-    """M13: reporting ``lease_level`` as an invalid enum after publication."""
+    """M13: reporting ``lease_level`` as an invalid enum after publication.
+
+    Moved to ``/break-even`` at D5.3 for the same reason as the test above:
+    ``/analyze`` serves the mode now, so the surface that can still get this
+    wrong is one that refuses it.
+    """
 
     detail = str(
         client.post(
-            "/analyze", json={**QUICK_INPUTS, "operating_mode": "lease_level"}
+            "/break-even",
+            json={"inputs": QUICK_INPUTS, **_HURDLES, "operating_mode": "lease_level"},
         ).json()["detail"]
     )
 

@@ -1212,10 +1212,17 @@ def test_g40_no_preset_bundle_was_invented() -> None:
     lease_level_exports = [
         name for name in analysis_package.__all__ if "lease_level" in name.lower()
     ]
+    # D5.3 adds ``parse_lease_level_inputs`` (its envelope,
+    # ``ParsedLeaseLevelInputs``, is not matched by this filter's snake_case
+    # test), re-exported so the delivery layer can reach the parser without
+    # importing ``anchor.leasing``. A parser is not a preset bundle, which is
+    # what this guardrail is about -- the assertions below still forbid any
+    # ``build_*`` or ``*Presets`` Lease-Level export.
     assert sorted(lease_level_exports) == [
         "LEASE_LEVEL_SUPPORTED_ASSUMPTIONS",
         "LEASE_LEVEL_SUPPORTED_METRICS",
         "analyze_lease_level_acquisition_with_projection",
+        "parse_lease_level_inputs",
         "run_lease_level_one_way_sensitivity",
         "run_lease_level_two_way_sensitivity",
     ]

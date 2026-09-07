@@ -429,12 +429,22 @@ def test_the_parser_runs_no_domain_validation() -> None:
         assert forbidden not in _CODE, f"parsing.py runs {forbidden}"
 
 
-def test_the_api_has_not_been_wired_to_the_parser() -> None:
-    """D5.3 owns activation. D5.2 ships a parser nothing calls yet."""
+def test_the_api_reaches_the_parser_only_through_the_analysis_facade() -> None:
+    """**Inverted at D5.3**, which owns activation.
+
+    D5.2 shipped a parser nothing called; this asserted exactly that. D5.3 wires
+    it, so the rule becomes the one that outlives activation: the delivery layer
+    may *use* the parser, but only through ``anchor.analysis``. Importing
+    ``anchor.leasing`` from ``api.py`` would invert the dependency direction
+    HD-D4-8 fixes, and there would then be two doors into the leasing layer.
+    """
 
     api = (_PARSING.parents[2] / "anchor" / "api.py").read_text(encoding="utf-8")
-    assert "parse_lease_level_inputs" not in api
+
+    assert "parse_lease_level_inputs" in api, "D5.3 should wire the parser"
     assert "leasing.parsing" not in api
+    assert "anchor.leasing" not in api
+    assert "from .leasing" not in api
 
 
 # =============================================================================

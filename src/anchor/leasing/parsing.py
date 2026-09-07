@@ -68,7 +68,7 @@ import dataclasses
 import itertools
 import types
 import typing
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date
 from enum import Enum
 from math import isfinite
@@ -455,19 +455,23 @@ class ParsedLeaseLevelInputs:
     leases: tuple[Lease, ...]
 
 
-#: Top-level keys of a Lease-Level request body that this module does not own:
-#: ``operating_mode`` is the API's dispatch discriminator (popped before the body
-#: reaches any parser) and ``terms`` is ``validate_acquisition_terms``'s. Named
-#: here so the envelope's unknown-key check does not report a legitimate key --
-#: the only place in this module where a key is named rather than derived, and
-#: only because the envelope is a JSON object with no dataclass of its own.
+#: Top-level keys every Lease-Level body carries that this module does not own:
+#: ``operating_mode`` is the API's dispatch discriminator and ``terms`` is
+#: ``validate_acquisition_terms``'s. Named here so the envelope's unknown-key
+#: check does not report a legitimate key -- the only place in this module where
+#: a key is named rather than derived, and only because the envelope is a JSON
+#: object with no dataclass of its own.
 _EXTERNALLY_OWNED_KEYS = frozenset({"operating_mode", "terms"})
 
 #: The collection members of the envelope and the contract each element is.
 _SEQUENCE_FIELDS: dict[str, type] = {"suites": Suite, "leases": Lease}
 
 
-def parse_lease_level_inputs(payload: Mapping[str, Any]) -> ParsedLeaseLevelInputs:
+def parse_lease_level_inputs(
+    payload: Mapping[str, Any],
+    *,
+    externally_owned_keys: Collection[str] = (),
+) -> ParsedLeaseLevelInputs:
     """Structurally parse the Lease-Level inputs of a request body.
 
     Returns the reconstructed envelope, or raises ``LeaseValidationError``
@@ -483,6 +487,18 @@ def parse_lease_level_inputs(payload: Mapping[str, Any]) -> ParsedLeaseLevelInpu
     Performs **no** domain validation. Returning successfully means the JSON
     could become the contracts -- not that the deal is analysable. That remains
     ``require_valid_lease_level_inputs``' answer, unchanged and uncopied.
+
+    ``externally_owned_keys`` names further top-level keys the *caller* owns, on
+    top of ``operating_mode`` and ``terms``. A sensitivity request carries its
+    row/column/metric controls beside the same Lease-Level inputs, and those
+    belong to the sensitivity runner rather than to any contract here.
+
+    Declaring them is deliberately the caller's job, and deliberately not a
+    filter. Handing this function a narrowed dict would discard a typo instead
+    of reporting it, which is the whole point of the unknown-key check; and
+    teaching this module the shape of a sensitivity request would give the
+    transport parser knowledge of what those keys *mean*. A caller states which
+    keys it will consume, and every other unrecognised key is still refused.
     """
 
     into = _Collector()
@@ -492,7 +508,8 @@ def parse_lease_level_inputs(payload: Mapping[str, Any]) -> ParsedLeaseLevelInpu
         raise LeaseValidationError(LeaseValidationResult(issues=into.issues))
 
     declared = {field.name for field in dataclasses.fields(ParsedLeaseLevelInputs)}
-    for key in sorted(set(payload) - declared - _EXTERNALLY_OWNED_KEYS):
+    owned = _EXTERNALLY_OWNED_KEYS | set(externally_owned_keys)
+    for key in sorted(set(payload) - declared - owned):
         into.unknown(key, "is not part of the Lease-Level inputs")
 
     hints = typing.get_type_hints(ParsedLeaseLevelInputs)
