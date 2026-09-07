@@ -61,6 +61,7 @@ from .contracts import (
     LeaseLevelOperatingInputs,
     LeaseLevelPropertyInputs,
     MonthlyPropertyExpenseSchedule,
+    MonthlyPropertyProjection,
     PropertyOperatingSchedule,
     PropertyRecoverySchedule,
     SuiteOperatingProjection,
@@ -177,6 +178,10 @@ class LeaseIssueCode(StrEnum):
     )
     EXPENSE_STOP_OUT_OF_DOMAIN = "EXPENSE_STOP_OUT_OF_DOMAIN"
     UNSUPPORTED_RECOVERY_BASIS = "UNSUPPORTED_RECOVERY_BASIS"
+
+    # --- annual operating adapter (D4.4) ---
+    PROJECTION_NOT_CANONICAL = "PROJECTION_NOT_CANONICAL"
+    PURCHASE_PRICE_OUT_OF_DOMAIN = "PURCHASE_PRICE_OUT_OF_DOMAIN"
 
     # --- monthly property projection (D4.3) ---
     PROPERTY_RECOVERY_NOT_ALIGNED = "PROPERTY_RECOVERY_NOT_ALIGNED"
@@ -2150,6 +2155,121 @@ def require_valid_initial_vacancy_inputs(
 
     result = validate_initial_vacancy_inputs(
         suites, leases, property_defaults=property_defaults, path=path
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D4.4 -- the annual operating adapter
+#
+# Two rules only. The reducers in ``aggregation.py`` already enforce that a
+# monthly series has exactly ``12H + 12`` values, and every contract already
+# enforces its own series lengths, so this validator adds precisely what
+# nothing upstream can know: that the hold/forward partition the adapter is
+# about to slice on is the one the calendar actually describes, and that the
+# valuation denominator is usable.
+# =============================================================================
+
+
+def validate_annual_adapter_inputs(
+    monthly: MonthlyPropertyProjection,
+    *,
+    hold_period: int,
+    purchase_price: float,
+) -> LeaseValidationResult:
+    """Validate the inputs to one monthly-to-annual derivation (D4.4).
+
+    **Canonical partition** (``PROJECTION_NOT_CANONICAL``). The adapter slices
+    hold years out of months ``1 .. 12H`` and the exit window out of
+    ``12H+1 .. 12H+12``. Both slices are position-based, so the partition must
+    match what ``ModelMonth`` says: the projection must hold exactly
+    ``12H + 12`` months, and exactly the final twelve must carry
+    ``is_forward_exit_month``. A projection whose flags disagree with its
+    length would still slice cleanly and would silently move the sale date.
+
+    **Valuation denominator** (``PURCHASE_PRICE_OUT_OF_DOMAIN``). ``> 0`` and
+    finite, the same domain ``anchor.validation`` already applies to
+    ``purchase_price``, reproduced here under the leasing-scoped severity
+    architecture rather than by importing or modifying the global validator.
+    The denominator is needed only to construct ``going_in_cap_rate``, which
+    ``OperatingProjectionLike`` requires; accepting it is not acquisition
+    integration, and nothing else in this gate reads it.
+
+    **Deliberately not checked: the sign of the forward NOI.** A non-positive
+    ``exit_noi`` is a legitimate operating result and this gate constructs it
+    faithfully. Cap-rate terminal valuation is what it makes meaningless, and
+    that is refused at the Lease-Level acquisition/integration boundary at
+    D4.5 (HD-D4-7, D4 Section 21.6). Moving the check here would make the
+    operating projection of a distressed building unbuildable, which is
+    exactly what the accepted decision avoids.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+
+    expected_months = projection_month_count(hold_period)
+    if len(monthly.months) != expected_months:
+        issues.append(
+            _issue(
+                LeaseIssueCode.PROJECTION_NOT_CANONICAL,
+                "monthly_projection.months",
+                f"a {hold_period}-year hold has {expected_months} canonical "
+                f"months ({hold_period} hold years plus the twelve forward "
+                f"exit months); the projection holds {len(monthly.months)}.",
+            )
+        )
+    else:
+        last_hold_month = 12 * hold_period
+        for position, month in enumerate(monthly.months):
+            is_forward = position >= last_hold_month
+            if month.is_forward_exit_month is not is_forward:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.PROJECTION_NOT_CANONICAL,
+                        f"monthly_projection.months[{position}]",
+                        f"month {month.period_index} is marked "
+                        f"is_forward_exit_month="
+                        f"{month.is_forward_exit_month!r} but position "
+                        f"{position} of a {hold_period}-year hold is "
+                        f"{'inside' if is_forward else 'outside'} the forward "
+                        "exit window; the sale date is month "
+                        f"{last_hold_month}.",
+                    )
+                )
+                break
+
+    if not _is_finite_number(purchase_price):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                "purchase_price",
+                "purchase_price must be a finite number.",
+            )
+        )
+    elif purchase_price <= 0:
+        issues.append(
+            _issue(
+                LeaseIssueCode.PURCHASE_PRICE_OUT_OF_DOMAIN,
+                "purchase_price",
+                f"purchase_price {purchase_price!r} must be greater than 0; it "
+                "is the going-in cap rate's denominator.",
+            )
+        )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_annual_adapter_inputs(
+    monthly: MonthlyPropertyProjection,
+    *,
+    hold_period: int,
+    purchase_price: float,
+) -> LeaseValidationResult:
+    """Validate annual-adapter inputs and raise on any ERROR."""
+
+    result = validate_annual_adapter_inputs(
+        monthly, hold_period=hold_period, purchase_price=purchase_price
     )
     if result.errors:
         raise LeaseValidationError(result)

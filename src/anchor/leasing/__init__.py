@@ -153,6 +153,20 @@ expenses stay gross, and TI and LC stay below NOI in every month including the
 forward window. Because the fee is excluded from the recoverable pool, the
 whole statement resolves in one pass with no solver. NOI is never floored.
 Annual aggregation, exit NOI and the going-in cap rate are D4.4's.
+
+D4.4 derives the annual view. ``aggregate_monthly_to_annual`` reduces the
+canonical monthly projection through the three D1.3 reducers and nothing else:
+every ``_by_year`` flow is the chronological sum of its twelve months, every
+annual state carries its semantics in its name, and ``exit_noi`` is the sum of
+monthly NOI over months ``12H+1..12H+12`` -- never Hold Year H grown. Annual
+NOI is summed from monthly NOI, not rebuilt from annual EGI less annual
+expenses, so the figure every downstream return depends on has one arithmetic
+path. Hold-year TI/LC arrays are length H and physically cannot reach a
+forward month; the forward window's leasing costs are disclosed once, as a
+scalar that nothing deducts. The result satisfies
+``OperatingProjectionLike`` structurally, without fabricating a single
+Detailed-only field. A non-positive ``exit_noi`` is constructed faithfully:
+refusing to capitalize it belongs to the integration boundary at D4.5.
 """
 
 from __future__ import annotations
@@ -178,6 +192,7 @@ from .calendar import (
     projection_month_count,
 )
 from .contracts import (
+    AnnualOperatingProjection,
     EscalationBasis,
     ExpectedRollover,
     ExpectedRolloverRecovery,
@@ -251,6 +266,7 @@ from .recoveries import (
     tenant_pro_rata_share,
 )
 from .projection import (
+    aggregate_monthly_to_annual,
     annual_other_income,
     build_monthly_property_projection,
 )
@@ -281,6 +297,8 @@ from .rollover import (
     weighted_outcome,
 )
 from .validation import (
+    require_valid_annual_adapter_inputs,
+    validate_annual_adapter_inputs,
     require_valid_property_projection_inputs,
     validate_property_projection_inputs,
     require_valid_property_operating_inputs,
@@ -402,6 +420,11 @@ __all__ = [
     "build_expected_rollover_recovery",
     "build_recursive_rollover_recovery",
     "build_initial_vacancy_rollover_recovery",
+    # annual operating adapter (D4.4)
+    "AnnualOperatingProjection",
+    "aggregate_monthly_to_annual",
+    "validate_annual_adapter_inputs",
+    "require_valid_annual_adapter_inputs",
     # monthly property projection (D4.3)
     "MonthlyPropertyProjection",
     "build_monthly_property_projection",

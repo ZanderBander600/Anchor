@@ -46,14 +46,24 @@ from __future__ import annotations
 from math import inf
 
 from ..engine.contracts import ensure_finite
+from .aggregation import (
+    aggregate_flow_over_forward_exit_window,
+    aggregate_flow_to_annual,
+    average_state_over_year,
+    snapshot_state_at_year_end,
+)
 from .contracts import (
+    AnnualOperatingProjection,
     LeaseLevelOperatingInputs,
     MonthlyPropertyExpenseSchedule,
     MonthlyPropertyProjection,
     PropertyOperatingSchedule,
     PropertyRecoverySchedule,
 )
-from .validation import require_valid_property_projection_inputs
+from .validation import (
+    require_valid_annual_adapter_inputs,
+    require_valid_property_projection_inputs,
+)
 
 
 _MONTHS_PER_YEAR = 12
@@ -288,4 +298,204 @@ def build_monthly_property_projection(
         operating_schedule=operating,
         recovery_schedule=recovery,
         expense_schedule=expenses,
+    )
+
+
+# =============================================================================
+# D4.4 -- the annual operating adapter
+#
+# A derivation over a derivation. Every figure below comes from one of the
+# three D1.3 reducers applied to a canonical monthly series, and from nothing
+# else. There is no annual growth rate here, no stabilization, no second NOI
+# formula, and no annual model of any kind.
+# =============================================================================
+
+
+#: Every monthly flow line that becomes an annual line, in statement order. One
+#: tuple, one loop, one reducer -- so ``noi_by_year`` and
+#: ``tenant_improvements_by_year`` cannot come to be summed by different code
+#: with different float grouping. The annual field is always the monthly name
+#: plus ``_by_year``, which is what lets the reconciliation test be mechanical
+#: rather than one assertion per line.
+_ANNUAL_FLOW_LINES: tuple[str, ...] = (
+    "contractual_base_rent",
+    "cash_base_rent",
+    "free_rent",
+    "expense_recovery",
+    "other_income",
+    "credit_loss",
+    "effective_gross_income",
+    "property_taxes",
+    "insurance",
+    "utilities",
+    "repairs_maintenance",
+    "other_operating_expenses",
+    "fixed_operating_expenses",
+    "management_fee",
+    "total_operating_expenses",
+    "noi",
+    "tenant_improvements",
+    "leasing_commissions",
+)
+
+
+def aggregate_monthly_to_annual(
+    monthly: MonthlyPropertyProjection,
+    *,
+    purchase_price: float,
+) -> AnnualOperatingProjection:
+    """Derive the annual operating view from the canonical monthly projection.
+
+    **Validates first, then derives.** ``require_valid_annual_adapter_inputs``
+    is the single authority for the hold/forward partition and for the
+    valuation denominator; this function adds no rule of its own.
+
+    **The hold period is read, not guessed.** It comes from
+    ``monthly.recovery_schedule.hold_period`` -- authoritative metadata carried
+    since D3.5 -- and is then checked against the calendar: the projection must
+    hold exactly ``12H + 12`` months and exactly the last twelve must be
+    flagged forward. Deriving ``H`` as ``len(months) / 12`` would silently
+    treat the forward year as a hold year, which is the one arithmetic mistake
+    that would put a post-sale month into a seller cash flow.
+
+    Flows, for ``y`` in ``1..H``:
+
+    ```
+    annual_X_by_year[y-1] = sum of monthly X_m for m in 12(y-1)+1 .. 12y
+    ```
+
+    through the existing ``aggregate_flow_to_annual``, in strictly ascending
+    period order. **One reducer for every line** -- ``noi_by_year`` and
+    ``tenant_improvements_by_year`` are produced by the same call in the same
+    loop, so no two annual figures can disagree about float grouping. Each
+    tuple has length exactly ``H``: the reducer stops at month ``12H`` by
+    construction, so no forward-window dollar can reach a hold-year array.
+
+    **``noi_by_year`` is the sum of monthly NOI.** It is never rebuilt from
+    annual EGI minus annual expenses. Those reconcile to within IEEE-754
+    grouping and a golden asserts it, but the monthly series is the authority,
+    and a second path to the figure every downstream return depends on is
+    exactly what this layer exists not to create.
+
+    States, with their semantics in their names (G-M6):
+
+    ```
+    occupied_area_at_year_end            = snapshot_state_at_year_end(...)
+    vacant_area_at_year_end              = snapshot_state_at_year_end(...)
+    physical_occupancy_at_year_end       = snapshot_state_at_year_end(...)
+    average_physical_occupancy_over_year = average_state_over_year(...)
+    ```
+
+    The headline annual occupancy is the **average** of the twelve monthly
+    property-level values (accepted at D4.0 human review). Those monthly values
+    were already computed once, from areas, at the property level by D4.2, so
+    nothing here returns to suite data and nothing averages a suite percentage.
+
+    Exit figures:
+
+    ```
+    exit_noi                  = sum of monthly noi over months 12H+1 .. 12H+12
+    exit_window_leasing_costs = the same window's TI + LC
+    going_in_cap_rate         = noi_by_year[0] / purchase_price
+    ```
+
+    ``exit_noi`` comes from the same canonical series an analyst can inspect
+    (G-M12). It is never Hold Year ``H`` grown, never ``12x`` a single month,
+    never stabilized and never gross of free rent -- whatever the forward
+    twelve months contain is already inside monthly NOI. TI and LC never
+    entered ``noi``, so they cannot reach ``exit_noi``; the exclusion is
+    structural rather than a subtraction anyone must remember not to make.
+
+    ``exit_window_leasing_costs`` is a **disclosed diagnostic, never deducted
+    from anything** (D0 Section 17.4), read by no engine calculation.
+
+    ``exit_noi`` may be positive, zero or negative, and all three are returned
+    faithfully. Cap-rate terminal valuation is refused for a non-positive
+    forward NOI at the Lease-Level acquisition/integration boundary (HD-D4-7),
+    which is D4.5's; refusing it here would make a distressed building's
+    operating projection unbuildable, which is what the accepted decision
+    deliberately avoids.
+
+    ``going_in_cap_rate`` is Year-1 NOI over price -- the one Anchor
+    convention, identical to Quick's and Detailed's (D4 Section 20.4). Year-1
+    NOI is a *modeled* result, so it may be zero or negative for a heavily
+    vacant building; unlike ``exit_noi`` it capitalizes nothing, so it is
+    reported as modeled rather than refused.
+
+    **This is not acquisition integration.** ``purchase_price`` is a scalar
+    denominator, taken exactly as
+    ``build_detailed_operating_projection(..., purchase_price=...)`` already
+    takes it. No exit value, no disposition cost, no debt, no return metric and
+    no ``AcquisitionTerms`` appears here or anywhere in ``anchor.leasing``.
+
+    Pure and deterministic: no I/O, no mutation, no ``set`` or ``dict``
+    iteration contributing to any figure.
+    """
+
+    hold_period = monthly.recovery_schedule.hold_period
+
+    require_valid_annual_adapter_inputs(
+        monthly, hold_period=hold_period, purchase_price=purchase_price
+    )
+
+    annual: dict[str, tuple[float, ...]] = {
+        name: aggregate_flow_to_annual(
+            getattr(monthly, name), hold_period=hold_period
+        )
+        for name in _ANNUAL_FLOW_LINES
+    }
+
+    exit_noi = ensure_finite(
+        "exit_noi",
+        aggregate_flow_over_forward_exit_window(
+            monthly.noi, hold_period=hold_period
+        ),
+    )
+    exit_window_leasing_costs = ensure_finite(
+        "exit_window_leasing_costs",
+        aggregate_flow_over_forward_exit_window(
+            monthly.tenant_improvements, hold_period=hold_period
+        )
+        + aggregate_flow_over_forward_exit_window(
+            monthly.leasing_commissions, hold_period=hold_period
+        ),
+    )
+    going_in_cap_rate = ensure_finite(
+        "going_in_cap_rate", annual["noi"][0] / purchase_price
+    )
+
+    return AnnualOperatingProjection(
+        contractual_base_rent_by_year=annual["contractual_base_rent"],
+        cash_base_rent_by_year=annual["cash_base_rent"],
+        free_rent_by_year=annual["free_rent"],
+        expense_recovery_by_year=annual["expense_recovery"],
+        other_income_by_year=annual["other_income"],
+        credit_loss_by_year=annual["credit_loss"],
+        effective_gross_income_by_year=annual["effective_gross_income"],
+        property_taxes_by_year=annual["property_taxes"],
+        insurance_by_year=annual["insurance"],
+        utilities_by_year=annual["utilities"],
+        repairs_maintenance_by_year=annual["repairs_maintenance"],
+        other_operating_expenses_by_year=annual["other_operating_expenses"],
+        fixed_operating_expenses_by_year=annual["fixed_operating_expenses"],
+        management_fee_by_year=annual["management_fee"],
+        total_operating_expenses_by_year=annual["total_operating_expenses"],
+        noi_by_year=annual["noi"],
+        tenant_improvements_by_year=annual["tenant_improvements"],
+        leasing_commissions_by_year=annual["leasing_commissions"],
+        occupied_area_at_year_end=snapshot_state_at_year_end(
+            monthly.occupied_area_sf, hold_period=hold_period
+        ),
+        vacant_area_at_year_end=snapshot_state_at_year_end(
+            monthly.vacant_area_sf, hold_period=hold_period
+        ),
+        physical_occupancy_at_year_end=snapshot_state_at_year_end(
+            monthly.physical_occupancy, hold_period=hold_period
+        ),
+        average_physical_occupancy_over_year=average_state_over_year(
+            monthly.physical_occupancy, hold_period=hold_period
+        ),
+        exit_noi=exit_noi,
+        going_in_cap_rate=going_in_cap_rate,
+        exit_window_leasing_costs=exit_window_leasing_costs,
     )

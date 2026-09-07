@@ -360,16 +360,17 @@ def test_package_exposes_no_d3_or_later_entry_point() -> None:
     the expense stop at D3.2, successor structures at D3.3, expected and
     recursive recoveries at D3.4, and property aggregation at D3.5.
 
-    **Sprint D3 is complete, and D4.1, D4.2 and D4.3 have landed.** D4.1
-    supplies the recoverable pool D3 has consumed as an injected input since
-    D3.1 (HD-D3-8: D3 injects, D4 supplies); D4.2 adds the suite extraction
-    seam and the property leasing aggregation; D4.3 composes the three
-    completed schedules into the monthly operating statement. All are now
-    positive assertions.
+    **Sprint D3 is complete, and D4.1 through D4.4 have landed.** D4.1 supplies
+    the recoverable pool D3 has consumed as an injected input since D3.1
+    (HD-D3-8: D3 injects, D4 supplies); D4.2 adds the suite extraction seam and
+    the property leasing aggregation; D4.3 composes the three completed
+    schedules into the monthly operating statement; D4.4 derives the annual
+    view, the forward exit NOI and the going-in cap rate. All are now positive
+    assertions.
 
-    What remains absent is everything D4.4 and later own: the annual adapter,
-    exit NOI, the going-in cap rate, and the integration into acquisition,
-    debt and returns -- the last of which lives in ``anchor.analysis``, not
+    What remains absent is everything D4.5 owns: the below-NOI owner-capital
+    channel, the Lease-Level result envelope, and the integration into
+    acquisition, debt and returns -- which lives in ``anchor.analysis``, not
     here."""
 
     import anchor.leasing as leasing
@@ -390,14 +391,16 @@ def test_package_exposes_no_d3_or_later_entry_point() -> None:
         "MonthlyPropertyProjection",
         "build_monthly_property_projection",
         "annual_other_income",
+        # D4.4
+        "AnnualOperatingProjection",
+        "aggregate_monthly_to_annual",
     ):
-        assert hasattr(leasing, present), f"D4.1-D4.3 must expose {present}"
+        assert hasattr(leasing, present), f"D4.1-D4.4 must expose {present}"
 
     for absent in (
         "build_lease_level_operating_projection",
-        "AnnualOperatingProjection",
+        "analyze_lease_level_acquisition_with_projection",
         "OperatingExpenseSchedule",
-        "aggregate_monthly_to_annual",
         "OperatingCapitalSchedule",
         "LeaseLevelAcquisitionResults",
     ):

@@ -2711,6 +2711,158 @@ class MonthlyPropertyProjection:
 
 
 # =============================================================================
+# D4.4 -- the derived annual operating view
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AnnualOperatingProjection:
+    """The annual view over the canonical monthly projection (D4.4).
+
+    Restates D0 Section 4.7 and D4 Sections 20.1-20.4. **A derivation, not a
+    model.** Every figure here is produced by one of the three D1.3 reducers
+    over a canonical monthly series, and by nothing else. There is no
+    independent annual Lease-Level engine, no annual growth rate and no
+    stabilization anywhere (guardrails G-M2, G-M3).
+
+    **Flow lines** are the chronological sum of their twelve monthly values:
+
+    ```
+    annual_X_by_year[y-1] = sum of monthly X_m for m in 12(y-1)+1 .. 12y
+    ```
+
+    accumulated in strictly ascending period order. Every ``_by_year`` tuple has
+    length exactly ``H``, so a forward-window figure cannot reach one: the
+    reducer physically stops at month ``12H``.
+
+    **``noi_by_year`` is the sum of monthly NOI**, never rebuilt as
+    ``effective_gross_income_by_year - total_operating_expenses_by_year``.
+    Those agree to within IEEE-754 grouping and are asserted to reconcile, but
+    reconstructing NOI would create a second arithmetic path for the one figure
+    every downstream return depends on.
+
+    **State lines** carry their semantics in their names (G-M6): a snapshot
+    ends ``_at_year_end``, an average begins ``average_``. No state metric is
+    ever summed and no flow metric is ever averaged -- the two reducers are
+    separate functions with separate names for exactly that reason. The
+    headline annual occupancy is the **average** of the twelve monthly
+    property-level values (accepted at D4.0 human review); the year-end
+    snapshot is retained beside it.
+
+    **Exit figures.** ``exit_noi`` is the chronological sum of monthly NOI over
+    months ``12H+1 .. 12H+12`` -- the same canonical series an analyst can
+    inspect (G-M12), never Hold Year ``H`` grown, never a stabilized override,
+    never contractual rent gross of free rent. Whatever happens in those twelve
+    months -- a rollover, a lease-up, free rent, a recovery step, an expense
+    step -- is already inside monthly NOI and is therefore already inside
+    ``exit_noi``.
+
+    ``exit_noi`` may be **positive, zero or negative**, and this contract
+    accepts all three. A non-positive forward NOI makes cap-rate terminal
+    valuation meaningless, but that restriction is enforced at the Lease-Level
+    acquisition/integration boundary before the shared exit-cap calculation
+    (HD-D4-7, D4 Section 21.6), not here: the operating projection of a
+    distressed building must stay inspectable.
+
+    ``exit_window_leasing_costs`` is the forward window's TI plus LC. It is a
+    **disclosed diagnostic, never deducted from anything** (D0 Section 17.4)
+    and is read by no engine calculation. TI and LC are below NOI in every
+    month, so they cannot reach ``exit_noi`` either -- structurally, because
+    ``noi`` never contained them.
+
+    ``going_in_cap_rate`` is ``noi_by_year[0] / purchase_price`` -- Year-1 NOI
+    over price, the one Anchor convention, identical to Quick's and Detailed's
+    (D4 Section 20.4). Year-1 NOI here is a *modeled* first-year result
+    reflecting lease-up, downtime and free rent, so for a heavily vacant
+    building it can be zero or negative. It is reported as modeled: unlike
+    ``exit_noi`` it capitalizes nothing, so nothing is refused.
+
+    **Satisfies ``anchor.engine.contracts.OperatingProjectionLike``
+    structurally** through ``noi_by_year``, ``exit_noi`` and
+    ``going_in_cap_rate``, without importing the Protocol and without
+    fabricating a single Detailed-only field. Lease-Level has no gross
+    potential rent, no blended vacancy factor and no generic revenue growth,
+    and it invents none to look like ``OperatingProjection``.
+
+    **Deliberately absent:** ``market_rent_psf_at_year_end`` from D0's sketch
+    (HD-D4-4 rejected a property-level market rate, and the monthly projection
+    carries none to reduce); any CapEx series (``annual_capex_reserve`` stays
+    its single authority); and every exit-value, debt and return figure, which
+    are D4.5's and the shared engine's.
+
+    Built only by ``anchor.leasing.projection.aggregate_monthly_to_annual``;
+    this dataclass performs no calculation of its own.
+    """
+
+    # --- flow, Years 1..H ---
+    contractual_base_rent_by_year: tuple[float, ...]
+    cash_base_rent_by_year: tuple[float, ...]
+    free_rent_by_year: tuple[float, ...]
+    expense_recovery_by_year: tuple[float, ...]
+    other_income_by_year: tuple[float, ...]
+    credit_loss_by_year: tuple[float, ...]
+    effective_gross_income_by_year: tuple[float, ...]
+    property_taxes_by_year: tuple[float, ...]
+    insurance_by_year: tuple[float, ...]
+    utilities_by_year: tuple[float, ...]
+    repairs_maintenance_by_year: tuple[float, ...]
+    other_operating_expenses_by_year: tuple[float, ...]
+    fixed_operating_expenses_by_year: tuple[float, ...]
+    management_fee_by_year: tuple[float, ...]
+    total_operating_expenses_by_year: tuple[float, ...]
+    noi_by_year: tuple[float, ...]
+    tenant_improvements_by_year: tuple[float, ...]
+    leasing_commissions_by_year: tuple[float, ...]
+
+    # --- state, explicitly named (G-M6) ---
+    occupied_area_at_year_end: tuple[float, ...]
+    vacant_area_at_year_end: tuple[float, ...]
+    physical_occupancy_at_year_end: tuple[float, ...]
+    average_physical_occupancy_over_year: tuple[float, ...]
+
+    # --- exit ---
+    exit_noi: float
+    going_in_cap_rate: float
+    exit_window_leasing_costs: float
+
+    def __post_init__(self) -> None:
+        expected = len(self.noi_by_year)
+        if expected < 1:
+            raise ValueError(
+                "AnnualOperatingProjection requires at least one hold year."
+            )
+        for name in (
+            "contractual_base_rent_by_year",
+            "cash_base_rent_by_year",
+            "free_rent_by_year",
+            "expense_recovery_by_year",
+            "other_income_by_year",
+            "credit_loss_by_year",
+            "effective_gross_income_by_year",
+            "property_taxes_by_year",
+            "insurance_by_year",
+            "utilities_by_year",
+            "repairs_maintenance_by_year",
+            "other_operating_expenses_by_year",
+            "fixed_operating_expenses_by_year",
+            "management_fee_by_year",
+            "total_operating_expenses_by_year",
+            "tenant_improvements_by_year",
+            "leasing_commissions_by_year",
+            "occupied_area_at_year_end",
+            "vacant_area_at_year_end",
+            "physical_occupancy_at_year_end",
+            "average_physical_occupancy_over_year",
+        ):
+            series = getattr(self, name)
+            if len(series) != expected:
+                raise ValueError(
+                    f"AnnualOperatingProjection requires one {name} figure per "
+                    f"hold year; got {len(series)} for {expected} years."
+                )
+
+
+# =============================================================================
 # D4.1 -- property operating inputs and the canonical monthly expense schedule
 #
 # Property economics, deliberately separate from lease and market-leasing

@@ -2677,10 +2677,15 @@ def test_no_later_d3_gate_concept_exists() -> None:
         # landed. What remains banned is D4.4's annual adapter and the
         # end-to-end orchestration entry point, which is D4.5's and lives in
         # ``anchor.analysis``, not here.
+        # D4.4 delivered ``AnnualOperatingProjection`` and
+        # ``aggregate_monthly_to_annual``; both leave the ban the way every
+        # earlier gate's names did, when the gate that owns them landed. What
+        # remains banned is the end-to-end orchestration entry point, which is
+        # D4.5's and lives in ``anchor.analysis``, not here.
         for forbidden in (
             "build_lease_level_operating_projection",
-            "AnnualOperatingProjection",
-            "aggregate_monthly_to_annual",
+            "analyze_lease_level_acquisition_with_projection",
+            "LeaseLevelAcquisitionResults",
         ):
             assert forbidden not in referenced, (
                 f"{source_file} references {forbidden!r}, which belongs to a "
@@ -3893,25 +3898,43 @@ _D4_1_PROPERTY_EXPENSE_NAMES = (
 #: ``credit_loss_pct`` -- inert declared fields D4.1 validates but never
 #: computes with -- do not collide with the ``management_fee`` and
 #: ``credit_loss`` DOLLAR concepts banned here.
-_DOWNSTREAM_NAMES_BANNED_THROUGH_D4_3 = (
-    "operating_expenses",
-    "egi",
+#: The modules D4.4 gave annual/exit vocabulary to. Every D1-D3 calculator and
+#: D4.1's and D4.2's modules keep the full ban, so an ``exit_noi`` appearing in
+#: ``recoveries.py`` or a ``purchase_price`` in ``rollover.py`` still fails.
+_D4_4_ANNUAL_MODULES = frozenset(
+    {"contracts.py", _PROJECTION_MODULE, "validation.py"}
+)
+
+#: Annual and exit vocabulary D4.4 legitimately owns (D4 Sections 20.1-20.4).
+#: ``purchase_price`` is the going-in cap rate's denominator and nothing else.
+_D4_4_ANNUAL_NAMES = (
     "exit_noi",
     "going_in_cap_rate",
+    "purchase_price",
+)
+
+_DOWNSTREAM_NAMES_BANNED_THROUGH_D4_4 = (
+    "operating_expenses",
+    "egi",
     "capex",
     "annual_capex_reserve",
     "irr",
     "dscr",
     "debt_yield",
     "equity_multiple",
-    "purchase_price",
     "exit_value",
+    "exit_cap_rate",
+    "disposition_cost_pct",
     "sale_proceeds",
+    "net_sale_proceeds",
+    "annual_debt_service",
     "OperatingCapitalSchedule",
+    "AcquisitionTerms",
+    "AcquisitionResults",
 )
 
 
-def test_no_downstream_concept_reaches_the_leasing_package_at_d4_3() -> None:
+def test_no_downstream_concept_reaches_the_leasing_package_at_d4_4() -> None:
     """**D3 guardrails 21-25, narrowed again at D4.3.** D3 stopped at monthly
     recovery revenue. D4.1 added the fixed-expense projection and the pool,
     D4.2 the property leasing aggregate, and D4.3 the operating statement --
@@ -3949,10 +3972,18 @@ def test_no_downstream_concept_reaches_the_leasing_package_at_d4_3() -> None:
                     f"{sorted(_D4_3_STATEMENT_MODULES)}"
                 )
 
-        for forbidden in _DOWNSTREAM_NAMES_BANNED_THROUGH_D4_3:
+        if source_file.name not in _D4_4_ANNUAL_MODULES:
+            for forbidden in _D4_4_ANNUAL_NAMES:
+                assert forbidden not in referenced, (
+                    f"{source_file.name} references {forbidden!r}; the annual "
+                    "view and the exit figures belong to "
+                    f"{sorted(_D4_4_ANNUAL_MODULES)}"
+                )
+
+        for forbidden in _DOWNSTREAM_NAMES_BANNED_THROUGH_D4_4:
             assert forbidden not in referenced, (
                 f"{source_file.name} references {forbidden!r}; that concept "
-                "belongs to a gate after D4.3 and exists nowhere in the "
+                "belongs to a gate after D4.4 and exists nowhere in the "
                 "leasing package"
             )
 
@@ -5661,14 +5692,18 @@ def test_d4_3_ti_and_lc_never_enter_the_statement_arithmetic() -> None:
     """**Guardrails 28 and 29.** They are copied and stay below NOI, in every
     month including the forward window."""
 
-    for node in ast.walk(_projection_tree()):
+    # Scoped to the D4.3 builder. D4.4's adapter, which shares this module,
+    # legitimately adds forward-window TI to forward-window LC to disclose
+    # ``exit_window_leasing_costs`` -- a diagnostic that is deducted from
+    # nothing, and which its own guardrails cover.
+    for node in ast.walk(_projection_fn("build_monthly_property_projection")):
         if not isinstance(node, ast.BinOp):
             continue
         operands = _referenced_names(node)
         leaked = operands & {"tenant_improvements", "leasing_commissions"}
         assert not leaked, (
-            f"{_PROJECTION_MODULE} performs arithmetic on {sorted(leaked)}; TI "
-            "and LC are strictly below NOI"
+            "build_monthly_property_projection performs arithmetic on "
+            f"{sorted(leaked)}; TI and LC are strictly below NOI"
         )
 
 
@@ -5689,19 +5724,38 @@ def test_d4_3_declares_no_capex_and_no_annual_series() -> None:
     assert "exit_noi" not in fields
     assert "going_in_cap_rate" not in fields
 
-    referenced = _referenced_names(_projection_tree())
+    # Scoped to the D4.3 builder: the monthly statement derives no annual
+    # figure. D4.4's adapter shares this module and is where the reducers
+    # legitimately live.
+    referenced = _referenced_names(
+        _projection_fn("build_monthly_property_projection")
+    )
     for forbidden in (
         "aggregate_flow_to_annual",
         "aggregate_flow_over_forward_exit_window",
         "snapshot_state_at_year_end",
         "average_state_over_year",
-        "NON_POSITIVE_FORWARD_EXIT_NOI",
-        "calculate_exit_value",
+        "exit_noi",
+        "going_in_cap_rate",
     ):
         assert forbidden not in referenced, (
-            f"{_PROJECTION_MODULE} references {forbidden!r}; annual "
-            "derivation, exit NOI and its validation are D4.4's and D4.5's"
+            f"build_monthly_property_projection references {forbidden!r}; "
+            "annual derivation and the exit figures are D4.4's"
         )
+
+    # And the validation that refuses a non-positive forward NOI is D4.5's, at
+    # the acquisition/integration boundary -- nowhere in this package.
+    for source_file in _leasing_source_files():
+        names = _referenced_names(
+            ast.parse(
+                source_file.read_text(encoding="utf-8"), filename=str(source_file)
+            )
+        )
+        for forbidden in ("NON_POSITIVE_FORWARD_EXIT_NOI", "calculate_exit_value"):
+            assert forbidden not in names, (
+                f"{source_file.name} references {forbidden!r}; cap-rate "
+                "terminal-value eligibility is enforced at D4.5"
+            )
 
 
 def test_d4_3_retains_the_whole_canonical_window() -> None:
@@ -5775,6 +5829,402 @@ def test_d4_3_other_income_steps_on_the_model_anniversary() -> None:
             assert "month" not in operands and "period_index" not in operands, (
                 "the growth exponent must be a model year, not a month"
             )
+
+
+# =============================================================================
+# D4.4 -- the annual operating adapter
+#
+# Forty-five guardrails, restating D4 Sections 20.1-20.5 and 21. The
+# package-wide scope proofs (no exit value, no debt, no returns, no
+# OperatingCapitalSchedule) live in
+# ``test_no_downstream_concept_reaches_the_leasing_package_at_d4_4`` above.
+# =============================================================================
+
+
+def _annual_class() -> ast.ClassDef:
+    return next(
+        node
+        for node in ast.walk(_contracts_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "AnnualOperatingProjection"
+    )
+
+
+def _annual_fields() -> list[str]:
+    return [
+        node.target.id
+        for node in _annual_class().body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    ]
+
+
+def test_d4_4_consumes_the_monthly_projection_and_a_price() -> None:
+    """**Guardrails 1-6.** The adapter takes a finished monthly projection and
+    a valuation denominator. No suite, no lease, no rollover assumption, no
+    market rate and no lease type can reach it."""
+
+    import inspect as _inspect
+
+    from anchor.leasing import aggregate_monthly_to_annual
+
+    parameters = set(_inspect.signature(aggregate_monthly_to_annual).parameters)
+    assert parameters == {"monthly", "purchase_price"}
+
+    referenced = _referenced_names(_projection_fn("aggregate_monthly_to_annual"))
+    for forbidden in (
+        "Suite",
+        "suite_id",
+        "suite_projections",
+        "Lease",
+        "lease_type",
+        "LeaseType",
+        "renewal_probability",
+        "market_rent_psf",
+        "escalation_pct",
+        "MarketLeasingAssumptions",
+        "RecoverableExpensePool",
+        "LeaseLevelOperatingInputs",
+    ):
+        assert forbidden not in referenced, (
+            f"aggregate_monthly_to_annual references {forbidden!r}; it derives "
+            "an annual view from a finished monthly projection"
+        )
+
+
+def test_d4_4_recalculates_no_monthly_economics() -> None:
+    """**Guardrails 7-11.** Recoveries, property expenses, EGI, the management
+    fee and monthly NOI are all final before the adapter sees them."""
+
+    adapter = _projection_fn("aggregate_monthly_to_annual")
+    referenced = _referenced_names(adapter)
+
+    for forbidden in (
+        "monthly_expense_recovery",
+        "annual_expense_amount",
+        "annual_other_income",
+        "build_property_expense_schedule",
+        "build_recoverable_expense_pool",
+        "build_monthly_property_projection",
+        "recoverable_expense_ratio",
+        "management_fee_pct",
+        "credit_loss_pct",
+        "other_income_growth",
+        "expense_growth",
+    ):
+        assert forbidden not in referenced, (
+            f"aggregate_monthly_to_annual references {forbidden!r}; every "
+            "monthly figure is final before it arrives"
+        )
+
+    # The only arithmetic in the adapter is the going-in cap division and the
+    # exit-window TI + LC disclosure. Everything else is a reducer call.
+    arithmetic = [
+        node
+        for node in ast.walk(adapter)
+        if isinstance(node, ast.BinOp)
+        and isinstance(
+            node.op,
+            ast.Add | ast.Sub | ast.Mult | ast.Div | ast.FloorDiv | ast.Pow | ast.Mod,
+        )
+    ]
+    assert len(arithmetic) == 2, (
+        f"the adapter performs {len(arithmetic)} arithmetic operations; it "
+        "should perform exactly two -- the going-in cap division and the "
+        "exit-window TI + LC sum"
+    )
+
+
+def test_d4_4_annual_flows_come_from_one_canonical_reducer() -> None:
+    """**Guardrails 12-15.** ``noi_by_year``, ``tenant_improvements_by_year``
+    and every other line are produced by the same call in the same loop, so no
+    two annual figures can disagree about float grouping."""
+
+    adapter = _projection_fn("aggregate_monthly_to_annual")
+
+    reducer_calls = [
+        node
+        for node in ast.walk(adapter)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "aggregate_flow_to_annual"
+    ]
+    assert len(reducer_calls) == 1, (
+        f"the annual flow reducer is called {len(reducer_calls)} times; one "
+        "loop over one line list produces every flow"
+    )
+
+    # And the line list is a module constant, not an inline literal per field.
+    module_names = {
+        target.id
+        for node in ast.walk(_projection_tree())
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+        for target in [node.target]
+    }
+    assert "_ANNUAL_FLOW_LINES" in module_names
+
+
+def test_d4_4_never_reconstructs_annual_noi() -> None:
+    """**Guardrail 12, the load-bearing half.** Annual NOI is the monthly sum.
+    A reconstruction from annual EGI less annual expenses would be a second
+    arithmetic path to the figure every downstream return depends on."""
+
+    adapter = _projection_fn("aggregate_monthly_to_annual")
+
+    for node in ast.walk(adapter):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Sub):
+            continue
+        operands = _referenced_names(node)
+        assert not (
+            {
+                "effective_gross_income",
+                "total_operating_expenses",
+                "fixed_operating_expenses",
+                "management_fee",
+            }
+            & operands
+        ), "annual NOI is reconstructed; it is the sum of monthly NOI"
+
+
+def test_d4_4_groups_by_model_period_not_calendar_year() -> None:
+    """**Guardrail 16.** The reducers slice on period index; nothing here reads
+    a calendar month or year."""
+
+    referenced = _referenced_names(_projection_fn("aggregate_monthly_to_annual"))
+
+    for forbidden in ("month_start", "year", "month", "date", "January", "calendar"):
+        assert forbidden not in referenced, (
+            f"aggregate_monthly_to_annual references {forbidden!r}; annual "
+            "grouping follows ModelMonth period indices"
+        )
+
+
+def test_d4_4_exit_noi_uses_the_forward_window_reducer() -> None:
+    """**Guardrails 17 and 18.** ``exit_noi`` is the forward-window sum of
+    monthly NOI, never Hold Year H grown and never a multiple of one month."""
+
+    adapter = _projection_fn("aggregate_monthly_to_annual")
+    referenced = _referenced_names(adapter)
+
+    assert "aggregate_flow_over_forward_exit_window" in referenced
+
+    for forbidden in ("growth", "grown", "stabilized", "normalize", "_growth_factor"):
+        assert forbidden not in referenced, (
+            f"aggregate_monthly_to_annual references {forbidden!r}; the "
+            "forward twelve months are summed as they are"
+        )
+
+    # exit_noi must not be derived from an annual array.
+    for node in ast.walk(adapter):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "exit_noi"
+            for target in node.targets
+        ):
+            continue
+        operands = _referenced_names(node.value)
+        assert "noi_by_year" not in operands, (
+            "exit_noi is derived from the annual array; it comes from the "
+            "forward months of the monthly series"
+        )
+        assert "aggregate_flow_over_forward_exit_window" in operands
+
+
+def test_d4_4_forward_leasing_costs_cannot_reach_a_hold_year() -> None:
+    """**Guardrails 19-23.** The hold-year reducer stops at month ``12H`` by
+    construction, and the forward window is reduced separately into a scalar
+    that nothing deducts."""
+
+    adapter = _projection_fn("aggregate_monthly_to_annual")
+
+    # TI and LC are annualised by the same hold-year reducer as every other
+    # flow -- so they cannot reach past month 12H -- and separately disclosed.
+    forward_calls = [
+        node
+        for node in ast.walk(adapter)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "aggregate_flow_over_forward_exit_window"
+    ]
+    assert len(forward_calls) == 3, (
+        "the forward window is reduced for exactly three series: NOI, TI and "
+        f"LC; found {len(forward_calls)} reductions"
+    )
+
+    # exit_window_leasing_costs is disclosed, never subtracted from anything.
+    for node in ast.walk(adapter):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
+            operands = _referenced_names(node)
+            assert "exit_window_leasing_costs" not in operands, (
+                "the exit-window leasing cost is deducted from something; it "
+                "is a disclosed diagnostic"
+            )
+
+
+def test_d4_4_annual_occupancy_uses_the_property_monthly_series() -> None:
+    """**Guardrails 24-26.** The average is over ``physical_occupancy``, which
+    D4.2 already computed once from areas at the property level. Nothing
+    returns to suite data and no vacancy percentage exists."""
+
+    adapter = _projection_fn("aggregate_monthly_to_annual")
+    referenced = _referenced_names(adapter)
+
+    assert "average_state_over_year" in referenced
+    assert "snapshot_state_at_year_end" in referenced
+    assert "physical_occupancy" in referenced
+
+    for forbidden in (
+        "suite_area_sf",
+        "rentable_area_sf",
+        "vacancy",
+        "vacancy_rate",
+        "occupancy_factor",
+        "successor_occupancy_factor",
+    ):
+        assert forbidden not in referenced, (
+            f"aggregate_monthly_to_annual references {forbidden!r}; annual "
+            "occupancy averages the finished property series"
+        )
+
+    # A state metric is never summed by the flow reducer.
+    for node in ast.walk(adapter):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "aggregate_flow_to_annual"
+        ):
+            operands = _referenced_names(node)
+            assert "physical_occupancy" not in operands, (
+                "occupancy is summed by the flow reducer; it is a state metric"
+            )
+
+
+def test_d4_4_every_annual_state_field_declares_its_semantics() -> None:
+    """**G-M6.** A snapshot ends ``_at_year_end``; an average begins
+    ``average_``. No ambiguous ``occupancy_by_year`` exists."""
+
+    for name in _annual_fields():
+        if "occupancy" in name or "area" in name:
+            assert name.startswith("average_") or name.endswith("_at_year_end"), (
+                f"AnnualOperatingProjection.{name} is a state field with "
+                "ambiguous annual semantics"
+            )
+
+
+def test_d4_4_declares_no_capex_and_no_downstream_result() -> None:
+    """**Guardrails 27-36.** CapEx keeps its single authority on
+    ``AcquisitionTerms``; exit value, sale proceeds, debt and every return
+    metric are the shared engine's."""
+
+    fields = set(_annual_fields())
+
+    for forbidden in (
+        "capex_by_year",
+        "capex",
+        "annual_capex_reserve",
+        "exit_value",
+        "disposition_costs",
+        "net_sale_proceeds",
+        "annual_debt_service",
+        "remaining_loan_balance",
+        "dscr_by_year",
+        "unlevered_irr",
+        "levered_irr",
+        "equity_multiple",
+        "operating_capital",
+    ):
+        assert forbidden not in fields, (
+            f"AnnualOperatingProjection declares {forbidden!r}; that belongs "
+            "to the shared engine or to D4.5"
+        )
+
+
+def test_d4_4_satisfies_operating_projection_like_without_fabrication() -> None:
+    """**The downstream seam.** Three fields, structurally, and not one
+    Detailed-only field invented to look like ``OperatingProjection``."""
+
+    fields = set(_annual_fields())
+
+    for required in ("noi_by_year", "exit_noi", "going_in_cap_rate"):
+        assert required in fields, (
+            f"AnnualOperatingProjection lacks {required!r}; it must satisfy "
+            "OperatingProjectionLike structurally"
+        )
+
+    for fabricated in (
+        "gross_potential_rent_by_year",
+        "vacancy_credit_loss_by_year",
+        "revenue_growth",
+        "occupancy",
+    ):
+        assert fabricated not in fields, (
+            f"AnnualOperatingProjection declares {fabricated!r}; Lease-Level "
+            "has no such concept and invents none"
+        )
+
+    # And the Protocol is satisfied structurally, never by import or subclass.
+    referenced = _referenced_names(_projection_tree())
+    assert "OperatingProjectionLike" not in referenced, (
+        "projection.py names OperatingProjectionLike; structural typing needs "
+        "no import and creates no dependency"
+    )
+    assert "OperatingProjection" not in referenced, (
+        "projection.py names the Detailed contract; Lease-Level satisfies the "
+        "seam on its own terms"
+    )
+
+
+def test_d4_4_does_not_enforce_the_non_positive_exit_noi_rule() -> None:
+    """**Guardrails 38 and 39.** HD-D4-7 places that check at the Lease-Level
+    acquisition/integration boundary (D4.5). The scalar existing here is not a
+    reason to move the validation upstream: a distressed building's operating
+    projection must stay buildable."""
+
+    from anchor.leasing.validation import LeaseIssueCode
+
+    assert not hasattr(LeaseIssueCode, "NON_POSITIVE_FORWARD_EXIT_NOI")
+
+    validator = next(
+        node
+        for node in ast.walk(
+            ast.parse(
+                (_LEASING_DIR / "validation.py").read_text(encoding="utf-8"),
+                filename="validation.py",
+            )
+        )
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "validate_annual_adapter_inputs"
+    )
+    referenced = _referenced_names(validator)
+    assert "exit_noi" not in referenced, (
+        "the annual adapter's validator inspects exit_noi; its sign is D4.5's "
+        "concern"
+    )
+
+    # Nothing in the adapter compares the forward NOI against zero.
+    for node in ast.walk(_projection_fn("aggregate_monthly_to_annual")):
+        if isinstance(node, ast.Compare) and "exit_noi" in _referenced_names(node):
+            pytest.fail(
+                "the adapter branches on the sign of exit_noi; it constructs "
+                "the scalar faithfully and refuses nothing"
+            )
+
+
+def test_d4_4_did_not_reach_outside_the_leasing_package() -> None:
+    """**Guardrails 37 and 40.** D4.4 is entirely inside ``anchor.leasing``;
+    the integration layer is D4.5's and belongs to ``anchor.analysis``."""
+
+    names = _imported_module_names(_LEASING_DIR / _PROJECTION_MODULE)
+
+    for name in names:
+        if name.startswith("anchor.") and not name.startswith("anchor.leasing"):
+            assert name in _PERMITTED_ANCHOR_IMPORTS, (
+                f"{_PROJECTION_MODULE} imports {name!r}; D4.4 stays inside "
+                "anchor.leasing"
+            )
+
+    assert not (_ANALYSIS_DIR / "lease_level.py").exists(), (
+        "analysis/lease_level.py exists; the integration layer is D4.5's"
+    )
 
 
 def test_d4_3_did_not_reach_outside_the_leasing_package() -> None:

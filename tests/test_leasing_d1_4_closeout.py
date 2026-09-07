@@ -1084,11 +1084,14 @@ def test_no_contract_declares_a_d3_or_downstream_field() -> None:
     # ``operating_expenses`` stays banned as a bare name -- the contracts
     # deliver ``fixed_operating_expenses``, ``other_operating_expenses`` and
     # ``total_operating_expenses``, each a distinct identifier.
+    # ``exit_noi`` and ``going_in_cap_rate`` left the set at D4.4, the gate
+    # that derives them, exactly as ``noi`` left it at D4.3. ``capex`` never
+    # leaves: ``AcquisitionTerms.annual_capex_reserve`` is its single authority.
     banned = {
         "expected_rent_psf", "expected_term_months", "expected_ti_psf",
         "expected_lc_pct", "expected_downtime_months",
         "expense_stop", "base_year",
-        "capex", "operating_expenses", "exit_noi", "going_in_cap_rate",
+        "capex", "operating_expenses", "exit_value", "net_sale_proceeds",
         "vacancy_credit_loss_pct", "occupancy",
     }
 
