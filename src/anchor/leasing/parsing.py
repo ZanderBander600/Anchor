@@ -48,13 +48,18 @@ default applies. It never writes a default of its own -- the difference between
 ``Lease.origin`` defaulting to ``IN_PLACE`` (a documented contractual fact) and a
 parser inventing ``credit_loss_pct = 0.0`` at the wire (an unstated assumption).
 
-**Scope.** The five leasing contracts of a Lease-Level request.
-``AcquisitionTerms`` is deliberately *not* parsed here: it already has a shipped
-owner in ``anchor.validation.validate_acquisition_terms``, which both the
-Detailed API path and Detailed persistence use, and which performs the shared
-domain checks this module must not duplicate. D5.3 composes the two exactly as
-``api.py`` already composes ``_require_deal_terms`` with
-``_require_deal_detailed_operating_inputs``.
+**Scope: the Lease-Level-specific inputs, not the whole request.** This module
+parses the five leasing contracts and nothing else. ``AcquisitionTerms`` is
+deliberately excluded: it already has a shipped owner in
+``anchor.validation.validate_acquisition_terms``, which both the Detailed API
+path and Detailed persistence use, and which performs shared domain checks this
+module must not duplicate or silently skip.
+
+That is why the names say *inputs* rather than *request*. A
+``parse_lease_level_request`` returning something with no ``terms`` would
+overstate its responsibility, and would read as a defect once D5.3 wires the
+actual HTTP request. D5.3 composes the two owners exactly as ``api.py`` already
+pairs ``_require_deal_terms`` with ``_require_deal_detailed_operating_inputs``.
 """
 
 from __future__ import annotations
@@ -86,8 +91,8 @@ from .validation import (
 )
 
 __all__ = [
-    "ParsedLeaseLevelRequest",
-    "parse_lease_level_request",
+    "ParsedLeaseLevelInputs",
+    "parse_lease_level_inputs",
 ]
 
 
@@ -420,22 +425,27 @@ def _parse_sequence(
 
 
 # =============================================================================
-# The request envelope
+# The parsed-input envelope
 # =============================================================================
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
-class ParsedLeaseLevelRequest:
+class ParsedLeaseLevelInputs:
     """The five leasing contracts a Lease-Level analysis needs, reconstructed.
 
-    Deliberately *not* carrying ``AcquisitionTerms``: that contract has a shipped
-    parser and validator in ``anchor.validation``, shared with the Detailed path,
-    and re-parsing it here would either duplicate its domain rules or silently
-    skip them. D5.3 supplies terms alongside this envelope, exactly as ``api.py``
+    Deliberately *not* carrying ``AcquisitionTerms``, and named ``Inputs``
+    rather than ``Request`` to say so: that contract has a shipped parser and
+    validator in ``anchor.validation``, shared with the Detailed path, and
+    re-parsing it here would either duplicate its domain rules or silently skip
+    them. D5.3 supplies terms alongside this envelope, exactly as ``api.py``
     already pairs ``_require_deal_terms`` with the Detailed operating inputs.
 
-    Field names are the request's top-level keys, so the accepted envelope shape
-    is this contract rather than a list maintained beside it.
+    Carries no ``operating_mode``, no API metadata, no persistence metadata and
+    no results: it is the parsed *input* set the deterministic analysis needs,
+    and nothing about how it arrived.
+
+    Field names are the corresponding top-level keys of a request body, so the
+    accepted shape is this contract rather than a list maintained beside it.
     """
 
     property_inputs: LeaseLevelPropertyInputs
@@ -445,7 +455,7 @@ class ParsedLeaseLevelRequest:
     leases: tuple[Lease, ...]
 
 
-#: Top-level keys that belong to a Lease-Level request but are owned elsewhere:
+#: Top-level keys of a Lease-Level request body that this module does not own:
 #: ``operating_mode`` is the API's dispatch discriminator (popped before the body
 #: reaches any parser) and ``terms`` is ``validate_acquisition_terms``'s. Named
 #: here so the envelope's unknown-key check does not report a legitimate key --
@@ -457,8 +467,8 @@ _EXTERNALLY_OWNED_KEYS = frozenset({"operating_mode", "terms"})
 _SEQUENCE_FIELDS: dict[str, type] = {"suites": Suite, "leases": Lease}
 
 
-def parse_lease_level_request(payload: Mapping[str, Any]) -> ParsedLeaseLevelRequest:
-    """Structurally parse one Lease-Level request body into frozen contracts.
+def parse_lease_level_inputs(payload: Mapping[str, Any]) -> ParsedLeaseLevelInputs:
+    """Structurally parse the Lease-Level inputs of a request body.
 
     Returns the reconstructed envelope, or raises ``LeaseValidationError``
     carrying **every** structural issue found in one pass -- the exact contract
@@ -481,15 +491,15 @@ def parse_lease_level_request(payload: Mapping[str, Any]) -> ParsedLeaseLevelReq
         into.malformed("", f"must be an object, got {_describe(payload)}")
         raise LeaseValidationError(LeaseValidationResult(issues=into.issues))
 
-    declared = {field.name for field in dataclasses.fields(ParsedLeaseLevelRequest)}
+    declared = {field.name for field in dataclasses.fields(ParsedLeaseLevelInputs)}
     for key in sorted(set(payload) - declared - _EXTERNALLY_OWNED_KEYS):
-        into.unknown(key, "is not part of a Lease-Level request")
+        into.unknown(key, "is not part of the Lease-Level inputs")
 
-    hints = typing.get_type_hints(ParsedLeaseLevelRequest)
+    hints = typing.get_type_hints(ParsedLeaseLevelInputs)
     parts: dict[str, Any] = {}
     failed = False
 
-    for field in dataclasses.fields(ParsedLeaseLevelRequest):
+    for field in dataclasses.fields(ParsedLeaseLevelInputs):
         name = field.name
         if name not in payload:
             into.missing(name, "is required")
@@ -509,4 +519,4 @@ def parse_lease_level_request(payload: Mapping[str, Any]) -> ParsedLeaseLevelReq
     if into:
         raise LeaseValidationError(LeaseValidationResult(issues=into.issues))
     assert not failed
-    return ParsedLeaseLevelRequest(**parts)
+    return ParsedLeaseLevelInputs(**parts)

@@ -35,7 +35,7 @@ from pathlib import Path
 import pytest
 
 from anchor.leasing import contracts as leasing_contracts
-from anchor.leasing.parsing import ParsedLeaseLevelRequest, parse_lease_level_request
+from anchor.leasing.parsing import ParsedLeaseLevelInputs, parse_lease_level_inputs
 from anchor.leasing.validation import LeaseIssueCode, LeaseIssueSeverity
 
 _PARSING = Path(__file__).resolve().parents[1] / "src" / "anchor" / "leasing" / "parsing.py"
@@ -262,7 +262,7 @@ def test_no_contract_field_name_is_hardcoded_in_the_parser() -> None:
     body is a JSON object with no dataclass of its own.
     """
 
-    envelope = {field.name for field in dataclasses.fields(ParsedLeaseLevelRequest)}
+    envelope = {field.name for field in dataclasses.fields(ParsedLeaseLevelInputs)}
     allowed = envelope | {"operating_mode", "terms"}
 
     literals = {
@@ -279,6 +279,51 @@ def test_no_contract_field_name_is_hardcoded_in_the_parser() -> None:
                 f"parsing.py hardcodes the field name {field.name!r}; accepted keys "
                 "must be derived from the contract so they cannot drift"
             )
+
+
+def test_the_parsed_envelope_excludes_acquisition_terms() -> None:
+    """The boundary the D5.2 amendment named the module after.
+
+    ``AcquisitionTerms`` has a shipped owner in
+    ``anchor.validation.validate_acquisition_terms``, shared with the Detailed
+    path. Pulling it in here would either duplicate its domain rules or -- worse,
+    because it would be silent -- skip them, so a Lease-Level deal's terms would
+    be validated differently from a Detailed deal's.
+
+    The envelope is named ``ParsedLeaseLevelInputs`` rather than ``...Request``
+    precisely because it is not the whole request. This test is what keeps the
+    name honest: it must carry exactly the five Lease-Level input contracts, and
+    no terms, no transport metadata, no persistence metadata and no results.
+    """
+
+    from anchor.contracts import AcquisitionTerms
+
+    hints = typing.get_type_hints(ParsedLeaseLevelInputs)
+    assert [field.name for field in dataclasses.fields(ParsedLeaseLevelInputs)] == [
+        "property_inputs",
+        "operating_inputs",
+        "market_leasing",
+        "suites",
+        "leases",
+    ]
+
+    assert AcquisitionTerms not in hints.values()
+    for forbidden in ("terms", "operating_mode", "deal_id", "results", "analysis"):
+        assert forbidden not in hints, (
+            f"ParsedLeaseLevelInputs carries {forbidden!r}; it holds parsed inputs "
+            "only, and terms remain owned by anchor.validation"
+        )
+
+    # Frozen and slotted, like every other Anchor input contract.
+    assert ParsedLeaseLevelInputs.__dataclass_params__.frozen
+    assert hasattr(ParsedLeaseLevelInputs, "__slots__")
+
+
+def test_the_parser_never_reaches_the_shared_terms_validator() -> None:
+    """Terms are composed by the caller, not absorbed by the parser."""
+
+    for forbidden in ("AcquisitionTerms", "validate_acquisition_terms", "anchor.validation"):
+        assert forbidden not in _CODE, f"parsing.py reaches {forbidden}"
 
 
 def test_the_parser_reads_its_field_set_from_the_dataclasses() -> None:
@@ -388,7 +433,7 @@ def test_the_api_has_not_been_wired_to_the_parser() -> None:
     """D5.3 owns activation. D5.2 ships a parser nothing calls yet."""
 
     api = (_PARSING.parents[2] / "anchor" / "api.py").read_text(encoding="utf-8")
-    assert "parse_lease_level_request" not in api
+    assert "parse_lease_level_inputs" not in api
     assert "leasing.parsing" not in api
 
 
@@ -408,7 +453,7 @@ def test_m1_an_unknown_field_is_not_silently_ignored() -> None:
     from anchor.leasing.validation import LeaseValidationError
 
     with pytest.raises(LeaseValidationError) as excinfo:
-        parse_lease_level_request(request_payload(unexpected_key=1))
+        parse_lease_level_inputs(request_payload(unexpected_key=1))
 
     assert any(i.code is LeaseIssueCode.UNKNOWN_FIELD for i in excinfo.value.result.errors)
 
@@ -421,7 +466,7 @@ def test_m2_a_missing_required_field_is_not_defaulted() -> None:
     del payload["property_inputs"]["rentable_area_sf"]
 
     with pytest.raises(LeaseValidationError):
-        parse_lease_level_request(payload)
+        parse_lease_level_inputs(payload)
 
 
 @pytest.mark.parametrize("value", ["3%", "0.03", " 0.03 ", "3 percent"])
@@ -433,7 +478,7 @@ def test_m3_m4_no_string_is_ever_converted_to_a_number(value: str) -> None:
     payload["market_leasing"]["renewal_probability"] = value
 
     with pytest.raises(LeaseValidationError) as excinfo:
-        parse_lease_level_request(payload)
+        parse_lease_level_inputs(payload)
 
     assert [i.path for i in excinfo.value.result.errors] == [
         "market_leasing.renewal_probability"
@@ -446,7 +491,7 @@ def test_m5_a_mid_month_date_is_not_snapped() -> None:
     payload = request_payload()
     payload["property_inputs"]["analysis_start_date"] = "2027-01-15"
 
-    parsed = parse_lease_level_request(payload)
+    parsed = parse_lease_level_inputs(payload)
 
     assert parsed.property_inputs.analysis_start_date == date(2027, 1, 15)
 
@@ -459,7 +504,7 @@ def test_m6_m7_out_of_domain_values_are_not_rejected_by_the_parser() -> None:
     payload["property_inputs"]["rentable_area_sf"] = -100.0
     payload["suites"][0]["suite_area_sf"] = -1.0
 
-    parsed = parse_lease_level_request(payload)
+    parsed = parse_lease_level_inputs(payload)
 
     assert parsed.market_leasing.renewal_probability == 1.2
     assert parsed.property_inputs.rentable_area_sf == -100.0
@@ -474,7 +519,7 @@ def test_m8_an_invalid_enum_never_falls_back_to_a_default() -> None:
     payload["leases"][0]["lease_type"] = "not-a-lease-type"
 
     with pytest.raises(LeaseValidationError) as excinfo:
-        parse_lease_level_request(payload)
+        parse_lease_level_inputs(payload)
 
     assert [i.path for i in excinfo.value.result.errors] == ["leases[0].lease_type"]
 
@@ -487,7 +532,7 @@ def test_m9_no_stdlib_exception_text_reaches_a_message() -> None:
     payload["property_inputs"]["analysis_start_date"] = "2027-02-30"
 
     with pytest.raises(LeaseValidationError) as excinfo:
-        parse_lease_level_request(payload)
+        parse_lease_level_inputs(payload)
 
     message = excinfo.value.result.errors[0].message
     assert "isoformat" not in message.lower()
@@ -500,7 +545,7 @@ def test_m10_m11_nested_objects_are_never_left_as_raw_dicts() -> None:
 
     payload = request_payload()
     payload["suites"][0]["market_leasing_override"] = dict(payload["market_leasing"])
-    parsed = parse_lease_level_request(payload)
+    parsed = parse_lease_level_inputs(payload)
 
     assert isinstance(parsed.suites[0].market_leasing_override, MarketLeasingAssumptions)
     assert isinstance(parsed.suites[1].initial_vacancy, InitialVacancyAssumptions)
@@ -510,7 +555,7 @@ def test_m10_m11_nested_objects_are_never_left_as_raw_dicts() -> None:
 def test_m12_json_arrays_become_tuples() -> None:
     request_payload = _payload()
 
-    parsed = parse_lease_level_request(request_payload())
+    parsed = parse_lease_level_inputs(request_payload())
 
     assert type(parsed.suites) is tuple
     assert type(parsed.leases) is tuple
@@ -528,7 +573,7 @@ def test_m13_ordering_is_independent_of_mapping_iteration() -> None:
         suite["suite_area_sf"] = "x"
         payload["suites"] = [dict(reversed(list(suite.items()))) if reverse else suite]
         with pytest.raises(LeaseValidationError) as excinfo:
-            parse_lease_level_request(payload)
+            parse_lease_level_inputs(payload)
         return [(i.code, i.path) for i in excinfo.value.result.errors]
 
     assert issues(False) == issues(True)
@@ -545,7 +590,7 @@ def test_m14_the_parser_never_emits_a_warning() -> None:
     del payload["market_leasing"]["renewal_probability"]
 
     with pytest.raises(LeaseValidationError) as excinfo:
-        parse_lease_level_request(payload)
+        parse_lease_level_inputs(payload)
 
     assert excinfo.value.result.warnings == ()
     assert all(

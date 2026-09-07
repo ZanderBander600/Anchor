@@ -1,4 +1,8 @@
-"""D5.2 -- structural parsing of Lease-Level request bodies.
+"""D5.2 -- structural parsing of the Lease-Level inputs of a request body.
+
+Not the whole request: ``AcquisitionTerms`` stays with its shipped owner,
+``anchor.validation.validate_acquisition_terms``, which the Detailed path
+already uses. D5.3 composes the two.
 
 Three properties, in the order they matter:
 
@@ -38,7 +42,7 @@ from anchor.leasing.contracts import (
     RecoveryBasis,
     Suite,
 )
-from anchor.leasing.parsing import ParsedLeaseLevelRequest, parse_lease_level_request
+from anchor.leasing.parsing import ParsedLeaseLevelInputs, parse_lease_level_inputs
 from anchor.leasing.validation import (
     LeaseIssueCode,
     LeaseIssueSeverity,
@@ -151,7 +155,7 @@ def request_payload(**overrides: Any) -> dict[str, Any]:
 
 def issues_of(payload: dict[str, Any]):
     with pytest.raises(LeaseValidationError) as excinfo:
-        parse_lease_level_request(payload)
+        parse_lease_level_inputs(payload)
     return excinfo.value.result.issues
 
 
@@ -161,9 +165,9 @@ def issues_of(payload: dict[str, Any]):
 
 
 def test_the_whole_request_round_trips() -> None:
-    parsed = parse_lease_level_request(request_payload())
+    parsed = parse_lease_level_inputs(request_payload())
 
-    assert parsed == ParsedLeaseLevelRequest(
+    assert parsed == ParsedLeaseLevelInputs(
         property_inputs=PROPERTY_INPUTS,
         operating_inputs=OPERATING_INPUTS,
         market_leasing=MARKET_LEASING,
@@ -197,16 +201,16 @@ def test_every_contract_round_trips_field_for_field(original: Any) -> None:
     }.get(type(original))
 
     if field_name is not None:
-        parsed = getattr(parse_lease_level_request(request_payload()), field_name)
+        parsed = getattr(parse_lease_level_inputs(request_payload()), field_name)
         # Re-parse with this exact instance to prove *this* value round-tripped.
         parsed = getattr(
-            parse_lease_level_request(request_payload(**{field_name: _wire(original)})),
+            parse_lease_level_inputs(request_payload(**{field_name: _wire(original)})),
             field_name,
         )
     elif isinstance(original, Suite):
-        parsed = parse_lease_level_request(request_payload(suites=[_wire(original)])).suites[0]
+        parsed = parse_lease_level_inputs(request_payload(suites=[_wire(original)])).suites[0]
     else:
-        parsed = parse_lease_level_request(request_payload(leases=[_wire(original)])).leases[0]
+        parsed = parse_lease_level_inputs(request_payload(leases=[_wire(original)])).leases[0]
 
     for field in dataclasses.fields(original):
         assert getattr(parsed, field.name) == getattr(original, field.name), field.name
@@ -214,7 +218,7 @@ def test_every_contract_round_trips_field_for_field(original: Any) -> None:
 
 
 def test_nested_initial_vacancy_becomes_the_frozen_contract() -> None:
-    parsed = parse_lease_level_request(request_payload()).suites[1]
+    parsed = parse_lease_level_inputs(request_payload()).suites[1]
 
     assert isinstance(parsed.initial_vacancy, InitialVacancyAssumptions)
     assert parsed.initial_vacancy.strategy is InitialVacancyStrategy.MARKET_LEASE_UP
@@ -223,14 +227,14 @@ def test_nested_initial_vacancy_becomes_the_frozen_contract() -> None:
 
 def test_nested_market_leasing_override_becomes_the_frozen_contract() -> None:
     suite = _wire(OCCUPIED_SUITE) | {"market_leasing_override": _wire(MARKET_LEASING)}
-    parsed = parse_lease_level_request(request_payload(suites=[suite])).suites[0]
+    parsed = parse_lease_level_inputs(request_payload(suites=[suite])).suites[0]
 
     assert isinstance(parsed.market_leasing_override, MarketLeasingAssumptions)
     assert parsed.market_leasing_override == MARKET_LEASING
 
 
 def test_an_absent_override_stays_none_rather_than_a_partial_record() -> None:
-    parsed = parse_lease_level_request(request_payload()).suites[0]
+    parsed = parse_lease_level_inputs(request_payload()).suites[0]
 
     assert parsed.market_leasing_override is None
     assert parsed.initial_vacancy is None
@@ -238,13 +242,13 @@ def test_an_absent_override_stays_none_rather_than_a_partial_record() -> None:
 
 def test_explicit_null_override_is_none() -> None:
     suite = _wire(OCCUPIED_SUITE) | {"market_leasing_override": None}
-    parsed = parse_lease_level_request(request_payload(suites=[suite])).suites[0]
+    parsed = parse_lease_level_inputs(request_payload(suites=[suite])).suites[0]
 
     assert parsed.market_leasing_override is None
 
 
 def test_collections_become_tuples_in_request_order() -> None:
-    parsed = parse_lease_level_request(request_payload())
+    parsed = parse_lease_level_inputs(request_payload())
 
     assert isinstance(parsed.suites, tuple)
     assert isinstance(parsed.leases, tuple)
@@ -255,7 +259,7 @@ def test_collections_are_neither_sorted_nor_deduplicated() -> None:
     """Ordering and duplicates are downstream questions, not transport ones."""
 
     duplicate = _wire(OCCUPIED_SUITE)
-    parsed = parse_lease_level_request(
+    parsed = parse_lease_level_inputs(
         request_payload(suites=[_wire(VACANT_SUITE), duplicate, duplicate])
     )
 
@@ -263,7 +267,7 @@ def test_collections_are_neither_sorted_nor_deduplicated() -> None:
 
 
 def test_an_empty_collection_parses() -> None:
-    parsed = parse_lease_level_request(request_payload(suites=[], leases=[]))
+    parsed = parse_lease_level_inputs(request_payload(suites=[], leases=[]))
 
     assert parsed.suites == ()
     assert parsed.leases == ()
@@ -279,7 +283,7 @@ def test_an_omitted_defaulted_field_takes_the_contracts_default() -> None:
     del lease["origin"]
     del lease["recovery_basis"]
 
-    parsed = parse_lease_level_request(request_payload(leases=[lease])).leases[0]
+    parsed = parse_lease_level_inputs(request_payload(leases=[lease])).leases[0]
 
     assert parsed.origin is LeaseOrigin.IN_PLACE
     assert parsed.recovery_basis is None
@@ -289,7 +293,7 @@ def test_an_omitted_defaulted_operating_field_takes_the_contracts_default() -> N
     operating = _wire(OPERATING_INPUTS)
     del operating["credit_loss_pct"]
 
-    parsed = parse_lease_level_request(request_payload(operating_inputs=operating))
+    parsed = parse_lease_level_inputs(request_payload(operating_inputs=operating))
 
     assert parsed.operating_inputs.credit_loss_pct == 0.0
 
@@ -399,7 +403,7 @@ def test_the_api_owned_top_level_keys_are_not_unknown() -> None:
 
     payload = request_payload(operating_mode="lease_level", terms={"purchase_price": 1.0})
 
-    parse_lease_level_request(payload)  # does not raise
+    parse_lease_level_inputs(payload)  # does not raise
 
 
 # =============================================================================
@@ -536,7 +540,7 @@ def test_a_non_mapping_payload_is_refused() -> None:
 def test_a_json_integer_satisfies_a_float_field() -> None:
     """Widening, exactly as ``_normalize_field_value`` does with ``float(value)``."""
 
-    parsed = parse_lease_level_request(
+    parsed = parse_lease_level_inputs(
         request_payload(property_inputs={"analysis_start_date": "2027-01-01", "rentable_area_sf": 120_000})
     )
 
@@ -547,7 +551,7 @@ def test_a_json_integer_satisfies_a_float_field() -> None:
 def test_an_integral_float_satisfies_an_int_field() -> None:
     """Mirrors the ``is_integer()`` gate ``validation.py`` applies to year fields."""
 
-    parsed = parse_lease_level_request(
+    parsed = parse_lease_level_inputs(
         request_payload(market_leasing=_wire(MARKET_LEASING) | {"renewal_term_months": 60.0})
     )
 
@@ -648,7 +652,7 @@ def test_renewal_probability_above_one_parses_and_is_refused_downstream() -> Non
     payload = request_payload(
         market_leasing=_wire(MARKET_LEASING) | {"renewal_probability": 1.2}
     )
-    parsed = parse_lease_level_request(payload)
+    parsed = parse_lease_level_inputs(payload)
 
     assert parsed.market_leasing.renewal_probability == 1.2
 
@@ -671,7 +675,7 @@ def test_a_mid_month_analysis_start_parses_and_is_refused_downstream() -> None:
     payload = request_payload(
         property_inputs=_wire(PROPERTY_INPUTS) | {"analysis_start_date": "2027-01-15"}
     )
-    parsed = parse_lease_level_request(payload)
+    parsed = parse_lease_level_inputs(payload)
 
     assert parsed.property_inputs.analysis_start_date == date(2027, 1, 15)
 
@@ -694,7 +698,7 @@ def test_a_negative_rentable_area_parses_and_is_refused_downstream() -> None:
     payload = request_payload(
         property_inputs=_wire(PROPERTY_INPUTS) | {"rentable_area_sf": -100.0}
     )
-    parsed = parse_lease_level_request(payload)
+    parsed = parse_lease_level_inputs(payload)
 
     assert parsed.property_inputs.rentable_area_sf == -100.0
 
@@ -719,7 +723,7 @@ def test_two_leases_on_one_suite_parse_and_are_refused_downstream() -> None:
         "rent_commencement_date": "2029-03-01",
         "lease_expiration_date": "2034-02-28",
     }
-    parsed = parse_lease_level_request(
+    parsed = parse_lease_level_inputs(
         request_payload(leases=[_wire(IN_PLACE_LEASE), second])
     )
 
@@ -737,7 +741,7 @@ def test_a_fully_valid_request_passes_both_phases() -> None:
 
     from anchor.leasing.validation import require_valid_lease_level_inputs
 
-    parsed = parse_lease_level_request(request_payload())
+    parsed = parse_lease_level_inputs(request_payload())
     result = require_valid_lease_level_inputs(
         parsed.property_inputs,
         parsed.suites,

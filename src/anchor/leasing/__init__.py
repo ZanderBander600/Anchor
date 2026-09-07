@@ -299,7 +299,7 @@ from .rollover import (
 # D5.2 -- the structural transport boundary. Imported after ``.validation``
 # because it builds on that module's issue contracts; it adds no rule of its
 # own and runs no validator. D5.3 owns wiring it to the API.
-from .parsing import ParsedLeaseLevelRequest, parse_lease_level_request
+from .parsing import ParsedLeaseLevelInputs, parse_lease_level_inputs
 from .validation import (
     require_capitalizable_exit_noi,
     validate_capitalizable_exit_noi,
@@ -475,8 +475,8 @@ __all__ = [
     "LeaseValidationIssue",
     "LeaseValidationResult",
     # D5.2 structural parsing (raw JSON -> frozen contracts)
-    "ParsedLeaseLevelRequest",
-    "parse_lease_level_request",
+    "ParsedLeaseLevelInputs",
+    "parse_lease_level_inputs",
     "require_valid_lease_level_inputs",
     "validate_lease_level_inputs",
     "require_valid_recovery_inputs",
