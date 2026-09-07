@@ -29,6 +29,7 @@ from ..contracts import (
     AcquisitionTerms,
     DetailedOperatingInputs,
     OperatingMode,
+    UnsupportedOperatingModeError,
 )
 from ..engine.contracts import AcquisitionResults, OperatingProjection
 
@@ -85,6 +86,13 @@ class AnalysisContext:
     deal_context: str | None
 
     def __post_init__(self) -> None:
+        # D5.1A: total dispatch. Previously ``if QUICK: ... else: <DETAILED
+        # invariants>``, so a third mode would have been validated against
+        # Detailed's required-field rules and, on passing them, presented to the
+        # model as a Detailed deal. Each mode now states its own invariants.
+        # A mode this contract cannot yet represent honestly is refused by name
+        # -- see D7/D5.8, which owns making ``sensitivities``/``break_even``
+        # optional so Lease-Level can be represented at all.
         if self.operating_mode is OperatingMode.QUICK:
             if self.inputs is None:
                 raise ValueError("A QUICK AnalysisContext must have 'inputs' populated.")
@@ -97,7 +105,7 @@ class AnalysisContext:
                     "A QUICK AnalysisContext must not have 'terms', "
                     "'detailed_operating_inputs', or 'operating_projection' populated."
                 )
-        else:
+        elif self.operating_mode is OperatingMode.DETAILED:
             if (
                 self.terms is None
                 or self.detailed_operating_inputs is None
@@ -112,6 +120,20 @@ class AnalysisContext:
                     "A DETAILED AnalysisContext must not have 'inputs' populated -- "
                     "current_noi/noi_growth/occupancy do not exist in this path."
                 )
+        elif self.operating_mode is OperatingMode.LEASE_LEVEL:
+            # D5.8 owns this. The refusal is structural, not a policy choice:
+            # ``sensitivities`` and ``break_even`` are non-optional and typed to
+            # the Quick/Detailed preset and break-even contracts, and Lease-Level
+            # has neither -- no preset bundle (deferred at D4.6B) and no
+            # break-even (guardrail G35). A Lease-Level context therefore cannot
+            # be built honestly until D7 makes those two fields optional.
+            raise UnsupportedOperatingModeError(
+                self.operating_mode, operation="AnalysisContext"
+            )
+        else:
+            raise UnsupportedOperatingModeError(
+                self.operating_mode, operation="AnalysisContext"
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -809,39 +809,50 @@ def test_g31_no_engine_module_knows_the_terminal_rule() -> None:
             assert forbidden not in text, f"{source_file.name} mentions {forbidden}"
 
 
-def test_g32_the_public_operating_mode_enum_is_unchanged() -> None:
-    """**Guardrail 32.** ``OperatingMode.LEASE_LEVEL`` was **deliberately not
-    added** at D4.5B.
+def test_g32_the_public_operating_mode_enum_is_published_behind_total_dispatch() -> None:
+    """**Guardrail 32, succeeded at D5.1A.**
 
-    Every consumer of the enum branches ``is DETAILED`` / ``is QUICK`` with an
-    implicit else. Adding the member would make ``POST /analyze`` accept
-    ``"lease_level"`` and silently run it as Quick, across roughly eight
-    endpoints, instead of the 422 it correctly returns today. Publishing the
-    mode is a wider change than this gate authorises; see the D4.5B
-    exhaustive-mode report. D4.6B re-confirmed the deferral (Section 38.10):
-    Lease-Level sensitivity is distinguished by **function identity**, exactly
-    as Quick and Detailed already are, so it needs no enum member either.
+    D4.5B refused to add ``OperatingMode.LEASE_LEVEL`` because every consumer
+    branched ``is DETAILED`` / ``is QUICK`` with an implicit else: the member
+    would not have created a third branch, it would have joined whichever branch
+    the else happened to be, and ``POST /analyze`` would have answered
+    ``"lease_level"`` with Quick economics under a Lease-Level label.
 
-    **Narrowed at D4.6B, and not weakened.** The check was a bare
-    ``"LEASE_LEVEL"`` substring scan, which is only a proxy for the real rule:
-    ``anchor.analysis.lease_level_sensitivity`` legitimately declares
-    ``LEASE_LEVEL_SUPPORTED_ASSUMPTIONS``, a sensitivity *target* tuple with
-    nothing to do with the operating-mode enum. The rule that matters is now
-    stated directly, in three parts -- the enum's members, the absence of any
-    ``OperatingMode.LEASE_LEVEL`` reference anywhere in the tree (the
-    orchestrator no longer excepted), and the enum declaration read
-    structurally rather than by substring.
+    The deferral was never "this member is undesirable"; it was "this member is
+    unsafe *while dispatch is exhaustive-by-omission*". D5.1A removed the
+    precondition rather than the intent, in that order -- total dispatch first,
+    member second -- so the guardrail now asserts the state that makes
+    publication safe rather than the absence that avoided the question.
+
+    The three original parts are preserved, each in its succeeded form: the
+    enum's exact membership, that ``OperatingMode.LEASE_LEVEL`` references are
+    now legitimate but only inside dispatch, and the structural reading of the
+    enum declaration. Exhaustiveness itself is proved in
+    ``tests/test_d5_1a_operating_mode_total_dispatch.py``, which is the file
+    this guardrail now depends on rather than duplicating.
     """
 
     from anchor.contracts import OperatingMode
 
-    assert {member.value for member in OperatingMode} == {"quick", "detailed"}
-    assert not hasattr(OperatingMode, "LEASE_LEVEL")
+    assert {member.value for member in OperatingMode} == {
+        "quick",
+        "detailed",
+        "lease_level",
+    }
+    assert hasattr(OperatingMode, "LEASE_LEVEL")
+    assert OperatingMode("lease_level") is OperatingMode.LEASE_LEVEL
 
+    # Every module that names the member must be a dispatch consumer -- the
+    # member exists to be branched on, never to be imported into the financial
+    # layers, which stay mode-blind.
+    permitted = {"api.py", "contracts.py", "store.py", "presentation.py"}
     for source_file in _python_files_under(_ANCHOR_DIR):
-        assert "OperatingMode.LEASE_LEVEL" not in source_file.read_text(
-            encoding="utf-8"
-        ), f"{source_file.name} references a Lease-Level operating mode"
+        if "OperatingMode.LEASE_LEVEL" not in source_file.read_text(encoding="utf-8"):
+            continue
+        assert source_file.name in permitted, (
+            f"{source_file.name} names OperatingMode.LEASE_LEVEL; only the mode "
+            "dispatch consumers may"
+        )
 
     operating_mode_class = next(
         node
@@ -855,12 +866,7 @@ def test_g32_the_public_operating_mode_enum_is_unchanged() -> None:
         for target in node.targets
         if isinstance(target, ast.Name)
     ]
-    assert declared == ["QUICK", "DETAILED"], declared
-
-
-# =============================================================================
-# Guardrails 33-35 -- Quick, Detailed and the AI surface are untouched
-# =============================================================================
+    assert declared == ["QUICK", "DETAILED", "LEASE_LEVEL"], declared
 
 
 def test_g33_the_whole_engine_package_is_unchanged_since_d4_5a() -> None:
@@ -879,15 +885,41 @@ def test_g33_the_whole_engine_package_is_unchanged_since_d4_5a() -> None:
     )
 
 
-def test_g34_the_ai_surface_is_unchanged_since_d4_5a() -> None:
-    """**Guardrail 34.** The narrow D4.5A exception -- excluding the two TI/LC
-    fields from AI presentation -- stands exactly as authorised. D4.5B neither
-    widens it nor quietly reverses it, and adds no Lease-Level presentation of
-    its own."""
+def test_g34_the_ai_surface_changed_only_to_make_mode_dispatch_total() -> None:
+    """**Guardrail 34, narrowed at D5.1A -- and not weakened.**
+
+    The original asserted byte-identity of the whole ``src/anchor/ai`` tree
+    since D4.5A. D5.1A must edit two files in that tree -- ``contracts.py`` and
+    ``presentation.py`` -- because both carried ``if QUICK: ... else:
+    <Detailed>`` dispatch, which is exactly the hazard this gate exists to
+    close. Byte-identity is therefore no longer the right statement of the rule.
+
+    What the guardrail was actually protecting was never the bytes: it was that
+    **no Lease-Level AI presentation is smuggled in, and the TI/LC exclusion is
+    neither widened nor reversed**. Both survive verbatim, now stated directly:
+    the prompt surface is still byte-identical (D5.1A changes no prompt), and
+    only the two dispatch files moved. D5.8 owns the presentation decision.
+    """
 
     changed = _files_changed_since(_D4_5A_COMMIT, "src/anchor/ai")
 
-    assert changed == [], f"the AI surface changed at D4.5B: {changed}"
+    assert sorted(changed) == [
+        "src/anchor/ai/contracts.py",
+        "src/anchor/ai/presentation.py",
+    ], (
+        "the AI surface changed beyond D5.1A's authorised total-dispatch "
+        f"conversion: {changed}"
+    )
+
+    # The prompts are untouched: D5.1A adds no mode vocabulary to the model.
+    assert _files_changed_since(_D4_5A_COMMIT, "src/anchor/ai/prompts.py") == []
+
+    # The D4.5A TI/LC exclusion stands exactly as authorised.
+    from anchor.ai.presentation import INTENTIONALLY_EXCLUDED_RESULT_FIELDS
+
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset(
+        {"tenant_improvements_by_year", "leasing_commissions_by_year"}
+    )
 
 
 def test_g35_the_ai_exclusion_decision_is_intact() -> None:
@@ -940,16 +972,34 @@ def test_g35_the_ai_exclusion_decision_is_intact() -> None:
 # =============================================================================
 
 
-def test_hd_d4_9_the_mode_is_not_publishable_yet() -> None:
-    """The enum is the gate. While ``lease_level`` is not a member, no payload
-    can name it and no dispatch can mis-route it."""
+def test_hd_d4_9_superseded_the_mode_is_published_and_parses_as_valid() -> None:
+    """**HD-D4-9, discharged at D5.1A.**
+
+    The enum was the gate: while ``lease_level`` named no member, no payload
+    could carry it and no dispatch could mis-route it. That was a holding
+    position, and D5.1A discharges it in the required order -- total dispatch
+    first, member second.
+
+    The successor invariant is the one that now matters, and it is a
+    *distinction* rather than a refusal: ``"lease_level"`` parses as a valid
+    mode, while an unknown token still does not. Collapsing the two would tell a
+    caller that ``"lease_level"`` is not a mode, which stopped being true the
+    moment the member was published. Whether any given endpoint *serves* the
+    mode is a separate question, asserted in the endpoint matrix below.
+    """
 
     from anchor.contracts import OperatingMode
 
-    assert {member.value for member in OperatingMode} == {"quick", "detailed"}
+    assert {member.value for member in OperatingMode} == {
+        "quick",
+        "detailed",
+        "lease_level",
+    }
+
+    assert OperatingMode("lease_level") is OperatingMode.LEASE_LEVEL
 
     with pytest.raises(ValueError):
-        OperatingMode("lease_level")
+        OperatingMode("leaselevel")
 
 
 def test_hd_d4_9_the_api_rejects_the_mode_rather_than_running_quick() -> None:
@@ -980,17 +1030,34 @@ def test_hd_d4_9_the_api_rejects_the_mode_rather_than_running_quick() -> None:
 
     assert response.status_code == 422, (
         f"POST /analyze accepted operating_mode='lease_level' with "
-        f"{response.status_code}; an unpublished mode must be rejected, never "
+        f"{response.status_code}; an unsupported mode must be refused, never "
         "silently dispatched to Quick"
     )
     assert "operating_mode" in response.text
 
+    # D5.1A: the refusal must be the *unsupported* one, not the unparseable one
+    # -- and above all must not carry Quick results for a Quick-shaped payload.
+    body = response.json()
+    assert "not supported by" in str(body["detail"])
+    assert "levered_irr" not in response.text
 
-def test_hd_d4_9_no_public_surface_mentions_the_mode() -> None:
-    """No half-wiring anywhere: not in the API, the web layer, persistence,
-    ingestion or the AI surface."""
 
-    candidates = [
+def test_hd_d4_9_superseded_the_mode_is_named_but_no_capability_is_wired() -> None:
+    """**HD-D4-9's anti-half-wiring rule, succeeded at D5.1A.**
+
+    The original banned the strings ``LEASE_LEVEL``/``lease_level`` anywhere in
+    the API, persistence, ingestion or AI surfaces, because at D4 *any* mention
+    would have been half-wiring: publication was supposed to land atomically.
+
+    D5.1A publishes the **mode vocabulary** and deliberately nothing else, so
+    the string ban is the wrong instrument -- refusing a mode by name requires
+    naming it. The intent survives intact and is now stated as the thing that
+    actually matters: **no Lease-Level capability is reachable.** D5.2 owns
+    request parsing, D5.3 analysis, D5.4 persistence, D5.8 AI; none may leak in
+    early behind a mode arm that merely looks wired.
+    """
+
+    surfaces = [
         _ANCHOR_DIR / "api.py",
         *(
             path
@@ -999,28 +1066,65 @@ def test_hd_d4_9_no_public_surface_mentions_the_mode() -> None:
         ),
     ]
 
-    for source_file in candidates:
+    # D5.2/D5.3: no delivery surface may reach the Lease-Level engine, its
+    # sensitivity runners, or the leasing input contracts.
+    forbidden_capability = (
+        "analyze_lease_level_acquisition_with_projection",
+        "run_lease_level_one_way_sensitivity",
+        "run_lease_level_two_way_sensitivity",
+        "lease_level_sensitivity",
+        "LeaseLevelAcquisitionResults",
+        "LeaseLevelPropertyInputs",
+        "LeaseLevelOperatingInputs",
+        "MarketLeasingAssumptions",
+        "anchor.leasing",
+        "from ..leasing",
+    )
+    for source_file in surfaces:
         text = source_file.read_text(encoding="utf-8")
-        for forbidden in ("LEASE_LEVEL", "lease_level"):
+        for forbidden in forbidden_capability:
             assert forbidden not in text, (
-                f"{source_file.name} mentions {forbidden!r}; publication is "
-                "deferred to D5 and must land atomically"
+                f"{source_file.name} references {forbidden!r}; D5.1A publishes "
+                "the mode vocabulary only -- capability belongs to D5.2/D5.3/"
+                "D5.4/D5.8 and must not land early"
             )
 
+    # D5.4: no Lease-Level persistence exists yet.
+    store = (_ANCHOR_DIR / "deals" / "store.py").read_text(encoding="utf-8")
+    assert "lease_level_deals" not in store
+    assert "_SCHEMA_VERSION = 4" in store, (
+        "the persistence schema version moved; D5.4 owns schema 5"
+    )
 
-def test_hd_d4_9_the_exhaustive_dispatch_hazard_is_recorded() -> None:
-    """The evidence for the deferral, kept executable.
+    # The only Lease-Level references permitted are dispatch arms and the
+    # refusals they raise.
+    api_text = (_ANCHOR_DIR / "api.py").read_text(encoding="utf-8")
+    assert "case OperatingMode.LEASE_LEVEL:" in api_text
+    assert "_unsupported_operating_mode" in api_text
 
-    Each of these sites branches on exactly one mode and lets the other fall
-    through. The count is not asserted exactly -- that would break on unrelated
-    edits -- but the *shape* is: every mode comparison in these modules is an
-    identity test against a single member, which is precisely what makes a
-    third member unsafe. If someone refactors these into exhaustive dispatch
-    (a match statement, or an explicit else that raises), this test starts
-    failing and the deferral can be revisited.
+
+def test_hd_d4_9_superseded_the_exhaustive_dispatch_hazard_is_closed() -> None:
+    """**The trigger D4 armed, fired and discharged at D5.1A.**
+
+    The original counted implicit two-mode dispatch sites and required at least
+    eight, with this instruction to its future reader, quoted from the D4.5B
+    source: *"If someone refactors these into exhaustive dispatch (a match
+    statement, or an explicit else that raises), this test starts failing and
+    the deferral can be revisited."*
+
+    That is precisely what D5.1A did, so the test fired as designed and is
+    inverted here rather than deleted. The hazard it recorded -- every mode
+    comparison in these four modules being an identity test against a single
+    member, which is what made a third member unsafe -- must now be **absent**.
+
+    Kept deliberately narrow and independent of
+    ``tests/test_d5_1a_operating_mode_total_dispatch.py``: that file proves
+    exhaustiveness over the live enum, whereas this one preserves D4's own
+    framing of the danger (single-member identity tests with a live fallthrough)
+    so the historical record stays executable rather than becoming a comment.
     """
 
-    implicit_dispatch: list[str] = []
+    surviving: list[str] = []
 
     for source_file in (
         _ANCHOR_DIR / "api.py",
@@ -1037,13 +1141,32 @@ def test_hd_d4_9_the_exhaustive_dispatch_hazard_is_recorded() -> None:
             if not any(isinstance(op, ast.Is) for op in test.ops):
                 continue
             names = _referenced_names(test)
-            if {"QUICK", "DETAILED"} & names:
-                implicit_dispatch.append(f"{source_file.name}:{node.lineno}")
+            if not ({"QUICK", "DETAILED", "LEASE_LEVEL"} & names):
+                continue
 
-    assert len(implicit_dispatch) >= 8, (
-        "the exhaustive-dispatch hazard that justifies HD-D4-9 is no longer "
-        f"visible (found {implicit_dispatch}); re-examine whether publication "
-        "is now safe rather than leaving a stale deferral in place"
+            # Walk to the end of the if/elif chain. The hazard is a *live*
+            # fallthrough -- an ``else`` that does something other than raise,
+            # meaning "every mode I did not name behaves like this one".
+            tail = node
+            while (
+                tail.orelse
+                and len(tail.orelse) == 1
+                and isinstance(tail.orelse[0], ast.If)
+            ):
+                tail = tail.orelse[0]
+            if not tail.orelse:
+                continue
+            if any(
+                isinstance(stmt, ast.Raise)
+                for stmt in ast.walk(ast.Module(body=tail.orelse, type_ignores=[]))
+            ):
+                continue
+            surviving.append(f"{source_file.name}:{node.lineno}")
+
+    assert surviving == [], (
+        "the exhaustive-dispatch hazard HD-D4-9 recorded is back: these sites "
+        "test one OperatingMode member and let every other member fall through "
+        f"into that branch's sibling behavior: {surviving}"
     )
 
 

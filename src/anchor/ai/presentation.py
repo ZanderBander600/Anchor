@@ -36,6 +36,7 @@ from ..contracts import (
     AcquisitionTerms,
     DetailedOperatingInputs,
     OperatingMode,
+    UnsupportedOperatingModeError,
 )
 from ..engine.contracts import AcquisitionResults, OperatingProjection
 from .contracts import AnalysisContext
@@ -730,6 +731,35 @@ def _format_detailed_break_even(context: AnalysisContext) -> dict[str, Any]:
     }
 
 
+def _add_quick_sections(payload: dict[str, Any], context: AnalysisContext) -> None:
+    """The Quick-mode sections of the presentation payload, extracted at D5.1A
+    so ``build_presentation_payload`` can resolve its mode *before* formatting
+    anything. Behavior is unchanged."""
+
+    assert context.inputs is not None
+    payload["base_inputs"] = _format_inputs(context.inputs)
+    payload["sensitivities"] = _format_quick_sensitivities(context)
+    payload["break_even"] = _format_quick_break_even(context)
+
+
+def _add_detailed_sections(payload: dict[str, Any], context: AnalysisContext) -> None:
+    """The Detailed-mode sections, extracted at D5.1A alongside
+    ``_add_quick_sections``. Behavior is unchanged."""
+
+    assert context.terms is not None
+    assert context.detailed_operating_inputs is not None
+    assert context.operating_projection is not None
+    payload["base_terms"] = _format_terms(context.terms)
+    payload["base_detailed_operating_inputs"] = _format_detailed_operating_inputs(
+        context.detailed_operating_inputs
+    )
+    payload["operating_projection"] = _format_operating_projection(
+        context.operating_projection
+    )
+    payload["sensitivities"] = _format_detailed_sensitivities(context)
+    payload["break_even"] = _format_detailed_break_even(context)
+
+
 def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
     """Return the complete presentation-formatted, JSON-serializable
     evidence payload for ``context`` -- currency in $/K/M, rates/IRRs as
@@ -768,6 +798,36 @@ def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
     deterministic data.
     """
 
+    # D5.1A: mode dispatch runs FIRST, before any payload is assembled.
+    #
+    # Previously ``if QUICK: ... else: <Detailed sections>``, so a third mode
+    # would have reached the Detailed arm and tripped an ``assert`` -- or, had
+    # those asserts been absent, been described to the model under Detailed's
+    # section names. Presenting one mode's economics under another mode's labels
+    # is a grounding failure, not a mislabelling.
+    #
+    # Resolving the section builder up front (rather than branching at the end)
+    # means an unsupported mode is refused before a single field is formatted.
+    # That matters beyond tidiness: the shared ``base_results``/``hurdle_*``
+    # block above assumes fields a mode this function cannot serve is not
+    # obliged to populate, so formatting first would surface an unsupported mode
+    # as an ``AttributeError`` from deep inside a formatter instead of as the
+    # explicit refusal it is.
+    match context.operating_mode:
+        case OperatingMode.QUICK:
+            add_mode_sections = _add_quick_sections
+        case OperatingMode.DETAILED:
+            add_mode_sections = _add_detailed_sections
+        case OperatingMode.LEASE_LEVEL:
+            # D5.8 owns Lease-Level presentation and its grounding rules.
+            raise UnsupportedOperatingModeError(
+                context.operating_mode, operation="build_presentation_payload"
+            )
+        case _:
+            raise UnsupportedOperatingModeError(
+                context.operating_mode, operation="build_presentation_payload"
+            )
+
     payload: dict[str, Any] = {
         "operating_mode": context.operating_mode.value,
         "base_results": _format_results(context.results),
@@ -787,23 +847,6 @@ def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
     if context.deal_context is not None and context.deal_context.strip():
         payload["deal_context"] = context.deal_context.strip()
 
-    if context.operating_mode is OperatingMode.QUICK:
-        assert context.inputs is not None
-        payload["base_inputs"] = _format_inputs(context.inputs)
-        payload["sensitivities"] = _format_quick_sensitivities(context)
-        payload["break_even"] = _format_quick_break_even(context)
-    else:
-        assert context.terms is not None
-        assert context.detailed_operating_inputs is not None
-        assert context.operating_projection is not None
-        payload["base_terms"] = _format_terms(context.terms)
-        payload["base_detailed_operating_inputs"] = _format_detailed_operating_inputs(
-            context.detailed_operating_inputs
-        )
-        payload["operating_projection"] = _format_operating_projection(
-            context.operating_projection
-        )
-        payload["sensitivities"] = _format_detailed_sensitivities(context)
-        payload["break_even"] = _format_detailed_break_even(context)
+    add_mode_sections(payload, context)
 
     return payload

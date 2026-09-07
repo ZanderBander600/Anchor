@@ -207,6 +207,37 @@ def _validation_error_detail(error: InputValidationError) -> list[dict[str, Any]
     ]
 
 
+def _unsupported_operating_mode(
+    operating_mode: OperatingMode, *, endpoint: str
+) -> HTTPException:
+    """D5.1A: the explicit refusal a *total* ``OperatingMode`` dispatch raises
+    for a valid mode this endpoint has no implementation for.
+
+    Deliberately distinct from the *unparseable*-mode error raised by
+    ``_require_operating_mode`` and the two inline parse guards: that one means
+    the submitted string names no ``OperatingMode`` member at all, and its
+    message enumerates the members that exist. This one means the caller named a
+    real, currently-valid member that this particular endpoint does not serve --
+    which is exactly the state every Lease-Level surface is in until the gate
+    that implements it (D5.3 analysis, D5.4 persistence, D5.8 AI). Collapsing the
+    two would tell a caller that ``"lease_level"`` is not a mode, which stops
+    being true the moment the member is published.
+
+    Carries no financial knowledge, parses nothing, and dispatches nothing: it
+    formats one 422 so no endpoint hand-writes the same payload, and so a mode
+    becomes supported by replacing a ``case`` arm rather than by editing an
+    error string.
+    """
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=(
+            f"operating_mode {operating_mode.value!r} is not supported by "
+            f"{endpoint}."
+        ),
+    )
+
+
 def _analyze_detailed(payload: dict[str, Any]) -> DetailedAcquisitionResults:
     """Detailed Operating Model V2.1 Gate 5 (mode routing) / Gate 4
     (response shape): the 'detailed' operating_mode branch of ``/analyze``.
@@ -253,6 +284,25 @@ def _analyze_detailed(payload: dict[str, Any]) -> DetailedAcquisitionResults:
     return analyze_detailed_acquisition_with_projection(terms, detailed_inputs)
 
 
+def _analyze_quick(payload: dict[str, Any]) -> AcquisitionResults:
+    """D5.1A: the 'quick' operating_mode branch of ``POST /analyze``,
+    extracted verbatim so the endpoint's mode dispatch can be total -- one
+    explicit arm per mode -- rather than a Detailed test with an implicit
+    Quick fallthrough. Behavior is unchanged: the same validator, the same
+    engine call, the same bare ``AcquisitionResults`` response.
+    Named symmetrically with ``_analyze_detailed``."""
+
+    try:
+        inputs = validate_acquisition_inputs(payload)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    return analyze_acquisition(inputs)
+
+
 @app.post("/analyze", response_model=AcquisitionResults | DetailedAcquisitionResults)
 def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults | DetailedAcquisitionResults:
     """Detailed Operating Model V2.1 Gate 5: gains an optional
@@ -283,18 +333,20 @@ def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults | Detaile
             ),
         ) from None
 
-    if operating_mode is OperatingMode.DETAILED:
-        return _analyze_detailed(payload)
-
-    try:
-        inputs = validate_acquisition_inputs(payload)
-    except InputValidationError as error:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=_validation_error_detail(error),
-        ) from None
-
-    return analyze_acquisition(inputs)
+    match operating_mode:
+        case OperatingMode.QUICK:
+            return _analyze_quick(payload)
+        case OperatingMode.DETAILED:
+            return _analyze_detailed(payload)
+        case OperatingMode.LEASE_LEVEL:
+            # D5.3 wires Lease-Level analysis; D5.2 owns the request parsing it needs.
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /analyze"
+            )
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /analyze"
+            )
 
 
 # =============================================================================
@@ -362,13 +414,13 @@ def _sensitivity_detailed(payload: dict[str, Any]) -> TwoWaySensitivityResult:
         ) from None
 
 
-@app.post("/sensitivity", response_model=TwoWaySensitivityResult)
-def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
-    payload = dict(payload)
-    operating_mode = _require_operating_mode(payload)
-
-    if operating_mode is OperatingMode.DETAILED:
-        return _sensitivity_detailed(payload)
+def _sensitivity_quick(payload: dict[str, Any]) -> TwoWaySensitivityResult:
+    """D5.1A: the 'quick' operating_mode branch of ``POST /sensitivity``,
+    extracted verbatim so the endpoint's mode dispatch can be total -- one
+    explicit arm per mode -- rather than a Detailed test with an implicit
+    Quick fallthrough. Behavior is unchanged: the same validator and the
+    same ``run_two_way_sensitivity`` call.
+    Named symmetrically with ``_sensitivity_detailed``."""
 
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
@@ -426,6 +478,27 @@ def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
         ) from None
 
 
+@app.post("/sensitivity", response_model=TwoWaySensitivityResult)
+def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    match operating_mode:
+        case OperatingMode.QUICK:
+            return _sensitivity_quick(payload)
+        case OperatingMode.DETAILED:
+            return _sensitivity_detailed(payload)
+        case OperatingMode.LEASE_LEVEL:
+            # D5.3 wires Lease-Level sensitivity (the runners already exist internally).
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /sensitivity"
+            )
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /sensitivity"
+            )
+
+
 def _sensitivity_presets_detailed(
     payload: dict[str, Any]
 ) -> StandardDetailedSensitivityPresets:
@@ -434,18 +507,13 @@ def _sensitivity_presets_detailed(
     return build_standard_detailed_presets(terms, detailed_operating_inputs)
 
 
-@app.post(
-    "/sensitivity/presets",
-    response_model=StandardSensitivityPresets | StandardDetailedSensitivityPresets,
-)
-def sensitivity_presets(
-    payload: dict[str, Any] = Body(...),
-) -> StandardSensitivityPresets | StandardDetailedSensitivityPresets:
-    payload = dict(payload)
-    operating_mode = _require_operating_mode(payload)
-
-    if operating_mode is OperatingMode.DETAILED:
-        return _sensitivity_presets_detailed(payload)
+def _sensitivity_presets_quick(payload: dict[str, Any]) -> StandardSensitivityPresets:
+    """D5.1A: the 'quick' operating_mode branch of ``POST /sensitivity/presets``,
+    extracted verbatim so the endpoint's mode dispatch can be total -- one
+    explicit arm per mode -- rather than a Detailed test with an implicit
+    Quick fallthrough. Behavior is unchanged: the same validator and the
+    same ``build_standard_presets`` call.
+    Named symmetrically with ``_sensitivity_presets_detailed``."""
 
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
@@ -463,6 +531,33 @@ def sensitivity_presets(
         ) from None
 
     return build_standard_presets(inputs)
+
+
+@app.post(
+    "/sensitivity/presets",
+    response_model=StandardSensitivityPresets | StandardDetailedSensitivityPresets,
+)
+def sensitivity_presets(
+    payload: dict[str, Any] = Body(...),
+) -> StandardSensitivityPresets | StandardDetailedSensitivityPresets:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    match operating_mode:
+        case OperatingMode.QUICK:
+            return _sensitivity_presets_quick(payload)
+        case OperatingMode.DETAILED:
+            return _sensitivity_presets_detailed(payload)
+        case OperatingMode.LEASE_LEVEL:
+            # Lease-Level ships no preset bundle -- deliberately, per D4.6B/D5.0 decision D4.
+            # This refusal is permanent for D5, not a staging placeholder.
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /sensitivity/presets"
+            )
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /sensitivity/presets"
+            )
 
 
 # =============================================================================
@@ -515,18 +610,14 @@ def _break_even_detailed(payload: dict[str, Any]) -> StandardDetailedBreakEvenAn
         ) from None
 
 
-@app.post(
-    "/break-even",
-    response_model=StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis,
-)
-def break_even(
-    payload: dict[str, Any] = Body(...),
-) -> StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis:
-    payload = dict(payload)
-    operating_mode = _require_operating_mode(payload)
-
-    if operating_mode is OperatingMode.DETAILED:
-        return _break_even_detailed(payload)
+def _break_even_quick(payload: dict[str, Any]) -> StandardBreakEvenAnalysis:
+    """D5.1A: the 'quick' operating_mode branch of ``POST /break-even``,
+    extracted verbatim so the endpoint's mode dispatch can be total -- one
+    explicit arm per mode -- rather than a Detailed test with an implicit
+    Quick fallthrough. Behavior is unchanged: the same validator, the same
+    hurdle parsing and the same ``build_standard_break_even_analysis``
+    call.
+    Named symmetrically with ``_break_even_detailed``."""
 
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
@@ -583,6 +674,33 @@ def break_even(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
         ) from None
+
+
+@app.post(
+    "/break-even",
+    response_model=StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis,
+)
+def break_even(
+    payload: dict[str, Any] = Body(...),
+) -> StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    match operating_mode:
+        case OperatingMode.QUICK:
+            return _break_even_quick(payload)
+        case OperatingMode.DETAILED:
+            return _break_even_detailed(payload)
+        case OperatingMode.LEASE_LEVEL:
+            # Lease-Level break-even does not exist and is not planned for D5 (guardrail G35).
+            # This refusal is permanent for D5, not a staging placeholder.
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /break-even"
+            )
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /break-even"
+            )
 
 
 # =============================================================================
@@ -670,24 +788,13 @@ def _ai_analysis_detailed(payload: dict[str, Any]) -> AIAnalysis:
         ) from None
 
 
-@app.post("/ai/analysis", response_model=AIAnalysis)
-def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
-    payload = dict(payload)
-    operating_mode_raw = payload.pop("operating_mode", OperatingMode.QUICK.value)
-    try:
-        operating_mode = OperatingMode(operating_mode_raw)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                "operating_mode must be one of "
-                f"{[member.value for member in OperatingMode]}; "
-                f"got {operating_mode_raw!r}."
-            ),
-        ) from None
-
-    if operating_mode is OperatingMode.DETAILED:
-        return _ai_analysis_detailed(payload)
+def _ai_analysis_quick(payload: dict[str, Any]) -> AIAnalysis:
+    """D5.1A: the 'quick' operating_mode branch of ``POST /ai/analysis``,
+    extracted verbatim so the endpoint's mode dispatch can be total -- one
+    explicit arm per mode -- rather than a Detailed test with an implicit
+    Quick fallthrough. Behavior is unchanged: the same validator and the
+    same ``generate_ai_analysis`` call.
+    Named symmetrically with ``_ai_analysis_detailed``."""
 
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
@@ -733,6 +840,38 @@ def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
         ) from None
+
+
+@app.post("/ai/analysis", response_model=AIAnalysis)
+def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
+    payload = dict(payload)
+    operating_mode_raw = payload.pop("operating_mode", OperatingMode.QUICK.value)
+    try:
+        operating_mode = OperatingMode(operating_mode_raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "operating_mode must be one of "
+                f"{[member.value for member in OperatingMode]}; "
+                f"got {operating_mode_raw!r}."
+            ),
+        ) from None
+
+    match operating_mode:
+        case OperatingMode.QUICK:
+            return _ai_analysis_quick(payload)
+        case OperatingMode.DETAILED:
+            return _ai_analysis_detailed(payload)
+        case OperatingMode.LEASE_LEVEL:
+            # D5.8 owns the Lease-Level AI context; AnalysisContext cannot represent it yet.
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /ai/analysis"
+            )
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /ai/analysis"
+            )
 
 
 # =============================================================================
@@ -1136,15 +1275,21 @@ def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
     operating_mode = _require_operating_mode(payload)
     deal_context = _optional_deal_context(payload)
 
-    if operating_mode is OperatingMode.DETAILED:
-        terms = _require_deal_terms(payload)
-        detailed_inputs = _require_deal_detailed_operating_inputs(payload)
-        return deals_store.create_detailed_deal(
-            name, terms, detailed_inputs, deal_context=deal_context
-        )
-
-    inputs = _require_deal_inputs(payload)
-    return deals_store.create_deal(name, inputs, deal_context=deal_context)
+    match operating_mode:
+        case OperatingMode.QUICK:
+            inputs = _require_deal_inputs(payload)
+            return deals_store.create_deal(name, inputs, deal_context=deal_context)
+        case OperatingMode.DETAILED:
+            terms = _require_deal_terms(payload)
+            detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+            return deals_store.create_detailed_deal(
+                name, terms, detailed_inputs, deal_context=deal_context
+            )
+        case OperatingMode.LEASE_LEVEL:
+            # D5.4 owns Lease-Level persistence (schema 5).
+            raise _unsupported_operating_mode(operating_mode, endpoint="POST /deals")
+        case _:
+            raise _unsupported_operating_mode(operating_mode, endpoint="POST /deals")
 
 
 @app.get("/deals", response_model=list[Deal])
@@ -1179,15 +1324,27 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
     deal_context = _optional_deal_context(payload)
 
     try:
-        if operating_mode is OperatingMode.DETAILED:
-            terms = _require_deal_terms(payload)
-            detailed_inputs = _require_deal_detailed_operating_inputs(payload)
-            return deals_store.update_detailed_deal(
-                deal_id, name, terms, detailed_inputs, deal_context=deal_context
-            )
-
-        inputs = _require_deal_inputs(payload)
-        return deals_store.update_deal(deal_id, name, inputs, deal_context=deal_context)
+        match operating_mode:
+            case OperatingMode.QUICK:
+                inputs = _require_deal_inputs(payload)
+                return deals_store.update_deal(
+                    deal_id, name, inputs, deal_context=deal_context
+                )
+            case OperatingMode.DETAILED:
+                terms = _require_deal_terms(payload)
+                detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+                return deals_store.update_detailed_deal(
+                    deal_id, name, terms, detailed_inputs, deal_context=deal_context
+                )
+            case OperatingMode.LEASE_LEVEL:
+                # D5.4 owns Lease-Level persistence (schema 5).
+                raise _unsupported_operating_mode(
+                    operating_mode, endpoint="PUT /deals/{deal_id}"
+                )
+            case _:
+                raise _unsupported_operating_mode(
+                    operating_mode, endpoint="PUT /deals/{deal_id}"
+                )
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
@@ -1250,13 +1407,25 @@ def deal_fingerprint(payload: dict[str, Any] = Body(...)) -> _FingerprintRespons
     operating_mode = _require_operating_mode(payload)
     deal_context = _optional_deal_context(payload)
 
-    if operating_mode is OperatingMode.DETAILED:
-        terms = _require_deal_terms(payload)
-        detailed_inputs = _require_deal_detailed_operating_inputs(payload)
-        financial_input_fingerprint = fingerprint_detailed_inputs(terms, detailed_inputs)
-    else:
-        inputs = _require_deal_inputs(payload)
-        financial_input_fingerprint = fingerprint_quick_inputs(inputs)
+    match operating_mode:
+        case OperatingMode.QUICK:
+            inputs = _require_deal_inputs(payload)
+            financial_input_fingerprint = fingerprint_quick_inputs(inputs)
+        case OperatingMode.DETAILED:
+            terms = _require_deal_terms(payload)
+            detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+            financial_input_fingerprint = fingerprint_detailed_inputs(
+                terms, detailed_inputs
+            )
+        case OperatingMode.LEASE_LEVEL:
+            # D5.4 owns the Lease-Level fingerprint.
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /deals/fingerprint"
+            )
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /deals/fingerprint"
+            )
 
     ai_context_fingerprint = fingerprint_ai(
         analysis_fingerprint=financial_input_fingerprint, deal_context=deal_context

@@ -77,6 +77,11 @@ _ENTRY_POINT = "analyze_lease_level_acquisition_with_projection"
 #: Detailed sensitivity and break-even sources must still be identical to it.
 _D4_6A_COMMIT = "15e910d"
 
+#: The Sprint-D merge commit -- the base every D5 gate branches from, and the
+#: correct baseline for any file that did not yet exist at D4.6A (notably
+#: ``lease_level_sensitivity.py``, which D4.6B itself created).
+_D5_BASE_COMMIT = "4f8a648"
+
 
 # =============================================================================
 # Helpers
@@ -937,17 +942,34 @@ def test_g33_no_arbitrary_grid_limit_exists() -> None:
 # =============================================================================
 
 
-def test_g34_operating_mode_lease_level_remains_absent() -> None:
-    """**Guardrail 34.** HD-D4-9 unchanged. Lease-Level sensitivity is
-    distinguished by function identity; D5 owns public mode publication."""
+def test_g34_operating_mode_lease_level_is_published_but_sensitivity_stays_mode_blind() -> None:
+    """**Guardrail 34, succeeded at D5.1A.**
+
+    D4.6B re-confirmed HD-D4-9's deferral and added its own, independent reason
+    for wanting no enum member: Lease-Level sensitivity is distinguished by
+    **function identity**, exactly as Quick and Detailed already are, so the
+    runners never needed one.
+
+    D5.1A publishes the member for the *delivery* layers that genuinely must
+    dispatch on it. That does not touch this module's reason for existing, so
+    the half of the guardrail that mattered to D4.6B is unchanged and is the
+    half asserted most strongly here: ``lease_level_sensitivity`` still never
+    names or imports ``OperatingMode``. If the mode ever leaks into the
+    sensitivity layer, the analysis package has started dispatching on an enum
+    instead of on function identity, and that is a real architectural
+    regression -- which is why this assertion survives verbatim.
+    """
 
     from anchor.contracts import OperatingMode
 
-    assert {member.value for member in OperatingMode} == {"quick", "detailed"}
-    assert not hasattr(OperatingMode, "LEASE_LEVEL")
-    with pytest.raises(ValueError):
-        OperatingMode("lease_level")
+    assert {member.value for member in OperatingMode} == {
+        "quick",
+        "detailed",
+        "lease_level",
+    }
+    assert OperatingMode("lease_level") is OperatingMode.LEASE_LEVEL
 
+    # Unchanged from D4.6B, and the point of this guardrail.
     assert "OperatingMode" not in _referenced_names(_tree(_SENSITIVITY))
     assert not any(
         name.endswith("OperatingMode") for name in _imported_module_names(_SENSITIVITY)
@@ -1004,24 +1026,63 @@ def test_g37_analysis_break_even_is_byte_identical_since_d4_6a() -> None:
     assert changed == [], f"analysis/break_even.py changed: {changed}"
 
 
-def test_g37_the_engine_leasing_ai_and_delivery_layers_are_unchanged() -> None:
-    """Nothing financial moved. The whole re-underwrite is the D4.5B pipeline
-    exactly as it shipped."""
+def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> None:
+    """**Narrowed at D5.1A -- and not weakened.**
 
+    The original asserted byte-identity across eleven areas since D4.6A. Five of
+    them are mode-dispatch consumers that D5.1A must edit by definition
+    (``api.py``, ``contracts.py``, ``deals``, ``ai``), so whole-tree identity
+    stopped being a statement of the rule.
+
+    The rule it was protecting is *"nothing financial moved"*, and that is
+    asserted here undiminished: every engine, leasing and analysis module is
+    still byte-identical, as is ``validation.py`` and the whole web tree. The
+    five dispatch files are permitted to change, and are then held to a
+    stronger, more specific claim than byte-identity could give -- that the only
+    thing which changed in them is mode routing, proved by
+    ``tests/test_d5_1a_operating_mode_total_dispatch.py`` and by G34's TI/LC
+    assertion above.
+    """
+
+    # Financial authority: byte-identical since D4.6A, no exceptions.
     for area in (
         "src/anchor/engine",
         "src/anchor/leasing",
-        "src/anchor/ai",
-        "src/anchor/deals",
-        "src/anchor/ingestion",
-        "src/anchor/api.py",
-        "src/anchor/contracts.py",
-        "src/anchor/validation.py",
         "src/anchor/analysis/contracts.py",
         "src/anchor/analysis/lease_level.py",
+        "src/anchor/analysis/sensitivity.py",
+        "src/anchor/analysis/break_even.py",
+        "src/anchor/validation.py",
+        "src/anchor/ingestion",
+        "src/anchor/ai/prompts.py",
         "web",
     ):
         assert _files_changed_since(_D4_6A_COMMIT, area) == [], f"{area} changed"
+
+    # ``lease_level_sensitivity.py`` did not exist at D4.6A -- D4.6B created it
+    # -- so its baseline is the Sprint-D merge this gate branched from.
+    assert (
+        _files_changed_since(
+            _D5_BASE_COMMIT, "src/anchor/analysis/lease_level_sensitivity.py"
+        )
+        == []
+    )
+
+    # Delivery layers: only the mode-dispatch consumers moved.
+    permitted = {
+        "src/anchor/api.py",
+        "src/anchor/contracts.py",
+        "src/anchor/deals/contracts.py",
+        "src/anchor/deals/store.py",
+        "src/anchor/ai/contracts.py",
+        "src/anchor/ai/presentation.py",
+    }
+    for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
+                 "src/anchor/contracts.py"):
+        unexpected = set(_files_changed_since(_D4_6A_COMMIT, area)) - permitted
+        assert unexpected == set(), (
+            f"{area} changed beyond D5.1A's mode-dispatch scope: {sorted(unexpected)}"
+        )
 
 
 @pytest.mark.parametrize(

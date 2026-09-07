@@ -558,21 +558,43 @@ def test_calculate_exit_value_is_unchanged_in_behaviour() -> None:
             pytest.fail("calculate_exit_value branches on a value; it must not")
 
 
-def test_no_lease_level_operating_mode_exists_yet() -> None:
-    """**Guardrail 32**, deliberately unchanged at D4.5B.
+def test_the_lease_level_operating_mode_is_published_and_the_engine_stays_mode_blind() -> None:
+    """**Guardrail 32, succeeded at D5.1A.**
 
-    The end-to-end path shipped at D4.5B, but the public ``OperatingMode``
-    member did **not**. Every consumer of that enum branches
-    ``is DETAILED`` / ``is QUICK`` with an implicit else, so adding
-    ``LEASE_LEVEL`` would make ``POST /analyze`` accept ``"lease_level"`` and
-    silently run it as Quick instead of the 422 it correctly returns today.
-    Publishing the mode is therefore a separate, wider change; see the D4.5B
-    exhaustive-mode report.
+    D4.5B deliberately withheld the ``OperatingMode`` member because every
+    consumer branched ``is DETAILED`` / ``is QUICK`` with an implicit else, so
+    publishing it would have made ``POST /analyze`` accept ``"lease_level"`` and
+    silently run it as Quick. D5.1A removed that hazard first -- every audited
+    backend dispatch site is now total -- and only then published the member.
+    The precondition the old guardrail protected is satisfied, not waived; see
+    ``tests/test_d5_1a_operating_mode_total_dispatch.py``.
+
+    What this guardrail still asserts, and the reason it lives in the *engine*
+    architecture file, is unchanged and is not about the enum's size: the shared
+    acquisition engine remains **mode-blind**. It has never named an
+    ``OperatingMode`` and must not start, because all three modes converge on
+    one ``analyze_acquisition``/``AcquisitionResults`` -- that convergence is
+    what makes a third mode an integration question rather than a financial one.
     """
 
     from anchor.contracts import OperatingMode
 
-    assert {member.value for member in OperatingMode} == {"quick", "detailed"}
+    assert {member.value for member in OperatingMode} == {
+        "quick",
+        "detailed",
+        "lease_level",
+    }
+
+    # The engine never dispatches on, or even names, an operating mode.
+    for source_file in sorted(_ENGINE_DIR.rglob("*.py")):
+        if "__pycache__" in str(source_file):
+            continue
+        text = source_file.read_text(encoding="utf-8")
+        assert "OperatingMode" not in text, (
+            f"{source_file.name} names OperatingMode; the shared engine must "
+            "stay mode-blind so all three modes keep converging on one "
+            "acquisition calculation"
+        )
 
 
 def test_the_orchestration_module_is_outside_the_engine() -> None:

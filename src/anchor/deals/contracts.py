@@ -51,6 +51,7 @@ from ..contracts import (
     AcquisitionTerms,
     DetailedOperatingInputs,
     OperatingMode,
+    UnsupportedOperatingModeError,
 )
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 
@@ -104,6 +105,12 @@ class Deal:
     updated_at: datetime
 
     def __post_init__(self) -> None:
+        # D5.1A: total dispatch. Previously ``if QUICK: ... else: <DETAILED
+        # invariants>``, which meant any future mode silently inherited
+        # Detailed's required-field rules and was reported with Detailed's
+        # wording. Each mode now states its own invariants, and a mode with no
+        # persisted representation is refused by name rather than by falling
+        # into another mode's branch.
         if self.operating_mode is OperatingMode.QUICK:
             if self.inputs is None:
                 raise ValueError("A QUICK Deal must have 'inputs' populated.")
@@ -119,7 +126,7 @@ class Deal:
                     "A QUICK Deal's 'analysis_snapshot' must be an "
                     "AcquisitionResults instance, or None."
                 )
-        else:
+        elif self.operating_mode is OperatingMode.DETAILED:
             if self.terms is None or self.detailed_operating_inputs is None:
                 raise ValueError(
                     "A DETAILED Deal must have both 'terms' and "
@@ -134,6 +141,19 @@ class Deal:
                     "A DETAILED Deal's 'analysis_snapshot' must be a "
                     "DetailedAcquisitionResults instance, or None."
                 )
+        elif self.operating_mode is OperatingMode.LEASE_LEVEL:
+            # D5.4 owns Lease-Level persistence. Refusing construction here is
+            # what keeps a half-formed Lease-Level deal out of the store during
+            # D5.1A-D5.3: there are no columns to hold suites, leases, market
+            # leasing or operating inputs yet, and borrowing Detailed's fields
+            # would silently change which engine underwrites the deal.
+            raise UnsupportedOperatingModeError(
+                self.operating_mode, operation="Deal"
+            )
+        else:
+            raise UnsupportedOperatingModeError(
+                self.operating_mode, operation="Deal"
+            )
 
 
 class DealNotFoundError(LookupError):

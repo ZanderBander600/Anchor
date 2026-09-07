@@ -153,7 +153,13 @@ from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from ..ai.contracts import AIAnalysis
-from ..contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs, OperatingMode
+from ..contracts import (
+    AcquisitionInputs,
+    AcquisitionTerms,
+    DetailedOperatingInputs,
+    OperatingMode,
+    UnsupportedOperatingModeError,
+)
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults, OperatingProjection
 from .contracts import Deal, DealNotFoundError
 from .fingerprint import fingerprint_ai, fingerprint_detailed_inputs, fingerprint_quick_inputs
@@ -1140,25 +1146,48 @@ def duplicate_deal(
     original = get_deal(deal_id, db_path=db_path)
     new_name = name if name else f"{original.name} (Copy)"
 
-    if original.operating_mode is OperatingMode.QUICK:
-        assert original.inputs is not None
-        new_deal = create_deal(
-            new_name, original.inputs, deal_context=original.deal_context, db_path=db_path
-        )
-        analysis_fingerprint = fingerprint_quick_inputs(original.inputs)
-    else:
-        assert original.terms is not None
-        assert original.detailed_operating_inputs is not None
-        new_deal = create_detailed_deal(
-            new_name,
-            original.terms,
-            original.detailed_operating_inputs,
-            deal_context=original.deal_context,
-            db_path=db_path,
-        )
-        analysis_fingerprint = fingerprint_detailed_inputs(
-            original.terms, original.detailed_operating_inputs
-        )
+    # D5.1A: total dispatch. This branch was ``if QUICK: ... else: <Detailed
+    # copy>``, so a deal of any third mode would have been duplicated *as a
+    # Detailed deal* -- silently rewriting the copy's operating mode and, with
+    # it, which engine later underwrites it. That is a data-corruption path, not
+    # merely a wrong error message, which is why it is closed here rather than
+    # in the gate that adds the mode's own persistence.
+    match original.operating_mode:
+        case OperatingMode.QUICK:
+            assert original.inputs is not None
+            new_deal = create_deal(
+                new_name,
+                original.inputs,
+                deal_context=original.deal_context,
+                db_path=db_path,
+            )
+            analysis_fingerprint = fingerprint_quick_inputs(original.inputs)
+        case OperatingMode.DETAILED:
+            assert original.terms is not None
+            assert original.detailed_operating_inputs is not None
+            new_deal = create_detailed_deal(
+                new_name,
+                original.terms,
+                original.detailed_operating_inputs,
+                deal_context=original.deal_context,
+                db_path=db_path,
+            )
+            analysis_fingerprint = fingerprint_detailed_inputs(
+                original.terms, original.detailed_operating_inputs
+            )
+        case OperatingMode.LEASE_LEVEL:
+            # D5.4 owns Lease-Level persistence. Until it lands, no Lease-Level
+            # deal can be stored at all (``Deal.__post_init__`` refuses to
+            # construct one), so this arm is unreachable through the running
+            # app -- it is here because the *shape* is what makes a duplicate
+            # safe, not the current reachability.
+            raise UnsupportedOperatingModeError(
+                original.operating_mode, operation="duplicate_deal"
+            )
+        case _:
+            raise UnsupportedOperatingModeError(
+                original.operating_mode, operation="duplicate_deal"
+            )
 
     if original.analysis_snapshot is not None:
         new_deal = update_analysis_snapshot(
