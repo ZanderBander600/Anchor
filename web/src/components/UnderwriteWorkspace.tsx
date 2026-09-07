@@ -6,7 +6,7 @@ import { SubNav } from './SubNav';
 import { OPERATIONS_VIEWS, UNDERWRITE_TABS, resultsViewsFor, sectionsForView } from '../underwrite';
 import type { FieldSection, ResultsViewId, UnderwriteTabId } from '../underwrite';
 import type { AcquisitionResults, OperatingMode } from '../types';
-import { requireImplementedMode } from '../operatingMode';
+import { requireUnderwriteWorkspaceMode } from '../operatingMode';
 
 export interface UnderwriteWorkspaceProps {
   operatingMode: OperatingMode;
@@ -89,7 +89,7 @@ export function UnderwriteWorkspace({
   // silently answered "no sub-nav" for every mode that is not Detailed, which
   // is right for Quick and an unverified guess for anything else.
   const hasOperationsSubNav =
-    requireImplementedMode(operatingMode, 'the Underwrite workspace') === 'detailed';
+    requireUnderwriteWorkspaceMode(operatingMode, 'the Underwrite workspace') === 'detailed';
   const availableResultsViews = resultsViewsFor(operatingMode);
 
   return (

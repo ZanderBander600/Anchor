@@ -77,6 +77,15 @@ export interface ResolvedField {
   suffix?: string;
   value: string;
   onChange: (value: string) => void;
+  /** D5.5A: the backend's message for this field, when the last submission was
+   * refused because of it.
+   *
+   * Optional and additive. Quick and Detailed never set it -- they keep the
+   * single page-level banner they have always had -- so the grid they render is
+   * byte-identical to before. Lease-Level sets it because its issue stream
+   * carries a `path` that names the exact field, which is the whole reason that
+   * locator exists. The grid never derives this: it renders what it is given. */
+  error?: string;
 }
 
 export interface FieldSection {

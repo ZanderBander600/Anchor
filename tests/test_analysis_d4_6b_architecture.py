@@ -1082,9 +1082,36 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "web/src/format.ts",
         "web/src/liveMetrics.ts",
         "web/src/ownerSummary.ts",
-        "web/src/api.ts",
     ):
         assert _files_changed_since(_D4_6A_COMMIT, area) == [], f"{area} changed"
+
+    # ``web/src/api.ts`` was byte-identical until D5.5A, which is the gate that
+    # gives the analyst a Lease-Level workflow and therefore the gate that must
+    # add the three client functions it calls. Byte-identity stopped being a
+    # statement of the rule there, so a stronger and more specific one takes its
+    # place: **the file changed only by addition.** Not one line that existed at
+    # D4.6A was removed or edited, so every Quick and Detailed client function --
+    # its URL, its body, its error handling, its 422 parse -- is exactly the code
+    # that shipped, proved by the diff rather than by reading it.
+    #
+    # This is deliberately stronger than "only these functions changed": it
+    # forbids a one-character edit anywhere in the shipped surface, including
+    # inside a function nobody thought to name.
+    removed = [
+        line
+        for line in subprocess.run(
+            ["git", "diff", "-U0", _D4_6A_COMMIT, "--", "web/src/api.ts"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=_PROJECT_ROOT,
+        ).stdout.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+    assert removed == [], (
+        "web/src/api.ts changed by more than addition since D4.6A; a shipped "
+        f"Quick/Detailed client function was edited: {removed[:5]}"
+    )
 
     # ``lease_level_sensitivity.py`` did not exist at D4.6A -- D4.6B created it
     # -- so its baseline is the Sprint-D merge this gate branched from.
@@ -1136,6 +1163,15 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     # guardrails (`web/src/modeDispatch.architecture.test.ts`) prove the change
     # was dispatch and nothing else; this pins the file list from the backend
     # side so a frontend gate cannot quietly widen without a reviewer noticing.
+    #
+    # D5.5A widens it deliberately, and by the smallest amount that lets a
+    # Lease-Level deal be entered: four new modules that no other mode reads,
+    # plus four shipped files that gain something strictly additive -- the client
+    # functions in ``api.ts`` (asserted purely additive above), an optional
+    # ``error`` on the shared field primitive that Quick and Detailed never set,
+    # a stylesheet appended to, and the shell's own mount. The list is the point:
+    # a broad Quick/Detailed refactor is a stop condition for D5.5A, and a
+    # refactor could not happen without appearing here.
     permitted_web = {
         "web/src/App.tsx",
         "web/src/types.ts",
@@ -1146,6 +1182,15 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "web/src/components/DealLibraryPanel.tsx",
         "web/src/components/OwnerSummaryPanel.tsx",
         "web/src/components/UnderwriteWorkspace.tsx",
+        # D5.5A -- new, and read by no other mode.
+        "web/src/leaseLevelTypes.ts",
+        "web/src/leaseLevelConvert.ts",
+        "web/src/useLeaseLevelDeal.ts",
+        "web/src/components/LeaseLevelWorkspace.tsx",
+        # D5.5A -- shipped files, extended additively.
+        "web/src/api.ts",
+        "web/src/index.css",
+        "web/src/components/AssumptionFieldGrid.tsx",
     }
     unexpected_web = {
         path

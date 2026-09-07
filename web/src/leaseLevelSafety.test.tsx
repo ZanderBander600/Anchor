@@ -11,6 +11,14 @@
  *   2. The analyst still **cannot select** Lease-Level. Knowing the name is not
  *      offering the workflow. D5.5A inverts this guardrail when the workspace
  *      behind it exists.
+ *
+ * **D5.5A transition.** The workspace now exists, so (2) is inverted rather than
+ * deleted: the selector must offer all three modes, and its successor invariant
+ * -- that choosing Lease-Level reaches the Lease-Level workspace and not Quick's
+ * -- is asserted in `leaseLevelWorkspace.test.tsx`. Rule (1) is unchanged and
+ * still binding: a Lease-Level deal is labelled Lease-Level everywhere. The
+ * safe-behaviour matrix below keeps every refusal that is still true, and the
+ * two that stopped being true are restated as what replaced them.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -19,7 +27,7 @@ import { AppSidebar } from './components/AppSidebar';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
 import { DealHeader } from './components/DealHeader';
 import { resultsViewsFor } from './underwrite';
-import { UnsupportedOperatingModeError, requireImplementedMode } from './operatingMode';
+import { UnsupportedOperatingModeError, requireUnderwriteWorkspaceMode } from './operatingMode';
 import type { Deal } from './types';
 
 afterEach(() => {
@@ -58,8 +66,29 @@ function leaseLevelDeal(): Deal {
     name: 'Rolling Rent Roll',
     operating_mode: 'lease_level',
     inputs: null,
-    terms: null,
+    // D5.5A: `terms` is the shared `AcquisitionTerms` contract, and a
+    // Lease-Level deal genuinely carries one. `inputs` and
+    // `detailed_operating_inputs` stay null, because it genuinely carries
+    // neither.
+    terms: {
+      purchase_price: 31_000_000,
+      hold_period: 7,
+      exit_cap_rate: 0.0625,
+      ltv: 0.6,
+      interest_rate: 0.055,
+      amortization: 30,
+      acquisition_cost_pct: 0.015,
+      financing_fee_pct: 0.01,
+      disposition_cost_pct: 0.0125,
+      annual_capex_reserve: 120_000,
+      io_period: 2,
+    },
     detailed_operating_inputs: null,
+    property_inputs: null,
+    operating_inputs: null,
+    market_leasing: null,
+    suites: null,
+    leases: null,
     deal_context: null,
     analysis_snapshot: null,
     ai_snapshot: null,
@@ -112,7 +141,13 @@ describe('deal identity is never mislabelled', () => {
     expect(screen.queryByText('Detailed')).toBeNull();
   });
 
-  it('shows an unavailable purchase price rather than borrowing another mode’s', () => {
+  it('shows the deal’s own purchase price, never another mode’s', () => {
+    // D5.5A transition. D5.1B asserted N/A here, and that was right at the
+    // time: no Lease-Level deal could be persisted, so there was no `terms` to
+    // read and the honest answer was "unavailable". D5.4 gave the deal `terms`,
+    // so the successor invariant is that the row shows *that* number. What is
+    // still forbidden is unchanged: reading Quick's `inputs`, which this deal
+    // does not populate.
     render(
       <DealLibraryPanel
         deals={[leaseLevelDeal()]}
@@ -125,10 +160,26 @@ describe('deal identity is never mislabelled', () => {
       />,
     );
 
-    // `formatCurrency(null)` is the app's existing neutral unavailable state.
+    expect(screen.getByText(/\$31,000,000/)).toBeTruthy();
+  });
+
+  it('shows an unavailable price for a Lease-Level deal with no terms', () => {
+    // The library lists summaries, which carry no `terms`. `null` must still
+    // render as the app's neutral unavailable state rather than as zero -- a
+    // deal whose price is unknown is not a deal that cost nothing.
+    render(
+      <DealLibraryPanel
+        deals={[{ ...leaseLevelDeal(), terms: null }]}
+        isLoading={false}
+        error={null}
+        onOpen={vi.fn()}
+        onDuplicate={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
     expect(screen.getByText(/N\/A/)).toBeTruthy();
-    // Emphatically not "$0", which would read as a real, stated price of zero.
-    expect(screen.queryByText(/\$0\b/)).toBeNull();
   });
 
   it('still labels Quick deals Quick', () => {
@@ -152,8 +203,9 @@ describe('deal identity is never mislabelled', () => {
 // =============================================================================
 // 2. The visible mode selector still offers only working modes
 //
-// Inverted by D5.5A, deliberately. Until the Lease-Level workspace exists,
-// offering the choice would be offering a dead end.
+// D5.5A: inverted. The workspace behind the choice now exists, so withholding
+// the choice would be hiding a shipped workflow -- the opposite failure to the
+// one D5.1B was preventing.
 // =============================================================================
 
 describe('the visible mode selector', () => {
@@ -178,18 +230,23 @@ describe('the visible mode selector', () => {
     );
   }
 
-  it('offers exactly the two implemented modes', () => {
+  it('offers exactly the three published modes', () => {
     renderHeader();
     const tabs = screen.getAllByRole('tab');
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       'Quick Underwrite',
       'Detailed Underwrite',
+      'Lease-Level Underwrite',
     ]);
   });
 
-  it('does not offer Lease-Level', () => {
+  it('offers Lease-Level, and keeps the two existing tab names byte-identical', () => {
     renderHeader();
-    expect(screen.queryByRole('tab', { name: /Lease-Level/i })).toBeNull();
+    // The existing names are load-bearing: `App.test.tsx` switches modes by
+    // clicking them throughout. Adding a third tab must not rename either.
+    expect(screen.getByRole('tab', { name: 'Quick Underwrite' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Detailed Underwrite' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Lease-Level Underwrite' })).toBeTruthy();
   });
 });
 
@@ -221,20 +278,30 @@ describe('the Lease-Level safe-behaviour matrix', () => {
     );
   });
 
-  it('the Underwrite shell refuses Lease-Level rather than rendering Quick', () => {
-    expect(requireImplementedMode('quick', 'the Underwrite shell')).toBe('quick');
-    expect(requireImplementedMode('detailed', 'the Underwrite shell')).toBe('detailed');
-    expect(() => requireImplementedMode('lease_level', 'the Underwrite shell')).toThrow(
-      UnsupportedOperatingModeError,
+  it('the shared Quick/Detailed workspace still refuses Lease-Level', () => {
+    // D5.5A narrows what this guardrail claims rather than removing it.
+    // Lease-Level is implemented -- in its own component. Routing it through
+    // `UnderwriteWorkspace` would render a rent-roll deal as a column of scalar
+    // assumptions, which is the substitution this refusal exists to prevent.
+    expect(requireUnderwriteWorkspaceMode('quick', 'the Underwrite workspace')).toBe('quick');
+    expect(requireUnderwriteWorkspaceMode('detailed', 'the Underwrite workspace')).toBe(
+      'detailed',
     );
+    expect(() =>
+      requireUnderwriteWorkspaceMode('lease_level', 'the Underwrite workspace'),
+    ).toThrow(UnsupportedOperatingModeError);
   });
 
-  it('Open Deal refuses a Lease-Level deal rather than opening it as Quick', () => {
-    // The narrowing `handleOpenDeal` performs before either branch. Asserted at
-    // the seam rather than by driving the whole App, because the App-level path
-    // is unreachable until D5.4 can persist such a deal at all.
-    expect(() => requireImplementedMode(leaseLevelDeal().operating_mode, 'Open Deal')).toThrow(
-      UnsupportedOperatingModeError,
-    );
+  it('Open Deal now opens a Lease-Level deal, and opens it as Lease-Level', () => {
+    // D5.1B asserted the opposite here, because no Lease-Level deal could be
+    // persisted or rendered. D5.4 made one persistable and D5.5A makes one
+    // openable, so the successor invariant is that opening one selects
+    // `lease_level` -- never Quick. The behavioural proof lives in
+    // `leaseLevelWorkspace.test.tsx`, which drives the real `handleOpenDeal`
+    // against a mocked API; what is asserted here is the fixture's own claim,
+    // so this file cannot silently start describing a Quick deal.
+    expect(leaseLevelDeal().operating_mode).toBe('lease_level');
+    expect(leaseLevelDeal().inputs).toBeNull();
+    expect(leaseLevelDeal().detailed_operating_inputs).toBeNull();
   });
 });

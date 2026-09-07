@@ -3200,3 +3200,86 @@ body {
     justify-content: flex-start;
   }
 }
+
+/* ==========================================================================
+   D5.5A -- Lease-Level workspace.
+
+   Additive only. Nothing above is edited: the workspace reuses the existing
+   `.underwrite`, `.assumption-*` and `.field-*` rules wholesale, so Quick and
+   Detailed render byte-identically to before. What is new here is the inline
+   field error (available to every mode, used so far only by Lease-Level) and
+   two small Lease-Level-specific blocks.
+   ========================================================================== */
+
+/* The backend's message for one field, shown under the input it names.
+   `role="alert"` carries it to assistive technology; the input points at it
+   with `aria-describedby`. */
+.field-error {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--color-negative);
+}
+
+.field-input[aria-invalid='true'] {
+  border-color: var(--color-negative);
+}
+
+.field-input[aria-invalid='true']:focus {
+  border-color: var(--color-negative);
+  box-shadow: 0 0 0 3px rgba(167, 43, 43, 0.12);
+}
+
+/* Standing guidance under a section heading -- never an error, never a
+   calculated value. */
+.field-hint {
+  margin: 0 0 var(--sp-2);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  max-width: 62ch;
+}
+
+/* Issues the workspace could not anchor to a field: suite and lease paths
+   until D5.5B builds the rows, and whole-submission issues that belong to no
+   single input. Listed rather than dropped. */
+.lease-level-issue-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.lease-level-issue-list code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.82em;
+  opacity: 0.85;
+}
+
+/* Rent-roll counts. A count of loaded rows, not a financial total: no area,
+   rent or occupancy figure is computed anywhere in this workspace. */
+.lease-level-roll-counts {
+  display: flex;
+  gap: var(--sp-4);
+  margin: 0 0 var(--sp-2);
+}
+
+.lease-level-roll-counts div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.lease-level-roll-counts dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.lease-level-roll-counts dd {
+  margin: 0;
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}

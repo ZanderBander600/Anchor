@@ -17,8 +17,19 @@ import type {
   StandardSensitivityPresets,
   ValidationIssue,
 } from './types';
+import type {
+  LeaseLevelAcquisitionResults,
+  LeaseLevelInputsRequest,
+  LeaseLevelIssue,
+} from './leaseLevelTypes';
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
+
+/** The single unreachable-backend message, shared by the D5.5A client
+ * functions. Identical wording to the one the existing functions inline. */
+const NETWORK_ERROR_MESSAGE =
+  'Could not reach the Anchor API. Confirm the backend is running at ' +
+  `${API_BASE_URL}.`;
 
 export class ApiError extends Error {
   issues: ValidationIssue[];
@@ -27,6 +38,29 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
     this.issues = issues;
+  }
+}
+
+/**
+ * D5.5A -- a 422 from a Lease-Level request, carrying whichever issue shape the
+ * backend actually returned.
+ *
+ * A single Lease-Level endpoint can fail in two different vocabularies:
+ * `terms` goes through the shared `validate_acquisition_terms` and produces
+ * `ValidationIssue`s keyed by `field_id`, while the Lease-Level parser and
+ * validators produce `LeaseLevelIssue`s keyed by `path`. Rather than guess from
+ * the mode, the client reads the detail array's own shape and reports both.
+ *
+ * Extends `ApiError` so every existing `catch (error) { if (error instanceof
+ * ApiError) ... }` site keeps working unchanged and still sees a real message.
+ */
+export class LeaseLevelApiError extends ApiError {
+  leaseIssues: LeaseLevelIssue[];
+
+  constructor(message: string, issues: ValidationIssue[], leaseIssues: LeaseLevelIssue[]) {
+    super(message, issues);
+    this.name = 'LeaseLevelApiError';
+    this.leaseIssues = leaseIssues;
   }
 }
 
@@ -1068,4 +1102,181 @@ export async function deleteDeal(dealId: string): Promise<void> {
   if (!response.ok) {
     throw new ApiError(`The deal could not be deleted (HTTP ${response.status}).`);
   }
+}
+
+// =============================================================================
+// D5.5A -- one shared request/error path for the Lease-Level client functions.
+//
+// The Quick and Detailed functions above each inline this same fetch/422/!ok
+// sequence, which is how they were written gate by gate. Reproducing it three
+// more times would be three more places for the error contract to drift, so the
+// new functions share one helper. The existing functions are deliberately left
+// exactly as they are -- rewriting shipped, tested code to share a helper is not
+// this gate's work.
+// =============================================================================
+
+async function sendJson(
+  method: 'POST' | 'PUT',
+  path: string,
+  body: unknown,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE);
+  }
+
+  if (response.status === 422) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw leaseLevelValidationError(payload);
+  }
+  if (response.status === 404) {
+    throw new ApiError('That deal no longer exists.');
+  }
+  if (!response.ok) {
+    throw new ApiError(`The request failed (HTTP ${response.status}).`);
+  }
+  return response;
+}
+
+/** Narrows one 422 detail entry to the Lease-Level issue shape.
+ *
+ * Structural, not positional: an entry qualifies because it carries a `path`, a
+ * `code` and a valid `severity`, never because of where it appeared or which
+ * endpoint returned it. An entry that matches neither shape is not silently
+ * dropped -- `leaseLevelValidationError` still counts it, so an unrecognised
+ * detail can never turn a refusal into a blank screen. */
+function isLeaseLevelIssue(entry: unknown): entry is LeaseLevelIssue {
+  if (typeof entry !== 'object' || entry === null) {
+    return false;
+  }
+  const candidate = entry as Record<string, unknown>;
+  return (
+    typeof candidate.code === 'string' &&
+    typeof candidate.path === 'string' &&
+    typeof candidate.message === 'string' &&
+    (candidate.severity === 'error' || candidate.severity === 'warning')
+  );
+}
+
+/** Narrows one 422 detail entry to the shared Quick/Detailed issue shape,
+ * which is what `terms` validation still produces on a Lease-Level request. */
+function isValidationIssue(entry: unknown): entry is ValidationIssue {
+  if (typeof entry !== 'object' || entry === null) {
+    return false;
+  }
+  const candidate = entry as Record<string, unknown>;
+  return (
+    (typeof candidate.field_id === 'string' || candidate.field_id === null) &&
+    typeof candidate.category === 'string' &&
+    typeof candidate.message === 'string'
+  );
+}
+
+function leaseLevelValidationError(payload: unknown): ApiError {
+  const detail: unknown =
+    typeof payload === 'object' && payload !== null
+      ? (payload as Record<string, unknown>).detail
+      : null;
+  const entries: unknown[] = Array.isArray(detail) ? detail : [];
+
+  const leaseIssues = entries.filter(isLeaseLevelIssue);
+  const issues = entries.filter(isValidationIssue);
+
+  // Every message the backend sent, in the order it sent them, regardless of
+  // which vocabulary each one arrived in. The banner is the last line of
+  // defence: an issue the workspace cannot anchor to a field must still be
+  // readable somewhere.
+  const messages = entries
+    .map((entry) =>
+      typeof entry === 'object' && entry !== null
+        ? (entry as Record<string, unknown>).message
+        : null,
+    )
+    .filter((message): message is string => typeof message === 'string');
+
+  const message =
+    messages.length > 0
+      ? messages.join(' ')
+      : 'The submitted assumptions failed validation.';
+  return new LeaseLevelApiError(message, issues, leaseIssues);
+}
+
+async function postJson(path: string, body: unknown): Promise<Response> {
+  return sendJson('POST', path, body);
+}
+
+// =============================================================================
+// D5.5A -- Lease-Level client functions.
+//
+// The same endpoints every other mode uses, discriminated by `operating_mode`
+// exactly as the Detailed functions above are. No parallel endpoint family, and
+// no financial calculation: these build a typed body and hand back what the
+// backend returned.
+//
+// One function per (endpoint x mode), matching the shipped convention. That is
+// what makes the mode literal a *fact about the function* rather than a runtime
+// branch that could be reached with the wrong argument.
+// =============================================================================
+
+/** `POST /analyze` with `operating_mode: "lease_level"`.
+ *
+ * Returns the three authoritative surfaces unchanged. Nothing is reshaped here:
+ * an undefined `levered_irr` stays `null`, because a mid-hold leasing-capital
+ * year legitimately leaves the levered IRR undefined and reporting it as zero
+ * would turn a healthy deal into a broken-looking one. */
+export async function analyzeLeaseLevelAcquisition(
+  terms: AcquisitionTermsRequest,
+  inputs: LeaseLevelInputsRequest,
+): Promise<LeaseLevelAcquisitionResults> {
+  const response = await postJson('/analyze', {
+    operating_mode: 'lease_level',
+    terms,
+    ...inputs,
+  });
+  return (await response.json()) as LeaseLevelAcquisitionResults;
+}
+
+/** `POST /deals` with `operating_mode: "lease_level"`. */
+export async function createLeaseLevelDeal(
+  name: string,
+  terms: AcquisitionTermsRequest,
+  inputs: LeaseLevelInputsRequest,
+  dealContext: string | null,
+): Promise<Deal> {
+  const response = await postJson('/deals', {
+    operating_mode: 'lease_level',
+    name,
+    terms,
+    ...inputs,
+    ...(dealContext === null ? {} : { deal_context: dealContext }),
+  });
+  return (await response.json()) as Deal;
+}
+
+/** `PUT /deals/{id}` with `operating_mode: "lease_level"`.
+ *
+ * `inputs` carries the caller's whole rent roll, including suites and leases it
+ * never edited: the backend replaces a Lease-Level deal's input state
+ * wholesale, so omitting them would delete them. */
+export async function updateLeaseLevelDeal(
+  dealId: string,
+  name: string,
+  terms: AcquisitionTermsRequest,
+  inputs: LeaseLevelInputsRequest,
+  dealContext: string | null,
+): Promise<Deal> {
+  const response = await sendJson('PUT', `/deals/${dealId}`, {
+    operating_mode: 'lease_level',
+    name,
+    terms,
+    ...inputs,
+    ...(dealContext === null ? {} : { deal_context: dealContext }),
+  });
+  return (await response.json()) as Deal;
 }

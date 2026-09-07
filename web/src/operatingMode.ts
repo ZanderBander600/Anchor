@@ -35,18 +35,19 @@
 import type { OperatingMode } from './types';
 
 /**
- * The modes this frontend can actually render a workflow for today.
+ * The two modes the shared `UnderwriteWorkspace` renders.
  *
- * Distinct from {@link OperatingMode}, which is the full wire vocabulary. The
- * gap between the two is the honest statement of where D5 currently stands:
- * the backend parses `lease_level` and refuses every operation on it (D5.1A),
- * and the frontend knows the name without having a workspace behind it.
+ * **Renamed at D5.5A.** This was `ImplementedOperatingMode` -- "the modes the
+ * frontend can render at all" -- which stopped being true the moment
+ * Lease-Level got a workspace. It never had one *here*: `LeaseLevelWorkspace`
+ * is its own component with its own layout, because a rent roll is not a column
+ * of scalar assumptions.
  *
- * D5.5A adds `'lease_level'` here, at which point every `requireImplementedMode`
- * call site becomes a compile error until it handles the new arm -- which is
- * the point of naming the narrower set at all.
+ * So the narrow set survives with an honest name. `UnderwriteWorkspace` still
+ * serves exactly Quick and Detailed, and still refuses anything else rather
+ * than guessing which of the two a third mode resembles.
  */
-export type ImplementedOperatingMode = 'quick' | 'detailed';
+export type UnderwriteWorkspaceMode = 'quick' | 'detailed';
 
 /**
  * Compile-time exhaustiveness check for a mode `switch`.
@@ -103,19 +104,19 @@ export class UnsupportedOperatingModeError extends Error {
  * implemented modes, and the backend refuses to persist a Lease-Level deal at
  * all -- so it is a future-proofing guardrail rather than a live code path.
  */
-export function requireImplementedMode(
+export function requireUnderwriteWorkspaceMode(
   mode: OperatingMode,
   surface: string,
-): ImplementedOperatingMode {
+): UnderwriteWorkspaceMode {
   switch (mode) {
     case 'quick':
       return 'quick';
     case 'detailed':
       return 'detailed';
     case 'lease_level':
-      // D5.5A adds the Lease-Level workspace and removes this arm. Until then
-      // the mode is a name the frontend can render on a badge, not a workflow
-      // it can drive.
+      // Lease-Level has a workspace from D5.5A -- just not this one. Routing it
+      // here would render a rent-roll deal through the scalar Quick/Detailed
+      // shell, which is the fallback this module exists to prevent.
       throw new UnsupportedOperatingModeError(mode, surface);
     default:
       return assertNeverMode(mode);
@@ -155,6 +156,33 @@ export function operatingModeUnderwriteLabel(mode: OperatingMode): string {
       return 'Detailed Underwrite';
     case 'lease_level':
       return 'Lease-Level Underwrite';
+    default:
+      return assertNeverMode(mode);
+  }
+}
+
+
+/**
+ * Choose one value per operating mode, exhaustively.
+ *
+ * The typed alternative to `mode === 'detailed' ? a : b`. Because `choices` is a
+ * `Record<OperatingMode, T>`, TypeScript requires an entry for every mode --
+ * including any mode added later, which becomes a compile error at each call
+ * site rather than a silent fallback to whichever branch the ternary happened
+ * to have.
+ *
+ * Introduced at D5.5A so the app shell can pick a deal name, a save status or a
+ * workspace per mode without either a third nested ternary or a restructuring
+ * of the Quick and Detailed state the shell already holds.
+ */
+export function byMode<T>(mode: OperatingMode, choices: Record<OperatingMode, T>): T {
+  switch (mode) {
+    case 'quick':
+      return choices.quick;
+    case 'detailed':
+      return choices.detailed;
+    case 'lease_level':
+      return choices.lease_level;
     default:
       return assertNeverMode(mode);
   }

@@ -1,3 +1,13 @@
+// D5.4/D5.5A: the Lease-Level transport contracts live in their own module
+// (see `leaseLevelTypes.ts`); only the `Deal` shape below needs to name them.
+import type {
+  LeaseLevelOperatingInputsRequest,
+  LeaseLevelPropertyInputsRequest,
+  LeaseRequest,
+  MarketLeasingAssumptionsRequest,
+  SuiteRequest,
+} from './leaseLevelTypes';
+
 export interface AcquisitionFormValues {
   purchasePrice: string;
   currentNoi: string;
@@ -394,6 +404,15 @@ export interface Deal {
   inputs: AcquisitionRequest | null;
   terms: AcquisitionTermsRequest | null;
   detailed_operating_inputs: DetailedOperatingInputsRequest | null;
+  /** D5.4: the five Lease-Level input objects. `null` for Quick and Detailed
+   * deals, exactly as `inputs` is `null` for the other two -- the mode says
+   * which grouping is populated, and a deal never carries two. `terms` above is
+   * shared with Detailed and is populated for Lease-Level too. */
+  property_inputs: LeaseLevelPropertyInputsRequest | null;
+  operating_inputs: LeaseLevelOperatingInputsRequest | null;
+  market_leasing: MarketLeasingAssumptionsRequest | null;
+  suites: SuiteRequest[] | null;
+  leases: LeaseRequest[] | null;
   /** Owner Return Metrics V3 Gate A4: optional, user-authored free text
    * describing the investment strategy/business plan -- never an
    * underwriting input, `null` when no context was supplied (including

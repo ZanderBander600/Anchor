@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import type { OperatingMode } from '../types';
+import type { OperatingMode, OperatingMode as SelectableMode } from '../types';
 import { operatingModeUnderwriteLabel } from '../operatingMode';
-import type { ImplementedOperatingMode } from '../operatingMode';
 
 /** The operating modes the analyst may actually choose.
  *
- * D5.1B: the frontend's `OperatingMode` union knows `lease_level`, but this
- * list deliberately does not. The type system tracks the wire vocabulary so a
- * Lease-Level deal is never mislabelled; this constant tracks what the product
- * can actually do. D5.5A adds `'lease_level'` here, together with the
- * workspace behind it -- and not before. */
-const SELECTABLE_MODES: ImplementedOperatingMode[] = ['quick', 'detailed'];
+ * D5.1B held this at Quick and Detailed while the type system already knew
+ * `lease_level`: the wire vocabulary tracked what a deal could *be*, this
+ * constant tracked what the product could *do*, and offering a third tab with
+ * nothing behind it would have been offering a dead end.
+ *
+ * **D5.5A adds it, together with the workspace behind it.** The gap closes in
+ * the same gate that fills it, which is the order the two were always meant to
+ * happen in. */
+const SELECTABLE_MODES: SelectableMode[] = ['quick', 'detailed', 'lease_level'];
 
 /** Mirrors the three-state save status the deal header surfaces. "unsaved-deal"
  * means the working deal has never been persisted at all (no id yet), even
