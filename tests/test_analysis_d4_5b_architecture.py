@@ -259,7 +259,12 @@ def test_g6_the_bridge_is_the_only_lease_level_orchestrator() -> None:
 
     assert definitions == [f"anchor/analysis/lease_level.py::{_ENTRY_POINT}"]
 
-    # Re-exporting it is fine; defining a second one is not.
+    # Re-exporting it is fine; defining a second one is not. D4.6B adds one
+    # legitimate consumer: Lease-Level sensitivity, whose entire correctness
+    # claim is that it calls this exact entry point for every scenario rather
+    # than reaching a builder or the engine directly. Importing the bridge is
+    # what that guardrail *requires*, so the list is widened by exactly one
+    # named file -- the ban on defining a second orchestrator is untouched.
     importers = sorted(
         path.relative_to(_SRC_DIR).as_posix()
         for path in _python_files_under(_ANCHOR_DIR)
@@ -268,7 +273,10 @@ def test_g6_the_bridge_is_the_only_lease_level_orchestrator() -> None:
             for name in _imported_module_names(path)
         )
     )
-    assert importers == ["anchor/analysis/__init__.py"]
+    assert importers == [
+        "anchor/analysis/__init__.py",
+        "anchor/analysis/lease_level_sensitivity.py",
+    ]
 
 
 # =============================================================================
@@ -810,20 +818,44 @@ def test_g32_the_public_operating_mode_enum_is_unchanged() -> None:
     ``"lease_level"`` and silently run it as Quick, across roughly eight
     endpoints, instead of the 422 it correctly returns today. Publishing the
     mode is a wider change than this gate authorises; see the D4.5B
-    exhaustive-mode report.
+    exhaustive-mode report. D4.6B re-confirmed the deferral (Section 38.10):
+    Lease-Level sensitivity is distinguished by **function identity**, exactly
+    as Quick and Detailed already are, so it needs no enum member either.
+
+    **Narrowed at D4.6B, and not weakened.** The check was a bare
+    ``"LEASE_LEVEL"`` substring scan, which is only a proxy for the real rule:
+    ``anchor.analysis.lease_level_sensitivity`` legitimately declares
+    ``LEASE_LEVEL_SUPPORTED_ASSUMPTIONS``, a sensitivity *target* tuple with
+    nothing to do with the operating-mode enum. The rule that matters is now
+    stated directly, in three parts -- the enum's members, the absence of any
+    ``OperatingMode.LEASE_LEVEL`` reference anywhere in the tree (the
+    orchestrator no longer excepted), and the enum declaration read
+    structurally rather than by substring.
     """
 
     from anchor.contracts import OperatingMode
 
     assert {member.value for member in OperatingMode} == {"quick", "detailed"}
+    assert not hasattr(OperatingMode, "LEASE_LEVEL")
 
-    for directory in (_ANCHOR_DIR,):
-        for source_file in _python_files_under(directory):
-            if source_file == _ORCHESTRATOR:
-                continue
-            assert "LEASE_LEVEL" not in source_file.read_text(encoding="utf-8"), (
-                f"{source_file.name} references a Lease-Level operating mode"
-            )
+    for source_file in _python_files_under(_ANCHOR_DIR):
+        assert "OperatingMode.LEASE_LEVEL" not in source_file.read_text(
+            encoding="utf-8"
+        ), f"{source_file.name} references a Lease-Level operating mode"
+
+    operating_mode_class = next(
+        node
+        for node in ast.walk(_tree(_ANCHOR_DIR / "contracts.py"))
+        if isinstance(node, ast.ClassDef) and node.name == "OperatingMode"
+    )
+    declared = [
+        target.id
+        for node in operating_mode_class.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    ]
+    assert declared == ["QUICK", "DETAILED"], declared
 
 
 # =============================================================================

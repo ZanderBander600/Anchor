@@ -51,6 +51,15 @@ from .contracts import (
     TwoWaySensitivityResult,
 )
 from .lease_level import analyze_lease_level_acquisition_with_projection
+from .lease_level_sensitivity import (
+    LEASE_LEVEL_SUPPORTED_ASSUMPTIONS,
+    LEASE_LEVEL_SUPPORTED_METRICS,
+    SENSITIVITY_TARGET_SHADOWED_BY_SUITE_OVERRIDE,
+    SensitivityTargetShadowedBySuiteOverrideError,
+    UnknownLeaseLevelAssumptionError,
+    run_lease_level_one_way_sensitivity,
+    run_lease_level_two_way_sensitivity,
+)
 from .sensitivity import (
     DETAILED_SUPPORTED_ASSUMPTIONS,
     SUPPORTED_ASSUMPTIONS,
@@ -115,4 +124,14 @@ __all__ = [
     # Lease-Level acquisition orchestration (D4.5B)
     "LeaseLevelAcquisitionResults",
     "analyze_lease_level_acquisition_with_projection",
+    # Lease-Level sensitivity (D4.6B) -- the third parallel runner pair. No
+    # OperatingMode member accompanies it: the mode is distinguished by
+    # function identity, and D5 owns public mode publication.
+    "LEASE_LEVEL_SUPPORTED_ASSUMPTIONS",
+    "LEASE_LEVEL_SUPPORTED_METRICS",
+    "SENSITIVITY_TARGET_SHADOWED_BY_SUITE_OVERRIDE",
+    "SensitivityTargetShadowedBySuiteOverrideError",
+    "UnknownLeaseLevelAssumptionError",
+    "run_lease_level_one_way_sensitivity",
+    "run_lease_level_two_way_sensitivity",
 ]

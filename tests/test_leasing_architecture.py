@@ -146,12 +146,19 @@ def test_leasing_package_imports_only_stdlib_its_own_modules_and_contracts() -> 
 # =============================================================================
 
 
-#: The only files permitted to depend on ``anchor.leasing``, delivered at
-#: D4.5B and named by Sections 29.2a and 30.1 of the D4 architecture: the
-#: orchestrator, and the module holding the result envelope it returns.
+#: The only files permitted to depend on ``anchor.leasing``: the D4.5B
+#: orchestrator and the module holding the result envelope it returns (named by
+#: Sections 29.2a and 30.1 of the D4 architecture), plus the D4.6B Lease-Level
+#: sensitivity runners (named by Section 15.1 of the D4.6 sensitivity
+#: architecture, which chose a separate module precisely so that
+#: ``analysis/sensitivity.py`` -- imported by ``api.py`` on every Quick and
+#: Detailed request -- would *not* acquire a transitive leasing dependency).
 #: Narrowed from "nothing may" to "exactly these may" -- the ban is not lifted,
-#: it is reduced to its complement.
-_PERMITTED_LEASING_IMPORTERS = frozenset({"lease_level.py", "contracts.py"})
+#: it is reduced to its complement, and D4.6B widened that complement by
+#: exactly one named file.
+_PERMITTED_LEASING_IMPORTERS = frozenset(
+    {"lease_level.py", "lease_level_sensitivity.py", "contracts.py"}
+)
 
 
 @pytest.mark.parametrize(
@@ -186,9 +193,14 @@ def test_no_existing_package_imports_anchor_leasing(package_dir: Path) -> None:
         )
 
 
-def test_exactly_two_modules_in_the_tree_import_anchor_leasing() -> None:
+def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
     """The complement of the guardrail above, stated positively so that a
-    third bridge cannot appear in a package nobody parametrized."""
+    fourth leasing consumer cannot appear in a package nobody parametrized.
+
+    Three files, each for a stated reason: the bridge, the envelope it returns,
+    and the D4.6B sensitivity runners that call the bridge once per scenario.
+    ``analysis/sensitivity.py`` and ``analysis/break_even.py`` are deliberately
+    **not** on this list and are byte-identical to their pre-D4.6B state."""
 
     importers = sorted(
         str(source_file.relative_to(_SRC_DIR)).replace("\\", "/")
@@ -205,6 +217,7 @@ def test_exactly_two_modules_in_the_tree_import_anchor_leasing() -> None:
     assert importers == [
         "anchor/analysis/contracts.py",
         "anchor/analysis/lease_level.py",
+        "anchor/analysis/lease_level_sensitivity.py",
     ]
 
 
