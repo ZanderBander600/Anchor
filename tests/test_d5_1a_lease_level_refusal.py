@@ -102,19 +102,19 @@ _AXES: dict[str, Any] = {
 #: makes "did not return Quick results" a meaningful assertion rather than an
 #: accident of a broken payload.
 #:
-#: **Narrowed at D5.3**, which wired ``/analyze`` and ``/sensitivity`` (and
-#: added ``/sensitivity/one-way``). Those three moved out of this table and into
-#: ``tests/test_d5_3_lease_level_api.py``, which asserts the far stronger
-#: property that replaced refusal: their numbers equal a direct call to the
-#: deterministic pipeline. Everything below is still owned by a later gate --
-#: presets and break-even permanently for D5, deals by D5.4, AI by D5.8.
+#: **Narrowed twice.** D5.3 wired ``/analyze`` and ``/sensitivity`` (and added
+#: ``/sensitivity/one-way``); D5.4 wired the three deal endpoints. Each moved out
+#: of this table into the gate that proves the far stronger property replacing
+#: refusal -- that its numbers, or its persisted inputs, survive a round trip
+#: against the deterministic pipeline.
+#:
+#: What remains is what no gate in D5 will wire: presets and break-even are
+#: permanently refused for Lease-Level (no preset bundle exists, and guardrail
+#: G35 forbids a Lease-Level break-even), and AI belongs to D5.8.
 ENDPOINTS: tuple[tuple[str, str, dict[str, Any]], ...] = (
     ("post", "/sensitivity/presets", {"inputs": QUICK_INPUTS}),
     ("post", "/break-even", {"inputs": QUICK_INPUTS, **_HURDLES}),
     ("post", "/ai/analysis", {"inputs": QUICK_INPUTS, **_HURDLES}),
-    ("post", "/deals", {"name": "D5.1A refusal", "inputs": QUICK_INPUTS}),
-    ("put", "/deals/does-not-exist", {"name": "D5.1A refusal", "inputs": QUICK_INPUTS}),
-    ("post", "/deals/fingerprint", {"inputs": QUICK_INPUTS}),
 )
 
 #: Fields that only ever appear in a *successful* analysis. Their presence in a
@@ -278,11 +278,9 @@ def test_the_mode_parses_even_though_no_endpoint_serves_it() -> None:
     (
         ("post", "/analyze", dict(QUICK_INPUTS)),
         ("post", "/sensitivity", {"inputs": QUICK_INPUTS, **_AXES}),
-        *(
-            e
-            for e in ENDPOINTS
-            if e[1] not in ("/ai/analysis", "/deals/does-not-exist")
-        ),
+        ("post", "/deals", {"name": "Quick deal", "inputs": QUICK_INPUTS}),
+        ("post", "/deals/fingerprint", {"inputs": QUICK_INPUTS}),
+        *(e for e in ENDPOINTS if e[1] != "/ai/analysis"),
     ),
     ids=lambda v: v if isinstance(v, str) else "",
 )
@@ -422,8 +420,20 @@ def _bypass_construct(cls, **fields):
     return instance
 
 
-def test_a_lease_level_deal_cannot_be_constructed() -> None:
-    with pytest.raises(UnsupportedOperatingModeError) as excinfo:
+def test_a_lease_level_deal_cannot_borrow_another_modes_fields() -> None:
+    """**Superseded at D5.4**, which gave Lease-Level its own persisted fields.
+
+    Until then a Lease-Level ``Deal`` was unconstructible, and this asserted
+    exactly that -- the safe holding state while there were no columns to hold a
+    rent roll. D5.4 adds them, so the invariant becomes the one that outlives
+    construction: a Lease-Level deal must carry its *own* five fields and none of
+    the other modes'. Borrowing ``inputs`` or ``detailed_operating_inputs``
+    would give the deal two answers to which engine underwrites it.
+    """
+
+    import datetime
+
+    with pytest.raises(ValueError, match="must have 'terms'"):
         Deal(
             id="x",
             name="Lease-Level",
@@ -434,23 +444,24 @@ def test_a_lease_level_deal_cannot_be_constructed() -> None:
             deal_context=None,
             analysis_snapshot=None,
             ai_snapshot=None,
-            created_at=__import__("datetime").datetime(2027, 1, 1),
-            updated_at=__import__("datetime").datetime(2027, 1, 1),
+            created_at=datetime.datetime(2027, 1, 1),
+            updated_at=datetime.datetime(2027, 1, 1),
         )
-
-    assert excinfo.value.operating_mode is OperatingMode.LEASE_LEVEL
-    assert excinfo.value.operation == "Deal"
 
 
 def test_a_lease_level_deal_is_never_duplicated_as_detailed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The latent defect this gate owns.
+    """The latent defect this gate closed, still closed.
 
     Before D5.1A ``duplicate_deal`` was ``if QUICK: ... else: <Detailed copy>``,
     so a Lease-Level deal would have been silently rewritten into a *Detailed*
-    deal -- changing which engine later underwrites it. That is data corruption,
+    one -- changing which engine later underwrites it. That is data corruption,
     not a wrong error message.
+
+    **Superseded at D5.4**, which implements the real copy. The assertion that
+    mattered is unchanged and is now the whole test: whatever ``duplicate_deal``
+    does with a Lease-Level deal, it must not be a Quick or Detailed writer.
     """
 
     stub = _bypass_construct(
@@ -461,6 +472,11 @@ def test_a_lease_level_deal_is_never_duplicated_as_detailed(
         inputs=None,
         terms=None,
         detailed_operating_inputs=None,
+        property_inputs=None,
+        operating_inputs=None,
+        market_leasing=None,
+        suites=None,
+        leases=None,
         deal_context=None,
         analysis_snapshot=None,
         ai_snapshot=None,
@@ -479,13 +495,13 @@ def test_a_lease_level_deal_is_never_duplicated_as_detailed(
         deals_store, "create_deal", lambda *a, **k: called.append("quick")
     )
 
-    with pytest.raises(UnsupportedOperatingModeError) as excinfo:
+    # The stub carries no rent roll, so the real Lease-Level writer refuses it.
+    # Either outcome is acceptable; writing a *different mode* is not.
+    with pytest.raises(Exception):
         deals_store.duplicate_deal("ll-1")
 
-    assert excinfo.value.operation == "duplicate_deal"
     assert called == [], (
-        f"duplicate_deal created a {called} copy of a Lease-Level deal instead "
-        "of refusing"
+        f"duplicate_deal created a {called} copy of a Lease-Level deal"
     )
 
 
@@ -625,7 +641,17 @@ def test_m1_to_m12_deleting_a_lease_level_arm_is_killed(
         arm = source.rindex("OperatingMode.LEASE_LEVEL", 0, anchor_index)
         lineno = source[:arm].count("\n") + 1
     else:
-        lineno = source[: source.index("OperatingMode.LEASE_LEVEL")].count("\n") + 1
+        # The *dispatch arm*, not merely the first mention. From D5.4
+        # ``store.py`` also *constructs* ``OperatingMode.LEASE_LEVEL`` when it
+        # reads a saved deal back, and that line comes first -- mutating it
+        # would leave the arm under test untouched and report a mutant as
+        # surviving when it was never actually applied.
+        marker = (
+            "case OperatingMode.LEASE_LEVEL:"
+            if "case OperatingMode.LEASE_LEVEL:" in source
+            else "OperatingMode.LEASE_LEVEL"
+        )
+        lineno = source[: source.index(marker)].count(chr(10)) + 1
 
     mutated = _strip_lease_level_arm(source, lineno)
     assert mutated != source, f"{mutant}: mutation did not change the source"

@@ -68,7 +68,12 @@ from .contracts import (
 )
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError, SnapshotValidationError
-from .deals.fingerprint import fingerprint_ai, fingerprint_detailed_inputs, fingerprint_quick_inputs
+from .deals.fingerprint import (
+    fingerprint_ai,
+    fingerprint_detailed_inputs,
+    fingerprint_lease_level_inputs,
+    fingerprint_quick_inputs,
+)
 from .engine import (
     AcquisitionResults,
     DetailedAcquisitionResults,
@@ -600,6 +605,12 @@ _TWO_WAY_FIELDS = (
 )
 
 _ONE_WAY_FIELDS = ("assumption", "values", "metric")
+
+#: Top-level keys a ``/deals`` body carries beside the Lease-Level inputs.
+#: A literal tuple, reviewed here: these are the keys *this endpoint family*
+#: consumes, and nothing derived from the request may ever join them -- a typo
+#: must never be able to excuse itself by appearing in the owned set.
+_DEAL_FIELDS = ("name", "deal_context")
 
 
 def _require_fields(payload: dict[str, Any], fields: tuple[str, ...]) -> None:
@@ -1580,8 +1591,18 @@ def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
                 name, terms, detailed_inputs, deal_context=deal_context
             )
         case OperatingMode.LEASE_LEVEL:
-            # D5.4 owns Lease-Level persistence (schema 5).
-            raise _unsupported_operating_mode(operating_mode, endpoint="POST /deals")
+            terms = _require_deal_terms(payload, mode_label="lease_level")
+            inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+            return deals_store.create_lease_level_deal(
+                name,
+                terms,
+                inputs.property_inputs,
+                inputs.operating_inputs,
+                inputs.market_leasing,
+                inputs.suites,
+                inputs.leases,
+                deal_context=deal_context,
+            )
         case _:
             raise _unsupported_operating_mode(operating_mode, endpoint="POST /deals")
 
@@ -1631,9 +1652,18 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
                     deal_id, name, terms, detailed_inputs, deal_context=deal_context
                 )
             case OperatingMode.LEASE_LEVEL:
-                # D5.4 owns Lease-Level persistence (schema 5).
-                raise _unsupported_operating_mode(
-                    operating_mode, endpoint="PUT /deals/{deal_id}"
+                terms = _require_deal_terms(payload, mode_label="lease_level")
+                inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+                return deals_store.update_lease_level_deal(
+                    deal_id,
+                    name,
+                    terms,
+                    inputs.property_inputs,
+                    inputs.operating_inputs,
+                    inputs.market_leasing,
+                    inputs.suites,
+                    inputs.leases,
+                    deal_context=deal_context,
                 )
             case _:
                 raise _unsupported_operating_mode(
@@ -1712,9 +1742,15 @@ def deal_fingerprint(payload: dict[str, Any] = Body(...)) -> _FingerprintRespons
                 terms, detailed_inputs
             )
         case OperatingMode.LEASE_LEVEL:
-            # D5.4 owns the Lease-Level fingerprint.
-            raise _unsupported_operating_mode(
-                operating_mode, endpoint="POST /deals/fingerprint"
+            terms = _require_deal_terms(payload, mode_label="lease_level")
+            inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+            financial_input_fingerprint = fingerprint_lease_level_inputs(
+                terms,
+                inputs.property_inputs,
+                inputs.suites,
+                inputs.leases,
+                market_leasing=inputs.market_leasing,
+                operating_inputs=inputs.operating_inputs,
             )
         case _:
             raise _unsupported_operating_mode(

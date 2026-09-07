@@ -53,6 +53,13 @@ from ..contracts import (
     OperatingMode,
     UnsupportedOperatingModeError,
 )
+from ..analysis import (
+    Lease,
+    LeaseLevelOperatingInputs,
+    LeaseLevelPropertyInputs,
+    MarketLeasingAssumptions,
+    Suite,
+)
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 
 
@@ -98,11 +105,51 @@ class Deal:
     inputs: AcquisitionInputs | None
     terms: AcquisitionTerms | None
     detailed_operating_inputs: DetailedOperatingInputs | None
+
+    # --- Lease-Level (D5.4) -------------------------------------------
+    #
+    # Its own five fields rather than a reuse of Detailed's, because a
+    # Lease-Level deal genuinely has neither ``detailed_operating_inputs``
+    # (no ``gross_potential_rent`` -- that is an *output* of the rent roll)
+    # nor ``inputs`` (no ``current_noi``, no ``noi_growth``). ``terms`` is
+    # shared with Detailed and deliberately not duplicated: the acquisition
+    # and debt assumptions mean the same thing in both modes.
+    #
+    # ``suites`` and ``leases`` are tuples in the request's own order. That
+    # order is presentation, not economics -- the engine addresses both by
+    # id -- so it is preserved for display and excluded from the
+    # fingerprint.
+    property_inputs: LeaseLevelPropertyInputs | None = None
+    operating_inputs: LeaseLevelOperatingInputs | None = None
+    market_leasing: MarketLeasingAssumptions | None = None
+    suites: tuple[Suite, ...] | None = None
+    leases: tuple[Lease, ...] | None = None
+
     deal_context: str | None
     analysis_snapshot: AcquisitionResults | DetailedAcquisitionResults | None
     ai_snapshot: AIAnalysis | None
     created_at: datetime
     updated_at: datetime
+
+    def _lease_level_fields_populated(self) -> bool:
+        """Whether any Lease-Level-only field carries a value.
+
+        Guards the modes in both directions: Lease-Level may not borrow
+        Quick's or Detailed's fields, and neither may quietly carry a rent
+        roll. A deal that held both would have two answers to which engine
+        underwrites it.
+        """
+
+        return any(
+            value is not None
+            for value in (
+                self.property_inputs,
+                self.operating_inputs,
+                self.market_leasing,
+                self.suites,
+                self.leases,
+            )
+        )
 
     def __post_init__(self) -> None:
         # D5.1A: total dispatch. Previously ``if QUICK: ... else: <DETAILED
@@ -112,6 +159,10 @@ class Deal:
         # persisted representation is refused by name rather than by falling
         # into another mode's branch.
         if self.operating_mode is OperatingMode.QUICK:
+            if self._lease_level_fields_populated():
+                raise ValueError(
+                    "A QUICK Deal must not have Lease-Level fields populated."
+                )
             if self.inputs is None:
                 raise ValueError("A QUICK Deal must have 'inputs' populated.")
             if self.terms is not None or self.detailed_operating_inputs is not None:
@@ -127,6 +178,10 @@ class Deal:
                     "AcquisitionResults instance, or None."
                 )
         elif self.operating_mode is OperatingMode.DETAILED:
+            if self._lease_level_fields_populated():
+                raise ValueError(
+                    "A DETAILED Deal must not have Lease-Level fields populated."
+                )
             if self.terms is None or self.detailed_operating_inputs is None:
                 raise ValueError(
                     "A DETAILED Deal must have both 'terms' and "
@@ -142,14 +197,36 @@ class Deal:
                     "DetailedAcquisitionResults instance, or None."
                 )
         elif self.operating_mode is OperatingMode.LEASE_LEVEL:
-            # D5.4 owns Lease-Level persistence. Refusing construction here is
-            # what keeps a half-formed Lease-Level deal out of the store during
-            # D5.1A-D5.3: there are no columns to hold suites, leases, market
-            # leasing or operating inputs yet, and borrowing Detailed's fields
-            # would silently change which engine underwrites the deal.
-            raise UnsupportedOperatingModeError(
-                self.operating_mode, operation="Deal"
-            )
+            if (
+                self.terms is None
+                or self.property_inputs is None
+                or self.operating_inputs is None
+                or self.market_leasing is None
+                or self.suites is None
+                or self.leases is None
+            ):
+                raise ValueError(
+                    "A LEASE_LEVEL Deal must have 'terms', 'property_inputs', "
+                    "'operating_inputs', 'market_leasing', 'suites' and "
+                    "'leases' all populated."
+                )
+            if self.inputs is not None or self.detailed_operating_inputs is not None:
+                raise ValueError(
+                    "A LEASE_LEVEL Deal must not have 'inputs' or "
+                    "'detailed_operating_inputs' populated -- it has no "
+                    "current_noi/noi_growth and no gross_potential_rent."
+                )
+            if self.analysis_snapshot is not None:
+                # D5 decision A, enforced by the contract rather than by
+                # convention. Lease-Level results are recomputed on open from
+                # approved inputs, so there is no cached financial artifact to
+                # go stale and none to be served as current. Making this a
+                # constructible state would be the first step toward one.
+                raise ValueError(
+                    "A LEASE_LEVEL Deal must not carry an 'analysis_snapshot': "
+                    "Lease-Level results are recomputed from approved inputs on "
+                    "open, never restored from persistence."
+                )
         else:
             raise UnsupportedOperatingModeError(
                 self.operating_mode, operation="Deal"

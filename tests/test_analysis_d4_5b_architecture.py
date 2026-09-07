@@ -1070,11 +1070,10 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     it. The intent was restated then as the thing that actually matters: no
     capability may leak in ahead of the gate that owns it.
 
-    **Amended at D5.3**, which owns analysis and sensitivity and wires exactly
-    those. The rule is now a ledger rather than a ban: the delivery layer may
-    reach the analysis entry point and the two sensitivity runners, and must
-    still reach nothing else. D5.4 owns persistence and D5.8 owns AI, and both
-    are asserted absent below.
+    **Amended at D5.3** (analysis and sensitivity) and **D5.4** (persistence).
+    The rule is a ledger rather than a ban: each gate adds exactly what it owns,
+    and the surfaces no gate has reached must stay unreached. D5.8 owns AI, and
+    it is asserted absent below.
     """
 
     surfaces = [
@@ -1090,21 +1089,22 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     # and must still not reach the leasing package directly: the dependency
     # direction HD-D4-8 fixes is leasing -> analysis -> engine, so D5.3
     # reaches the parser and the runners through the analysis facade.
-    forbidden_capability = (
-        "LeaseLevelPropertyInputs",
-        "LeaseLevelOperatingInputs",
-        "MarketLeasingAssumptions",
-        "anchor.leasing",
-        "from ..leasing",
-        "from .leasing",
-    )
+    # **Narrowed at D5.4.** Until then the delivery layer named no leasing
+    # contract at all, and banning the names was a fair proxy for banning the
+    # dependency. D5.4 persists Lease-Level deals as *typed* contracts, so
+    # ``deals`` must name ``Suite`` and ``Lease`` -- storing them as untyped rows
+    # or raw dicts is precisely what the gate forbids.
+    #
+    # The rule that survives is the dependency direction itself: those types
+    # arrive through ``anchor.analysis``, never by importing ``anchor.leasing``,
+    # so the leasing layer keeps exactly one door (HD-D4-8).
+    forbidden_capability = ("anchor.leasing", "from ..leasing", "from .leasing")
     for source_file in surfaces:
         text = source_file.read_text(encoding="utf-8")
         for forbidden in forbidden_capability:
             assert forbidden not in text, (
-                f"{source_file.name} references {forbidden!r}; the delivery "
-                "layer composes analysis through anchor.analysis and "
-                "constructs no leasing contract of its own"
+                f"{source_file.name} imports {forbidden!r}; the delivery layer "
+                "reaches leasing only through the anchor.analysis facade"
             )
 
     # D5.8: the AI layer may *name* the mode to refuse it -- D5.1A put explicit
@@ -1123,19 +1123,25 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
                 f"{source_file.name} reaches {forbidden}; D5.8 owns Lease-Level AI"
             )
 
-    # D5.4: no Lease-Level persistence exists yet.
+    # D5.4 wired persistence. What must still be absent from the store is the
+    # transport parser -- storage reads its own rows, and routing them through
+    # the HTTP parser would couple the database format to the wire format so
+    # neither could change alone -- and any cached Lease-Level financial result.
     store = (_ANCHOR_DIR / "deals" / "store.py").read_text(encoding="utf-8")
-    # As with the AI layer, ``store.py`` may *name* the mode to refuse it --
-    # D5.1A gave ``duplicate_deal`` an explicit Lease-Level arm precisely so a
-    # Lease-Level deal could never be duplicated as a Detailed one. What must be
-    # absent is the capability: no table, no schema bump, no parser.
-    assert "lease_level_deals" not in store
-    assert "lease_level_suites" not in store
-    assert "lease_level_leases" not in store
-    assert "parse_lease_level_inputs" not in store
-    assert "_SCHEMA_VERSION = 4" in store, (
-        "the persistence schema version moved; D5.4 owns schema 5"
+    assert "lease_level_deals" in store, "D5.4 should persist Lease-Level deals"
+    assert "parse_lease_level_inputs" not in store, (
+        "store.py must not depend on the HTTP transport parser"
     )
+    for cached_result in (
+        "LeaseLevelAcquisitionResults",
+        "MonthlyPropertyProjection",
+        "AnnualOperatingProjection",
+    ):
+        assert cached_result not in store, (
+            f"store.py references {cached_result}; Lease-Level results are "
+            "recomputed on open, never persisted (D5 decision A)"
+        )
+    assert "_SCHEMA_VERSION = 5" in store
 
     # D5.3 ledger: the API reaches exactly the approved entry points.
     api_text = (_ANCHOR_DIR / "api.py").read_text(encoding="utf-8")
@@ -1149,7 +1155,7 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     ):
         assert wired in api_text, f"D5.3 should wire {wired}"
     for not_yet in ("build_standard_lease_level", "lease_level_break_even"):
-        assert not_yet not in api_text, f"{not_yet} is not D5.3 to add"
+        assert not_yet not in api_text, f"{not_yet} belongs to no D5 gate"
 
 
 def test_hd_d4_9_superseded_the_exhaustive_dispatch_hazard_is_closed() -> None:

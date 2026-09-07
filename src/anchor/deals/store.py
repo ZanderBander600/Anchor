@@ -145,14 +145,29 @@ import json
 import os
 import sqlite3
 import uuid
+from enum import Enum
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from ..ai.contracts import AIAnalysis
+from ..analysis import (
+    EscalationBasis,
+    InitialVacancyAssumptions,
+    InitialVacancyStrategy,
+    Lease,
+    LeaseLevelOperatingInputs,
+    LeaseLevelPropertyInputs,
+    LeaseOrigin,
+    LeaseType,
+    LeasingCommissionMethod,
+    MarketLeasingAssumptions,
+    RecoveryBasis,
+    Suite,
+)
 from ..contracts import (
     AcquisitionInputs,
     AcquisitionTerms,
@@ -162,7 +177,12 @@ from ..contracts import (
 )
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults, OperatingProjection
 from .contracts import Deal, DealNotFoundError
-from .fingerprint import fingerprint_ai, fingerprint_detailed_inputs, fingerprint_quick_inputs
+from .fingerprint import (
+    fingerprint_ai,
+    fingerprint_detailed_inputs,
+    fingerprint_lease_level_inputs,
+    fingerprint_quick_inputs,
+)
 
 _DEFAULT_DB_PATH = Path("data/anchor.db")
 
@@ -191,7 +211,21 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # ``DEFAULT`` literal, same reasoning as ``deal_context``: a legacy row
 # backfills to ``NULL`` on every one, which is exactly "no cached snapshot
 # exists yet" -- never a fabricated cached result.
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
+
+
+class PersistedDealDataError(RuntimeError):
+    """Stored data could not be decoded into an authoritative contract.
+
+    Distinct from a validation error, which describes something a *caller*
+    submitted and can fix. This describes the database disagreeing with the code
+    -- an enum token no longer in the enum, an override JSON that will not parse,
+    a parent row whose children are missing.
+
+    Raised rather than repaired. A store that quietly substituted a default for
+    an unreadable ``lease_type`` would hand the engine a rent roll nobody
+    authored, and the resulting numbers would look entirely ordinary.
+    """
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS deals (
@@ -277,6 +311,167 @@ CREATE TABLE IF NOT EXISTS detailed_operating_inputs (
     expense_growth            REAL NOT NULL
 )
 """
+
+# =============================================================================
+# Sprint D5.4 -- Lease-Level persistence, schema version 5.
+#
+# Six tables, following the Detailed precedent exactly: a new table family per
+# mode rather than a discriminator column, because ``operating_mode`` is not
+# stored anywhere -- it is inferred from which table a row lives in. That keeps
+# ``deals`` and ``detailed_deals`` byte-untouched by this gate.
+#
+# Fixed-arity contracts stay flat and typed, so SQLite stores a float as a REAL
+# and returns it bit-identical. Only the two genuinely variable-arity
+# collections become relational rows.
+#
+# The single JSON column is ``lease_level_suites.market_leasing_override``, and
+# it is JSON because the domain says the record is atomic: a suite supplies a
+# whole ``MarketLeasingAssumptions`` or none of one (D0 24.2). Twenty-three
+# nullable columns would make a *partial* override representable in storage,
+# which the domain forbids -- the shape would permit a state no analyst can
+# author and no validator would catch.
+#
+# No ON DELETE CASCADE is declared: this module never enables
+# ``PRAGMA foreign_keys``, matching its existing posture, so a declared cascade
+# would be decorative. Child rows are deleted explicitly, in the same
+# transaction as the parent, exactly as ``detailed_operating_inputs`` already is.
+# =============================================================================
+
+_CREATE_LEASE_LEVEL_DEALS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_deals (
+    id                    TEXT PRIMARY KEY,
+    name                  TEXT NOT NULL,
+    purchase_price        REAL NOT NULL,
+    hold_period           INTEGER NOT NULL,
+    exit_cap_rate         REAL NOT NULL,
+    ltv                   REAL NOT NULL,
+    interest_rate         REAL NOT NULL,
+    amortization          INTEGER NOT NULL,
+    acquisition_cost_pct  REAL NOT NULL,
+    financing_fee_pct     REAL NOT NULL,
+    disposition_cost_pct  REAL NOT NULL,
+    annual_capex_reserve  REAL NOT NULL,
+    io_period             INTEGER NOT NULL,
+    deal_context          TEXT,
+    ai_snapshot                         TEXT,
+    ai_snapshot_schema_version          INTEGER,
+    ai_snapshot_fingerprint             TEXT,
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
+)
+"""
+
+# Deliberately no ``analysis_snapshot`` columns. D5 decision A: Lease-Level
+# results are recomputed from approved inputs on open, so there is no cached
+# financial artifact to store, to go stale, or to be served as current. Absent
+# columns are a stronger guarantee than an unused nullable one -- there is
+# nowhere for a future gate to put one by accident.
+
+_CREATE_LEASE_LEVEL_PROPERTY_INPUTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_property_inputs (
+    deal_id              TEXT PRIMARY KEY REFERENCES lease_level_deals(id),
+    analysis_start_date  TEXT NOT NULL,
+    rentable_area_sf     REAL NOT NULL
+)
+"""
+
+_CREATE_LEASE_LEVEL_OPERATING_INPUTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_operating_inputs (
+    deal_id                    TEXT PRIMARY KEY REFERENCES lease_level_deals(id),
+    other_income               REAL NOT NULL,
+    other_income_growth        REAL NOT NULL,
+    credit_loss_pct            REAL NOT NULL,
+    property_taxes             REAL NOT NULL,
+    insurance                  REAL NOT NULL,
+    utilities                  REAL NOT NULL,
+    repairs_maintenance        REAL NOT NULL,
+    other_operating_expenses   REAL NOT NULL,
+    management_fee_pct         REAL NOT NULL,
+    expense_growth             REAL NOT NULL,
+    recoverable_expense_ratio  REAL NOT NULL
+)
+"""
+
+_CREATE_LEASE_LEVEL_MARKET_LEASING_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_market_leasing (
+    deal_id                    TEXT PRIMARY KEY REFERENCES lease_level_deals(id),
+    market_rent_psf            REAL NOT NULL,
+    market_rent_growth         REAL NOT NULL,
+    renewal_rent_psf           REAL,
+    renewal_rent_spread        REAL NOT NULL,
+    renewal_term_months        INTEGER NOT NULL,
+    successor_escalation_pct   REAL NOT NULL,
+    renewal_downtime_months    REAL NOT NULL,
+    renewal_free_rent_months   REAL NOT NULL,
+    new_term_months            INTEGER NOT NULL,
+    new_downtime_months        REAL NOT NULL,
+    new_free_rent_months       REAL NOT NULL,
+    renewal_ti_psf             REAL NOT NULL,
+    new_ti_psf                 REAL NOT NULL,
+    leasing_commission_method  TEXT NOT NULL,
+    renewal_lc_pct             REAL NOT NULL,
+    new_lc_pct                 REAL NOT NULL,
+    renewal_probability        REAL NOT NULL,
+    renewal_lease_type         TEXT NOT NULL,
+    renewal_recovery_basis     TEXT,
+    renewal_expense_stop_psf   REAL,
+    new_lease_type             TEXT NOT NULL,
+    new_recovery_basis         TEXT,
+    new_expense_stop_psf       REAL
+)
+"""
+
+# ``ordinal`` is display metadata: it preserves the order the analyst entered
+# the rent roll in, and is excluded from the economic fingerprint, so reordering
+# rows never invalidates a snapshot. The composite primary key is the domain's
+# own identity rule -- one suite id per deal -- and nothing more. No CHECK
+# constraint restates a financial domain: ``renewal_probability`` bounds belong
+# to the D2 validator, in one place.
+_CREATE_LEASE_LEVEL_SUITES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_suites (
+    deal_id                  TEXT NOT NULL REFERENCES lease_level_deals(id),
+    suite_id                 TEXT NOT NULL,
+    ordinal                  INTEGER NOT NULL,
+    suite_area_sf            REAL NOT NULL,
+    suite_label              TEXT,
+    market_rent_psf          REAL,
+    market_leasing_override  TEXT,
+    initial_vacancy_strategy            TEXT,
+    initial_vacancy_lease_up_months     REAL,
+    PRIMARY KEY (deal_id, suite_id)
+)
+"""
+
+_CREATE_LEASE_LEVEL_LEASES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_leases (
+    deal_id                 TEXT NOT NULL REFERENCES lease_level_deals(id),
+    lease_id                TEXT NOT NULL,
+    ordinal                 INTEGER NOT NULL,
+    suite_id                TEXT NOT NULL,
+    leased_area_sf          REAL NOT NULL,
+    rent_commencement_date  TEXT NOT NULL,
+    lease_expiration_date   TEXT NOT NULL,
+    base_rent_psf           REAL NOT NULL,
+    escalation_pct          REAL NOT NULL,
+    escalation_basis        TEXT NOT NULL,
+    lease_type              TEXT NOT NULL,
+    tenant_name             TEXT,
+    lease_start_date        TEXT,
+    origin                  TEXT NOT NULL,
+    recovery_basis          TEXT,
+    expense_stop_psf        REAL,
+    PRIMARY KEY (deal_id, lease_id)
+)
+"""
+
+_LEASE_LEVEL_CHILD_TABLES = (
+    "lease_level_property_inputs",
+    "lease_level_operating_inputs",
+    "lease_level_market_leasing",
+    "lease_level_suites",
+    "lease_level_leases",
+)
+
 
 # Underwriting V2 Gate 5's five new columns, in the order they are added to
 # a pre-V2 database by ``_migrate``: (column name, SQLite column type,
@@ -605,6 +800,12 @@ def _migrate(connection: sqlite3.Connection) -> None:
                 f"ALTER TABLE detailed_deals ADD COLUMN {column_name} {column_type}"
             )
 
+    # D5.4 -- schema version 5 adds the six ``lease_level_*`` tables. There is
+    # no ALTER here, and deliberately nothing to write: the tables are created
+    # unconditionally by ``_connect`` via CREATE TABLE IF NOT EXISTS, exactly as
+    # the Detailed pair was at version 2, so a v4 database gains the new family
+    # without a single existing row being read or rewritten. The safest
+    # migration available is one that touches no existing data.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -640,6 +841,12 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_TABLE_SQL)
     connection.execute(_CREATE_DETAILED_DEALS_TABLE_SQL)
     connection.execute(_CREATE_DETAILED_OPERATING_INPUTS_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_DEALS_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_PROPERTY_INPUTS_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_OPERATING_INPUTS_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_MARKET_LEASING_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_SUITES_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_LEASES_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -651,6 +858,446 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+
+# =============================================================================
+# Sprint D5.4 -- Lease-Level storage codec.
+#
+# A *trusted* boundary, deliberately separate from ``leasing/parsing.py``. That
+# module answers "can this untrusted JSON become a contract"; this one answers
+# "restore the contract this store wrote". Routing rows through the HTTP parser
+# would make persistence inherit transport semantics -- unknown-key reporting,
+# request-shaped error paths -- for data the store itself produced, and would
+# couple the database format to the wire format so neither could change alone.
+#
+# Everything here is contract-driven: column tuples come from
+# ``dataclasses.fields``, so a field added to ``Suite`` or ``Lease`` is a schema
+# change this module notices rather than silently drops.
+# =============================================================================
+
+
+def _column_names(contract: type) -> tuple[str, ...]:
+    return tuple(field.name for field in dataclasses.fields(contract))
+
+
+_LEASE_LEVEL_OPERATING_COLUMNS = _column_names(LeaseLevelOperatingInputs)
+_LEASE_LEVEL_MARKET_COLUMNS = _column_names(MarketLeasingAssumptions)
+
+#: ``MarketLeasingAssumptions`` fields by name, with the enum type each enum
+#: field must be restored to. Derived from the contract so a new enum field
+#: cannot be silently decoded as a bare string.
+_MARKET_ENUM_FIELDS: dict[str, type] = {
+    "leasing_commission_method": LeasingCommissionMethod,
+    "renewal_lease_type": LeaseType,
+    "renewal_recovery_basis": RecoveryBasis,
+    "new_lease_type": LeaseType,
+    "new_recovery_basis": RecoveryBasis,
+}
+
+_LEASE_ENUM_FIELDS: dict[str, type] = {
+    "escalation_basis": EscalationBasis,
+    "lease_type": LeaseType,
+    "origin": LeaseOrigin,
+    "recovery_basis": RecoveryBasis,
+}
+
+_LEASE_DATE_FIELDS = (
+    "rent_commencement_date",
+    "lease_expiration_date",
+    "lease_start_date",
+)
+
+
+def _encode_enum(value: object) -> str | None:
+    """An enum as its wire token. ``None`` stays ``None``."""
+
+    if value is None:
+        return None
+    assert isinstance(value, Enum)
+    return value.value
+
+
+def _decode_enum(value: object, enum_type: type, *, path: str) -> object:
+    """A stored token back into its authoritative member.
+
+    A token the enum no longer recognises is a data-integrity failure, not a
+    reason to pick a default: silently substituting ``NNN`` for an unreadable
+    ``lease_type`` would hand the engine a lease nobody wrote, and the resulting
+    recoveries would look perfectly ordinary.
+    """
+
+    if value is None:
+        return None
+    try:
+        return enum_type(value)
+    except ValueError:
+        raise PersistedDealDataError(
+            f"{path} holds {value!r}, which is not a valid "
+            f"{enum_type.__name__} value."
+        ) from None
+
+
+def _encode_date(value: object) -> str | None:
+    """ISO-8601 TEXT -- the same spelling the wire and the fingerprint use, so
+    one value has one representation everywhere. No timezone is introduced: a
+    lease date is a calendar date, not an instant."""
+
+    if value is None:
+        return None
+    assert isinstance(value, date)
+    return value.isoformat()
+
+
+def _decode_date(value: object, *, path: str) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        raise PersistedDealDataError(
+            f"{path} holds {value!r}, which is not an ISO-8601 date."
+        ) from None
+
+
+def _encode_market_leasing_override(
+    override: MarketLeasingAssumptions | None,
+) -> str | None:
+    """The one approved nested-JSON column.
+
+    ``MarketLeasingAssumptions`` is atomic by design -- a suite supplies the
+    whole record or none of it -- so the two states this column can hold are
+    exactly the two the domain permits. Canonical (sorted-key, tight) JSON, with
+    dates and enums going through the same encoders the columns use, so the
+    stored bytes are a function of the value and nothing else.
+
+    Floats are written by ``json`` in ``repr`` form, which round-trips a Python
+    float exactly; a test pins that over the whole contract rather than trusting
+    it.
+    """
+
+    if override is None:
+        return None
+
+    payload = {
+        name: (
+            _encode_enum(value)
+            if isinstance(value, Enum)
+            else _encode_date(value)
+            if isinstance(value, date)
+            else value
+        )
+        for name, value in dataclasses.asdict(override).items()
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _decode_market_leasing_override(
+    raw: object, *, path: str
+) -> MarketLeasingAssumptions | None:
+    """Rebuild the authoritative contract -- never hand back a raw dict.
+
+    A dict would type-check nowhere and blow up somewhere far from here, inside
+    a rollover builder reading ``.renewal_probability`` off a mapping.
+    """
+
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(str(raw))
+    except ValueError:
+        raise PersistedDealDataError(
+            f"{path} does not hold valid JSON."
+        ) from None
+    if not isinstance(payload, dict):
+        raise PersistedDealDataError(f"{path} does not hold a JSON object.")
+
+    expected = set(_LEASE_LEVEL_MARKET_COLUMNS)
+    if set(payload) != expected:
+        missing = sorted(expected - set(payload))
+        unexpected = sorted(set(payload) - expected)
+        raise PersistedDealDataError(
+            f"{path} is not a complete MarketLeasingAssumptions record "
+            f"(missing={missing}, unexpected={unexpected})."
+        )
+
+    for name, enum_type in _MARKET_ENUM_FIELDS.items():
+        payload[name] = _decode_enum(payload[name], enum_type, path=f"{path}.{name}")
+    return MarketLeasingAssumptions(**payload)
+
+
+def _suite_row_values(deal_id: str, ordinal: int, suite: Suite) -> tuple[object, ...]:
+    initial_vacancy = suite.initial_vacancy
+    return (
+        deal_id,
+        suite.suite_id,
+        ordinal,
+        suite.suite_area_sf,
+        suite.suite_label,
+        suite.market_rent_psf,
+        _encode_market_leasing_override(suite.market_leasing_override),
+        _encode_enum(initial_vacancy.strategy) if initial_vacancy is not None else None,
+        initial_vacancy.initial_lease_up_months if initial_vacancy is not None else None,
+    )
+
+
+def _suite_from_row(row: sqlite3.Row) -> Suite:
+    suite_id = row["suite_id"]
+    strategy = row["initial_vacancy_strategy"]
+    initial_vacancy = (
+        InitialVacancyAssumptions(
+            strategy=_decode_enum(
+                strategy,
+                InitialVacancyStrategy,
+                path=f"suite {suite_id!r} initial_vacancy_strategy",
+            ),
+            initial_lease_up_months=row["initial_vacancy_lease_up_months"],
+        )
+        if strategy is not None
+        else None
+    )
+    return Suite(
+        suite_id=suite_id,
+        suite_area_sf=row["suite_area_sf"],
+        suite_label=row["suite_label"],
+        market_rent_psf=row["market_rent_psf"],
+        market_leasing_override=_decode_market_leasing_override(
+            row["market_leasing_override"],
+            path=f"suite {suite_id!r} market_leasing_override",
+        ),
+        initial_vacancy=initial_vacancy,
+    )
+
+
+def _lease_row_values(deal_id: str, ordinal: int, lease: Lease) -> tuple[object, ...]:
+    return (
+        deal_id,
+        lease.lease_id,
+        ordinal,
+        lease.suite_id,
+        lease.leased_area_sf,
+        _encode_date(lease.rent_commencement_date),
+        _encode_date(lease.lease_expiration_date),
+        lease.base_rent_psf,
+        lease.escalation_pct,
+        _encode_enum(lease.escalation_basis),
+        _encode_enum(lease.lease_type),
+        lease.tenant_name,
+        _encode_date(lease.lease_start_date),
+        _encode_enum(lease.origin),
+        _encode_enum(lease.recovery_basis),
+        lease.expense_stop_psf,
+    )
+
+
+def _lease_from_row(row: sqlite3.Row) -> Lease:
+    lease_id = row["lease_id"]
+    decoded: dict[str, object] = {
+        "lease_id": lease_id,
+        "suite_id": row["suite_id"],
+        "leased_area_sf": row["leased_area_sf"],
+        "base_rent_psf": row["base_rent_psf"],
+        "escalation_pct": row["escalation_pct"],
+        "tenant_name": row["tenant_name"],
+        "expense_stop_psf": row["expense_stop_psf"],
+    }
+    for name in _LEASE_DATE_FIELDS:
+        decoded[name] = _decode_date(row[name], path=f"lease {lease_id!r} {name}")
+    for name, enum_type in _LEASE_ENUM_FIELDS.items():
+        decoded[name] = _decode_enum(row[name], enum_type, path=f"lease {lease_id!r} {name}")
+    return Lease(**decoded)
+
+
+def _lease_level_property_inputs_from_row(row: sqlite3.Row) -> LeaseLevelPropertyInputs:
+    return LeaseLevelPropertyInputs(
+        analysis_start_date=_decode_date(
+            row["analysis_start_date"], path="property_inputs.analysis_start_date"
+        ),
+        rentable_area_sf=row["rentable_area_sf"],
+    )
+
+
+def _lease_level_operating_inputs_from_row(row: sqlite3.Row) -> LeaseLevelOperatingInputs:
+    return LeaseLevelOperatingInputs(
+        **{name: row[name] for name in _LEASE_LEVEL_OPERATING_COLUMNS}
+    )
+
+
+def _market_leasing_from_row(row: sqlite3.Row) -> MarketLeasingAssumptions:
+    values: dict[str, object] = {
+        name: row[name] for name in _LEASE_LEVEL_MARKET_COLUMNS
+    }
+    for name, enum_type in _MARKET_ENUM_FIELDS.items():
+        values[name] = _decode_enum(values[name], enum_type, path=f"market_leasing.{name}")
+    return MarketLeasingAssumptions(**values)
+
+
+def _write_lease_level_children(
+    connection: sqlite3.Connection,
+    deal_id: str,
+    property_inputs: LeaseLevelPropertyInputs,
+    operating_inputs: LeaseLevelOperatingInputs,
+    market_leasing: MarketLeasingAssumptions,
+    suites: tuple[Suite, ...],
+    leases: tuple[Lease, ...],
+) -> None:
+    """Write every child row for one Lease-Level deal.
+
+    Called inside the caller's transaction, after any existing children have
+    been removed, so an update is a whole-rent-roll replacement rather than a
+    row-by-row diff. Replacement is the simpler correct thing here: a rent roll
+    is submitted whole, ids are the only identity, and a diff would have to
+    invent an answer for a suite that changed id.
+    """
+
+    connection.execute(
+        "INSERT INTO lease_level_property_inputs "
+        "(deal_id, analysis_start_date, rentable_area_sf) VALUES (?, ?, ?)",
+        (
+            deal_id,
+            _encode_date(property_inputs.analysis_start_date),
+            property_inputs.rentable_area_sf,
+        ),
+    )
+    connection.execute(
+        f"""
+        INSERT INTO lease_level_operating_inputs
+            (deal_id, {", ".join(_LEASE_LEVEL_OPERATING_COLUMNS)})
+        VALUES (?, {", ".join("?" for _ in _LEASE_LEVEL_OPERATING_COLUMNS)})
+        """,
+        (
+            deal_id,
+            *(getattr(operating_inputs, name) for name in _LEASE_LEVEL_OPERATING_COLUMNS),
+        ),
+    )
+    market_values = [
+        _encode_enum(getattr(market_leasing, name))
+        if name in _MARKET_ENUM_FIELDS
+        else getattr(market_leasing, name)
+        for name in _LEASE_LEVEL_MARKET_COLUMNS
+    ]
+    connection.execute(
+        f"""
+        INSERT INTO lease_level_market_leasing
+            (deal_id, {", ".join(_LEASE_LEVEL_MARKET_COLUMNS)})
+        VALUES (?, {", ".join("?" for _ in _LEASE_LEVEL_MARKET_COLUMNS)})
+        """,
+        (deal_id, *market_values),
+    )
+    connection.executemany(
+        """
+        INSERT INTO lease_level_suites
+            (deal_id, suite_id, ordinal, suite_area_sf, suite_label,
+             market_rent_psf, market_leasing_override,
+             initial_vacancy_strategy, initial_vacancy_lease_up_months)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [_suite_row_values(deal_id, ordinal, suite) for ordinal, suite in enumerate(suites)],
+    )
+    connection.executemany(
+        """
+        INSERT INTO lease_level_leases
+            (deal_id, lease_id, ordinal, suite_id, leased_area_sf,
+             rent_commencement_date, lease_expiration_date, base_rent_psf,
+             escalation_pct, escalation_basis, lease_type, tenant_name,
+             lease_start_date, origin, recovery_basis, expense_stop_psf)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [_lease_row_values(deal_id, ordinal, lease) for ordinal, lease in enumerate(leases)],
+    )
+
+
+def _delete_lease_level_children(connection: sqlite3.Connection, deal_id: str) -> None:
+    """Remove every child row for one deal.
+
+    Explicit rather than by ``ON DELETE CASCADE``: this module never enables
+    ``PRAGMA foreign_keys``, so a declared cascade would silently do nothing and
+    leave orphans behind a reassuring-looking schema.
+    """
+
+    for table in _LEASE_LEVEL_CHILD_TABLES:
+        connection.execute(f"DELETE FROM {table} WHERE deal_id = ?", (deal_id,))
+
+
+def _row_to_lease_level_deal(
+    connection: sqlite3.Connection, row: sqlite3.Row, *, include_snapshots: bool = True
+) -> Deal:
+    """Reassemble one Lease-Level deal from its parent row and children."""
+
+    deal_id = row["id"]
+
+    def one(table: str) -> sqlite3.Row:
+        child = connection.execute(
+            f"SELECT * FROM {table} WHERE deal_id = ?", (deal_id,)
+        ).fetchone()
+        if child is None:
+            raise PersistedDealDataError(
+                f"Lease-Level deal {deal_id!r} has no {table} row."
+            )
+        return child
+
+    # Ordered by the display ordinal the analyst's own submission order set --
+    # not by id. Canonical id order belongs to the fingerprint alone, and
+    # letting it govern display would reorder a rent roll under the analyst.
+    suite_rows = connection.execute(
+        "SELECT * FROM lease_level_suites WHERE deal_id = ? ORDER BY ordinal",
+        (deal_id,),
+    ).fetchall()
+    lease_rows = connection.execute(
+        "SELECT * FROM lease_level_leases WHERE deal_id = ? ORDER BY ordinal",
+        (deal_id,),
+    ).fetchall()
+
+    deal_context = row["deal_context"]
+    terms = _terms_from_row(row)
+    property_inputs = _lease_level_property_inputs_from_row(one("lease_level_property_inputs"))
+    operating_inputs = _lease_level_operating_inputs_from_row(
+        one("lease_level_operating_inputs")
+    )
+    market_leasing = _market_leasing_from_row(one("lease_level_market_leasing"))
+    suites = tuple(_suite_from_row(suite_row) for suite_row in suite_rows)
+    leases = tuple(_lease_from_row(lease_row) for lease_row in lease_rows)
+
+    ai_snapshot = None
+    if include_snapshots:
+        analysis_fingerprint = fingerprint_lease_level_inputs(
+            terms,
+            property_inputs,
+            suites,
+            leases,
+            market_leasing=market_leasing,
+            operating_inputs=operating_inputs,
+        )
+        ai_snapshot = _decode_snapshot(
+            raw_json=row["ai_snapshot"],
+            stored_schema_version=row["ai_snapshot_schema_version"],
+            current_schema_version=_AI_SNAPSHOT_SCHEMA_VERSION,
+            stored_fingerprint=row["ai_snapshot_fingerprint"],
+            expected_fingerprint=fingerprint_ai(
+                analysis_fingerprint=analysis_fingerprint, deal_context=deal_context
+            ),
+            decoder=_ai_snapshot_from_dict,
+        )
+
+    return Deal(
+        id=deal_id,
+        name=row["name"],
+        operating_mode=OperatingMode.LEASE_LEVEL,
+        inputs=None,
+        terms=terms,
+        detailed_operating_inputs=None,
+        property_inputs=property_inputs,
+        operating_inputs=operating_inputs,
+        market_leasing=market_leasing,
+        suites=suites,
+        leases=leases,
+        deal_context=deal_context,
+        # D5 decision A: never restored from persistence, and there is no column
+        # it could be restored from.
+        analysis_snapshot=None,
+        ai_snapshot=ai_snapshot,
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
 
 def _inputs_from_row(row: sqlite3.Row) -> AcquisitionInputs:
     return AcquisitionInputs(
@@ -1018,6 +1665,112 @@ def update_detailed_deal(
 # =============================================================================
 
 
+
+def create_lease_level_deal(
+    name: str,
+    terms: AcquisitionTerms,
+    property_inputs: LeaseLevelPropertyInputs,
+    operating_inputs: LeaseLevelOperatingInputs,
+    market_leasing: MarketLeasingAssumptions,
+    suites: tuple[Suite, ...],
+    leases: tuple[Lease, ...],
+    *,
+    deal_context: str | None = None,
+    db_path: Path | None = None,
+) -> Deal:
+    """Persist one Lease-Level deal: parent row plus every child row.
+
+    Takes **typed contracts**, never a mapping. The API layer has already turned
+    the request body into these through the D5.2 parser; handing this function
+    raw JSON would give the store a second, divergent notion of the wire format
+    and make the database schema hostage to the HTTP one.
+
+    Parent and children are written in one transaction, so a failure part-way
+    cannot leave a deal with half a rent roll.
+
+    Persists inputs only. There is no analysis-snapshot column to write, by
+    design (D5 decision A) -- opening the deal re-runs the engine.
+    """
+
+    deal_id = uuid.uuid4().hex
+    now = _utc_now_iso()
+
+    with _connect(db_path) as connection:
+        connection.execute(
+            f"""
+            INSERT INTO lease_level_deals
+                (id, name, {", ".join(_TERMS_COLUMNS)}, deal_context,
+                 created_at, updated_at)
+            VALUES (?, ?, {", ".join("?" for _ in _TERMS_COLUMNS)}, ?, ?, ?)
+            """,
+            (deal_id, name, *_terms_values(terms), deal_context, now, now),
+        )
+        _write_lease_level_children(
+            connection,
+            deal_id,
+            property_inputs,
+            operating_inputs,
+            market_leasing,
+            suites,
+            leases,
+        )
+
+    return get_deal(deal_id, db_path=db_path)
+
+
+def update_lease_level_deal(
+    deal_id: str,
+    name: str,
+    terms: AcquisitionTerms,
+    property_inputs: LeaseLevelPropertyInputs,
+    operating_inputs: LeaseLevelOperatingInputs,
+    market_leasing: MarketLeasingAssumptions,
+    suites: tuple[Suite, ...],
+    leases: tuple[Lease, ...],
+    *,
+    deal_context: str | None = None,
+    db_path: Path | None = None,
+) -> Deal:
+    """Replace one Lease-Level deal's approved input state.
+
+    The rent roll is replaced wholesale -- children deleted, then rewritten --
+    rather than diffed row by row. A rent roll is submitted whole, ``suite_id``
+    is its only identity, and a diff would need an answer for a suite whose id
+    changed that no submission actually expresses. Wholesale replacement has
+    exactly one meaning.
+
+    All of it in one transaction: a mid-update failure leaves the previous rent
+    roll intact rather than a half-replaced one.
+    """
+
+    with _connect(db_path) as connection:
+        cursor = connection.execute(
+            f"""
+            UPDATE lease_level_deals
+            SET name = ?,
+                {", ".join(f"{column} = ?" for column in _TERMS_COLUMNS)},
+                deal_context = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (name, *_terms_values(terms), deal_context, _utc_now_iso(), deal_id),
+        )
+        if cursor.rowcount == 0:
+            raise DealNotFoundError(deal_id)
+
+        _delete_lease_level_children(connection, deal_id)
+        _write_lease_level_children(
+            connection,
+            deal_id,
+            property_inputs,
+            operating_inputs,
+            market_leasing,
+            suites,
+            leases,
+        )
+
+    return get_deal(deal_id, db_path=db_path)
+
 def get_deal(deal_id: str, *, db_path: Path | None = None) -> Deal:
     """Return the deal with ``deal_id``, dispatching by which table
     actually holds it: ``deals`` (Quick) first, then ``detailed_deals`` +
@@ -1035,7 +1788,15 @@ def get_deal(deal_id: str, *, db_path: Path | None = None) -> Deal:
             "SELECT * FROM detailed_deals WHERE id = ?", (deal_id,)
         ).fetchone()
         if detailed_row is None:
-            raise DealNotFoundError(deal_id)
+            # D5.4: the third table family. Probed last, so Quick and Detailed
+            # lookups are unchanged, and returned as LEASE_LEVEL by construction
+            # -- the mode is which table the row lives in, never a guess.
+            lease_level_row = connection.execute(
+                "SELECT * FROM lease_level_deals WHERE id = ?", (deal_id,)
+            ).fetchone()
+            if lease_level_row is None:
+                raise DealNotFoundError(deal_id)
+            return _row_to_lease_level_deal(connection, lease_level_row)
 
         operating_row = connection.execute(
             "SELECT * FROM detailed_operating_inputs WHERE deal_id = ?", (deal_id,)
@@ -1064,6 +1825,16 @@ def list_deals(*, db_path: Path | None = None) -> list[Deal]:
     with _connect(db_path) as connection:
         quick_rows = connection.execute("SELECT * FROM deals").fetchall()
         detailed_rows = connection.execute("SELECT * FROM detailed_deals").fetchall()
+        lease_level_rows = connection.execute(
+            "SELECT * FROM lease_level_deals"
+        ).fetchall()
+        # Built inside the connection block: a Lease-Level deal is assembled
+        # from five child tables, so its reader needs the live connection --
+        # unlike the flat Quick/Detailed rows, which are complete on their own.
+        lease_level_deals = [
+            _row_to_lease_level_deal(connection, row, include_snapshots=False)
+            for row in lease_level_rows
+        ]
         operating_rows_by_deal_id = {
             row["deal_id"]: row
             for row in connection.execute("SELECT * FROM detailed_operating_inputs")
@@ -1082,7 +1853,9 @@ def list_deals(*, db_path: Path | None = None) -> list[Deal]:
     # matches the ordering "SELECT * FROM deals ORDER BY updated_at DESC"
     # already produced for Quick-only queries before this gate.
     return sorted(
-        [*quick_deals, *detailed_deals], key=lambda deal: deal.updated_at, reverse=True
+        [*quick_deals, *detailed_deals, *lease_level_deals],
+        key=lambda deal: deal.updated_at,
+        reverse=True,
     )
 
 
@@ -1103,6 +1876,17 @@ def delete_deal(deal_id: str, *, db_path: Path | None = None) -> None:
         )
         cursor = connection.execute(
             "DELETE FROM detailed_deals WHERE id = ?", (deal_id,)
+        )
+        if cursor.rowcount > 0:
+            return
+
+        # D5.4: children first, then the parent, in one transaction. Explicit
+        # rather than by cascade, because this module never enables
+        # ``PRAGMA foreign_keys`` -- a declared ON DELETE CASCADE would do
+        # nothing and leave orphan suites behind a schema that looked safe.
+        _delete_lease_level_children(connection, deal_id)
+        cursor = connection.execute(
+            "DELETE FROM lease_level_deals WHERE id = ?", (deal_id,)
         )
         if cursor.rowcount == 0:
             raise DealNotFoundError(deal_id)
@@ -1176,13 +1960,34 @@ def duplicate_deal(
                 original.terms, original.detailed_operating_inputs
             )
         case OperatingMode.LEASE_LEVEL:
-            # D5.4 owns Lease-Level persistence. Until it lands, no Lease-Level
-            # deal can be stored at all (``Deal.__post_init__`` refuses to
-            # construct one), so this arm is unreachable through the running
-            # app -- it is here because the *shape* is what makes a duplicate
-            # safe, not the current reachability.
-            raise UnsupportedOperatingModeError(
-                original.operating_mode, operation="duplicate_deal"
+            # D5.4 implements what D5.1A made safe. The copy keeps its own mode
+            # -- the whole point of the arm D5.1A added, since the implicit
+            # ``else`` it replaced would have written a *Detailed* deal here and
+            # silently changed which engine underwrites the copy.
+            assert original.terms is not None
+            assert original.property_inputs is not None
+            assert original.operating_inputs is not None
+            assert original.market_leasing is not None
+            assert original.suites is not None
+            assert original.leases is not None
+            new_deal = create_lease_level_deal(
+                new_name,
+                original.terms,
+                original.property_inputs,
+                original.operating_inputs,
+                original.market_leasing,
+                original.suites,
+                original.leases,
+                deal_context=original.deal_context,
+                db_path=db_path,
+            )
+            analysis_fingerprint = fingerprint_lease_level_inputs(
+                original.terms,
+                original.property_inputs,
+                original.suites,
+                original.leases,
+                market_leasing=original.market_leasing,
+                operating_inputs=original.operating_inputs,
             )
         case _:
             raise UnsupportedOperatingModeError(

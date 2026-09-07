@@ -77,6 +77,26 @@ from .lease_level_sensitivity import (
 # ``analyze_lease_level_acquisition_with_projection`` raise, so a caller that
 # can reach the entry point but not its failure mode could not use it at all.
 from ..leasing.validation import LeaseValidationError
+# D5.4 -- the input contracts themselves. ``analyze_lease_level_acquisition_
+# with_projection`` takes all six as parameters, so any caller of the analysis
+# layer needs their types to build its arguments; persistence needs them to
+# reconstruct a saved deal. Re-exported here for the same reason the parser is:
+# the dependency direction runs leasing -> analysis -> engine, and ``deals`` and
+# ``api`` must not reach past the facade.
+from ..leasing.contracts import (
+    EscalationBasis,
+    InitialVacancyAssumptions,
+    InitialVacancyStrategy,
+    Lease,
+    LeaseLevelOperatingInputs,
+    LeaseLevelPropertyInputs,
+    LeaseOrigin,
+    LeaseType,
+    LeasingCommissionMethod,
+    MarketLeasingAssumptions,
+    RecoveryBasis,
+    Suite,
+)
 from ..leasing.parsing import ParsedLeaseLevelInputs, parse_lease_level_inputs
 from .sensitivity import (
     DETAILED_SUPPORTED_ASSUMPTIONS,
@@ -142,6 +162,20 @@ __all__ = [
     # Lease-Level structural request parsing (D5.2), re-exported at D5.3 so
     # the API can reach it without importing anchor.leasing directly.
     "LeaseValidationError",
+    # Lease-Level input contracts (D5.4), re-exported so persistence and the
+    # API can name them without importing anchor.leasing.
+    "EscalationBasis",
+    "InitialVacancyAssumptions",
+    "InitialVacancyStrategy",
+    "Lease",
+    "LeaseLevelOperatingInputs",
+    "LeaseLevelPropertyInputs",
+    "LeaseOrigin",
+    "LeaseType",
+    "LeasingCommissionMethod",
+    "MarketLeasingAssumptions",
+    "RecoveryBasis",
+    "Suite",
     "ParsedLeaseLevelInputs",
     "parse_lease_level_inputs",
     # Lease-Level acquisition orchestration (D4.5B)

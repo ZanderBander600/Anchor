@@ -1096,16 +1096,24 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     )
 
     # Delivery layers: only the mode-dispatch consumers moved.
+    # D5.3 added ``analysis/__init__.py`` (the parser facade) and D5.4 extended
+    # it with the Lease-Level input contract types plus
+    # ``deals/fingerprint.py``. Each is re-export or persistence, never
+    # financial logic -- the ten leasing economics modules above are still
+    # byte-identical, which is what "nothing financial moved" actually means.
     permitted = {
         "src/anchor/api.py",
         "src/anchor/contracts.py",
+        "src/anchor/analysis/__init__.py",
         "src/anchor/deals/contracts.py",
         "src/anchor/deals/store.py",
+        "src/anchor/deals/fingerprint.py",
+        "src/anchor/deals/__init__.py",
         "src/anchor/ai/contracts.py",
         "src/anchor/ai/presentation.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
-                 "src/anchor/contracts.py"):
+                 "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):
         unexpected = set(_files_changed_since(_D4_6A_COMMIT, area)) - permitted
         assert unexpected == set(), (
             f"{area} changed beyond D5.1A's mode-dispatch scope: {sorted(unexpected)}"

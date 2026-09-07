@@ -18,11 +18,17 @@ and its numeric-representation rationale.
 from __future__ import annotations
 
 from .contracts import Deal, DealNotFoundError
-from .fingerprint import fingerprint_ai, fingerprint_detailed_inputs, fingerprint_quick_inputs
+from .fingerprint import (
+    fingerprint_ai,
+    fingerprint_detailed_inputs,
+    fingerprint_lease_level_inputs,
+    fingerprint_quick_inputs,
+)
 from .store import (
     SnapshotValidationError,
     create_deal,
     create_detailed_deal,
+    create_lease_level_deal,
     delete_deal,
     duplicate_deal,
     get_deal,
@@ -32,6 +38,7 @@ from .store import (
     update_analysis_snapshot,
     update_deal,
     update_detailed_deal,
+    update_lease_level_deal,
 )
 
 __all__ = [
@@ -40,10 +47,12 @@ __all__ = [
     "SnapshotValidationError",
     "create_deal",
     "create_detailed_deal",
+    "create_lease_level_deal",
     "delete_deal",
     "duplicate_deal",
     "fingerprint_ai",
     "fingerprint_detailed_inputs",
+    "fingerprint_lease_level_inputs",
     "fingerprint_quick_inputs",
     "get_deal",
     "get_db_path",
@@ -52,4 +61,5 @@ __all__ = [
     "update_analysis_snapshot",
     "update_deal",
     "update_detailed_deal",
+    "update_lease_level_deal",
 ]

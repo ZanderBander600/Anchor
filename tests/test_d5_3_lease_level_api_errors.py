@@ -541,15 +541,18 @@ def test_detailed_terms_errors_are_unchanged(client: TestClient) -> None:
                          "target_equity_multiple": 1.5}),
         ("/ai/analysis", {"target_levered_irr": 0.1, "target_headline_dscr": 1.2,
                           "target_equity_multiple": 1.5}),
-        ("/deals", {"name": "Lease-Level"}),
-        ("/deals/fingerprint", {}),
     ],
-    ids=["presets", "break-even", "ai", "deals", "fingerprint"],
+    ids=["presets", "break-even", "ai"],
 )
 def test_the_gates_that_still_own_lease_level_keep_refusing(
     client: TestClient, path: str, extra: dict[str, Any]
 ) -> None:
-    """Presets and break-even permanently for D5; deals is D5.4's; AI is D5.8's.
+    """What no D5 gate wires, plus the one that belongs to a later gate.
+
+    Presets and break-even are refused for the whole of D5 -- there is no
+    Lease-Level preset bundle and guardrail G35 forbids a Lease-Level break-even
+    -- and AI is D5.8's. ``/deals`` and ``/deals/fingerprint`` left this list at
+    D5.4, which wired them.
 
     Each body is a *complete, valid* Lease-Level request, so the refusal can
     only be about the endpoint rather than about a missing field.
@@ -563,11 +566,20 @@ def test_the_gates_that_still_own_lease_level_keep_refusing(
         assert marker not in response.text
 
 
-def test_updating_a_deal_still_refuses_lease_level(client: TestClient) -> None:
+def test_updating_an_unknown_deal_is_a_404_not_a_mode_refusal(
+    client: TestClient,
+) -> None:
+    """**Superseded at D5.4**, which wired ``PUT /deals/{id}`` for Lease-Level.
+
+    The mode is served now, so an unknown id must be reported as an unknown id.
+    Returning a mode refusal here would tell an analyst their whole workflow is
+    unsupported when in fact they mistyped a deal id.
+    """
+
     response = client.put("/deals/does-not-exist", json={**body(), "name": "x"})
 
-    assert response.status_code == 422
-    assert "not supported by" in str(detail_of(response))
+    assert response.status_code == 404
+    assert "not supported by" not in str(detail_of(response))
 
 
 # =============================================================================
