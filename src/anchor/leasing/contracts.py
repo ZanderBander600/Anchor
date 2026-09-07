@@ -2554,6 +2554,163 @@ class PropertyOperatingSchedule:
 
 
 # =============================================================================
+# D4.3 -- the canonical monthly property projection
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MonthlyPropertyProjection:
+    """The property's canonical monthly operating statement (D4.3).
+
+    Restates D0 Section 18.1 (as amended at D4.0) and D4 Sections 5.3-5.6 and
+    29.3. One statement per canonical ``ModelMonth``, over the whole
+    ``12H + 12`` window -- the hold months **and** the twelve forward exit
+    months, all economics live throughout, because D4.4 reads exit NOI off
+    exactly these values.
+
+    **A composition, not a calculation.** Every leasing figure comes from
+    ``PropertyOperatingSchedule`` (D4.2), every recovery dollar from
+    ``PropertyRecoverySchedule`` (D3.5) and every fixed expense line from
+    ``MonthlyPropertyExpenseSchedule`` (D4.1), copied verbatim. Only six series
+    are new here: ``other_income``, ``credit_loss``,
+    ``effective_gross_income``, ``management_fee``,
+    ``total_operating_expenses`` and ``noi``.
+
+    **The statement, in order:**
+
+    ```
+     1  contractual_base_rent      AUDIT ONLY -- feeds nothing
+     2  free_rent                  AUDIT ONLY -- feeds nothing
+     3  cash_base_rent             AUTHORITATIVE revenue; EGI reads THIS
+     4  expense_recovery           revenue, on its own line, never netted
+     5  other_income
+     6  credit_loss                = credit_loss_pct * (3 + 4)
+     7  effective_gross_income     = 3 + 4 + 5 - 6
+     8..12  the five fixed expense lines
+    13  fixed_operating_expenses   = 8 + 9 + 10 + 11 + 12
+    14  management_fee             = 7 * management_fee_pct
+    15  total_operating_expenses   = 13 + 14
+    16  noi                        = 7 - 15
+    --- below NOI, touching nothing above ---
+    17  tenant_improvements
+    18  leasing_commissions
+    --- state, descriptive ---
+    19  occupied_area_sf, vacant_area_sf, physical_occupancy
+    ```
+
+    **``cash_base_rent`` is the revenue figure, not
+    ``contractual_base_rent - free_rent``** (HD-D4-5). The two differ in any
+    fractional-downtime month by the part of the month during which no tenant
+    was in possession, and treating that part as collected revenue is the
+    single arithmetic error this contract's shape exists to prevent. Lines 1
+    and 2 are retained for audit precisely so an analyst can see the
+    concession and the face rent without either entering the arithmetic.
+
+    **Recovery stays revenue and expenses stay gross.** Netting the two would
+    leave NOI-before-fee unchanged while shrinking EGI -- and therefore the
+    management fee, and therefore NOI. The separation is load-bearing, not
+    presentational (D4 Section 15).
+
+    **NOI is never floored.** A vacant building still incurs its taxes,
+    insurance and utilities, so a negative monthly NOI is a correct result.
+
+    **Deliberately absent:** ``absent_rent`` (an explanatory reconciliation
+    concept, never a field -- HD-D4-5 as narrowed), ``capex`` (a second monthly
+    series is how it comes to be subtracted twice; ``annual_capex_reserve``
+    stays its single authority), ``market_rent_psf`` (HD-D4-4), any
+    ``_by_year`` series, ``exit_noi``, ``going_in_cap_rate``, and every debt,
+    return and acquisition figure. Monthly is canonical; D4.4 owns the annual
+    adapter.
+
+    ``recoverable_expense_pool`` is also absent, which departs from D4
+    Section 29.3's sketch. Carrying it would require either accepting a
+    ``RecoverableExpensePool`` this gate has no financial use for, or
+    recomputing it here from the ratio -- a second implementation of D4.1's
+    pool formula, and one that could silently disagree with the pool the
+    supplied recovery schedule was actually built from. ``expense_schedule``
+    and ``recovery_schedule`` are retained below, so the audit trail from
+    expenses through recovery is complete without it.
+
+    The three source schedules are **retained, not collapsed**, so every
+    figure above can be traced to the schedule that produced it.
+
+    Built only by
+    ``anchor.leasing.projection.build_monthly_property_projection``; this
+    dataclass performs no calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    rentable_area_sf: float
+
+    # --- revenue, above NOI ---
+    contractual_base_rent: tuple[float, ...]
+    free_rent: tuple[float, ...]
+    cash_base_rent: tuple[float, ...]
+    expense_recovery: tuple[float, ...]
+    other_income: tuple[float, ...]
+    credit_loss: tuple[float, ...]
+    effective_gross_income: tuple[float, ...]
+
+    # --- expenses, above NOI ---
+    property_taxes: tuple[float, ...]
+    insurance: tuple[float, ...]
+    utilities: tuple[float, ...]
+    repairs_maintenance: tuple[float, ...]
+    other_operating_expenses: tuple[float, ...]
+    fixed_operating_expenses: tuple[float, ...]
+    management_fee: tuple[float, ...]
+    total_operating_expenses: tuple[float, ...]
+
+    noi: tuple[float, ...]
+
+    # --- below NOI ---
+    tenant_improvements: tuple[float, ...]
+    leasing_commissions: tuple[float, ...]
+
+    # --- state ---
+    occupied_area_sf: tuple[float, ...]
+    vacant_area_sf: tuple[float, ...]
+    physical_occupancy: tuple[float, ...]
+
+    # --- retained sources, not collapsed ---
+    operating_schedule: PropertyOperatingSchedule
+    recovery_schedule: PropertyRecoverySchedule
+    expense_schedule: MonthlyPropertyExpenseSchedule
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name in (
+            "contractual_base_rent",
+            "free_rent",
+            "cash_base_rent",
+            "expense_recovery",
+            "other_income",
+            "credit_loss",
+            "effective_gross_income",
+            "property_taxes",
+            "insurance",
+            "utilities",
+            "repairs_maintenance",
+            "other_operating_expenses",
+            "fixed_operating_expenses",
+            "management_fee",
+            "total_operating_expenses",
+            "noi",
+            "tenant_improvements",
+            "leasing_commissions",
+            "occupied_area_sf",
+            "vacant_area_sf",
+            "physical_occupancy",
+        ):
+            series = getattr(self, name)
+            if len(series) != expected:
+                raise ValueError(
+                    f"MonthlyPropertyProjection requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+
+
+# =============================================================================
 # D4.1 -- property operating inputs and the canonical monthly expense schedule
 #
 # Property economics, deliberately separate from lease and market-leasing

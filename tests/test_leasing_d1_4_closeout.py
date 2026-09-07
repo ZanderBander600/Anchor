@@ -1075,15 +1075,20 @@ def test_no_contract_declares_a_d3_or_downstream_field() -> None:
     # ``vacancy_credit_loss_pct`` and ``occupancy`` never leave it. They are
     # not deferred but **rejected** for Lease-Level (G-M14): physical vacancy
     # is modeled per suite per month, and a second, blanket mechanism would
-    # double-count it. ``noi``, ``capex`` and ``operating_expenses`` stay
-    # banned as bare names through D4.1 -- the schedule delivers
-    # ``fixed_operating_expenses`` and ``other_operating_expenses``, which are
-    # distinct identifiers, and NOI and CapEx belong to later gates.
+    # double-count it.
+    #
+    # ``noi`` left the set at D4.3, the gate that computes it, exactly as every
+    # earlier gate's fields did on delivery. ``capex`` never leaves:
+    # ``AcquisitionTerms.annual_capex_reserve`` is its single authority and a
+    # second monthly series is how it would come to be subtracted twice.
+    # ``operating_expenses`` stays banned as a bare name -- the contracts
+    # deliver ``fixed_operating_expenses``, ``other_operating_expenses`` and
+    # ``total_operating_expenses``, each a distinct identifier.
     banned = {
         "expected_rent_psf", "expected_term_months", "expected_ti_psf",
         "expected_lc_pct", "expected_downtime_months",
         "expense_stop", "base_year",
-        "noi", "capex", "operating_expenses",
+        "capex", "operating_expenses", "exit_noi", "going_in_cap_rate",
         "vacancy_credit_loss_pct", "occupancy",
     }
 

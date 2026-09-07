@@ -60,6 +60,9 @@ from .contracts import (
     Lease,
     LeaseLevelOperatingInputs,
     LeaseLevelPropertyInputs,
+    MonthlyPropertyExpenseSchedule,
+    PropertyOperatingSchedule,
+    PropertyRecoverySchedule,
     SuiteOperatingProjection,
     LeaseOrigin,
     LeaseType,
@@ -174,6 +177,16 @@ class LeaseIssueCode(StrEnum):
     )
     EXPENSE_STOP_OUT_OF_DOMAIN = "EXPENSE_STOP_OUT_OF_DOMAIN"
     UNSUPPORTED_RECOVERY_BASIS = "UNSUPPORTED_RECOVERY_BASIS"
+
+    # --- monthly property projection (D4.3) ---
+    PROPERTY_RECOVERY_NOT_ALIGNED = "PROPERTY_RECOVERY_NOT_ALIGNED"
+    PROPERTY_EXPENSE_SCHEDULE_NOT_ALIGNED = (
+        "PROPERTY_EXPENSE_SCHEDULE_NOT_ALIGNED"
+    )
+    PROPERTY_RECOVERY_AREA_MISMATCH = "PROPERTY_RECOVERY_AREA_MISMATCH"
+    PROPERTY_RECOVERY_SUITE_UNIVERSE_MISMATCH = (
+        "PROPERTY_RECOVERY_SUITE_UNIVERSE_MISMATCH"
+    )
 
     # --- property leasing aggregation (D4.2) ---
     OPERATING_SCHEDULE_NOT_ALIGNED = "OPERATING_SCHEDULE_NOT_ALIGNED"
@@ -2137,6 +2150,144 @@ def require_valid_initial_vacancy_inputs(
 
     result = validate_initial_vacancy_inputs(
         suites, leases, property_defaults=property_defaults, path=path
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D4.3 -- monthly property projection composition
+#
+# Three completed schedules are about to be read position by position. Each
+# check below exists because the corresponding mistake would produce a
+# plausible, wrong statement rather than a crash: a recovery series from a
+# different projection, an expense series from a different hold horizon, or a
+# recovery schedule belonging to another building entirely.
+# =============================================================================
+
+
+def validate_property_projection_inputs(
+    operating: PropertyOperatingSchedule,
+    recovery: PropertyRecoverySchedule,
+    expenses: MonthlyPropertyExpenseSchedule,
+    *,
+    operating_inputs: LeaseLevelOperatingInputs,
+) -> LeaseValidationResult:
+    """Validate the three schedules and the assumptions D4.3 composes.
+
+    **The leasing schedule defines the timeline.** ``PropertyOperatingSchedule``
+    is the accepted property-level authority (D4.2), so its ``months`` is the
+    canonical sequence and the other two are checked against it.
+
+    Rules, in a fixed order so the emitted sequence is reproducible:
+
+    1. **Operating-input domains**, through the existing
+       ``validate_lease_level_operating_inputs`` -- one authority, reused, not
+       a second copy. D4.3 consumes only ``other_income``,
+       ``other_income_growth``, ``credit_loss_pct`` and ``management_fee_pct``,
+       but the whole contract is validated because that is what the single
+       authority does, and an out-of-domain field it does not read is still an
+       out-of-domain field.
+    2. **Recovery alignment** (``PROPERTY_RECOVERY_NOT_ALIGNED``) -- month
+       *identity*, on the same semantic basis D3.5 and D4.2 already use
+       (tuple equality over ``ModelMonth``), never length. A recovery series
+       from a different analysis start or hold horizon would zip cleanly by
+       position and add up to a plausible, wrong EGI.
+    3. **Expense alignment** (``PROPERTY_EXPENSE_SCHEDULE_NOT_ALIGNED``) -- the
+       same rule, for the same reason.
+    4. **Property-area identity** (``PROPERTY_RECOVERY_AREA_MISMATCH``) --
+       both schedules carry their own ``rentable_area_sf``; they must agree
+       under Anchor's existing scaled area tolerance. Two buildings can easily
+       share a timeline, and the areas are the only scalar both schedules
+       independently record.
+    5. **Suite-universe identity**
+       (``PROPERTY_RECOVERY_SUITE_UNIVERSE_MISMATCH``) -- both schedules retain
+       their per-suite projections, so the suites they describe must be the
+       same set. This is what actually distinguishes "the same property" from
+       "a property of the same size"; the area check alone would not.
+
+    Deliberately **not** checked here: anything the source contracts already
+    guarantee. Series lengths are enforced by each schedule's own
+    ``__post_init__``, the recovery domain by D3, and the expense domain by
+    D4.1. There is one validation authority per rule.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+
+    issues.extend(
+        validate_lease_level_operating_inputs(operating_inputs).issues
+    )
+
+    months = operating.months
+
+    if recovery.months != months:
+        issues.append(
+            _issue(
+                LeaseIssueCode.PROPERTY_RECOVERY_NOT_ALIGNED,
+                "recovery_schedule.months",
+                "the property recovery schedule was built against a different "
+                "canonical month sequence than the property leasing schedule; "
+                "one projection shares one timeline, and matching lengths are "
+                "not matching months.",
+            )
+        )
+
+    if expenses.months != months:
+        issues.append(
+            _issue(
+                LeaseIssueCode.PROPERTY_EXPENSE_SCHEDULE_NOT_ALIGNED,
+                "expense_schedule.months",
+                "the monthly property expense schedule was built against a "
+                "different canonical month sequence than the property leasing "
+                "schedule; one projection shares one timeline.",
+            )
+        )
+
+    if not _areas_reconcile(recovery.rentable_area_sf, operating.rentable_area_sf):
+        issues.append(
+            _issue(
+                LeaseIssueCode.PROPERTY_RECOVERY_AREA_MISMATCH,
+                "recovery_schedule.rentable_area_sf",
+                f"the recovery schedule states {recovery.rentable_area_sf!r} "
+                f"rentable SF and the leasing schedule "
+                f"{operating.rentable_area_sf!r}; the two must describe the "
+                "same property.",
+            )
+        )
+
+    operating_suites = sorted(
+        projection.suite_id for projection in operating.suite_projections
+    )
+    recovery_suites = sorted(
+        projection.suite_id for projection in recovery.suite_projections
+    )
+    if operating_suites != recovery_suites:
+        issues.append(
+            _issue(
+                LeaseIssueCode.PROPERTY_RECOVERY_SUITE_UNIVERSE_MISMATCH,
+                "recovery_schedule.suite_projections",
+                f"the recovery schedule covers suites {recovery_suites} and "
+                f"the leasing schedule {operating_suites}; two schedules of "
+                "the same property describe the same suites, and equal areas "
+                "and timelines alone do not make one property.",
+            )
+        )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_property_projection_inputs(
+    operating: PropertyOperatingSchedule,
+    recovery: PropertyRecoverySchedule,
+    expenses: MonthlyPropertyExpenseSchedule,
+    *,
+    operating_inputs: LeaseLevelOperatingInputs,
+) -> LeaseValidationResult:
+    """Validate projection composition inputs and raise on any ERROR."""
+
+    result = validate_property_projection_inputs(
+        operating, recovery, expenses, operating_inputs=operating_inputs
     )
     if result.errors:
         raise LeaseValidationError(result)

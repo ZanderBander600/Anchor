@@ -138,6 +138,21 @@ builder takes no suite, lease, area or occupancy, so a fully vacant building
 incurs exactly the same fixed expenses as a fully leased one. Revenue, credit
 loss, the management fee, EGI and NOI are D4.3; nothing here computes tenant
 recovery revenue, which remains D3's.
+
+D4.3 composes the three completed monthly schedules into
+``MonthlyPropertyProjection``, the statement a Lease-Level deal is read from.
+``projection.py`` recalculates nothing: it copies the leasing lines, the
+recovery revenue and the five fixed expense lines, and adds exactly six new
+series -- other income, credit loss, EGI, the management fee, total operating
+expenses and NOI. EGI reads ``cash_base_rent`` **directly**, never
+``contractual - free_rent``, which differs from it in any fractional-downtime
+month; contractual rent and free rent stay audit lines feeding nothing. Credit
+loss applies to cash rent plus recovery only, the management fee is a
+percentage of EGI with recoveries included, recovery stays revenue while
+expenses stay gross, and TI and LC stay below NOI in every month including the
+forward window. Because the fee is excluded from the recoverable pool, the
+whole statement resolves in one pass with no solver. NOI is never floored.
+Annual aggregation, exit NOI and the going-in cap rate are D4.4's.
 """
 
 from __future__ import annotations
@@ -192,6 +207,7 @@ from .contracts import (
     LeaseRecoverySchedule,
     ModelMonth,
     MonthlyPropertyExpenseSchedule,
+    MonthlyPropertyProjection,
     NewTenantBranch,
     PropertyOperatingSchedule,
     PropertyRentRollSchedule,
@@ -234,6 +250,10 @@ from .recoveries import (
     monthly_expense_stop_dollars,
     tenant_pro_rata_share,
 )
+from .projection import (
+    annual_other_income,
+    build_monthly_property_projection,
+)
 from .rent import (
     build_lease_monthly_schedule,
     contractual_face_rent_over_full_term,
@@ -261,6 +281,8 @@ from .rollover import (
     weighted_outcome,
 )
 from .validation import (
+    require_valid_property_projection_inputs,
+    validate_property_projection_inputs,
     require_valid_property_operating_inputs,
     validate_property_operating_inputs,
     require_valid_lease_level_operating_inputs,
@@ -380,6 +402,12 @@ __all__ = [
     "build_expected_rollover_recovery",
     "build_recursive_rollover_recovery",
     "build_initial_vacancy_rollover_recovery",
+    # monthly property projection (D4.3)
+    "MonthlyPropertyProjection",
+    "build_monthly_property_projection",
+    "annual_other_income",
+    "validate_property_projection_inputs",
+    "require_valid_property_projection_inputs",
     # property leasing aggregation (D4.2)
     "SuiteOperatingProjection",
     "PropertyOperatingSchedule",
