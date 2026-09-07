@@ -115,6 +115,7 @@ import type {
   StandardSensitivityPresets,
   V2FieldId,
 } from './types';
+import { requireImplementedMode } from './operatingMode';
 
 /** Owner Return Metrics V3 Gate A6: `Deal.analysis_snapshot`'s type is
  * `AcquisitionResults | DetailedAcquisitionResults | null` at the shared
@@ -1389,7 +1390,14 @@ export default function App() {
    * assumptions/results.
    */
   async function handleOpenDeal(deal: Deal) {
-    if (deal.operating_mode === 'detailed') {
+    // D5.1B: total dispatch. This was `if (detailed) { … return; } <quick body>`,
+    // so a deal of any third mode fell into the Quick branch and was opened with
+    // `getDeal` -> "Quick deal is missing inputs." -- a Quick-shaped failure for a
+    // deal that was never Quick. Narrowing first refuses an unimplemented mode by
+    // name; the branch below is then two-way over a closed union rather than by
+    // omission. D5.4 persists Lease-Level deals and D5.5A opens them.
+    const dealMode = requireImplementedMode(deal.operating_mode, 'Open Deal');
+    if (dealMode === 'detailed') {
       if (!confirmDiscardIfDetailedDirty()) {
         return;
       }
@@ -1842,8 +1850,24 @@ export default function App() {
    *
    * Dispatches to the active operating mode's own analysis path, never
    * both. */
+  // D5.1B: the shell's one explicit narrowing of the active mode.
+  //
+  // Everything below -- the header Analyze action, the active deal id, New Deal,
+  // the delete confirmation's name, and the `isDetailed` that selects between
+  // the two render trees -- was written as `operatingMode === 'detailed' ? … : …`,
+  // which silently meant *Quick* for any third mode. Narrowing once, here, makes
+  // every one of those two-way over a closed union instead of by omission, at the
+  // cost of a single line and no restructuring of either existing tree.
+  //
+  // Refusing rather than falling back is deliberate: rendering Quick's deal name,
+  // Quick's save state and Quick's workspace for a Lease-Level deal would present
+  // one deal's economics under another's label. Unreachable today -- the selector
+  // offers only the implemented modes -- so this is future-proofing, not a live
+  // path. D5.5A adds the Lease-Level arm together with the workspace behind it.
+  const shellMode = requireImplementedMode(operatingMode, 'the Underwrite shell');
+
   function handleAnalyzeFromHeader() {
-    if (operatingMode === 'detailed') {
+    if (shellMode === 'detailed') {
       void runDetailedAnalyze();
       return;
     }
@@ -1853,10 +1877,10 @@ export default function App() {
   /** Sprint C Gate C2: the deal the sidebar should mark active is whichever
    * one the *currently selected* operating mode has open -- the other mode's
    * open deal stays untouched in the background, exactly as it always has. */
-  const activeDealId = operatingMode === 'detailed' ? currentDetailedDealId : currentDealId;
+  const activeDealId = shellMode === 'detailed' ? currentDetailedDealId : currentDealId;
 
   function handleNewDealFromSidebar() {
-    if (operatingMode === 'detailed') {
+    if (shellMode === 'detailed') {
       handleNewDetailedDeal();
       return;
     }
@@ -1878,7 +1902,7 @@ export default function App() {
       return;
     }
     const name =
-      (operatingMode === 'detailed' ? detailedDealName : dealName).trim() || 'Untitled Deal';
+      (shellMode === 'detailed' ? detailedDealName : dealName).trim() || 'Untitled Deal';
     if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) {
       return;
     }
@@ -2395,7 +2419,7 @@ export default function App() {
     </>
   );
 
-  const isDetailed = operatingMode === 'detailed';
+  const isDetailed = shellMode === 'detailed';
 
   return (
     <div className="app-shell">

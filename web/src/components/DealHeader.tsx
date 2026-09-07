@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import type { OperatingMode } from '../types';
+import { operatingModeUnderwriteLabel } from '../operatingMode';
+import type { ImplementedOperatingMode } from '../operatingMode';
+
+/** The operating modes the analyst may actually choose.
+ *
+ * D5.1B: the frontend's `OperatingMode` union knows `lease_level`, but this
+ * list deliberately does not. The type system tracks the wire vocabulary so a
+ * Lease-Level deal is never mislabelled; this constant tracks what the product
+ * can actually do. D5.5A adds `'lease_level'` here, together with the
+ * workspace behind it -- and not before. */
+const SELECTABLE_MODES: ImplementedOperatingMode[] = ['quick', 'detailed'];
 
 /** Mirrors the three-state save status the deal header surfaces. "unsaved-deal"
  * means the working deal has never been persisted at all (no id yet), even
@@ -124,32 +135,34 @@ export function DealHeader({
           {/* Detailed Operating Model V2.1 Gate 6's mode toggle, relocated
            * into the header. Same roles, same accessible names, same
            * `setOperatingMode` handler -- Quick and Detailed remain fully
-           * independent workspaces. */}
+           * independent workspaces.
+           *
+           * D5.1B: rendered from SELECTABLE_MODES rather than two hand-written
+           * buttons. The tabs were previously a pair of
+           * `operatingMode === '…' ? active : inactive` ternaries, which was
+           * safe (each asked "am I the active tab?", not "which mode's
+           * behaviour?") but left the offered set implicit in the markup.
+           * Naming it makes what the analyst is offered a single reviewable
+           * value -- and makes it the thing D5.5A edits, once a Lease-Level
+           * workspace exists to select. Knowing a mode's name is not the same
+           * as offering it. */}
           <div className="mode-switch" role="tablist" aria-label="Underwriting Mode">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={operatingMode === 'quick'}
-              className={
-                operatingMode === 'quick' ? 'mode-switch-tab mode-switch-tab-active' : 'mode-switch-tab'
-              }
-              onClick={() => onOperatingModeChange('quick')}
-            >
-              Quick Underwrite
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={operatingMode === 'detailed'}
-              className={
-                operatingMode === 'detailed'
-                  ? 'mode-switch-tab mode-switch-tab-active'
-                  : 'mode-switch-tab'
-              }
-              onClick={() => onOperatingModeChange('detailed')}
-            >
-              Detailed Underwrite
-            </button>
+            {SELECTABLE_MODES.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                role="tab"
+                aria-selected={operatingMode === mode}
+                className={
+                  operatingMode === mode
+                    ? 'mode-switch-tab mode-switch-tab-active'
+                    : 'mode-switch-tab'
+                }
+                onClick={() => onOperatingModeChange(mode)}
+              >
+                {operatingModeUnderwriteLabel(mode)}
+              </button>
+            ))}
           </div>
         </div>
 

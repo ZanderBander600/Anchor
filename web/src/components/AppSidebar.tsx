@@ -1,5 +1,6 @@
 import { formatCurrency } from '../format';
 import type { Deal } from '../types';
+import { assertNeverMode, operatingModeLabel } from '../operatingMode';
 
 /** Maximum saved deals surfaced in the sidebar's Recent Deals list. The full
  * list always remains one click away in the Deal Library view -- the sidebar
@@ -56,10 +57,22 @@ function IconBuilding() {
  * `AcquisitionTerms` (Detailed) -- read from whichever the deal actually
  * populated, never fabricated for the other mode. This is a read of stored
  * assumptions, not a calculation. */
-function purchasePriceOf(deal: Deal): number {
-  return deal.operating_mode === 'detailed'
-    ? (deal.terms?.purchase_price ?? 0)
-    : (deal.inputs?.purchase_price ?? 0);
+function purchasePriceOf(deal: Deal): number | null {
+  switch (deal.operating_mode) {
+    case 'quick':
+      return deal.inputs?.purchase_price ?? null;
+    case 'detailed':
+      return deal.terms?.purchase_price ?? null;
+    case 'lease_level':
+      // No Lease-Level deal shape exists on the frontend yet (D5.4 persists it,
+      // D5.5A types it), and the two fields above belong to contracts a
+      // Lease-Level deal does not populate. `null` renders through the existing
+      // `formatCurrency` as the app's standard unavailable state -- which is the
+      // truth -- rather than borrowing Quick's or Detailed's purchase price.
+      return null;
+    default:
+      return assertNeverMode(deal.operating_mode);
+  }
 }
 
 export interface AppSidebarProps {
@@ -161,7 +174,7 @@ export function AppSidebar({
                   <span className="sidebar-deal-text">
                     <span className="sidebar-deal-name">{deal.name}</span>
                     <span className="sidebar-deal-meta">
-                      {deal.operating_mode === 'detailed' ? 'Detailed' : 'Quick'} ·{' '}
+                      {operatingModeLabel(deal.operating_mode)} ·{' '}
                       {formatCurrency(purchasePriceOf(deal))}
                     </span>
                   </span>

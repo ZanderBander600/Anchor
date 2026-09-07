@@ -1,5 +1,6 @@
 import { formatCurrency } from '../format';
 import type { Deal } from '../types';
+import { assertNeverMode, operatingModeLabel } from '../operatingMode';
 
 export interface DealLibraryPanelProps {
   deals: Deal[];
@@ -25,10 +26,22 @@ function formatUpdatedAt(iso: string): string {
  * both `AcquisitionInputs` (Quick) and `AcquisitionTerms` (Detailed) --
  * reads it from whichever one the deal actually populated, never
  * fabricating a value for the other mode. */
-function purchasePriceOf(deal: Deal): number {
-  return deal.operating_mode === 'detailed'
-    ? (deal.terms?.purchase_price ?? 0)
-    : (deal.inputs?.purchase_price ?? 0);
+function purchasePriceOf(deal: Deal): number | null {
+  switch (deal.operating_mode) {
+    case 'quick':
+      return deal.inputs?.purchase_price ?? null;
+    case 'detailed':
+      return deal.terms?.purchase_price ?? null;
+    case 'lease_level':
+      // No Lease-Level deal shape exists on the frontend yet (D5.4 persists it,
+      // D5.5A types it), and the two fields above belong to contracts a
+      // Lease-Level deal does not populate. `null` renders through the existing
+      // `formatCurrency` as the app's standard unavailable state -- which is the
+      // truth -- rather than borrowing Quick's or Detailed's purchase price.
+      return null;
+    default:
+      return assertNeverMode(deal.operating_mode);
+  }
 }
 
 /**
@@ -90,7 +103,7 @@ export function DealLibraryPanel({
                   <span
                     className={`deal-library-row-mode deal-library-row-mode-${deal.operating_mode}`}
                   >
-                    {deal.operating_mode === 'detailed' ? 'Detailed' : 'Quick'}
+                    {operatingModeLabel(deal.operating_mode)}
                   </span>
                 </span>
                 <span className="deal-library-row-meta">

@@ -1055,7 +1055,17 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "src/anchor/validation.py",
         "src/anchor/ingestion",
         "src/anchor/ai/prompts.py",
-        "web",
+        # The frontend's financial and transport modules. `web` as a whole was
+        # asserted byte-identical until D5.1B, which had to edit the frontend's
+        # mode-dispatch files for exactly the reason D5.1A edited the backend's.
+        # Whole-tree identity therefore stopped being the statement of the rule;
+        # "nothing financial moved" is, and these are the frontend files that
+        # could carry financial or transport meaning. Every one is untouched.
+        "web/src/convert.ts",
+        "web/src/format.ts",
+        "web/src/liveMetrics.ts",
+        "web/src/ownerSummary.ts",
+        "web/src/api.ts",
     ):
         assert _files_changed_since(_D4_6A_COMMIT, area) == [], f"{area} changed"
 
@@ -1083,6 +1093,30 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         assert unexpected == set(), (
             f"{area} changed beyond D5.1A's mode-dispatch scope: {sorted(unexpected)}"
         )
+
+    # D5.1B: the frontend changed only its mode-dispatch surface. Its own
+    # guardrails (`web/src/modeDispatch.architecture.test.ts`) prove the change
+    # was dispatch and nothing else; this pins the file list from the backend
+    # side so a frontend gate cannot quietly widen without a reviewer noticing.
+    permitted_web = {
+        "web/src/App.tsx",
+        "web/src/types.ts",
+        "web/src/underwrite.ts",
+        "web/src/operatingMode.ts",
+        "web/src/components/AppSidebar.tsx",
+        "web/src/components/DealHeader.tsx",
+        "web/src/components/DealLibraryPanel.tsx",
+        "web/src/components/OwnerSummaryPanel.tsx",
+        "web/src/components/UnderwriteWorkspace.tsx",
+    }
+    unexpected_web = {
+        path
+        for path in _files_changed_since(_D4_6A_COMMIT, "web")
+        if not path.endswith(".test.ts") and not path.endswith(".test.tsx")
+    } - permitted_web
+    assert unexpected_web == set(), (
+        f"web changed beyond D5.1B's mode-dispatch scope: {sorted(unexpected_web)}"
+    )
 
 
 @pytest.mark.parametrize(

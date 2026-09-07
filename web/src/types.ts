@@ -172,7 +172,7 @@ export interface AcquisitionResults {
 // =============================================================================
 
 /** Mirrors ``OperatingMode`` in ``src/anchor/contracts.py``. */
-export type OperatingMode = 'quick' | 'detailed';
+export type OperatingMode = 'quick' | 'detailed' | 'lease_level';
 
 export interface AcquisitionTermsFormValues {
   purchasePrice: string;

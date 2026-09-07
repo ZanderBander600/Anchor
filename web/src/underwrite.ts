@@ -3,6 +3,7 @@ import {
   DETAILED_OPERATING_FIELD_GROUPS,
   TERMS_FIELD_GROUPS,
 } from './convert';
+import { assertNeverMode, UnsupportedOperatingModeError } from './operatingMode';
 import type {
   AcquisitionFormValues,
   AcquisitionTermsFormValues,
@@ -35,17 +36,34 @@ export type ResultsViewId = 'summary' | 'cash-flow' | 'owner-returns' | 'operati
 
 /** Detailed adds the Operating Statement; Quick has no operating projection,
  * so it has no such view -- the sub-nav is derived from what the mode
- * actually produces rather than showing a dead entry. */
+ * actually produces rather than showing a dead entry.
+ *
+ * D5.1B: total dispatch. Previously `if (mode === 'detailed')`, which meant
+ * every other mode silently received *Quick's* result navigation -- three tabs
+ * describing an analysis that mode had not run.
+ *
+ * Refuses an unimplemented mode rather than returning an empty list. The only
+ * caller (`UnderwriteWorkspace`) feeds the result straight into a `SubNav` and
+ * a `resultsView` state value, so an empty array would render a Results tab
+ * with no sub-navigation and a selected view that does not exist -- a broken
+ * surface that looks like a loading state. D5.6 adds the real Lease-Level
+ * result views. */
 export function resultsViewsFor(mode: OperatingMode): { id: ResultsViewId; label: string }[] {
   const views: { id: ResultsViewId; label: string }[] = [
     { id: 'summary', label: 'Summary' },
     { id: 'cash-flow', label: 'Cash Flow' },
     { id: 'owner-returns', label: 'Owner Returns' },
   ];
-  if (mode === 'detailed') {
-    views.push({ id: 'operating-statement', label: 'Operating Statement' });
+  switch (mode) {
+    case 'quick':
+      return views;
+    case 'detailed':
+      return [...views, { id: 'operating-statement', label: 'Operating Statement' }];
+    case 'lease_level':
+      throw new UnsupportedOperatingModeError(mode, 'the Results sub-navigation');
+    default:
+      return assertNeverMode(mode);
   }
-  return views;
 }
 
 /** One assumption input, fully resolved: its display configuration comes from

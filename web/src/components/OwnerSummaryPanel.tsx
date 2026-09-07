@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { BreakEvenMetric, BreakEvenResult, DealStory } from '../types';
 import type { OwnerSummaryData } from '../ownerSummary';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
+import { operatingModeUnderwriteLabel } from '../operatingMode';
 
 interface StatCardProps {
   label: string;
@@ -188,7 +189,7 @@ export function OwnerSummaryPanel({
         <header className="owner-summary-header">
           <h2 className="owner-summary-deal-name">{identity.dealName}</h2>
           <span className="owner-summary-mode-badge">
-            {identity.operatingMode === 'quick' ? 'Quick Underwrite' : 'Detailed Underwrite'}
+            {operatingModeUnderwriteLabel(identity.operatingMode)}
           </span>
         </header>
       )}
