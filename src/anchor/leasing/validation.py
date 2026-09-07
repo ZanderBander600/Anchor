@@ -105,6 +105,23 @@ class LeaseIssueCode(StrEnum):
     lists are added by the gate that can raise them.
     """
 
+    # --- structural parsing (D5.2) ---
+    #
+    # Raised by ``anchor.leasing.parsing`` at the transport boundary, before any
+    # contract exists to validate. They live on this enum rather than on a
+    # second, parse-only issue contract because D8 ratified one issue stream for
+    # the whole Lease-Level input workflow: a frontend renders a malformed field
+    # and an out-of-domain field through the same ``path``/``code``/``severity``
+    # shape, and ``anchor.validation.IssueCategory`` already sets the precedent
+    # by carrying WORKBOOK_OPEN and MALFORMED_TABLE beside OUT_OF_DOMAIN_VALUE.
+    #
+    # One stream is not one phase. Everything else on this enum describes a
+    # defect in an *assembled* rent roll; these two describe JSON that could not
+    # become one. The parser raises only these, and no rule below is restated
+    # there.
+    UNKNOWN_FIELD = "UNKNOWN_FIELD"
+    MALFORMED_FIELD = "MALFORMED_FIELD"
+
     # --- property / analysis ---
     ANALYSIS_START_NOT_MONTH_ALIGNED = "ANALYSIS_START_NOT_MONTH_ALIGNED"
     RENTABLE_AREA_OUT_OF_DOMAIN = "RENTABLE_AREA_OUT_OF_DOMAIN"

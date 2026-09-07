@@ -455,12 +455,20 @@ def test_the_rent_module_is_the_only_one_that_touches_rent_fields() -> None:
     ), f"{rent_module} must contain the compound-escalation term"
 
 
-def test_leasing_package_contains_only_the_gate_d4_3_modules() -> None:
+def test_leasing_package_contains_only_its_approved_modules() -> None:
     """D0 Gate D1.0 files, plus D1.1's ``calendar.py``, D1.2's ``rent.py``,
     D1.3's ``aggregation.py``, D2.1's ``market.py``, D2.2/D2.3's
     ``rollover.py``, D2.4's ``leasing_costs.py``, D3.1's ``recoveries.py``
-    (D3 conventions Section 14), D4.1's ``expenses.py`` and D4.3's
-    ``projection.py`` (D4 Section 27.1)."""
+    (D3 conventions Section 14), D4.1's ``expenses.py``, D4.3's
+    ``projection.py`` (D4 Section 27.1), and D5.2's ``parsing.py``.
+
+    **Extended at D5.2, and not weakened.** The inventory is a ledger of
+    deliberate additions, not a freeze -- every module above arrived through a
+    gate that named it. ``parsing.py`` is the structural transport boundary
+    (raw JSON -> frozen contracts); it holds no financial rule, which the
+    guardrails in ``tests/test_d5_2_parsing_architecture.py`` enforce
+    structurally rather than by keeping it out of the package.
+    """
 
     assert {path.name for path in _leasing_source_files()} == {
         "__init__.py",
@@ -470,6 +478,7 @@ def test_leasing_package_contains_only_the_gate_d4_3_modules() -> None:
         "expenses.py",
         "leasing_costs.py",
         "market.py",
+        "parsing.py",
         "projection.py",
         "recoveries.py",
         "rent.py",

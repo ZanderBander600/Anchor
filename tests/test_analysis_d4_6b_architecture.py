@@ -1047,7 +1047,24 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     # Financial authority: byte-identical since D4.6A, no exceptions.
     for area in (
         "src/anchor/engine",
-        "src/anchor/leasing",
+        # ``src/anchor/leasing`` as a whole was asserted byte-identical until
+        # D5.2, which adds the structural transport boundary ``parsing.py`` and
+        # the two structural issue codes it raises. Neither is financial, so the
+        # rule is now stated over the modules that carry leasing *economics* --
+        # every builder, every convention, every rule. ``validation.py`` and
+        # ``__init__.py`` are excluded here and held to a stronger, more specific
+        # claim by ``tests/test_d5_2_parsing_architecture.py``: the parser can
+        # name no domain code, run no validator and perform no arithmetic.
+        "src/anchor/leasing/aggregation.py",
+        "src/anchor/leasing/calendar.py",
+        "src/anchor/leasing/contracts.py",
+        "src/anchor/leasing/expenses.py",
+        "src/anchor/leasing/leasing_costs.py",
+        "src/anchor/leasing/market.py",
+        "src/anchor/leasing/projection.py",
+        "src/anchor/leasing/recoveries.py",
+        "src/anchor/leasing/rent.py",
+        "src/anchor/leasing/rollover.py",
         "src/anchor/analysis/contracts.py",
         "src/anchor/analysis/lease_level.py",
         "src/anchor/analysis/sensitivity.py",
@@ -1093,6 +1110,19 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         assert unexpected == set(), (
             f"{area} changed beyond D5.1A's mode-dispatch scope: {sorted(unexpected)}"
         )
+
+    # D5.2: ``leasing/validation.py`` gained exactly the two structural parsing
+    # codes D8 approved, and nothing else. Asserted on the enum rather than the
+    # file, because the enum is what other layers depend on.
+    from anchor.leasing.validation import LeaseIssueCode
+
+    structural = {"UNKNOWN_FIELD", "MALFORMED_FIELD"}
+    assert structural <= {code.name for code in LeaseIssueCode}
+    assert not {
+        code.name
+        for code in LeaseIssueCode
+        if code.name.startswith(("PARSE_", "MISSING_FIELD", "STRUCTURAL_"))
+    }, "an unapproved structural parse code was added"
 
     # D5.1B: the frontend changed only its mode-dispatch surface. Its own
     # guardrails (`web/src/modeDispatch.architecture.test.ts`) prove the change
