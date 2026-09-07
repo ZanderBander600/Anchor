@@ -41,6 +41,7 @@ from .contracts import (
     BreakEvenResult,
     BreakEvenStatus,
     BreakEvenType,
+    LeaseLevelAcquisitionResults,
     OneWaySensitivityResult,
     ReturnHurdleMetric,
     StandardBreakEvenAnalysis,
@@ -49,6 +50,7 @@ from .contracts import (
     StandardSensitivityPresets,
     TwoWaySensitivityResult,
 )
+from .lease_level import analyze_lease_level_acquisition_with_projection
 from .sensitivity import (
     DETAILED_SUPPORTED_ASSUMPTIONS,
     SUPPORTED_ASSUMPTIONS,
@@ -110,4 +112,7 @@ __all__ = [
     "solve_detailed_max_interest_rate",
     "build_standard_break_even_analysis",
     "build_standard_detailed_break_even_analysis",
+    # Lease-Level acquisition orchestration (D4.5B)
+    "LeaseLevelAcquisitionResults",
+    "analyze_lease_level_acquisition_with_projection",
 ]

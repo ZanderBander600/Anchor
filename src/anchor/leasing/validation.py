@@ -179,6 +179,10 @@ class LeaseIssueCode(StrEnum):
     EXPENSE_STOP_OUT_OF_DOMAIN = "EXPENSE_STOP_OUT_OF_DOMAIN"
     UNSUPPORTED_RECOVERY_BASIS = "UNSUPPORTED_RECOVERY_BASIS"
 
+    # --- Lease-Level acquisition integration (D4.5B) ---
+    NON_POSITIVE_FORWARD_EXIT_NOI = "NON_POSITIVE_FORWARD_EXIT_NOI"
+    MULTIPLE_IN_PLACE_LEASES_IN_SUITE = "MULTIPLE_IN_PLACE_LEASES_IN_SUITE"
+
     # --- annual operating adapter (D4.4) ---
     PROJECTION_NOT_CANONICAL = "PROJECTION_NOT_CANONICAL"
     PURCHASE_PRICE_OUT_OF_DOMAIN = "PURCHASE_PRICE_OUT_OF_DOMAIN"
@@ -2156,6 +2160,141 @@ def require_valid_initial_vacancy_inputs(
     result = validate_initial_vacancy_inputs(
         suites, leases, property_defaults=property_defaults, path=path
     )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D4.5B -- the Lease-Level acquisition integration boundary
+#
+# Two rules, and both belong here rather than upstream. Neither is an operating
+# rule: a projection carrying either defect is a perfectly valid *operating*
+# model, and only the act of running an acquisition analysis against it is
+# refused.
+# =============================================================================
+
+
+def validate_capitalizable_exit_noi(
+    exit_noi: float, *, path: str = "annual_projection.exit_noi"
+) -> LeaseValidationResult:
+    """Refuse a non-positive forward exit NOI (HD-D4-7).
+
+    ``exit_value = exit_noi / exit_cap_rate`` is a valuation only when the
+    numerator is an income stream. With a non-positive numerator the expression
+    behaves perversely -- a *lower* cap rate makes the "value" *more* negative
+    -- and it then propagates into net sale proceeds, both cash-flow series and
+    both IRRs. Reporting that number, and returns derived from it, would be
+    worse than refusing.
+
+    **This is an acquisition-boundary rule, not an operating one.** The monthly
+    and annual projections of a distressed building build successfully and stay
+    fully inspectable; negative monthly NOI, negative hold-year NOI and a
+    negative going-in cap rate are all legitimate results and none is refused
+    here. Only the forward NOI *used for cap-rate terminal valuation* is
+    restricted, and only at the point where that capitalization is about to
+    happen.
+
+    Deliberately not in ``anchor.engine``: ``calculate_exit_value`` keeps its
+    behaviour for every caller, so Quick and Detailed are provably unaffected
+    (G-2).
+    """
+
+    if not _is_finite_number(exit_noi):
+        return LeaseValidationResult(
+            issues=(
+                _issue(
+                    LeaseIssueCode.NON_FINITE_VALUE,
+                    path,
+                    "the forward exit NOI must be a finite number.",
+                ),
+            )
+        )
+    if exit_noi <= 0:
+        return LeaseValidationResult(
+            issues=(
+                _issue(
+                    LeaseIssueCode.NON_POSITIVE_FORWARD_EXIT_NOI,
+                    path,
+                    f"the forward exit NOI is {exit_noi!r}. Cap-rate terminal "
+                    "valuation requires a positive forward income stream: "
+                    "dividing a loss by a cap rate does not produce a price a "
+                    "buyer would pay, and a lower cap rate would make the "
+                    "result more negative. The operating projection itself is "
+                    "valid and remains inspectable; only capitalizing it is "
+                    "refused.",
+                ),
+            )
+        )
+    return LeaseValidationResult(issues=())
+
+
+def require_capitalizable_exit_noi(
+    exit_noi: float, *, path: str = "annual_projection.exit_noi"
+) -> LeaseValidationResult:
+    """Validate the forward exit NOI and raise ``LeaseValidationError`` on any
+    ERROR. Called immediately before the shared exit-cap calculation."""
+
+    result = validate_capitalizable_exit_noi(exit_noi, path=path)
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+def validate_lease_level_acquisition_leases(
+    suites: Iterable[Suite], leases: Iterable[Lease]
+) -> LeaseValidationResult:
+    """Refuse a suite carrying more than one in-place lease (D4.5B).
+
+    **A scoped integration restriction, not an economic default.** D1 permits a
+    suite to hold several sequential, non-overlapping leases, and that is a
+    valid rent roll. But the authoritative full-chain builder for an occupied
+    suite -- ``build_recursive_rollover`` -- is seeded from exactly one
+    expiring lease, and ``suite_operating_projection`` takes exactly one
+    chain per suite. There is no builder that composes two known leases plus
+    their successors into a single chain.
+
+    Rather than pick one lease and silently drop the other's rent, or
+    fabricate a merged lease, this path refuses and says why. A suite with
+    sequential known leases is modelled today by stating the in-place lease
+    and letting the rollover engine price what follows it.
+
+    Emitted in suite order, so the sequence is reproducible.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+    lease_tuple = tuple(leases)
+
+    for suite in tuple(suites):
+        matching = [
+            lease.lease_id
+            for lease in lease_tuple
+            if lease.suite_id == suite.suite_id
+        ]
+        if len(matching) > 1:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MULTIPLE_IN_PLACE_LEASES_IN_SUITE,
+                    f"suites[{suite.suite_id}]",
+                    f"suite {suite.suite_id!r} carries {len(matching)} leases "
+                    f"({sorted(matching)}). Lease-Level acquisition analysis "
+                    "builds one authoritative chain per suite, seeded from one "
+                    "in-place lease; it will not choose between two or silently "
+                    "drop one. State the in-place lease and let the rollover "
+                    "engine price what follows it.",
+                )
+            )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_lease_level_acquisition_leases(
+    suites: Iterable[Suite], leases: Iterable[Lease]
+) -> LeaseValidationResult:
+    """Validate suite/lease association for the acquisition path and raise on
+    any ERROR."""
+
+    result = validate_lease_level_acquisition_leases(suites, leases)
     if result.errors:
         raise LeaseValidationError(result)
     return result

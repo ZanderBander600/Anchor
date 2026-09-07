@@ -146,21 +146,102 @@ def test_leasing_package_imports_only_stdlib_its_own_modules_and_contracts() -> 
 # =============================================================================
 
 
+#: The only files permitted to depend on ``anchor.leasing``, delivered at
+#: D4.5B and named by Sections 29.2a and 30.1 of the D4 architecture: the
+#: orchestrator, and the module holding the result envelope it returns.
+#: Narrowed from "nothing may" to "exactly these may" -- the ban is not lifted,
+#: it is reduced to its complement.
+_PERMITTED_LEASING_IMPORTERS = frozenset({"lease_level.py", "contracts.py"})
+
+
 @pytest.mark.parametrize(
     "package_dir",
     [_ENGINE_DIR, _ANALYSIS_DIR, _DEALS_DIR, _AI_DIR, _INGESTION_DIR],
     ids=["engine", "analysis", "deals", "ai", "ingestion"],
 )
 def test_no_existing_package_imports_anchor_leasing(package_dir: Path) -> None:
-    """Integration is a D4 concern, in the direction ``anchor.engine`` ->
-    ``anchor.leasing``. Nothing may depend on the leasing layer before then."""
+    """Integration is a D4 concern, and the corrected direction (HD-D4-8) is
+    ``anchor.leasing`` -> ``anchor.analysis.lease_level`` -> ``anchor.engine``.
+
+    Exactly one file in the whole source tree may depend on the leasing layer:
+    ``anchor/analysis/lease_level.py``, the D4.5B bridge. Every other module in
+    every one of these packages -- the engine included -- must still be
+    importable with ``anchor.leasing`` absent.
+    """
 
     for source_file in package_dir.glob("*.py"):
         names = _imported_module_names(source_file)
-        assert not any(
+        imports_leasing = any(
             name == "anchor.leasing" or name.startswith("anchor.leasing.")
             for name in names
-        ), f"{source_file} must not import anchor.leasing at D1"
+        )
+        if (
+            package_dir == _ANALYSIS_DIR
+            and source_file.name in _PERMITTED_LEASING_IMPORTERS
+        ):
+            continue
+        assert not imports_leasing, (
+            f"{source_file} must not import anchor.leasing; only "
+            f"{sorted(_PERMITTED_LEASING_IMPORTERS)} in anchor/analysis may"
+        )
+
+
+def test_exactly_two_modules_in_the_tree_import_anchor_leasing() -> None:
+    """The complement of the guardrail above, stated positively so that a
+    third bridge cannot appear in a package nobody parametrized."""
+
+    importers = sorted(
+        str(source_file.relative_to(_SRC_DIR)).replace("\\", "/")
+        for source_file in (_SRC_DIR / "anchor").rglob("*.py")
+        if not str(source_file.relative_to(_SRC_DIR)).replace("\\", "/").startswith(
+            "anchor/leasing/"
+        )
+        and any(
+            name == "anchor.leasing" or name.startswith("anchor.leasing.")
+            for name in _imported_module_names(source_file)
+        )
+    )
+
+    assert importers == [
+        "anchor/analysis/contracts.py",
+        "anchor/analysis/lease_level.py",
+    ]
+
+
+def test_the_envelope_module_imports_types_only() -> None:
+    """``analysis/contracts.py`` holds the result envelope, so it must name the
+    two Lease-Level projection **types** -- and nothing else. Importing a
+    builder or a validator there would put behaviour in a contracts module and
+    give the whole analysis package a functional dependency on leasing rather
+    than a structural one."""
+
+    names = [
+        name
+        for name in _imported_module_names(_ANALYSIS_DIR / "contracts.py")
+        if name.startswith("anchor.leasing")
+    ]
+
+    assert sorted(names) == ["anchor.leasing.contracts"], (
+        "the envelope module reaches a leasing module other than contracts.py"
+    )
+
+    imported_symbols = sorted(
+        alias.name
+        for node in ast.walk(
+            ast.parse(
+                (_ANALYSIS_DIR / "contracts.py").read_text(encoding="utf-8"),
+                filename="contracts.py",
+            )
+        )
+        if isinstance(node, ast.ImportFrom)
+        and (node.module or "").endswith("leasing.contracts")
+        for alias in node.names
+    )
+
+    assert imported_symbols == [
+        "AnnualOperatingProjection",
+        "MonthlyPropertyProjection",
+    ], f"the envelope module imports {imported_symbols}; types only"
 
 
 def test_top_level_anchor_modules_do_not_import_anchor_leasing() -> None:
@@ -5744,18 +5825,26 @@ def test_d4_3_declares_no_capex_and_no_annual_series() -> None:
         )
 
     # And the validation that refuses a non-positive forward NOI is D4.5's, at
-    # the acquisition/integration boundary -- nowhere in this package.
+    # the acquisition/integration boundary. Narrowed at D4.5B: the rule now
+    # exists, and lives in exactly one leasing module -- validation.py, which
+    # states it without applying it. No projection or aggregation module may
+    # reference it, and no leasing module may reach the exit-value calculation.
     for source_file in _leasing_source_files():
         names = _referenced_names(
             ast.parse(
                 source_file.read_text(encoding="utf-8"), filename=str(source_file)
             )
         )
-        for forbidden in ("NON_POSITIVE_FORWARD_EXIT_NOI", "calculate_exit_value"):
-            assert forbidden not in names, (
-                f"{source_file.name} references {forbidden!r}; cap-rate "
-                "terminal-value eligibility is enforced at D4.5"
-            )
+        assert "calculate_exit_value" not in names, (
+            f"{source_file.name} references calculate_exit_value; capitalization "
+            "belongs to the shared engine"
+        )
+        if source_file.name in ("validation.py", "__init__.py"):
+            continue
+        assert "NON_POSITIVE_FORWARD_EXIT_NOI" not in names, (
+            f"{source_file.name} references the terminal-value rule; it is "
+            "declared in validation.py and applied only at the D4.5 boundary"
+        )
 
 
 def test_d4_3_retains_the_whole_canonical_window() -> None:
@@ -6181,7 +6270,28 @@ def test_d4_4_does_not_enforce_the_non_positive_exit_noi_rule() -> None:
 
     from anchor.leasing.validation import LeaseIssueCode
 
-    assert not hasattr(LeaseIssueCode, "NON_POSITIVE_FORWARD_EXIT_NOI")
+    # Narrowed at D4.5B: the code now exists, but nothing in the D4.4 annual
+    # adapter reaches it. ``aggregate_monthly_to_annual`` still returns a
+    # negative ``exit_noi`` without complaint.
+    assert hasattr(LeaseIssueCode, "NON_POSITIVE_FORWARD_EXIT_NOI")
+
+    adapter_names = _referenced_names(
+        next(
+            node
+            for node in ast.walk(_projection_tree())
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "aggregate_monthly_to_annual"
+        )
+    )
+    for forbidden in (
+        "NON_POSITIVE_FORWARD_EXIT_NOI",
+        "validate_capitalizable_exit_noi",
+        "require_capitalizable_exit_noi",
+    ):
+        assert forbidden not in adapter_names, (
+            f"aggregate_monthly_to_annual references {forbidden!r}; the check "
+            "belongs at the D4.5 acquisition boundary"
+        )
 
     validator = next(
         node
@@ -6222,8 +6332,11 @@ def test_d4_4_did_not_reach_outside_the_leasing_package() -> None:
                 "anchor.leasing"
             )
 
-    assert not (_ANALYSIS_DIR / "lease_level.py").exists(), (
-        "analysis/lease_level.py exists; the integration layer is D4.5's"
+    # Narrowed at D4.5B: the integration layer now exists, and the claim
+    # becomes that D4.4's module still does not reach into it.
+    assert "anchor.analysis" not in " ".join(names), (
+        f"{_PROJECTION_MODULE} imports the integration layer; the dependency "
+        "runs analysis -> leasing, never back"
     )
 
 

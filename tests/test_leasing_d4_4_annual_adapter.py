@@ -836,11 +836,25 @@ def test_g21_exit_noi_is_never_floored_at_zero() -> None:
     assert annual.exit_noi < 0.0
 
 
-def test_the_non_positive_exit_noi_code_does_not_exist_at_this_gate() -> None:
+def test_the_non_positive_exit_noi_rule_is_not_applied_at_this_gate() -> None:
     """HD-D4-7 assigns the validation to the D4.5 integration boundary. It must
-    not have been moved upstream merely because the scalar is built here."""
+    not have been moved upstream merely because the scalar is built here.
 
-    assert not hasattr(LeaseIssueCode, "NON_POSITIVE_FORWARD_EXIT_NOI")
+    Narrowed at D4.5B: the issue code now exists, declared once in
+    ``leasing/validation.py`` and applied only by the acquisition orchestrator.
+    What this gate still asserts is that the D4.4 adapter never reaches it --
+    ``aggregate_monthly_to_annual`` returns a negative ``exit_noi`` without
+    complaint, so a distressed building's operating projection stays
+    buildable and inspectable.
+    """
+
+    assert hasattr(LeaseIssueCode, "NON_POSITIVE_FORWARD_EXIT_NOI")
+
+    monthly = monthly_projection(hold_period=1, noi=[100.0] * 12 + [-500.0] * 12)
+
+    annual = aggregate_monthly_to_annual(monthly, purchase_price=PRICE)
+
+    assert annual.exit_noi < 0.0
 
 
 def test_a_negative_exit_noi_raises_no_validation_issue() -> None:

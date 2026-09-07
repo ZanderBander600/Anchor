@@ -559,18 +559,41 @@ def test_calculate_exit_value_is_unchanged_in_behaviour() -> None:
 
 
 def test_no_lease_level_operating_mode_exists_yet() -> None:
-    """**Guardrail 32.** A public mode arrives with the end-to-end path at
-    D4.5B, never half-wired."""
+    """**Guardrail 32**, deliberately unchanged at D4.5B.
+
+    The end-to-end path shipped at D4.5B, but the public ``OperatingMode``
+    member did **not**. Every consumer of that enum branches
+    ``is DETAILED`` / ``is QUICK`` with an implicit else, so adding
+    ``LEASE_LEVEL`` would make ``POST /analyze`` accept ``"lease_level"`` and
+    silently run it as Quick instead of the 422 it correctly returns today.
+    Publishing the mode is therefore a separate, wider change; see the D4.5B
+    exhaustive-mode report.
+    """
 
     from anchor.contracts import OperatingMode
 
     assert {member.value for member in OperatingMode} == {"quick", "detailed"}
 
 
-def test_no_lease_level_orchestration_module_exists_yet() -> None:
-    """**Guardrail 33.**"""
+def test_the_orchestration_module_is_outside_the_engine() -> None:
+    """**Guardrail 33**, narrowed at D4.5B.
 
-    assert not (_ANALYSIS_DIR / "lease_level.py").exists()
+    The orchestration module now exists. What D4.5A asserted -- that no
+    Lease-Level orchestration lives in ``anchor.engine`` -- is unchanged, and
+    is now also asserted in the other direction: the bridge sits in
+    ``anchor.analysis`` and the engine does not know its name.
+    """
+
+    assert (_ANALYSIS_DIR / "lease_level.py").exists()
+
+    for source_file in _engine_source_files():
+        names = _imported_module_names(source_file)
+        assert not any(
+            name.startswith("anchor.analysis") for name in names
+        ), f"{source_file.name} imports the analysis layer"
+        assert "analyze_lease_level_acquisition_with_projection" not in (
+            source_file.read_text(encoding="utf-8")
+        ), f"{source_file.name} names the Lease-Level orchestrator"
 
 
 def test_no_monthly_return_engine_exists() -> None:

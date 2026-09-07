@@ -297,6 +297,10 @@ from .rollover import (
     weighted_outcome,
 )
 from .validation import (
+    require_capitalizable_exit_noi,
+    validate_capitalizable_exit_noi,
+    require_valid_lease_level_acquisition_leases,
+    validate_lease_level_acquisition_leases,
     require_valid_annual_adapter_inputs,
     validate_annual_adapter_inputs,
     require_valid_property_projection_inputs,
@@ -420,6 +424,11 @@ __all__ = [
     "build_expected_rollover_recovery",
     "build_recursive_rollover_recovery",
     "build_initial_vacancy_rollover_recovery",
+    # Lease-Level acquisition integration boundary (D4.5B)
+    "validate_capitalizable_exit_noi",
+    "require_capitalizable_exit_noi",
+    "validate_lease_level_acquisition_leases",
+    "require_valid_lease_level_acquisition_leases",
     # annual operating adapter (D4.4)
     "AnnualOperatingProjection",
     "aggregate_monthly_to_annual",
