@@ -165,12 +165,27 @@ _YEAR_FIELDS: frozenset[str] = frozenset(
 # dedicated presentation gate. Gate A4 removes all four: they are now
 # formatted and presented like every other ``AcquisitionResults`` field (see
 # ``_format_results`` below) -- Deal Context makes them especially useful to
-# interpret, per Gate A4's charter. The allowlist is empty again; every
-# field of all five dataclasses is presented.
+# interpret, per Gate A4's charter.
+#
+# Sprint D Gate D4.5A re-uses that same precedent for exactly two fields.
+# ``tenant_improvements_by_year`` and ``leasing_commissions_by_year`` are the
+# generic below-NOI operating-capital channel the shared acquisition engine
+# gained at D4.5A. They are **deliberately withheld from the AI Analyst for
+# now**: D4 owns deterministic financial integration, and how leasing capital
+# should be presented to, and interpreted by, the AI Analyst is a presentation
+# question belonging to D5, alongside the rest of the Lease-Level surface.
+#
+# This is a deferral, not a judgement that the fields are uninteresting. They
+# are real owner cash outflows and they already move IRR, the equity multiple
+# and every recurring owner-return metric. When D5 gives them a reviewed
+# presentation and the grounding rules to interpret them, both entries come
+# out of this allowlist exactly as Gate A4 removed A2's four.
 # =============================================================================
 
 INTENTIONALLY_EXCLUDED_INPUT_FIELDS: frozenset[str] = frozenset()
-INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset()
+INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset(
+    {"tenant_improvements_by_year", "leasing_commissions_by_year"}
+)
 INTENTIONALLY_EXCLUDED_TERMS_FIELDS: frozenset[str] = frozenset()
 INTENTIONALLY_EXCLUDED_DETAILED_OPERATING_FIELDS: frozenset[str] = frozenset()
 INTENTIONALLY_EXCLUDED_OPERATING_PROJECTION_FIELDS: frozenset[str] = frozenset()

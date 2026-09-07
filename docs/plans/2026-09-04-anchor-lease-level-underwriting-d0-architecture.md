@@ -2,7 +2,7 @@
 title: Lease-Level Underwriting - D0 Architecture and Financial Conventions
 type: feat
 date: 2026-09-04
-amended: 2026-09-04
+amended: 2026-09-05
 topic: lease-level-underwriting
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
@@ -495,6 +495,39 @@ Enforced by `tests/test_leasing_architecture.py` (**G-1**).
 
 At D4, `anchor.engine.acquisition` imports `anchor.leasing` — never the reverse.
 
+> **Amended at D4.0** (corrected at human financial review, 2026-09-05). The
+> line above, and Appendix A's row placing
+> `analyze_lease_level_acquisition_with_projection` in
+> `engine/acquisition.py`, are **superseded**. Making the shared acquisition
+> engine import `anchor.leasing` would make it operating-mode aware; it must
+> stay generic.
+>
+> **The approved direction:**
+>
+> ```
+> anchor.leasing  ->  Lease-Level analysis/integration layer
+>                 ->  generic acquisition engine  ->  debt / returns
+> ```
+>
+> Orchestration moves to `src/anchor/analysis/lease_level.py`, which is an
+> existing integration layer (its package docstring already places it above the
+> engine and below the API, and it already orchestrates by *calling*
+> `analyze_acquisition` / `analyze_detailed_acquisition_with_projection`). It
+> imports `anchor.leasing`, `anchor.engine.acquisition` and
+> `anchor.engine.contracts`.
+>
+> `anchor.engine.acquisition` gains only **generic** additive support (an
+> optional `OperatingCapitalSchedule` argument) and **never imports
+> `anchor.leasing`**;
+> `analyze_acquisition_from_operating_projection` remains operating-mode
+> agnostic. `anchor.leasing`'s own permitted imports are unchanged, and
+> `tests/test_leasing_architecture.py::
+> test_importing_anchor_engine_does_not_pull_in_anchor_leasing` survives
+> **unchanged** rather than being replaced — the engine's isolation is
+> preserved in full. Full statement and the revised graph:
+> `docs/plans/2026-09-05-anchor-lease-level-underwriting-d4-integration-architecture.md`
+> §27 and **HD-D4-8**.
+
 ---
 
 ## 4. Domain Contracts
@@ -700,6 +733,14 @@ class PropertyRentRollSchedule:
 ```
 
 #### `MonthlyPropertyProjection` — the canonical projection  *(D4)*
+
+> **Amended at D4.0** (approved at human financial review, 2026-09-05). This
+> sketch predates D2.3. Two changes; see Section 18.1's amendment block and
+> D4.0 §5.4 / §29.3. `cash_base_rent` joins the flow series and EGI is built
+> from it, not from `contractual_base_rent − free_rent`; `market_rent_psf`
+> moves out of the D4 contract to D5 presentation (**HD-D4-4**). No
+> `absent_rent` field is added — that quantity is explanatory only. The
+> remaining fields stand.
 
 ```python
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1807,6 +1848,37 @@ Disclosed consequences:
 **State:**
 
 12. `occupied_area`, `vacant_area`, `physical_occupancy`, `market_rent_psf`
+
+> **Amended at D4.0 — the EGI formula in line 6 is incomplete.** Written before
+> D2.3 shipped, line 6 assumes `cash rent == contractual_base_rent − free_rent`.
+> The D2.3 concession waterfall makes that false in a **fractional downtime
+> boundary month**: there, `cash_base_rent = R × (O_m − a)` while
+> `contractual_base_rent − free_rent = R × (1 − a)`, and the two differ by
+> `R × frac(D)` — the *downtime* portion of the month, which line 6 would
+> recognise as collected revenue. On D2 §7.2's own reference case
+> (`D = 2.25`, `R = 100,000`, September) line 6 gives `25,000` where the
+> tenant paid `0`.
+>
+> **The correction, and the only change (APPROVED at human financial review,
+> 2026-09-05):** EGI consumes `cash_base_rent` directly.
+>
+> ```
+> EGI_m = cash_base_rent_m + expense_recoveries_m + other_income_m − credit_loss_m
+> ```
+>
+> `contractual_base_rent` and `free_rent` remain **audit lines that feed
+> nothing**. D4 never reconstructs cash rent from them. The gap
+> `contractual − free_rent − cash_base_rent` is an **explanatory reconciliation
+> concept** ("absent rent"), not a new financial assumption and not a contract
+> field; it survives only as a guardrail assertion.
+>
+> No lease-level number changes; D1–D3 are untouched. The proof, the worked
+> case and the human decision (**HD-D4-5**) are in
+> `docs/plans/2026-09-05-anchor-lease-level-underwriting-d4-integration-architecture.md`
+> §5.4 and §33. Line 12's `market_rent_psf` is likewise revisited there
+> (**HD-D4-4**): `market.py` refuses to aggregate a rate across suites, so a
+> property-level figure is a D5 presentation concern rather than a D4 field.
+> Every other item in this section stands unchanged.
 
 ### 18.2 Renewal and replacement rent are not separate revenue lines
 
@@ -3520,3 +3592,77 @@ surface in one place, with the phase that touches it.
 
 Every entry is additive. No existing formula, field meaning, or convention is
 modified anywhere in this list.
+
+---
+
+## Appendix B — D4.7 Sprint-D Closeout Amendment — 2026-09-07
+
+**Narrow, dated amendment. No D0 decision, convention or formula is rewritten.**
+Sprint D is now implemented through D4.6B (commit `1bbd95f`). Three forward-
+looking statements in this document were overtaken by decisions taken and
+accepted during D4, and are superseded **only** on the points listed below.
+Everything else in this document stands.
+
+**The authoritative Sprint-D closeout is §39 of**
+`docs/plans/2026-09-05-anchor-lease-level-underwriting-d4-integration-architecture.md`.
+
+### B.1 `OperatingMode.LEASE_LEVEL` — deferred to D5, not delivered in D4
+
+This document schedules `OperatingMode.LEASE_LEVEL` for D4 in three places:
+Section 3's blast-radius table (D4 row), Section 29's D4.3 plan row, and
+Appendix A's `src/anchor/contracts.py` row.
+
+**Superseded by HD-D4-9**, decided at the D4.5B human review and re-confirmed at
+D4.6A §38.10. The enum member is **not added during D4**. At the end of Sprint D:
+
+- `OperatingMode` remains exactly `{QUICK, DETAILED}`;
+- `OperatingMode("lease_level")` raises, and `POST /analyze` returns 422 rather
+  than mis-dispatching;
+- the deterministic Lease-Level analysis and its sensitivity runners exist and
+  are complete, reachable through `anchor.analysis` by **function identity**;
+- publication of the public mode moves to **D5**, which must first convert
+  today's exhaustive-by-omission `OperatingMode` dispatch to total dispatch —
+  every current consumer tests one member and lets the other fall through an
+  implicit `else`, so adding a member first would silently run Lease-Level as
+  Quick.
+
+### B.2 The canonical projection shipped as two contracts, not one
+
+Section 5's `MonthlyPropertyProjection` sketch (already carrying a D4.0
+amendment block) combines the monthly series, the annual series and the exit
+figures in a single contract.
+
+**As shipped, that is two contracts:** `MonthlyPropertyProjection` (26 fields,
+the canonical monthly model, D4.3) and `AnnualOperatingProjection` (25 fields,
+derived from it and satisfying `OperatingProjectionLike`, D4.4). The monthly
+model is retained on the result envelope, never discarded after aggregation, so
+the split costs no auditability. Field-level naming also settled differently —
+`expense_recoveries` shipped as `expense_recovery`, and the `rent_roll` and
+`market_rent_psf_at_year_end` members are not present.
+
+**The shipped field lists are reconciled in §39.2 of the D4 integration
+architecture, which governs.** The financial content of the sketch — what EGI
+contains, what sits below NOI, what the state series mean — was implemented as
+designed.
+
+### B.3 Gate numbering drifted from the Section 29 sketch
+
+Section 29 assigns `MonthlyPropertyProjection` to D4.1 and the below-NOI
+channel, the mode entry point and the result envelope to D4.3. The work
+actually shipped as: **D4.1** property expenses and the recoverable pool,
+**D4.2** property operating aggregation, **D4.3** the monthly projection,
+**D4.4** the annual adapter, **D4.5A** the generic `OperatingCapitalSchedule`
+below-NOI channel, **D4.5B** the acquisition orchestration and result envelope,
+**D4.6A/B** sensitivity, **D4.7** closeout. No scope was dropped; it was
+sequenced into more gates than the sketch anticipated. §39.1.1 of the D4
+integration architecture is the authoritative gate-by-gate inventory.
+
+### B.4 What is unchanged
+
+`absent_rent` is still **not** a production field, exactly as Section 5 and its
+D4.0 amendment require. EGI is still built from `cash_base_rent`, never
+reconstructed as `contractual_base_rent − free_rent`. The dependency direction
+Section 3 sets out held: `anchor.engine` never imports `anchor.leasing`, and the
+orchestration lives in `src/anchor/analysis/lease_level.py` as forecast.
+HD-D3-5, HD-D3-6 and HD-D3-7 all remain deferred and were verified absent from
+the shipped code at closeout.

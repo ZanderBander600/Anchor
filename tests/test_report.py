@@ -115,6 +115,8 @@ def test_build_report_only_formats_precomputed_engine_values() -> None:
         remaining_loan_balance=results.remaining_loan_balance,
         noi_by_year=results.noi_by_year,
         capex_by_year=results.capex_by_year,
+        tenant_improvements_by_year=results.tenant_improvements_by_year,
+        leasing_commissions_by_year=results.leasing_commissions_by_year,
         exit_noi=results.exit_noi,
         exit_value=results.exit_value,
         disposition_costs=results.disposition_costs,

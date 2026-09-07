@@ -58,7 +58,13 @@ from .calendar import (
 from .contracts import (
     EscalationBasis,
     Lease,
+    LeaseLevelOperatingInputs,
     LeaseLevelPropertyInputs,
+    MonthlyPropertyExpenseSchedule,
+    MonthlyPropertyProjection,
+    PropertyOperatingSchedule,
+    PropertyRecoverySchedule,
+    SuiteOperatingProjection,
     LeaseOrigin,
     LeaseType,
     LeasingCommissionMethod,
@@ -172,6 +178,41 @@ class LeaseIssueCode(StrEnum):
     )
     EXPENSE_STOP_OUT_OF_DOMAIN = "EXPENSE_STOP_OUT_OF_DOMAIN"
     UNSUPPORTED_RECOVERY_BASIS = "UNSUPPORTED_RECOVERY_BASIS"
+
+    # --- Lease-Level acquisition integration (D4.5B) ---
+    NON_POSITIVE_FORWARD_EXIT_NOI = "NON_POSITIVE_FORWARD_EXIT_NOI"
+    MULTIPLE_KNOWN_LEASES_IN_SUITE = "MULTIPLE_KNOWN_LEASES_IN_SUITE"
+
+    # --- annual operating adapter (D4.4) ---
+    PROJECTION_NOT_CANONICAL = "PROJECTION_NOT_CANONICAL"
+    PURCHASE_PRICE_OUT_OF_DOMAIN = "PURCHASE_PRICE_OUT_OF_DOMAIN"
+
+    # --- monthly property projection (D4.3) ---
+    PROPERTY_RECOVERY_NOT_ALIGNED = "PROPERTY_RECOVERY_NOT_ALIGNED"
+    PROPERTY_EXPENSE_SCHEDULE_NOT_ALIGNED = (
+        "PROPERTY_EXPENSE_SCHEDULE_NOT_ALIGNED"
+    )
+    PROPERTY_RECOVERY_AREA_MISMATCH = "PROPERTY_RECOVERY_AREA_MISMATCH"
+    PROPERTY_RECOVERY_SUITE_UNIVERSE_MISMATCH = (
+        "PROPERTY_RECOVERY_SUITE_UNIVERSE_MISMATCH"
+    )
+
+    # --- property leasing aggregation (D4.2) ---
+    OPERATING_SCHEDULE_NOT_ALIGNED = "OPERATING_SCHEDULE_NOT_ALIGNED"
+    MISSING_SUITE_OPERATING_PROJECTION = "MISSING_SUITE_OPERATING_PROJECTION"
+    SUITE_AREA_MISMATCH = "SUITE_AREA_MISMATCH"
+
+    # --- property operating inputs (D4.1) ---
+    PROPERTY_EXPENSE_OUT_OF_DOMAIN = "PROPERTY_EXPENSE_OUT_OF_DOMAIN"
+    EXPENSE_GROWTH_OUT_OF_DOMAIN = "EXPENSE_GROWTH_OUT_OF_DOMAIN"
+    RECOVERABLE_EXPENSE_RATIO_OUT_OF_DOMAIN = (
+        "RECOVERABLE_EXPENSE_RATIO_OUT_OF_DOMAIN"
+    )
+    OTHER_INCOME_OUT_OF_DOMAIN = "OTHER_INCOME_OUT_OF_DOMAIN"
+    OTHER_INCOME_GROWTH_OUT_OF_DOMAIN = "OTHER_INCOME_GROWTH_OUT_OF_DOMAIN"
+    MANAGEMENT_FEE_OUT_OF_DOMAIN = "MANAGEMENT_FEE_OUT_OF_DOMAIN"
+    CREDIT_LOSS_OUT_OF_DOMAIN = "CREDIT_LOSS_OUT_OF_DOMAIN"
+    UNUSUALLY_HIGH_CREDIT_LOSS = "UNUSUALLY_HIGH_CREDIT_LOSS"
 
     # --- rent ---
     BASE_RENT_OUT_OF_DOMAIN = "BASE_RENT_OUT_OF_DOMAIN"
@@ -2119,6 +2160,905 @@ def require_valid_initial_vacancy_inputs(
     result = validate_initial_vacancy_inputs(
         suites, leases, property_defaults=property_defaults, path=path
     )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D4.5B -- the Lease-Level acquisition integration boundary
+#
+# Two rules, and both belong here rather than upstream. Neither is an operating
+# rule: a projection carrying either defect is a perfectly valid *operating*
+# model, and only the act of running an acquisition analysis against it is
+# refused.
+# =============================================================================
+
+
+def validate_capitalizable_exit_noi(
+    exit_noi: float, *, path: str = "annual_projection.exit_noi"
+) -> LeaseValidationResult:
+    """Refuse a non-positive forward exit NOI (HD-D4-7).
+
+    ``exit_value = exit_noi / exit_cap_rate`` is a valuation only when the
+    numerator is an income stream. With a non-positive numerator the expression
+    behaves perversely -- a *lower* cap rate makes the "value" *more* negative
+    -- and it then propagates into net sale proceeds, both cash-flow series and
+    both IRRs. Reporting that number, and returns derived from it, would be
+    worse than refusing.
+
+    **This is an acquisition-boundary rule, not an operating one.** The monthly
+    and annual projections of a distressed building build successfully and stay
+    fully inspectable; negative monthly NOI, negative hold-year NOI and a
+    negative going-in cap rate are all legitimate results and none is refused
+    here. Only the forward NOI *used for cap-rate terminal valuation* is
+    restricted, and only at the point where that capitalization is about to
+    happen.
+
+    Deliberately not in ``anchor.engine``: ``calculate_exit_value`` keeps its
+    behaviour for every caller, so Quick and Detailed are provably unaffected
+    (G-2).
+    """
+
+    if not _is_finite_number(exit_noi):
+        return LeaseValidationResult(
+            issues=(
+                _issue(
+                    LeaseIssueCode.NON_FINITE_VALUE,
+                    path,
+                    "the forward exit NOI must be a finite number.",
+                ),
+            )
+        )
+    if exit_noi <= 0:
+        return LeaseValidationResult(
+            issues=(
+                _issue(
+                    LeaseIssueCode.NON_POSITIVE_FORWARD_EXIT_NOI,
+                    path,
+                    f"the forward exit NOI is {exit_noi!r}. Cap-rate terminal "
+                    "valuation requires a positive forward income stream: "
+                    "dividing a loss by a cap rate does not produce a price a "
+                    "buyer would pay, and a lower cap rate would make the "
+                    "result more negative. The operating projection itself is "
+                    "valid and remains inspectable; only capitalizing it is "
+                    "refused.",
+                ),
+            )
+        )
+    return LeaseValidationResult(issues=())
+
+
+def require_capitalizable_exit_noi(
+    exit_noi: float, *, path: str = "annual_projection.exit_noi"
+) -> LeaseValidationResult:
+    """Validate the forward exit NOI and raise ``LeaseValidationError`` on any
+    ERROR. Called immediately before the shared exit-cap calculation."""
+
+    result = validate_capitalizable_exit_noi(exit_noi, path=path)
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+def validate_lease_level_acquisition_leases(
+    suites: Iterable[Suite], leases: Iterable[Lease]
+) -> LeaseValidationResult:
+    """Refuse a suite carrying more than one **known** lease (D4.5B).
+
+    Lease-Level acquisition underwriting supports at most one known lease per
+    suite. Zero known leases follow the initial-vacancy path (``HOLD_VACANT``
+    or ``MARKET_LEASE_UP``); exactly one follows the occupied recursive
+    rollover path; more than one is rejected.
+
+    **"Known", not "in place".** The count is of every lease stated for the
+    suite, with no date condition, so a signed *future* lease that does not
+    overlap the current one is rejected by this same rule. That is deliberate
+    and is the reason the code says ``KNOWN`` rather than ``IN_PLACE``.
+
+    **A scoped acquisition restriction, not an economic default, and not a D1
+    rule.** D1 is a contractual/factual layer and legitimately represents
+    sequential known leases; that representation is unchanged and this
+    validator is not applied there. What is missing is downstream: the
+    authoritative full-chain builder for an occupied suite --
+    ``build_recursive_rollover`` -- is seeded from exactly one expiring lease,
+    and ``suite_operating_projection`` takes exactly one chain per suite. No
+    contract describes the economics required to compose *known lease A ->
+    known future lease B -> market recursion*: the committed successor's
+    concessions, TI, LC, commencement-gap treatment, recovery structure and
+    exact handoff to probabilistic rollover all have no home.
+
+    So the alternatives are all worse than refusing. Dropping the later lease,
+    keeping only the first, reinterpreting a signed future lease as a
+    probabilistic market successor, or fabricating concessions, TI, LC or
+    downtime to bridge the gap would each report a number nobody underwrote.
+    Committed/sequential future known leases are a deferred leasing capability.
+
+    Emitted in suite order, so the sequence is reproducible.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+    lease_tuple = tuple(leases)
+
+    for suite in tuple(suites):
+        matching = [
+            lease.lease_id
+            for lease in lease_tuple
+            if lease.suite_id == suite.suite_id
+        ]
+        if len(matching) > 1:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MULTIPLE_KNOWN_LEASES_IN_SUITE,
+                    f"suites[{suite.suite_id}]",
+                    f"suite {suite.suite_id!r} carries {len(matching)} known "
+                    f"leases ({sorted(matching)}). Lease-Level acquisition "
+                    "underwriting currently supports at most one known lease "
+                    "per suite; sequential or committed future known leases are "
+                    "not yet supported. State the in-place lease and let the "
+                    "rollover engine price what follows it.",
+                )
+            )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_lease_level_acquisition_leases(
+    suites: Iterable[Suite], leases: Iterable[Lease]
+) -> LeaseValidationResult:
+    """Validate suite/lease association for the acquisition path and raise on
+    any ERROR."""
+
+    result = validate_lease_level_acquisition_leases(suites, leases)
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D4.4 -- the annual operating adapter
+#
+# Two rules only. The reducers in ``aggregation.py`` already enforce that a
+# monthly series has exactly ``12H + 12`` values, and every contract already
+# enforces its own series lengths, so this validator adds precisely what
+# nothing upstream can know: that the hold/forward partition the adapter is
+# about to slice on is the one the calendar actually describes, and that the
+# valuation denominator is usable.
+# =============================================================================
+
+
+def validate_annual_adapter_inputs(
+    monthly: MonthlyPropertyProjection,
+    *,
+    hold_period: int,
+    purchase_price: float,
+) -> LeaseValidationResult:
+    """Validate the inputs to one monthly-to-annual derivation (D4.4).
+
+    **Canonical partition** (``PROJECTION_NOT_CANONICAL``). The adapter slices
+    hold years out of months ``1 .. 12H`` and the exit window out of
+    ``12H+1 .. 12H+12``. Both slices are position-based, so the partition must
+    match what ``ModelMonth`` says: the projection must hold exactly
+    ``12H + 12`` months, and exactly the final twelve must carry
+    ``is_forward_exit_month``. A projection whose flags disagree with its
+    length would still slice cleanly and would silently move the sale date.
+
+    **Valuation denominator** (``PURCHASE_PRICE_OUT_OF_DOMAIN``). ``> 0`` and
+    finite, the same domain ``anchor.validation`` already applies to
+    ``purchase_price``, reproduced here under the leasing-scoped severity
+    architecture rather than by importing or modifying the global validator.
+    The denominator is needed only to construct ``going_in_cap_rate``, which
+    ``OperatingProjectionLike`` requires; accepting it is not acquisition
+    integration, and nothing else in this gate reads it.
+
+    **Deliberately not checked: the sign of the forward NOI.** A non-positive
+    ``exit_noi`` is a legitimate operating result and this gate constructs it
+    faithfully. Cap-rate terminal valuation is what it makes meaningless, and
+    that is refused at the Lease-Level acquisition/integration boundary at
+    D4.5 (HD-D4-7, D4 Section 21.6). Moving the check here would make the
+    operating projection of a distressed building unbuildable, which is
+    exactly what the accepted decision avoids.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+
+    expected_months = projection_month_count(hold_period)
+    if len(monthly.months) != expected_months:
+        issues.append(
+            _issue(
+                LeaseIssueCode.PROJECTION_NOT_CANONICAL,
+                "monthly_projection.months",
+                f"a {hold_period}-year hold has {expected_months} canonical "
+                f"months ({hold_period} hold years plus the twelve forward "
+                f"exit months); the projection holds {len(monthly.months)}.",
+            )
+        )
+    else:
+        last_hold_month = 12 * hold_period
+        for position, month in enumerate(monthly.months):
+            is_forward = position >= last_hold_month
+            if month.is_forward_exit_month is not is_forward:
+                issues.append(
+                    _issue(
+                        LeaseIssueCode.PROJECTION_NOT_CANONICAL,
+                        f"monthly_projection.months[{position}]",
+                        f"month {month.period_index} is marked "
+                        f"is_forward_exit_month="
+                        f"{month.is_forward_exit_month!r} but position "
+                        f"{position} of a {hold_period}-year hold is "
+                        f"{'inside' if is_forward else 'outside'} the forward "
+                        "exit window; the sale date is month "
+                        f"{last_hold_month}.",
+                    )
+                )
+                break
+
+    if not _is_finite_number(purchase_price):
+        issues.append(
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                "purchase_price",
+                "purchase_price must be a finite number.",
+            )
+        )
+    elif purchase_price <= 0:
+        issues.append(
+            _issue(
+                LeaseIssueCode.PURCHASE_PRICE_OUT_OF_DOMAIN,
+                "purchase_price",
+                f"purchase_price {purchase_price!r} must be greater than 0; it "
+                "is the going-in cap rate's denominator.",
+            )
+        )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_annual_adapter_inputs(
+    monthly: MonthlyPropertyProjection,
+    *,
+    hold_period: int,
+    purchase_price: float,
+) -> LeaseValidationResult:
+    """Validate annual-adapter inputs and raise on any ERROR."""
+
+    result = validate_annual_adapter_inputs(
+        monthly, hold_period=hold_period, purchase_price=purchase_price
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D4.3 -- monthly property projection composition
+#
+# Three completed schedules are about to be read position by position. Each
+# check below exists because the corresponding mistake would produce a
+# plausible, wrong statement rather than a crash: a recovery series from a
+# different projection, an expense series from a different hold horizon, or a
+# recovery schedule belonging to another building entirely.
+# =============================================================================
+
+
+def validate_property_projection_inputs(
+    operating: PropertyOperatingSchedule,
+    recovery: PropertyRecoverySchedule,
+    expenses: MonthlyPropertyExpenseSchedule,
+    *,
+    operating_inputs: LeaseLevelOperatingInputs,
+) -> LeaseValidationResult:
+    """Validate the three schedules and the assumptions D4.3 composes.
+
+    **The leasing schedule defines the timeline.** ``PropertyOperatingSchedule``
+    is the accepted property-level authority (D4.2), so its ``months`` is the
+    canonical sequence and the other two are checked against it.
+
+    Rules, in a fixed order so the emitted sequence is reproducible:
+
+    1. **Operating-input domains**, through the existing
+       ``validate_lease_level_operating_inputs`` -- one authority, reused, not
+       a second copy. D4.3 consumes only ``other_income``,
+       ``other_income_growth``, ``credit_loss_pct`` and ``management_fee_pct``,
+       but the whole contract is validated because that is what the single
+       authority does, and an out-of-domain field it does not read is still an
+       out-of-domain field.
+    2. **Recovery alignment** (``PROPERTY_RECOVERY_NOT_ALIGNED``) -- month
+       *identity*, on the same semantic basis D3.5 and D4.2 already use
+       (tuple equality over ``ModelMonth``), never length. A recovery series
+       from a different analysis start or hold horizon would zip cleanly by
+       position and add up to a plausible, wrong EGI.
+    3. **Expense alignment** (``PROPERTY_EXPENSE_SCHEDULE_NOT_ALIGNED``) -- the
+       same rule, for the same reason.
+    4. **Property-area identity** (``PROPERTY_RECOVERY_AREA_MISMATCH``) --
+       both schedules carry their own ``rentable_area_sf``; they must agree
+       under Anchor's existing scaled area tolerance. Two buildings can easily
+       share a timeline, and the areas are the only scalar both schedules
+       independently record.
+    5. **Suite-universe identity**
+       (``PROPERTY_RECOVERY_SUITE_UNIVERSE_MISMATCH``) -- both schedules retain
+       their per-suite projections, so the suites they describe must be the
+       same set. This is what actually distinguishes "the same property" from
+       "a property of the same size"; the area check alone would not.
+
+    Deliberately **not** checked here: anything the source contracts already
+    guarantee. Series lengths are enforced by each schedule's own
+    ``__post_init__``, the recovery domain by D3, and the expense domain by
+    D4.1. There is one validation authority per rule.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+
+    issues.extend(
+        validate_lease_level_operating_inputs(operating_inputs).issues
+    )
+
+    months = operating.months
+
+    if recovery.months != months:
+        issues.append(
+            _issue(
+                LeaseIssueCode.PROPERTY_RECOVERY_NOT_ALIGNED,
+                "recovery_schedule.months",
+                "the property recovery schedule was built against a different "
+                "canonical month sequence than the property leasing schedule; "
+                "one projection shares one timeline, and matching lengths are "
+                "not matching months.",
+            )
+        )
+
+    if expenses.months != months:
+        issues.append(
+            _issue(
+                LeaseIssueCode.PROPERTY_EXPENSE_SCHEDULE_NOT_ALIGNED,
+                "expense_schedule.months",
+                "the monthly property expense schedule was built against a "
+                "different canonical month sequence than the property leasing "
+                "schedule; one projection shares one timeline.",
+            )
+        )
+
+    if not _areas_reconcile(recovery.rentable_area_sf, operating.rentable_area_sf):
+        issues.append(
+            _issue(
+                LeaseIssueCode.PROPERTY_RECOVERY_AREA_MISMATCH,
+                "recovery_schedule.rentable_area_sf",
+                f"the recovery schedule states {recovery.rentable_area_sf!r} "
+                f"rentable SF and the leasing schedule "
+                f"{operating.rentable_area_sf!r}; the two must describe the "
+                "same property.",
+            )
+        )
+
+    operating_suites = sorted(
+        projection.suite_id for projection in operating.suite_projections
+    )
+    recovery_suites = sorted(
+        projection.suite_id for projection in recovery.suite_projections
+    )
+    if operating_suites != recovery_suites:
+        issues.append(
+            _issue(
+                LeaseIssueCode.PROPERTY_RECOVERY_SUITE_UNIVERSE_MISMATCH,
+                "recovery_schedule.suite_projections",
+                f"the recovery schedule covers suites {recovery_suites} and "
+                f"the leasing schedule {operating_suites}; two schedules of "
+                "the same property describe the same suites, and equal areas "
+                "and timelines alone do not make one property.",
+            )
+        )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_property_projection_inputs(
+    operating: PropertyOperatingSchedule,
+    recovery: PropertyRecoverySchedule,
+    expenses: MonthlyPropertyExpenseSchedule,
+    *,
+    operating_inputs: LeaseLevelOperatingInputs,
+) -> LeaseValidationResult:
+    """Validate projection composition inputs and raise on any ERROR."""
+
+    result = validate_property_projection_inputs(
+        operating, recovery, expenses, operating_inputs=operating_inputs
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D4.2 -- property leasing aggregation
+#
+# Mirrors ``validate_property_recovery_inputs`` (D3.5) rule for rule, with one
+# deliberate tightening: ``suites`` is REQUIRED and completeness is
+# unconditional. D3.5 could only judge completeness when it also knew the
+# leases, because a suite with no lease legitimately had no recovery schedule.
+# At D4.2 every suite has leasing economics -- an occupied one has its chain,
+# a MARKET_LEASE_UP one has its lease-up chain, and a HOLD_VACANT one has an
+# explicit all-zero chain -- so "this suite may be omitted" is no longer a
+# thing, and D3.6's refusal to let deliberate vacancy look like an omission is
+# preserved rather than weakened.
+# =============================================================================
+
+
+def validate_property_operating_inputs(
+    projections: Iterable[SuiteOperatingProjection],
+    suites: Iterable[Suite],
+    *,
+    months: tuple[ModelMonth, ...],
+    leases: Iterable[Lease] | None = None,
+) -> LeaseValidationResult:
+    """Validate the inputs to one property leasing aggregation (D4.2).
+
+    Leasing-scoped, and deliberately separate from
+    ``validate_lease_level_inputs``: a rent roll is valid input to D1 and D2
+    whether or not anyone has projected a suite, so a missing projection is
+    reported by the aggregation that needs it and by nothing else.
+
+    **Month identity is checked, not length**
+    (``OPERATING_SCHEDULE_NOT_ALIGNED``). A projection from a different
+    analysis start, hold horizon or forward window would zip cleanly by
+    position and add up to a plausible, wrong answer. There is one canonical
+    timeline, and matching lengths are not matching months.
+
+    **Duplicate suites** (``DUPLICATE_SUITE_ID``) are an ERROR rather than a
+    silent sum. Two projections for one suite would double that suite's rent,
+    TI, LC **and** its occupied area -- an overstatement with no visible
+    symptom, since the property total is a sum and nothing else constrains it.
+
+    **Unknown suites** (``UNKNOWN_SUITE_REFERENCE``): a projection for space
+    the property does not contain adds rent and occupied area from nowhere.
+
+    **Area mismatch** (``SUITE_AREA_MISMATCH``): a projection must claim the
+    suite's authoritative ``suite_area_sf``, compared under Anchor's existing
+    scaled tolerance rather than ``==``. The area is what every occupancy
+    figure is measured against, so a projection quietly carrying a different
+    one would corrupt property occupancy while every rent figure still looked
+    right.
+
+    **Missing projections**: every suite must appear exactly once. A suite
+    carrying an explicit initial-vacancy treatment that produced no projection
+    is ``MISSING_SUITE_OPERATING_PROJECTION`` -- a deliberate zero must be
+    *present*, so it stays distinguishable from an omission. A suite that is
+    vacant and was never underwritten at all is
+    ``MISSING_INITIAL_VACANCY_TREATMENT``, the D3.6 rule, unchanged: Anchor
+    does not assume vacant space stays vacant.
+
+    Issues are emitted in a deterministic order: alignment, duplication and
+    area in the caller's own projection order, then unknown suites, then
+    missing ones in suite order. Nothing here iterates a ``set`` or ``dict``
+    to produce an issue.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+    projection_tuple = tuple(projections)
+    suite_tuple = tuple(suites)
+    areas = {suite.suite_id: suite.suite_area_sf for suite in suite_tuple}
+
+    seen: set[str] = set()
+    for index, projection in enumerate(projection_tuple):
+        path = f"suite_operating[{index}]"
+
+        if projection.months != months:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.OPERATING_SCHEDULE_NOT_ALIGNED,
+                    f"{path}.months",
+                    f"the operating projection for suite "
+                    f"{projection.suite_id!r} was built against a different "
+                    "canonical month sequence; one property aggregation "
+                    "shares one timeline, and matching lengths are not "
+                    "matching months.",
+                )
+            )
+
+        if projection.suite_id in seen:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.DUPLICATE_SUITE_ID,
+                    f"{path}.suite_id",
+                    f"suite {projection.suite_id!r} has more than one "
+                    "operating projection in this aggregation; its rent, "
+                    "leasing costs and occupied area would all be counted "
+                    "twice.",
+                )
+            )
+        seen.add(projection.suite_id)
+
+        authoritative = areas.get(projection.suite_id)
+        if authoritative is not None and not _areas_reconcile(
+            projection.suite_area_sf, authoritative
+        ):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.SUITE_AREA_MISMATCH,
+                    f"{path}.suite_area_sf",
+                    f"the operating projection for suite "
+                    f"{projection.suite_id!r} claims "
+                    f"{projection.suite_area_sf!r} SF but the suite is "
+                    f"{authoritative!r} SF; occupancy is measured against the "
+                    "suite's authoritative area.",
+                )
+            )
+
+    known = set(areas)
+    for index, projection in enumerate(projection_tuple):
+        if projection.suite_id not in known:
+            issues.append(
+                _issue(
+                    LeaseIssueCode.UNKNOWN_SUITE_REFERENCE,
+                    f"suite_operating[{index}].suite_id",
+                    f"operating projection references suite "
+                    f"{projection.suite_id!r}, which is not a suite of this "
+                    "property; rent and occupied area cannot come from space "
+                    "the property does not contain.",
+                )
+            )
+
+    tenanted = None if leases is None else {lease.suite_id for lease in leases}
+    for suite in suite_tuple:
+        if suite.suite_id in seen:
+            continue
+
+        if suite.initial_vacancy is None and (
+            tenanted is not None and suite.suite_id not in tenanted
+        ):
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_INITIAL_VACANCY_TREATMENT,
+                    f"suites[{suite.suite_id}].initial_vacancy",
+                    f"suite {suite.suite_id!r} is vacant at the analysis start "
+                    "and states no initial-vacancy treatment, so its future "
+                    "leasing economics cannot be aggregated. Anchor does not "
+                    "assume vacant space stays vacant: state HOLD_VACANT or "
+                    "MARKET_LEASE_UP explicitly.",
+                )
+            )
+        else:
+            treatment = (
+                "is occupied or unlabelled"
+                if suite.initial_vacancy is None
+                else f"is vacant with an explicit "
+                f"{suite.initial_vacancy.strategy.value} treatment"
+            )
+            issues.append(
+                _issue(
+                    LeaseIssueCode.MISSING_SUITE_OPERATING_PROJECTION,
+                    f"suites[{suite.suite_id}]",
+                    f"suite {suite.suite_id!r} {treatment} but has no "
+                    "operating projection in this aggregation. Every suite "
+                    "appears exactly once, so a deliberate zero is "
+                    "distinguishable from an omission.",
+                )
+            )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_property_operating_inputs(
+    projections: Iterable[SuiteOperatingProjection],
+    suites: Iterable[Suite],
+    *,
+    months: tuple[ModelMonth, ...],
+    leases: Iterable[Lease] | None = None,
+) -> LeaseValidationResult:
+    """Validate property leasing-aggregation inputs and raise on any ERROR."""
+
+    result = validate_property_operating_inputs(
+        projections, suites, months=months, leases=leases
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+# =============================================================================
+# D4.1 -- property operating inputs
+#
+# Deliberately separate from ``validate_lease_level_inputs``, for the reason
+# D3.1 established for recovery inputs: a rent roll that carries no property
+# operating assumptions is not thereby invalid input to D1, D2 or D3. The
+# market-leasing engine remains usable before any expense schedule exists, so
+# an operating-input defect is reported by the calculation that needs it and by
+# nothing else.
+#
+# The domains below are the *identical* domains ``anchor.validation`` already
+# applies to the same six Detailed concepts, reproduced here under the
+# leasing-scoped ERROR/WARNING architecture (HD-6) rather than by importing or
+# modifying the global validator -- which D4 Section 9.2 requires be left
+# untouched, since it owns the API boundary for Quick and Detailed and the
+# Lease-Level API boundary is D5.
+# =============================================================================
+
+
+#: The five eligible fixed property expense lines, in the order
+#: ``MonthlyPropertyExpenseSchedule`` declares them, so validation issues are
+#: emitted in the same canonical order the schedule accumulates them.
+_FIXED_EXPENSE_FIELDS: tuple[str, ...] = (
+    "property_taxes",
+    "insurance",
+    "utilities",
+    "repairs_maintenance",
+    "other_operating_expenses",
+)
+
+#: Above this, a Lease-Level credit-loss allowance is more likely a Detailed
+#: ``vacancy_credit_loss_pct`` carried across by mistake than a genuine bad-debt
+#: assumption (D0 Section 15.4). Physical vacancy is already modeled per suite
+#: per month, so it must not be inside this percentage a second time.
+_UNUSUAL_CREDIT_LOSS_THRESHOLD = 0.10
+
+
+def _validate_ratio_field(
+    value: object, *, code: LeaseIssueCode, path: str, label: str
+) -> list[LeaseValidationIssue]:
+    """Finite and ``0 <= x <= 1``."""
+
+    if not _is_finite_number(value):
+        return [
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                path,
+                f"{label} must be a finite number.",
+            )
+        ]
+    if not 0 <= value <= 1:
+        return [
+            _issue(
+                code,
+                path,
+                f"{label} {value!r} must be between 0 and 1, inclusive.",
+            )
+        ]
+    return []
+
+
+def _validate_growth_field(
+    value: object, *, code: LeaseIssueCode, path: str, label: str
+) -> list[LeaseValidationIssue]:
+    """Finite and ``> -1`` -- the exact Detailed growth domain.
+
+    No upper bound, and negative growth is permitted: a building whose taxes
+    are being appealed downward is ordinary. ``g <= -1`` is refused because
+    ``(1 + g)`` is then non-positive, which either collapses every later year
+    to exactly zero (``g == -1``) or flips its sign every year (``g < -1``) --
+    neither is meaningful for a compounding dollar amount. This is the same
+    reasoning, and the same boundary, ``anchor.validation`` records for
+    ``expense_growth`` and ``revenue_growth``.
+    """
+
+    if not _is_finite_number(value):
+        return [
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                path,
+                f"{label} must be a finite number.",
+            )
+        ]
+    if not value > -1:
+        return [
+            _issue(
+                code,
+                path,
+                f"{label} {value!r} must be greater than -1; at or below -1 a "
+                "compounding amount collapses to zero or flips sign each year.",
+            )
+        ]
+    return []
+
+
+def _validate_non_negative_dollars(
+    value: object, *, code: LeaseIssueCode, path: str, label: str
+) -> list[LeaseValidationIssue]:
+    """Finite and ``>= 0`` -- the exact Detailed expense/other-income domain.
+
+    Zero is valid and economically meaningful: a building with no separately
+    metered utilities carries ``utilities = 0.0``. Negative is refused; a
+    negative annual operating expense is an expense credit, for which the
+    accepted model has no convention, exactly as D3 refuses a negative pool.
+    """
+
+    if not _is_finite_number(value):
+        return [
+            _issue(
+                LeaseIssueCode.NON_FINITE_VALUE,
+                path,
+                f"{label} must be a finite number.",
+            )
+        ]
+    if value < 0:
+        return [
+            _issue(
+                code,
+                path,
+                f"{label} {value!r} must be greater than or equal to 0.",
+            )
+        ]
+    return []
+
+
+def validate_recoverable_expense_ratio(
+    recoverable_expense_ratio: object,
+    *,
+    path: str = "operating_inputs.recoverable_expense_ratio",
+) -> LeaseValidationResult:
+    """Validate a standalone ``recoverable_expense_ratio`` (D4.1).
+
+    Finite and ``0 <= x <= 1`` (D0 Section 4.6). Both endpoints are valid and
+    meaningful: ``0.0`` is a property whose expenses are wholly the landlord's,
+    ``1.0`` a fully recoverable expense structure.
+
+    **No silent clipping.** A ratio outside the domain is an ERROR, never
+    clamped to the nearest endpoint -- clamping would turn an analyst's typo
+    (``60`` meaning 60%) into a plausible, wrong model.
+
+    Exists because ``expenses.build_recoverable_expense_pool`` takes the ratio
+    as a bare scalar alongside an already-built schedule, so it needs a guard
+    of its own. It shares ``_validate_ratio_field`` with
+    ``validate_lease_level_operating_inputs`` below, so there is exactly one
+    rule with two entry points rather than two rules that could drift.
+    """
+
+    return LeaseValidationResult(
+        issues=tuple(
+            _validate_ratio_field(
+                recoverable_expense_ratio,
+                code=LeaseIssueCode.RECOVERABLE_EXPENSE_RATIO_OUT_OF_DOMAIN,
+                path=path,
+                label="recoverable_expense_ratio",
+            )
+        )
+    )
+
+
+def require_valid_recoverable_expense_ratio(
+    recoverable_expense_ratio: object,
+    *,
+    path: str = "operating_inputs.recoverable_expense_ratio",
+) -> LeaseValidationResult:
+    """Validate a standalone ratio and raise ``LeaseValidationError`` on any
+    ERROR."""
+
+    result = validate_recoverable_expense_ratio(
+        recoverable_expense_ratio, path=path
+    )
+    if result.errors:
+        raise LeaseValidationError(result)
+    return result
+
+
+def validate_lease_level_operating_inputs(
+    operating_inputs: LeaseLevelOperatingInputs,
+    *,
+    path: str = "operating_inputs",
+) -> LeaseValidationResult:
+    """Validate one ``LeaseLevelOperatingInputs`` (D4.1).
+
+    Rules are evaluated in a **fixed order** so the emitted sequence is
+    reproducible and never depends on ``dict`` iteration, ``set`` iteration or
+    the caller: the five fixed expense lines in
+    ``MonthlyPropertyExpenseSchedule``'s declared order, then
+    ``expense_growth``, then ``recoverable_expense_ratio``, then the revenue
+    and rate fields D4.3 will consume, then the credit-loss warning last.
+
+    **Every field is validated, including the four this gate does not use.**
+    ``other_income``, ``other_income_growth``, ``management_fee_pct`` and
+    ``credit_loss_pct`` are declared on the contract by D4 Section 9.2 and are
+    financially inert until D4.3 -- but an accepted field that nothing checks
+    is a hole, and a negative ``other_income`` should be refused when it is
+    supplied, not two gates later. Validating a value is not calculating with
+    it: no D4.1 output changes when any of the four changes.
+
+    Domains, each identical to the one ``anchor.validation`` applies to the
+    same Detailed concept:
+
+    - the five fixed expense lines and ``other_income`` -- finite, ``>= 0``
+    - ``expense_growth`` and ``other_income_growth`` -- finite, ``> -1``
+    - ``management_fee_pct``, ``credit_loss_pct`` and
+      ``recoverable_expense_ratio`` -- finite, ``0 <= x <= 1``
+
+    **One WARNING** (D0 Section 15.4): ``UNUSUALLY_HIGH_CREDIT_LOSS`` above
+    10%. Lease-Level's ``credit_loss_pct`` covers **bad debt only** -- physical
+    vacancy is modeled explicitly, per suite, per month -- so a figure at
+    Detailed's blended ``vacancy_credit_loss_pct`` magnitude usually means the
+    two were confused and vacancy is about to be counted twice. It is a
+    warning, not an error: a genuinely high bad-debt assumption is computable
+    and defensible, and Anchor never downgrades a mathematically invalid input
+    to a warning nor upgrades a merely unusual one to an error.
+    """
+
+    issues: list[LeaseValidationIssue] = []
+
+    for name in _FIXED_EXPENSE_FIELDS:
+        issues.extend(
+            _validate_non_negative_dollars(
+                getattr(operating_inputs, name),
+                code=LeaseIssueCode.PROPERTY_EXPENSE_OUT_OF_DOMAIN,
+                path=f"{path}.{name}",
+                label=name,
+            )
+        )
+
+    issues.extend(
+        _validate_growth_field(
+            operating_inputs.expense_growth,
+            code=LeaseIssueCode.EXPENSE_GROWTH_OUT_OF_DOMAIN,
+            path=f"{path}.expense_growth",
+            label="expense_growth",
+        )
+    )
+    issues.extend(
+        _validate_ratio_field(
+            operating_inputs.recoverable_expense_ratio,
+            code=LeaseIssueCode.RECOVERABLE_EXPENSE_RATIO_OUT_OF_DOMAIN,
+            path=f"{path}.recoverable_expense_ratio",
+            label="recoverable_expense_ratio",
+        )
+    )
+    issues.extend(
+        _validate_non_negative_dollars(
+            operating_inputs.other_income,
+            code=LeaseIssueCode.OTHER_INCOME_OUT_OF_DOMAIN,
+            path=f"{path}.other_income",
+            label="other_income",
+        )
+    )
+    issues.extend(
+        _validate_growth_field(
+            operating_inputs.other_income_growth,
+            code=LeaseIssueCode.OTHER_INCOME_GROWTH_OUT_OF_DOMAIN,
+            path=f"{path}.other_income_growth",
+            label="other_income_growth",
+        )
+    )
+    issues.extend(
+        _validate_ratio_field(
+            operating_inputs.management_fee_pct,
+            code=LeaseIssueCode.MANAGEMENT_FEE_OUT_OF_DOMAIN,
+            path=f"{path}.management_fee_pct",
+            label="management_fee_pct",
+        )
+    )
+    credit_loss_issues = _validate_ratio_field(
+        operating_inputs.credit_loss_pct,
+        code=LeaseIssueCode.CREDIT_LOSS_OUT_OF_DOMAIN,
+        path=f"{path}.credit_loss_pct",
+        label="credit_loss_pct",
+    )
+    issues.extend(credit_loss_issues)
+
+    if not credit_loss_issues and (
+        operating_inputs.credit_loss_pct > _UNUSUAL_CREDIT_LOSS_THRESHOLD
+    ):
+        issues.append(
+            _issue(
+                LeaseIssueCode.UNUSUALLY_HIGH_CREDIT_LOSS,
+                f"{path}.credit_loss_pct",
+                f"credit_loss_pct {operating_inputs.credit_loss_pct!r} exceeds "
+                "10%. Lease-Level credit loss covers bad debt only; physical "
+                "vacancy is already modeled per suite per month, so a Detailed "
+                "vacancy_credit_loss_pct must not be carried across here.",
+                LeaseIssueSeverity.WARNING,
+            )
+        )
+
+    return LeaseValidationResult(issues=tuple(issues))
+
+
+def require_valid_lease_level_operating_inputs(
+    operating_inputs: LeaseLevelOperatingInputs,
+    *,
+    path: str = "operating_inputs",
+) -> LeaseValidationResult:
+    """Validate property operating inputs and raise on any ERROR.
+
+    Returns the full result when valid, so a caller wanting both the go-ahead
+    and any warnings needs exactly one call.
+    """
+
+    result = validate_lease_level_operating_inputs(operating_inputs, path=path)
     if result.errors:
         raise LeaseValidationError(result)
     return result

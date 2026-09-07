@@ -78,6 +78,8 @@ def test_context_carries_every_acquisition_results_field() -> None:
         "remaining_loan_balance",
         "noi_by_year",
         "capex_by_year",
+        "tenant_improvements_by_year",
+        "leasing_commissions_by_year",
         "exit_noi",
         "exit_value",
         "disposition_costs",

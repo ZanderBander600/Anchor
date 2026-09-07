@@ -407,14 +407,24 @@ def test_every_acquisition_results_field_is_presented_or_deliberately_excluded()
     )
 
 
-def test_intentional_exclusion_allowlists_are_currently_empty() -> None:
-    """Documents the current state: every field of both dataclasses is
-    presented today. Owner Return Metrics V3 Gate A2 temporarily excluded
-    four ``AcquisitionResults`` fields pending a dedicated presentation
-    gate; Gate A4 removed that exclusion (Deal Context makes them
-    especially useful to interpret) -- the allowlist is empty again. If
-    this ever legitimately changes, update the allowlist in presentation.py
-    (with a comment explaining why) rather than this test."""
+def test_intentional_exclusion_allowlists_hold_exactly_the_deferred_fields() -> None:
+    """Documents the current state, field for field.
+
+    Owner Return Metrics V3 Gate A2 temporarily excluded four
+    ``AcquisitionResults`` fields pending a dedicated presentation gate; Gate
+    A4 removed that exclusion. Sprint D Gate D4.5A re-uses the same mechanism
+    for exactly two: the generic below-NOI operating-capital channel's
+    ``tenant_improvements_by_year`` and ``leasing_commissions_by_year``,
+    deliberately withheld while D4 does deterministic financial integration
+    and their presentation is deferred to D5.
+
+    The assertion is an **exact set**, never a subset: a field can only go
+    unseen by the model on purpose, and this test is what makes "on purpose"
+    auditable. If the allowlist legitimately changes again, update it in
+    presentation.py with a comment explaining why and update this expectation
+    to match -- never relax it to a containment check."""
 
     assert INTENTIONALLY_EXCLUDED_INPUT_FIELDS == frozenset()
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset(
+        {"tenant_improvements_by_year", "leasing_commissions_by_year"}
+    )

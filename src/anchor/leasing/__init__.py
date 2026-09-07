@@ -110,6 +110,63 @@ is an explicit zero rather than a zero factor, and `MODIFIED_GROSS` is refused
 rather than silently zeroed -- it needs an explicit contractual basis, which is
 D3.2. Successor recoveries are D3.3, expected and recursive recoveries D3.4,
 and property aggregation D3.5.
+
+D4.2 aggregates the completed leasing economics of the whole property.
+``suite_operating_projection`` is the one extraction seam: it copies an
+authoritative **full-chain** result -- ``RecursiveRollover`` for an occupied
+suite, ``InitialVacancyRollover`` for one vacant at the analysis start,
+including the explicit all-zero `HOLD_VACANT` chain -- onto a neutral
+``SuiteOperatingProjection``, and computes nothing.
+``build_property_operating_schedule`` then sums those finished dollars and
+areas once, deterministically, with every suite present exactly once. Cash base
+rent is **carried**, never rebuilt as contractual minus free rent, because in a
+fractional-downtime month those differ by the part of the month nobody
+occupied. Property occupancy is computed once from areas -- suite-level ratios
+are not published, so averaging them is unavailable rather than merely
+discouraged. Recoveries, property expenses, other income, credit loss, the
+management fee, EGI and NOI are all later gates.
+
+D4.1 closes the D3/D4 seam. ``expenses.py`` projects the five fixed property
+operating expense lines onto the canonical monthly timeline -- annual step
+growth on analysis-start anniversaries, then a level ``/ 12`` inside each model
+year -- and builds the ``RecoverableExpensePool`` D3 has consumed as an
+injected input since D3.1 (HD-D3-8, resolved: D3 injects, D4 supplies). The
+pool is ``recoverable_expense_ratio`` times the completed five-line total, and
+the management fee is structurally absent from that total, which is what makes
+the whole property build one deterministic pass with no fixed-point solve. The
+builder takes no suite, lease, area or occupancy, so a fully vacant building
+incurs exactly the same fixed expenses as a fully leased one. Revenue, credit
+loss, the management fee, EGI and NOI are D4.3; nothing here computes tenant
+recovery revenue, which remains D3's.
+
+D4.3 composes the three completed monthly schedules into
+``MonthlyPropertyProjection``, the statement a Lease-Level deal is read from.
+``projection.py`` recalculates nothing: it copies the leasing lines, the
+recovery revenue and the five fixed expense lines, and adds exactly six new
+series -- other income, credit loss, EGI, the management fee, total operating
+expenses and NOI. EGI reads ``cash_base_rent`` **directly**, never
+``contractual - free_rent``, which differs from it in any fractional-downtime
+month; contractual rent and free rent stay audit lines feeding nothing. Credit
+loss applies to cash rent plus recovery only, the management fee is a
+percentage of EGI with recoveries included, recovery stays revenue while
+expenses stay gross, and TI and LC stay below NOI in every month including the
+forward window. Because the fee is excluded from the recoverable pool, the
+whole statement resolves in one pass with no solver. NOI is never floored.
+Annual aggregation, exit NOI and the going-in cap rate are D4.4's.
+
+D4.4 derives the annual view. ``aggregate_monthly_to_annual`` reduces the
+canonical monthly projection through the three D1.3 reducers and nothing else:
+every ``_by_year`` flow is the chronological sum of its twelve months, every
+annual state carries its semantics in its name, and ``exit_noi`` is the sum of
+monthly NOI over months ``12H+1..12H+12`` -- never Hold Year H grown. Annual
+NOI is summed from monthly NOI, not rebuilt from annual EGI less annual
+expenses, so the figure every downstream return depends on has one arithmetic
+path. Hold-year TI/LC arrays are length H and physically cannot reach a
+forward month; the forward window's leasing costs are disclosed once, as a
+scalar that nothing deducts. The result satisfies
+``OperatingProjectionLike`` structurally, without fabricating a single
+Detailed-only field. A non-positive ``exit_noi`` is constructed faithfully:
+refusing to capitalize it belongs to the integration boundary at D4.5.
 """
 
 from __future__ import annotations
@@ -118,8 +175,10 @@ from .aggregation import (
     aggregate_flow_over_forward_exit_window,
     aggregate_flow_to_annual,
     average_state_over_year,
+    build_property_operating_schedule,
     build_property_rent_roll_schedule,
     build_property_recovery_schedule,
+    suite_operating_projection,
     suite_recovery_projection,
     snapshot_state_at_year_end,
 )
@@ -133,6 +192,7 @@ from .calendar import (
     projection_month_count,
 )
 from .contracts import (
+    AnnualOperatingProjection,
     EscalationBasis,
     ExpectedRollover,
     ExpectedRolloverRecovery,
@@ -147,8 +207,10 @@ from .contracts import (
     RolloverTransitionAudit,
     SuccessorContribution,
     SuccessorRecoverySchedule,
+    SuiteOperatingProjection,
     SuiteRecoveryProjection,
     Lease,
+    LeaseLevelOperatingInputs,
     LeaseLevelPropertyInputs,
     LeaseMonthlySchedule,
     LeaseOrigin,
@@ -159,7 +221,10 @@ from .contracts import (
     MarketRentSchedule,
     LeaseRecoverySchedule,
     ModelMonth,
+    MonthlyPropertyExpenseSchedule,
+    MonthlyPropertyProjection,
     NewTenantBranch,
+    PropertyOperatingSchedule,
     PropertyRentRollSchedule,
     PropertyRecoverySchedule,
     RecoverableExpensePool,
@@ -168,6 +233,12 @@ from .contracts import (
     RenewalBranch,
     ResolvedMarketLeasing,
     Suite,
+)
+from .expenses import (
+    FIXED_EXPENSE_LINES,
+    annual_expense_amount,
+    build_property_expense_schedule,
+    build_recoverable_expense_pool,
 )
 from .market import (
     build_market_rent_schedule,
@@ -193,6 +264,11 @@ from .recoveries import (
     monthly_expense_recovery,
     monthly_expense_stop_dollars,
     tenant_pro_rata_share,
+)
+from .projection import (
+    aggregate_monthly_to_annual,
+    annual_other_income,
+    build_monthly_property_projection,
 )
 from .rent import (
     build_lease_monthly_schedule,
@@ -221,6 +297,20 @@ from .rollover import (
     weighted_outcome,
 )
 from .validation import (
+    require_capitalizable_exit_noi,
+    validate_capitalizable_exit_noi,
+    require_valid_lease_level_acquisition_leases,
+    validate_lease_level_acquisition_leases,
+    require_valid_annual_adapter_inputs,
+    validate_annual_adapter_inputs,
+    require_valid_property_projection_inputs,
+    validate_property_projection_inputs,
+    require_valid_property_operating_inputs,
+    validate_property_operating_inputs,
+    require_valid_lease_level_operating_inputs,
+    require_valid_recoverable_expense_ratio,
+    validate_lease_level_operating_inputs,
+    validate_recoverable_expense_ratio,
     require_valid_recovery_inputs,
     require_valid_property_recovery_inputs,
     require_valid_initial_vacancy_inputs,
@@ -334,6 +424,40 @@ __all__ = [
     "build_expected_rollover_recovery",
     "build_recursive_rollover_recovery",
     "build_initial_vacancy_rollover_recovery",
+    # Lease-Level acquisition integration boundary (D4.5B)
+    "validate_capitalizable_exit_noi",
+    "require_capitalizable_exit_noi",
+    "validate_lease_level_acquisition_leases",
+    "require_valid_lease_level_acquisition_leases",
+    # annual operating adapter (D4.4)
+    "AnnualOperatingProjection",
+    "aggregate_monthly_to_annual",
+    "validate_annual_adapter_inputs",
+    "require_valid_annual_adapter_inputs",
+    # monthly property projection (D4.3)
+    "MonthlyPropertyProjection",
+    "build_monthly_property_projection",
+    "annual_other_income",
+    "validate_property_projection_inputs",
+    "require_valid_property_projection_inputs",
+    # property leasing aggregation (D4.2)
+    "SuiteOperatingProjection",
+    "PropertyOperatingSchedule",
+    "suite_operating_projection",
+    "build_property_operating_schedule",
+    "validate_property_operating_inputs",
+    "require_valid_property_operating_inputs",
+    # property operating expenses and the recoverable pool (D4.1)
+    "LeaseLevelOperatingInputs",
+    "MonthlyPropertyExpenseSchedule",
+    "FIXED_EXPENSE_LINES",
+    "annual_expense_amount",
+    "build_property_expense_schedule",
+    "build_recoverable_expense_pool",
+    "validate_lease_level_operating_inputs",
+    "require_valid_lease_level_operating_inputs",
+    "validate_recoverable_expense_ratio",
+    "require_valid_recoverable_expense_ratio",
     # contracts
     "EscalationBasis",
     "Lease",

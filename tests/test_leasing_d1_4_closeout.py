@@ -1064,12 +1064,35 @@ def test_no_contract_declares_a_d3_or_downstream_field() -> None:
 
     from anchor.leasing import contracts as contracts_module
 
+    # D4.1 delivers ``LeaseLevelOperatingInputs``, whose contract (D4
+    # Section 9.2) declares ``other_income`` and ``credit_loss_pct``. Both are
+    # financially INERT at D4.1 -- no expense or pool figure moves when either
+    # changes, which ``tests/test_leasing_d4_1_expenses.py`` asserts directly
+    # -- and D4.3 is the gate that computes with them. They leave the banned
+    # set the same way every earlier gate's fields did: when the gate that
+    # owns them lands.
+    #
+    # ``vacancy_credit_loss_pct`` and ``occupancy`` never leave it. They are
+    # not deferred but **rejected** for Lease-Level (G-M14): physical vacancy
+    # is modeled per suite per month, and a second, blanket mechanism would
+    # double-count it.
+    #
+    # ``noi`` left the set at D4.3, the gate that computes it, exactly as every
+    # earlier gate's fields did on delivery. ``capex`` never leaves:
+    # ``AcquisitionTerms.annual_capex_reserve`` is its single authority and a
+    # second monthly series is how it would come to be subtracted twice.
+    # ``operating_expenses`` stays banned as a bare name -- the contracts
+    # deliver ``fixed_operating_expenses``, ``other_operating_expenses`` and
+    # ``total_operating_expenses``, each a distinct identifier.
+    # ``exit_noi`` and ``going_in_cap_rate`` left the set at D4.4, the gate
+    # that derives them, exactly as ``noi`` left it at D4.3. ``capex`` never
+    # leaves: ``AcquisitionTerms.annual_capex_reserve`` is its single authority.
     banned = {
         "expected_rent_psf", "expected_term_months", "expected_ti_psf",
         "expected_lc_pct", "expected_downtime_months",
         "expense_stop", "base_year",
-        "noi", "capex", "other_income", "operating_expenses",
-        "vacancy_credit_loss_pct", "occupancy", "credit_loss_pct",
+        "capex", "operating_expenses", "exit_value", "net_sale_proceeds",
+        "vacancy_credit_loss_pct", "occupancy",
     }
 
     for name in dir(contracts_module):

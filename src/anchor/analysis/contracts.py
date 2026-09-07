@@ -13,6 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from ..engine.contracts import AcquisitionResults
+from ..leasing.contracts import (
+    AnnualOperatingProjection,
+    MonthlyPropertyProjection,
+)
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class OneWaySensitivityResult:
@@ -173,3 +179,50 @@ class StandardDetailedBreakEvenAnalysis:
     max_purchase_price: BreakEvenResult
     max_exit_cap_rate: BreakEvenResult
     max_interest_rate: BreakEvenResult
+
+
+# =============================================================================
+# Sprint D Gate D4.5B -- the Lease-Level result envelope
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LeaseLevelAcquisitionResults:
+    """The Lease-Level result envelope
+    (``docs/plans/2026-09-05-anchor-lease-level-underwriting-d4-integration-architecture.md``
+    Sections 28 and 29.2a).
+
+    Exposes the two Lease-Level operating models **alongside** the unchanged,
+    authoritative ``AcquisitionResults`` -- a higher-level envelope rather than
+    contaminating ``AcquisitionResults`` itself with mode-specific schedules,
+    exactly as ``DetailedAcquisitionResults`` does for Detailed.
+
+    **The envelope lives with the layer that assembles it.**
+    ``DetailedAcquisitionResults`` sits beside its orchestrator in
+    ``anchor.engine``; this one sits beside
+    ``anchor.analysis.lease_level.analyze_lease_level_acquisition_with_projection``.
+    That is what keeps ``anchor.engine.contracts`` free of any field typed as a
+    Lease-Level projection, and the shared engine free of any knowledge that
+    Suites exist.
+
+    ``monthly_projection`` is the canonical monthly operating model -- the one
+    an analyst inspects, and the one ``exit_noi`` was summed from (G-M12). It
+    is retained, never discarded after annual integration.
+
+    ``annual_projection`` is the derived annual view. It is the **same object**
+    passed to the shared engine, so the ``noi_by_year``, ``exit_noi`` and
+    ``going_in_cap_rate`` a caller reads here are bit-for-bit the ones the
+    returns were computed from -- there is no presentation copy.
+
+    ``results`` is the generic ``AcquisitionResults``, produced by the single
+    shared ``analyze_acquisition_from_operating_projection`` that Quick and
+    Detailed also call. **No Lease-Level IRR, DSCR, exit value or debt figure
+    exists anywhere**: there is one returns engine, and this mode joins it at
+    the existing seam.
+
+    This dataclass performs no calculation of its own.
+    """
+
+    monthly_projection: MonthlyPropertyProjection
+    annual_projection: AnnualOperatingProjection
+    results: AcquisitionResults

@@ -2389,3 +2389,637 @@ class InitialVacancyRolloverRecovery:
                 f"{len(self.rollover.transitions)} authoritative rollover "
                 "transitions; D3 attaches recovery to the events D2 decided."
             )
+
+
+# =============================================================================
+# D4.2 -- suite operating projections and property leasing aggregation
+#
+# The aggregation boundary. Everything below carries **completed** D1-D3
+# leasing dollars and areas; nothing below prices a lease, and no gate after
+# this one reprices one either.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SuiteOperatingProjection:
+    """One suite's completed monthly leasing economics (D4.2).
+
+    **The single extraction seam onto the property boundary**, exactly as
+    ``SuiteRecoveryProjection`` is for D3.5 recoveries: property aggregation
+    gets one input shape rather than one code path per suite kind. Built only
+    by ``anchor.leasing.aggregation.suite_operating_projection``, which
+    **copies** already-calculated series and computes nothing.
+
+    Every series is the **full chain** for the suite -- an occupied suite's own
+    in-place lease plus every expected successor generation, or an initially
+    vacant suite's vacancy months plus its first speculative tenant plus every
+    later generation. There is no partial projection: taking a successor-only
+    or first-rollover-only series here would silently drop real months
+    (D4 Section 2.10).
+
+    **Deliberately absent, and each absence is load-bearing:**
+
+    - ``physical_occupancy`` and ``vacant_area_sf``. A suite-level *ratio* has
+      no business at the property boundary, because property occupancy is
+      ``property occupied area / rentable area`` and is computed once, from
+      areas (D4 Section 16.1). Averaging suite ratios is wrong the moment two
+      suites differ in size -- 90,000 SF full plus 10,000 SF empty is 90%
+      occupancy, not 50%. Omitting the field is what makes that mistake
+      unavailable rather than merely discouraged. ``occupied_area_sf`` is an
+      **area**, and areas add.
+    - ``expense_recovery``. That is ``SuiteRecoveryProjection``'s, computed by
+      D3 against an injected pool, and D4.2 never touches it.
+    - Everything above and below NOI: other income, credit loss, the
+      management fee, EGI, NOI, CapEx, debt and returns. D4.2 answers "what
+      are the completed monthly leasing economics of this suite", not "what
+      does the property earn".
+
+    ``occupied_area_sf`` may be **fractional** for a probability-weighted
+    chain, and that is correct: it is an *expected* area over branch states
+    whose own physical occupancy is integral (D2 HD-D2-2). It is never derived
+    from rent, from a cash factor, or from
+    ``expected_successor_occupancy_factor`` -- that factor is a month-equivalent
+    economic exposure, a different quantity under a different name, and
+    conflating the two is failure mode FM-D2-19.
+    """
+
+    suite_id: str
+    suite_area_sf: float
+    months: tuple[ModelMonth, ...]
+
+    # --- flow, dollars per month ---
+    contractual_base_rent: tuple[float, ...]
+    cash_base_rent: tuple[float, ...]
+    free_rent: tuple[float, ...]
+    tenant_improvements: tuple[float, ...]
+    leasing_commissions: tuple[float, ...]
+
+    # --- state, square feet ---
+    occupied_area_sf: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("contractual_base_rent", self.contractual_base_rent),
+            ("cash_base_rent", self.cash_base_rent),
+            ("free_rent", self.free_rent),
+            ("tenant_improvements", self.tenant_improvements),
+            ("leasing_commissions", self.leasing_commissions),
+            ("occupied_area_sf", self.occupied_area_sf),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"SuiteOperatingProjection requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PropertyOperatingSchedule:
+    """The property's canonical monthly leasing economics (D4.2).
+
+    The sum of every suite's completed leasing dollars and areas, over the
+    whole canonical projection -- the ``12H`` hold months **and** the twelve
+    forward exit months. Nothing stops at the sale date here: rent, free rent,
+    TI, LC and occupancy stay live through the forward window, because those
+    are real leasing events. Which of them is a *seller* cash flow is D4.4/D4.5's
+    question and is deliberately not answered here (D4 Section 21.3).
+
+    **This is a leasing aggregate, despite the name.** It carries no expense
+    recovery, no property operating expense, no other income, no credit loss,
+    no management fee, no EGI and no NOI. D4.3 is the first gate that combines
+    this schedule with ``PropertyRecoverySchedule`` and
+    ``MonthlyPropertyExpenseSchedule``.
+
+    ``contractual_base_rent`` and ``free_rent`` are **audit lines**.
+    ``cash_base_rent`` is the authoritative revenue figure D4.3 will consume,
+    and it is aggregated **directly** from the suite chains -- never
+    reconstructed as ``contractual - free_rent``, which is wrong in any month
+    with fractional downtime, where the two differ by the portion of the month
+    during which no tenant was in economic possession (HD-D4-5, D4
+    Section 5.4).
+
+    ``vacant_area_sf = rentable_area_sf - occupied_area_sf`` and
+    ``physical_occupancy = occupied_area_sf / rentable_area_sf``, both computed
+    once at the property level against the property's authoritative rentable
+    area (D0 Section 15.1), so ``occupied + vacant == rentable_area_sf`` holds
+    in every month. No vacancy percentage, no gross-up, and no average of
+    suite-level occupancy ratios is involved anywhere.
+
+    Built only by
+    ``anchor.leasing.aggregation.build_property_operating_schedule``; this
+    dataclass performs no calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    rentable_area_sf: float
+    suite_projections: tuple[SuiteOperatingProjection, ...]
+
+    # --- flow, dollars per month ---
+    contractual_base_rent: tuple[float, ...]
+    cash_base_rent: tuple[float, ...]
+    free_rent: tuple[float, ...]
+    tenant_improvements: tuple[float, ...]
+    leasing_commissions: tuple[float, ...]
+
+    # --- state, square feet and ratio ---
+    occupied_area_sf: tuple[float, ...]
+    vacant_area_sf: tuple[float, ...]
+    physical_occupancy: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("contractual_base_rent", self.contractual_base_rent),
+            ("cash_base_rent", self.cash_base_rent),
+            ("free_rent", self.free_rent),
+            ("tenant_improvements", self.tenant_improvements),
+            ("leasing_commissions", self.leasing_commissions),
+            ("occupied_area_sf", self.occupied_area_sf),
+            ("vacant_area_sf", self.vacant_area_sf),
+            ("physical_occupancy", self.physical_occupancy),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"PropertyOperatingSchedule requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+        for projection in self.suite_projections:
+            if projection.months != self.months:
+                raise ValueError(
+                    f"suite {projection.suite_id!r} was projected against a "
+                    "different canonical month sequence; one property "
+                    "aggregation shares one timeline."
+                )
+
+
+# =============================================================================
+# D4.3 -- the canonical monthly property projection
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MonthlyPropertyProjection:
+    """The property's canonical monthly operating statement (D4.3).
+
+    Restates D0 Section 18.1 (as amended at D4.0) and D4 Sections 5.3-5.6 and
+    29.3. One statement per canonical ``ModelMonth``, over the whole
+    ``12H + 12`` window -- the hold months **and** the twelve forward exit
+    months, all economics live throughout, because D4.4 reads exit NOI off
+    exactly these values.
+
+    **A composition, not a calculation.** Every leasing figure comes from
+    ``PropertyOperatingSchedule`` (D4.2), every recovery dollar from
+    ``PropertyRecoverySchedule`` (D3.5) and every fixed expense line from
+    ``MonthlyPropertyExpenseSchedule`` (D4.1), copied verbatim. Only six series
+    are new here: ``other_income``, ``credit_loss``,
+    ``effective_gross_income``, ``management_fee``,
+    ``total_operating_expenses`` and ``noi``.
+
+    **The statement, in order:**
+
+    ```
+     1  contractual_base_rent      AUDIT ONLY -- feeds nothing
+     2  free_rent                  AUDIT ONLY -- feeds nothing
+     3  cash_base_rent             AUTHORITATIVE revenue; EGI reads THIS
+     4  expense_recovery           revenue, on its own line, never netted
+     5  other_income
+     6  credit_loss                = credit_loss_pct * (3 + 4)
+     7  effective_gross_income     = 3 + 4 + 5 - 6
+     8..12  the five fixed expense lines
+    13  fixed_operating_expenses   = 8 + 9 + 10 + 11 + 12
+    14  management_fee             = 7 * management_fee_pct
+    15  total_operating_expenses   = 13 + 14
+    16  noi                        = 7 - 15
+    --- below NOI, touching nothing above ---
+    17  tenant_improvements
+    18  leasing_commissions
+    --- state, descriptive ---
+    19  occupied_area_sf, vacant_area_sf, physical_occupancy
+    ```
+
+    **``cash_base_rent`` is the revenue figure, not
+    ``contractual_base_rent - free_rent``** (HD-D4-5). The two differ in any
+    fractional-downtime month by the part of the month during which no tenant
+    was in possession, and treating that part as collected revenue is the
+    single arithmetic error this contract's shape exists to prevent. Lines 1
+    and 2 are retained for audit precisely so an analyst can see the
+    concession and the face rent without either entering the arithmetic.
+
+    **Recovery stays revenue and expenses stay gross.** Netting the two would
+    leave NOI-before-fee unchanged while shrinking EGI -- and therefore the
+    management fee, and therefore NOI. The separation is load-bearing, not
+    presentational (D4 Section 15).
+
+    **NOI is never floored.** A vacant building still incurs its taxes,
+    insurance and utilities, so a negative monthly NOI is a correct result.
+
+    **Deliberately absent:** ``absent_rent`` (an explanatory reconciliation
+    concept, never a field -- HD-D4-5 as narrowed), ``capex`` (a second monthly
+    series is how it comes to be subtracted twice; ``annual_capex_reserve``
+    stays its single authority), ``market_rent_psf`` (HD-D4-4), any
+    ``_by_year`` series, ``exit_noi``, ``going_in_cap_rate``, and every debt,
+    return and acquisition figure. Monthly is canonical; D4.4 owns the annual
+    adapter.
+
+    ``recoverable_expense_pool`` is also absent, which departs from D4
+    Section 29.3's sketch. Carrying it would require either accepting a
+    ``RecoverableExpensePool`` this gate has no financial use for, or
+    recomputing it here from the ratio -- a second implementation of D4.1's
+    pool formula, and one that could silently disagree with the pool the
+    supplied recovery schedule was actually built from. ``expense_schedule``
+    and ``recovery_schedule`` are retained below, so the audit trail from
+    expenses through recovery is complete without it.
+
+    The three source schedules are **retained, not collapsed**, so every
+    figure above can be traced to the schedule that produced it.
+
+    Built only by
+    ``anchor.leasing.projection.build_monthly_property_projection``; this
+    dataclass performs no calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    rentable_area_sf: float
+
+    # --- revenue, above NOI ---
+    contractual_base_rent: tuple[float, ...]
+    free_rent: tuple[float, ...]
+    cash_base_rent: tuple[float, ...]
+    expense_recovery: tuple[float, ...]
+    other_income: tuple[float, ...]
+    credit_loss: tuple[float, ...]
+    effective_gross_income: tuple[float, ...]
+
+    # --- expenses, above NOI ---
+    property_taxes: tuple[float, ...]
+    insurance: tuple[float, ...]
+    utilities: tuple[float, ...]
+    repairs_maintenance: tuple[float, ...]
+    other_operating_expenses: tuple[float, ...]
+    fixed_operating_expenses: tuple[float, ...]
+    management_fee: tuple[float, ...]
+    total_operating_expenses: tuple[float, ...]
+
+    noi: tuple[float, ...]
+
+    # --- below NOI ---
+    tenant_improvements: tuple[float, ...]
+    leasing_commissions: tuple[float, ...]
+
+    # --- state ---
+    occupied_area_sf: tuple[float, ...]
+    vacant_area_sf: tuple[float, ...]
+    physical_occupancy: tuple[float, ...]
+
+    # --- retained sources, not collapsed ---
+    operating_schedule: PropertyOperatingSchedule
+    recovery_schedule: PropertyRecoverySchedule
+    expense_schedule: MonthlyPropertyExpenseSchedule
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name in (
+            "contractual_base_rent",
+            "free_rent",
+            "cash_base_rent",
+            "expense_recovery",
+            "other_income",
+            "credit_loss",
+            "effective_gross_income",
+            "property_taxes",
+            "insurance",
+            "utilities",
+            "repairs_maintenance",
+            "other_operating_expenses",
+            "fixed_operating_expenses",
+            "management_fee",
+            "total_operating_expenses",
+            "noi",
+            "tenant_improvements",
+            "leasing_commissions",
+            "occupied_area_sf",
+            "vacant_area_sf",
+            "physical_occupancy",
+        ):
+            series = getattr(self, name)
+            if len(series) != expected:
+                raise ValueError(
+                    f"MonthlyPropertyProjection requires one {name} figure per "
+                    f"model month; got {len(series)} for {expected} months."
+                )
+
+
+# =============================================================================
+# D4.4 -- the derived annual operating view
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AnnualOperatingProjection:
+    """The annual view over the canonical monthly projection (D4.4).
+
+    Restates D0 Section 4.7 and D4 Sections 20.1-20.4. **A derivation, not a
+    model.** Every figure here is produced by one of the three D1.3 reducers
+    over a canonical monthly series, and by nothing else. There is no
+    independent annual Lease-Level engine, no annual growth rate and no
+    stabilization anywhere (guardrails G-M2, G-M3).
+
+    **Flow lines** are the chronological sum of their twelve monthly values:
+
+    ```
+    annual_X_by_year[y-1] = sum of monthly X_m for m in 12(y-1)+1 .. 12y
+    ```
+
+    accumulated in strictly ascending period order. Every ``_by_year`` tuple has
+    length exactly ``H``, so a forward-window figure cannot reach one: the
+    reducer physically stops at month ``12H``.
+
+    **``noi_by_year`` is the sum of monthly NOI**, never rebuilt as
+    ``effective_gross_income_by_year - total_operating_expenses_by_year``.
+    Those agree to within IEEE-754 grouping and are asserted to reconcile, but
+    reconstructing NOI would create a second arithmetic path for the one figure
+    every downstream return depends on.
+
+    **State lines** carry their semantics in their names (G-M6): a snapshot
+    ends ``_at_year_end``, an average begins ``average_``. No state metric is
+    ever summed and no flow metric is ever averaged -- the two reducers are
+    separate functions with separate names for exactly that reason. The
+    headline annual occupancy is the **average** of the twelve monthly
+    property-level values (accepted at D4.0 human review); the year-end
+    snapshot is retained beside it.
+
+    **Exit figures.** ``exit_noi`` is the chronological sum of monthly NOI over
+    months ``12H+1 .. 12H+12`` -- the same canonical series an analyst can
+    inspect (G-M12), never Hold Year ``H`` grown, never a stabilized override,
+    never contractual rent gross of free rent. Whatever happens in those twelve
+    months -- a rollover, a lease-up, free rent, a recovery step, an expense
+    step -- is already inside monthly NOI and is therefore already inside
+    ``exit_noi``.
+
+    ``exit_noi`` may be **positive, zero or negative**, and this contract
+    accepts all three. A non-positive forward NOI makes cap-rate terminal
+    valuation meaningless, but that restriction is enforced at the Lease-Level
+    acquisition/integration boundary before the shared exit-cap calculation
+    (HD-D4-7, D4 Section 21.6), not here: the operating projection of a
+    distressed building must stay inspectable.
+
+    ``exit_window_leasing_costs`` is the forward window's TI plus LC. It is a
+    **disclosed diagnostic, never deducted from anything** (D0 Section 17.4)
+    and is read by no engine calculation. TI and LC are below NOI in every
+    month, so they cannot reach ``exit_noi`` either -- structurally, because
+    ``noi`` never contained them.
+
+    ``going_in_cap_rate`` is ``noi_by_year[0] / purchase_price`` -- Year-1 NOI
+    over price, the one Anchor convention, identical to Quick's and Detailed's
+    (D4 Section 20.4). Year-1 NOI here is a *modeled* first-year result
+    reflecting lease-up, downtime and free rent, so for a heavily vacant
+    building it can be zero or negative. It is reported as modeled: unlike
+    ``exit_noi`` it capitalizes nothing, so nothing is refused.
+
+    **Satisfies ``anchor.engine.contracts.OperatingProjectionLike``
+    structurally** through ``noi_by_year``, ``exit_noi`` and
+    ``going_in_cap_rate``, without importing the Protocol and without
+    fabricating a single Detailed-only field. Lease-Level has no gross
+    potential rent, no blended vacancy factor and no generic revenue growth,
+    and it invents none to look like ``OperatingProjection``.
+
+    **Deliberately absent:** ``market_rent_psf_at_year_end`` from D0's sketch
+    (HD-D4-4 rejected a property-level market rate, and the monthly projection
+    carries none to reduce); any CapEx series (``annual_capex_reserve`` stays
+    its single authority); and every exit-value, debt and return figure, which
+    are D4.5's and the shared engine's.
+
+    Built only by ``anchor.leasing.projection.aggregate_monthly_to_annual``;
+    this dataclass performs no calculation of its own.
+    """
+
+    # --- flow, Years 1..H ---
+    contractual_base_rent_by_year: tuple[float, ...]
+    cash_base_rent_by_year: tuple[float, ...]
+    free_rent_by_year: tuple[float, ...]
+    expense_recovery_by_year: tuple[float, ...]
+    other_income_by_year: tuple[float, ...]
+    credit_loss_by_year: tuple[float, ...]
+    effective_gross_income_by_year: tuple[float, ...]
+    property_taxes_by_year: tuple[float, ...]
+    insurance_by_year: tuple[float, ...]
+    utilities_by_year: tuple[float, ...]
+    repairs_maintenance_by_year: tuple[float, ...]
+    other_operating_expenses_by_year: tuple[float, ...]
+    fixed_operating_expenses_by_year: tuple[float, ...]
+    management_fee_by_year: tuple[float, ...]
+    total_operating_expenses_by_year: tuple[float, ...]
+    noi_by_year: tuple[float, ...]
+    tenant_improvements_by_year: tuple[float, ...]
+    leasing_commissions_by_year: tuple[float, ...]
+
+    # --- state, explicitly named (G-M6) ---
+    occupied_area_at_year_end: tuple[float, ...]
+    vacant_area_at_year_end: tuple[float, ...]
+    physical_occupancy_at_year_end: tuple[float, ...]
+    average_physical_occupancy_over_year: tuple[float, ...]
+
+    # --- exit ---
+    exit_noi: float
+    going_in_cap_rate: float
+    exit_window_leasing_costs: float
+
+    def __post_init__(self) -> None:
+        expected = len(self.noi_by_year)
+        if expected < 1:
+            raise ValueError(
+                "AnnualOperatingProjection requires at least one hold year."
+            )
+        for name in (
+            "contractual_base_rent_by_year",
+            "cash_base_rent_by_year",
+            "free_rent_by_year",
+            "expense_recovery_by_year",
+            "other_income_by_year",
+            "credit_loss_by_year",
+            "effective_gross_income_by_year",
+            "property_taxes_by_year",
+            "insurance_by_year",
+            "utilities_by_year",
+            "repairs_maintenance_by_year",
+            "other_operating_expenses_by_year",
+            "fixed_operating_expenses_by_year",
+            "management_fee_by_year",
+            "total_operating_expenses_by_year",
+            "tenant_improvements_by_year",
+            "leasing_commissions_by_year",
+            "occupied_area_at_year_end",
+            "vacant_area_at_year_end",
+            "physical_occupancy_at_year_end",
+            "average_physical_occupancy_over_year",
+        ):
+            series = getattr(self, name)
+            if len(series) != expected:
+                raise ValueError(
+                    f"AnnualOperatingProjection requires one {name} figure per "
+                    f"hold year; got {len(series)} for {expected} years."
+                )
+
+
+# =============================================================================
+# D4.1 -- property operating inputs and the canonical monthly expense schedule
+#
+# Property economics, deliberately separate from lease and market-leasing
+# economics. Nothing below describes how space re-lets; it describes what the
+# building costs to run.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LeaseLevelOperatingInputs:
+    """The property operating assumptions for one Lease-Level deal (D4.1).
+
+    Restates D0 Section 4.6 and D4 Section 9.2 exactly. **These are PROPERTY
+    OPERATING assumptions, not lease-market assumptions.** Nothing here belongs
+    on ``MarketLeasingAssumptions``, which describes how space re-lets, on
+    ``Suite``, or on ``Lease``: a property tax bill is a fact about the
+    building, identical for every tenant, and putting it on a lease would
+    invite per-lease tax rates the aggregate model does not support.
+
+    **Why this is a separate contract from ``DetailedOperatingInputs``**
+    (D0 Section 3.3, D4 Section 9.1). Detailed requires
+    ``gross_potential_rent``, ``vacancy_credit_loss_pct`` and
+    ``revenue_growth``. In Lease-Level the first is an *output*, the second is
+    a forbidden second vacancy mechanism (G-M14 -- physical vacancy is already
+    modeled per suite per month), and the third does not exist, because rent
+    growth arrives through contractual escalation and market-rent growth at
+    rollover. Reusing that contract would mean fabricating three values. The
+    six expense *concepts* and their *formulas* are reused unchanged; only the
+    input container differs, exactly as ``AcquisitionTerms`` was introduced
+    alongside ``AcquisitionInputs`` rather than merging them.
+
+    **Units.** ``other_income`` and the five fixed expense lines are
+    **Year-1 annual property dollars** -- never monthly, never ``$/SF``, never
+    per occupied or per leased SF. ``other_income_growth``, ``expense_growth``,
+    ``management_fee_pct``, ``credit_loss_pct`` and
+    ``recoverable_expense_ratio`` are decimals, not percentages.
+
+    **Domains** (enforced by
+    ``anchor.leasing.validation.validate_lease_level_operating_inputs``, never
+    here -- this contract performs no validation and no calculation):
+
+    - ``other_income`` -- finite, ``>= 0``
+    - ``other_income_growth`` -- finite, ``> -1``
+    - ``credit_loss_pct`` -- finite, ``0 <= x <= 1``
+    - ``property_taxes`` -- finite, ``>= 0``
+    - ``insurance`` -- finite, ``>= 0``
+    - ``utilities`` -- finite, ``>= 0``
+    - ``repairs_maintenance`` -- finite, ``>= 0``
+    - ``other_operating_expenses`` -- finite, ``>= 0``
+    - ``management_fee_pct`` -- finite, ``0 <= x <= 1``
+    - ``expense_growth`` -- finite, ``> -1``
+    - ``recoverable_expense_ratio`` -- finite, ``0 <= x <= 1``
+
+    The five expense domains and both growth domains are the *identical*
+    domains ``anchor.validation`` already applies to the same six Detailed
+    concepts, reproduced under the leasing-scoped severity architecture
+    (HD-6) rather than by importing or modifying the global validator.
+    ``expense_growth`` in particular is ``> -1`` with **no upper bound**:
+    negative expense growth is permitted, ``-1`` and below is not, because
+    ``(1 + g) <= 0`` either collapses every later year to zero or flips its
+    sign every year.
+
+    ``recoverable_expense_ratio`` carries **no default** (D4 Section 9.3): a
+    default of ``1.0`` would silently make every eligible expense recoverable
+    and a default of ``0.0`` would silently zero every `NNN` recovery. A
+    Lease-Level deal states it. ``credit_loss_pct`` defaults to ``0.0``, the
+    D0-locked economically neutral value.
+
+    **Which fields D4.1 actually consumes.** Only ``property_taxes``,
+    ``insurance``, ``utilities``, ``repairs_maintenance``,
+    ``other_operating_expenses``, ``expense_growth`` and
+    ``recoverable_expense_ratio``. ``other_income``, ``other_income_growth``,
+    ``credit_loss_pct`` and ``management_fee_pct`` are declared here because
+    D4 Section 9.2 defines the contract as a whole, and they are **financially
+    inert at this gate**: no D4.1 output changes when any of them changes,
+    which ``tests/test_leasing_d4_1_expenses.py`` asserts directly. Revenue,
+    credit loss, the management fee, EGI and NOI are D4.3.
+    """
+
+    # --- revenue (declared here; financially inert until D4.3) ---
+    other_income: float
+    other_income_growth: float
+    credit_loss_pct: float = 0.0
+
+    # --- the five fixed expense lines, Year-1 annual dollars ---
+    property_taxes: float
+    insurance: float
+    utilities: float
+    repairs_maintenance: float
+    other_operating_expenses: float
+
+    # --- rates ---
+    management_fee_pct: float
+    expense_growth: float
+    recoverable_expense_ratio: float
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MonthlyPropertyExpenseSchedule:
+    """The property's canonical monthly fixed operating expenses (D4.1).
+
+    One dollar figure per canonical ``ModelMonth``, for each of the five
+    eligible fixed expense lines, plus their monthly total. The schedule spans
+    the **whole** canonical projection -- the ``12H`` hold months **and** the
+    twelve forward exit months -- because the forward window is part of the
+    authoritative property expense projection (D0 Section 17.1): the exit NOI
+    a later gate computes must see the expenses that forward year actually
+    incurs, grown to model year ``H + 1``.
+
+    **Monthly is authoritative.** There is no annual field here, and no annual
+    figure is ever derived from anywhere but these monthly values (guardrails
+    G-M2, G-M3). ``fixed_operating_expenses`` is the sum of the five lines in
+    the declared order below, computed once by
+    ``anchor.leasing.expenses.build_property_expense_schedule`` and reused --
+    never recomputed by a consumer.
+
+    **What is deliberately absent, and why.** The management fee is not a fixed
+    line: it is percentage-derived from EGI, its exclusion from the recoverable
+    pool is what makes the pool computable in one pass with no fixed-point
+    solve (D0 Section 16.3, D4 Section 13), and it belongs to D4.3. CapEx is
+    not here either -- ``AcquisitionTerms.annual_capex_reserve`` remains its
+    single authority, and a second monthly series is exactly how it would come
+    to be subtracted twice (D4 Section 18.2). TI, LC, debt service, acquisition
+    costs, financing fees and disposition costs are below-NOI or transaction
+    items and are not property operating expenses at all.
+
+    **Expenses do not scale with occupancy.** A fully vacant building still
+    incurs its taxes, insurance and utilities, so nothing that produced this
+    schedule read an occupancy, an area, a lease or a suite. That is asserted
+    structurally rather than by convention: the builder's signature admits no
+    such input.
+
+    Built only by ``anchor.leasing.expenses.build_property_expense_schedule``;
+    this dataclass performs no calculation of its own.
+    """
+
+    months: tuple[ModelMonth, ...]
+    property_taxes: tuple[float, ...]
+    insurance: tuple[float, ...]
+    utilities: tuple[float, ...]
+    repairs_maintenance: tuple[float, ...]
+    other_operating_expenses: tuple[float, ...]
+    fixed_operating_expenses: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        expected = len(self.months)
+        for name, series in (
+            ("property_taxes", self.property_taxes),
+            ("insurance", self.insurance),
+            ("utilities", self.utilities),
+            ("repairs_maintenance", self.repairs_maintenance),
+            ("other_operating_expenses", self.other_operating_expenses),
+            ("fixed_operating_expenses", self.fixed_operating_expenses),
+        ):
+            if len(series) != expected:
+                raise ValueError(
+                    f"MonthlyPropertyExpenseSchedule requires one {name} "
+                    f"figure per model month; got {len(series)} for "
+                    f"{expected} months."
+                )

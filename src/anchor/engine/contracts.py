@@ -135,6 +135,86 @@ class DebtSchedule:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class OperatingCapitalSchedule:
+    """Below-NOI, year-varying property capital outflows, Years 1..H
+    (``docs/plans/2026-09-05-anchor-lease-level-underwriting-d4-integration-architecture.md``
+    Section 17.2, resolving D0's HD-1).
+
+    **Deliberately not named for leasing.** A future Development Engine needs
+    the same channel for construction and lease-up capital, and the shared
+    acquisition engine must not become lease-aware. The *components* are named
+    for their real cause, because an analyst auditing a cash flow must be able
+    to see which dollars were tenant improvements and which were leasing
+    commissions -- a single opaque number would destroy that split.
+
+    **This is a generic engine contract.** Nothing here knows what a Suite, a
+    Lease, a rollover or a recovery is; it carries completed annual dollars and
+    says nothing about where they came from. Producing them is the caller's
+    job.
+
+    ``tenant_improvements_by_year`` and ``leasing_commissions_by_year`` each
+    hold exactly ``hold_period`` values, Years 1..H in chronological order.
+    **There is no Year H+1 entry**: a forward-window capital event occurs after
+    the modelled sale, is not a seller cash flow, and is excluded before this
+    boundary is reached (D4 Section 21.3). The engine has no concept of a
+    forward window at all.
+
+    Every figure is finite and ``>= 0``. A negative "outflow" would be capital
+    *income*, for which the accepted model has no convention, so it is refused
+    rather than given an invented meaning -- the same reasoning that refuses a
+    negative recoverable-expense pool.
+
+    **Absent means absent.** Where no schedule is supplied the engine behaves
+    exactly as it did before this channel existed; see
+    ``anchor.engine.acquisition.calculate_operating_capital_by_year``.
+
+    Where this reaches, and where it deliberately does not
+    (D4 Sections 17.4 and 22):
+
+    - **Reduces** unlevered and levered cash flows, both recurring owner-return
+      series, and through them IRR, equity multiple, cash-on-cash, cash yield
+      and cumulative distributions.
+    - **Never touches** ``noi_by_year``, ``exit_noi``, ``exit_value``,
+      ``disposition_costs``, the debt schedule, ``dscr_by_year``,
+      ``headline_dscr``, ``min_dscr`` or ``year_1_debt_yield``. Lender metrics
+      are NOI-based by convention and stay that way.
+    - Is **separate from** ``capex_by_year``, which continues to report the
+      constant ``AcquisitionTerms.annual_capex_reserve`` alone. The two are
+      additive, never merged.
+
+    This dataclass performs no calculation of its own.
+    """
+
+    tenant_improvements_by_year: tuple[float, ...]
+    leasing_commissions_by_year: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.tenant_improvements_by_year) != len(
+            self.leasing_commissions_by_year
+        ):
+            raise ValueError(
+                "OperatingCapitalSchedule requires one tenant-improvement and "
+                "one leasing-commission figure per hold year; got "
+                f"{len(self.tenant_improvements_by_year)} and "
+                f"{len(self.leasing_commissions_by_year)}."
+            )
+        for name, series in (
+            ("tenant_improvements_by_year", self.tenant_improvements_by_year),
+            ("leasing_commissions_by_year", self.leasing_commissions_by_year),
+        ):
+            for year, amount in enumerate(series):
+                if not isfinite(amount):
+                    raise NonFiniteResultError(f"{name}[{year}]", amount)
+                if amount < 0.0:
+                    raise ValueError(
+                        f"{name}[{year}] is {amount!r}; an operating-capital "
+                        "outflow is finite and greater than or equal to 0. A "
+                        "negative outflow would be capital income, for which "
+                        "there is no convention."
+                    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AcquisitionCashFlows:
     """Underwriting V2 Gate 2 adds ``disposition_costs``. ``exit_value``
     remains the gross, unmodified market-value estimate; disposition costs
@@ -232,6 +312,8 @@ class AcquisitionResults:
     remaining_loan_balance: float
     noi_by_year: tuple[float, ...]
     capex_by_year: tuple[float, ...]
+    tenant_improvements_by_year: tuple[float, ...]
+    leasing_commissions_by_year: tuple[float, ...]
     exit_noi: float
     exit_value: float
     disposition_costs: float

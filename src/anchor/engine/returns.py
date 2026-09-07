@@ -291,39 +291,69 @@ def calculate_recurring_levered_cash_flows(
     noi_by_year: tuple[float, ...],
     capex_by_year: tuple[float, ...],
     annual_debt_service: tuple[float, ...],
+    operating_capital_by_year: tuple[float, ...] = (),
 ) -> tuple[float, ...]:
-    """Return ``(RLCF_1, .., RLCF_H)``: ``RLCF_y = NOI_y - CapEx_y - ADS_y``
-    for every hold year, including the final one.
+    """Return ``(RLCF_1, .., RLCF_H)``: ``RLCF_y = NOI_y - CapEx_y -
+    OpCap_y - ADS_y`` for every hold year, including the final one.
 
     Unlike ``calculate_levered_cash_flows`` (``acquisition.py``), this
     series never adds ``net_sale_proceeds`` to its final entry -- there is
     no terminal-year special case here at all, by construction. Never
-    floored at zero; CapEx or debt service exceeding NOI in a year produces
-    a negative entry, reported as-is.
+    floored at zero; CapEx, operating capital or debt service exceeding NOI
+    in a year produces a negative entry, reported as-is.
+
+    D4.5A (HD-D4-3): operating capital joins CapEx here because this series
+    answers "what did the owner actually receive this year", and a below-NOI
+    capital cheque is money that left the account. Omitting it would report a
+    cash-on-cash return the property did not earn. ``operating_capital_by_year``
+    is the completed per-year total from
+    ``acquisition.calculate_operating_capital_by_year``; empty or all-zero
+    reduces this to exactly the prior formula.
     """
+
+    hold_period = len(noi_by_year)
+    operating_capital = operating_capital_by_year or tuple(
+        0.0 for _ in range(hold_period)
+    )
 
     return tuple(
         ensure_finite(
             f"recurring_levered_cash_flows[{year}]",
-            noi_by_year[year] - capex_by_year[year] - annual_debt_service[year],
+            noi_by_year[year]
+            - capex_by_year[year]
+            - operating_capital[year]
+            - annual_debt_service[year],
         )
-        for year in range(len(noi_by_year))
+        for year in range(hold_period)
     )
 
 
 def calculate_recurring_unlevered_cash_flows(
-    *, noi_by_year: tuple[float, ...], capex_by_year: tuple[float, ...]
+    *,
+    noi_by_year: tuple[float, ...],
+    capex_by_year: tuple[float, ...],
+    operating_capital_by_year: tuple[float, ...] = (),
 ) -> tuple[float, ...]:
-    """Return ``(RUCF_1, .., RUCF_H)``: ``RUCF_y = NOI_y - CapEx_y`` for
-    every hold year, including the final one -- no ``exit_value`` or
-    ``disposition_costs`` term, ever. Never floored at zero."""
+    """Return ``(RUCF_1, .., RUCF_H)``: ``RUCF_y = NOI_y - CapEx_y -
+    OpCap_y`` for every hold year, including the final one -- no
+    ``exit_value`` or ``disposition_costs`` term, ever. Never floored at zero.
+
+    D4.5A (HD-D4-3): the same reasoning as the levered series above. Empty or
+    all-zero ``operating_capital_by_year`` reduces this to exactly the prior
+    formula.
+    """
+
+    hold_period = len(noi_by_year)
+    operating_capital = operating_capital_by_year or tuple(
+        0.0 for _ in range(hold_period)
+    )
 
     return tuple(
         ensure_finite(
             f"recurring_unlevered_cash_flows[{year}]",
-            noi_by_year[year] - capex_by_year[year],
+            noi_by_year[year] - capex_by_year[year] - operating_capital[year],
         )
-        for year in range(len(noi_by_year))
+        for year in range(hold_period)
     )
 
 
@@ -431,20 +461,29 @@ def calculate_owner_return_metrics(
     acquisition_costs: float,
     initial_equity: float,
     loan_amount: float,
+    operating_capital_by_year: tuple[float, ...] = (),
 ) -> OwnerReturnMetrics:
     """Compute the Owner Return Metrics V3 Gate A2 result from
     already-assembled capital-stack and cash-flow inputs -- identical for
-    Quick and Detailed Underwrite, since every parameter here is already
+    Quick, Detailed and any later mode, since every parameter here is already
     mode-agnostic (``AcquisitionTerms``/``CapitalStack``/``DebtSchedule``
-    fields, plus the shared ``noi_by_year``/``capex_by_year``)."""
+    fields, plus the shared ``noi_by_year``/``capex_by_year`` and, from D4.5A,
+    ``operating_capital_by_year``).
+
+    ``year_1_debt_yield`` is deliberately **not** affected by operating
+    capital: it is ``NOI_1 / loan_amount``, a lender metric, and NOI is never
+    reduced by a below-NOI outflow (D4 Section 22)."""
 
     recurring_levered_cash_flows = calculate_recurring_levered_cash_flows(
         noi_by_year=noi_by_year,
         capex_by_year=capex_by_year,
         annual_debt_service=annual_debt_service,
+        operating_capital_by_year=operating_capital_by_year,
     )
     recurring_unlevered_cash_flows = calculate_recurring_unlevered_cash_flows(
-        noi_by_year=noi_by_year, capex_by_year=capex_by_year
+        noi_by_year=noi_by_year,
+        capex_by_year=capex_by_year,
+        operating_capital_by_year=operating_capital_by_year,
     )
     unlevered_acquisition_basis = calculate_unlevered_acquisition_basis(
         purchase_price=purchase_price, acquisition_costs=acquisition_costs
