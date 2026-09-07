@@ -4,7 +4,11 @@
 **Date:** 2026-09-07
 **Branch:** `feature/lease-underwriting-d4-property-integration`
 **Baseline HEAD:** `84fbbfd` (D4.5B closed; 4401 backend tests passing)
-**Status:** proposal for human financial review. No production code changes.
+**Status:** **ACCEPTED.** Human financial review completed 2026-09-07; all
+six decisions are decided and **no decision blocks D4.6B**. The final rulings,
+and the shadow-detection rule measured from shipped code, are in **§38**. Part I
+and Part II record the analysis as proposed; where §38 differs, **§38 governs**.
+No production code changes.
 
 Governed by, and subordinate to:
 
@@ -34,11 +38,12 @@ narrow Lease-Level sensitivity orchestrator that reuses the current
 scenario/result contracts. Not a framework refactor, not a generic adapter.
 Rationale in §12.
 
-**Six human decisions are required** (§26). Two of them —
-market-leasing/suite-override semantics (HD-D4.6-2) and Lease-Level break-even
-inclusion (HD-D4.6-5) — are genuinely blocking, because the evidence below
-shows that guessing either one wrong produces silently wrong output rather than
-an error.
+**Six human decisions were required, and all six are now decided** (§35,
+finalised in §38). Four approved, two deferred, **none blocking**. The two that
+were blocking — market-leasing/suite-override semantics (HD-D4.6-2) and
+Lease-Level break-even inclusion (HD-D4.6-5) — were decided as recommended,
+because the evidence below showed that guessing either one wrong produces
+silently wrong output rather than an error.
 
 **Everything in this document that could be measured, was measured.** The
 runtime numbers, the memory numbers, the override-shadowing failure, the
@@ -456,8 +461,8 @@ place to add a leasing-side dimension.
 
 | Field | Class | Reason |
 |---|---|---|
-| `expense_growth` | **S** | Measured monotonic. Property-wide, unambiguous. Rebuilds expenses → pool → recoveries → fee via EGI → NOI → exit NOI, exercising the deepest rebuild chain of any target. High analytical value. |
-| `recoverable_expense_ratio` | **S (recommended)** | Measured monotonic and **by far the most influential single assumption tested** — equity multiple moved 0.33 → 1.63 across its domain. Property-wide, unambiguous. See HD-D4.6-1. |
+| `expense_growth` | **S — APPROVED** | Measured monotonic. Property-wide, unambiguous (§38.2). Rebuilds expenses → pool → recoveries → fee via EGI → NOI → exit NOI, exercising the deepest rebuild chain of any target. High analytical value. |
+| `recoverable_expense_ratio` | **S — APPROVED** | Measured monotonic and **by far the most influential single assumption tested** — equity multiple moved 0.33 → 1.63 across its domain. Property-wide, unambiguous, and §38.2 proves it is unreachable from any suite override. |
 | `credit_loss_pct` | **D** | Legitimate, but low marginal value beside the two above and adds a fourth EGI-side dimension. |
 | `management_fee_pct` | **D** | Same. Its circularity proof (D4 §13) is settled; nothing structural blocks it later. |
 | `other_income`, `other_income_growth` | **D** | Small magnitude; not a decision driver. |
@@ -466,12 +471,13 @@ place to add a leasing-side dimension.
 ### 18.3 Market leasing assumptions — `MarketLeasingAssumptions`
 
 **Every field in this contract is subject to the suite-override problem
-(§19).** Nothing here can be approved until HD-D4.6-2 is answered.
+(§19).** HD-D4.6-2 has since been decided (§38.2): the two approved targets ship
+with a mandatory, target-specific shadow check.
 
 | Field | Class | Reason |
 |---|---|---|
-| `market_rent_psf` | **S, conditional on HD-D4.6-2** | The single highest-value Lease-Level question. Measured monotonic. Blocked only by override semantics. |
-| `renewal_probability` | **S, conditional on HD-D4.6-2** | Measured monotonic. The assumption most unique to lease-level underwriting — no Quick or Detailed analogue exists. §19.3 for domain handling. |
+| `market_rent_psf` | **S — APPROVED** with the §38.2 shadow check | The single highest-value Lease-Level question. Measured monotonic. Shadowed by **either** suite override field. |
+| `renewal_probability` | **S — APPROVED** with the §38.2 shadow check | Measured monotonic. The assumption most unique to lease-level underwriting — no Quick or Detailed analogue exists. Shadowed **only** by a full `market_leasing_override`. §25.3 for domain handling. |
 | `market_rent_growth` | **D** | Highly correlated with `market_rent_psf` in effect; one rent dimension is enough for D4. |
 | `renewal_downtime_months`, `new_downtime_months` | **D** | **Measured non-monotonic** (§20.2). Supportable as a *sensitivity* dimension, but see §20.2 — the discontinuity is real and should be documented before it is exposed. |
 | `renewal_free_rent_months`, `new_free_rent_months` | **D** | Same timing-discontinuity family as downtime. |
@@ -571,16 +577,16 @@ everything.
 | **C** overwrite all resolved rents | Set every suite's resolved value to the candidate | Destroys the override structure. An analyst who set Suite C to \$52 for a reason sees it silently discarded. Rejected. |
 | **D** property-default, **refused when shadowed** | Semantics of A, but raise an explicit error if any suite shadows the target | Never silently wrong. Costs the ability to run the sensitivity on override-carrying properties. |
 
-**Recommendation: D.** It preserves absolute-value semantics, invents no new
-financial concept, keeps `resolve_market_leasing` the sole precedence
-authority, and converts §19.2's silent flat row into an explicit, honest
-refusal. B is the right *long-term* answer and should be recorded as a deferred
-capability — but it introduces relative-shock semantics, which is a separate
-decision (§21) and a larger one than D4.6 should absorb.
+**Recommended D — and D was APPROVED** (§38.2). It preserves absolute-value
+semantics, invents no new financial concept, keeps `resolve_market_leasing` the
+sole precedence authority, and converts §19.2's silent flat row into an
+explicit, honest refusal. **A, B and C are explicitly rejected for D4**; B is
+the right *long-term* answer and is recorded as a deferred capability (§38.2.4),
+but it introduces relative-shock semantics, which is a separate decision (§21)
+and a larger one than D4.6 should absorb.
 
-This is **HD-D4.6-2**, and it is blocking: it gates both market-leasing
-targets, which are the two dimensions that make Lease-Level sensitivity worth
-having.
+The exact detection rule — which turned out to be **target-specific**, not
+all-or-nothing — was measured from shipped code and is stated in **§38.2.2**.
 
 ### 19.4 If suite targeting is later approved
 
@@ -663,8 +669,8 @@ reports it as a solved threshold.
 
 ### 20.4 Break-even recommendation
 
-**DEFER Lease-Level break-even out of D4.6 entirely.** Three independent
-reasons, each sufficient:
+**DEFERRED ENTIRELY — APPROVED (§38.5).** Three independent reasons, each
+sufficient:
 
 1. `levered_irr` is undefined for the normal Lease-Level cash-flow shape
    (§20.1), and it is the primary hurdle metric.
@@ -676,7 +682,9 @@ reasons, each sufficient:
 **If it is later wanted**, the only defensible starting pair is
 `max_purchase_price` and `max_exit_cap_rate` against an **equity-multiple**
 hurdle — both measured monotonic, both on a metric that is always defined.
-That is a D5+ gate with its own evidence, not a D4.6 add-on. **HD-D4.6-5.**
+That is a D5+ gate with its own evidence and its own explicit
+monotonicity / metric-suitability rules, not a D4.6 add-on. **HD-D4.6-5 —
+DEFER.** `analysis/break_even.py` is **not to be modified during D4** (§38.5).
 
 ## 21. Absolute vs relative shocks
 
@@ -839,7 +847,7 @@ perturbations applied together**, mirroring the existing implementation
 exactly. No row-then-column incrementalism. `row_assumption ==
 column_assumption` raises.
 
-**Recommendation: include two-way in D4.6B.** It is the same code shape as
+**APPROVED — two-way ships in D4.6B (§38.6).** It is the same code shape as
 one-way, the anti-contamination property is inherited from the existing
 implementation rather than invented, and §27 shows the runtime is trivial. A
 one-way-only gate would leave the highest-value view (price × exit cap)
@@ -875,11 +883,12 @@ One Lease-Level re-underwrite costs ≈ **14.7×** one Quick scenario.
 | 10×10 two-way | 101 | 0.093 s | 0.273 s | **1.147 s** |
 | three 5×5 presets | 78 | 0.072 s | 0.211 s | 0.886 s |
 
-**Conclusion: performance is a non-issue.** The worst realistic case is about
-one second. **No grid-size limit is needed.** Correctness outranks speed and
-here it costs nothing.
+**Conclusion: performance is a non-issue — findings ACCEPTED (§38.7).** The
+worst realistic case is about one second. **No grid-size limit is required by
+performance.** Correctness and determinism outrank unnecessary optimization,
+and here correctness costs nothing.
 
-### 27.3 Caching — **do not add**
+### 27.3 Caching — **do not add (APPROVED, §38.7)**
 
 No memoization, at any level. There is no performance problem to solve (§27.2),
 and a correct cache would need a dependency-aware fingerprint over six nested
@@ -888,7 +897,7 @@ an unfingerprinted field changed — precisely the "stale recoverable pool /
 stale TI-LC" failure family in §31. The existing framework provides no cache
 seam and should not grow one here.
 
-### 27.4 Parallelism — **do not add**
+### 27.4 Parallelism — **do not add (APPROVED, §38.7)**
 
 The existing framework is sequential and deterministic. §27.2 shows no need.
 Deferred.
@@ -923,9 +932,14 @@ A 4-suite H=10 property multiplies the per-cell figure several-fold.
 
 ### 29.2 Recommendation
 
-**Retain scalars only per cell** — i.e. reuse `OneWaySensitivityResult` /
-`TwoWaySensitivityResult` exactly as they are, holding the candidate value and
-one metric.
+**Retain scalars only per cell — APPROVED (§38.8).** Reuse
+`OneWaySensitivityResult` / `TwoWaySensitivityResult` exactly as they are,
+holding the candidate value and one metric. The full
+`LeaseLevelAcquisitionResults` (and its `MonthlyPropertyProjection`,
+`AnnualOperatingProjection` and suite-chain tree) exists **temporarily** during
+each scenario's evaluation and is then reduced to the selected metric. This is
+a **memory boundary, not a financial shortcut**: every scenario still performs
+the complete re-underwrite.
 
 The full baseline audit trail is **not lost**: the caller already holds the
 baseline `LeaseLevelAcquisitionResults` from its own analysis call, complete
@@ -1025,21 +1039,23 @@ existing pipeline; sensitivity only chooses inputs and reads one output field.
 | 2 | Purchase-price sensitivity — monotone decreasing EM; exit **NOI unchanged** across cells |
 | 3 | Exit-cap sensitivity — exit *value* moves, exit **NOI does not** |
 | 4 | Interest-rate sensitivity — NOI and exit NOI **bit-identical** across cells; DSCR and levered returns move |
-| 5 | Market-rent sensitivity *(if HD-D4.6-2 approves)* — successor rent, LC, exit NOI and returns all move together |
-| 6 | Renewal-probability sensitivity *(if approved)* — including exact `p=0` and `p=1` endpoints |
+| 5 | Market-rent sensitivity **(approved)** — successor rent, LC, exit NOI and returns all move together |
+| 6 | Renewal-probability sensitivity **(approved)** — including exact `p=0` and `p=1` endpoints fed through the normal pipeline |
 | 7 | Expense sensitivity — expenses, pool, recoveries, management fee and NOI all rebuilt; a cell with `recoverable_expense_ratio=0` differs from `=1` by the full recovery line |
 | 8 | TI/LC — *(deferred; not in scope)* |
 | 9 | Invalid-domain candidate — explicit run raises; preset omits |
 | 10 | A candidate driving `NON_POSITIVE_FORWARD_EXIT_NOI` — explicit run raises that code; **no cell is zero, floored or capitalised** |
 | 11 | One-way ordering — cells align positionally with candidates, in caller order |
 | 12 | Two-way independence — cell (i,j) equals a direct analysis with both perturbations; and equals the same cell when rows/columns are permuted |
-| 13 | Suite-target semantics — *(deferred; guardrail asserts no suite target exists)* |
-| 14 | **Suite-override interaction** — the §19.2 property: a shadowed property-level shock is refused (or, under another HD outcome, behaves exactly as decided) |
+| 13 | Suite-target semantics — *(deferred by HD-D4.6-3; guardrail asserts no suite target exists)* |
+| 14 | **Market-rent shadow golden (MANDATORY, §38.9)** — a suite override shadows the property default; property-level market-rent sensitivity is **refused** with the shadow error. Not four identical cells, not a silent no-op, not an override overwrite |
+| 14b | **Renewal-probability shadow golden (MANDATORY, §38.9)** — a full `market_leasing_override` shadows it and is refused; a suite carrying **only** the scalar `market_rent_psf` override does **not** shadow it and the run proceeds |
+| 14c | **Unshadowed operating targets** — `expense_growth` and `recoverable_expense_ratio` are never shadowed, on any suite shape |
 | 15 | Quick/Detailed preservation — existing sensitivity results unchanged; 624-object hex matrix |
 | 16 | Repeated-run equality — two identical runs are `float.hex()`-equal |
 | 17 | Baseline immutability — all six contracts compare equal to a pre-run deep copy |
 | 18 | Call count — `1 + N` and `1 + R×C` calls to the Lease-Level entry point |
-| 19 | Undefined IRR — a TI/LC-heavy deal yields `None` IRR cells while `equity_multiple` cells stay defined |
+| 19 | **Undefined-metric golden (MANDATORY, §38.4)** — a *valid* TI/LC-heavy scenario yields a `None` levered-IRR cell **and the run stays valid**, while `equity_multiple` stays defined; then a separate *invalid* scenario **fails validation** rather than producing `None`. The distinction is separately guardrailed |
 
 ## 34.1 Mutation plan
 
@@ -1092,21 +1108,24 @@ existing pipeline; sensitivity only chooses inputs and reads one output field.
 
 ## 35. HD-D4.6 register
 
-| ID | Decision | Blocking? |
-|---|---|---|
-| HD-D4.6-1 | Minimum supported D4 sensitivity dimensions | **Yes** — defines the gate |
-| HD-D4.6-2 | Market-leasing sensitivity vs suite overrides | **Yes** — silently wrong if guessed |
-| HD-D4.6-3 | Suite-specific sensitivity scope | No — recommended defer |
-| HD-D4.6-4 | Invalid-cell representation | No — recommended option needs no change |
-| HD-D4.6-5 | Lease-Level break-even inclusion | **Yes** — scope-defining |
-| HD-D4.6-6 | Two-way sensitivity in D4.6B | No — recommended include |
+**All six are decided as of the 2026-09-07 human review. No decision blocks
+D4.6B.** Full rulings in §38.
+
+| ID | Decision | Outcome | Blocking now |
+|---|---|---|---|
+| HD-D4.6-1 | Minimum supported D4 sensitivity dimensions | **APPROVED** (option C) | none |
+| HD-D4.6-2 | Market-leasing sensitivity vs suite overrides | **APPROVED** (option D, target-specific) | none |
+| HD-D4.6-3 | Suite-specific sensitivity scope | **DEFER** | none |
+| HD-D4.6-4 | Invalid-cell representation | **APPROVED** (option A) | none |
+| HD-D4.6-5 | Lease-Level break-even inclusion | **DEFER** | none |
+| HD-D4.6-6 | Two-way sensitivity in D4.6B | **APPROVED** | none |
 
 Absolute-vs-relative semantics (§21), categorical assumptions (§23), dates
 (§22.2), `hold_period`/`amortization` (§18.1) and result retention (§29) are
 **not** listed as human decisions: each is already settled by shipped code,
 existing frozen conventions, or measurement.
 
-### HD-D4.6-1 — Minimum supported D4 sensitivity dimensions
+### HD-D4.6-1 — Minimum supported D4 sensitivity dimensions — **APPROVED (option C)**
 
 **A.** Shared terms only — `purchase_price`, `exit_cap_rate`, `ltv`,
 `interest_rate`. Exactly `DETAILED_SUPPORTED_ASSUMPTIONS`.
@@ -1127,9 +1146,9 @@ assumption measured — `recoverable_expense_ratio` moved equity multiple
 `expense_growth`'s owning contract, which has **no suite override** and
 therefore no HD-D4.6-2 exposure.
 
-*Blocks:* the supported-assumption tuple, the target map, goldens 2–7.
+*Decided:* **approved**. It unblocks the supported-assumption tuple, the target map and goldens 2–7. Exact approved names in §38.1.
 
-### HD-D4.6-2 — Market-leasing sensitivity vs suite overrides — **BLOCKING**
+### HD-D4.6-2 — Market-leasing sensitivity vs suite overrides — **APPROVED (option D)**
 
 Evidence: §19.2 — measured, a property whose suites all carry overrides returns
 **four identical cells** for a 60% market-rent swing, with no indication in the
@@ -1152,11 +1171,13 @@ never wrong, needs no new concept, and costs only the ability to run these two
 targets on override-carrying properties — which the analyst can still do by
 editing the override.
 
-*Blocks:* both market-leasing targets, i.e. two of the three dimensions in
-HD-D4.6-1 option B/C. If A is chosen, golden 14 changes meaning; if B, §21's
-absolute-only convention needs a dated amendment.
+*Decided:* **D approved**; A, B and C explicitly rejected for D4. It unblocks
+both market-leasing targets. The detection rule turned out to be
+**target-specific** rather than record-level — measured in §38.2.2 — so
+`renewal_probability` and `market_rent_psf` have **different** shadow
+conditions, and goldens 14 and 14b test them separately.
 
-### HD-D4.6-3 — Suite-specific sensitivity scope
+### HD-D4.6-3 — Suite-specific sensitivity scope — **DEFER (option A)**
 
 **A.** Property-level targets only in D4.6.
 **B.** Add suite-targeted variants keyed by `suite_id`.
@@ -1171,10 +1192,10 @@ rules out. A keeps D4.6 additive. If B is ever wanted, §19.4 fixes the
 semantics in advance: target by `suite_id`, unknown id is an explicit error, no
 "first suite".
 
-*Blocks:* goldens 13 and mutation 5 (both currently written as
-"must be unreachable").
+*Decided:* **deferred**. Goldens 13 and mutation 5 stay written as "must be
+unreachable"; no composite target contract is required in D4.6B.
 
-### HD-D4.6-4 — Invalid-cell representation
+### HD-D4.6-4 — Invalid-cell representation — **APPROVED (option A)**
 
 **A.** Reuse existing semantics exactly — explicit runs raise, presets omit
 (§25.2).
@@ -1189,10 +1210,11 @@ opposed to merely out of domain). B is a real improvement in explanatory power
 but is a **framework change touching Quick and Detailed**, which contradicts
 this gate's minimality preference and would require its own preservation proof.
 
-*Blocks:* nothing. A can ship now and B can be added later without invalidating
-anything built under A.
+*Decided:* **A approved**. Nothing was blocked; A ships now and B can be added
+later without invalidating anything built under A. The `None`-versus-validation-
+failure distinction is locked in §38.4.1 and must be guardrailed.
 
-### HD-D4.6-5 — Lease-Level break-even inclusion — **BLOCKING (scope)**
+### HD-D4.6-5 — Lease-Level break-even inclusion — **DEFER (option A)**
 
 **A.** Defer entirely from D4.6.
 **B.** Include, restricted to `max_purchase_price` / `max_exit_cap_rate` on an
@@ -1210,10 +1232,11 @@ defensible on today's evidence — but "defensible on two sweeps" is not the
 standard this project has held, and a break-even that reports `SOLVED` at an
 arbitrary point inside a flat step is exactly the silent-wrongness class.
 
-*Blocks:* whether D4.6B has a break-even deliverable at all, and whether
-`_ASSUMPTION_TOLERANCES` gains Lease-Level entries.
+*Decided:* **deferred entirely**. D4.6B has **no** break-even deliverable,
+`_ASSUMPTION_TOLERANCES` gains no Lease-Level entries, and
+`analysis/break_even.py` must not be modified during D4 at all (§38.5).
 
-### HD-D4.6-6 — Two-way sensitivity in D4.6B
+### HD-D4.6-6 — Two-way sensitivity in D4.6B — **APPROVED (option A)**
 
 **A.** One-way and two-way together.
 **B.** One-way only; two-way in a later gate.
@@ -1226,17 +1249,20 @@ inventing it. Runtime is ≈0.07 s for a 5×5 (§27.2). B would withhold the
 highest-value view — price × exit cap — from the mode that most needs it, for
 no risk reduction.
 
-*Blocks:* golden 12, mutation 3.
+*Decided:* **approved**. Two-way ships in D4.6B; golden 12 and mutation 3 are in scope (§38.6).
 
 ## 36. Blocking decisions, restated
 
-Work cannot start on D4.6B until **HD-D4.6-1**, **HD-D4.6-2** and
-**HD-D4.6-5** are answered. HD-D4.6-3, -4 and -6 have recommendations that are
-safe to adopt by default.
+**NONE.** All six decisions were taken at the 2026-09-07 human review (§38).
+D4.6B is unblocked and may begin when a D4.6B gate authorises it — this gate
+does not.
 
 ## 37. Classification
 
-**A — D4.6 ARCHITECTURE READY FOR HUMAN REVIEW.**
+**A — D4.6A FINANCIALLY ACCEPTED, READY FOR D4.6B.**
+
+*(Originally classified "ready for human review" on 2026-09-07; that review
+completed the same day and accepted the architecture. See §38.)*
 
 The existing framework is fully mapped from source. The seam is chosen and
 justified against the Detailed precedent. Every target is classified with a
@@ -1247,6 +1273,369 @@ quantified and neither constrains the design. No production change is required
 outside one new analysis module and its tests, and Quick/Detailed preservation
 reduces to file identity.
 
-Six human decisions are enumerated; three block D4.6B.
+Six human decisions were enumerated and **all six are now decided; none
+blocks D4.6B** (§38).
 
 **D4.6B has not begun. Nothing is merged.**
+
+---
+
+# PART V — HUMAN REVIEW CLOSEOUT
+
+## 38. D4.6A Closeout Amendment — 2026-09-07
+
+**Amendment, not a rewrite.** Parts I–IV record the mapping, the design and the
+options as presented for review. This section records the decisions taken at
+the D4.6A human financial review, which **accepted the architecture**. Where
+this section and an earlier one differ on a decided point, **this section
+governs**; earlier conditional language ("recommendation", "if approved",
+"blocking") has been reconciled in place and now points here.
+
+**Status: D4.6A FINANCIALLY ACCEPTED. No human decision blocks D4.6B.**
+
+### 38.1 HD-D4.6-1 — Supported D4 dimensions — **APPROVED**
+
+D4.6B supports the smallest coherent Lease-Level sensitivity set: **eight
+targets**.
+
+**Shared acquisition targets — exactly the four already in
+`DETAILED_SUPPORTED_ASSUMPTIONS`.** Read from
+`src/anchor/analysis/sensitivity.py` at `cce2d6f`, not inferred:
+
+```python
+DETAILED_SUPPORTED_ASSUMPTIONS: tuple[str, ...] = (
+    "purchase_price",
+    "exit_cap_rate",
+    "ltv",
+    "interest_rate",
+)
+```
+
+All four exist on `AcquisitionTerms` under those exact names.
+
+**Lease-Level additive targets — four:**
+
+| Target | Owning contract |
+|---|---|
+| `market_rent_psf` | `MarketLeasingAssumptions` |
+| `renewal_probability` | `MarketLeasingAssumptions` |
+| `expense_growth` | `LeaseLevelOperatingInputs` |
+| `recoverable_expense_ratio` | `LeaseLevelOperatingInputs` |
+
+**No other Lease-Level sensitivity target is in D4.6B.** Explicitly deferred,
+at minimum: `market_rent_growth`; renewal/new rent spreads and
+`renewal_rent_psf`; `successor_escalation_pct`; renewal/new downtime; renewal/new
+free rent; renewal/new TI; renewal/new LC; the five individual fixed operating
+expense lines; `other_income` and `other_income_growth`; `credit_loss_pct`;
+`management_fee_pct`; the acquisition/financing/disposition cost percentages
+not in the approved shared set; `annual_capex_reserve`; `renewal_term_months`
+and `new_term_months`; `hold_period`; `amortization`; `io_period`; all dates;
+all categorical lease structures; initial-vacancy strategy.
+
+**The purpose of D4.6B is to prove correct full re-underwriting across a useful
+minimum target set — not maximum target coverage.**
+
+### 38.2 HD-D4.6-2 — Property default vs suite overrides — **APPROVED**
+
+D4.6B supports **property-default market-leasing sensitivity only**. A scenario
+whose selected target is shadowed by a suite-specific override is **rejected**.
+
+#### 38.2.1 Prohibited alternatives
+
+Options A, B and C of §19.3 are **explicitly rejected for D4**. D4.6B must not
+overwrite a suite override, must not proportionally shock resolved suite
+values, must not silently perturb only the un-overridden suites, and must not
+report a property-wide-looking sensitivity whose target did not apply
+consistently to the intended property-default population.
+
+The rule is deliberately conservative because **the current sensitivity result
+contracts cannot communicate affected-suite coverage** (§1) — there is no field
+in which "this cell moved 2 of your 4 suites" could be stated.
+
+#### 38.2.2 The exact shadow-detection rule, measured from shipped code
+
+The review asked whether override behaviour is all-or-nothing at the record
+level or field-level, and required the answer be taken from the code rather
+than assumed. **It is both**, and therefore the check is **target-specific**.
+
+`anchor/leasing/market.py::resolve_market_leasing` applies two distinct
+mechanisms:
+
+1. `market_leasing_override` (a whole `MarketLeasingAssumptions` record) is
+   **all-or-nothing**: when present it replaces the property default entirely
+   and *no* field falls through.
+2. `Suite.market_rent_psf` (a bare `float | None`) is a **single-field**
+   override applied on top of whichever record won — and it is the only such
+   field on `Suite`.
+
+`Suite` carries exactly these two override fields and no others:
+`market_rent_psf: float | None`, `market_leasing_override:
+MarketLeasingAssumptions | None`.
+
+**Measured at the resolver** (property default rent \$30, renewal probability
+0.70; override record rent \$48, renewal probability 0.25):
+
+| Suite shape | resolved rent | resolved renewal prob | source |
+|---|---|---|---|
+| no override | 30.00 *(property)* | 0.70 *(property)* | `property_default` |
+| scalar `market_rent_psf` only | 48.00 *(suite)* | **0.70 *(property)*** | `property_default` |
+| full `market_leasing_override` | 48.00 *(override)* | **0.25 *(override)*** | `suite_override` |
+| full override + scalar | 52.00 *(scalar wins)* | 0.25 *(override)* | `suite_override` |
+
+**Confirmed end to end** — does perturbing the property default move exit NOI?
+(renewal and new-tenant economics deliberately differentiated, so
+`renewal_probability` is not inert by construction):
+
+| Suite shape | `market_rent_psf` | `renewal_probability` |
+|---|---|---|
+| no override | MOVES | MOVES |
+| scalar `market_rent_psf` only | **SHADOWED** | MOVES |
+| full `market_leasing_override` | SHADOWED | **SHADOWED** |
+| full override + scalar | SHADOWED | SHADOWED |
+
+**The D4 rule, stated exactly:**
+
+```
+shadowed(suite, target) :=
+    suite.market_leasing_override is not None
+      or (target == "market_rent_psf" and suite.market_rent_psf is not None)
+```
+
+A run is rejected if **any** suite shadows the selected target. A two-way run
+is rejected if **either** target is shadowed by any suite.
+
+**The two operating targets are never shadowed and require no check.**
+`expense_growth` and `recoverable_expense_ratio` live on
+`LeaseLevelOperatingInputs`, which shares **no field name with `Suite`** and is
+not reachable from any suite override — verified by field-set intersection,
+which is empty. The check therefore applies only to the two market-leasing
+targets.
+
+#### 38.2.3 The validation concept
+
+```
+SENSITIVITY_TARGET_SHADOWED_BY_SUITE_OVERRIDE
+```
+
+**This is an ANALYSIS sensitivity validation, not a leasing financial-domain
+validation.** It belongs to `anchor/analysis/lease_level_sensitivity.py` and
+must **not** be added to `LeaseIssueCode` or to `anchor/leasing/validation.py`:
+nothing about the rent roll is invalid, and the identical inputs remain
+perfectly analysable through `analyze_lease_level_acquisition_with_projection`.
+What is refused is *this sensitivity question about these inputs*.
+
+Its message must name the shadowed target and the shadowing suite ids, so the
+analyst can see exactly which suites made the question unanswerable.
+
+D4.6B's exact error type and placement are an implementation detail of that
+module, subject to the no-financial-formula rule (§38.10).
+
+#### 38.2.4 Deferred future capability
+
+Both remain deferred and neither may appear in D4.6B: **(A)** explicit
+suite-specific sensitivity keyed by `suite_id`; **(B)** proportional shock to
+resolved market economics. §19.4 fixes A's semantics in advance if it is ever
+approved.
+
+### 38.3 HD-D4.6-3 — Suite-specific targeting — **DEFER**
+
+D4.6B does not support `suite_id` + assumption targeting, suite-index
+targeting, or all-suite proportional targeting. The approved Lease-Level market
+targets operate **only** on the property-default market-leasing assumptions,
+subject to §38.2.
+
+**No composite target contract is required in D4.6B.**
+
+### 38.4 HD-D4.6-4 — Invalid scenario semantics — **APPROVED**
+
+Current explicit-run semantics are preserved: **one invalid explicit scenario
+fails the sensitivity run.** No per-cell validation-status contract is
+introduced in D4.
+
+#### 38.4.1 The `None`-versus-invalid distinction, locked
+
+| | Meaning |
+|---|---|
+| **`None`** | The scenario was **valid** and fully underwritten; the requested output metric is **mathematically undefined**. Levered IRR may legitimately be `None` for a valid Lease-Level cash-flow shape — see §20.1, where TI/LC in a rollover year produce three sign changes. |
+| **Validation failure** | The scenario **itself cannot be underwritten**. Examples: `renewal_probability` outside `[0,1]`; exit cap outside its domain; `NON_POSITIVE_FORWARD_EXIT_NOI`; a market-leasing target shadowed under §38.2. |
+
+**Validation failure must never be encoded as `None`, `0`, `NaN`, or a sentinel
+IRR.** A zero would be a fabricated return; a `None` would be indistinguishable
+from a legitimately undefined metric.
+
+The underlying Lease-Level validation remains authoritative — sensitivity
+neither restates nor softens it.
+
+Preset candidate generation may continue to exclude known invalid
+**input-domain** values per existing framework convention (§9).
+
+#### 38.4.2 `NON_POSITIVE_FORWARD_EXIT_NOI`
+
+A scenario driving `exit_noi <= 0` must surface the existing
+`NON_POSITIVE_FORWARD_EXIT_NOI` failure raised by
+`analyze_lease_level_acquisition_with_projection`. Sensitivity must **not**
+catch and convert it to `None`, convert it to zero, floor exit NOI, capitalise
+it anyway, or continue the grid silently. Under §38.4 the explicit run fails.
+
+### 38.5 HD-D4.6-5 — Lease-Level break-even — **DEFER ENTIRELY**
+
+No Lease-Level break-even in D4.6B — no public and no internal entry point.
+Four reasons, confirmed by this gate's investigation:
+
+1. Normal Lease-Level levered cash flow can contain **multiple sign changes**,
+   making levered IRR legitimately undefined (§20.1: `[-14.5M, +1.68M, +1.68M,
+   −2.57M, +1.86M, +31.3M]`).
+2. The current bisection **assumes a usable single crossing**, even though the
+   module's own language says it does not assume monotonicity (§12).
+3. Lease-Level timing-sensitive variables can be **non-monotonic / piecewise**
+   because lease events cross market-rent anniversaries and other monthly
+   boundaries (§20.2, §20.3).
+4. Timing / term / rollover economics create discontinuities unsuitable for a
+   generic bisection assumption.
+
+**`analysis/break_even.py` must not be modified during D4** — not to "fix" the
+monotonicity language, not to add tolerances, not at all. Quick and Detailed
+break-even behaviour remains frozen and its outputs must be proven unchanged.
+
+Future Lease-Level break-even requires its **own architecture** with explicit
+monotonicity and metric-suitability rules.
+
+### 38.6 HD-D4.6-6 — Two-way sensitivity — **APPROVED**
+
+D4.6B includes both one-way and two-way sensitivity. Every scenario and every
+cell is a **full independent re-underwrite from the same immutable baseline**:
+
+```
+baseline
+  -> immutably replace row target
+  -> immutably replace column target
+  -> full Lease-Level analysis
+```
+
+or an equivalent immutable replacement sequence. **No row result becomes the
+baseline of another row. No column result becomes the baseline of another
+column. No cumulative scenario state.** Requested candidate ordering is
+preserved deterministically.
+
+### 38.7 Confirmed conventions
+
+**Absolute value semantics — CONFIRMED.** D4.6B candidate values are **absolute
+assumption values**: `exit_cap_rate = 0.065`, `market_rent_psf = 45.0`,
+`renewal_probability = 0.70`. They are **not** relative shocks — not `+50 bps`,
+not `+5%`, not `−10%`. **No relative shocks in D4**, and absolute and relative
+semantics are never mixed. Preset builders may still convert offsets or
+multipliers into absolute values before calling a runner (§21).
+
+**Probability — CONFIRMED.** `renewal_probability` remains governed by its
+source contract, `0 <= p <= 1`, with **no clipping**. `p = 0` and `p = 1`
+remain valid **exact D2 branch endpoints**, and sensitivity must feed those
+exact values through the normal deterministic pipeline.
+
+**Performance — findings ACCEPTED.** No D4 grid-size limit is required by
+performance (§27.2). **No memoization, no cache, no parallel execution, no
+approximate updates** in D4.6B. Sequential full re-underwriting is the
+reference behaviour; correctness and determinism outrank unnecessary
+optimization.
+
+### 38.8 Result retention — **APPROVED**
+
+Cells retain only the existing sensitivity scalar result/metric surface. D4.6B
+must **not** retain, per cell, a complete `LeaseLevelAcquisitionResults`,
+`MonthlyPropertyProjection`, `AnnualOperatingProjection` or suite-chain tree.
+
+**Every scenario must still perform the full re-underwrite.** The completed
+full object may exist **temporarily** during scenario evaluation and is then
+reduced to the selected result metric. This is a **memory boundary, not a
+financial shortcut**. Baseline auditability remains available through the
+caller's ordinary Lease-Level analysis.
+
+### 38.9 Mandatory D4.6B goldens arising from this review
+
+Three are named by the review and are **mandatory**; they are folded into the
+golden plan at §34 (items 14, 14b, 14c and 19).
+
+1. **Market-rent shadow golden.** A property where a suite override shadows the
+   property-default `market_rent_psf`. Property-default market-rent sensitivity
+   is attempted. Expected: an **explicit sensitivity-target-shadowed validation
+   failure** — *not* four identical result cells, *not* a silent no-op, *not*
+   an override overwrite.
+2. **Renewal-probability shadow golden.** The same principle applied to
+   `renewal_probability`, against the **measured** resolution behaviour of
+   §38.2.2 — and it differs, which is the point: a full `market_leasing_override`
+   shadows it and must be refused, while a suite carrying **only** the scalar
+   `market_rent_psf` override does **not** shadow it and the run must proceed
+   normally. Both halves are required; assuming symmetry with `market_rent_psf`
+   would be wrong.
+3. **Undefined-metric golden.** A **valid** Lease-Level scenario whose levered
+   IRR is `None` under the existing engine because of its cash-flow shape —
+   expected cell `None`, **run remains valid**. Then, separately, an **invalid**
+   scenario — expected **validation failure, not `None`**. This distinction must
+   be architecture-guardrailed, not merely asserted in a golden.
+
+### 38.10 Confirmed D4.6B implementation surface
+
+**New module: `src/anchor/analysis/lease_level_sensitivity.py`**, holding a
+third parallel pair of Lease-Level sensitivity runners that call
+`analyze_lease_level_acquisition_with_projection` for every scenario.
+
+**`analysis/sensitivity.py` and `analysis/break_even.py` must not be refactored
+for symmetry, and should remain byte-identical.** Quick/Detailed financial
+engines remain unchanged, and D4.6B regression must prove current sensitivity
+and break-even outputs are unchanged.
+
+**The module MAY:** validate supported target names; resolve whether a target
+is shadowed; immutably replace approved assumptions; invoke Lease-Level
+analysis; extract the selected existing result metric; assemble the existing
+sensitivity result contracts.
+
+**The module MAY NOT calculate:** NOI, recoveries, rent, exit value, IRR,
+equity multiple, DSCR, cash flow, or terminal NOI. Every scenario must call the
+real Lease-Level analysis.
+
+**Target representation.** An explicit immutable supported-name set plus a
+single deterministic replacement mapping (§17.2). Unsupported names raise an
+explicit error. **No arbitrary `getattr`/`setattr` traversal, no `eval`, no
+string-path mutation, no unrestricted field paths.**
+
+**`OperatingMode` — HD-D4-9 unchanged.** `OperatingMode.LEASE_LEVEL` is **not**
+added during D4.6B. Lease-Level sensitivity is distinguished by **function
+identity**, consistent with the current analysis architecture (§13). D5
+publishes the mode atomically across its exhaustive consumers.
+
+### 38.11 Consistency audit
+
+Every active statement on the reviewed topics was audited and reconciled. No
+stale alternative is left presented as open.
+
+| Topic | Status after this amendment |
+|---|---|
+| Supported targets | §18 and §38.1 agree: 4 shared + 4 lease-level = 8. `recoverable_expense_ratio` and `expense_growth` upgraded from "recommended" to **APPROVED** |
+| `market_rent_psf` | §18.3 and §38.2 agree: **APPROVED** with the target-specific shadow check |
+| `renewal_probability` | Same, and §38.2.2 records that its shadow condition **differs** from `market_rent_psf`'s |
+| Suite overrides | §19.3 options A/B/C explicitly **rejected for D4**; D approved. §19.2's measured flat-row evidence retained as the justification |
+| `suite_id` sensitivity | §18.4 and §38.3 agree: **deferred**, no composite target contract |
+| Absolute shocks | §21 and §38.7 agree: absolute only, **confirmed convention**, not an open decision |
+| Relative shocks | Explicitly **rejected for D4**; recorded as deferred capability B (§38.2.4) |
+| Invalid cells | §25.2 and §38.4 agree: explicit run fails, presets omit, **no per-cell status contract** |
+| `None` metrics | §20.1, §25.2 and §38.4.1 agree: `None` means **valid scenario, undefined metric** — never a validation failure |
+| `NON_POSITIVE_FORWARD_EXIT_NOI` | §25.2 and §38.4.2 agree: surfaced, never floored/zeroed/capitalised/skipped |
+| Break-even | §20.4, §26/§35 and §38.5 agree: **deferred entirely**; `break_even.py` frozen for D4 |
+| Two-way sensitivity | §26.2 and §38.6 agree: **approved**, same-baseline cells, no cumulative state |
+| `OperatingMode.LEASE_LEVEL` | §13, §32 and §38.10 agree: **not added**; function identity distinguishes the mode |
+| Result retention | §29.2 and §38.8 agree: scalars only, full object temporary, **memory boundary not a shortcut** |
+| Caching | §27.3 and §38.7 agree: **none** |
+| Parallelism | §27.4 and §38.7 agree: **none**, sequential is the reference behaviour |
+
+One correction was made to this document's own earlier text: §19.3 described
+the shadow condition as though it followed from record-level all-or-nothing
+override semantics alone. Measurement (§38.2.2) shows the condition is
+**target-specific**, because `Suite.market_rent_psf` is a genuine single-field
+override. The rule in §38.2.2 is authoritative.
+
+### 38.12 Status
+
+**D4.6A is financially accepted.** Six decisions taken; four approved, two
+deferred; **none blocking**.
+
+**D4.6B has not begun, and this gate does not authorise it.** Nothing is
+merged.
