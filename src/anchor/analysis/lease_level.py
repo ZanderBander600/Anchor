@@ -98,8 +98,10 @@ def analyze_lease_level_acquisition_with_projection(
     2. **Validate initial vacancy** (D3.6): a suite with no lease must carry an
        explicit ``HOLD_VACANT`` or ``MARKET_LEASE_UP`` treatment. Vacant space
        is never assumed to stay vacant.
-    3. **Validate suite/lease association** for this path: one in-place lease
-       per suite, because one suite yields one authoritative chain.
+    3. **Validate suite/lease association** for this path: at most one
+       *known* lease per suite, because one suite yields one authoritative
+       chain. Sequential and committed future known leases are rejected too,
+       not silently dropped.
     4. **Build the canonical timeline** -- ``12H + 12`` months from the one D1
        calendar builder. No month arithmetic happens in this module.
     5. **Build one full leasing chain per suite.** An occupied suite goes

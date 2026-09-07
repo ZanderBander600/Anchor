@@ -888,3 +888,139 @@ def test_g35_the_ai_exclusion_decision_is_intact() -> None:
             assert not name.endswith("LeaseLevelAcquisitionResults"), (
                 f"{source_file.name} imports the Lease-Level envelope"
             )
+
+
+# =============================================================================
+# D4.5B closeout -- HD-D4-9: public Lease-Level mode publication deferred to D5
+#
+# The internal deterministic Lease-Level entry point is complete and callable
+# through the analysis layer. What is deferred is *publication*: making
+# "lease_level" a dispatchable public ``OperatingMode``.
+#
+# The reason is that dispatch across this codebase is exhaustive-by-omission.
+# Every consumer tests one mode and lets the other fall through an implicit
+# else. Adding a third member does not create a third branch -- it silently
+# joins whichever branch the else happens to be, which differs by module: Quick
+# in ``api.py``, Detailed in ``ai/presentation.py`` and ``deals/contracts.py``.
+# A request that parsed as Lease-Level would then be answered with Quick
+# numbers, under a Lease-Level label. Rejection is the safe state until D5
+# publishes the mode atomically across every one of these sites.
+# =============================================================================
+
+
+def test_hd_d4_9_the_mode_is_not_publishable_yet() -> None:
+    """The enum is the gate. While ``lease_level`` is not a member, no payload
+    can name it and no dispatch can mis-route it."""
+
+    from anchor.contracts import OperatingMode
+
+    assert {member.value for member in OperatingMode} == {"quick", "detailed"}
+
+    with pytest.raises(ValueError):
+        OperatingMode("lease_level")
+
+
+def test_hd_d4_9_the_api_rejects_the_mode_rather_than_running_quick() -> None:
+    """The behavioural half, through the real endpoint.
+
+    A 422 is the required outcome. The failure this guards against is a 200
+    carrying Quick results -- an answer to a question nobody asked.
+    """
+
+    from fastapi.testclient import TestClient
+
+    from anchor.api import app
+
+    payload = {
+        "purchase_price": 50_000_000,
+        "current_noi": 2_500_000,
+        "occupancy": 0.95,
+        "noi_growth": 0.03,
+        "hold_period": 5,
+        "exit_cap_rate": 0.055,
+        "ltv": 0.65,
+        "interest_rate": 0.0525,
+        "amortization": 30,
+        "operating_mode": "lease_level",
+    }
+
+    response = TestClient(app).post("/analyze", json=payload)
+
+    assert response.status_code == 422, (
+        f"POST /analyze accepted operating_mode='lease_level' with "
+        f"{response.status_code}; an unpublished mode must be rejected, never "
+        "silently dispatched to Quick"
+    )
+    assert "operating_mode" in response.text
+
+
+def test_hd_d4_9_no_public_surface_mentions_the_mode() -> None:
+    """No half-wiring anywhere: not in the API, the web layer, persistence,
+    ingestion or the AI surface."""
+
+    candidates = [
+        _ANCHOR_DIR / "api.py",
+        *(
+            path
+            for directory in ("ai", "deals", "ingestion")
+            for path in _python_files_under(_ANCHOR_DIR / directory)
+        ),
+    ]
+
+    for source_file in candidates:
+        text = source_file.read_text(encoding="utf-8")
+        for forbidden in ("LEASE_LEVEL", "lease_level"):
+            assert forbidden not in text, (
+                f"{source_file.name} mentions {forbidden!r}; publication is "
+                "deferred to D5 and must land atomically"
+            )
+
+
+def test_hd_d4_9_the_exhaustive_dispatch_hazard_is_recorded() -> None:
+    """The evidence for the deferral, kept executable.
+
+    Each of these sites branches on exactly one mode and lets the other fall
+    through. The count is not asserted exactly -- that would break on unrelated
+    edits -- but the *shape* is: every mode comparison in these modules is an
+    identity test against a single member, which is precisely what makes a
+    third member unsafe. If someone refactors these into exhaustive dispatch
+    (a match statement, or an explicit else that raises), this test starts
+    failing and the deferral can be revisited.
+    """
+
+    implicit_dispatch: list[str] = []
+
+    for source_file in (
+        _ANCHOR_DIR / "api.py",
+        _ANCHOR_DIR / "ai" / "contracts.py",
+        _ANCHOR_DIR / "ai" / "presentation.py",
+        _ANCHOR_DIR / "deals" / "contracts.py",
+    ):
+        for node in ast.walk(_tree(source_file)):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            if not isinstance(test, ast.Compare):
+                continue
+            if not any(isinstance(op, ast.Is) for op in test.ops):
+                continue
+            names = _referenced_names(test)
+            if {"QUICK", "DETAILED"} & names:
+                implicit_dispatch.append(f"{source_file.name}:{node.lineno}")
+
+    assert len(implicit_dispatch) >= 8, (
+        "the exhaustive-dispatch hazard that justifies HD-D4-9 is no longer "
+        f"visible (found {implicit_dispatch}); re-examine whether publication "
+        "is now safe rather than leaving a stale deferral in place"
+    )
+
+
+def test_hd_d4_9_the_internal_entry_point_is_nevertheless_complete() -> None:
+    """Deferring publication defers *only* publication. The deterministic
+    analysis is finished and reachable through the approved analysis layer."""
+
+    import anchor.analysis as analysis
+
+    assert hasattr(analysis, _ENTRY_POINT)
+    assert _ENTRY_POINT in analysis.__all__
+    assert "LeaseLevelAcquisitionResults" in analysis.__all__

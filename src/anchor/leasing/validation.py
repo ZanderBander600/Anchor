@@ -181,7 +181,7 @@ class LeaseIssueCode(StrEnum):
 
     # --- Lease-Level acquisition integration (D4.5B) ---
     NON_POSITIVE_FORWARD_EXIT_NOI = "NON_POSITIVE_FORWARD_EXIT_NOI"
-    MULTIPLE_IN_PLACE_LEASES_IN_SUITE = "MULTIPLE_IN_PLACE_LEASES_IN_SUITE"
+    MULTIPLE_KNOWN_LEASES_IN_SUITE = "MULTIPLE_KNOWN_LEASES_IN_SUITE"
 
     # --- annual operating adapter (D4.4) ---
     PROJECTION_NOT_CANONICAL = "PROJECTION_NOT_CANONICAL"
@@ -2244,20 +2244,35 @@ def require_capitalizable_exit_noi(
 def validate_lease_level_acquisition_leases(
     suites: Iterable[Suite], leases: Iterable[Lease]
 ) -> LeaseValidationResult:
-    """Refuse a suite carrying more than one in-place lease (D4.5B).
+    """Refuse a suite carrying more than one **known** lease (D4.5B).
 
-    **A scoped integration restriction, not an economic default.** D1 permits a
-    suite to hold several sequential, non-overlapping leases, and that is a
-    valid rent roll. But the authoritative full-chain builder for an occupied
-    suite -- ``build_recursive_rollover`` -- is seeded from exactly one
-    expiring lease, and ``suite_operating_projection`` takes exactly one
-    chain per suite. There is no builder that composes two known leases plus
-    their successors into a single chain.
+    Lease-Level acquisition underwriting supports at most one known lease per
+    suite. Zero known leases follow the initial-vacancy path (``HOLD_VACANT``
+    or ``MARKET_LEASE_UP``); exactly one follows the occupied recursive
+    rollover path; more than one is rejected.
 
-    Rather than pick one lease and silently drop the other's rent, or
-    fabricate a merged lease, this path refuses and says why. A suite with
-    sequential known leases is modelled today by stating the in-place lease
-    and letting the rollover engine price what follows it.
+    **"Known", not "in place".** The count is of every lease stated for the
+    suite, with no date condition, so a signed *future* lease that does not
+    overlap the current one is rejected by this same rule. That is deliberate
+    and is the reason the code says ``KNOWN`` rather than ``IN_PLACE``.
+
+    **A scoped acquisition restriction, not an economic default, and not a D1
+    rule.** D1 is a contractual/factual layer and legitimately represents
+    sequential known leases; that representation is unchanged and this
+    validator is not applied there. What is missing is downstream: the
+    authoritative full-chain builder for an occupied suite --
+    ``build_recursive_rollover`` -- is seeded from exactly one expiring lease,
+    and ``suite_operating_projection`` takes exactly one chain per suite. No
+    contract describes the economics required to compose *known lease A ->
+    known future lease B -> market recursion*: the committed successor's
+    concessions, TI, LC, commencement-gap treatment, recovery structure and
+    exact handoff to probabilistic rollover all have no home.
+
+    So the alternatives are all worse than refusing. Dropping the later lease,
+    keeping only the first, reinterpreting a signed future lease as a
+    probabilistic market successor, or fabricating concessions, TI, LC or
+    downtime to bridge the gap would each report a number nobody underwrote.
+    Committed/sequential future known leases are a deferred leasing capability.
 
     Emitted in suite order, so the sequence is reproducible.
     """
@@ -2274,14 +2289,14 @@ def validate_lease_level_acquisition_leases(
         if len(matching) > 1:
             issues.append(
                 _issue(
-                    LeaseIssueCode.MULTIPLE_IN_PLACE_LEASES_IN_SUITE,
+                    LeaseIssueCode.MULTIPLE_KNOWN_LEASES_IN_SUITE,
                     f"suites[{suite.suite_id}]",
-                    f"suite {suite.suite_id!r} carries {len(matching)} leases "
-                    f"({sorted(matching)}). Lease-Level acquisition analysis "
-                    "builds one authoritative chain per suite, seeded from one "
-                    "in-place lease; it will not choose between two or silently "
-                    "drop one. State the in-place lease and let the rollover "
-                    "engine price what follows it.",
+                    f"suite {suite.suite_id!r} carries {len(matching)} known "
+                    f"leases ({sorted(matching)}). Lease-Level acquisition "
+                    "underwriting currently supports at most one known lease "
+                    "per suite; sequential or committed future known leases are "
+                    "not yet supported. State the in-place lease and let the "
+                    "rollover engine price what follows it.",
                 )
             )
 

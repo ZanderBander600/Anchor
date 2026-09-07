@@ -729,7 +729,7 @@ def test_two_leases_in_one_suite_are_refused_rather_than_silently_dropped() -> N
     with pytest.raises(LeaseValidationError) as raised:
         run([suite], [first, second])
 
-    assert LeaseIssueCode.MULTIPLE_IN_PLACE_LEASES_IN_SUITE in [
+    assert LeaseIssueCode.MULTIPLE_KNOWN_LEASES_IN_SUITE in [
         issue.code for issue in raised.value.result.errors
     ]
 
@@ -899,3 +899,259 @@ def test_the_envelope_adds_no_lease_level_return_metric() -> None:
         "annual_debt_service",
     ):
         assert forbidden not in fields
+
+
+# =============================================================================
+# D4.5B closeout -- the at-most-one-known-lease-per-suite scope rule
+#
+# Six cases fixing the D4 boundary exactly. The rule counts *known* leases with
+# no date condition, so Case E -- two sequential, non-overlapping leases -- is
+# the one that proves the terminology: this is not an overlap check.
+# =============================================================================
+
+
+def _second_lease(
+    suite_id: str,
+    area: float,
+    *,
+    commencement: date,
+    expiration: date,
+    lease_id: str = "L-A2",
+) -> Lease:
+    return Lease(
+        lease_id=lease_id,
+        suite_id=suite_id,
+        leased_area_sf=area,
+        rent_commencement_date=commencement,
+        lease_expiration_date=expiration,
+        base_rent_psf=32.0,
+        escalation_pct=0.0,
+        escalation_basis=EscalationBasis.NONE,
+        lease_type=LeaseType.NNN,
+    )
+
+
+def test_case_a_zero_leases_with_hold_vacant_is_valid() -> None:
+    """A suite may legitimately carry no lease at all."""
+
+    occupied = Suite(suite_id="A", suite_area_sf=80_000.0)
+    empty = vacant_suite(
+        "V", 20_000.0, strategy=InitialVacancyStrategy.HOLD_VACANT, lease_up=None
+    )
+
+    out = run([occupied, empty], [occupied_lease(occupied)])
+
+    held = next(
+        p
+        for p in out.monthly_projection.operating_schedule.suite_projections
+        if p.suite_id == "V"
+    )
+    assert held.cash_base_rent == tuple(0.0 for _ in out.monthly_projection.months)
+    assert out.monthly_projection.physical_occupancy[0] == pytest.approx(
+        0.80, abs=1e-12
+    )
+    assert out.results.exit_value > 0.0
+
+
+def test_case_b_zero_leases_with_market_lease_up_is_valid() -> None:
+    empty = vacant_suite("A", AREA, lease_up=3.0)
+
+    out = run([empty], [])
+
+    assert out.monthly_projection.cash_base_rent[:3] == (0.0, 0.0, 0.0)
+    assert out.monthly_projection.cash_base_rent[3] > 0.0
+    assert out.results.exit_value > 0.0
+
+
+def test_case_c_exactly_one_known_lease_enters_the_recursive_rollover() -> None:
+    """One lease is the occupied path -- and it genuinely rolls over: the lease
+    expires inside the hold, and a successor prices the months after."""
+
+    suite = Suite(suite_id="A", suite_area_sf=AREA)
+    lease = occupied_lease(suite, end=date(2028, 12, 31))
+
+    out = run([suite], [lease], mkt=market(renewal_probability=1.0))
+    monthly = out.monthly_projection
+
+    # Month 24 is the last contractual month; month 25 is the successor's.
+    assert monthly.cash_base_rent[23] > 0.0
+    assert monthly.cash_base_rent[24] > 0.0
+    # The successor is priced off market, not off the expiring contract rent.
+    assert monthly.cash_base_rent[24] != pytest.approx(
+        monthly.cash_base_rent[23], abs=1e-6
+    )
+    assert out.results.exit_value > 0.0
+
+
+def test_case_d_two_overlapping_known_leases_are_rejected() -> None:
+    """Rejected -- and rejected by the *right* rule.
+
+    Overlapping leases in one suite are a contractual defect: the rent roll
+    double-counts the same square feet. That is D1's pre-existing
+    ``OVERLAPPING_LEASES_IN_SUITE``, and because validation runs upstream-first
+    it fires before the D4 scope rule is ever consulted. The two rules are not
+    interchangeable: one says the rent roll is wrong, the other says the rent
+    roll is fine but this path cannot underwrite it (Case E).
+    """
+
+    suite = Suite(suite_id="A", suite_area_sf=AREA)
+    first = occupied_lease(suite, end=date(2030, 12, 31))
+    overlapping = _second_lease(
+        "A", AREA, commencement=date(2028, 1, 1), expiration=date(2033, 12, 31)
+    )
+
+    with pytest.raises(LeaseValidationError) as raised:
+        run([suite], [first, overlapping])
+
+    codes = [issue.code for issue in raised.value.result.errors]
+    assert LeaseIssueCode.OVERLAPPING_LEASES_IN_SUITE in codes
+
+    # The D4 rule would also have caught it, had it been reached.
+    from anchor.leasing import validate_lease_level_acquisition_leases
+
+    assert [
+        issue.code
+        for issue in validate_lease_level_acquisition_leases(
+            [suite], [first, overlapping]
+        ).errors
+    ] == [LeaseIssueCode.MULTIPLE_KNOWN_LEASES_IN_SUITE]
+
+
+def test_case_e_two_sequential_non_overlapping_known_leases_are_rejected() -> None:
+    """**The case that proves "known" rather than "in place".**
+
+    These two leases never coexist: the first ends 2028-12-31, the second
+    commences the next day. D1 represents that rent roll perfectly well. The D4
+    acquisition path still refuses it, because composing *known lease -> known
+    future lease -> market recursion* needs economics no contract carries -- so
+    the alternative would be to drop the signed future lease's rent, or to
+    fabricate its concessions, TI, LC and commencement-gap treatment.
+    """
+
+    suite = Suite(suite_id="A", suite_area_sf=AREA)
+    first = occupied_lease(suite, end=date(2028, 12, 31))
+    sequential = _second_lease(
+        "A", AREA, commencement=date(2029, 1, 1), expiration=date(2033, 12, 31)
+    )
+
+    assert sequential.rent_commencement_date > first.lease_expiration_date
+
+    with pytest.raises(LeaseValidationError) as raised:
+        run([suite], [first, sequential])
+
+    errors = raised.value.result.errors
+    assert [issue.code for issue in errors] == [
+        LeaseIssueCode.MULTIPLE_KNOWN_LEASES_IN_SUITE
+    ]
+    assert "at most one known lease" in errors[0].message
+    assert "sequential or committed future known leases" in errors[0].message
+
+
+def test_case_e_the_rule_is_not_an_overlap_check() -> None:
+    """Stated directly against the validator: identical rejection whether the
+    two leases overlap or not. A date-sensitive rule would differ."""
+
+    from anchor.leasing import validate_lease_level_acquisition_leases
+
+    suite = Suite(suite_id="A", suite_area_sf=AREA)
+    first = occupied_lease(suite, end=date(2028, 12, 31))
+    overlapping = _second_lease(
+        "A", AREA, commencement=date(2028, 1, 1), expiration=date(2033, 12, 31)
+    )
+    sequential = _second_lease(
+        "A", AREA, commencement=date(2029, 1, 1), expiration=date(2033, 12, 31)
+    )
+
+    overlapping_codes = [
+        issue.code
+        for issue in validate_lease_level_acquisition_leases(
+            [suite], [first, overlapping]
+        ).errors
+    ]
+    sequential_codes = [
+        issue.code
+        for issue in validate_lease_level_acquisition_leases(
+            [suite], [first, sequential]
+        ).errors
+    ]
+
+    assert overlapping_codes == sequential_codes
+    assert sequential_codes == [LeaseIssueCode.MULTIPLE_KNOWN_LEASES_IN_SUITE]
+
+
+def test_case_e_the_error_names_every_lease_it_refused() -> None:
+    """Nothing is dropped silently -- both lease ids appear in the message, so
+    the analyst can see exactly what was not modelled."""
+
+    from anchor.leasing import validate_lease_level_acquisition_leases
+
+    suite = Suite(suite_id="A", suite_area_sf=AREA)
+    first = occupied_lease(suite, end=date(2028, 12, 31))
+    sequential = _second_lease(
+        "A", AREA, commencement=date(2029, 1, 1), expiration=date(2033, 12, 31)
+    )
+
+    issue = validate_lease_level_acquisition_leases(
+        [suite], [first, sequential]
+    ).errors[0]
+
+    assert first.lease_id in issue.message
+    assert sequential.lease_id in issue.message
+    assert issue.path == "suites[A]"
+
+
+def test_case_f_d1_still_accepts_sequential_known_leases() -> None:
+    """**D1 is unchanged.** The restriction is scoped to the acquisition path;
+    the contractual layer that represents the rent roll never sees it.
+
+    The same two leases the acquisition path rejects validate cleanly through
+    the D1 rent-roll authority, and each still builds its own contractual
+    schedule.
+    """
+
+    from anchor.leasing import (
+        build_lease_monthly_schedule,
+        build_model_months,
+        validate_lease_level_inputs,
+    )
+
+    suite = Suite(suite_id="A", suite_area_sf=AREA)
+    first = occupied_lease(suite, end=date(2028, 12, 31))
+    sequential = _second_lease(
+        "A", AREA, commencement=date(2029, 1, 1), expiration=date(2033, 12, 31)
+    )
+
+    result = validate_lease_level_inputs(
+        property_inputs(),
+        [suite],
+        [first, sequential],
+        hold_period=HOLD,
+        market_leasing=market(),
+    )
+
+    assert result.is_valid, [issue.message for issue in result.errors]
+    assert LeaseIssueCode.MULTIPLE_KNOWN_LEASES_IN_SUITE not in [
+        issue.code for issue in result.issues
+    ]
+
+    months = build_model_months(analysis_start=JAN, hold_period=HOLD)
+    for lease in (first, sequential):
+        schedule = build_lease_monthly_schedule(
+            lease, analysis_start=JAN, months=months
+        )
+        assert any(value > 0.0 for value in schedule.contractual_base_rent)
+
+
+def test_a_second_lease_in_a_different_suite_is_fine() -> None:
+    """The rule is per suite, not per property -- a multi-tenant rent roll is
+    the normal case, not an error."""
+
+    a = Suite(suite_id="A", suite_area_sf=60_000.0)
+    b = Suite(suite_id="B", suite_area_sf=40_000.0)
+
+    out = run([a, b], [occupied_lease(a), occupied_lease(b)])
+
+    assert out.monthly_projection.physical_occupancy[0] == pytest.approx(
+        1.0, abs=1e-12
+    )
+    assert out.results.exit_value > 0.0

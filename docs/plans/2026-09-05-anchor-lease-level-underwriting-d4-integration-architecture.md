@@ -2946,6 +2946,10 @@ architectural direction inherited from D0 was additionally corrected
 (Section 27). Decisions already answered by D0/D2/D3 or by shipped code are not
 restated here as open questions.
 
+**Amended 2026-09-06 (D4.5B closeout):** two further items were decided at the
+D4.5B human review and are recorded as **HD-D4-9** and **HD-D4-10** in
+Section 38. Neither changes a financial calculation.
+
 | ID | Outcome | Blocks |
 |---|---|---|
 | HD-D4-1 | **APPROVED** (conditional on G-D4-5/G-D4-6) | nothing |
@@ -2956,6 +2960,8 @@ restated here as open questions.
 | HD-D4-6 | **APPROVED** | nothing |
 | HD-D4-7 | **REJECTED AND REPLACED** — scoped validation ERROR | nothing |
 | Dependency direction | **CORRECTED** — integration layer owns orchestration | nothing |
+| HD-D4-9 *(2026-09-06)* | **DEFERRED TO D5** — public `OperatingMode.LEASE_LEVEL` publication (Section 38.1) | nothing in D4 |
+| HD-D4-10 *(2026-09-06)* | **APPROVED** — at most one known lease per suite (Section 38.2) | nothing |
 
 ### HD-D4-1 — Where the expense-growth helper lives — **APPROVED**
 
@@ -3300,6 +3306,8 @@ are specified in Section 10.6.
 | Extracting a shared property-expense contract from `DetailedOperatingInputs` | Section 9.1 Option B — a pure Detailed refactor on its own merits, post-D4 |
 | Expense seasonality, true-ups, accrual schedules | Section 10.5 — changes nothing at annual resolution |
 | Percentage rent, retail breakpoints, CPI escalation, expense caps/floors | D0 Section 25.3 |
+| **Public `OperatingMode.LEASE_LEVEL` publication** *(added 2026-09-06)* | **HD-D4-9**, Section 38.1. The internal deterministic entry point is complete; only the public dispatchable mode is deferred, because dispatch is exhaustive-by-omission and a third member would silently join an existing branch. D5 must publish it atomically across every consumer |
+| **Committed / sequential future known leases** *(added 2026-09-06)* | **HD-D4-10**, Section 38.2. No contract describes the economics required to compose *known lease A → known future lease B → market recursion*. Rejection is safer than incomplete modeling; a later leasing enhancement may add the committed-successor contract |
 
 ---
 
@@ -3415,3 +3423,181 @@ gate.**
 expenses and the recoverable expense pool — reaches none of the concepts the
 remaining decisions touch, and its own condition (HD-D4-1) is approved with its
 guardrails specified in Section 10.6.
+
+---
+
+## 38. D4.5B Closeout Amendment — 2026-09-06
+
+**Amendment, not a rewrite.** Sections 1–37 record the architecture as designed
+and reviewed on 2026-09-05. This section records two decisions taken at the
+D4.5B human financial review, after the implementation was inspected and
+**accepted**. No financial calculation, formula, convention or golden changes.
+Where this section and an earlier one appear to conflict on these two narrow
+points, this section governs.
+
+### 38.1 HD-D4-9 — Public Lease-Level mode publication — **DEFERRED TO D5**
+
+**Decision.** `OperatingMode.LEASE_LEVEL` is **not added during D4**.
+Publication of Lease-Level as a public, dispatchable operating mode is deferred
+to D5.
+
+**What exists at the end of D4:**
+
+- the deterministic internal Lease-Level analysis entry point **exists and is
+  complete** — `anchor.analysis.analyze_lease_level_acquisition_with_projection`;
+- it is callable directly through the approved analysis layer;
+- the public `OperatingMode` remains **`QUICK` / `DETAILED` only**;
+- `POST /analyze` with `operating_mode="lease_level"` **is rejected (422)**,
+  not mis-dispatched;
+- **no** API, web, persistence, ingestion or AI public-mode wiring is added.
+
+**Reason — dispatch is exhaustive-by-omission.** Repository inspection at
+D4.5B found that every consumer of `OperatingMode` tests exactly one member and
+lets the other fall through an implicit `else`:
+
+```python
+if operating_mode is OperatingMode.DETAILED:
+    return _analyze_detailed(payload)
+# ... implicit else: Quick
+```
+
+Adding a third member therefore does **not** create a third branch. It silently
+joins whichever branch the `else` happens to be — and that differs by module:
+
+| Site | Branches on | A `LEASE_LEVEL` value would silently run as |
+|---|---|---|
+| `api.py` (~8 sites, incl. `/analyze`) | `is DETAILED` | **Quick** |
+| `ai/contracts.py:88` | `is QUICK` | Detailed |
+| `ai/presentation.py:790` | `is QUICK` | Detailed |
+| `deals/contracts.py:107` | `is QUICK` | Detailed |
+
+A request that successfully parsed as Lease-Level would then be answered with
+Quick numbers under a Lease-Level label. That is unacceptable, and it is
+strictly worse than the current behaviour, which is an honest rejection.
+
+**The safe state is rejection.** `OperatingMode("lease_level")` raises
+`ValueError`, `api.py` converts that to a 422 naming the supported modes, and
+no downstream branch is ever reached. Rejection is not a gap to be patched; it
+is the correct behaviour until publication is safe.
+
+**D5 publication requirement.** D5 must publish the mode **atomically across
+every exhaustive consumer** — every site in the table above, plus any added
+since — in a single change. Converting implicit dispatch to explicit,
+total dispatch (a `match` over all members, or an `else` that raises) is the
+natural prerequisite, and would make the addition safe by construction.
+
+**Guardrails.** `tests/test_analysis_d4_5b_architecture.py` holds five: the
+enum membership, the `ValueError`, a live `POST /analyze` returning 422, the
+absence of any `lease_level` mention on the public surface, and a structural
+check that the implicit-dispatch shape justifying this deferral is still
+present — so that if someone later makes dispatch total, the stale deferral is
+flagged for revisiting rather than left in place.
+
+**This does not block deterministic D4 completion.**
+
+### 38.2 HD-D4-10 — At most one known lease per suite — **APPROVED**
+
+**Decision.** Lease-Level **acquisition** underwriting supports **at most one
+known lease per suite**:
+
+| Known leases in a suite | Path |
+|---|---|
+| **0** | Initial-vacancy path — `HOLD_VACANT` or `MARKET_LEASE_UP` (D3.6) |
+| **1** | Occupied path — `build_recursive_rollover` (D2) |
+| **more than 1** | **Explicitly rejected** by the acquisition orchestration |
+
+Rejection **includes sequential, non-overlapping known future leases.**
+
+**Prohibited alternatives.** None of the following may be done, silently or
+otherwise: dropping later known leases; picking the first lease; keeping the
+current lease and ignoring a signed future one; reinterpreting a known future
+lease as a probabilistic market successor; combining two D1 chains ad hoc;
+fabricating concessions, TI, LC or downtime to bridge the gap.
+
+**Why the limitation is accepted.** D1 is a contractual/factual layer and may
+legitimately represent sequential known leases. But D2–D4's acquisition
+projection has exactly one authoritative starting occupied lease followed by
+market rollover, and there is **no accepted committed-future-lease contract**
+describing the economics that composing
+
+> known lease A → known future lease B → market recursion
+
+would require: known future concessions, TI, LC, commencement-gap economics,
+recovery structure, and the exact handoff to probabilistic rollover. Every one
+of those would have to be invented at the integration layer. Rejection is
+therefore safer than incomplete modeling.
+
+**D1 is unchanged.** This is a Lease-Level **acquisition-scope** restriction
+only. The D1 representation of sequential leases is not prohibited, and the D1
+rent-roll validator continues to accept it — proven by a test that runs the
+same two leases through `validate_lease_level_inputs` (valid) and through the
+acquisition path (rejected).
+
+**Validation code — renamed for accuracy.** The implemented validator counts
+every lease matching a suite **with no date condition**, so it rejects
+sequential leases as well as overlapping ones. The original name said
+`IN_PLACE`, which described a narrower rule than the code actually enforces, so
+it was renamed:
+
+| | |
+|---|---|
+| **Code** | `LeaseIssueCode.MULTIPLE_KNOWN_LEASES_IN_SUITE` |
+| **Severity** | ERROR |
+| **Authority** | `anchor/leasing/validation.py` — `validate_lease_level_acquisition_leases` / `require_valid_lease_level_acquisition_leases` |
+| **Applied at** | the acquisition orchestration only, never D1 |
+| **Message** | "suite `<id>` carries `<n>` known leases (`<ids>`). Lease-Level acquisition underwriting currently supports at most one known lease per suite; sequential or committed future known leases are not yet supported. State the in-place lease and let the rollover engine price what follows it." |
+
+The message names **every** lease it refused, so nothing is dropped invisibly.
+
+**Two distinct rules, not one.** Overlapping leases in a suite remain a **D1
+contractual defect** (`OVERLAPPING_LEASES_IN_SUITE`) — the rent roll
+double-counts the same square feet. Because validation runs upstream-first,
+that rule fires before the D4 scope rule is consulted. The two are not
+interchangeable: one says the rent roll is wrong; the other says the rent roll
+is fine but this path cannot underwrite it.
+
+**Scope cases.** `tests/test_analysis_d4_5b_lease_level.py` fixes all six:
+zero leases + `HOLD_VACANT` (valid), zero + `MARKET_LEASE_UP` (valid), exactly
+one (valid, enters recursive rollover), two overlapping (rejected), two
+sequential non-overlapping (**rejected by this rule** — the case that proves
+"known" rather than "in place"), and D1 standalone behaviour unchanged.
+
+**Deferred capability:** committed / sequential future known leases —
+Section 34.3.
+
+### 38.3 M19 mutation disposition — **EQUIVALENT / INERT MUTANT**
+
+The D4.5B mutation run was 26 mutations, 25 killed, 1 survivor. The survivor,
+**M19**, reverses the order in which suite projections are handed to property
+aggregation.
+
+**M19 is classified as an EQUIVALENT / INERT MUTANT DUE TO INTENTIONAL
+ORDER-INDEPENDENCE — not a surviving financial mutation.**
+
+D4.2/D3.5 aggregation deliberately guarantees order independence:
+`aggregation.py` sorts projections by `suite_id` and accumulates each month
+with `math.fsum` (Sections 15.2 and 19.3). Input order therefore *cannot*
+affect the result, by construction and by design. Killing M19 would require
+weakening that guarantee, and would directly contradict the orchestration-level
+permutation golden that asserts suite and lease order do not change any
+result — so **order independence must not be weakened to kill this mutant.**
+
+The meaningful live variants of the same idea are retained and **both remain
+killed**:
+
+| Mutation | Behaviour | Result |
+|---|---|---|
+| **M19b** | each suite paired with **another suite's leasing chain** | **killed** |
+| **M19c** | each suite paired with **another suite's recovery chain** | **killed** |
+
+Mis-pairing is the real hazard; reordering is not.
+
+### 38.4 Status after this amendment
+
+**D4.5B is financially accepted.** The implementation was reviewed and required
+no change. This amendment altered no formula, no convention and no golden: it
+renamed one validation code to match the rule it already enforced, added scope
+and public-safety guardrails, and recorded two decisions and one mutation
+disposition.
+
+D4.6 has not begun. Nothing here is merged.
