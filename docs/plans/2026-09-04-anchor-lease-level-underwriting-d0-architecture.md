@@ -3592,3 +3592,77 @@ surface in one place, with the phase that touches it.
 
 Every entry is additive. No existing formula, field meaning, or convention is
 modified anywhere in this list.
+
+---
+
+## Appendix B — D4.7 Sprint-D Closeout Amendment — 2026-09-07
+
+**Narrow, dated amendment. No D0 decision, convention or formula is rewritten.**
+Sprint D is now implemented through D4.6B (commit `1bbd95f`). Three forward-
+looking statements in this document were overtaken by decisions taken and
+accepted during D4, and are superseded **only** on the points listed below.
+Everything else in this document stands.
+
+**The authoritative Sprint-D closeout is §39 of**
+`docs/plans/2026-09-05-anchor-lease-level-underwriting-d4-integration-architecture.md`.
+
+### B.1 `OperatingMode.LEASE_LEVEL` — deferred to D5, not delivered in D4
+
+This document schedules `OperatingMode.LEASE_LEVEL` for D4 in three places:
+Section 3's blast-radius table (D4 row), Section 29's D4.3 plan row, and
+Appendix A's `src/anchor/contracts.py` row.
+
+**Superseded by HD-D4-9**, decided at the D4.5B human review and re-confirmed at
+D4.6A §38.10. The enum member is **not added during D4**. At the end of Sprint D:
+
+- `OperatingMode` remains exactly `{QUICK, DETAILED}`;
+- `OperatingMode("lease_level")` raises, and `POST /analyze` returns 422 rather
+  than mis-dispatching;
+- the deterministic Lease-Level analysis and its sensitivity runners exist and
+  are complete, reachable through `anchor.analysis` by **function identity**;
+- publication of the public mode moves to **D5**, which must first convert
+  today's exhaustive-by-omission `OperatingMode` dispatch to total dispatch —
+  every current consumer tests one member and lets the other fall through an
+  implicit `else`, so adding a member first would silently run Lease-Level as
+  Quick.
+
+### B.2 The canonical projection shipped as two contracts, not one
+
+Section 5's `MonthlyPropertyProjection` sketch (already carrying a D4.0
+amendment block) combines the monthly series, the annual series and the exit
+figures in a single contract.
+
+**As shipped, that is two contracts:** `MonthlyPropertyProjection` (26 fields,
+the canonical monthly model, D4.3) and `AnnualOperatingProjection` (25 fields,
+derived from it and satisfying `OperatingProjectionLike`, D4.4). The monthly
+model is retained on the result envelope, never discarded after aggregation, so
+the split costs no auditability. Field-level naming also settled differently —
+`expense_recoveries` shipped as `expense_recovery`, and the `rent_roll` and
+`market_rent_psf_at_year_end` members are not present.
+
+**The shipped field lists are reconciled in §39.2 of the D4 integration
+architecture, which governs.** The financial content of the sketch — what EGI
+contains, what sits below NOI, what the state series mean — was implemented as
+designed.
+
+### B.3 Gate numbering drifted from the Section 29 sketch
+
+Section 29 assigns `MonthlyPropertyProjection` to D4.1 and the below-NOI
+channel, the mode entry point and the result envelope to D4.3. The work
+actually shipped as: **D4.1** property expenses and the recoverable pool,
+**D4.2** property operating aggregation, **D4.3** the monthly projection,
+**D4.4** the annual adapter, **D4.5A** the generic `OperatingCapitalSchedule`
+below-NOI channel, **D4.5B** the acquisition orchestration and result envelope,
+**D4.6A/B** sensitivity, **D4.7** closeout. No scope was dropped; it was
+sequenced into more gates than the sketch anticipated. §39.1.1 of the D4
+integration architecture is the authoritative gate-by-gate inventory.
+
+### B.4 What is unchanged
+
+`absent_rent` is still **not** a production field, exactly as Section 5 and its
+D4.0 amendment require. EGI is still built from `cash_base_rent`, never
+reconstructed as `contractual_base_rent − free_rent`. The dependency direction
+Section 3 sets out held: `anchor.engine` never imports `anchor.leasing`, and the
+orchestration lives in `src/anchor/analysis/lease_level.py` as forecast.
+HD-D3-5, HD-D3-6 and HD-D3-7 all remain deferred and were verified absent from
+the shipped code at closeout.

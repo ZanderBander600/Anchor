@@ -1639,3 +1639,46 @@ deferred; **none blocking**.
 
 **D4.6B has not begun, and this gate does not authorise it.** Nothing is
 merged.
+
+---
+
+## 39. D4.6B Closeout Note — 2026-09-07 (added at D4.7)
+
+**Narrow status amendment. No decision, recommendation, measurement or
+classification in Sections 0–38 changes.**
+
+Sections 37 and 38.12 close with *"D4.6B has not begun. Nothing is merged."*
+Both sentences were accurate when written, earlier on 2026-09-07. **D4.6B has
+since shipped and been accepted** (commit `1bbd95f`), and Section 38's rulings
+were implemented as written. Those two status lines are therefore **superseded
+by this note**; everything else in this document stands unchanged.
+
+**What shipped, against what this document specified:**
+
+| Section 38 ruling | Shipped |
+|---|---|
+| §38.1 — eight targets, shared four = `DETAILED_SUPPORTED_ASSUMPTIONS` | as specified; the shared four are derived structurally from the shipped Detailed tuple and guardrailed equal to it |
+| §38.2 — property-default only, target-specific shadow refusal | as specified; `SENSITIVITY_TARGET_SHADOWED_BY_SUITE_OVERRIDE`, raised before any scenario runs |
+| §38.3 — no suite targeting, no composite target | as specified |
+| §38.4 — invalid run fails; `None` means undefined metric | as specified, and separately guardrailed |
+| §38.5 — break-even deferred entirely, `break_even.py` frozen | as specified; asserted byte-identical |
+| §38.6 — two-way ships, every cell from the same baseline | as specified; proven by an independent 3x3 cell oracle |
+| §38.7 — absolute values, no clipping, no cache, no parallelism, no grid limit | as specified |
+| §38.8 — scalars only per cell | as specified |
+| §38.9 — three mandatory goldens | all three implemented, plus the asymmetric renewal-probability pair |
+| §38.10 — new module; `sensitivity.py` unchanged; no `OperatingMode.LEASE_LEVEL` | as specified; both `sensitivity.py` and `break_even.py` byte-identical to `15e910d` |
+| §26.2 — presets deferred to D4.6C or later | no preset builder or bundle exists |
+
+**One implementation detail arose that this document did not anticipate.**
+`analysis/lease_level_sensitivity.py` reuses the neutral private helper
+`analysis.sensitivity._extract_metric` rather than declaring a second metric
+map. Human review **accepted this for D4** — duplicating the map would risk
+silent drift from the five shipped metrics — and recorded it as **non-blocking
+technical debt**. See §39.11 of the D4 integration architecture.
+
+**Final Sprint-D closeout, including the full capability and limitation
+register and the D5 handoff, lives in §39 of**
+`docs/plans/2026-09-05-anchor-lease-level-underwriting-d4-integration-architecture.md`,
+**which is the authoritative Sprint-D closeout document.**
+
+Nothing is merged. D5 has not begun.
