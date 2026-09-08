@@ -8,11 +8,25 @@
  * two agree because the backend derived one from the other, and the backend's
  * own tests prove they reconcile.
  *
- * TI and LC sit **below NOI**, where D4 puts them. They are not operating
- * expenses and folding them in would overstate every expense line and
- * understate NOI on a rent roll with real rollover.
+ * D5.6A adds two presentation distinctions that were previously left to the
+ * reader:
+ *
+ * - **Leasing capital is not financing.** TI, LC and the CapEx reserve are
+ *   costs of keeping the building let; debt service is a cost of how it was
+ *   bought. Both sit below NOI, and D4 puts them there, but they answer
+ *   different questions and no longer share a heading.
+ * - **The hold period is not the forward valuation window.** The canonical
+ *   projection runs twelve months past the sale, and those months exist only to
+ *   establish the NOI capitalised at exit. They are real forecast months, not
+ *   another year of ownership, and the monthly header now says so.
+ *
+ * Which months those are is read from `is_forward_exit_month` on the response.
+ * It is never inferred from the hold period, from the length of the array, or
+ * from a calendar year -- the backend owns that classification, and a second
+ * opinion computed here could disagree with it.
  */
 
+import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import { formatCurrency, formatPercent } from '../format';
 import { formatMonthLabel, formatSquareFeet } from '../leaseLevelFormat';
@@ -39,13 +53,54 @@ interface Row {
 }
 
 interface Section {
-  title: string;
+  /** `null` for a section whose single row already names it. NOI had both a
+   * band and a row reading "Net Operating Income"; one of them was noise. */
+  title: string | null;
   rows: Row[];
 }
 
-/** Column headers for the monthly view: `Jan 2027`, not `period_index 1`. */
-function monthlyColumns(monthly: MonthlyPropertyProjection): string[] {
-  return monthly.months.map((month) => formatMonthLabel(month.month_start));
+interface Column {
+  key: string;
+  label: string;
+  /** Straight from `is_forward_exit_month`. Never derived here. */
+  isForward: boolean;
+  /** The first forward month: where the sale falls. */
+  isBoundary: boolean;
+}
+
+interface PeriodGroup {
+  key: string;
+  label: string;
+  note: string;
+  span: number;
+  isForward: boolean;
+}
+
+/**
+ * Column headers for the monthly view: `Jan 2027`, not `period_index 1`.
+ *
+ * Each column carries the response's own verdict on which period it belongs to.
+ * `seenForward` finds the boundary by walking those flags in order rather than
+ * by indexing, so a projection whose forward window were some other length --
+ * or absent altogether -- would still be grouped correctly.
+ */
+function monthlyColumns(monthly: MonthlyPropertyProjection): Column[] {
+  const columns: Column[] = [];
+  let seenForward = false;
+  for (const month of monthly.months) {
+    const isForward = month.is_forward_exit_month;
+    const isBoundary = isForward && !seenForward;
+    if (isForward) {
+      seenForward = true;
+    }
+    columns.push({
+      key: month.month_start,
+      label: formatMonthLabel(month.month_start),
+      isForward,
+      isBoundary,
+    });
+  }
+  return columns;
 }
 
 /**
@@ -53,10 +108,15 @@ function monthlyColumns(monthly: MonthlyPropertyProjection): string[] {
  *
  * Taken from the projection's own `hold_year` values rather than counted out in
  * TypeScript. The hold months carry `1..H` and the twelve forward exit months
- * carry `H+1`, so filtering the forward window and de-duplicating yields
- * exactly the years the annual arrays cover, in order, with no arithmetic.
+ * carry `H+1`, so skipping the forward window and de-duplicating yields exactly
+ * the years the annual arrays cover, in order, with no arithmetic.
+ *
+ * The forward window is deliberately not a column here. It is a valuation
+ * period, not a year of ownership, and showing it as "Year 8" of a seven-year
+ * hold would invite precisely the reading D4 designed it to avoid. The monthly
+ * view is where those months are inspected.
  */
-function annualColumns(monthly: MonthlyPropertyProjection): string[] {
+function annualColumns(monthly: MonthlyPropertyProjection): Column[] {
   const years: number[] = [];
   for (const month of monthly.months) {
     if (month.is_forward_exit_month) {
@@ -66,7 +126,58 @@ function annualColumns(monthly: MonthlyPropertyProjection): string[] {
       years.push(month.hold_year);
     }
   }
-  return years.map((year) => `Year ${year}`);
+  return years.map((year) => ({
+    key: `year-${year}`,
+    label: `Year ${year}`,
+    isForward: false,
+    isBoundary: false,
+  }));
+}
+
+/**
+ * The two period bands above the columns, or none at all.
+ *
+ * Partitioned by the authoritative flag each column already carries, so a span
+ * is a count of what the backend classified rather than a calculation of where
+ * the boundary ought to fall. The annual view has no forward columns and
+ * therefore gets no band row: one group is not a grouping.
+ */
+function periodGroups(columns: Column[]): PeriodGroup[] {
+  const hold: Column[] = [];
+  const forward: Column[] = [];
+  for (const column of columns) {
+    if (column.isForward) {
+      forward.push(column);
+    } else {
+      hold.push(column);
+    }
+  }
+  if (forward.length === 0) {
+    return [];
+  }
+  return [
+    { key: 'hold', label: 'Hold Period', note: 'Ownership', span: hold.length, isForward: false },
+    {
+      key: 'forward',
+      label: 'Forward 12 Months',
+      note: 'Used for Exit Valuation',
+      span: forward.length,
+      isForward: true,
+    },
+  ];
+}
+
+function columnClass(column: Column | undefined): string | undefined {
+  if (column === undefined) {
+    return undefined;
+  }
+  if (column.isBoundary) {
+    return 'lease-level-statement-forward lease-level-statement-boundary';
+  }
+  if (column.isForward) {
+    return 'lease-level-statement-forward';
+  }
+  return undefined;
 }
 
 function monthlySections(monthly: MonthlyPropertyProjection): Section[] {
@@ -113,11 +224,14 @@ function monthlySections(monthly: MonthlyPropertyProjection): Section[] {
       ],
     },
     {
-      title: 'Net Operating Income',
+      title: null,
       rows: [{ label: 'Net Operating Income', values: monthly.noi, kind: 'total' }],
     },
     {
-      title: 'Below NOI',
+      // No Financing band monthly: there is no canonical monthly debt service,
+      // and none is manufactured. Debt service appears on the annual view,
+      // where the engine actually computed it.
+      title: 'Leasing & Capital Costs',
       rows: [
         { label: 'Tenant Improvements', values: monthly.tenant_improvements, kind: 'deduction' },
         { label: 'Leasing Commissions', values: monthly.leasing_commissions, kind: 'deduction' },
@@ -190,11 +304,13 @@ function annualSections(
       ],
     },
     {
-      title: 'Net Operating Income',
+      title: null,
       rows: [{ label: 'Net Operating Income', values: annual.noi_by_year, kind: 'total' }],
     },
     {
-      title: 'Below NOI',
+      // The cost of keeping the building let. All three are property-level
+      // capital and all three sit below NOI, which is where D4 puts them.
+      title: 'Leasing & Capital Costs',
       rows: [
         {
           label: 'Tenant Improvements',
@@ -214,6 +330,15 @@ function annualSections(
           values: results.capex_by_year.slice(0, holdYears),
           kind: 'deduction',
         },
+      ],
+    },
+    {
+      // Financing is a cost of how the building was bought, not of keeping it
+      // let. Sharing a heading with leasing capital made an unlevered read of
+      // the property harder than it needed to be. Nothing moved financially:
+      // this row reads the same array it always did, in the same place.
+      title: 'Financing',
+      rows: [
         {
           label: 'Debt Service',
           values: results.annual_debt_service.slice(0, holdYears),
@@ -264,6 +389,7 @@ export function LeaseLevelOperatingStatement({
 }: LeaseLevelOperatingStatementProps) {
   const monthly = analysis.monthly_projection;
   const columns = view === 'monthly' ? monthlyColumns(monthly) : annualColumns(monthly);
+  const groups = periodGroups(columns);
   const sections =
     view === 'monthly'
       ? monthlySections(monthly)
@@ -300,36 +426,82 @@ export function LeaseLevelOperatingStatement({
 
       <p className="field-hint">
         {view === 'monthly'
-          ? 'The canonical monthly model, including the twelve months after the hold period that set the exit. CapEx reserve and debt service are annual assumptions and appear on the annual view.'
-          : 'Each year of the hold. Tenant improvements and leasing commissions sit below net operating income, where they belong.'}
+          ? 'The canonical monthly model. The property is notionally sold at the end of the hold period; the Forward 12 months that follow are used to determine the Exit NOI capitalised at that sale, and are not another year of ownership. CapEx reserve and debt service are annual assumptions and appear on the annual view.'
+          : 'Each year of the hold period. The Forward 12 valuation months are not a year of ownership and are inspected on the monthly view. Leasing capital and debt service sit below net operating income, where they belong.'}
       </p>
 
       <div className="table-scroll">
         <table className="cash-flow-table operating-statement-table lease-level-statement-table">
           <caption className="visually-hidden">
             Lease-Level operating statement, {view === 'monthly' ? 'monthly' : 'annual'}.
+            {view === 'monthly'
+              ? ' Columns are grouped into the hold period and the Forward 12 months used for exit valuation.'
+              : ' Columns are the years of the hold period.'}
           </caption>
           <thead>
+            {groups.length > 0 && (
+              <tr className="lease-level-statement-periods">
+                <th scope="col" rowSpan={2} className="lease-level-statement-corner">
+                  Line Item
+                </th>
+                {groups.map((group) => (
+                  <th
+                    key={group.key}
+                    scope="colgroup"
+                    colSpan={group.span}
+                    className={
+                      group.isForward
+                        ? 'lease-level-statement-period lease-level-statement-forward lease-level-statement-boundary'
+                        : 'lease-level-statement-period'
+                    }
+                  >
+                    <span className="lease-level-statement-period-label">
+                      <span className="lease-level-statement-period-name">{group.label}</span>
+                      <span className="lease-level-statement-period-note">{group.note}</span>
+                    </span>
+                    {/* The sale falls at the right-hand edge of the hold band,
+                        which is exactly the boundary between the two groups, so
+                        the marker lands on the boundary without a column of its
+                        own. It is a label: no value, no data, no fake month. */}
+                    {!group.isForward && (
+                      <span className="lease-level-statement-sale">Sale / Hold End</span>
+                    )}
+                  </th>
+                ))}
+              </tr>
+            )}
             <tr>
-              <th scope="col">Line Item</th>
+              {groups.length === 0 && (
+                <th scope="col" className="lease-level-statement-corner">
+                  Line Item
+                </th>
+              )}
               {columns.map((column) => (
-                <th scope="col" key={column}>
-                  {column}
+                <th scope="col" key={column.key} className={columnClass(column)}>
+                  {column.label}
+                  {column.isBoundary && (
+                    <span className="visually-hidden">
+                      {' '}
+                      — sale and hold end; the Forward 12 months used for exit valuation begin here
+                    </span>
+                  )}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
             {sections.map((section) => (
-              <>
-                <tr className="lease-level-statement-section" key={`${section.title}-head`}>
-                  <th scope="rowgroup" colSpan={spanAllColumns}>
-                    {section.title}
-                  </th>
-                </tr>
+              <Fragment key={section.title ?? section.rows[0].label}>
+                {section.title !== null && (
+                  <tr className="lease-level-statement-section">
+                    <th scope="rowgroup" colSpan={spanAllColumns}>
+                      {section.title}
+                    </th>
+                  </tr>
+                )}
                 {section.rows.map((row) => (
                   <tr
-                    key={`${section.title}-${row.label}`}
+                    key={row.label}
                     className={
                       row.kind === 'total'
                         ? 'operating-statement-emphasis lease-level-statement-noi'
@@ -340,11 +512,16 @@ export function LeaseLevelOperatingStatement({
                   >
                     <th scope="row">{row.label}</th>
                     {row.values.map((value, index) => (
-                      <td key={columns[index] ?? index}>{renderValue(row, value)}</td>
+                      <td
+                        key={columns[index]?.key ?? index}
+                        className={columnClass(columns[index])}
+                      >
+                        {renderValue(row, value)}
+                      </td>
                     ))}
                   </tr>
                 ))}
-              </>
+              </Fragment>
             ))}
           </tbody>
         </table>

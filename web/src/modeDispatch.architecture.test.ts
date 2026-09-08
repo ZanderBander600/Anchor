@@ -820,6 +820,56 @@ describe('mutation kills', () => {
     }
   });
 
+  it('D5.6A M6/M7: deriving the Forward 12 boundary instead of reading it is caught', () => {
+    // The forward valuation window is classified by the backend, on each month,
+    // and the statement's only job is to render that classification. Two
+    // plausible shortcuts would both produce a boundary in the right place on
+    // today's fixture and the wrong place the moment the engine changed shape:
+    // counting `hold_period * 12` months, or taking the last twelve entries.
+    const source = sourceOf('components/LeaseLevelOperatingStatement.tsx');
+
+    expect(source, 'the statement reads the authoritative flag').toContain(
+      'is_forward_exit_month',
+    );
+    // No hold-period arithmetic, and no `12` anywhere: the number of forward
+    // months is the backend's business, not a constant this module knows.
+    expect(source).not.toContain('hold_period');
+    expect(source).not.toMatch(/\* 12|\/ 12|12 \*/);
+    // No positional classification.
+    expect(source).not.toMatch(/length\s*-\s*12|slice\(-12\)|slice\(-\s*12/);
+    // `slice` survives for one purpose only -- trimming the annual debt and
+    // capex arrays to the hold years the operating arrays cover -- and both of
+    // those start at zero.
+    for (const match of source.match(/\.slice\([^)]*\)/g) ?? []) {
+      expect(match, `unexpected slice: ${match}`).toBe('.slice(0, holdYears)');
+    }
+  });
+
+  it('D5.6A M4/M5: manufacturing a monthly debt or capex series is caught', () => {
+    // There is no canonical monthly debt service and no canonical monthly
+    // capex. The only way to show either monthly is to divide an annual figure
+    // by twelve, which is a schedule the loan does not follow.
+    const source = sourceOf('components/LeaseLevelOperatingStatement.tsx');
+
+    const monthly = source.slice(
+      source.indexOf('function monthlySections'),
+      source.indexOf('function annualSections'),
+    );
+    expect(monthly.length, 'the monthly section builder was not found').toBeGreaterThan(0);
+    for (const forbidden of [
+      'annual_debt_service',
+      'capex_by_year',
+      'Debt Service',
+      'CapEx Reserve',
+      'results.',
+    ]) {
+      expect(monthly, `the monthly view reaches for ${forbidden}`).not.toContain(forbidden);
+    }
+    // And the monthly builder takes only the monthly projection, so an annual
+    // array is not in scope for it to divide even if someone tried.
+    expect(source).toContain('function monthlySections(monthly: MonthlyPropertyProjection)');
+  });
+
   it('D5.6 M21/M22: a Lease-Level change reaching Quick or Detailed output is caught', () => {
     // The behavioural proof that Quick and Detailed results are unchanged is
     // their own suites, which run unedited. This is the structural half: the

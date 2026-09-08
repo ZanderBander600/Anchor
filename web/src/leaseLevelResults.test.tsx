@@ -106,6 +106,18 @@ function rowValues(label: string): string[] {
   return Array.from(row.querySelectorAll('td')).map((cell) => cell.textContent ?? '');
 }
 
+/** The period column headers -- months or years.
+ *
+ * The monthly head has two rows since D5.6A: a period band over the columns,
+ * then the columns themselves. Reading every `columnheader` in the table would
+ * mix the two, so this takes the last head row, which is always the periods. */
+function periodHeaders(): string[] {
+  const table = document.querySelector('.lease-level-statement-table') as HTMLElement;
+  const rows = table.querySelectorAll('thead tr');
+  const last = rows[rows.length - 1];
+  return Array.from(last.querySelectorAll('th')).map((cell) => cell.textContent ?? '');
+}
+
 async function openStatement(user: ReturnType<typeof userEvent.setup>) {
   await user.click(
     within(resultsPanel()).getByRole('tab', { name: 'Operating Statement' }),
@@ -210,20 +222,22 @@ describe('the monthly and annual views', () => {
     const user = await analyze();
     await openStatement(user);
 
-    const table = () => document.querySelector('.lease-level-statement-table') as HTMLElement;
-    const annualHeaders = within(table())
-      .getAllByRole('columnheader')
-      .map((cell) => cell.textContent);
-    expect(annualHeaders).toEqual(['Line Item', 'Year 1', 'Year 2', 'Year 3', 'Year 4', 'Year 5']);
+    expect(periodHeaders()).toEqual([
+      'Line Item',
+      'Year 1',
+      'Year 2',
+      'Year 3',
+      'Year 4',
+      'Year 5',
+    ]);
 
     await user.click(within(resultsPanel()).getByRole('tab', { name: 'Monthly' }));
-    const monthlyHeaders = within(table())
-      .getAllByRole('columnheader')
-      .map((cell) => cell.textContent);
-    // A month, not a period index.
-    expect(monthlyHeaders[1]).toBe('Jan 2027');
-    expect(monthlyHeaders[2]).toBe('Feb 2027');
-    expect(monthlyHeaders).toHaveLength(HEALTHY.monthly_projection.months.length + 1);
+    const monthlyHeaders = periodHeaders();
+    // A month, not a period index. The label column is the band row's corner
+    // cell since D5.6A, so this row is months only.
+    expect(monthlyHeaders[0]).toBe('Jan 2027');
+    expect(monthlyHeaders[1]).toBe('Feb 2027');
+    expect(monthlyHeaders).toHaveLength(HEALTHY.monthly_projection.months.length);
   });
 
   it('renders the annual array in the annual view, not a sum of months (M3)', async () => {
@@ -266,11 +280,7 @@ describe('the monthly and annual views', () => {
     expect(rowValues('Net Operating Income')).toHaveLength(72);
     // Nothing is silently truncated (M26).
     const last = HEALTHY.monthly_projection.months[71];
-    const headers = within(
-      document.querySelector('.lease-level-statement-table') as HTMLElement,
-    )
-      .getAllByRole('columnheader')
-      .map((cell) => cell.textContent);
+    const headers = periodHeaders();
     expect(headers[headers.length - 1]).toBe(formatMonthLabel(last.month_start));
   });
 });
@@ -424,7 +434,9 @@ describe('exit and coverage', () => {
     expect(exitNoi).not.toBeCloseTo(finalYearNoi, 2);
 
     expect(panel.getByText(`$${Math.round(exitNoi).toLocaleString('en-US')}`)).toBeTruthy();
-    expect(panel.getByText(/twelve months following the hold period/i)).toBeTruthy();
+    // D5.6A: worded to match the Forward 12 band on the monthly statement, so
+    // the tile and the columns are recognisably the same period.
+    expect(panel.getByText(/Forward 12-month NOI used for exit valuation/i)).toBeTruthy();
   });
 
   it('shows exit value, disposition costs and net proceeds from the response', async () => {
@@ -563,6 +575,8 @@ describe('the full projection is rendered', () => {
     const table = document.querySelector('.lease-level-statement-table') as HTMLElement;
     // Semantic headers, so a screen reader can say which line a figure is on.
     expect(table.querySelectorAll('th[scope="row"]').length).toBeGreaterThan(15);
+    // D5.6A: Revenue, Operating Expenses, Leasing & Capital Costs, Financing,
+    // Occupancy. NOI has no band -- the row names itself.
     expect(table.querySelectorAll('th[scope="rowgroup"]').length).toBe(5);
   });
 });

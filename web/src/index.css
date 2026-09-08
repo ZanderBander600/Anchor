@@ -3738,13 +3738,26 @@ body {
   box-shadow: 1px 0 0 var(--color-divider);
 }
 
-.lease-level-statement-table thead th:first-child {
+/* The corner cell, named rather than positional: with the D5.6A period band
+   the head has two rows, and `thead th:first-child` would also have caught the
+   first month column and pinned it to the left edge. */
+.lease-level-statement-corner {
   position: sticky;
   left: 0;
-  z-index: 2;
+  z-index: 3;
   background: var(--color-surface);
   text-align: left;
+  vertical-align: bottom;
   box-shadow: 1px 0 0 var(--color-divider);
+}
+
+/* One width for the label column, so the sticky period labels below have a
+   fixed offset to sit against and a 132-column table cannot squeeze the line
+   items to nothing. */
+.lease-level-statement-corner,
+.lease-level-statement-table th[scope='row'] {
+  width: 15rem;
+  min-width: 15rem;
 }
 
 .lease-level-statement-table td {
@@ -3767,10 +3780,89 @@ body {
   box-shadow: none;
 }
 
-/* NOI is the line the whole statement builds to. */
+/* NOI is the line the whole statement builds to. It carries no section band
+   above it -- the row names itself -- so the rules do the separating. */
 .lease-level-statement-noi th,
 .lease-level-statement-noi td {
   font-weight: 700;
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
+}
+
+/* ---------------------------------------------------------------------------
+   D5.6A -- hold period vs the Forward 12 valuation window.
+
+   The canonical monthly projection runs twelve months past the sale. Those
+   months are real forecast, not another year of ownership, so they are marked
+   as different in purpose rather than dimmed as if they were invalid.
+
+   Three cues, deliberately, because no one of them survives every way of
+   reading the table: a textual band header (which is what a screen reader
+   gets), a full-height rule at the boundary (visible while scrolling
+   vertically), and a faint tint across the forward columns (visible at any
+   horizontal scroll position, including when the boundary itself is off
+   screen).
+   --------------------------------------------------------------------------- */
+
+.lease-level-statement-period {
+  position: relative;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-muted, #f1f2f4);
+  display: table-cell;
+}
+
+/* The band label stays against the line-item column while its own months
+   scroll underneath, so the analyst can always see which period they are in.
+   `left` matches the corner width above. Sticky is scoped to the cell, so the
+   label leaves with its band rather than crossing the boundary. */
+.lease-level-statement-period-label {
+  position: sticky;
+  left: 15rem;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.lease-level-statement-period-note {
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--color-text-muted);
+}
+
+/* Sits at the right-hand edge of the hold band -- which is the boundary -- so
+   the marker lands on the sale without a column of its own. */
+.lease-level-statement-sale {
+  float: right;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  padding-left: 1.5rem;
+}
+
+.lease-level-statement-forward {
+  background: var(--color-surface-muted, #f1f2f4);
+}
+
+.lease-level-statement-table td.lease-level-statement-forward {
+  background: color-mix(in srgb, var(--color-surface-muted, #f1f2f4) 55%, transparent);
+}
+
+/* The sale itself. A rule the full height of the table, on the first forward
+   month, so the boundary is unmistakable however far down the analyst has
+   scrolled. */
+.lease-level-statement-boundary {
+  border-left: 3px solid var(--color-text-muted);
+}
+
+/* The row labels sit above the tinted columns as they scroll past. */
+.lease-level-statement-table th[scope='row'] {
+  z-index: 2;
 }

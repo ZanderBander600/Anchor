@@ -73,16 +73,26 @@ export function LeaseLevelMetricSummary({ analysis }: LeaseLevelMetricSummaryPro
     {
       label: 'Exit NOI',
       value: formatCurrency(results.exit_noi),
-      // D4's forward window, stated so nobody reads it as the final hold year.
-      note: 'The twelve months following the hold period.',
+      // D4's forward window, named the same way the monthly statement names it
+      // so the tile and the columns are recognisably the same period. Stated
+      // explicitly because the obvious wrong reading -- the final hold year --
+      // produces a plausible number.
+      note: 'Forward 12-month NOI used for exit valuation.',
     },
     { label: 'Exit Value', value: formatCurrency(results.exit_value) },
     { label: 'Disposition Costs', value: formatCurrency(results.disposition_costs) },
-    { label: 'Net Sale Proceeds', value: formatCurrency(results.net_sale_proceeds) },
+    {
+      // D5.6A: the value is after disposition costs *and* after repaying the
+      // remaining loan balance, so "Net Sale Proceeds" understated how far
+      // through the waterfall it already is. The label now says whose money it
+      // is. The field, the source and the wire value are untouched.
+      label: 'Net Sale Proceeds to Equity',
+      value: formatCurrency(results.net_sale_proceeds),
+    },
     {
       label: 'Exit Window Leasing Costs',
       value: formatCurrency(annual.exit_window_leasing_costs),
-      note: 'Excluded from Exit NOI and from hold-period cash flow.',
+      note: 'TI and leasing commissions falling in the Forward 12 valuation period. Excluded from Exit NOI and from hold-period cash flow.',
     },
   ];
 
