@@ -32,6 +32,7 @@ import dataclasses
 import os
 import subprocess
 import sys
+from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -82,6 +83,133 @@ _D4_6A_COMMIT = "15e910d"
 #: correct baseline for any file that did not yet exist at D4.6A (notably
 #: ``lease_level_sensitivity.py``, which D4.6B itself created).
 _D5_BASE_COMMIT = "4f8a648"
+
+
+#: The frontend files a completed D5 gate has ratified, and the only ones
+#: permitted to differ from ``_D4_6A_COMMIT``.
+#:
+#: G37 asserted the whole ``web`` tree byte-identical until D5.1B, which had to
+#: edit the frontend's mode-dispatch files for exactly the reason D5.1A edited
+#: the backend's. Byte-identity stopped being the statement of the rule there;
+#: *"only the explicitly accepted frontend integration files from completed D5
+#: product gates have changed"* is. Each gate widens this set by the smallest
+#: amount its own scope requires, and a broad Quick/Detailed refactor is a stop
+#: condition precisely because it could not happen without appearing here.
+#:
+#: Every entry is a literal repository path. There is deliberately no pattern,
+#: no prefix rule and no directory glob: a set of names is the only form of this
+#: list that a reviewer can read and a future gate cannot quietly widen.
+#:
+#: Hoisted to module scope at D5.7B so the rule below can be exercised against a
+#: synthetic file list. A real one only ever contains what the repository
+#: happens to hold, which can prove the guardrail accepts the tree as it stands
+#: but never that it would reject anything.
+_PERMITTED_WEB = frozenset(
+    {
+        # D5.1B -- the mode-dispatch surface itself.
+        "web/src/App.tsx",
+        "web/src/types.ts",
+        "web/src/underwrite.ts",
+        "web/src/operatingMode.ts",
+        "web/src/components/AppSidebar.tsx",
+        "web/src/components/DealHeader.tsx",
+        "web/src/components/DealLibraryPanel.tsx",
+        "web/src/components/OwnerSummaryPanel.tsx",
+        "web/src/components/UnderwriteWorkspace.tsx",
+        # D5.5A -- new, and read by no other mode.
+        "web/src/leaseLevelTypes.ts",
+        "web/src/leaseLevelConvert.ts",
+        "web/src/useLeaseLevelDeal.ts",
+        "web/src/components/LeaseLevelWorkspace.tsx",
+        # D5.5A -- shipped files, extended additively.
+        "web/src/api.ts",
+        "web/src/index.css",
+        "web/src/components/AssumptionFieldGrid.tsx",
+        # D5.5B -- the rent-roll editor. Three new modules no other mode reads,
+        # and no further shipped file touched: the gate that makes suites and
+        # leases editable adds components rather than reworking the shell.
+        "web/src/leaseLevelIssues.ts",
+        "web/src/components/RentRollTable.tsx",
+        "web/src/components/SuiteLeaseEditor.tsx",
+        # D5.5D -- a shared test fixture. Named without ``.test.`` because two
+        # test files import it, so the extension filter below does not catch it.
+        "web/src/hiddenIssuesFixture.ts",
+        # D5.5E -- display-only thousands grouping. Two new modules, both pure
+        # presentation: the formatter is string-in/string-out and parses no
+        # number, and the input it feeds performs no arithmetic. They are shared
+        # by all three modes deliberately, which is why they are their own
+        # primitive rather than a change to any mode's form.
+        "web/src/numberFormat.ts",
+        "web/src/components/NumericInput.tsx",
+        # D5.6 -- the result surfaces. Four new modules, all presentation: they
+        # render the authoritative response and compute nothing, which
+        # ``modeDispatch.architecture.test.ts`` holds closed on the TypeScript
+        # side. `leaseLevelResultsFixture.json` is two captured `/analyze`
+        # responses, listed here for the same reason `hiddenIssuesFixture.ts`
+        # is -- the extension filter below only skips ``.test.ts``/``.test.tsx``.
+        "web/src/leaseLevelFormat.ts",
+        "web/src/leaseLevelResultsFixture.json",
+        "web/src/components/LeaseLevelResults.tsx",
+        "web/src/components/LeaseLevelMetricSummary.tsx",
+        "web/src/components/LeaseLevelOperatingStatement.tsx",
+        # D5.7 -- the Lease-Level sensitivity workspace, ratified at D5.7B.
+        #
+        # Seven new modules and no further shipped file touched beyond the four
+        # already listed above (``App.tsx`` mounts the workspace, ``api.ts``
+        # gains the two client functions the additive-only assertion above still
+        # covers, ``index.css`` is appended to, and ``useLeaseLevelDeal.ts``
+        # supplies the request the workspace sends). Quick and Detailed keep
+        # their own sensitivity panel untouched: ``SensitivityPanel.tsx`` is
+        # absent from this list and absent from the diff.
+        #
+        # All seven are presentation or vocabulary. That they compute no lease
+        # economics is not asserted here but on the TypeScript side, by
+        # ``modeDispatch.architecture.test.ts`` (G-M7), which parses each of them
+        # and rejects a single arithmetic operator. The one approved carve-out,
+        # ``leaseLevelSensitivityLadder.ts``, generates candidate values an
+        # analyst can see and edit before any run and is proved unreachable from
+        # a result surface by that same file.
+        "web/src/leaseLevelSensitivityTypes.ts",
+        "web/src/leaseLevelSensitivity.ts",
+        "web/src/leaseLevelSensitivityLadder.ts",
+        "web/src/components/LeaseLevelSensitivityWorkspace.tsx",
+        "web/src/components/LeaseLevelOneWaySensitivity.tsx",
+        "web/src/components/LeaseLevelTwoWaySensitivity.tsx",
+        "web/src/components/CandidateValueEditor.tsx",
+        # D5.7A -- presentation polish. It added no file: the baseline context
+        # line and the directional matrix corner changed two of the sensitivity
+        # components above and appended to ``index.css``, all four of which this
+        # set already carried. It is named here because a reader tracing the
+        # frontend history should find every accepted gate accounted for, not
+        # because it needed an entry.
+    }
+)
+
+
+def _unexpected_web(changed: Iterable[str]) -> set[str]:
+    """The changed ``web`` paths no completed gate has ratified.
+
+    The extension filter excludes test sources and nothing else: a production
+    module cannot escape the list by being a ``.ts`` file, and the two fixtures
+    that are production-named but test-only are enumerated above rather than
+    pattern-matched.
+
+    **Known limitation, owned by D5.9.** ``changed`` comes from ``git diff``,
+    which does not report untracked files, so a brand-new frontend module that
+    has never been ``git add``-ed is invisible to this rule until it is staged
+    or committed. First recorded at D5.5E; restated here because D5.7B measured
+    it -- an unratified file dropped into ``web/src`` survives the guardrail
+    while untracked and is rejected the moment git can see it. Every file that
+    reaches a commit, and therefore every file that reaches review or CI, is
+    covered. Widening the discovery mechanism is D5.9 hardening and is
+    deliberately not attempted here.
+    """
+
+    return {
+        path
+        for path in changed
+        if not path.endswith(".test.ts") and not path.endswith(".test.tsx")
+    } - _PERMITTED_WEB
 
 
 # =============================================================================
@@ -1256,69 +1384,88 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     # was dispatch and nothing else; this pins the file list from the backend
     # side so a frontend gate cannot quietly widen without a reviewer noticing.
     #
-    # D5.5A widens it deliberately, and by the smallest amount that lets a
-    # Lease-Level deal be entered: four new modules that no other mode reads,
-    # plus four shipped files that gain something strictly additive -- the client
-    # functions in ``api.ts`` (asserted purely additive above), an optional
-    # ``error`` on the shared field primitive that Quick and Detailed never set,
-    # a stylesheet appended to, and the shell's own mount. The list is the point:
-    # a broad Quick/Detailed refactor is a stop condition for D5.5A, and a
-    # refactor could not happen without appearing here.
-    permitted_web = {
-        "web/src/App.tsx",
-        "web/src/types.ts",
-        "web/src/underwrite.ts",
-        "web/src/operatingMode.ts",
-        "web/src/components/AppSidebar.tsx",
-        "web/src/components/DealHeader.tsx",
-        "web/src/components/DealLibraryPanel.tsx",
-        "web/src/components/OwnerSummaryPanel.tsx",
-        "web/src/components/UnderwriteWorkspace.tsx",
-        # D5.5A -- new, and read by no other mode.
-        "web/src/leaseLevelTypes.ts",
-        "web/src/leaseLevelConvert.ts",
-        "web/src/useLeaseLevelDeal.ts",
-        "web/src/components/LeaseLevelWorkspace.tsx",
-        # D5.5A -- shipped files, extended additively.
-        "web/src/api.ts",
-        "web/src/index.css",
-        "web/src/components/AssumptionFieldGrid.tsx",
-        # D5.5B -- the rent-roll editor. Three new modules no other mode reads,
-        # and no further shipped file touched: the gate that makes suites and
-        # leases editable adds components rather than reworking the shell.
-        "web/src/leaseLevelIssues.ts",
-        "web/src/components/RentRollTable.tsx",
-        "web/src/components/SuiteLeaseEditor.tsx",
-        # D5.5D -- a shared test fixture. Named without ``.test.`` because two
-        # test files import it, so the extension filter above does not catch it.
-        "web/src/hiddenIssuesFixture.ts",
-        # D5.5E -- display-only thousands grouping. Two new modules, both pure
-        # presentation: the formatter is string-in/string-out and parses no
-        # number, and the input it feeds performs no arithmetic. They are shared
-        # by all three modes deliberately, which is why they are their own
-        # primitive rather than a change to any mode's form.
-        "web/src/numberFormat.ts",
-        "web/src/components/NumericInput.tsx",
-        # D5.6 -- the result surfaces. Four new modules, all presentation: they
-        # render the authoritative response and compute nothing, which
-        # ``modeDispatch.architecture.test.ts`` holds closed on the TypeScript
-        # side. `leaseLevelResultsFixture.json` is two captured `/analyze`
-        # responses, listed here for the same reason `hiddenIssuesFixture.ts`
-        # is -- the extension filter below only skips ``.test.ts``/``.test.tsx``.
-        "web/src/leaseLevelFormat.ts",
-        "web/src/leaseLevelResultsFixture.json",
-        "web/src/components/LeaseLevelResults.tsx",
-        "web/src/components/LeaseLevelMetricSummary.tsx",
-        "web/src/components/LeaseLevelOperatingStatement.tsx",
-    }
-    unexpected_web = {
-        path
-        for path in _files_changed_since(_D4_6A_COMMIT, "web")
-        if not path.endswith(".test.ts") and not path.endswith(".test.tsx")
-    } - permitted_web
+    # The list itself is ``_PERMITTED_WEB``, at the top of this module, where
+    # each gate's widening is recorded with the reason for it. Read it there:
+    # this assertion is only the moment the tree is measured against it.
+    unexpected_web = _unexpected_web(_files_changed_since(_D4_6A_COMMIT, "web"))
     assert unexpected_web == set(), (
         f"web changed beyond D5.1B's mode-dispatch scope: {sorted(unexpected_web)}"
     )
+
+
+def test_g37_the_web_allowlist_would_reject_an_unratified_file() -> None:
+    """**D5.7B.** G37's frontend clause has teeth, proved rather than assumed.
+
+    G37 measures the repository as it stands. A passing run therefore shows only
+    that the tree contains nothing unratified *today* -- which is equally what a
+    guardrail rewritten to permit everything would show. The rule is exercised
+    here on file lists chosen for the purpose, so the difference is visible.
+
+    Three shapes of weakening are killed: a wildcard or prefix rule in place of
+    the literal set, an extension filter widened until a production module slips
+    through it, and an entry that quietly re-admits a mode whose files this gate
+    claims are untouched.
+    """
+
+    ratified = sorted(_PERMITTED_WEB)
+
+    # The tree as ratified is accepted. This is the baseline the assertions
+    # below are measured against -- without it, a rule that rejected everything
+    # would look like a rule with teeth.
+    assert _unexpected_web(ratified) == set()
+
+    # M2. An unrelated production module appearing in the frontend is rejected,
+    # and named in the failure rather than silently absorbed.
+    intruder = "web/src/unapprovedFinancialLogic.ts"
+    assert _unexpected_web([*ratified, intruder]) == {intruder}
+
+    # M4. The same intruder alone is still rejected, so no prefix rule, glob or
+    # ``web/src/**`` wildcard can have replaced the literal set: any of those
+    # would return an empty difference here.
+    assert _unexpected_web([intruder]) == {intruder}
+    for entry in ratified:
+        assert not set(entry) & set("*?[]"), f"{entry} is a pattern, not a path"
+        assert entry.startswith("web/"), f"{entry} is not a frontend path"
+
+    # The extension filter excuses test sources and nothing else. A production
+    # module does not escape by being a ``.ts`` file, and a name that merely
+    # contains ``.test.`` is not a test source either.
+    assert _unexpected_web(["web/src/unapproved.test.ts"]) == set()
+    assert _unexpected_web(["web/src/unapproved.test.tsx"]) == set()
+    assert _unexpected_web(["web/src/unapproved.test.helpers.ts"]) == {
+        "web/src/unapproved.test.helpers.ts"
+    }
+
+    # Quick and Detailed keep their own sensitivity surface. D5.7 built the
+    # Lease-Level one beside it rather than migrating them onto it, so this file
+    # is deliberately absent from the ratified set and would be reported.
+    quick = "web/src/components/SensitivityPanel.tsx"
+    assert quick not in _PERMITTED_WEB
+    assert _unexpected_web([quick]) == {quick}
+
+
+def test_g37_detects_a_real_difference_rather_than_reporting_none() -> None:
+    """**D5.7B.** The mechanism G37's financial clauses rest on actually works.
+
+    Every byte-identity assertion in G37 has the form ``_files_changed_since(...)
+    == []``. All of them would pass vacuously together if that helper ever
+    stopped reporting differences -- a mistyped commit, a wrong working
+    directory, a swallowed error -- and the failure would be silent, because a
+    guardrail that finds nothing looks exactly like a tree that changed nothing.
+
+    So the helper is shown to report a difference where one genuinely exists.
+    ``index.css`` is used because it is ratified above: every completed
+    Lease-Level gate has appended to it, so it differs from ``_D4_6A_COMMIT`` by
+    construction and will keep differing.
+    """
+
+    assert _files_changed_since(_D4_6A_COMMIT, "web/src/index.css") == [
+        "web/src/index.css"
+    ], "G37's change detection is not reporting a difference that exists"
+
+    # And a path that cannot have changed reports nothing, so the helper is
+    # discriminating rather than merely always non-empty.
+    assert _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine") == []
 
 
 @pytest.mark.parametrize(
