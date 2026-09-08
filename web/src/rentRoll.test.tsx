@@ -542,9 +542,20 @@ describe('occupied and vacant', () => {
 
   it('offers no way to add a second lease to a suite (M5, M30)', async () => {
     await openSavedDeal();
-    // No "add lease" affordance anywhere, and no sequential/next/future lease UI.
+
+    // D5.5E transition. This asserted that the words "future lease" appeared
+    // nowhere, as a proxy for "no sequential-lease UI". That proxy stopped
+    // working when Human Pass #1 asked for "Successor Escalation" to be renamed:
+    // "Future Lease Rent Escalation" is a *market leasing assumption* about the
+    // lease that follows an expiry, which is precisely the thing D2/D3 model and
+    // the opposite of a second known lease an analyst could enter.
+    //
+    // So the guardrail now tests the invariant instead of the phrase: there is
+    // no affordance to add a lease, and no control anywhere for entering a
+    // second one.
     expect(screen.queryByRole('button', { name: /add.*lease/i })).toBeNull();
-    expect(screen.queryByText(/next lease|future lease|second lease|lease stack/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /second lease|next lease|lease stack/i })).toBeNull();
+    expect(screen.queryByText(/second lease|lease stack|sequential lease/i)).toBeNull();
 
     // Structurally: a row holds one optional lease, so a second is not
     // representable in the form at all.
@@ -706,14 +717,14 @@ describe('editing', () => {
     await user.click(within(dataRows()[0]).getByRole('button', { name: /Edit details for/ }));
 
     const leased = screen.getByLabelText('Leased Area') as HTMLInputElement;
-    expect(leased.value).toBe('18400');
+    expect(leased.value).toBe('18,400');
     const suiteArea = screen.getByLabelText('Suite Area') as HTMLInputElement;
     await user.clear(suiteArea);
     await user.type(suiteArea, '19000');
-    expect(leased.value).toBe('18400');
+    expect(leased.value).toBe('18,400');
 
     await user.click(screen.getByRole('button', { name: 'Use Suite Area' }));
-    expect((screen.getByLabelText('Leased Area') as HTMLInputElement).value).toBe('19000');
+    expect((screen.getByLabelText('Leased Area') as HTMLInputElement).value).toBe('19,000');
   });
 
   it('holds lease origin rather than offering it (successor stays engine-owned)', async () => {
@@ -867,7 +878,7 @@ describe('suite overrides', () => {
     expect(
       (within(drawer()).getByLabelText('Renewal Lease Type') as HTMLSelectElement).value,
     ).toBe('nnn');
-    expect((within(drawer()).getByLabelText(/^New Downtime/) as HTMLInputElement).value).toBe('12');
+    expect((within(drawer()).getByLabelText(/^New Tenant Downtime/) as HTMLInputElement).value).toBe('12');
     // A rate arrives as a decimal and renders percent-scale, exactly like the
     // property defaults -- one convention, not two.
     expect((within(drawer()).getByLabelText(/^Renewal Probability/) as HTMLInputElement).value).toBe('70');
@@ -903,7 +914,11 @@ describe('area reconciliation', () => {
     await user.type(area, '13400');
 
     const strip = screen.getByLabelText('Area reconciliation');
-    expect(within(strip).getByText(/5,000 SF unallocated/)).toBeTruthy();
+    // D5.5E: product language. Human Pass #1 rejected the previous wording,
+    // which explained Anchor's internals rather than the analyst's rent roll.
+    expect(
+      within(strip).getByText(/Suite areas are 5,000 SF below the property rentable area/),
+    ).toBeTruthy();
     // No residual suite was created to absorb it.
     expect(dataRows()).toHaveLength(6);
     // And the request still goes: the client is not an area authority.
@@ -914,14 +929,22 @@ describe('area reconciliation', () => {
     });
   });
 
-  it('does not present itself as a backend validation result', async () => {
+  it('describes the shortfall in the analyst’s own terms', async () => {
+    // D5.5E transition. The old copy earned its keep by disclaiming authority
+    // -- "an entry aid only, the backend decides" -- which is true and is
+    // engineering's way of saying it. The successor states the same fact in the
+    // analyst's vocabulary, and the non-authority claim is proved by behaviour
+    // instead: the request still goes, which the test above asserts.
     const user = await openSavedDeal();
     const area = cell(dataRows()[0], /^Area SF, /);
     await user.clear(area);
     await user.type(area, '13400');
-    expect(
-      within(screen.getByLabelText('Area reconciliation')).getByText(/entry aid only/i),
-    ).toBeTruthy();
+
+    const strip = within(screen.getByLabelText('Area reconciliation'));
+    expect(strip.getByText(/below the property rentable area/)).toBeTruthy();
+    for (const word of [/backend/i, /entry aid/i, /validation/i, /engine/i]) {
+      expect(strip.queryByText(word)).toBeNull();
+    }
   });
 
   it('computes only counts and area sums, never economics (M29)', () => {

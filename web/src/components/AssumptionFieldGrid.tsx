@@ -1,5 +1,6 @@
-import type { ChangeEvent } from 'react';
 import type { FieldSection } from '../underwrite';
+import { NumericInput } from './NumericInput';
+import { groupsThousands } from '../numberFormat';
 
 export interface AssumptionFieldGridProps {
   sections: FieldSection[];
@@ -43,14 +44,16 @@ export function AssumptionFieldGrid({ sections, disabled }: AssumptionFieldGridP
                   {field.prefix && (
                     <span className="field-affix field-affix-left">{field.prefix}</span>
                   )}
-                  <input
+                  <NumericInput
                     id={field.id}
                     className="field-input"
-                    type="number"
-                    inputMode="decimal"
-                    step="any"
                     value={field.value}
+                    onChange={field.onChange}
                     disabled={disabled}
+                    // D5.5E: currency and area group; percentages, months and
+                    // years do not. Read off the prefix/suffix each field
+                    // already declares, so nothing needs registering.
+                    group={groupsThousands(field)}
                     /* D5.5A: every attribute below is conditional on an error
                      * being supplied, so a field without one renders exactly the
                      * element it always has. `aria-label` restates the label
@@ -61,9 +64,6 @@ export function AssumptionFieldGrid({ sections, disabled }: AssumptionFieldGridP
                     aria-label={field.error ? field.label : undefined}
                     aria-invalid={field.error ? true : undefined}
                     aria-describedby={field.error ? `${field.id}-error` : undefined}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                      field.onChange(event.target.value)
-                    }
                     style={{
                       paddingLeft: field.prefix ? '1.4rem' : undefined,
                       paddingRight: field.suffix ? '2.4rem' : undefined,

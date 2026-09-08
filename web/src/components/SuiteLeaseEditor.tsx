@@ -17,6 +17,7 @@
 
 import type { ChangeEvent, ReactNode } from 'react';
 import { AssumptionFieldGrid } from './AssumptionFieldGrid';
+import { NumericInput } from './NumericInput';
 import {
   ESCALATION_BASIS_OPTIONS,
   INITIAL_VACANCY_STRATEGY_OPTIONS,
@@ -90,6 +91,8 @@ interface TextFieldProps {
   hint?: string;
   placeholder?: string;
   after?: ReactNode;
+  /** Show thousands separators while unfocused. Currency and area only. */
+  group?: boolean;
 }
 
 function TextField({
@@ -103,29 +106,43 @@ function TextField({
   hint,
   placeholder,
   after,
+  group,
 }: TextFieldProps) {
   return (
     <label className="field">
       <span className="field-label">{label}</span>
       <div className="field-with-action">
-        <input
-          id={id}
-          className="field-input"
-          type={type}
-          inputMode={type === 'number' ? 'decimal' : undefined}
-          step={type === 'number' ? 'any' : undefined}
-          value={value}
-          disabled={disabled}
-          placeholder={placeholder}
-          /* The hint and the error are *descriptions*, not part of the name.
-           * Left to the wrapping `<label>` they would be absorbed into it, and
-           * this field would answer to "Expense Stop Annual $/SF. A contract
-           * term Anchor never infers." instead of to "Expense Stop". */
-          aria-label={label}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={describedBy(id, hint, error)}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
-        />
+        {type === 'number' ? (
+          <NumericInput
+            id={id}
+            className="field-input"
+            value={value}
+            onChange={onChange}
+            disabled={disabled}
+            group={group ?? false}
+            placeholder={placeholder}
+            /* The hint and the error are *descriptions*, not part of the name.
+             * Left to the wrapping `<label>` they would be absorbed into it, and
+             * this field would answer to "Expense Stop Annual $/SF. A contract
+             * term Anchor never infers." instead of to "Expense Stop". */
+            aria-label={label}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={describedBy(id, hint, error)}
+          />
+        ) : (
+          <input
+            id={id}
+            className="field-input"
+            type={type}
+            value={value}
+            disabled={disabled}
+            placeholder={placeholder}
+            aria-label={label}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={describedBy(id, hint, error)}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
+          />
+        )}
         {after}
       </div>
       {hint && (
@@ -289,6 +306,7 @@ export function SuiteLeaseEditor({
               onChange={(next) => onSuiteFieldChange(row.rowId, 'suiteAreaSf', next)}
               disabled={disabled}
               type="number"
+              group
               error={describe('suite_area_sf')}
             />
             <TextField
@@ -306,6 +324,7 @@ export function SuiteLeaseEditor({
               onChange={(next) => onSuiteFieldChange(row.rowId, 'marketRentPsf', next)}
               disabled={disabled}
               type="number"
+              group
               placeholder="Property default"
               hint="Overrides the rent level alone. Blank inherits the property default."
               error={describe('market_rent_psf')}
@@ -342,6 +361,7 @@ export function SuiteLeaseEditor({
               onChange={(next) => onLeaseFieldChange(row.rowId, 'leasedAreaSf', next)}
               disabled={disabled}
               type="number"
+              group
               error={describe('leased_area_sf')}
               // An explicit action, never an automatic mirror. The backend
               // requires the two to be equal today, but copying silently would
@@ -394,12 +414,13 @@ export function SuiteLeaseEditor({
               onChange={(next) => onLeaseFieldChange(row.rowId, 'baseRentPsf', next)}
               disabled={disabled}
               type="number"
+              group
               hint="Annual $/SF as of rent commencement."
               error={describe('base_rent_psf')}
             />
             <TextField
               id={`editor-lease-escalation-${row.rowId}`}
-              label="Escalation"
+              label="Rent Escalation (%)"
               value={lease.escalationPct}
               onChange={(next) => onLeaseFieldChange(row.rowId, 'escalationPct', next)}
               disabled={disabled}
@@ -408,11 +429,12 @@ export function SuiteLeaseEditor({
             />
             <SelectField
               id={`editor-lease-escalation-basis-${row.rowId}`}
-              label="Escalation Basis"
+              label="Escalation Timing"
               value={lease.escalationBasis}
               options={ESCALATION_BASIS_OPTIONS}
               onChange={(next) => onLeaseFieldChange(row.rowId, 'escalationBasis', next)}
               disabled={disabled}
+              hint="When the rent steps up. Flat rent never steps."
               error={describe('escalation_basis')}
             />
             <SelectField
@@ -449,6 +471,7 @@ export function SuiteLeaseEditor({
                   onChange={(next) => onLeaseFieldChange(row.rowId, 'expenseStopPsf', next)}
                   disabled={disabled}
                   type="number"
+              group
                   hint="Annual $/SF. A contract term Anchor never infers."
                   error={describe('expense_stop_psf')}
                 />
@@ -513,8 +536,8 @@ export function SuiteLeaseEditor({
             </label>
             <p className="field-hint">
               {row.marketLeasingOverrideEnabled
-                ? 'Full suite leasing assumptions take precedence while enabled, including over the Suite Market Rent above. That value is kept and applies again if you turn this off.'
-                : 'Using the property defaults. A full override replaces the entire record — it is all-or-nothing, never a per-field merge.'}
+                ? 'These suite assumptions take precedence while enabled, including over the Suite Market Rent above. That rent is kept and applies again if you turn this off.'
+                : 'Using the property defaults. A suite override replaces every market leasing assumption for this suite, not just the ones you change.'}
             </p>
           </div>
 
@@ -550,7 +573,7 @@ export function SuiteLeaseEditor({
                     />
                     <SelectField
                       id={`override-${row.rowId}-newLeaseType`}
-                      label="New Lease Type"
+                      label="New Tenant Lease Type"
                       value={row.marketLeasingOverride.newLeaseType}
                       options={LEASE_TYPE_OPTIONS}
                       onChange={(next) => onOverrideFieldChange(row.rowId, 'newLeaseType', next)}
@@ -559,7 +582,7 @@ export function SuiteLeaseEditor({
                     />
                     <SelectField
                       id={`override-${row.rowId}-newRecoveryBasis`}
-                      label="New Recovery Basis"
+                      label="New Tenant Recovery Basis"
                       value={row.marketLeasingOverride.newRecoveryBasis}
                       options={RECOVERY_BASIS_OPTIONS}
                       onChange={(next) =>

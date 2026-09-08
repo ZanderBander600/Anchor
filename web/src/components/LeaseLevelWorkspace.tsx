@@ -180,14 +180,14 @@ function AreaReconciliation({
       </dl>
       <p className={reconciled ? 'area-reconciliation-note' : 'area-reconciliation-note area-reconciliation-note-warn'}>
         {rentableAreaSf === null
-          ? 'Enter the property rentable area on the Property tab to reconcile suite areas against it.'
+          ? 'Enter the property rentable area on the Property tab to compare suite areas against it.'
           : rowsWithoutArea > 0
             ? `${rowsWithoutArea} suite${rowsWithoutArea === 1 ? '' : 's'} without an area yet — this total is incomplete.`
             : reconciled
               ? 'Suite areas match the property rentable area.'
               : differenceSf! > 0
-                ? `${formatArea(differenceSf!)} SF unallocated. An entry aid only — the backend decides whether the roll reconciles.`
-                : `${formatArea(Math.abs(differenceSf!))} SF over-allocated. An entry aid only — the backend decides whether the roll reconciles.`}
+                ? `Suite areas are ${formatArea(differenceSf!)} SF below the property rentable area.`
+                : `Suite areas exceed the property rentable area by ${formatArea(Math.abs(differenceSf!))} SF.`}
       </p>
     </section>
   );
@@ -446,13 +446,19 @@ export function LeaseLevelWorkspace({
   const startDateError = messageFor(leaseIssues, 'property_inputs', 'analysis_start_date');
 
   function panel(id: LeaseLevelSectionId, children: ReactNode) {
+    // D5.5E: the rent roll uses the widened panel; the scalar sections stay at
+    // the normal readable measure inside it. A column of labelled inputs
+    // stretched to 1800px is harder to read, not easier.
+    const scalar = id !== 'rent-roll';
     return (
       <div
         id={`lease-level-panel-${id}`}
         role="tabpanel"
         aria-labelledby={`lease-level-tab-${id}`}
         hidden={id !== activeSection}
-        className="underwrite-tab-panel"
+        className={
+          scalar ? 'underwrite-tab-panel lease-level-scalar-panel' : 'underwrite-tab-panel'
+        }
       >
         {children}
       </div>
@@ -554,9 +560,10 @@ export function LeaseLevelWorkspace({
             'market',
             <>
               <p className="field-hint">
-                Property-default market leasing. These apply to successor leases the
-                rollover engine creates and to vacant space being leased up &mdash; never
-                to a signed lease&rsquo;s own contractual terms.
+                Property defaults for leasing that has not happened yet. These apply
+                to the lease that follows each current lease when it expires, and to
+                vacant space being leased up &mdash; never to a signed lease&rsquo;s own
+                contractual terms.
               </p>
               <AssumptionFieldGrid sections={marketSections} disabled={isSubmitting} />
               <div className="assumption-sections">
@@ -588,7 +595,7 @@ export function LeaseLevelWorkspace({
                     />
                     <SelectField
                       id="lease-level-market-newLeaseType"
-                      label="New Lease Type"
+                      label="New Tenant Lease Type"
                       value={values.marketLeasing.newLeaseType}
                       options={LEASE_TYPE_OPTIONS}
                       onChange={(next) => onMarketFieldChange('newLeaseType', next)}
@@ -597,7 +604,7 @@ export function LeaseLevelWorkspace({
                     />
                     <SelectField
                       id="lease-level-market-newRecoveryBasis"
-                      label="New Recovery Basis"
+                      label="New Tenant Recovery Basis"
                       value={values.marketLeasing.newRecoveryBasis}
                       options={RECOVERY_BASIS_OPTIONS}
                       onChange={(next) => onMarketFieldChange('newRecoveryBasis', next)}

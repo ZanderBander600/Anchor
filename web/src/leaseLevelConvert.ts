@@ -123,10 +123,14 @@ export const LEASE_LEVEL_OPERATING_FIELD_GROUPS: LeaseLevelFieldGroup<
  * decision each one belongs to.
  *
  * Grouped, not reordered arbitrarily: the sections follow the contract's own
- * structure -- the market, then the renewal branch, then the new-tenant branch,
- * then the leasing capital both share. Twenty-three inputs in one unbroken
- * column is a wall nobody reads carefully, and these are exactly the
- * assumptions that most reward reading carefully.
+ * structure -- the market, then a renewal, then a new tenant, then the leasing
+ * capital both share. Twenty-three inputs in one unbroken column is a wall
+ * nobody reads carefully, and these are exactly the assumptions that most
+ * reward reading carefully.
+ *
+ * D5.5E renamed the visible labels only. Human Pass #1 found "Successor
+ * Escalation" and "Branch" unreadable to anyone who had not read the engine;
+ * every wire key, enum and contract name below is untouched.
  *
  * The three enum fields and the two nullable expense stops live in
  * `MARKET_LEASING_STRUCTURE_FIELDS` below, since they are selects rather than
@@ -142,7 +146,7 @@ export const LEASE_LEVEL_MARKET_FIELD_GROUPS: LeaseLevelFieldGroup<
     ],
   },
   {
-    title: 'Renewal Branch',
+    title: 'Renewal',
     fields: [
       { key: 'renewalProbability', label: 'Renewal Probability', suffix: '%' },
       {
@@ -158,26 +162,26 @@ export const LEASE_LEVEL_MARKET_FIELD_GROUPS: LeaseLevelFieldGroup<
     ],
   },
   {
-    title: 'New-Tenant Branch',
+    title: 'New Tenant',
     fields: [
-      { key: 'newTermMonths', label: 'New Term', suffix: 'mo' },
-      { key: 'newDowntimeMonths', label: 'New Downtime', suffix: 'mo' },
-      { key: 'newFreeRentMonths', label: 'New Free Rent', suffix: 'mo' },
+      { key: 'newTermMonths', label: 'New Tenant Term', suffix: 'mo' },
+      { key: 'newDowntimeMonths', label: 'New Tenant Downtime', suffix: 'mo' },
+      { key: 'newFreeRentMonths', label: 'New Tenant Free Rent', suffix: 'mo' },
     ],
   },
   {
     title: 'Leasing Capital',
     fields: [
       { key: 'renewalTiPsf', label: 'Renewal TI', prefix: '$', suffix: '/SF' },
-      { key: 'newTiPsf', label: 'New TI', prefix: '$', suffix: '/SF' },
+      { key: 'newTiPsf', label: 'New Tenant TI', prefix: '$', suffix: '/SF' },
       { key: 'renewalLcPct', label: 'Renewal LC', suffix: '%' },
-      { key: 'newLcPct', label: 'New LC', suffix: '%' },
+      { key: 'newLcPct', label: 'New Tenant LC', suffix: '%' },
     ],
   },
   {
-    title: 'Successor Escalation',
+    title: 'Future Lease Escalation',
     fields: [
-      { key: 'successorEscalationPct', label: 'Successor Escalation', suffix: '%' },
+      { key: 'successorEscalationPct', label: 'Future Lease Rent Escalation', suffix: '%' },
     ],
   },
 ];
@@ -188,7 +192,7 @@ export const MARKET_LEASING_EXPENSE_STOP_FIELDS: LeaseLevelFieldConfig<
   keyof MarketLeasingFormValues
 >[] = [
   { key: 'renewalExpenseStopPsf', label: 'Renewal Expense Stop', prefix: '$', suffix: '/SF' },
-  { key: 'newExpenseStopPsf', label: 'New Expense Stop', prefix: '$', suffix: '/SF' },
+  { key: 'newExpenseStopPsf', label: 'New Tenant Expense Stop', prefix: '$', suffix: '/SF' },
 ];
 
 /** The wire `field_id` each `AcquisitionTerms` form key validates as.
@@ -498,23 +502,23 @@ export function buildMarketLeasingRequest(
     renewal_rent_spread: parsePercent('Renewal Rent Spread', values.renewalRentSpread),
     renewal_term_months: parseWholeNumber('Renewal Term', values.renewalTermMonths),
     successor_escalation_pct: parsePercent(
-      'Successor Escalation',
+      'Future Lease Rent Escalation',
       values.successorEscalationPct,
     ),
     renewal_downtime_months: parseNumber('Renewal Downtime', values.renewalDowntimeMonths),
     renewal_free_rent_months: parseNumber('Renewal Free Rent', values.renewalFreeRentMonths),
-    new_term_months: parseWholeNumber('New Term', values.newTermMonths),
-    new_downtime_months: parseNumber('New Downtime', values.newDowntimeMonths),
-    new_free_rent_months: parseNumber('New Free Rent', values.newFreeRentMonths),
+    new_term_months: parseWholeNumber('New Tenant Term', values.newTermMonths),
+    new_downtime_months: parseNumber('New Tenant Downtime', values.newDowntimeMonths),
+    new_free_rent_months: parseNumber('New Tenant Free Rent', values.newFreeRentMonths),
     renewal_ti_psf: parseNumber('Renewal TI', values.renewalTiPsf),
-    new_ti_psf: parseNumber('New TI', values.newTiPsf),
+    new_ti_psf: parseNumber('New Tenant TI', values.newTiPsf),
     leasing_commission_method: parseSelected<LeasingCommissionMethod>(
       'Leasing Commission Method',
       values.leasingCommissionMethod,
       COMMISSION_METHODS,
     ),
     renewal_lc_pct: parsePercent('Renewal LC', values.renewalLcPct),
-    new_lc_pct: parsePercent('New LC', values.newLcPct),
+    new_lc_pct: parsePercent('New Tenant LC', values.newLcPct),
     renewal_probability: parsePercent('Renewal Probability', values.renewalProbability),
     renewal_lease_type: parseSelected<LeaseType>(
       'Renewal Lease Type',
@@ -531,16 +535,19 @@ export function buildMarketLeasingRequest(
       values.renewalExpenseStopPsf,
     ),
     new_lease_type: parseSelected<LeaseType>(
-      'New Lease Type',
+      'New Tenant Lease Type',
       values.newLeaseType,
       LEASE_TYPES,
     ),
     new_recovery_basis: parseOptionalSelected<RecoveryBasis>(
-      'New Recovery Basis',
+      'New Tenant Recovery Basis',
       values.newRecoveryBasis,
       RECOVERY_BASES,
     ),
-    new_expense_stop_psf: parseOptionalNumber('New Expense Stop', values.newExpenseStopPsf),
+    new_expense_stop_psf: parseOptionalNumber(
+      'New Tenant Expense Stop',
+      values.newExpenseStopPsf,
+    ),
   };
 }
 

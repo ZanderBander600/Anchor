@@ -24,6 +24,7 @@
 
 import type { ChangeEvent } from 'react';
 import { LEASE_TYPE_OPTIONS, isRowOccupied } from '../leaseLevelConvert';
+import { NumericInput } from './NumericInput';
 import type { SuiteRowFormValues } from '../leaseLevelTypes';
 import type { RowIssues } from '../leaseLevelIssues';
 
@@ -79,20 +80,35 @@ function CellInput({
 }: CellInputProps) {
   return (
     <>
-      <input
-        id={id}
-        className="rent-roll-input"
-        type={type}
-        inputMode={type === 'number' ? 'decimal' : undefined}
-        step={type === 'number' ? 'any' : undefined}
-        value={value}
-        disabled={disabled}
-        placeholder={placeholder}
-        aria-label={label}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={error ? `${id}-error` : undefined}
-        onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
-      />
+      {type === 'number' ? (
+        <NumericInput
+          id={id}
+          className="rent-roll-input"
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          // Areas and dollar amounts read far better grouped in a grid the
+          // analyst is scanning down.
+          group
+          placeholder={placeholder}
+          aria-label={label}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
+        />
+      ) : (
+        <input
+          id={id}
+          className="rent-roll-input"
+          type={type}
+          value={value}
+          disabled={disabled}
+          placeholder={placeholder}
+          aria-label={label}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
+          onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
+        />
+      )}
       {error && (
         <span className="field-error" id={`${id}-error`} role="alert">
           {error}
@@ -121,6 +137,21 @@ export function RentRollTable({
             Rent roll: one row per suite, with the suite&rsquo;s current lease where
             it has one.
           </caption>
+          {/* D5.5E: column widths declared once, here, rather than emerging
+              from whichever cell happened to demand the most room. Identifiers
+              and enums stay compact so Tenant and the actions get the space
+              they need. */}
+          <colgroup>
+            <col className="rent-roll-col-suite" />
+            <col className="rent-roll-col-area" />
+            <col className="rent-roll-col-status" />
+            <col className="rent-roll-col-tenant" />
+            <col className="rent-roll-col-expiry" />
+            <col className="rent-roll-col-rent" />
+            <col className="rent-roll-col-type" />
+            <col className="rent-roll-col-market-rent" />
+            <col className="rent-roll-col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th scope="col">Suite</th>

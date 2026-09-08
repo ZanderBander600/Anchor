@@ -2532,7 +2532,9 @@ export default function App() {
         active={workspace}
         title="Underwrite"
         subtitle="Every assumption behind the numbers, tab by tab."
-        className="workspace-panel-fill"
+        /* D5.5E: only the Lease-Level Underwrite panel widens, because only it
+         * contains a rent roll. Quick and Detailed keep their own width. */
+        className="workspace-panel-fill workspace-panel-wide"
       >
         <LeaseLevelWorkspace
           values={leaseLevel.values}

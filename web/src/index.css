@@ -90,6 +90,11 @@
   --sidebar-width-narrow: 200px;
   --sidebar-width-rail: 64px;
   --workspace-max: 1360px;
+  /* D5.5E: the wider region a rent roll earns. Scalar assumption forms stay
+     at `--workspace-max`, where a column of labelled inputs is comfortable
+     to read; a nine-column grid is not, and Human Pass #1 found it scrolling
+     horizontally while hundreds of pixels sat unused beside it. */
+  --workspace-wide: 1800px;
 
   color-scheme: light;
 }
@@ -2051,6 +2056,12 @@ body {
   margin: 0 auto;
 }
 
+/* Opted into by the Lease-Level Underwrite panel alone. Quick and Detailed
+   never receive it, so their layout is untouched. */
+.workspace-panel-wide {
+  max-width: var(--workspace-wide);
+}
+
 .workspace-panel-head {
   margin-bottom: var(--sp-5);
 }
@@ -3543,4 +3554,105 @@ body {
 .suite-editor-banner-lead {
   margin: 0 0 0.4rem;
   font-size: 0.82rem;
+}
+
+/* ==========================================================================
+   D5.5E -- desktop space utilisation.
+
+   The rent roll widens; the scalar assumption forms deliberately do not. The
+   asymmetry is the point: a nine-column grid wants the desk, a column of
+   labelled inputs wants a readable measure.
+   ========================================================================== */
+
+/* Inside the widened Lease-Level panel, the four scalar sections stay at the
+   normal readable width rather than stretching with the grid. */
+.lease-level-scalar-panel {
+  max-width: var(--workspace-max);
+}
+
+/* Cell inputs fill the width their column is given instead of demanding a
+   uniform 7rem each -- which is what forced the table to overflow even on a
+   wide desktop, and what clipped the Delete action. */
+.rent-roll-input {
+  min-width: 0;
+  width: 100%;
+}
+
+.rent-roll-table {
+  table-layout: fixed;
+}
+
+/* Column widths sized to their content: identifiers and enums stay compact,
+   free text gets the room. Percentages of the table, so the grid stays fluid
+   rather than pinned to a pixel measurement that only suits one screen. */
+.rent-roll-col-suite {
+  width: 9%;
+}
+.rent-roll-col-area {
+  width: 9%;
+}
+.rent-roll-col-status {
+  width: 9%;
+}
+.rent-roll-col-tenant {
+  width: 18%;
+}
+.rent-roll-col-expiry {
+  width: 13%;
+}
+.rent-roll-col-rent {
+  width: 10%;
+}
+.rent-roll-col-type {
+  width: 12%;
+}
+.rent-roll-col-market-rent {
+  width: 11%;
+}
+.rent-roll-col-actions {
+  width: 9%;
+}
+
+/* The sticky suite column needs an opaque background and a visible edge, or
+   the cells scrolling beneath it read as overlapping it. */
+.rent-roll-table thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--color-surface);
+}
+
+.rent-roll-table th[scope='row'],
+.rent-roll-table thead th:first-child {
+  box-shadow: 1px 0 0 var(--color-divider);
+}
+
+/* Details and Delete sit side by side and must both stay legible. */
+.rent-roll-actions {
+  display: flex;
+  gap: 0.25rem;
+  align-items: flex-start;
+}
+
+.rent-roll-actions .btn {
+  padding-left: 0.4rem;
+  padding-right: 0.4rem;
+}
+
+/* The drawer uses the same widened region, but its own controls keep a sane
+   measure -- the goal is to use blank page space, not to grow input boxes. */
+.suite-editor .assumption-field-grid {
+  max-width: var(--workspace-max);
+}
+
+@media (max-width: 1279px) {
+  /* Below a comfortable desktop the grid returns to its natural widths and
+     scrolls horizontally, which is the right fallback rather than a redesign. */
+  .rent-roll-table {
+    table-layout: auto;
+  }
+
+  .rent-roll-input {
+    min-width: 7rem;
+  }
 }

@@ -411,7 +411,7 @@ describe('entering Lease-Level mode', () => {
     await user.click(screen.getByRole('tab', { name: 'Lease-Level Underwrite' }));
     await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
 
-    expect(field('purchasePrice').value).toBe('12345');
+    expect(field('purchasePrice').value).toBe('12,345');
   });
 });
 
@@ -435,9 +435,9 @@ describe('scalar manual entry', () => {
     await user.type(field(MARKET_RENT), '34.5');
 
     await user.click(section('Acquisition & Debt'));
-    expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+    expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     await user.click(section('Property'));
-    expect(field('lease-level-property-rentableAreaSf').value).toBe('62000');
+    expect(field('lease-level-property-rentableAreaSf').value).toBe('62,000');
   });
 
   it('gives Analysis Start Date a real date control, and sends it unchanged', async () => {
@@ -500,7 +500,7 @@ describe('opening a saved Lease-Level deal', () => {
     const user = await openSavedDeal();
 
     await waitFor(() => {
-      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
     expect(field('lease-level-terms-exitCapRate').value).toBe('6.25');
 
@@ -508,10 +508,10 @@ describe('opening a saved Lease-Level deal', () => {
     expect(field('lease-level-property-analysisStartDate').value).toBe(
       '2027-01-01',
     );
-    expect(field('lease-level-property-rentableAreaSf').value).toBe('62000');
+    expect(field('lease-level-property-rentableAreaSf').value).toBe('62,000');
 
     await user.click(section('Operating'));
-    expect(field('lease-level-operating-propertyTaxes').value).toBe('410000');
+    expect(field('lease-level-operating-propertyTaxes').value).toBe('410,000');
     expect(field('lease-level-operating-managementFeePct').value).toBe('3');
 
     await user.click(section('Market Leasing'));
@@ -546,7 +546,7 @@ describe('opening a saved Lease-Level deal', () => {
     // local UI identity and never leaves the browser.
     expect((within(rows[0]).getByLabelText(/^Suite, /) as HTMLInputElement).value).toBe('100');
     expect((within(rows[0]).getByLabelText(/^Area SF, /) as HTMLInputElement).value).toBe(
-      '18400',
+      '18,400',
     );
     expect((within(rows[0]).getByLabelText(/^Tenant, /) as HTMLInputElement).value).toBe(
       'Marlow Provisions',
@@ -599,7 +599,7 @@ describe('the held rent roll', () => {
     const user = await openSavedDeal();
 
     await waitFor(() => {
-      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
     await user.clear(field(TERMS_PURCHASE_PRICE));
     await user.type(field(TERMS_PURCHASE_PRICE), '44000000');
@@ -620,7 +620,7 @@ describe('the held rent roll', () => {
     const user = await openSavedDeal();
 
     await waitFor(() => {
-      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
     await user.click(section('Market Leasing'));
     await user.clear(field(MARKET_RENT));
@@ -644,7 +644,7 @@ describe('the held rent roll', () => {
     const user = await openSavedDeal();
 
     await waitFor(() => {
-      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
     await user.clear(field(TERMS_PURCHASE_PRICE));
     await user.type(field(TERMS_PURCHASE_PRICE), '44000000');
@@ -757,7 +757,7 @@ describe('validation surfacing', () => {
     mockAnalyze.mockRejectedValue(new LeaseLevelApiError('refused', termsIssues, leaseIssues));
     const user = await openSavedDeal();
     await waitFor(() => {
-      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
     await user.click(analyzeButton());
     await waitFor(() => {
@@ -855,7 +855,7 @@ describe('validation surfacing', () => {
     mockAnalyze.mockRejectedValue(new ApiError('Could not reach the Anchor API.'));
     const user = await openSavedDeal();
     await waitFor(() => {
-      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
     await user.click(analyzeButton());
 
@@ -894,7 +894,7 @@ describe('save status', () => {
     );
     const user = await openSavedDeal();
     await waitFor(() => {
-      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
 
     await user.clear(field(TERMS_PURCHASE_PRICE));
@@ -909,7 +909,7 @@ describe('save status', () => {
   it('marks the deal dirty when a scalar changes', async () => {
     const user = await openSavedDeal();
     await waitFor(() => {
-      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
     expect(document.querySelector('.save-status')?.textContent).toMatch(/Saved/i);
 
@@ -948,7 +948,7 @@ describe('mutation kills', () => {
     mockAnalyze.mockRejectedValue(new LeaseLevelApiError('refused', [], issues));
     const user = await openSavedDeal();
     await waitFor(() => {
-      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
     await user.click(analyzeButton());
     await waitFor(() => {
@@ -1045,7 +1045,7 @@ describe('mutation kills', () => {
     mockAnalyze.mockResolvedValue(leaseLevelResults());
     const user = await openSavedDeal();
     await waitFor(() => {
-      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42500000');
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
     await user.click(analyzeButton());
 

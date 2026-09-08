@@ -1289,6 +1289,16 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "web/src/leaseLevelIssues.ts",
         "web/src/components/RentRollTable.tsx",
         "web/src/components/SuiteLeaseEditor.tsx",
+        # D5.5D -- a shared test fixture. Named without ``.test.`` because two
+        # test files import it, so the extension filter above does not catch it.
+        "web/src/hiddenIssuesFixture.ts",
+        # D5.5E -- display-only thousands grouping. Two new modules, both pure
+        # presentation: the formatter is string-in/string-out and parses no
+        # number, and the input it feeds performs no arithmetic. They are shared
+        # by all three modes deliberately, which is why they are their own
+        # primitive rather than a change to any mode's form.
+        "web/src/numberFormat.ts",
+        "web/src/components/NumericInput.tsx",
     }
     unexpected_web = {
         path
