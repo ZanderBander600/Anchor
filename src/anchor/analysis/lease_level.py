@@ -71,6 +71,8 @@ from ..leasing import (
     require_valid_initial_vacancy_inputs,
     require_valid_lease_level_acquisition_leases,
     require_valid_lease_level_inputs,
+    require_valid_recovery_inputs,
+    require_valid_successor_recovery_assumptions,
     suite_operating_projection,
     suite_recovery_projection,
 )
@@ -102,27 +104,41 @@ def analyze_lease_level_acquisition_with_projection(
        *known* lease per suite, because one suite yields one authoritative
        chain. Sequential and committed future known leases are rejected too,
        not silently dropped.
-    4. **Build the canonical timeline** -- ``12H + 12`` months from the one D1
+    4. **Validate successor recovery terms** (D3.3) on the property default
+       and on every suite's full override, through
+       ``require_valid_successor_recovery_assumptions`` -- the D3 authority,
+       called here rather than restated. Each record is checked on the same
+       ``path`` the D1/D2 market validator already uses for its non-recovery
+       fields, so one record reports under one name. Validated before any
+       rollover is built, because a successor's recovery terms are an analyst
+       input like any other.
+    5. **Build the canonical timeline** -- ``12H + 12`` months from the one D1
        calendar builder. No month arithmetic happens in this module.
-    5. **Build one full leasing chain per suite.** An occupied suite goes
+    6. **Build one full leasing chain per suite.** An occupied suite goes
        through ``build_recursive_rollover``; a suite vacant at the analysis
        start through ``build_initial_vacancy_rollover``, which covers both
        ``HOLD_VACANT`` (an explicit all-zero chain) and ``MARKET_LEASE_UP``.
        A branch, a successor contribution or a first-rollover-only result is
        never used as property authority.
-    6. **Build the monthly property expense schedule** (D4.1).
-    7. **Build the recoverable expense pool** from that same completed schedule
+    7. **Build the monthly property expense schedule** (D4.1).
+    8. **Build the recoverable expense pool** from that same completed schedule
        -- **exactly one pool exists** for the whole analysis, and every suite's
        recoveries consume it.
-    8. **Attach recoveries** to each chain through the matching D3 builder, all
-       against that one pool.
-    9. **Aggregate** the suite leasing projections (D4.2) and the suite
-       recovery projections (D3.5) into their property schedules.
-    10. **Compose the monthly statement** (D4.3) and **derive the annual view**
+    9. **Validate the in-place leases' recovery terms against that pool**
+       (D3.1) through ``require_valid_recovery_inputs`` -- again the existing
+       authority, and the precondition ``build_lease_recovery_schedule``'s own
+       docstring names. It runs here rather than with the other input
+       validation only because it also checks the pool's domain and its
+       alignment to the canonical timeline, which requires the pool to exist.
+    10. **Attach recoveries** to each chain through the matching D3 builder,
+        all against that one pool.
+    11. **Aggregate** the suite leasing projections (D4.2) and the suite
+        recovery projections (D3.5) into their property schedules.
+    12. **Compose the monthly statement** (D4.3) and **derive the annual view**
         (D4.4).
-    11. **Refuse a non-positive forward exit NOI** (HD-D4-7) -- before the
+    13. **Refuse a non-positive forward exit NOI** (HD-D4-7) -- before the
         shared engine is touched.
-    12. **Assemble the generic ``OperatingCapitalSchedule``** directly from the
+    14. **Assemble the generic ``OperatingCapitalSchedule``** directly from the
         annual projection's hold-period TI and LC arrays, and call the shared
         engine.
 
@@ -139,8 +155,20 @@ def analyze_lease_level_acquisition_with_projection(
 
     Validation order is deterministic and upstream-first: a malformed rent roll
     surfaces before an initial-vacancy defect, which surfaces before a
-    suite/lease association defect, and all of them before the terminal-value
-    check -- so a bad lease is never reported as a valuation problem.
+    suite/lease association defect, which surfaces before a successor recovery
+    defect, and all of them before the terminal-value check -- so a bad lease is
+    never reported as a valuation problem.
+
+    **Every recovery builder's stated precondition is now actually met here.**
+    ``recoveries.py`` documents ``require_valid_recovery_inputs`` and
+    ``require_valid_successor_recovery_assumptions`` as preconditions and keeps
+    a defensive ``ValueError`` for callers that ignore them. Until D5.5C this
+    module ignored them: an analyst-invalid recovery contract -- a
+    ``MODIFIED_GROSS`` lease with no stop, an ``NNN`` lease carrying one --
+    passed every validator above and tripped that defensive guard, which the API
+    surfaces as a 500 rather than as the structured issue the leasing package
+    had known how to emit all along. The guards remain; they are simply no
+    longer reachable from analyst input.
 
     Raises ``anchor.leasing.LeaseValidationError`` on any leasing-scoped
     failure, including the terminal-value refusal. Nothing partially populated
@@ -163,13 +191,37 @@ def analyze_lease_level_acquisition_with_projection(
     )
     require_valid_lease_level_acquisition_leases(suite_tuple, lease_tuple)
 
-    # --- 4. the one canonical timeline ----------------------------------
+    # --- 4. successor recovery terms, on every record that can supply them ---
+    #
+    # The property default and each suite's full override are both complete
+    # `MarketLeasingAssumptions`, and either can carry an invalid successor
+    # recovery contract. Both are checked, on the same paths
+    # `validate_lease_level_inputs` already uses for the non-recovery fields of
+    # the same records -- so one record reports under one name whichever
+    # validator found the defect.
+    #
+    # Every override is validated whether or not this particular roll resolves
+    # to it, exactly as the D1/D2 market validator above already does: the
+    # record is a declared input of the deal, not a conditional one.
+    #
+    # This also covers D3.6's first tenant, which reuses the new-tenant branch
+    # of whichever record its suite resolves to rather than stating recovery
+    # terms of its own.
+    require_valid_successor_recovery_assumptions(market_leasing)
+    for index, suite in enumerate(suite_tuple):
+        if suite.market_leasing_override is not None:
+            require_valid_successor_recovery_assumptions(
+                suite.market_leasing_override,
+                path=f"suites[{index}].market_leasing_override",
+            )
+
+    # --- 5. the one canonical timeline ----------------------------------
     months = build_model_months(
         analysis_start=property_inputs.analysis_start_date,
         hold_period=terms.hold_period,
     )
 
-    # --- 5. one authoritative full chain per suite ----------------------
+    # --- 6. one authoritative full chain per suite ----------------------
     lease_for_suite = {lease.suite_id: lease for lease in lease_tuple}
     chains: list[tuple[Suite, RecursiveRollover | InitialVacancyRollover]] = []
     for suite in suite_tuple:
@@ -193,7 +245,7 @@ def analyze_lease_level_acquisition_with_projection(
             )
         chains.append((suite, chain))
 
-    # --- 6-7. property expenses, then THE pool --------------------------
+    # --- 7-8. property expenses, then THE pool --------------------------
     expense_schedule = build_property_expense_schedule(
         operating_inputs, months=months
     )
@@ -202,7 +254,15 @@ def analyze_lease_level_acquisition_with_projection(
         recoverable_expense_ratio=operating_inputs.recoverable_expense_ratio,
     )
 
-    # --- 8. recoveries, every chain against that one pool ---------------
+    # --- 9. the in-place leases' own recovery contracts ---------------------
+    #
+    # `build_lease_recovery_schedule` names this call as its precondition. It
+    # sits here rather than with the input validation above because it also
+    # checks the pool's domain and its identity against the canonical
+    # timeline -- neither of which can be asked before the pool exists.
+    require_valid_recovery_inputs(lease_tuple, pool, months=months)
+
+    # --- 10. recoveries, every chain against that one pool --------------
     recovery_projections = []
     for suite, chain in chains:
         if isinstance(chain, RecursiveRollover):
@@ -225,7 +285,7 @@ def analyze_lease_level_acquisition_with_projection(
             )
         recovery_projections.append(suite_recovery_projection(recovery))
 
-    # --- 9. property aggregation ----------------------------------------
+    # --- 11. property aggregation ---------------------------------------
     operating_schedule = build_property_operating_schedule(
         [suite_operating_projection(suite, chain) for suite, chain in chains],
         suite_tuple,

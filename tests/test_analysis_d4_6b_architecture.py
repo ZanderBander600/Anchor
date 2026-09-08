@@ -27,6 +27,7 @@ proven rather than asserted.
 from __future__ import annotations
 
 import ast
+import collections
 import dataclasses
 import os
 import subprocess
@@ -1026,6 +1027,65 @@ def test_g37_analysis_break_even_is_byte_identical_since_d4_6a() -> None:
     assert changed == [], f"analysis/break_even.py changed: {changed}"
 
 
+def _pipeline_call_names(source: str, function: str) -> list[str]:
+    """The ordered names of every function one named function calls."""
+
+    tree = ast.parse(source)
+    target = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == function
+    )
+    names: list[str] = []
+    for node in ast.walk(target):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        if isinstance(callee, ast.Name):
+            names.append(callee.id)
+        elif isinstance(callee, ast.Attribute):
+            names.append(callee.attr)
+    return names
+
+
+def _assert_lease_level_pipeline_only_gained_validators() -> None:
+    """D5.5C added validator calls to the Lease-Level orchestration and nothing
+    else. Proved by differencing the multiset of calls it makes, then checking
+    that every builder call survives in its original relative order."""
+
+    before = subprocess.run(
+        ["git", "show", f"{_D4_6A_COMMIT}:src/anchor/analysis/lease_level.py"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=_PROJECT_ROOT,
+    ).stdout
+    after = (
+        _PROJECT_ROOT / "src" / "anchor" / "analysis" / "lease_level.py"
+    ).read_text(encoding="utf-8")
+
+    function = "analyze_lease_level_acquisition_with_projection"
+    old_calls = _pipeline_call_names(before, function)
+    new_calls = _pipeline_call_names(after, function)
+
+    added = collections.Counter(new_calls) - collections.Counter(old_calls)
+    removed = collections.Counter(old_calls) - collections.Counter(new_calls)
+
+    assert removed == collections.Counter(), (
+        f"D5.5C removed calls from the Lease-Level pipeline: {sorted(removed)}"
+    )
+    assert set(added) <= {
+        "require_valid_recovery_inputs",
+        "require_valid_successor_recovery_assumptions",
+        # The loop that reaches each suite's override.
+        "enumerate",
+    }, f"D5.5C added a non-validator call: {sorted(added)}"
+
+    # And the surviving calls keep their relative order, so no builder moved.
+    surviving = [name for name in new_calls if name in set(old_calls)]
+    assert surviving == old_calls, "D5.5C reordered the Lease-Level pipeline"
+
+
 def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> None:
     """**Narrowed at D5.1A -- and not weakened.**
 
@@ -1066,7 +1126,6 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "src/anchor/leasing/rent.py",
         "src/anchor/leasing/rollover.py",
         "src/anchor/analysis/contracts.py",
-        "src/anchor/analysis/lease_level.py",
         "src/anchor/analysis/sensitivity.py",
         "src/anchor/analysis/break_even.py",
         "src/anchor/validation.py",
@@ -1112,6 +1171,39 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "web/src/api.ts changed by more than addition since D4.6A; a shipped "
         f"Quick/Detailed client function was edited: {removed[:5]}"
     )
+
+    # ``src/anchor/analysis/lease_level.py`` was byte-identical until D5.5C,
+    # which wired two *existing* recovery validators into the orchestration that
+    # had never called them. It is financial-authority-adjacent -- it sequences
+    # every builder -- so byte-identity is replaced by two claims that are
+    # together stronger than it was, rather than by a weaker file list.
+    #
+    # Claim 1: nothing executable was removed. Every deleted line is prose or a
+    # step-number comment.
+    removed = [
+        line
+        for line in subprocess.run(
+            ["git", "diff", "-U0", _D4_6A_COMMIT, "--", "src/anchor/analysis/lease_level.py"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=_PROJECT_ROOT,
+        ).stdout.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+    for line in removed:
+        body = line[1:].strip()
+        assert body == "" or body.startswith("#") or not body.endswith((")", ",", ":")), (
+            "D5.5C removed executable code from the Lease-Level orchestration: "
+            f"{line}"
+        )
+
+    # Claim 2 -- the one that matters. The ordered sequence of calls the
+    # orchestration makes is the D4.6A sequence with exactly the two validator
+    # calls inserted: no builder added, removed, reordered or replaced. A change
+    # to the analysis pipeline itself cannot hide behind a validation gate.
+    _assert_lease_level_pipeline_only_gained_validators()
+
 
     # ``lease_level_sensitivity.py`` did not exist at D4.6A -- D4.6B created it
     # -- so its baseline is the Sprint-D merge this gate branched from.
