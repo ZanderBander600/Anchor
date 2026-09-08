@@ -25,6 +25,7 @@ import {
   buildLeaseLevelInputsRequest,
   buildLeaseLevelTermsRequest,
   collectBlankScalarIssues,
+  isRowOccupied,
   wireFieldName,
 } from './leaseLevelConvert';
 import type {
@@ -91,8 +92,9 @@ const FILLED: LeaseLevelFormValues = {
     recoverableExpenseRatio: '85',
   },
   marketLeasing: MARKET_FORM,
-  suites: [],
-  leases: [],
+  rentRoll: [],
+  leaseOrder: [],
+  unmatchedLeases: [],
 };
 
 const SAVED_DEAL: LeaseLevelDealFields = {
@@ -100,13 +102,25 @@ const SAVED_DEAL: LeaseLevelDealFields = {
   property_inputs: { analysis_start_date: '2027-01-01', rentable_area_sf: 62_000 },
   operating_inputs: buildLeaseLevelInputsRequest(FILLED).operating_inputs,
   market_leasing: buildLeaseLevelInputsRequest(FILLED).market_leasing,
+  // Deliberately mixed, and internally consistent: an occupied suite carrying a
+  // full override, and a vacant one on MARKET_LEASE_UP. D5.5A's fixture had a
+  // lease naming a suite that was not in the roll, which nothing joined the two
+  // to notice; folding them into rows does.
   suites: [
+    {
+      suite_id: '100',
+      suite_area_sf: 18_400,
+      suite_label: null,
+      market_rent_psf: 38.75,
+      market_leasing_override: buildLeaseLevelInputsRequest(FILLED).market_leasing,
+      initial_vacancy: null,
+    },
     {
       suite_id: '300',
       suite_area_sf: 12_000,
       suite_label: 'Suite 300',
       market_rent_psf: null,
-      market_leasing_override: buildLeaseLevelInputsRequest(FILLED).market_leasing,
+      market_leasing_override: null,
       initial_vacancy: { strategy: 'market_lease_up', initial_lease_up_months: 8 },
     },
   ],
@@ -254,31 +268,79 @@ describe('the analysis start date', () => {
 // 4. The rent roll passes through untouched
 // =============================================================================
 
-describe('the held rent roll', () => {
-  it('passes suites and leases through by value, not by re-encoding', () => {
-    const values: LeaseLevelFormValues = {
-      ...FILLED,
-      suites: SAVED_DEAL.suites,
-      leases: SAVED_DEAL.leases,
-    };
-    const inputs = buildLeaseLevelInputsRequest(values);
+/**
+ * D5.5B transition. D5.5A asserted the rent roll passed through *by value*,
+ * which was the right protection while nothing could edit it. Now it is folded
+ * into editable rows and unfolded again, so the successor invariant is stronger
+ * and stated directly: **fold then unfold reproduces the rent roll exactly**.
+ */
+describe('the rent roll round-trips through the editable form', () => {
+  it('reproduces suites and leases byte-for-byte with no edits', () => {
+    const form = buildLeaseLevelFormValues(SAVED_DEAL, TERMS_FORM);
+    const inputs = buildLeaseLevelInputsRequest(form);
     expect(inputs.suites).toEqual(SAVED_DEAL.suites);
     expect(inputs.leases).toEqual(SAVED_DEAL.leases);
   });
 
-  it('reopens a saved rent roll unchanged, including a whole override', () => {
+  it('keeps a whole suite override intact', () => {
     const form = buildLeaseLevelFormValues(SAVED_DEAL, TERMS_FORM);
-    expect(form.suites).toEqual(SAVED_DEAL.suites);
-    expect(form.leases).toEqual(SAVED_DEAL.leases);
-    // All-or-nothing by design: every field of the override survives, or the
-    // override is absent. A partial one is not representable.
-    expect(form.suites[0].market_leasing_override).toEqual(SAVED_DEAL.market_leasing);
+    // All-or-nothing by design: every field survives, or the override is
+    // absent. A partial one is not representable.
+    expect(form.rentRoll[0].marketLeasingOverrideEnabled).toBe(true);
+    const inputs = buildLeaseLevelInputsRequest(form);
+    expect(inputs.suites[0].market_leasing_override).toEqual(SAVED_DEAL.market_leasing);
+  });
+
+  it('preserves lease order that does not follow suite order', () => {
+    // The backend preserves the `leases` array order independently of `suites`
+    // order -- verified against the live API. Folding leases into suite rows and
+    // unfolding them in row order would silently reorder a saved roll on
+    // open-and-save, which is normalization by opening.
+    const reordered: LeaseLevelDealFields = {
+      ...SAVED_DEAL,
+      suites: [
+        SAVED_DEAL.suites[0],
+        { ...SAVED_DEAL.suites[0], suite_id: 'B', market_leasing_override: null },
+      ],
+      // Second suite's lease first: an order the backend preserves and this
+      // must not normalise.
+      leases: [
+        { ...SAVED_DEAL.leases[0], lease_id: 'L-B', suite_id: 'B' },
+        SAVED_DEAL.leases[0],
+      ],
+    };
+    const inputs = buildLeaseLevelInputsRequest(
+      buildLeaseLevelFormValues(reordered, TERMS_FORM),
+    );
+    expect(inputs.leases.map((lease) => lease.lease_id)).toEqual(['L-B', 'L-100']);
+  });
+
+  it('derives occupancy from the lease, with no status field of its own', () => {
+    const form = buildLeaseLevelFormValues(SAVED_DEAL, TERMS_FORM);
+    expect(isRowOccupied(form.rentRoll[0])).toBe(true);
+    expect(form.rentRoll[0].lease?.leaseId).toBe('L-100');
+  });
+
+  it('keeps a lease no row could claim, rather than dropping it', () => {
+    // Neither a second lease on one suite nor one naming a missing suite can be
+    // created here or saved through the D5.4 endpoints, so this is corrupt or
+    // externally-written data. Silently discarding it would repair persisted
+    // data behind the analyst's back and hide the backend issue.
+    const corrupt: LeaseLevelDealFields = {
+      ...SAVED_DEAL,
+      leases: [SAVED_DEAL.leases[0], { ...SAVED_DEAL.leases[0], lease_id: 'L-100b' }],
+    };
+    const form = buildLeaseLevelFormValues(corrupt, TERMS_FORM);
+    expect(form.unmatchedLeases.map((lease) => lease.lease_id)).toEqual(['L-100b']);
+    const inputs = buildLeaseLevelInputsRequest(form);
+    expect(inputs.leases.map((lease) => lease.lease_id)).toEqual(['L-100', 'L-100b']);
   });
 
   it('copies the arrays rather than aliasing the response', () => {
     const form = buildLeaseLevelFormValues(SAVED_DEAL, TERMS_FORM);
-    expect(form.suites).not.toBe(SAVED_DEAL.suites);
-    expect(form.leases).not.toBe(SAVED_DEAL.leases);
+    const inputs = buildLeaseLevelInputsRequest(form);
+    expect(inputs.suites).not.toBe(SAVED_DEAL.suites);
+    expect(inputs.leases).not.toBe(SAVED_DEAL.leases);
   });
 });
 
@@ -469,19 +531,24 @@ describe('mutation kills', () => {
   });
 
   it('M24: a suite dropped or reordered on the way out is caught', () => {
-    const suites = [
-      { ...SAVED_DEAL.suites[0], suite_id: 'A' },
-      { ...SAVED_DEAL.suites[0], suite_id: 'B' },
-      { ...SAVED_DEAL.suites[0], suite_id: 'C' },
-    ];
-    const inputs = buildLeaseLevelInputsRequest({ ...FILLED, suites });
+    const form = buildLeaseLevelFormValues(SAVED_DEAL, TERMS_FORM);
+    const rentRoll = ['A', 'B', 'C'].map((suiteId) => ({
+      ...form.rentRoll[0],
+      rowId: `r-${suiteId}`,
+      suiteId,
+      lease: null,
+      initialVacancy: { strategy: 'hold_vacant', initialLeaseUpMonths: '' },
+    }));
+    const inputs = buildLeaseLevelInputsRequest({ ...FILLED, rentRoll });
     expect(inputs.suites.map((suite) => suite.suite_id)).toEqual(['A', 'B', 'C']);
   });
 
   it('M25: an override flattened into the property default is caught', () => {
     const form = buildLeaseLevelFormValues(SAVED_DEAL, TERMS_FORM);
-    const mutatedDefault = { ...FILLED, marketLeasing: { ...MARKET_FORM, marketRentPsf: '99' } };
-    const inputs = buildLeaseLevelInputsRequest({ ...mutatedDefault, suites: form.suites });
+    const inputs = buildLeaseLevelInputsRequest({
+      ...form,
+      marketLeasing: { ...MARKET_FORM, marketRentPsf: '99' },
+    });
     expect(inputs.market_leasing.market_rent_psf).toBe(99);
     expect(inputs.suites[0].market_leasing_override?.market_rent_psf).toBe(34.5);
   });
@@ -492,7 +559,7 @@ describe('mutation kills', () => {
         expect(value, `${group}.${key} is seeded with ${String(value)}`).toBe('');
       }
     }
-    expect(BLANK_LEASE_LEVEL_FORM_VALUES.suites).toEqual([]);
-    expect(BLANK_LEASE_LEVEL_FORM_VALUES.leases).toEqual([]);
+    expect(BLANK_LEASE_LEVEL_FORM_VALUES.rentRoll).toEqual([]);
+    expect(BLANK_LEASE_LEVEL_FORM_VALUES.unmatchedLeases).toEqual([]);
   });
 });

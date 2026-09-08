@@ -1191,6 +1191,12 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "web/src/api.ts",
         "web/src/index.css",
         "web/src/components/AssumptionFieldGrid.tsx",
+        # D5.5B -- the rent-roll editor. Three new modules no other mode reads,
+        # and no further shipped file touched: the gate that makes suites and
+        # leases editable adds components rather than reworking the shell.
+        "web/src/leaseLevelIssues.ts",
+        "web/src/components/RentRollTable.tsx",
+        "web/src/components/SuiteLeaseEditor.tsx",
     }
     unexpected_web = {
         path

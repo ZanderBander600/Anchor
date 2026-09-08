@@ -285,8 +285,9 @@ const FILLED_FORM_VALUES: LeaseLevelFormValues = {
     newRecoveryBasis: '',
     newExpenseStopPsf: '',
   },
-  suites: [],
-  leases: [],
+  rentRoll: [],
+  leaseOrder: [],
+  unmatchedLeases: [],
 };
 
 function leaseLevelResults(): LeaseLevelAcquisitionResults {
@@ -385,8 +386,8 @@ describe('entering Lease-Level mode', () => {
     // The one assertion that matters most: no fabricated rent roll. A seeded
     // suite would let a blank deal analyze, and would be an assumption nobody
     // made presented as one they did.
-    expect(BLANK_LEASE_LEVEL_FORM_VALUES.suites).toEqual([]);
-    expect(BLANK_LEASE_LEVEL_FORM_VALUES.leases).toEqual([]);
+    expect(BLANK_LEASE_LEVEL_FORM_VALUES.rentRoll).toEqual([]);
+    expect(BLANK_LEASE_LEVEL_FORM_VALUES.unmatchedLeases).toEqual([]);
   });
 
   it('leaves every enum unselected rather than choosing an assumption', async () => {
@@ -529,20 +530,33 @@ describe('opening a saved Lease-Level deal', () => {
     expect(field('lease-level-market-renewalRecoveryBasis').value).toBe('');
   });
 
-  it('hydrates the rent roll, including both vacancy strategies', async () => {
+  it('hydrates the rent roll into one row per suite', async () => {
+    // D5.5B transition: D5.5A showed counts because it had no grid. The
+    // successor assertion is the grid itself -- a row per suite, each carrying
+    // its own lease or none.
     const user = await openSavedDeal();
     await user.click(section('Rent Roll'));
 
     const panel = document.getElementById('lease-level-panel-rent-roll') as HTMLElement;
-    expect(within(panel).getByText('4')).toBeTruthy();
-    expect(within(panel).getByText('2')).toBeTruthy();
+    const rows = within(panel).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(SUITES.length);
 
-    // The rows themselves round-trip verbatim on the next submit -- proved
-    // below by `carries the rent roll through a scalar edit`.
-    expect(SUITES.some((suite) => suite.initial_vacancy?.strategy === 'market_lease_up')).toBe(
-      true,
+    // By position, never by row id: `rowId` is a module-level counter, so it is
+    // stable within a render but not across tests -- which is exactly why it is
+    // local UI identity and never leaves the browser.
+    expect((within(rows[0]).getByLabelText(/^Suite, /) as HTMLInputElement).value).toBe('100');
+    expect((within(rows[0]).getByLabelText(/^Area SF, /) as HTMLInputElement).value).toBe(
+      '18400',
     );
-    expect(SUITES.some((suite) => suite.initial_vacancy?.strategy === 'hold_vacant')).toBe(true);
+    expect((within(rows[0]).getByLabelText(/^Tenant, /) as HTMLInputElement).value).toBe(
+      'Marlow Provisions',
+    );
+
+    // Both vacancy states are represented, and are read off the lease rather
+    // than off any status field.
+    expect(within(rows[0]).getByRole('button', { name: /is occupied/ })).toBeTruthy();
+    expect(within(rows[2]).getByRole('button', { name: /is vacant/ })).toBeTruthy();
+    expect(within(rows[3]).getByRole('button', { name: /is vacant/ })).toBeTruthy();
   });
 
   it('reads the deal name and context from the saved deal', async () => {
@@ -723,8 +737,8 @@ describe('a blank Lease-Level deal', () => {
 
     // Nothing was sent, and nothing was invented in order to send something.
     expect(mockAnalyze).not.toHaveBeenCalled();
-    expect(BLANK_LEASE_LEVEL_FORM_VALUES.suites).toEqual([]);
-    expect(BLANK_LEASE_LEVEL_FORM_VALUES.leases).toEqual([]);
+    expect(BLANK_LEASE_LEVEL_FORM_VALUES.rentRoll).toEqual([]);
+    expect(BLANK_LEASE_LEVEL_FORM_VALUES.unmatchedLeases).toEqual([]);
   });
 });
 
@@ -796,11 +810,12 @@ describe('validation surfacing', () => {
     expect(screen.getByText('must be greater than zero')).toBeTruthy();
   });
 
-  it('lists a suite issue rather than swallowing it', async () => {
-    // D5.5B anchors these to their rows. Until then they must still be
-    // readable: an unexplained refusal is worse than an awkwardly placed
-    // explanation.
-    await analyzeWithIssues([
+  it('anchors a suite issue to its row instead of listing it', async () => {
+    // D5.5B transition. D5.5A could only list these, because it had no rows to
+    // hang them on; the successor invariant is that the row claims it. The
+    // banner keeps its job for anything no row can claim -- proved by the test
+    // below and by M23.
+    const user = await analyzeWithIssues([
       {
         code: 'MULTIPLE_KNOWN_LEASES_IN_SUITE',
         path: 'suites[2]',
@@ -808,8 +823,9 @@ describe('validation surfacing', () => {
         severity: 'error',
       },
     ]);
+    await user.click(section('Rent Roll'));
+    await user.click(screen.getByRole('button', { name: /Edit details for suite 300/ }));
     expect(screen.getByText(/has more than one known lease/)).toBeTruthy();
-    expect(screen.getByText('suites[2]')).toBeTruthy();
   });
 
   it('shows a whole-submission issue that belongs to no field', async () => {

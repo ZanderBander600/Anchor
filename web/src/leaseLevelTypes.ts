@@ -323,22 +323,128 @@ export interface MarketLeasingFormValues {
   newExpenseStopPsf: string;
 }
 
+// =============================================================================
+// D5.5B -- the editable rent roll
+//
+// The transport keeps two flat arrays, `suites` and `leases`, exactly as the
+// engine contract defines them. The *form* keeps one row per suite with its
+// lease folded in, because D4 acquisition supports at most one known lease per
+// suite, so a suite-centric row matches the capability exactly and spares the
+// analyst maintaining two tables cross-referenced by hand on `suite_id`.
+//
+// This is UI composition only. Nothing about the wire contract changes, and
+// `buildLeaseLevelInputsRequest` unfolds these rows back into the two arrays.
+// =============================================================================
+
+/** One lease, as the analyst edits it.
+ *
+ * `suite_id` is deliberately absent: the row owns it, so a lease cannot come to
+ * reference a suite that is not its own, and `UNKNOWN_SUITE_REFERENCE` becomes
+ * unreachable by construction rather than by validation.
+ *
+ * `origin` is *held*, not edited. `SUCCESSOR` marks a lease the rollover engine
+ * generated -- an assumption about what follows an expiry, never a signed
+ * tenancy -- so offering it as a choice would invite an analyst to hand-enter a
+ * derived state. It is carried through unchanged so loaded data is never
+ * silently rewritten. */
+export interface LeaseFormValues {
+  leaseId: string;
+  leasedAreaSf: string;
+  tenantName: string;
+  leaseStartDate: string;
+  rentCommencementDate: string;
+  leaseExpirationDate: string;
+  baseRentPsf: string;
+  escalationPct: string;
+  escalationBasis: string;
+  leaseType: string;
+  recoveryBasis: string;
+  expenseStopPsf: string;
+  /** Held verbatim from whatever was loaded; `'in_place'` for a lease the
+   * analyst creates. Never presented as an editable control. */
+  origin: LeaseOrigin;
+}
+
+/** How one vacant suite is underwritten.
+ *
+ * `initialLeaseUpMonths` is kept even while the strategy is `hold_vacant`, where
+ * the contract requires it absent. Holding it locally means toggling the
+ * strategy twice does not destroy a number the analyst typed; the conversion
+ * drops it on the way out, so a stale value can never reach the wire. */
+export interface InitialVacancyFormValues {
+  strategy: string;
+  initialLeaseUpMonths: string;
+}
+
+/**
+ * One rent-roll row: a suite, and the one lease it may carry.
+ *
+ * **Occupancy has no field of its own.** A row is occupied exactly when
+ * `lease !== null`, which is the same rule the engine applies (a vacant suite is
+ * a suite no lease covers, never a synthetic vacant-lease row). An
+ * `occupied: true` flag would be a second authority that could disagree with the
+ * lease it describes.
+ *
+ * Three pieces of state are deliberately kept while inactive, because the
+ * contract cannot represent them and losing them would punish an analyst for
+ * toggling a control: `initialVacancy` while the row is occupied,
+ * `initialLeaseUpMonths` while the strategy is `hold_vacant`, and
+ * `marketLeasingOverride` while `marketLeasingOverrideEnabled` is false. The
+ * conversion submits `null` for each, so no dormant value ever reaches the wire.
+ */
+export interface SuiteRowFormValues {
+  /** Local UI identity. Never submitted, never persisted, never fingerprinted,
+   * and never an underwriting assumption -- it exists only because `suiteId` is
+   * an analyst-editable field that is legitimately blank or duplicated while a
+   * row is being typed, and React needs a stable key that is none of those
+   * things. */
+  rowId: string;
+  suiteId: string;
+  suiteAreaSf: string;
+  suiteLabel: string;
+  marketRentPsf: string;
+  lease: LeaseFormValues | null;
+  initialVacancy: InitialVacancyFormValues;
+  marketLeasingOverrideEnabled: boolean;
+  marketLeasingOverride: MarketLeasingFormValues;
+}
+
 /**
  * Everything a Lease-Level deal holds while it is being edited.
  *
- * `suites` and `leases` are kept as **transport** values rather than form
- * values. D5.5A does not edit them, and converting a loaded rent roll into
- * editable strings and back would risk changing it on a screen that never shows
- * it. D5.5B introduces their form representation together with the editors that
- * justify one.
+ * **Changed at D5.5B.** D5.5A held `suites` and `leases` as transport values and
+ * passed them through untouched, because it had no editor and converting a
+ * loaded rent roll into strings and back would have risked altering it on a
+ * screen that never showed it. D5.5B has the editor, so the rows become form
+ * values -- and the protection D5.5A bought with pass-through is now bought by a
+ * stronger, directly tested claim: a loaded deal opened and saved with no edits
+ * round-trips byte-identically through the form.
  */
 export interface LeaseLevelFormValues {
   terms: import('./types').AcquisitionTermsFormValues;
   property: LeaseLevelPropertyFormValues;
   operating: LeaseLevelOperatingFormValues;
   marketLeasing: MarketLeasingFormValues;
-  suites: SuiteRequest[];
-  leases: LeaseRequest[];
+  rentRoll: SuiteRowFormValues[];
+  /** Lease ids in the order the loaded deal carried them.
+   *
+   * The transport's `leases` array order is independent of `suites` order and
+   * the backend preserves it exactly (verified against the live API), so folding
+   * leases into suite rows and unfolding them in row order would silently
+   * reorder a saved rent roll on open-and-save. This replays the loaded order;
+   * leases not named here -- new ones, and ones whose id was retyped -- follow in
+   * row order. It carries no economics and is never submitted. */
+  leaseOrder: string[];
+  /** Leases a loaded deal carried that no suite row could claim: a second lease
+   * on one suite, or one naming a suite that is not in the roll.
+   *
+   * Neither can be created here and neither can be saved through the D5.4
+   * endpoints, which refuse both -- so this is corrupt or externally-written
+   * data. It is resubmitted **verbatim** rather than dropped, so the backend
+   * still reports `MULTIPLE_KNOWN_LEASES_IN_SUITE` or
+   * `UNKNOWN_SUITE_REFERENCE` on it. Quietly discarding the extra lease would
+   * repair persisted data behind the analyst's back and hide a real defect. */
+  unmatchedLeases: LeaseRequest[];
 }
 
 /** A saved Lease-Level deal as `GET /deals/{id}` returns it. */

@@ -2548,6 +2548,20 @@ export default function App() {
           leaseIssues={leaseLevel.leaseIssues}
           termsIssues={leaseLevel.termsIssues}
           error={leaseLevel.error}
+          issuesByRow={leaseLevel.issuesByRow}
+          area={leaseLevel.area}
+          editorRowId={leaseLevel.editorRowId}
+          onOpenEditor={leaseLevel.openEditor}
+          onCloseEditor={leaseLevel.closeEditor}
+          onAddRow={leaseLevel.addRow}
+          onDeleteRow={leaseLevel.deleteRow}
+          onSuiteFieldChange={leaseLevel.updateSuiteField}
+          onLeaseFieldChange={leaseLevel.updateLeaseField}
+          onVacancyFieldChange={leaseLevel.updateVacancyField}
+          onOverrideFieldChange={leaseLevel.updateOverrideField}
+          onToggleOverride={leaseLevel.toggleOverride}
+          onToggleOccupancy={leaseLevel.toggleOccupancy}
+          onUseSuiteArea={leaseLevel.useSuiteArea}
         />
       </WorkspacePanel>
 

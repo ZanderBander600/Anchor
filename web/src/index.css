@@ -3283,3 +3283,257 @@ body {
   font-variant-numeric: tabular-nums;
   color: var(--color-text);
 }
+
+/* ==========================================================================
+   D5.5B -- the rent roll.
+
+   Additive only. One primary grid, one row per suite, plus the advanced
+   editor beside it. Nothing above is edited: Quick and Detailed render
+   byte-identically to before.
+   ========================================================================== */
+
+.rent-roll-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* Area reconciliation: the D5.0 display-only carve-out. Styled as an entry
+   aid, deliberately not as a validation result -- the backend owns that. */
+.area-reconciliation {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  padding: var(--sp-3);
+}
+
+.area-reconciliation-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+  margin: 0;
+}
+
+.area-reconciliation-figures div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.area-reconciliation-figures dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.area-reconciliation-figures dd {
+  margin: 0;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.area-reconciliation-note {
+  margin: var(--sp-2) 0 0;
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+
+.area-reconciliation-note-warn {
+  color: var(--color-negative);
+}
+
+.rent-roll-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.rent-roll-table th[scope='col'] {
+  text-align: left;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 2px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.rent-roll-table td,
+.rent-roll-table th[scope='row'] {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--color-divider);
+  vertical-align: top;
+  font-weight: 400;
+  text-align: left;
+}
+
+/* The suite identifier stays put while the rest of the row scrolls. */
+.rent-roll-table th[scope='row'] {
+  position: sticky;
+  left: 0;
+  background: var(--color-surface);
+  z-index: 1;
+}
+
+.rent-roll-row-error th[scope='row'] {
+  background: var(--danger-soft);
+}
+
+.rent-roll-input {
+  width: 100%;
+  min-width: 7rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  font-size: 0.85rem;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.rent-roll-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(22, 50, 79, 0.12);
+}
+
+.rent-roll-input[aria-invalid='true'] {
+  border-color: var(--color-negative);
+}
+
+.rent-roll-empty {
+  color: var(--color-text-muted);
+}
+
+/* Occupied / vacant. The word is always rendered, so the state is never
+   carried by colour alone. */
+.status-pill {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.status-occupied {
+  background: var(--color-positive-bg);
+  border-color: #b9e2c6;
+  color: var(--color-positive);
+}
+
+.status-vacant {
+  background: var(--color-surface-muted, #f1f2f4);
+  color: var(--color-text-muted);
+}
+
+.status-pill:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.rent-roll-actions {
+  white-space: nowrap;
+}
+
+.rent-roll-flag {
+  display: inline-block;
+  margin-left: 0.3rem;
+  color: var(--color-negative);
+  font-weight: 700;
+}
+
+.rent-roll-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin-top: var(--sp-3);
+}
+
+.rent-roll-note {
+  margin: 0;
+  max-width: 52ch;
+}
+
+/* The advanced editor. A panel beside the grid rather than a modal: entering
+   thirty suites through five modals apiece is sixty open/save cycles. */
+.suite-editor {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.suite-editor-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  border-bottom: 1px solid var(--color-divider);
+  padding-bottom: var(--sp-2);
+}
+
+.suite-editor-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.suite-editor-subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.suite-editor-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.suite-editor-section-title {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.suite-editor-override-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.field-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.field-with-action {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.field-action {
+  white-space: nowrap;
+}
+
+.field-hint-inline {
+  margin: 0;
+  max-width: none;
+}

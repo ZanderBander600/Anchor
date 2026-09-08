@@ -25,6 +25,14 @@ import type {
   LeaseLevelFormValues,
   LeaseLevelInputsRequest,
   LeaseLevelIssue,
+  EscalationBasis,
+  InitialVacancyAssumptionsRequest,
+  InitialVacancyStrategy,
+  InitialVacancyFormValues,
+  LeaseFormValues,
+  LeaseRequest,
+  SuiteRequest,
+  SuiteRowFormValues,
   LeaseLevelOperatingFormValues,
   LeaseLevelOperatingInputsRequest,
   LeaseLevelPropertyFormValues,
@@ -298,8 +306,9 @@ export const BLANK_LEASE_LEVEL_FORM_VALUES: LeaseLevelFormValues = {
   property: BLANK_LEASE_LEVEL_PROPERTY_FORM_VALUES,
   operating: BLANK_LEASE_LEVEL_OPERATING_FORM_VALUES,
   marketLeasing: BLANK_MARKET_LEASING_FORM_VALUES,
-  suites: [],
-  leases: [],
+  rentRoll: [],
+  leaseOrder: [],
+  unmatchedLeases: [],
 };
 
 // =============================================================================
@@ -538,19 +547,22 @@ export function buildMarketLeasingRequest(
 /**
  * The five Lease-Level input objects, ready to send.
  *
- * `suites` and `leases` pass through **exactly as loaded**. D5.5A edits no rent
- * roll, so anything other than a verbatim hand-off would be this gate silently
- * changing data it does not own.
+ * **Changed at D5.5B.** D5.5A handed `suites` and `leases` through verbatim
+ * because it had no editor and could not have produced them. Now the rent roll
+ * is unfolded from the editable rows -- and the protection the verbatim hand-off
+ * bought is bought instead by the round-trip tests, which prove a loaded deal
+ * opened and saved with no edits reproduces its rent roll byte-for-byte.
  */
 export function buildLeaseLevelInputsRequest(
   values: LeaseLevelFormValues,
 ): LeaseLevelInputsRequest {
+  const { suites, leases } = buildRentRollRequests(values);
   return {
     property_inputs: buildLeaseLevelPropertyInputsRequest(values.property),
     operating_inputs: buildLeaseLevelOperatingInputsRequest(values.operating),
     market_leasing: buildMarketLeasingRequest(values.marketLeasing),
-    suites: values.suites,
-    leases: values.leases,
+    suites,
+    leases,
   };
 }
 
@@ -651,12 +663,457 @@ export function buildLeaseLevelFormValues(
   deal: LeaseLevelDealFields,
   termsFormValues: AcquisitionTermsFormValues,
 ): LeaseLevelFormValues {
+  const rentRoll = buildRentRollFormValues(deal.suites, deal.leases);
   return {
     terms: termsFormValues,
     property: buildLeaseLevelPropertyFormValues(deal.property_inputs),
     operating: buildLeaseLevelOperatingFormValues(deal.operating_inputs),
     marketLeasing: buildMarketLeasingFormValues(deal.market_leasing),
-    suites: [...deal.suites],
-    leases: [...deal.leases],
+    ...rentRoll,
+  };
+}
+
+// =============================================================================
+// D5.5B -- the rent roll
+//
+// One form row per suite, unfolded on submit into the two flat transport arrays
+// the engine contract defines. D4 acquisition supports at most one known lease
+// per suite, so a suite-centric row matches the capability exactly and spares
+// the analyst maintaining two tables cross-referenced by hand on `suite_id`.
+//
+// Every rule below is structural -- which fields the contract can represent, and
+// when -- never economic. No rent, area total, term or date is computed here.
+// =============================================================================
+
+export const ESCALATION_BASIS_OPTIONS: SelectOption[] = [
+  { value: 'none', label: 'None (flat rent)' },
+  { value: 'lease_anniversary', label: 'Lease Anniversary' },
+];
+
+export const INITIAL_VACANCY_STRATEGY_OPTIONS: SelectOption[] = [
+  { value: 'hold_vacant', label: 'Hold Vacant' },
+  { value: 'market_lease_up', label: 'Market Lease-Up' },
+];
+
+const ESCALATION_BASES: readonly EscalationBasis[] = ['none', 'lease_anniversary'];
+const VACANCY_STRATEGIES: readonly InitialVacancyStrategy[] = [
+  'hold_vacant',
+  'market_lease_up',
+];
+
+/** Local row identity. Never submitted, never persisted, never fingerprinted,
+ * and never an underwriting assumption.
+ *
+ * A counter rather than anything derived from the row's contents: `suiteId` is
+ * blank on a new row and duplicated while one is being retyped, so a
+ * content-derived key would collide exactly when React most needs it stable. */
+let nextRowSequence = 0;
+
+export function nextRowId(): string {
+  nextRowSequence += 1;
+  return `row-${nextRowSequence}`;
+}
+
+/** A brand-new lease: every field blank.
+ *
+ * Nothing is seeded -- not the rent, not a term, not the dates, and above all
+ * not NNN. Marking a suite occupied says only that a tenant exists; every
+ * economic term of that tenancy is the analyst's to state. */
+export function blankLeaseFormValues(): LeaseFormValues {
+  return {
+    leaseId: '',
+    leasedAreaSf: '',
+    tenantName: '',
+    leaseStartDate: '',
+    rentCommencementDate: '',
+    leaseExpirationDate: '',
+    baseRentPsf: '',
+    escalationPct: '',
+    escalationBasis: '',
+    leaseType: '',
+    recoveryBasis: '',
+    expenseStopPsf: '',
+    // The contract's own default for a lease an analyst enters. `SUCCESSOR` is
+    // engine-generated and is never created here.
+    origin: 'in_place',
+  };
+}
+
+export const BLANK_INITIAL_VACANCY_FORM_VALUES: InitialVacancyFormValues = {
+  // Unselected. Anchor does not assume vacant space stays vacant, and does not
+  // assume it lets either -- `MISSING_INITIAL_VACANCY_TREATMENT` exists exactly
+  // so the choice is made rather than inherited.
+  strategy: '',
+  initialLeaseUpMonths: '',
+};
+
+/** A brand-new suite row: blank, vacant, with no treatment chosen.
+ *
+ * Vacant because a suite with no lease *is* vacant -- the engine's own rule, not
+ * a default chosen here. Blank because a fabricated area or rent would be an
+ * assumption the analyst never made, sitting in a roll that looks entered. */
+export function blankSuiteRow(): SuiteRowFormValues {
+  return {
+    rowId: nextRowId(),
+    suiteId: '',
+    suiteAreaSf: '',
+    suiteLabel: '',
+    marketRentPsf: '',
+    lease: null,
+    initialVacancy: { ...BLANK_INITIAL_VACANCY_FORM_VALUES },
+    marketLeasingOverrideEnabled: false,
+    marketLeasingOverride: { ...BLANK_MARKET_LEASING_FORM_VALUES },
+  };
+}
+
+/** Occupied exactly when a lease exists -- the engine's rule, restated nowhere
+ * else in this frontend and never stored as a field of its own. */
+export function isRowOccupied(row: SuiteRowFormValues): boolean {
+  return row.lease !== null;
+}
+
+// -----------------------------------------------------------------------------
+// Form -> transport
+// -----------------------------------------------------------------------------
+
+function buildInitialVacancyRequest(
+  values: InitialVacancyFormValues,
+): InitialVacancyAssumptionsRequest {
+  const strategy = parseSelected<InitialVacancyStrategy>(
+    'Initial Vacancy Strategy',
+    values.strategy,
+    VACANCY_STRATEGIES,
+  );
+  return {
+    strategy,
+    // `HOLD_VACANT` must carry no lease-up period
+    // (`INITIAL_LEASE_UP_ON_HOLD_VACANT`); `MARKET_LEASE_UP` requires one
+    // (`MISSING_INITIAL_LEASE_UP_MONTHS`). Both are the contract's rules. This
+    // only decides which of the analyst's typed values the shape can carry, so
+    // a dormant lease-up figure never reaches the wire.
+    initial_lease_up_months:
+      strategy === 'market_lease_up'
+        ? parseNumber('Initial Lease-Up Months', values.initialLeaseUpMonths)
+        : null,
+  };
+}
+
+export function buildSuiteRequest(row: SuiteRowFormValues): SuiteRequest {
+  return {
+    suite_id: row.suiteId.trim(),
+    suite_area_sf: parseNumber('Suite Area', row.suiteAreaSf),
+    // A blank label is an absent label, not an empty one: `None` means
+    // "unlabelled", and sending "" would give every unlabelled suite a value it
+    // does not have.
+    suite_label: row.suiteLabel.trim() === '' ? null : row.suiteLabel.trim(),
+    market_rent_psf: parseOptionalNumber('Suite Market Rent', row.marketRentPsf),
+    // All-or-nothing (D0 24.2). Enabled submits the complete record; disabled
+    // submits `null` -- never a partial merge, and never the dormant values the
+    // form is still holding for the analyst.
+    market_leasing_override: row.marketLeasingOverrideEnabled
+      ? buildMarketLeasingRequest(row.marketLeasingOverride)
+      : null,
+    // An occupied suite must carry no treatment
+    // (`INITIAL_VACANCY_ON_OCCUPIED_SUITE`), so dormant vacancy state is dropped
+    // here rather than allowed to reach the wire.
+    initial_vacancy: isRowOccupied(row)
+      ? null
+      : buildInitialVacancyRequest(row.initialVacancy),
+  };
+}
+
+export function buildLeaseRequest(
+  row: SuiteRowFormValues,
+  lease: LeaseFormValues,
+): LeaseRequest {
+  return {
+    lease_id: lease.leaseId.trim(),
+    // Taken from the row that owns it, never typed twice -- which is what makes
+    // `UNKNOWN_SUITE_REFERENCE` unreachable from this editor by construction.
+    suite_id: row.suiteId.trim(),
+    leased_area_sf: parseNumber('Leased Area', lease.leasedAreaSf),
+    rent_commencement_date: parseIsoDate('Rent Commencement', lease.rentCommencementDate),
+    lease_expiration_date: parseIsoDate('Lease Expiration', lease.leaseExpirationDate),
+    base_rent_psf: parseNumber('Base Rent', lease.baseRentPsf),
+    escalation_pct: parsePercent('Escalation', lease.escalationPct),
+    escalation_basis: parseSelected<EscalationBasis>(
+      'Escalation Basis',
+      lease.escalationBasis,
+      ESCALATION_BASES,
+    ),
+    lease_type: parseSelected<LeaseType>('Lease Type', lease.leaseType, LEASE_TYPES),
+    tenant_name: lease.tenantName.trim() === '' ? null : lease.tenantName.trim(),
+    lease_start_date:
+      lease.leaseStartDate.trim() === ''
+        ? null
+        : parseIsoDate('Lease Start', lease.leaseStartDate),
+    // Held, not chosen: whatever was loaded is what goes back.
+    origin: lease.origin,
+    recovery_basis: parseOptionalSelected<RecoveryBasis>(
+      'Recovery Basis',
+      lease.recoveryBasis,
+      RECOVERY_BASES,
+    ),
+    expense_stop_psf: parseOptionalNumber('Expense Stop', lease.expenseStopPsf),
+  };
+}
+
+/**
+ * The rent roll, unfolded into the two arrays the contract defines.
+ *
+ * Suites follow row order, so the persisted `ordinal` follows the order the
+ * analyst arranged. Leases replay `leaseOrder` first -- the order the loaded
+ * deal carried, which the backend preserves independently of suite order -- and
+ * anything not named there follows in row order. Without that, opening and
+ * saving a deal whose leases were not stored in suite order would silently
+ * reorder them.
+ *
+ * A row with no lease contributes a suite and no lease, which is exactly how
+ * vacant space is represented, so a removed lease can never leave an orphan.
+ */
+export function buildRentRollRequests(values: LeaseLevelFormValues): {
+  suites: SuiteRequest[];
+  leases: LeaseRequest[];
+} {
+  const suites: SuiteRequest[] = [];
+  const built: LeaseRequest[] = [];
+  for (const row of values.rentRoll) {
+    suites.push(buildSuiteRequest(row));
+    if (row.lease !== null) {
+      built.push(buildLeaseRequest(row, row.lease));
+    }
+  }
+
+  const rank = (lease: LeaseRequest): number => {
+    const index = values.leaseOrder.indexOf(lease.lease_id);
+    return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  // Compared rather than subtracted: `a.rank - b.rank` is ordering, not
+  // economics, but G-M7 audits arithmetic structurally and a carve-out for
+  // "sorting" would be a hole shaped like anything. Comparison needs none.
+  const leases = built
+    .map((lease, position) => ({ lease, position, rank: rank(lease) }))
+    .sort((a, b) => {
+      if (a.rank !== b.rank) {
+        return a.rank < b.rank ? -1 : 1;
+      }
+      return a.position < b.position ? -1 : 1;
+    })
+    .map((entry) => entry.lease);
+
+  // Leases no row could claim are resubmitted verbatim so the backend still
+  // reports on them. They cannot be created or saved through this UI.
+  return { suites, leases: [...leases, ...values.unmatchedLeases] };
+}
+
+// -----------------------------------------------------------------------------
+// Transport -> form
+// -----------------------------------------------------------------------------
+
+function buildLeaseFormValues(lease: LeaseRequest): LeaseFormValues {
+  return {
+    leaseId: lease.lease_id,
+    leasedAreaSf: displayNumber(lease.leased_area_sf),
+    tenantName: lease.tenant_name ?? '',
+    leaseStartDate: lease.lease_start_date ?? '',
+    rentCommencementDate: lease.rent_commencement_date,
+    leaseExpirationDate: lease.lease_expiration_date,
+    baseRentPsf: displayNumber(lease.base_rent_psf),
+    escalationPct: displayPercent(lease.escalation_pct),
+    escalationBasis: lease.escalation_basis,
+    leaseType: lease.lease_type,
+    recoveryBasis: lease.recovery_basis ?? '',
+    expenseStopPsf: displayNumber(lease.expense_stop_psf),
+    origin: lease.origin,
+  };
+}
+
+/**
+ * Fold the two transport arrays into one row per suite.
+ *
+ * A lease is matched to its suite by `suite_id`, the same key the engine binds
+ * them with, and each lease is claimed at most once. Anything left unclaimed is
+ * returned rather than dropped -- see `LeaseLevelFormValues.unmatchedLeases`.
+ */
+export function buildRentRollFormValues(
+  suites: readonly SuiteRequest[],
+  leases: readonly LeaseRequest[],
+): { rentRoll: SuiteRowFormValues[]; leaseOrder: string[]; unmatchedLeases: LeaseRequest[] } {
+  const claimed = new Set<LeaseRequest>();
+  const rentRoll = suites.map((suite) => {
+    const lease = leases.find(
+      (candidate) => !claimed.has(candidate) && candidate.suite_id === suite.suite_id,
+    );
+    if (lease !== undefined) {
+      claimed.add(lease);
+    }
+    return {
+      rowId: nextRowId(),
+      suiteId: suite.suite_id,
+      suiteAreaSf: displayNumber(suite.suite_area_sf),
+      suiteLabel: suite.suite_label ?? '',
+      marketRentPsf: displayNumber(suite.market_rent_psf),
+      lease: lease === undefined ? null : buildLeaseFormValues(lease),
+      initialVacancy:
+        suite.initial_vacancy === null
+          ? { ...BLANK_INITIAL_VACANCY_FORM_VALUES }
+          : {
+              strategy: suite.initial_vacancy.strategy,
+              initialLeaseUpMonths: displayNumber(
+                suite.initial_vacancy.initial_lease_up_months,
+              ),
+            },
+      marketLeasingOverrideEnabled: suite.market_leasing_override !== null,
+      marketLeasingOverride:
+        suite.market_leasing_override === null
+          ? { ...BLANK_MARKET_LEASING_FORM_VALUES }
+          : buildMarketLeasingFormValues(suite.market_leasing_override),
+    };
+  });
+
+  return {
+    rentRoll,
+    leaseOrder: leases.map((lease) => lease.lease_id),
+    unmatchedLeases: leases.filter((lease) => !claimed.has(lease)),
+  };
+}
+
+// -----------------------------------------------------------------------------
+/** Lease fields the contract declares nullable. Everything else on a lease is
+ * required on the wire, so a blank one cannot become a value at all. */
+export const OPTIONAL_LEASE_KEYS: readonly (keyof LeaseFormValues)[] = [
+  'tenantName',
+  'leaseStartDate',
+  'recoveryBasis',
+  'expenseStopPsf',
+  'origin',
+];
+
+/** Suite fields the contract declares nullable. */
+export const OPTIONAL_SUITE_KEYS: readonly string[] = ['suiteLabel', 'marketRentPsf'];
+
+/**
+ * Every rent-roll field that is blank and cannot be, anchored to its row.
+ *
+ * The same rule as the scalar collector, applied to the roll: a blank required
+ * field cannot become a value, so there is no request to send, and reporting all
+ * of them at once beats one refusal per field across thirty suites. It says
+ * nothing about whether the deal is *valid* -- a fully typed roll produces
+ * nothing here and is sent for the backend to judge.
+ *
+ * Paths use the array index each row will occupy, matching the index-keyed
+ * convention `leasing/validation.py` uses for these fields, so the same row
+ * resolver handles collected blanks and backend issues identically.
+ */
+export function collectRentRollBlankIssues(values: LeaseLevelFormValues): LeaseLevelIssue[] {
+  const issues: LeaseLevelIssue[] = [];
+  const required = (path: string) => {
+    issues.push({
+      code: 'MALFORMED_FIELD',
+      path,
+      message: 'is required',
+      severity: 'error',
+    });
+  };
+
+  let leaseIndex = 0;
+  values.rentRoll.forEach((row, index) => {
+    const at = `suites[${index}]`;
+    for (const [key, value] of Object.entries(row)) {
+      if (typeof value !== 'string' || OPTIONAL_SUITE_KEYS.includes(key)) {
+        continue;
+      }
+      if (value.trim() === '') {
+        required(`${at}.${wireFieldName(key)}`);
+      }
+    }
+
+    if (row.marketLeasingOverrideEnabled) {
+      for (const [key, value] of Object.entries(row.marketLeasingOverride)) {
+        if (
+          value.trim() === '' &&
+          !(OPTIONAL_MARKET_LEASING_KEYS as readonly string[]).includes(key)
+        ) {
+          required(`${at}.market_leasing_override.${wireFieldName(key)}`);
+        }
+      }
+    }
+
+    if (!isRowOccupied(row)) {
+      // A vacant suite states its treatment; Anchor picks neither strategy.
+      if (row.initialVacancy.strategy.trim() === '') {
+        required(`${at}.initial_vacancy.strategy`);
+      } else if (
+        row.initialVacancy.strategy === 'market_lease_up' &&
+        row.initialVacancy.initialLeaseUpMonths.trim() === ''
+      ) {
+        required(`${at}.initial_vacancy.initial_lease_up_months`);
+      }
+    }
+
+    if (row.lease !== null) {
+      const leaseAt = `leases[${leaseIndex}]`;
+      leaseIndex += 1;
+      for (const [key, value] of Object.entries(row.lease)) {
+        if (
+          typeof value !== 'string' ||
+          (OPTIONAL_LEASE_KEYS as readonly string[]).includes(key)
+        ) {
+          continue;
+        }
+        if (value.trim() === '') {
+          required(`${leaseAt}.${wireFieldName(key)}`);
+        }
+      }
+    }
+  });
+
+  return issues;
+}
+
+// Area reconciliation -- the D5.0 display-only carve-out
+// -----------------------------------------------------------------------------
+
+/**
+ * Property rentable area against the sum of entered suite areas.
+ *
+ * The one arithmetic this gate performs, and it is addition of integers the
+ * analyst typed. Approved at D5.0 (plan section 10.1) as an **input-validation
+ * aid**, and it is never financial authority: it changes no value, allocates
+ * nothing, creates no residual suite, and blocks no submission.
+ * `RENTABLE_AREA_NOT_RECONCILED` from the backend remains the only thing that
+ * can refuse an analysis.
+ *
+ * A blank or unparseable area contributes nothing and is counted separately, so
+ * a half-typed roll reads as incomplete rather than as a shortfall.
+ */
+export function reconcileArea(values: LeaseLevelFormValues): {
+  rentableAreaSf: number | null;
+  allocatedSf: number;
+  differenceSf: number | null;
+  rowsWithoutArea: number;
+} {
+  const rentable = Number(values.property.rentableAreaSf.trim());
+  const rentableAreaSf =
+    values.property.rentableAreaSf.trim() === '' || !Number.isFinite(rentable)
+      ? null
+      : rentable;
+
+  let allocatedSf = 0;
+  let rowsWithoutArea = 0;
+  for (const row of values.rentRoll) {
+    const area = Number(row.suiteAreaSf.trim());
+    if (row.suiteAreaSf.trim() === '' || !Number.isFinite(area)) {
+      rowsWithoutArea += 1;
+      continue;
+    }
+    allocatedSf += area;
+  }
+
+  return {
+    rentableAreaSf,
+    allocatedSf,
+    differenceSf: rentableAreaSf === null ? null : rentableAreaSf - allocatedSf,
+    rowsWithoutArea,
   };
 }

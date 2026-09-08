@@ -22,6 +22,8 @@
 
 import type { ChangeEvent, ReactNode } from 'react';
 import { AssumptionFieldGrid } from './AssumptionFieldGrid';
+import { RentRollTable } from './RentRollTable';
+import { SuiteLeaseEditor } from './SuiteLeaseEditor';
 import { StrategyStrip } from './StrategyStrip';
 import { SubNav } from './SubNav';
 import {
@@ -33,18 +35,22 @@ import {
   MARKET_LEASING_EXPENSE_STOP_FIELDS,
   RECOVERY_BASIS_OPTIONS,
   TERMS_WIRE_IDS,
+  reconcileArea,
   wireFieldName,
 } from '../leaseLevelConvert';
 import type { LeaseLevelFieldConfig, SelectOption } from '../leaseLevelConvert';
 import { TERMS_FIELD_GROUPS } from '../convert';
 import type { FieldSection } from '../underwrite';
 import type {
+  InitialVacancyFormValues,
+  LeaseFormValues,
   LeaseLevelFormValues,
   LeaseLevelIssue,
   LeaseLevelOperatingFormValues,
   LeaseLevelPropertyFormValues,
   MarketLeasingFormValues,
 } from '../leaseLevelTypes';
+import type { RowIssues } from '../leaseLevelIssues';
 import type { AcquisitionTermsFormValues, ValidationIssue } from '../types';
 
 /**
@@ -95,6 +101,102 @@ export interface LeaseLevelWorkspaceProps {
    * anchored -- a transport failure, or an issue whose `path` names something
    * this gate does not yet render. */
   error: string | null;
+
+  // --- D5.5B: the rent roll -------------------------------------------------
+  /** Rent-roll issues already resolved to the row that produced them. */
+  issuesByRow: Map<string, RowIssues>;
+  /** Display-only area reconciliation. Never financial authority. */
+  area: AreaReconciliationValues;
+  editorRowId: string | null;
+  onOpenEditor: (rowId: string) => void;
+  onCloseEditor: () => void;
+  onAddRow: () => void;
+  onDeleteRow: (rowId: string) => void;
+  onSuiteFieldChange: (
+    rowId: string,
+    key: 'suiteId' | 'suiteAreaSf' | 'suiteLabel' | 'marketRentPsf',
+    value: string,
+  ) => void;
+  onLeaseFieldChange: (
+    rowId: string,
+    key: keyof Omit<LeaseFormValues, 'origin'>,
+    value: string,
+  ) => void;
+  onVacancyFieldChange: (
+    rowId: string,
+    key: keyof InitialVacancyFormValues,
+    value: string,
+  ) => void;
+  onOverrideFieldChange: (
+    rowId: string,
+    key: keyof MarketLeasingFormValues,
+    value: string,
+  ) => void;
+  onToggleOverride: (rowId: string) => void;
+  onToggleOccupancy: (rowId: string) => void;
+  onUseSuiteArea: (rowId: string) => void;
+}
+
+export type AreaReconciliationValues = ReturnType<typeof reconcileArea>;
+
+/**
+ * The D5.0 display-only area carve-out, rendered.
+ *
+ * Addition of integers the analyst typed, labelled as the input aid it is. It
+ * changes no value, allocates nothing, creates no residual suite and blocks no
+ * submission -- `RENTABLE_AREA_NOT_RECONCILED` from the backend is still the
+ * only thing that can refuse an analysis, and this deliberately does not claim
+ * to be that.
+ */
+function AreaReconciliation({
+  area,
+  rows,
+}: {
+  area: AreaReconciliationValues;
+  rows: number;
+}) {
+  const { rentableAreaSf, allocatedSf, differenceSf, rowsWithoutArea } = area;
+  const reconciled = differenceSf === 0 && rowsWithoutArea === 0;
+
+  return (
+    <section className="area-reconciliation" aria-label="Area reconciliation">
+      <dl className="area-reconciliation-figures">
+        <div>
+          <dt>Suites</dt>
+          <dd>{rows}</dd>
+        </div>
+        <div>
+          <dt>Property Rentable Area</dt>
+          <dd>{rentableAreaSf === null ? '—' : `${formatArea(rentableAreaSf)} SF`}</dd>
+        </div>
+        <div>
+          <dt>Allocated Suite Area</dt>
+          <dd>{`${formatArea(allocatedSf)} SF`}</dd>
+        </div>
+        <div>
+          <dt>Difference</dt>
+          <dd>{differenceSf === null ? '—' : `${formatArea(differenceSf)} SF`}</dd>
+        </div>
+      </dl>
+      <p className={reconciled ? 'area-reconciliation-note' : 'area-reconciliation-note area-reconciliation-note-warn'}>
+        {rentableAreaSf === null
+          ? 'Enter the property rentable area on the Property tab to reconcile suite areas against it.'
+          : rowsWithoutArea > 0
+            ? `${rowsWithoutArea} suite${rowsWithoutArea === 1 ? '' : 's'} without an area yet — this total is incomplete.`
+            : reconciled
+              ? 'Suite areas match the property rentable area.'
+              : differenceSf! > 0
+                ? `${formatArea(differenceSf!)} SF unallocated. An entry aid only — the backend decides whether the roll reconciles.`
+                : `${formatArea(Math.abs(differenceSf!))} SF over-allocated. An entry aid only — the backend decides whether the roll reconciles.`}
+      </p>
+    </section>
+  );
+}
+
+/** Thousands separators for a whole number of square feet. Presentation only:
+ * it rounds nothing and computes nothing. */
+function formatArea(value: number): string {
+  return value.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
 // ---------------------------------------------------------------------------
@@ -254,9 +356,38 @@ export function LeaseLevelWorkspace({
   leaseIssues,
   termsIssues,
   error,
+  issuesByRow,
+  area,
+  editorRowId,
+  onOpenEditor,
+  onCloseEditor,
+  onAddRow,
+  onDeleteRow,
+  onSuiteFieldChange,
+  onLeaseFieldChange,
+  onVacancyFieldChange,
+  onOverrideFieldChange,
+  onToggleOverride,
+  onToggleOccupancy,
+  onUseSuiteArea,
 }: LeaseLevelWorkspaceProps) {
+  const editorRow = values.rentRoll.find((row) => row.rowId === editorRowId);
   const anchorable = anchorablePaths(values);
-  const unanchored = leaseIssues.filter((issue) => !anchorable.has(issue.path));
+  // D5.5B: a rent-roll path is anchored when a row actually claimed it. Rows
+  // report which paths they resolved, so an issue naming a row that no longer
+  // exists still reaches the banner rather than disappearing with the row.
+  const claimedByRows = new Set<string>();
+  for (const row of issuesByRow.values()) {
+    for (const issue of row.fields.values()) {
+      claimedByRows.add(issue.path);
+    }
+    for (const issue of row.rowLevel) {
+      claimedByRows.add(issue.path);
+    }
+  }
+  const unanchored = leaseIssues.filter(
+    (issue) => !anchorable.has(issue.path) && !claimedByRows.has(issue.path),
+  );
 
   const termsSections: FieldSection[] = TERMS_FIELD_GROUPS.map((group) => ({
     view: null,
@@ -496,34 +627,35 @@ export function LeaseLevelWorkspace({
 
           {panel(
             'rent-roll',
-            <div className="assumption-sections">
-              <section className="assumption-section">
-                <h3 className="assumption-section-title">Rent Roll</h3>
-                {values.suites.length === 0 ? (
-                  <p className="field-hint">
-                    No suites yet. Suite and lease entry arrives in the next gate; until
-                    then a Lease-Level analysis needs a rent roll loaded from a saved
-                    deal.
-                  </p>
-                ) : (
-                  <>
-                    <dl className="lease-level-roll-counts">
-                      <div>
-                        <dt>Suites</dt>
-                        <dd>{values.suites.length}</dd>
-                      </div>
-                      <div>
-                        <dt>Leases</dt>
-                        <dd>{values.leases.length}</dd>
-                      </div>
-                    </dl>
-                    <p className="field-hint">
-                      Loaded from the saved deal and carried through every edit unchanged.
-                      Editing arrives in the next gate.
-                    </p>
-                  </>
-                )}
-              </section>
+            <div className="rent-roll-panel">
+              <AreaReconciliation area={area} rows={values.rentRoll.length} />
+
+              <RentRollTable
+                rows={values.rentRoll}
+                issuesByRow={issuesByRow}
+                disabled={isSubmitting}
+                onSuiteFieldChange={onSuiteFieldChange}
+                onLeaseFieldChange={onLeaseFieldChange}
+                onToggleOccupancy={onToggleOccupancy}
+                onOpenEditor={onOpenEditor}
+                onDeleteRow={onDeleteRow}
+                onAddRow={onAddRow}
+              />
+
+              {editorRow !== undefined && (
+                <SuiteLeaseEditor
+                  row={editorRow}
+                  issues={issuesByRow.get(editorRow.rowId)}
+                  disabled={isSubmitting}
+                  onClose={onCloseEditor}
+                  onSuiteFieldChange={onSuiteFieldChange}
+                  onLeaseFieldChange={onLeaseFieldChange}
+                  onVacancyFieldChange={onVacancyFieldChange}
+                  onOverrideFieldChange={onOverrideFieldChange}
+                  onToggleOverride={onToggleOverride}
+                  onUseSuiteArea={onUseSuiteArea}
+                />
+              )}
             </div>,
           )}
         </div>

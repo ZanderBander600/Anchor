@@ -66,6 +66,11 @@ const AUDITED = [
   // decision, so it is audited to prove it never starts making one.
   'useLeaseLevelDeal.ts',
   'components/LeaseLevelWorkspace.tsx',
+  // D5.5B. None of these makes a mode decision; they are audited to prove they
+  // never start making one.
+  'components/RentRollTable.tsx',
+  'components/SuiteLeaseEditor.tsx',
+  'leaseLevelIssues.ts',
 ];
 
 const MODE_LITERALS = new Set(['quick', 'detailed', 'lease_level']);
@@ -433,22 +438,50 @@ describe('the Lease-Level capability boundary', () => {
     }
   });
 
-  it('builds the Lease-Level workspace, and none of the editors a later gate owns', () => {
+  it('builds the rent-roll editor, and none of the surfaces a later gate owns', () => {
+    // D5.5B transition. D5.5A forbade every rent-roll editor because it had
+    // none; the successor requires the ones this gate owns and still forbids
+    // the result, sensitivity and AI surfaces D5.6-D5.8 own.
     const paths = Object.keys(SOURCES).join(' ');
-    expect(paths, 'LeaseLevelWorkspace should exist at D5.5A').toContain('LeaseLevelWorkspace');
+    for (const required of ['LeaseLevelWorkspace', 'RentRollTable', 'SuiteLeaseEditor']) {
+      expect(paths, `${required} should exist at D5.5B`).toContain(required);
+    }
     for (const forbidden of [
-      'SuiteTable',
-      'LeaseTable',
-      'SuiteOverrideDrawer',
-      'InitialVacancyDrawer',
       'RentRollPasteImport',
       'LeaseLevelOperatingStatement',
       'MonthlyRentRollTable',
       'LeaseLevelAuditCard',
       'LeaseLevelSensitivityPanel',
     ]) {
-      expect(paths, `${forbidden} exists; D5.5B/D5.6/D5.7 own it`).not.toContain(forbidden);
+      expect(paths, `${forbidden} exists; a later gate owns it`).not.toContain(forbidden);
     }
+  });
+
+  it('adds no sequential-known-lease surface', () => {
+    // D4 acquisition supports at most one known lease per suite. A future,
+    // committed or second lease is deferred, and the UI must not imply it can
+    // be entered.
+    for (const relative of [
+      'components/RentRollTable.tsx',
+      'components/SuiteLeaseEditor.tsx',
+      'useLeaseLevelDeal.ts',
+      'leaseLevelTypes.ts',
+    ]) {
+      const text = sourceOf(relative);
+      for (const forbidden of [
+        'Add Lease',
+        'addLease',
+        'Add another lease',
+        'nextLease',
+        'futureLease',
+        'leaseStack',
+        'leases: LeaseFormValues[]',
+      ]) {
+        expect(text, `${relative} offers ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+    // Structural: a row holds at most one lease, by type.
+    expect(sourceOf('leaseLevelTypes.ts')).toContain('lease: LeaseFormValues | null;');
   });
 
   it('renders no Lease-Level results, and asks for no Lease-Level results views', () => {
@@ -482,6 +515,29 @@ describe('the Lease-Level capability boundary', () => {
     );
   });
 
+  // The only additions D5.0 approved: the sensitivity ladder (D5.7, not built)
+  // and area totals. These are the exact expressions the area aid evaluates.
+  const AREA_CARVE_OUT = /allocatedSf \+ area|rentableAreaSf - allocatedSf/;
+
+  it('confines the area carve-out to one display-only function', () => {
+    const text = sourceOf('leaseLevelConvert.ts');
+    const start = text.indexOf('export function reconcileArea');
+    expect(start, 'reconcileArea should exist').toBeGreaterThan(-1);
+    const body = text.slice(start);
+    const end = body.indexOf('\n}\n');
+    // Every area expression the G-M7 filter tolerates lives inside this one
+    // function, so the carve-out cannot leak into a component.
+    const inside = body.slice(0, end);
+    expect(inside).toMatch(AREA_CARVE_OUT);
+    for (const relative of [
+      'components/RentRollTable.tsx',
+      'components/SuiteLeaseEditor.tsx',
+      'useLeaseLevelDeal.ts',
+    ]) {
+      expect(sourceOf(relative), `${relative} sums area itself`).not.toMatch(AREA_CARVE_OUT);
+    }
+  });
+
   it('computes no lease economics in the browser (G-M7)', () => {
     // The two approved carve-outs (plan section 10.1) are the sensitivity ladder
     // and area totals -- neither of which exists yet, so at D5.5A the correct
@@ -496,6 +552,10 @@ describe('the Lease-Level capability boundary', () => {
       'components/LeaseLevelWorkspace.tsx',
       'useLeaseLevelDeal.ts',
       'leaseLevelConvert.ts',
+      // D5.5B.
+      'components/RentRollTable.tsx',
+      'components/SuiteLeaseEditor.tsx',
+      'leaseLevelIssues.ts',
     ]) {
       const source = parse(relative);
       const offenders: string[] = [];
@@ -511,7 +571,15 @@ describe('the Lease-Level capability boundary', () => {
           offenders.push(`${relative}:${lineOf(source, node)} ${node.getText(source)}`);
         }
       });
-      const disallowed = offenders.filter((site) => !/\b100\b/.test(site));
+      // Two carve-outs, both named by literal so neither can widen silently:
+      //   * the percent convention (`* 100` / `/ 100`), unchanged since Phase 5
+      //     and shared verbatim with Quick and Detailed;
+      //   * D5.0's area reconciliation, which adds integers the analyst typed
+      //     and is display-only -- it is confined to `reconcileArea`, and the
+      //     assertion below proves that function is where it lives.
+      const disallowed = offenders.filter(
+        (site) => !/\b100\b/.test(site) && !AREA_CARVE_OUT.test(site),
+      );
       expect(disallowed, `${relative} performs lease arithmetic in the browser`).toEqual([]);
     }
   });

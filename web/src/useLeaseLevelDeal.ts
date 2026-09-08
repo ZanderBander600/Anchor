@@ -32,14 +32,23 @@ import {
 import { FormValidationError, buildDetailedTermsFormValuesFromRequest } from './convert';
 import {
   BLANK_LEASE_LEVEL_FORM_VALUES,
+  blankLeaseFormValues,
+  blankSuiteRow,
   buildLeaseLevelFormValues,
   buildLeaseLevelInputsRequest,
   buildLeaseLevelTermsRequest,
   collectBlankScalarIssues,
+  collectRentRollBlankIssues,
+  isRowOccupied,
+  reconcileArea,
 } from './leaseLevelConvert';
+import { EMPTY_SUBMITTED_RENT_ROLL, resolveRowIssues } from './leaseLevelIssues';
+import type { RowIssues, SubmittedRentRoll } from './leaseLevelIssues';
 import type { LeaseLevelSectionId } from './components/LeaseLevelWorkspace';
 import type { SaveStatus } from './components/DealHeader';
 import type {
+  InitialVacancyFormValues,
+  LeaseFormValues,
   LeaseLevelAcquisitionResults,
   LeaseLevelFormValues,
   LeaseLevelInputsRequest,
@@ -47,6 +56,7 @@ import type {
   LeaseLevelOperatingFormValues,
   LeaseLevelPropertyFormValues,
   MarketLeasingFormValues,
+  SuiteRowFormValues,
 } from './leaseLevelTypes';
 import type {
   AcquisitionTermsFormValues,
@@ -82,6 +92,41 @@ export interface LeaseLevelDealState {
   saveError: string | null;
   leaseIssues: LeaseLevelIssue[];
   termsIssues: ValidationIssue[];
+  /** Rent-roll issues from the last refused submission, already resolved to the
+   * row that produced them against the array that was actually submitted. */
+  issuesByRow: Map<string, RowIssues>;
+  /** The row whose advanced editor is open, or `null`. */
+  editorRowId: string | null;
+  openEditor: (rowId: string) => void;
+  closeEditor: () => void;
+  /** Display-only area reconciliation (D5.0 carve-out). Never authority. */
+  area: ReturnType<typeof reconcileArea>;
+
+  addRow: () => void;
+  deleteRow: (rowId: string) => void;
+  updateSuiteField: (
+    rowId: string,
+    key: 'suiteId' | 'suiteAreaSf' | 'suiteLabel' | 'marketRentPsf',
+    value: string,
+  ) => void;
+  updateLeaseField: (
+    rowId: string,
+    key: keyof Omit<LeaseFormValues, 'origin'>,
+    value: string,
+  ) => void;
+  updateVacancyField: (
+    rowId: string,
+    key: keyof InitialVacancyFormValues,
+    value: string,
+  ) => void;
+  updateOverrideField: (
+    rowId: string,
+    key: keyof MarketLeasingFormValues,
+    value: string,
+  ) => void;
+  toggleOverride: (rowId: string) => void;
+  toggleOccupancy: (rowId: string) => void;
+  useSuiteArea: (rowId: string) => void;
 
   onTermsFieldChange: (key: keyof AcquisitionTermsFormValues, value: string) => void;
   onPropertyFieldChange: (key: keyof LeaseLevelPropertyFormValues, value: string) => void;
@@ -114,20 +159,19 @@ const BLANK_SNAPSHOT: LeaseLevelSnapshot = {
 };
 
 /**
- * Dirty comparison over the scalar assumptions.
+ * Dirty comparison over everything the deal submits.
  *
- * Scalars only, and deliberately so: D5.5A cannot edit a suite or a lease, so
- * the loaded rows are identical to the saved rows by construction. The two
- * arrays are compared by *identity* -- if `open` put them there and nothing
- * replaced them, they are the same objects. D5.5B, which can edit them, owes
- * the field-by-field array comparison the plan calls for (§10); until then this
- * cannot report a false "saved", because nothing here can change a row.
+ * D5.5A compared scalars and the two rent-roll arrays by identity, which was
+ * sound while nothing could edit a row. D5.5B can, so the field-by-field array
+ * comparison the plan called for (§10) lands here.
  */
 function isSameSnapshot(a: LeaseLevelSnapshot, b: LeaseLevelSnapshot): boolean {
   if (a.dealName !== b.dealName || a.dealContext !== b.dealContext) {
     return false;
   }
-  if (a.values.suites !== b.values.suites || a.values.leases !== b.values.leases) {
+  // D5.5B: the rent roll is editable, so it joins the one dirty-state system
+  // rather than getting a flag of its own that could disagree with it.
+  if (!isSameRentRoll(a.values.rentRoll, b.values.rentRoll)) {
     return false;
   }
   const groups = ['terms', 'property', 'operating', 'marketLeasing'] as const;
@@ -140,6 +184,102 @@ function isSameSnapshot(a: LeaseLevelSnapshot, b: LeaseLevelSnapshot): boolean {
     const right = new Map<string, unknown>(Object.entries(b.values[group]));
     return (
       left.length === right.size && left.every(([key, value]) => right.get(key) === value)
+    );
+  });
+}
+
+// =============================================================================
+// D5.5B -- rent-roll editing
+//
+// Every operation below is structural: it adds, removes or retypes a row, or
+// moves a value between the states the contract can represent. None computes an
+// economic quantity, and none invents one.
+// =============================================================================
+
+/**
+ * Field-by-field comparison of two rent rolls.
+ *
+ * Not `JSON.stringify`: key order is an artefact of whichever code built the
+ * object, so two identical rolls -- one loaded, one edited back to the same
+ * values -- would compare unequal. Not a generic deep-equal either; this walks
+ * the shapes it actually has, so a field added to a form contract shows up here
+ * as a compile error rather than as a silently unwatched field.
+ *
+ * **It compares what would be submitted, and only that.** `rowId` is local UI
+ * identity. Dormant state -- an override the row is not using, a vacancy
+ * treatment on an occupied suite, a lease-up figure under Hold Vacant -- is held
+ * for the analyst's convenience but never sent, so counting it would mark a deal
+ * dirty that saves to identical bytes and then reports "saved" having discarded
+ * the edit.
+ */
+function isSameLease(a: LeaseFormValues | null, b: LeaseFormValues | null): boolean {
+  if (a === null || b === null) {
+    return a === b;
+  }
+  return (
+    a.leaseId === b.leaseId &&
+    a.leasedAreaSf === b.leasedAreaSf &&
+    a.tenantName === b.tenantName &&
+    a.leaseStartDate === b.leaseStartDate &&
+    a.rentCommencementDate === b.rentCommencementDate &&
+    a.leaseExpirationDate === b.leaseExpirationDate &&
+    a.baseRentPsf === b.baseRentPsf &&
+    a.escalationPct === b.escalationPct &&
+    a.escalationBasis === b.escalationBasis &&
+    a.leaseType === b.leaseType &&
+    a.recoveryBasis === b.recoveryBasis &&
+    a.expenseStopPsf === b.expenseStopPsf &&
+    a.origin === b.origin
+  );
+}
+
+function isSameStringRecord(a: object, b: object): boolean {
+  const left = Object.entries(a);
+  const right = new Map<string, unknown>(Object.entries(b));
+  return left.length === right.size && left.every(([key, value]) => right.get(key) === value);
+}
+
+function isSameVacancy(a: SuiteRowFormValues, b: SuiteRowFormValues): boolean {
+  // An occupied suite submits no treatment at all, so neither row's dormant
+  // values matter while both are occupied.
+  if (isRowOccupied(a) || isRowOccupied(b)) {
+    return isRowOccupied(a) === isRowOccupied(b);
+  }
+  if (a.initialVacancy.strategy !== b.initialVacancy.strategy) {
+    return false;
+  }
+  // The lease-up figure only travels under Market Lease-Up.
+  if (a.initialVacancy.strategy !== 'market_lease_up') {
+    return true;
+  }
+  return a.initialVacancy.initialLeaseUpMonths === b.initialVacancy.initialLeaseUpMonths;
+}
+
+function isSameRentRoll(
+  a: readonly SuiteRowFormValues[],
+  b: readonly SuiteRowFormValues[],
+): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  return a.every((row, index) => {
+    const other = b[index];
+    if (
+      row.suiteId !== other.suiteId ||
+      row.suiteAreaSf !== other.suiteAreaSf ||
+      row.suiteLabel !== other.suiteLabel ||
+      row.marketRentPsf !== other.marketRentPsf ||
+      row.marketLeasingOverrideEnabled !== other.marketLeasingOverrideEnabled
+    ) {
+      return false;
+    }
+    if (!isSameLease(row.lease, other.lease) || !isSameVacancy(row, other)) {
+      return false;
+    }
+    // A disabled override submits `null` whatever it holds.
+    return (
+      !row.marketLeasingOverrideEnabled ||
+      isSameStringRecord(row.marketLeasingOverride, other.marketLeasingOverride)
     );
   });
 }
@@ -168,6 +308,11 @@ export function useLeaseLevelDeal(options: {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [leaseIssues, setLeaseIssues] = useState<LeaseLevelIssue[]>([]);
   const [termsIssues, setTermsIssues] = useState<ValidationIssue[]>([]);
+  const [editorRowId, setEditorRowId] = useState<string | null>(null);
+  // What the last submission actually sent. Backend issue paths carry array
+  // indices, and those mean nothing against state the analyst has edited since,
+  // so they are resolved against this rather than against the current roll.
+  const [submitted, setSubmitted] = useState<SubmittedRentRoll>(EMPTY_SUBMITTED_RENT_ROLL);
 
   const isDirty = !isSameSnapshot({ dealName, values, dealContext }, savedSnapshot);
   const saveStatus: SaveStatus =
@@ -181,6 +326,7 @@ export function useLeaseLevelDeal(options: {
     setError(null);
     setLeaseIssues([]);
     setTermsIssues([]);
+    setSubmitted(EMPTY_SUBMITTED_RENT_ROLL);
   }
 
   function recordFailure(caught: unknown, fallback: string): string {
@@ -251,16 +397,51 @@ export function useLeaseLevelDeal(options: {
    *
    * Returns the built request, or `null` when it reported blanks instead.
    */
+  /** Which local row produced each entry of the arrays being reported on.
+   *
+   * Backend issue paths carry array indices, and an index means nothing against
+   * state the analyst has edited since the request went out -- resolving
+   * `suites[2]` against the current roll would blame whichever suite happens to
+   * sit there now. Captured here, at the moment of submission, so every index
+   * resolves to a stable local row id.
+   *
+   * `orderedLeaseSuiteIds` is the suite each submitted lease belongs to, in the
+   * order the leases were actually emitted; `null` means row order, which is
+   * what the blank collector uses since nothing is sent. */
+  function captureSubmitted(orderedLeaseSuiteIds: string[] | null): void {
+    const occupied = values.rentRoll.filter((row) => row.lease !== null);
+    setSubmitted({
+      suiteRowIds: values.rentRoll.map((row) => row.rowId),
+      suiteIds: values.rentRoll.map((row) => row.suiteId.trim()),
+      leaseRowIds:
+        orderedLeaseSuiteIds === null
+          ? occupied.map((row) => row.rowId)
+          : orderedLeaseSuiteIds.map(
+              (suiteId) =>
+                occupied.find((row) => row.suiteId.trim() === suiteId)?.rowId ?? '',
+            ),
+    });
+  }
+
   function buildRequest(): { terms: AcquisitionTermsRequest; inputs: LeaseLevelInputsRequest } | null {
     const blanks = collectBlankScalarIssues(values);
-    if (blanks.leaseIssues.length > 0 || blanks.termsIssues.length > 0) {
-      setLeaseIssues(blanks.leaseIssues);
+    const rowBlanks = collectRentRollBlankIssues(values);
+    if (
+      blanks.leaseIssues.length > 0 ||
+      blanks.termsIssues.length > 0 ||
+      rowBlanks.length > 0
+    ) {
+      captureSubmitted(null);
+      setLeaseIssues([...blanks.leaseIssues, ...rowBlanks]);
       setTermsIssues(blanks.termsIssues);
       return null;
     }
+    const inputs = buildLeaseLevelInputsRequest(values);
+    captureSubmitted(inputs.leases.map((lease) => lease.suite_id));
+
     return {
       terms: buildLeaseLevelTermsRequest(values.terms),
-      inputs: buildLeaseLevelInputsRequest(values),
+      inputs,
     };
   }
 
@@ -371,6 +552,8 @@ export function useLeaseLevelDeal(options: {
       dealContext: deal.deal_context ?? '',
     });
     setActiveSection('acquisition');
+    setEditorRowId(null);
+    setSubmitted(EMPTY_SUBMITTED_RENT_ROLL);
     setResults(null);
     setError(null);
     setSaveError(null);
@@ -395,6 +578,8 @@ export function useLeaseLevelDeal(options: {
     setLastSavedAt(null);
     setSavedSnapshot(BLANK_SNAPSHOT);
     setActiveSection('acquisition');
+    setEditorRowId(null);
+    setSubmitted(EMPTY_SUBMITTED_RENT_ROLL);
     setResults(null);
     setError(null);
     setSaveError(null);
@@ -407,6 +592,182 @@ export function useLeaseLevelDeal(options: {
       return true;
     }
     return window.confirm('You have unsaved changes that will be lost. Continue?');
+  }
+
+  // ===========================================================================
+  // D5.5B -- rent-roll operations
+  // ===========================================================================
+
+  /** Applies a change to one row, addressed by its local id. */
+  function updateRow(rowId: string, change: (row: SuiteRowFormValues) => SuiteRowFormValues) {
+    setValues((previous) => ({
+      ...previous,
+      rentRoll: previous.rentRoll.map((row) => (row.rowId === rowId ? change(row) : row)),
+    }));
+    resetDownstream();
+  }
+
+  function addRow(): void {
+    setValues((previous) => ({ ...previous, rentRoll: [...previous.rentRoll, blankSuiteRow()] }));
+    resetDownstream();
+  }
+
+  /** True when a row holds anything the analyst typed. Used to decide whether
+   * deleting it needs confirmation -- an untouched blank row is not data. */
+  function rowHasContent(row: SuiteRowFormValues): boolean {
+    if (
+      row.suiteId.trim() !== '' ||
+      row.suiteAreaSf.trim() !== '' ||
+      row.suiteLabel.trim() !== '' ||
+      row.marketRentPsf.trim() !== '' ||
+      row.marketLeasingOverrideEnabled
+    ) {
+      return true;
+    }
+    if (row.initialVacancy.strategy !== '') {
+      return true;
+    }
+    return row.lease !== null && leaseHasContent(row.lease);
+  }
+
+  function leaseHasContent(lease: LeaseFormValues): boolean {
+    return Object.entries(lease).some(
+      ([key, value]) => key !== 'origin' && typeof value === 'string' && value.trim() !== '',
+    );
+  }
+
+  /** Deletes a row, and with it the one lease it carried.
+   *
+   * Removing the row removes its lease from the submitted roll by construction:
+   * leases are emitted from rows, so there is no separate array left holding a
+   * lease that references a suite that no longer exists. */
+  function deleteRow(rowId: string): void {
+    const row = values.rentRoll.find((candidate) => candidate.rowId === rowId);
+    if (row === undefined) {
+      return;
+    }
+    if (rowHasContent(row)) {
+      const name = row.suiteId.trim() === '' ? 'this suite' : `suite ${row.suiteId.trim()}`;
+      const carriesLease = row.lease !== null && leaseHasContent(row.lease);
+      const detail = carriesLease ? ' Its lease will be removed with it.' : '';
+      if (!window.confirm(`Delete ${name}?${detail} This cannot be undone.`)) {
+        return;
+      }
+    }
+    setValues((previous) => ({
+      ...previous,
+      rentRoll: previous.rentRoll.filter((candidate) => candidate.rowId !== rowId),
+    }));
+    if (editorRowId === rowId) {
+      setEditorRowId(null);
+    }
+    resetDownstream();
+  }
+
+  function updateSuiteField(
+    rowId: string,
+    key: 'suiteId' | 'suiteAreaSf' | 'suiteLabel' | 'marketRentPsf',
+    value: string,
+  ): void {
+    updateRow(rowId, (row) => ({ ...row, [key]: value }));
+  }
+
+  function updateLeaseField(
+    rowId: string,
+    key: keyof Omit<LeaseFormValues, 'origin'>,
+    value: string,
+  ): void {
+    updateRow(rowId, (row) =>
+      row.lease === null ? row : { ...row, lease: { ...row.lease, [key]: value } },
+    );
+  }
+
+  function updateVacancyField(
+    rowId: string,
+    key: keyof InitialVacancyFormValues,
+    value: string,
+  ): void {
+    updateRow(rowId, (row) => ({
+      ...row,
+      initialVacancy: { ...row.initialVacancy, [key]: value },
+    }));
+  }
+
+  function updateOverrideField(
+    rowId: string,
+    key: keyof MarketLeasingFormValues,
+    value: string,
+  ): void {
+    updateRow(rowId, (row) => ({
+      ...row,
+      marketLeasingOverride: { ...row.marketLeasingOverride, [key]: value },
+    }));
+  }
+
+  /** Turns the full suite override on or off.
+   *
+   * Only the flag moves. The override's values are kept while it is off, and
+   * `market_rent_psf` is left completely alone -- the contract can carry both at
+   * once, and deleting the rent-only override because the full one was switched
+   * on would destroy an assumption the analyst still wants when they switch it
+   * back off. */
+  function toggleOverride(rowId: string): void {
+    updateRow(rowId, (row) => ({
+      ...row,
+      marketLeasingOverrideEnabled: !row.marketLeasingOverrideEnabled,
+    }));
+  }
+
+  /**
+   * Occupied <-> vacant. The control edits the lease, because the lease *is* the
+   * status: a suite is occupied exactly when one covers it.
+   *
+   * **Occupied to vacant destroys a lease**, so a populated one is confirmed
+   * first. Vacancy state is not chosen here either: the row keeps whatever
+   * treatment it was holding, which is blank for a suite that has never been
+   * vacant, and the backend then asks for one by name
+   * (`MISSING_INITIAL_VACANCY_TREATMENT`) rather than Anchor picking Hold Vacant
+   * or Market Lease-Up on the analyst's behalf.
+   *
+   * **Vacant to occupied creates an empty lease.** Not a rent, not a term, not a
+   * lease type, and emphatically not NNN. The suite's dormant vacancy treatment
+   * stays in local state but stops being submitted, because an occupied suite
+   * carrying one is refused (`INITIAL_VACANCY_ON_OCCUPIED_SUITE`).
+   */
+  function toggleOccupancy(rowId: string): void {
+    const row = values.rentRoll.find((candidate) => candidate.rowId === rowId);
+    if (row === undefined) {
+      return;
+    }
+    if (row.lease !== null) {
+      if (leaseHasContent(row.lease)) {
+        const name = row.suiteId.trim() === '' ? 'this suite' : `suite ${row.suiteId.trim()}`;
+        const tenant = row.lease.tenantName.trim();
+        const who = tenant === '' ? 'The lease' : `The lease for ${tenant}`;
+        if (
+          !window.confirm(
+            `Mark ${name} vacant? ${who} will be removed, and its rent, dates and terms discarded.`,
+          )
+        ) {
+          return;
+        }
+      }
+      updateRow(rowId, (candidate) => ({ ...candidate, lease: null }));
+      return;
+    }
+    updateRow(rowId, (candidate) => ({ ...candidate, lease: blankLeaseFormValues() }));
+  }
+
+  /** Copies the suite's area into the lease's leased area.
+   *
+   * An explicit action, never a mirror. D1-D3 require the two to be equal, but
+   * copying automatically would hide a rent roll that genuinely disagrees with
+   * itself, and would then have to decide what to do when the suite area changes
+   * later. The analyst asks, once. */
+  function useSuiteArea(rowId: string): void {
+    updateRow(rowId, (row) =>
+      row.lease === null ? row : { ...row, lease: { ...row.lease, leasedAreaSf: row.suiteAreaSf } },
+    );
   }
 
   return {
@@ -426,6 +787,20 @@ export function useLeaseLevelDeal(options: {
     saveError,
     leaseIssues,
     termsIssues,
+    issuesByRow: resolveRowIssues(leaseIssues, submitted).byRow,
+    editorRowId,
+    openEditor: setEditorRowId,
+    closeEditor: () => setEditorRowId(null),
+    area: reconcileArea(values),
+    addRow,
+    deleteRow,
+    updateSuiteField,
+    updateLeaseField,
+    updateVacancyField,
+    updateOverrideField,
+    toggleOverride,
+    toggleOccupancy,
+    useSuiteArea,
     onTermsFieldChange,
     onPropertyFieldChange,
     onOperatingFieldChange,
