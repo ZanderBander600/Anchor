@@ -3741,7 +3741,11 @@ body {
 /* The corner cell, named rather than positional: with the D5.6A period band
    the head has two rows, and `thead th:first-child` would also have caught the
    first month column and pinned it to the left edge. */
-.lease-level-statement-corner {
+/* Qualified with the table class deliberately. `.cash-flow-table th` sets
+   `text-align: right` -- right for a column of figures, wrong for a cell
+   holding a word -- and at (0,1,1) it outranks a bare class at (0,1,0). Every
+   label cell in this table therefore names the table too. */
+.lease-level-statement-table th.lease-level-statement-corner {
   position: sticky;
   left: 0;
   z-index: 3;
@@ -3773,10 +3777,12 @@ body {
 }
 
 /* A section band, not a card: it separates revenue from expenses without
-   turning every group into a panel. */
-.lease-level-statement-section th {
-  position: sticky;
-  left: 0;
+   turning every group into a panel.
+
+   The cell is not sticky. It spans every column, so it has nowhere to slide --
+   a sticky box is clamped to its containing block, and here the two are the
+   same width. The label inside it is what moves. */
+.lease-level-statement-table th[scope='rowgroup'] {
   text-align: left;
   font-size: 0.68rem;
   text-transform: uppercase;
@@ -3788,6 +3794,26 @@ body {
   box-shadow: none;
 }
 
+/* Sticky to the visible table, not to a span within it: a section applies to
+   every column, so its title should stay readable wherever the analyst has
+   scrolled to. Otherwise the band stays and the words leave, and the reader
+   gets an unexplained empty stripe.
+
+   `left: 0` puts it in the line-item column, which is where the section it
+   names is read from. That is a different scope from the phase labels, which
+   stick at `--ll-label-col` because they describe columns rather than rows --
+   the two must not be given the same offset.
+
+   Opaque, so nothing scrolls through it, and above the cells it passes over. */
+.lease-level-statement-section-label {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: inline-block;
+  background: var(--color-surface-muted, #f1f2f4);
+  padding-right: 0.75rem;
+}
+
 /* Net operating income is the line the whole statement builds to, and it is
    not part of the expense block above it. It carries no section band -- the row
    names itself, and a band repeating the words was the duplication D5.6A
@@ -3795,37 +3821,43 @@ body {
 
    Rules above and below, a tint, more air and a larger face together read as a
    section of one line rather than as the last row of Operating Expenses. */
+/* Net operating income: a ruled subtotal, the way an underwriting model draws
+   one, not a shaded panel.
+
+   The fill is gone. A tint across the row -- and a stronger one behind the
+   label -- read as a selected row rather than as a total, and the darker label
+   cell made it worse by looking like a highlighted cell in a spreadsheet. What
+   carries the emphasis instead is what carries it on paper: a heavy rule above,
+   a light one below, bold figures, and more air above the line than below it,
+   so the row reads as closing the block above rather than opening the one
+   below. */
 .lease-level-statement-noi th,
 .lease-level-statement-noi td {
   font-weight: 700;
-  font-size: 0.92rem;
-  padding-top: 1.05rem;
-  padding-bottom: 1.05rem;
+  font-size: 0.9rem;
+  padding-top: 0.85rem;
+  padding-bottom: 0.45rem;
   border-top: 2px solid var(--color-accent);
-  border-bottom: 2px solid var(--color-accent);
+  border-bottom: 1px solid var(--color-border);
+  background: none;
 }
 
-/* The tint, painted as an opaque surface with the accent laid over it.
-
-   The accent tokens are translucent by design, and two things here cannot take
-   a translucent background: the line-item cell is sticky, so anything showing
-   through it would be the row scrolling underneath, and the forward columns
-   already carry a tint of their own that would otherwise compound. Specific
-   enough to win over the forward-column rule, so the NOI row keeps one colour
-   across the sale boundary. */
-.lease-level-statement-table tr.lease-level-statement-noi th,
-.lease-level-statement-table tr.lease-level-statement-noi td {
-  background-color: var(--color-surface);
-  background-image: linear-gradient(var(--color-accent-soft), var(--color-accent-soft));
-}
-
+/* The label in the accent colour, and nothing else: no fill, so the sticky
+   cell keeps the plain opaque surface it needs and matches the rest of the
+   row exactly. */
 .lease-level-statement-table tr.lease-level-statement-noi th[scope='row'] {
-  background-image: linear-gradient(
-    var(--color-accent-soft-strong),
-    var(--color-accent-soft-strong)
-  );
+  background: var(--color-surface);
   color: var(--color-accent);
   letter-spacing: 0.01em;
+  /* Restated here because `th[scope='row']` sets `font-weight: 400` for the
+     ordinary line items at (0,2,1), which outranks the NOI rule's (0,1,1). The
+     label was rendering at normal weight while its own figures were bold. */
+  font-weight: 700;
+}
+
+/* A little air under the total before the next section opens. */
+.lease-level-statement-standalone + .lease-level-statement-group th[scope='rowgroup'] {
+  padding-top: 0.85rem;
 }
 
 /* Contra revenue -- free rent and credit loss. They sit among positives with
@@ -3852,8 +3884,12 @@ body {
    screen).
    --------------------------------------------------------------------------- */
 
-.lease-level-statement-period {
+.lease-level-statement-table th.lease-level-statement-period {
   position: relative;
+  /* Leading edge, not centred and not trailing. Without the table qualifier
+     this lost to `.cash-flow-table th` and the phase name drifted to the far
+     end of its span -- so "Forward 12 Months" sat over the last month of the
+     window rather than the first. */
   text-align: left;
   font-weight: 600;
   font-size: 0.68rem;

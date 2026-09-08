@@ -537,8 +537,17 @@ export function LeaseLevelOperatingStatement({
             >
               {section.title !== null && (
                 <tr className="lease-level-statement-section">
+                  {/* The title is its own element inside the band, and that is
+                      the whole point. The band cell spans every column, so a
+                      sticky *cell* has nowhere to slide -- its containing block
+                      is exactly as wide as it is -- and the title simply
+                      scrolled out of view, leaving an unexplained empty stripe
+                      across the table. A sticky span inside the cell does move,
+                      and stays legible at the left edge for as long as its rows
+                      are on screen. One label, in one place: never repeated
+                      into the month cells. */}
                   <th scope="rowgroup" colSpan={spanAllColumns}>
-                    {section.title}
+                    <span className="lease-level-statement-section-label">{section.title}</span>
                   </th>
                 </tr>
               )}
