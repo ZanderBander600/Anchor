@@ -490,7 +490,13 @@ describe('desktop space utilisation', () => {
         expect(panel.className, `${tab} panel`).not.toContain('workspace-panel-wide');
       }
     }
-    expect(appSource.match(/workspace-panel-wide/g)).toHaveLength(1);
+    // D5.7: two sites now, both Lease-Level -- the Underwrite panel for its rent
+    // roll, and the Risk panel for its sensitivity matrix, which is the other
+    // analyst-dense grid in the product. Quick and Detailed still ask for
+    // neither, which the loop above is what actually proves.
+    expect(appSource.match(/workspace-panel-wide/g)).toHaveLength(2);
+    const leaseLevelTree = appSource.slice(appSource.indexOf('const leaseLevelWorkspace = ('));
+    expect(leaseLevelTree.match(/workspace-panel-wide/g)).toHaveLength(2);
   });
 
   it('keeps the scalar tabs at the readable width', async () => {

@@ -77,6 +77,14 @@ const AUDITED = [
   'components/LeaseLevelOperatingStatement.tsx',
   'components/LeaseLevelMetricSummary.tsx',
   'leaseLevelFormat.ts',
+  // D5.7. The sensitivity workspace. None of these makes a mode decision, and
+  // none may compute an economic quantity: a sensitivity surface that derived a
+  // metric would be the most dangerous possible place for browser math.
+  'components/LeaseLevelSensitivityWorkspace.tsx',
+  'components/LeaseLevelOneWaySensitivity.tsx',
+  'components/LeaseLevelTwoWaySensitivity.tsx',
+  'components/CandidateValueEditor.tsx',
+  'leaseLevelSensitivity.ts',
 ];
 
 const MODE_LITERALS = new Set(['quick', 'detailed', 'lease_level']);
@@ -393,20 +401,57 @@ describe('the Lease-Level capability boundary', () => {
     }
   });
 
-  it('wires no client function for a surface a later gate owns', () => {
-    // The successor to D5.1B's blanket refusal. `/sensitivity` supports
-    // Lease-Level on the backend and `/ai/analysis` will, but no D5.5A screen
-    // consumes either, and a client function with no caller is a claim that a
-    // workflow exists.
+  it('wires the D5.7 sensitivity client functions, and none a later gate owns', () => {
+    // D5.7 transition. D5.5A forbade every sensitivity client function because
+    // no screen consumed one; the Risk workspace consumes both now, so the
+    // successor invariant requires them -- and still forbids presets, which
+    // Lease-Level deliberately never calls, plus break-even and AI, which
+    // remain unsupported and D5.8's.
     const api = sourceOf('api.ts');
+    for (const required of [
+      'runLeaseLevelOneWaySensitivity',
+      'runLeaseLevelTwoWaySensitivity',
+    ]) {
+      expect(api, `api.ts should wire ${required}`).toContain(required);
+    }
     for (const forbidden of [
-      'LeaseLevelSensitivity',
-      'leaseLevelSensitivity',
       'fetchLeaseLevelPresets',
+      'LeaseLevelSensitivityPresets',
       'LeaseLevelBreakEven',
       'leaseLevelAiAnalysis',
     ]) {
       expect(api, `api.ts wires ${forbidden}; a later gate owns that`).not.toContain(forbidden);
+    }
+  });
+
+  it('never asks for a Lease-Level sensitivity preset', () => {
+    // D5.0's decision, stated structurally: the analyst owns the scenario
+    // values, so `POST /sensitivity/presets` is never reachable from any
+    // Lease-Level surface, and no control silently populates an assumption with
+    // a named package.
+    //
+    // Every forbidden token below is an *identifier* a preset implementation
+    // would have to name. A doc comment explaining why Lease-Level has no
+    // presets writes the English word, and must not be what fails this test.
+    for (const relative of [
+      'components/LeaseLevelSensitivityWorkspace.tsx',
+      'components/LeaseLevelOneWaySensitivity.tsx',
+      'components/LeaseLevelTwoWaySensitivity.tsx',
+      'components/CandidateValueEditor.tsx',
+    ]) {
+      const code = sourceOf(relative);
+      for (const forbidden of [
+        '/sensitivity/presets',
+        'fetchSensitivityPresets',
+        'fetchDetailedSensitivityPresets',
+        'StandardSensitivityPresets',
+        'Conservative',
+        'Upside',
+        'Downside',
+        'Base Case',
+      ]) {
+        expect(code, `${relative} offers a preset (${forbidden})`).not.toContain(forbidden);
+      }
     }
   });
 
@@ -461,13 +506,40 @@ describe('the Lease-Level capability boundary', () => {
     ]) {
       expect(paths, `${required} should exist at D5.6`).toContain(required);
     }
-    for (const forbidden of [
-      'RentRollPasteImport',
-      'LeaseLevelSensitivityPanel',
-      'LeaseLevelBreakEven',
-      'LeaseLevelAiPanel',
+    // D5.7 transition: the sensitivity workspace this gate owns now exists, and
+    // break-even -- which Lease-Level does not support -- still must not.
+    for (const required of [
+      'LeaseLevelSensitivityWorkspace',
+      'LeaseLevelOneWaySensitivity',
+      'LeaseLevelTwoWaySensitivity',
     ]) {
+      expect(paths, `${required} should exist at D5.7`).toContain(required);
+    }
+    for (const forbidden of ['RentRollPasteImport', 'LeaseLevelBreakEven', 'LeaseLevelAiPanel']) {
       expect(paths, `${forbidden} exists; a later gate owns it`).not.toContain(forbidden);
+    }
+  });
+
+  it('offers no Lease-Level break-even', () => {
+    // Break-even is unsupported for Lease-Level. The Risk workspace therefore
+    // does not show a tab for it -- a control that refuses is worse than one
+    // that is absent -- and Quick's and Detailed's break-even panel is not
+    // reachable from any Lease-Level surface.
+    for (const relative of [
+      'components/LeaseLevelSensitivityWorkspace.tsx',
+      'components/LeaseLevelOneWaySensitivity.tsx',
+      'components/LeaseLevelTwoWaySensitivity.tsx',
+    ]) {
+      const text = sourceOf(relative);
+      for (const forbidden of [
+        'BreakEvenPanel',
+        'breakEven',
+        'fetchBreakEvenAnalysis',
+        'fetchDetailedBreakEvenAnalysis',
+        'BreakEvenResult',
+      ]) {
+        expect(text, `${relative} offers ${forbidden}`).not.toContain(forbidden);
+      }
     }
   });
 
@@ -511,6 +583,12 @@ describe('the Lease-Level capability boundary', () => {
       // The formatter too: a total slipped into a label would be the same
       // mutant wearing a different hat (M25).
       'leaseLevelFormat.ts',
+      // D5.7: a sensitivity table is a result surface too. A `Math.max` here
+      // would be the first step towards ranking scenarios, and a `.reduce`
+      // towards an average row -- both financial claims the backend never made.
+      'components/LeaseLevelOneWaySensitivity.tsx',
+      'components/LeaseLevelTwoWaySensitivity.tsx',
+      'leaseLevelSensitivity.ts',
     ]) {
       const source = sourceOf(relative);
       for (const forbidden of ['.reduce(', 'Math.max(', 'Math.min(', '.filter((', 'sum(']) {
@@ -530,9 +608,16 @@ describe('the Lease-Level capability boundary', () => {
     );
   });
 
-  // The only additions D5.0 approved: the sensitivity ladder (D5.7, not built)
-  // and area totals. These are the exact expressions the area aid evaluates.
+  // The only two additions D5.0 approved: area totals and the sensitivity
+  // ladder. These are the exact expressions the area aid evaluates.
   const AREA_CARVE_OUT = /allocatedSf \+ area|rentableAreaSf - allocatedSf/;
+
+  // D5.7. `index + 1` is the one-based position of a candidate field inside an
+  // `aria-label` ("Exit Cap Rate candidate value 3"). It is a list position, not
+  // a value: it is never submitted, never formatted as money, and never reaches
+  // a result cell. Named by literal, and confined below to the one component
+  // that renders a list of inputs.
+  const POSITION_CARVE_OUT = /\bindex \+ 1\b/;
 
   it('confines the area carve-out to one display-only function', () => {
     const text = sourceOf('leaseLevelConvert.ts');
@@ -550,6 +635,80 @@ describe('the Lease-Level capability boundary', () => {
       'useLeaseLevelDeal.ts',
     ]) {
       expect(sourceOf(relative), `${relative} sums area itself`).not.toMatch(AREA_CARVE_OUT);
+    }
+  });
+
+  it('confines the ladder carve-out to one generator module (D5.7)', () => {
+    // The D5.0-approved sensitivity ladder. `center + step * offset` is genuine
+    // arithmetic, so it is permitted in exactly one module, inside exactly one
+    // function, reachable only from the candidate editor.
+    const text = sourceOf('leaseLevelSensitivityLadder.ts');
+    const start = text.indexOf('export function generateLadderValues');
+    expect(start, 'generateLadderValues should exist').toBeGreaterThan(-1);
+    expect(text.slice(start)).toContain('center + step * offset');
+
+    // Nothing before the generator computes anything, so the carve-out cannot
+    // quietly grow a second resident.
+    const preamble = ts.createSourceFile(
+      'ladder-preamble.ts',
+      text.slice(0, start),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    const early: string[] = [];
+    walk(preamble, (node) => {
+      if (!ts.isBinaryExpression(node)) return;
+      const op = node.operatorToken.kind;
+      if (
+        op === ts.SyntaxKind.AsteriskToken ||
+        op === ts.SyntaxKind.SlashToken ||
+        op === ts.SyntaxKind.MinusToken ||
+        op === ts.SyntaxKind.PlusToken
+      ) {
+        early.push(node.getText(preamble));
+      }
+    });
+    expect(early, 'the ladder module computes before its generator').toEqual([]);
+
+    // It is a typing aid, not an analysis. Its only import is the shipped
+    // display rounding, so it has no result, no request and no metric within
+    // reach -- nothing financial to compute even by accident.
+    expect(text).toContain("import { formatDisplayNumber } from './convert';");
+    expect(text.match(/^import .*$/gm), 'the ladder module imports something else').toHaveLength(1);
+    for (const forbidden of ['fetch(', 'metric_values', 'matrix', 'baseline_']) {
+      expect(text, `the ladder module reaches ${forbidden}`).not.toContain(forbidden);
+    }
+
+    // Only the candidate editor reaches it. A result surface importing the
+    // generator would be the first move towards computing a cell.
+    for (const relative of [
+      'components/LeaseLevelSensitivityWorkspace.tsx',
+      'components/LeaseLevelOneWaySensitivity.tsx',
+      'components/LeaseLevelTwoWaySensitivity.tsx',
+      'components/LeaseLevelResults.tsx',
+      'components/LeaseLevelMetricSummary.tsx',
+    ]) {
+      expect(sourceOf(relative), `${relative} imports the ladder generator`).not.toContain(
+        'generateLadderValues',
+      );
+    }
+  });
+
+  it('confines the candidate-position carve-out to the candidate editor (D5.7)', () => {
+    // `index + 1` is tolerated by the G-M7 filter below. It is tolerated in one
+    // file, for one purpose -- naming an input in a list for assistive
+    // technology -- and nowhere near a value.
+    expect(sourceOf('components/CandidateValueEditor.tsx')).toMatch(POSITION_CARVE_OUT);
+    for (const relative of [
+      'components/LeaseLevelSensitivityWorkspace.tsx',
+      'components/LeaseLevelOneWaySensitivity.tsx',
+      'components/LeaseLevelTwoWaySensitivity.tsx',
+      'leaseLevelSensitivity.ts',
+    ]) {
+      expect(sourceOf(relative), `${relative} uses the position carve-out`).not.toMatch(
+        POSITION_CARVE_OUT,
+      );
     }
   });
 
@@ -576,6 +735,16 @@ describe('the Lease-Level capability boundary', () => {
       'components/LeaseLevelOperatingStatement.tsx',
       'components/LeaseLevelMetricSummary.tsx',
       'leaseLevelFormat.ts',
+      // D5.7. The sensitivity surface. The ladder generator is deliberately
+      // *not* in this list -- it is the approved carve-out, lives alone in
+      // `leaseLevelSensitivityLadder.ts`, and the test above proves that is its
+      // only home.
+      'components/LeaseLevelSensitivityWorkspace.tsx',
+      'components/LeaseLevelOneWaySensitivity.tsx',
+      'components/LeaseLevelTwoWaySensitivity.tsx',
+      'components/CandidateValueEditor.tsx',
+      'leaseLevelSensitivity.ts',
+      'leaseLevelSensitivityTypes.ts',
     ]) {
       const source = parse(relative);
       const offenders: string[] = [];
@@ -598,7 +767,10 @@ describe('the Lease-Level capability boundary', () => {
       //     and is display-only -- it is confined to `reconcileArea`, and the
       //     assertion below proves that function is where it lives.
       const disallowed = offenders.filter(
-        (site) => !/\b100\b/.test(site) && !AREA_CARVE_OUT.test(site),
+        (site) =>
+          !/\b100\b/.test(site) &&
+          !AREA_CARVE_OUT.test(site) &&
+          !POSITION_CARVE_OUT.test(site),
       );
       expect(disallowed, `${relative} performs lease arithmetic in the browser`).toEqual([]);
     }
@@ -752,8 +924,9 @@ describe('mutation kills', () => {
     const literals = api.match(/operating_mode: 'lease_level'/g) ?? [];
     expect(
       literals.length,
-      'analyze, create and update must each carry the Lease-Level discriminator',
-    ).toBe(3);
+      'analyze, create, update and the two D5.7 sensitivity runs must each carry ' +
+        'the Lease-Level discriminator',
+    ).toBe(5);
     for (const forbidden of ["operating_mode: 'quick',\n    terms,\n    ...inputs"]) {
       expect(api, 'a Lease-Level body carries another mode').not.toContain(forbidden);
     }

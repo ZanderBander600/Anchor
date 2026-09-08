@@ -3963,3 +3963,244 @@ body {
 .lease-level-statement-table th[scope='row'] {
   z-index: 2;
 }
+
+/* -------------------------------------------------------------------------
+   D5.7 -- the Lease-Level sensitivity workspace.
+
+   Institutional underwriting furniture, not a new visual language: the same
+   navy/white palette, the same spacing scale, the same `.field` inputs and the
+   same `.sensitivity-table` the Quick and Detailed matrices already use. The
+   builder is a dense strip of controls above a dense table, because that is
+   how an analyst reads a scenario grid.
+   ------------------------------------------------------------------------- */
+
+.lease-level-sensitivity {
+  gap: var(--sp-5);
+}
+
+.sensitivity-builder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.sensitivity-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+
+.sensitivity-select {
+  min-width: 220px;
+}
+
+/* Each axis of a two-way grid is one bordered block, so "which values are the
+   rows" is answered by the layout rather than by reading labels. */
+.sensitivity-axis {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.sensitivity-axis-title {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-candidates {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.sensitivity-candidates-legend {
+  padding: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-candidate-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.sensitivity-candidate {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+
+.sensitivity-candidate-affix {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-candidate-input {
+  width: 6.5rem;
+  border: none;
+  background: transparent;
+  padding: var(--sp-2) 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.sensitivity-candidate-remove {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: var(--sp-1);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.sensitivity-candidate-remove:hover:not(:disabled) {
+  color: var(--color-accent);
+  background: rgba(15, 44, 76, 0.08);
+}
+
+.sensitivity-add-value,
+.sensitivity-ladder-apply {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+}
+
+.sensitivity-add-value:hover:not(:disabled),
+.sensitivity-ladder-apply:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.sensitivity-candidate-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+/* The generator sits below the values it fills, visibly subordinate to them:
+   the candidate fields are the assumptions, this is only a way to type them. */
+.sensitivity-ladder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3);
+  padding-top: var(--sp-2);
+  border-top: 1px dashed var(--color-border);
+}
+
+.sensitivity-ladder-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  padding-bottom: var(--sp-2);
+}
+
+.sensitivity-ladder-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-ladder-field .field-input {
+  width: 7rem;
+}
+
+.sensitivity-shadow-notice {
+  margin: 0;
+  padding: var(--sp-3);
+  border-left: 3px solid var(--color-text-muted);
+  background: var(--color-surface-muted);
+  font-size: 0.78rem;
+  color: var(--color-text);
+}
+
+.sensitivity-run-row {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+}
+
+.sensitivity-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.sensitivity-caption {
+  caption-side: top;
+  text-align: left;
+  padding-bottom: var(--sp-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-baseline-line,
+.sensitivity-note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+/* A one-way answer is two columns; letting it stretch to 1800px would put the
+   assumption and its metric at opposite ends of the screen. */
+.sensitivity-one-way-table {
+  width: auto;
+  min-width: 22rem;
+}
+
+.sensitivity-baseline-row th,
+.sensitivity-baseline-row td {
+  border-bottom: 2px solid var(--color-border);
+}
+
+/* A percentage candidate needs `6.25`, not `84,000,000`, so it gets a field
+   sized for what it holds. Five of these then read as one set of assumptions
+   rather than as five widely-spaced boxes. */
+.sensitivity-candidate-input-narrow {
+  width: 4rem;
+}
+
+/* A result grid sizes to its own content. `.sensitivity-table` is 100% wide
+   because Quick's preset matrices fill a card; a five-column Lease-Level grid
+   stretched across an 1800px workspace puts the exit cap and its answer at
+   opposite ends of the screen. Wider grids still scroll inside `.table-scroll`.
+   Scoped to the Lease-Level result wrapper, so Quick and Detailed are
+   untouched. */
+.sensitivity-result .sensitivity-table {
+  width: auto;
+  min-width: 32rem;
+}
+
+.sensitivity-result .sensitivity-table th,
+.sensitivity-result .sensitivity-table td {
+  padding: 0.45rem 1.1rem;
+}

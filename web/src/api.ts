@@ -22,6 +22,12 @@ import type {
   LeaseLevelInputsRequest,
   LeaseLevelIssue,
 } from './leaseLevelTypes';
+import type {
+  LeaseLevelOneWaySensitivityControls,
+  LeaseLevelOneWaySensitivityResult,
+  LeaseLevelTwoWaySensitivityControls,
+  LeaseLevelTwoWaySensitivityResult,
+} from './leaseLevelSensitivityTypes';
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
 
@@ -1200,10 +1206,18 @@ function leaseLevelValidationError(payload: unknown): ApiError {
     )
     .filter((message): message is string => typeof message === 'string');
 
+  // D5.7: a `detail` that is a plain string is a real refusal with a real
+  // sentence in it -- `SENSITIVITY_TARGET_SHADOWED_BY_SUITE_OVERRIDE`, an
+  // unsupported target or metric, or a row/column target repeated -- and the
+  // backend is the only thing that knows which. Reporting those as the generic
+  // "failed validation" would replace the authoritative answer with a shrug, so
+  // the string is surfaced verbatim. A structured `detail` array is unaffected.
+  const stringDetail = typeof detail === 'string' && detail.trim() !== '' ? detail : null;
+
   const message =
     messages.length > 0
       ? messages.join(' ')
-      : 'The submitted assumptions failed validation.';
+      : (stringDetail ?? 'The submitted assumptions failed validation.');
   return new LeaseLevelApiError(message, issues, leaseIssues);
 }
 
@@ -1279,4 +1293,55 @@ export async function updateLeaseLevelDeal(
     ...(dealContext === null ? {} : { deal_context: dealContext }),
   });
   return (await response.json()) as Deal;
+}
+
+// =============================================================================
+// D5.7 -- Lease-Level sensitivity.
+//
+// The same two endpoints Quick and Detailed use, discriminated by
+// `operating_mode` exactly as every other Lease-Level function above is. No new
+// endpoint, no new backend field, and no sensitivity math: each builds a typed
+// body from the *current* inputs and hands back the response unchanged.
+//
+// Neither function caches, batches, reorders or deduplicates anything. The
+// backend performs `1 + N` complete re-underwrites for a one-way run and
+// `1 + R*C` for a two-way run, and nothing here shortens that.
+// =============================================================================
+
+/** `POST /sensitivity/one-way` with `operating_mode: "lease_level"`.
+ *
+ * `controls.values` are **absolute** assumption values already on the wire
+ * scale, in the analyst's own order, which the response preserves positionally.
+ */
+export async function runLeaseLevelOneWaySensitivity(
+  terms: AcquisitionTermsRequest,
+  inputs: LeaseLevelInputsRequest,
+  controls: LeaseLevelOneWaySensitivityControls,
+): Promise<LeaseLevelOneWaySensitivityResult> {
+  const response = await postJson('/sensitivity/one-way', {
+    operating_mode: 'lease_level',
+    terms,
+    ...inputs,
+    ...controls,
+  });
+  return (await response.json()) as LeaseLevelOneWaySensitivityResult;
+}
+
+/** `POST /sensitivity` with `operating_mode: "lease_level"`.
+ *
+ * Rows stay rows and columns stay columns: the controls carry the analyst's
+ * choice under the backend's own field names, and `matrix[row][column]` is
+ * returned and rendered in that orientation. */
+export async function runLeaseLevelTwoWaySensitivity(
+  terms: AcquisitionTermsRequest,
+  inputs: LeaseLevelInputsRequest,
+  controls: LeaseLevelTwoWaySensitivityControls,
+): Promise<LeaseLevelTwoWaySensitivityResult> {
+  const response = await postJson('/sensitivity', {
+    operating_mode: 'lease_level',
+    terms,
+    ...inputs,
+    ...controls,
+  });
+  return (await response.json()) as LeaseLevelTwoWaySensitivityResult;
 }

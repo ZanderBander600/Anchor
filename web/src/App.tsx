@@ -116,8 +116,9 @@ import type {
   V2FieldId,
 } from './types';
 import { assertNeverMode, byMode } from './operatingMode';
-import { useLeaseLevelDeal } from './useLeaseLevelDeal';
+import { LEASE_LEVEL_BLANKS_MESSAGE, useLeaseLevelDeal } from './useLeaseLevelDeal';
 import { LeaseLevelWorkspace } from './components/LeaseLevelWorkspace';
+import { LeaseLevelSensitivityWorkspace } from './components/LeaseLevelSensitivityWorkspace';
 
 /** Owner Return Metrics V3 Gate A6: `Deal.analysis_snapshot`'s type is
  * `AcquisitionResults | DetailedAcquisitionResults | null` at the shared
@@ -2573,21 +2574,27 @@ export default function App() {
         />
       </WorkspacePanel>
 
-      {/* Risk, AI Analyst and Documents are D5.7, D5.8 and post-D5. Each says
-        * which gate owns it rather than rendering Quick's panel with no data
-        * behind it -- an empty surface that looks broken is worse than one that
-        * says what it is waiting for. */}
+      {/* D5.7: Risk is now the Lease-Level sensitivity workspace. AI Analyst and
+        * Documents remain D5.8 and post-D5, and each still says which gate owns
+        * it rather than rendering Quick's panel with no data behind it -- an
+        * empty surface that looks broken is worse than one that says what it is
+        * waiting for.
+        *
+        * The subtitle names sensitivity alone: Lease-Level break-even is not
+        * supported, and this workspace deliberately offers no break-even tab
+        * rather than a tab that refuses. */}
       <WorkspacePanel
         id="risk"
         active={workspace}
         title="Risk"
-        subtitle="Sensitivity and break-even for these assumptions."
+        subtitle="One-way and two-way sensitivity over the assumptions on Underwrite."
+        className="workspace-panel-wide"
       >
-        <div className="empty-state">
-          Lease-Level sensitivity arrives in a later gate. The analysis itself
-          supports one-way and two-way sensitivity today; the screen for choosing
-          an assumption and a range is not built yet.
-        </div>
+        <LeaseLevelSensitivityWorkspace
+          rentRoll={leaseLevel.values.rentRoll}
+          buildRequest={leaseLevel.buildRequest}
+          blanksMessage={LEASE_LEVEL_BLANKS_MESSAGE}
+        />
       </WorkspacePanel>
 
       <WorkspacePanel

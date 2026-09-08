@@ -147,6 +147,22 @@ export interface LeaseLevelDealState {
   onDealNameChange: (value: string) => void;
   onDealContextChange: (value: string) => void;
 
+  /**
+   * D5.7 -- the request Analyze would submit, built from the assumptions
+   * currently on screen.
+   *
+   * Exposed so the sensitivity workspace runs against the **current** inputs
+   * rather than a saved deal, a stale snapshot or the last analysis, and does so
+   * through the one authoritative mapper. There is deliberately no second
+   * Lease-Level request builder: this is literally the function `analyze` and
+   * `save` call.
+   *
+   * Returns `null` when a field is still blank, having reported those blanks on
+   * the tabs that hold them exactly as Analyze does. Calling it neither dirties
+   * the deal, clears the analysis, nor persists anything.
+   */
+  buildRequest: () => { terms: AcquisitionTermsRequest; inputs: LeaseLevelInputsRequest } | null;
+
   analyze: () => Promise<void>;
   save: () => Promise<void>;
   /** Loads a saved Lease-Level deal into this state. Returns `false` when the
@@ -157,6 +173,13 @@ export interface LeaseLevelDealState {
   resetToBlank: () => void;
   confirmDiscardIfDirty: () => boolean;
 }
+
+/** The one message for "a field is still blank, so no request exists to send".
+ *
+ * Module scope since D5.7, because the sensitivity workspace builds the same
+ * request through the same mapper and must say the same thing when it cannot. */
+export const LEASE_LEVEL_BLANKS_MESSAGE =
+  'Some assumptions are still blank. They are marked on the tab that holds them.';
 
 interface LeaseLevelSnapshot {
   dealName: string;
@@ -459,9 +482,6 @@ export function useLeaseLevelDeal(options: {
     };
   }
 
-  const BLANKS_MESSAGE =
-    'Some assumptions are still blank. They are marked on the tab that holds them.';
-
   async function analyze(): Promise<void> {
     setIsAnalyzing(true);
     setError(null);
@@ -470,7 +490,7 @@ export function useLeaseLevelDeal(options: {
     try {
       const request = buildRequest();
       if (request === null) {
-        setError(BLANKS_MESSAGE);
+        setError(LEASE_LEVEL_BLANKS_MESSAGE);
         return;
       }
       const analysis = await analyzeLeaseLevelAcquisition(request.terms, request.inputs);
@@ -508,7 +528,7 @@ export function useLeaseLevelDeal(options: {
     try {
       const request = buildRequest();
       if (request === null) {
-        setSaveError(BLANKS_MESSAGE);
+        setSaveError(LEASE_LEVEL_BLANKS_MESSAGE);
         return;
       }
       const { terms, inputs } = request;
@@ -829,6 +849,7 @@ export function useLeaseLevelDeal(options: {
     onMarketFieldChange,
     onDealNameChange: setDealName,
     onDealContextChange,
+    buildRequest,
     analyze,
     save,
     open,
