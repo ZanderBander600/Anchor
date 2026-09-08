@@ -3751,13 +3751,21 @@ body {
   box-shadow: 1px 0 0 var(--color-divider);
 }
 
-/* One width for the label column, so the sticky period labels below have a
-   fixed offset to sit against and a 132-column table cannot squeeze the line
-   items to nothing. */
+/* One width for the label column, declared once.
+
+   The phase labels below stick at exactly this offset, so the two must never
+   drift: a hard-coded `left` that disagreed with the real column width would
+   slide the label under the line items or leave a gap beside them. Wide enough
+   for the longest label the statement has ("Physical Occupancy at Year End")
+   without wrapping. */
+.lease-level-statement-table {
+  --ll-label-col: 17rem;
+}
+
 .lease-level-statement-corner,
 .lease-level-statement-table th[scope='row'] {
-  width: 15rem;
-  min-width: 15rem;
+  width: var(--ll-label-col);
+  min-width: var(--ll-label-col);
 }
 
 .lease-level-statement-table td {
@@ -3780,13 +3788,53 @@ body {
   box-shadow: none;
 }
 
-/* NOI is the line the whole statement builds to. It carries no section band
-   above it -- the row names itself -- so the rules do the separating. */
+/* Net operating income is the line the whole statement builds to, and it is
+   not part of the expense block above it. It carries no section band -- the row
+   names itself, and a band repeating the words was the duplication D5.6A
+   removed -- so the separation has to come from the row.
+
+   Rules above and below, a tint, more air and a larger face together read as a
+   section of one line rather than as the last row of Operating Expenses. */
 .lease-level-statement-noi th,
 .lease-level-statement-noi td {
   font-weight: 700;
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
+  font-size: 0.92rem;
+  padding-top: 1.05rem;
+  padding-bottom: 1.05rem;
+  border-top: 2px solid var(--color-accent);
+  border-bottom: 2px solid var(--color-accent);
+}
+
+/* The tint, painted as an opaque surface with the accent laid over it.
+
+   The accent tokens are translucent by design, and two things here cannot take
+   a translucent background: the line-item cell is sticky, so anything showing
+   through it would be the row scrolling underneath, and the forward columns
+   already carry a tint of their own that would otherwise compound. Specific
+   enough to win over the forward-column rule, so the NOI row keeps one colour
+   across the sale boundary. */
+.lease-level-statement-table tr.lease-level-statement-noi th,
+.lease-level-statement-table tr.lease-level-statement-noi td {
+  background-color: var(--color-surface);
+  background-image: linear-gradient(var(--color-accent-soft), var(--color-accent-soft));
+}
+
+.lease-level-statement-table tr.lease-level-statement-noi th[scope='row'] {
+  background-image: linear-gradient(
+    var(--color-accent-soft-strong),
+    var(--color-accent-soft-strong)
+  );
+  color: var(--color-accent);
+  letter-spacing: 0.01em;
+}
+
+/* Contra revenue -- free rent and credit loss. They sit among positives with
+   no heading to say they come off, so they are shown the way they behave: a
+   leading minus, and red. The "Less:" label stays, because colour is the
+   weakest of the three cues and the first to be lost. */
+.lease-level-statement-contra th[scope='row'],
+.lease-level-statement-contra td {
+  color: var(--color-negative);
 }
 
 /* ---------------------------------------------------------------------------
@@ -3818,16 +3866,29 @@ body {
   display: table-cell;
 }
 
-/* The band label stays against the line-item column while its own months
-   scroll underneath, so the analyst can always see which period they are in.
-   `left` matches the corner width above. Sticky is scoped to the cell, so the
-   label leaves with its band rather than crossing the boundary. */
+/* The phase label sits at the left edge of its own band and travels with the
+   scroll, so an analyst three years into a 72-column table still knows whether
+   they are in the hold period or the valuation window.
+
+   It stops at the next phase for free: a sticky element cannot leave its
+   containing block, and the containing block here is the band cell. So the
+   Hold Period label slides as far as the sale and then goes with its band,
+   rather than crossing into the Forward 12 columns and mislabelling them.
+
+   Opaque, because on the last stretch of the hold band it slides over the
+   "Sale / Hold End" marker and needs to read as a layer rather than a
+   collision. */
 .lease-level-statement-period-label {
   position: sticky;
-  left: 15rem;
+  left: var(--ll-label-col);
+  z-index: 1;
   display: inline-flex;
   align-items: baseline;
   gap: 0.5rem;
+  padding-right: 0.75rem;
+  /* Matches the band it sits in, stated rather than inherited so the layering
+     does not depend on which of the two bands the label belongs to. */
+  background: var(--color-surface-muted, #f1f2f4);
 }
 
 .lease-level-statement-period-note {

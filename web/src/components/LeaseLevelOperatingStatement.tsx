@@ -26,7 +26,6 @@
  * opinion computed here could disagree with it.
  */
 
-import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import { formatCurrency, formatPercent } from '../format';
 import { formatMonthLabel, formatSquareFeet } from '../leaseLevelFormat';
@@ -44,7 +43,17 @@ export interface LeaseLevelOperatingStatementProps {
   onViewChange: (view: OperatingPeriodView) => void;
 }
 
-type RowKind = 'line' | 'deduction' | 'subtotal' | 'total' | 'state';
+/**
+ * `contra` is the one that carries presentation weight.
+ *
+ * Free rent and credit loss sit inside the revenue block, surrounded by
+ * positives, with nothing above them announcing that they come off. The
+ * expense lines do not have that problem -- they live under a heading that
+ * says Operating Expenses -- so they stay plain. A contra line is shown with a
+ * leading minus and in red, and keeps its "Less:" label, so the direction
+ * survives a monochrome print or a reader who does not see the colour.
+ */
+type RowKind = 'line' | 'contra' | 'deduction' | 'subtotal' | 'total' | 'state';
 
 interface Row {
   label: string;
@@ -186,11 +195,11 @@ function monthlySections(monthly: MonthlyPropertyProjection): Section[] {
       title: 'Revenue',
       rows: [
         { label: 'Contractual Base Rent', values: monthly.contractual_base_rent, kind: 'line' },
-        { label: 'Less: Free Rent', values: monthly.free_rent, kind: 'deduction' },
+        { label: 'Less: Free Rent', values: monthly.free_rent, kind: 'contra' },
         { label: 'Cash Base Rent', values: monthly.cash_base_rent, kind: 'subtotal' },
         { label: 'Expense Recoveries', values: monthly.expense_recovery, kind: 'line' },
         { label: 'Other Income', values: monthly.other_income, kind: 'line' },
-        { label: 'Less: Credit Loss', values: monthly.credit_loss, kind: 'deduction' },
+        { label: 'Less: Credit Loss', values: monthly.credit_loss, kind: 'contra' },
         {
           label: 'Effective Gross Income',
           values: monthly.effective_gross_income,
@@ -262,11 +271,11 @@ function annualSections(
           values: annual.contractual_base_rent_by_year,
           kind: 'line',
         },
-        { label: 'Less: Free Rent', values: annual.free_rent_by_year, kind: 'deduction' },
+        { label: 'Less: Free Rent', values: annual.free_rent_by_year, kind: 'contra' },
         { label: 'Cash Base Rent', values: annual.cash_base_rent_by_year, kind: 'subtotal' },
         { label: 'Expense Recoveries', values: annual.expense_recovery_by_year, kind: 'line' },
         { label: 'Other Income', values: annual.other_income_by_year, kind: 'line' },
-        { label: 'Less: Credit Loss', values: annual.credit_loss_by_year, kind: 'deduction' },
+        { label: 'Less: Credit Loss', values: annual.credit_loss_by_year, kind: 'contra' },
         {
           label: 'Effective Gross Income',
           values: annual.effective_gross_income_by_year,
@@ -372,14 +381,36 @@ function annualSections(
   ];
 }
 
+function rowClass(row: Row): string | undefined {
+  switch (row.kind) {
+    case 'total':
+      return 'operating-statement-emphasis lease-level-statement-noi';
+    case 'subtotal':
+      return 'operating-statement-emphasis';
+    case 'contra':
+      return 'lease-level-statement-contra';
+    default:
+      return undefined;
+  }
+}
+
 function renderValue(row: Row, value: number): ReactNode {
-  if (row.kind !== 'state') {
-    return formatCurrency(value);
+  if (row.kind === 'state') {
+    if (row.label.startsWith('Physical Occupancy') || row.label.startsWith('Average')) {
+      return formatPercent(value);
+    }
+    return formatSquareFeet(value);
   }
-  if (row.label.startsWith('Physical Occupancy') || row.label.startsWith('Average')) {
-    return formatPercent(value);
+  const amount = formatCurrency(value);
+  if (row.kind === 'contra' && value > 0) {
+    // A display sign, not a calculation. The wire carries a positive magnitude
+    // -- free rent of 20,000 is 20,000 of free rent -- and this puts a
+    // character in front of the formatted string. Nothing is negated, so the
+    // module still contains no arithmetic, and a zero stays `$0` rather than
+    // becoming the nonsense `-$0`.
+    return `-${amount}`;
   }
-  return formatSquareFeet(value);
+  return amount;
 }
 
 export function LeaseLevelOperatingStatement({
@@ -489,41 +520,40 @@ export function LeaseLevelOperatingStatement({
               ))}
             </tr>
           </thead>
-          <tbody>
-            {sections.map((section) => (
-              <Fragment key={section.title ?? section.rows[0].label}>
-                {section.title !== null && (
-                  <tr className="lease-level-statement-section">
-                    <th scope="rowgroup" colSpan={spanAllColumns}>
-                      {section.title}
-                    </th>
-                  </tr>
-                )}
-                {section.rows.map((row) => (
-                  <tr
-                    key={row.label}
-                    className={
-                      row.kind === 'total'
-                        ? 'operating-statement-emphasis lease-level-statement-noi'
-                        : row.kind === 'subtotal'
-                          ? 'operating-statement-emphasis'
-                          : undefined
-                    }
-                  >
-                    <th scope="row">{row.label}</th>
-                    {row.values.map((value, index) => (
-                      <td
-                        key={columns[index]?.key ?? index}
-                        className={columnClass(columns[index])}
-                      >
-                        {renderValue(row, value)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </Fragment>
-            ))}
-          </tbody>
+          {/* One `tbody` per section, which is what a row group is for.
+              It matters most for net operating income: with a single `tbody`,
+              NOI trailed the expense rows and belonged to the Operating
+              Expenses group in the markup as well as to the eye. It is not part
+              of that group -- it is what the group resolves to -- so it gets a
+              row group of its own, with nothing else in it. */}
+          {sections.map((section) => (
+            <tbody
+              key={section.title ?? section.rows[0].label}
+              className={
+                section.title === null
+                  ? 'lease-level-statement-group lease-level-statement-standalone'
+                  : 'lease-level-statement-group'
+              }
+            >
+              {section.title !== null && (
+                <tr className="lease-level-statement-section">
+                  <th scope="rowgroup" colSpan={spanAllColumns}>
+                    {section.title}
+                  </th>
+                </tr>
+              )}
+              {section.rows.map((row) => (
+                <tr key={row.label} className={rowClass(row)}>
+                  <th scope="row">{row.label}</th>
+                  {row.values.map((value, index) => (
+                    <td key={columns[index]?.key ?? index} className={columnClass(columns[index])}>
+                      {renderValue(row, value)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          ))}
         </table>
       </div>
     </section>
