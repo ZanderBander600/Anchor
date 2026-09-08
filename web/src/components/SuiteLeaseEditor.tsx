@@ -215,6 +215,28 @@ export function SuiteLeaseEditor({
   const name = row.suiteId.trim() === '' ? 'the new suite' : `Suite ${row.suiteId}`;
   const lease = row.lease;
 
+  // Which of this row's issues the drawer actually offers a control for.
+  //
+  // Recorded as the drawer asks, rather than listed. A field inside a
+  // conditional branch -- the recovery terms that exist only for a Modified
+  // Gross lease, the lease-up period that exists only under Market Lease-Up --
+  // is never asked about when that branch is not taken, so it never joins this
+  // set and falls through to the banner instead. A list would have to be kept
+  // in step with the JSX by hand; this cannot drift from it, because it *is*
+  // the JSX asking.
+  const consumed = new Set<string>();
+
+  function describe(field: string): string | undefined {
+    consumed.add(field);
+    return messageFor(issues, field);
+  }
+
+  /** The first message among several candidate paths, consuming all of them.
+   * `??` alone would short-circuit and leave the later path looking unrendered. */
+  function describeFirst(...fields: string[]): string | undefined {
+    return fields.map(describe).find((message) => message !== undefined);
+  }
+
   const overrideSections: FieldSection[] = LEASE_LEVEL_MARKET_FIELD_GROUPS.map((group) => ({
     view: null,
     title: group.title,
@@ -225,7 +247,7 @@ export function SuiteLeaseEditor({
       suffix: field.suffix,
       value: row.marketLeasingOverride[field.key],
       onChange: (value: string) => onOverrideFieldChange(row.rowId, field.key, value),
-      error: messageFor(issues, `market_leasing_override.${wireFieldName(field.key)}`),
+      error: describe(`market_leasing_override.${wireFieldName(field.key)}`),
     })),
   }));
 
@@ -240,81 +262,60 @@ export function SuiteLeaseEditor({
         suffix: field.suffix,
         value: row.marketLeasingOverride[field.key],
         onChange: (value: string) => onOverrideFieldChange(row.rowId, field.key, value),
-        error: messageFor(issues, `market_leasing_override.${wireFieldName(field.key)}`),
+        error: describe(`market_leasing_override.${wireFieldName(field.key)}`),
       })),
     },
   ];
 
-  return (
-    <aside
-      className="suite-editor"
-      role="dialog"
-      aria-modal="false"
-      aria-label={`Details for ${name}`}
-    >
-      <header className="suite-editor-head">
-        <div>
-          <h3 className="suite-editor-title">{name}</h3>
-          <p className="suite-editor-subtitle">{occupied ? 'Occupied' : 'Vacant'}</p>
-        </div>
-        <button type="button" className="btn btn-ghost btn-xs" onClick={onClose}>
-          Close
-        </button>
-      </header>
+  // Sections are built before the drawer is assembled, so that by the time
+  // the banner below is composed, `describe` has already been asked about
+  // every field this row actually renders. See `consumed`.
+  const suiteSection = (
+        <section className="suite-editor-section">
+          <h4 className="suite-editor-section-title">Suite</h4>
+          <div className="assumption-field-grid">
+            <TextField
+              id={`editor-suite-id-${row.rowId}`}
+              label="Suite"
+              value={row.suiteId}
+              onChange={(next) => onSuiteFieldChange(row.rowId, 'suiteId', next)}
+              disabled={disabled}
+              error={describe('suite_id')}
+            />
+            <TextField
+              id={`editor-suite-area-${row.rowId}`}
+              label="Suite Area"
+              value={row.suiteAreaSf}
+              onChange={(next) => onSuiteFieldChange(row.rowId, 'suiteAreaSf', next)}
+              disabled={disabled}
+              type="number"
+              error={describe('suite_area_sf')}
+            />
+            <TextField
+              id={`editor-suite-label-${row.rowId}`}
+              label="Suite Label"
+              value={row.suiteLabel}
+              onChange={(next) => onSuiteFieldChange(row.rowId, 'suiteLabel', next)}
+              disabled={disabled}
+              hint="Optional. Left blank, the suite is unlabelled."
+            />
+            <TextField
+              id={`editor-suite-market-rent-${row.rowId}`}
+              label="Suite Market Rent"
+              value={row.marketRentPsf}
+              onChange={(next) => onSuiteFieldChange(row.rowId, 'marketRentPsf', next)}
+              disabled={disabled}
+              type="number"
+              placeholder="Property default"
+              hint="Overrides the rent level alone. Blank inherits the property default."
+              error={describe('market_rent_psf')}
+            />
+          </div>
+        </section>
 
-      {issues && issues.rowLevel.length > 0 && (
-        <div className="error-banner" role="alert">
-          <ul className="lease-level-issue-list">
-            {issues.rowLevel.map((issue) => (
-              <li key={`${issue.code}-${issue.path}`}>{issue.message}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+  );
 
-      <section className="suite-editor-section">
-        <h4 className="suite-editor-section-title">Suite</h4>
-        <div className="assumption-field-grid">
-          <TextField
-            id={`editor-suite-id-${row.rowId}`}
-            label="Suite"
-            value={row.suiteId}
-            onChange={(next) => onSuiteFieldChange(row.rowId, 'suiteId', next)}
-            disabled={disabled}
-            error={messageFor(issues, 'suite_id')}
-          />
-          <TextField
-            id={`editor-suite-area-${row.rowId}`}
-            label="Suite Area"
-            value={row.suiteAreaSf}
-            onChange={(next) => onSuiteFieldChange(row.rowId, 'suiteAreaSf', next)}
-            disabled={disabled}
-            type="number"
-            error={messageFor(issues, 'suite_area_sf')}
-          />
-          <TextField
-            id={`editor-suite-label-${row.rowId}`}
-            label="Suite Label"
-            value={row.suiteLabel}
-            onChange={(next) => onSuiteFieldChange(row.rowId, 'suiteLabel', next)}
-            disabled={disabled}
-            hint="Optional. Left blank, the suite is unlabelled."
-          />
-          <TextField
-            id={`editor-suite-market-rent-${row.rowId}`}
-            label="Suite Market Rent"
-            value={row.marketRentPsf}
-            onChange={(next) => onSuiteFieldChange(row.rowId, 'marketRentPsf', next)}
-            disabled={disabled}
-            type="number"
-            placeholder="Property default"
-            hint="Overrides the rent level alone. Blank inherits the property default."
-            error={messageFor(issues, 'market_rent_psf')}
-          />
-        </div>
-      </section>
-
-      {lease !== null && (
+  const leaseSection = lease === null ? null : (
         <section className="suite-editor-section">
           <h4 className="suite-editor-section-title">Lease</h4>
           <div className="assumption-field-grid">
@@ -324,7 +325,7 @@ export function SuiteLeaseEditor({
               value={lease.leaseId}
               onChange={(next) => onLeaseFieldChange(row.rowId, 'leaseId', next)}
               disabled={disabled}
-              error={messageFor(issues, 'lease_id')}
+              error={describe('lease_id')}
             />
             <TextField
               id={`editor-lease-tenant-${row.rowId}`}
@@ -332,7 +333,7 @@ export function SuiteLeaseEditor({
               value={lease.tenantName}
               onChange={(next) => onLeaseFieldChange(row.rowId, 'tenantName', next)}
               disabled={disabled}
-              error={messageFor(issues, 'tenant_name')}
+              error={describe('tenant_name')}
             />
             <TextField
               id={`editor-lease-area-${row.rowId}`}
@@ -341,7 +342,7 @@ export function SuiteLeaseEditor({
               onChange={(next) => onLeaseFieldChange(row.rowId, 'leasedAreaSf', next)}
               disabled={disabled}
               type="number"
-              error={messageFor(issues, 'leased_area_sf')}
+              error={describe('leased_area_sf')}
               // An explicit action, never an automatic mirror. The backend
               // requires the two to be equal today, but copying silently would
               // hide a rent roll that genuinely disagrees with itself -- and
@@ -365,7 +366,7 @@ export function SuiteLeaseEditor({
               onChange={(next) => onLeaseFieldChange(row.rowId, 'rentCommencementDate', next)}
               disabled={disabled}
               type="date"
-              error={messageFor(issues, 'rent_commencement_date')}
+              error={describe('rent_commencement_date')}
             />
             <TextField
               id={`editor-lease-expiration-${row.rowId}`}
@@ -374,7 +375,7 @@ export function SuiteLeaseEditor({
               onChange={(next) => onLeaseFieldChange(row.rowId, 'leaseExpirationDate', next)}
               disabled={disabled}
               type="date"
-              error={messageFor(issues, 'lease_expiration_date')}
+              error={describe('lease_expiration_date')}
             />
             <TextField
               id={`editor-lease-start-${row.rowId}`}
@@ -384,7 +385,7 @@ export function SuiteLeaseEditor({
               disabled={disabled}
               type="date"
               hint="Optional. Informational only; it enters no calculation."
-              error={messageFor(issues, 'lease_start_date')}
+              error={describe('lease_start_date')}
             />
             <TextField
               id={`editor-lease-rent-${row.rowId}`}
@@ -394,7 +395,7 @@ export function SuiteLeaseEditor({
               disabled={disabled}
               type="number"
               hint="Annual $/SF as of rent commencement."
-              error={messageFor(issues, 'base_rent_psf')}
+              error={describe('base_rent_psf')}
             />
             <TextField
               id={`editor-lease-escalation-${row.rowId}`}
@@ -403,7 +404,7 @@ export function SuiteLeaseEditor({
               onChange={(next) => onLeaseFieldChange(row.rowId, 'escalationPct', next)}
               disabled={disabled}
               type="number"
-              error={messageFor(issues, 'escalation_pct')}
+              error={describe('escalation_pct')}
             />
             <SelectField
               id={`editor-lease-escalation-basis-${row.rowId}`}
@@ -412,7 +413,7 @@ export function SuiteLeaseEditor({
               options={ESCALATION_BASIS_OPTIONS}
               onChange={(next) => onLeaseFieldChange(row.rowId, 'escalationBasis', next)}
               disabled={disabled}
-              error={messageFor(issues, 'escalation_basis')}
+              error={describe('escalation_basis')}
             />
             <SelectField
               id={`editor-lease-type-${row.rowId}`}
@@ -421,7 +422,7 @@ export function SuiteLeaseEditor({
               options={LEASE_TYPE_OPTIONS}
               onChange={(next) => onLeaseFieldChange(row.rowId, 'leaseType', next)}
               disabled={disabled}
-              error={messageFor(issues, 'lease_type')}
+              error={describe('lease_type')}
             />
             {/* Recovery terms belong to Modified Gross alone: a stop on an NNN
                 or Gross lease is a validation error, because a stop implies
@@ -439,7 +440,7 @@ export function SuiteLeaseEditor({
                   onChange={(next) => onLeaseFieldChange(row.rowId, 'recoveryBasis', next)}
                   disabled={disabled}
                   nullable
-                  error={messageFor(issues, 'recovery_basis')}
+                  error={describe('recovery_basis')}
                 />
                 <TextField
                   id={`editor-lease-stop-${row.rowId}`}
@@ -449,15 +450,15 @@ export function SuiteLeaseEditor({
                   disabled={disabled}
                   type="number"
                   hint="Annual $/SF. A contract term Anchor never infers."
-                  error={messageFor(issues, 'expense_stop_psf')}
+                  error={describe('expense_stop_psf')}
                 />
               </>
             )}
           </div>
         </section>
-      )}
+  );
 
-      {!occupied && (
+  const vacancySection = occupied ? null : (
         <section className="suite-editor-section">
           <h4 className="suite-editor-section-title">Initial Vacancy</h4>
           <p className="field-hint">
@@ -472,10 +473,7 @@ export function SuiteLeaseEditor({
               options={INITIAL_VACANCY_STRATEGY_OPTIONS}
               onChange={(next) => onVacancyFieldChange(row.rowId, 'strategy', next)}
               disabled={disabled}
-              error={
-                messageFor(issues, 'initial_vacancy') ??
-                messageFor(issues, 'initial_vacancy.strategy')
-              }
+              error={describeFirst('initial_vacancy', 'initial_vacancy.strategy')}
             />
             {/* Only Market Lease-Up can carry a lease-up period; Hold Vacant
                 must not. The value the analyst typed is kept in local state
@@ -492,105 +490,158 @@ export function SuiteLeaseEditor({
                 disabled={disabled}
                 type="number"
                 hint="How long space already empty takes to fill. Not the same as new-tenant downtime."
-                error={messageFor(issues, 'initial_vacancy.initial_lease_up_months')}
+                error={describe('initial_vacancy.initial_lease_up_months')}
               />
             )}
           </div>
         </section>
+  );
+
+  const marketSection = (
+        <section className="suite-editor-section">
+          <h4 className="suite-editor-section-title">Market Leasing</h4>
+          <div className="suite-editor-override-toggle">
+            <label className="field-checkbox">
+              <input
+                id={`editor-override-enabled-${row.rowId}`}
+                type="checkbox"
+                checked={row.marketLeasingOverrideEnabled}
+                disabled={disabled}
+                onChange={() => onToggleOverride(row.rowId)}
+              />
+              <span>Use full suite leasing assumptions</span>
+            </label>
+            <p className="field-hint">
+              {row.marketLeasingOverrideEnabled
+                ? 'Full suite leasing assumptions take precedence while enabled, including over the Suite Market Rent above. That value is kept and applies again if you turn this off.'
+                : 'Using the property defaults. A full override replaces the entire record — it is all-or-nothing, never a per-field merge.'}
+            </p>
+          </div>
+
+          {row.marketLeasingOverrideEnabled && (
+            <>
+              <AssumptionFieldGrid sections={overrideSections} disabled={disabled} />
+              <div className="assumption-sections">
+                <section className="assumption-section">
+                  <h3 className="assumption-section-title">Lease Structure &amp; Recoveries</h3>
+                  <div className="assumption-field-grid">
+                    <SelectField
+                      id={`override-${row.rowId}-renewalLeaseType`}
+                      label="Renewal Lease Type"
+                      value={row.marketLeasingOverride.renewalLeaseType}
+                      options={LEASE_TYPE_OPTIONS}
+                      onChange={(next) =>
+                        onOverrideFieldChange(row.rowId, 'renewalLeaseType', next)
+                      }
+                      disabled={disabled}
+                      error={describe('market_leasing_override.renewal_lease_type')}
+                    />
+                    <SelectField
+                      id={`override-${row.rowId}-renewalRecoveryBasis`}
+                      label="Renewal Recovery Basis"
+                      value={row.marketLeasingOverride.renewalRecoveryBasis}
+                      options={RECOVERY_BASIS_OPTIONS}
+                      onChange={(next) =>
+                        onOverrideFieldChange(row.rowId, 'renewalRecoveryBasis', next)
+                      }
+                      disabled={disabled}
+                      nullable
+                      error={describe('market_leasing_override.renewal_recovery_basis')}
+                    />
+                    <SelectField
+                      id={`override-${row.rowId}-newLeaseType`}
+                      label="New Lease Type"
+                      value={row.marketLeasingOverride.newLeaseType}
+                      options={LEASE_TYPE_OPTIONS}
+                      onChange={(next) => onOverrideFieldChange(row.rowId, 'newLeaseType', next)}
+                      disabled={disabled}
+                      error={describe('market_leasing_override.new_lease_type')}
+                    />
+                    <SelectField
+                      id={`override-${row.rowId}-newRecoveryBasis`}
+                      label="New Recovery Basis"
+                      value={row.marketLeasingOverride.newRecoveryBasis}
+                      options={RECOVERY_BASIS_OPTIONS}
+                      onChange={(next) =>
+                        onOverrideFieldChange(row.rowId, 'newRecoveryBasis', next)
+                      }
+                      disabled={disabled}
+                      nullable
+                      error={describe('market_leasing_override.new_recovery_basis')}
+                    />
+                    <SelectField
+                      id={`override-${row.rowId}-leasingCommissionMethod`}
+                      label="Leasing Commission Method"
+                      value={row.marketLeasingOverride.leasingCommissionMethod}
+                      options={LEASING_COMMISSION_METHOD_OPTIONS}
+                      onChange={(next) =>
+                        onOverrideFieldChange(row.rowId, 'leasingCommissionMethod', next)
+                      }
+                      disabled={disabled}
+                      error={messageFor(
+                        issues,
+                        'market_leasing_override.leasing_commission_method',
+                      )}
+                    />
+                  </div>
+                </section>
+              </div>
+              <AssumptionFieldGrid sections={overrideStopSection} disabled={disabled} />
+            </>
+          )}
+        </section>
+  );
+
+  // Anything the row owns that no control above asked about. A conditionally
+  // hidden field -- a recovery basis on a lease that is no longer Modified
+  // Gross, a vacancy treatment on a suite that now has a tenant -- leaves its
+  // issue here rather than nowhere.
+  const unrendered =
+    issues === undefined
+      ? []
+      : [...issues.fields.entries()]
+          .filter(([field]) => !consumed.has(field))
+          .map(([, issue]) => issue);
+  const banner = [...(issues?.rowLevel ?? []), ...unrendered];
+
+  return (
+    <aside
+      className="suite-editor"
+      role="dialog"
+      aria-modal="false"
+      aria-label={`Details for ${name}`}
+    >
+      <header className="suite-editor-head">
+        <div>
+          <h3 className="suite-editor-title">{name}</h3>
+          <p className="suite-editor-subtitle">{occupied ? 'Occupied' : 'Vacant'}</p>
+        </div>
+        <button type="button" className="btn btn-ghost btn-xs" onClick={onClose}>
+          Close
+        </button>
+      </header>
+
+
+      {banner.length > 0 && (
+        <div className="error-banner suite-editor-banner" role="alert">
+          {unrendered.length > 0 && (
+            <p className="suite-editor-banner-lead">
+              These were reported against values this suite still carries but is not
+              showing a control for right now.
+            </p>
+          )}
+          <ul className="lease-level-issue-list">
+            {banner.map((issue) => (
+              <li key={`${issue.code}-${issue.path}`}>{issue.message}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
-      <section className="suite-editor-section">
-        <h4 className="suite-editor-section-title">Market Leasing</h4>
-        <div className="suite-editor-override-toggle">
-          <label className="field-checkbox">
-            <input
-              id={`editor-override-enabled-${row.rowId}`}
-              type="checkbox"
-              checked={row.marketLeasingOverrideEnabled}
-              disabled={disabled}
-              onChange={() => onToggleOverride(row.rowId)}
-            />
-            <span>Use full suite leasing assumptions</span>
-          </label>
-          <p className="field-hint">
-            {row.marketLeasingOverrideEnabled
-              ? 'Full suite leasing assumptions take precedence while enabled, including over the Suite Market Rent above. That value is kept and applies again if you turn this off.'
-              : 'Using the property defaults. A full override replaces the entire record — it is all-or-nothing, never a per-field merge.'}
-          </p>
-        </div>
-
-        {row.marketLeasingOverrideEnabled && (
-          <>
-            <AssumptionFieldGrid sections={overrideSections} disabled={disabled} />
-            <div className="assumption-sections">
-              <section className="assumption-section">
-                <h3 className="assumption-section-title">Lease Structure &amp; Recoveries</h3>
-                <div className="assumption-field-grid">
-                  <SelectField
-                    id={`override-${row.rowId}-renewalLeaseType`}
-                    label="Renewal Lease Type"
-                    value={row.marketLeasingOverride.renewalLeaseType}
-                    options={LEASE_TYPE_OPTIONS}
-                    onChange={(next) =>
-                      onOverrideFieldChange(row.rowId, 'renewalLeaseType', next)
-                    }
-                    disabled={disabled}
-                    error={messageFor(issues, 'market_leasing_override.renewal_lease_type')}
-                  />
-                  <SelectField
-                    id={`override-${row.rowId}-renewalRecoveryBasis`}
-                    label="Renewal Recovery Basis"
-                    value={row.marketLeasingOverride.renewalRecoveryBasis}
-                    options={RECOVERY_BASIS_OPTIONS}
-                    onChange={(next) =>
-                      onOverrideFieldChange(row.rowId, 'renewalRecoveryBasis', next)
-                    }
-                    disabled={disabled}
-                    nullable
-                    error={messageFor(issues, 'market_leasing_override.renewal_recovery_basis')}
-                  />
-                  <SelectField
-                    id={`override-${row.rowId}-newLeaseType`}
-                    label="New Lease Type"
-                    value={row.marketLeasingOverride.newLeaseType}
-                    options={LEASE_TYPE_OPTIONS}
-                    onChange={(next) => onOverrideFieldChange(row.rowId, 'newLeaseType', next)}
-                    disabled={disabled}
-                    error={messageFor(issues, 'market_leasing_override.new_lease_type')}
-                  />
-                  <SelectField
-                    id={`override-${row.rowId}-newRecoveryBasis`}
-                    label="New Recovery Basis"
-                    value={row.marketLeasingOverride.newRecoveryBasis}
-                    options={RECOVERY_BASIS_OPTIONS}
-                    onChange={(next) =>
-                      onOverrideFieldChange(row.rowId, 'newRecoveryBasis', next)
-                    }
-                    disabled={disabled}
-                    nullable
-                    error={messageFor(issues, 'market_leasing_override.new_recovery_basis')}
-                  />
-                  <SelectField
-                    id={`override-${row.rowId}-leasingCommissionMethod`}
-                    label="Leasing Commission Method"
-                    value={row.marketLeasingOverride.leasingCommissionMethod}
-                    options={LEASING_COMMISSION_METHOD_OPTIONS}
-                    onChange={(next) =>
-                      onOverrideFieldChange(row.rowId, 'leasingCommissionMethod', next)
-                    }
-                    disabled={disabled}
-                    error={messageFor(
-                      issues,
-                      'market_leasing_override.leasing_commission_method',
-                    )}
-                  />
-                </div>
-              </section>
-            </div>
-            <AssumptionFieldGrid sections={overrideStopSection} disabled={disabled} />
-          </>
-        )}
-      </section>
+      {suiteSection}
+      {leaseSection}
+      {vacancySection}
+      {marketSection}
     </aside>
   );
 }

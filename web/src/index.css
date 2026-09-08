@@ -3537,3 +3537,10 @@ body {
   margin: 0;
   max-width: none;
 }
+
+/* D5.5D -- issues the drawer owns but cannot anchor to a control.
+   Reuses `.error-banner`; the lead line only explains why they are here. */
+.suite-editor-banner-lead {
+  margin: 0 0 0.4rem;
+  font-size: 0.82rem;
+}
