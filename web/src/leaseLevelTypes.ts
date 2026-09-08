@@ -247,8 +247,14 @@ export interface AnnualOperatingProjection {
   noi_by_year: number[];
   tenant_improvements_by_year: number[];
   leasing_commissions_by_year: number[];
-  occupied_area_sf_at_year_end: number[];
-  vacant_area_sf_at_year_end: number[];
+  // D5.6: these are `occupied_area_at_year_end` / `vacant_area_at_year_end` on
+  // the wire -- no `_sf_` infix. D5.5A declared them with one, which nothing
+  // caught because nothing rendered them yet; reading them would have produced
+  // `undefined` in a financial table. Audited against a live `/analyze`
+  // response rather than against the Python field list, so the names are what
+  // the transport actually carries.
+  occupied_area_at_year_end: number[];
+  vacant_area_at_year_end: number[];
   physical_occupancy_at_year_end: number[];
   average_physical_occupancy_over_year: number[];
   exit_noi: number;

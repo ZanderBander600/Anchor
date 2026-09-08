@@ -22,6 +22,7 @@
 
 import type { ChangeEvent, ReactNode } from 'react';
 import { AssumptionFieldGrid } from './AssumptionFieldGrid';
+import { LeaseLevelResults } from './LeaseLevelResults';
 import { RentRollTable } from './RentRollTable';
 import { SuiteLeaseEditor } from './SuiteLeaseEditor';
 import { StrategyStrip } from './StrategyStrip';
@@ -40,10 +41,12 @@ import {
 } from '../leaseLevelConvert';
 import type { LeaseLevelFieldConfig, SelectOption } from '../leaseLevelConvert';
 import { TERMS_FIELD_GROUPS } from '../convert';
-import type { FieldSection } from '../underwrite';
+import type { FieldSection, ResultsViewId } from '../underwrite';
+import type { OperatingPeriodView } from './LeaseLevelOperatingStatement';
 import type {
   InitialVacancyFormValues,
   LeaseFormValues,
+  LeaseLevelAcquisitionResults,
   LeaseLevelFormValues,
   LeaseLevelIssue,
   LeaseLevelOperatingFormValues,
@@ -67,7 +70,8 @@ export type LeaseLevelSectionId =
   | 'property'
   | 'operating'
   | 'market'
-  | 'rent-roll';
+  | 'rent-roll'
+  | 'results';
 
 /* Not exported: a component module that also exports values loses fast
  * refresh, and nothing outside this file needs the list. */
@@ -77,6 +81,7 @@ const LEASE_LEVEL_SECTIONS: { id: LeaseLevelSectionId; label: string }[] = [
   { id: 'operating', label: 'Operating' },
   { id: 'market', label: 'Market Leasing' },
   { id: 'rent-roll', label: 'Rent Roll' },
+  { id: 'results', label: 'Results' },
 ];
 
 export interface LeaseLevelWorkspaceProps {
@@ -135,6 +140,16 @@ export interface LeaseLevelWorkspaceProps {
   onToggleOverride: (rowId: string) => void;
   onToggleOccupancy: (rowId: string) => void;
   onUseSuiteArea: (rowId: string) => void;
+
+  // --- D5.6: results ---------------------------------------------------------
+  /** The analysis describing the *current* inputs, or `null`. Never a stored
+   * snapshot: Lease-Level persists none, and any edit clears this. */
+  analysis: LeaseLevelAcquisitionResults | null;
+  isAnalyzing: boolean;
+  resultsView: ResultsViewId;
+  onResultsViewChange: (view: ResultsViewId) => void;
+  periodView: OperatingPeriodView;
+  onPeriodViewChange: (view: OperatingPeriodView) => void;
 }
 
 export type AreaReconciliationValues = ReturnType<typeof reconcileArea>;
@@ -370,6 +385,12 @@ export function LeaseLevelWorkspace({
   onToggleOverride,
   onToggleOccupancy,
   onUseSuiteArea,
+  analysis,
+  isAnalyzing,
+  resultsView,
+  onResultsViewChange,
+  periodView,
+  onPeriodViewChange,
 }: LeaseLevelWorkspaceProps) {
   const editorRow = values.rentRoll.find((row) => row.rowId === editorRowId);
   const anchorable = anchorablePaths(values);
@@ -449,7 +470,9 @@ export function LeaseLevelWorkspace({
     // D5.5E: the rent roll uses the widened panel; the scalar sections stay at
     // the normal readable measure inside it. A column of labelled inputs
     // stretched to 1800px is harder to read, not easier.
-    const scalar = id !== 'rent-roll';
+    // The rent roll and the result statements are both analyst-dense grids;
+    // the four assumption tabs keep the readable measure.
+    const scalar = id !== 'rent-roll' && id !== 'results';
     return (
       <div
         id={`lease-level-panel-${id}`}
@@ -664,6 +687,18 @@ export function LeaseLevelWorkspace({
                 />
               )}
             </div>,
+          )}
+
+          {panel(
+            'results',
+            <LeaseLevelResults
+              analysis={analysis}
+              isAnalyzing={isAnalyzing}
+              view={resultsView}
+              onViewChange={onResultsViewChange}
+              periodView={periodView}
+              onPeriodViewChange={onPeriodViewChange}
+            />,
           )}
         </div>
       </div>

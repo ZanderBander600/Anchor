@@ -1019,6 +1019,12 @@ describe('mutation kills', () => {
     mockAnalyze.mockResolvedValue(leaseLevelResults());
     await user.click(analyzeButton());
 
+    // D5.6: a successful Analyze lands on Results, so step back to the tab
+    // that held the issue to prove the issue itself is gone.
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Results' })).toBeTruthy();
+    });
+    await user.click(section('Market Leasing'));
     await waitFor(() => {
       expect(field(RENEWAL_PROBABILITY).getAttribute('aria-invalid')).toBeNull();
     });

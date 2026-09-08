@@ -45,6 +45,8 @@ import {
 import { EMPTY_SUBMITTED_RENT_ROLL, resolveRowIssues } from './leaseLevelIssues';
 import type { RowIssues, SubmittedRentRoll } from './leaseLevelIssues';
 import type { LeaseLevelSectionId } from './components/LeaseLevelWorkspace';
+import type { OperatingPeriodView } from './components/LeaseLevelOperatingStatement';
+import type { ResultsViewId } from './underwrite';
 import type { SaveStatus } from './components/DealHeader';
 import type {
   InitialVacancyFormValues,
@@ -78,10 +80,20 @@ export interface LeaseLevelDealState {
 
   activeSection: LeaseLevelSectionId;
   setActiveSection: (section: LeaseLevelSectionId) => void;
+  /** Which result view is open, and whether the statement shows months or
+   * years. View state only -- neither changes a number. */
+  resultsView: ResultsViewId;
+  setResultsView: (view: ResultsViewId) => void;
+  periodView: OperatingPeriodView;
+  setPeriodView: (view: OperatingPeriodView) => void;
 
-  /** The last successful analysis. Held, not rendered: D5.6 owns the result
-   * surfaces, and this gate deliberately renders none of it rather than
-   * inventing a presentation nobody has reviewed. */
+  /** The analysis describing the assumptions currently on screen, or `null`.
+   *
+   * Cleared by `resetDownstream` on every input edit, so it can never describe
+   * inputs the analyst has since changed, and never restored on open, because
+   * Lease-Level persists no snapshot (decision D5). Those two rules together
+   * are why no staleness indicator is needed: a result that is visible is a
+   * result that is current. */
   results: LeaseLevelAcquisitionResults | null;
   isAnalyzing: boolean;
   isSaving: boolean;
@@ -300,6 +312,8 @@ export function useLeaseLevelDeal(options: {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState<LeaseLevelSnapshot>(BLANK_SNAPSHOT);
   const [activeSection, setActiveSection] = useState<LeaseLevelSectionId>('acquisition');
+  const [resultsView, setResultsView] = useState<ResultsViewId>('summary');
+  const [periodView, setPeriodView] = useState<OperatingPeriodView>('annual');
 
   const [results, setResults] = useState<LeaseLevelAcquisitionResults | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -461,6 +475,10 @@ export function useLeaseLevelDeal(options: {
       }
       const analysis = await analyzeLeaseLevelAcquisition(request.terms, request.inputs);
       setResults(analysis);
+      // D5.6: Analyze must visibly do something. Landing on Results is what
+      // makes a successful run self-evident rather than something the analyst
+      // has to go looking for.
+      setActiveSection('results');
     } catch (caught) {
       setResults(null);
       setError(recordFailure(caught, 'An unexpected error occurred while analyzing the deal.'));
@@ -780,6 +798,10 @@ export function useLeaseLevelDeal(options: {
     isDirty,
     activeSection,
     setActiveSection,
+    resultsView,
+    setResultsView,
+    periodView,
+    setPeriodView,
     results,
     isAnalyzing,
     isSaving,

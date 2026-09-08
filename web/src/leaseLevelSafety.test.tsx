@@ -255,27 +255,26 @@ describe('the visible mode selector', () => {
 // =============================================================================
 
 describe('the Lease-Level safe-behaviour matrix', () => {
-  it('resultsViewsFor refuses Lease-Level instead of returning Quick views', () => {
-    const quickViews = resultsViewsFor('quick');
-    const detailedViews = resultsViewsFor('detailed');
+  it('resultsViewsFor gives Lease-Level its own views, never another mode’s', () => {
+    // D5.6 transition. This asserted a refusal, which was the honest answer
+    // while nothing could render a Lease-Level result. The successor invariant
+    // is the one the refusal was protecting: Lease-Level gets views of its own
+    // and inherits neither Quick's nor Detailed's.
+    const quickViews = resultsViewsFor('quick').map((view) => view.id);
+    const detailedViews = resultsViewsFor('detailed').map((view) => view.id);
+    const leaseLevelViews = resultsViewsFor('lease_level').map((view) => view.id);
 
-    expect(quickViews.map((view) => view.id)).toEqual([
-      'summary',
-      'cash-flow',
-      'owner-returns',
-    ]);
-    expect(detailedViews.map((view) => view.id)).toContain('operating-statement');
+    expect(quickViews).toEqual(['summary', 'cash-flow', 'owner-returns']);
+    expect(detailedViews).toContain('operating-statement');
 
-    let caught: unknown;
-    try {
-      resultsViewsFor('lease_level');
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(UnsupportedOperatingModeError);
-    expect((caught as UnsupportedOperatingModeError).surface).toBe(
-      'the Results sub-navigation',
-    );
+    expect(leaseLevelViews).toEqual(['summary', 'operating-statement', 'cash-flow']);
+    // Not Quick's list, and not Detailed's -- a fallthrough to either would be
+    // the exact hazard this file exists for.
+    expect(leaseLevelViews).not.toEqual(quickViews);
+    expect(leaseLevelViews).not.toEqual(detailedViews);
+    // And no Owner Returns: that surface needs one growth rate per mode, which
+    // Lease-Level does not have.
+    expect(leaseLevelViews).not.toContain('owner-returns');
   });
 
   it('the shared Quick/Detailed workspace still refuses Lease-Level', () => {

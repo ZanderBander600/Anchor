@@ -3656,3 +3656,121 @@ body {
     min-width: 7rem;
   }
 }
+
+/* ==========================================================================
+   D5.6 -- Lease-Level results.
+
+   Institutional density: line items as rows, periods as columns, numbers
+   right-aligned, a strong NOI line, and section bands that group revenue from
+   expenses without a card around every figure.
+   ========================================================================== */
+
+.lease-level-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--sp-4);
+}
+
+.lease-level-metric-card {
+  min-width: 0;
+}
+
+.lease-level-metric-grid {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.lease-level-metric dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.lease-level-metric dd {
+  margin: 0.1rem 0 0;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+/* The three figures an analyst reads first. */
+.lease-level-metric-emphasis dd {
+  font-size: 1.4rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.lease-level-metric-note {
+  margin: 0.2rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  max-width: 42ch;
+}
+
+.lease-level-statement-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-2);
+}
+
+.lease-level-statement-head .card-title {
+  margin: 0;
+}
+
+/* Line-item labels stay put while the periods scroll. A monthly statement is
+   96 columns wide for a seven-year hold; without this the analyst loses which
+   row they are reading two screens in. */
+.lease-level-statement-table th[scope='row'] {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--color-surface);
+  text-align: left;
+  font-weight: 400;
+  white-space: nowrap;
+  box-shadow: 1px 0 0 var(--color-divider);
+}
+
+.lease-level-statement-table thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--color-surface);
+  text-align: left;
+  box-shadow: 1px 0 0 var(--color-divider);
+}
+
+.lease-level-statement-table td {
+  white-space: nowrap;
+}
+
+/* A section band, not a card: it separates revenue from expenses without
+   turning every group into a panel. */
+.lease-level-statement-section th {
+  position: sticky;
+  left: 0;
+  text-align: left;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  background: var(--color-surface-muted, #f1f2f4);
+  padding: 0.4rem 0.75rem;
+  border-top: 1px solid var(--color-border);
+  box-shadow: none;
+}
+
+/* NOI is the line the whole statement builds to. */
+.lease-level-statement-noi th,
+.lease-level-statement-noi td {
+  font-weight: 700;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}

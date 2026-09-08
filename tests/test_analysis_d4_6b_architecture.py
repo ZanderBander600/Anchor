@@ -1299,6 +1299,17 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         # primitive rather than a change to any mode's form.
         "web/src/numberFormat.ts",
         "web/src/components/NumericInput.tsx",
+        # D5.6 -- the result surfaces. Four new modules, all presentation: they
+        # render the authoritative response and compute nothing, which
+        # ``modeDispatch.architecture.test.ts`` holds closed on the TypeScript
+        # side. `leaseLevelResultsFixture.json` is two captured `/analyze`
+        # responses, listed here for the same reason `hiddenIssuesFixture.ts`
+        # is -- the extension filter below only skips ``.test.ts``/``.test.tsx``.
+        "web/src/leaseLevelFormat.ts",
+        "web/src/leaseLevelResultsFixture.json",
+        "web/src/components/LeaseLevelResults.tsx",
+        "web/src/components/LeaseLevelMetricSummary.tsx",
+        "web/src/components/LeaseLevelOperatingStatement.tsx",
     }
     unexpected_web = {
         path

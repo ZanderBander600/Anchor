@@ -2564,6 +2564,12 @@ export default function App() {
           onToggleOverride={leaseLevel.toggleOverride}
           onToggleOccupancy={leaseLevel.toggleOccupancy}
           onUseSuiteArea={leaseLevel.useSuiteArea}
+          analysis={leaseLevel.results}
+          isAnalyzing={leaseLevel.isAnalyzing}
+          resultsView={leaseLevel.resultsView}
+          onResultsViewChange={leaseLevel.setResultsView}
+          periodView={leaseLevel.periodView}
+          onPeriodViewChange={leaseLevel.setPeriodView}
         />
       </WorkspacePanel>
 

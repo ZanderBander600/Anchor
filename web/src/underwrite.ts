@@ -3,7 +3,7 @@ import {
   DETAILED_OPERATING_FIELD_GROUPS,
   TERMS_FIELD_GROUPS,
 } from './convert';
-import { assertNeverMode, UnsupportedOperatingModeError } from './operatingMode';
+import { assertNeverMode } from './operatingMode';
 import type {
   AcquisitionFormValues,
   AcquisitionTermsFormValues,
@@ -42,12 +42,12 @@ export type ResultsViewId = 'summary' | 'cash-flow' | 'owner-returns' | 'operati
  * every other mode silently received *Quick's* result navigation -- three tabs
  * describing an analysis that mode had not run.
  *
- * Refuses an unimplemented mode rather than returning an empty list. The only
- * caller (`UnderwriteWorkspace`) feeds the result straight into a `SubNav` and
- * a `resultsView` state value, so an empty array would render a Results tab
- * with no sub-navigation and a selected view that does not exist -- a broken
- * surface that looks like a loading state. D5.6 adds the real Lease-Level
- * result views. */
+ * Never returns an empty list: a caller feeds the result straight into a
+ * `SubNav` and a `resultsView` state value, so an empty array would render a
+ * Results tab with no sub-navigation and a selected view that does not exist --
+ * a broken surface that looks like a loading state.
+ *
+ * Every mode names its own views explicitly. None inherits another's. */
 export function resultsViewsFor(mode: OperatingMode): { id: ResultsViewId; label: string }[] {
   const views: { id: ResultsViewId; label: string }[] = [
     { id: 'summary', label: 'Summary' },
@@ -60,7 +60,20 @@ export function resultsViewsFor(mode: OperatingMode): { id: ResultsViewId; label
     case 'detailed':
       return [...views, { id: 'operating-statement', label: 'Operating Statement' }];
     case 'lease_level':
-      throw new UnsupportedOperatingModeError(mode, 'the Results sub-navigation');
+      // D5.6 transition. This refused Lease-Level by name while nothing could
+      // render it -- the honest answer then, and the reason the refusal existed
+      // rather than a silent fallback to Quick's three tabs.
+      //
+      // Lease-Level now has its own three, and they are not Quick's plus one:
+      // it has an operating statement (Quick has no operating projection at
+      // all) and it has no Owner Returns, because that surface needs a single
+      // growth rate per mode and Lease-Level's growth emerges from per-lease
+      // escalation and rollover rather than from any one assumption.
+      return [
+        { id: 'summary', label: 'Summary' },
+        { id: 'operating-statement', label: 'Operating Statement' },
+        { id: 'cash-flow', label: 'Cash Flow' },
+      ];
     default:
       return assertNeverMode(mode);
   }

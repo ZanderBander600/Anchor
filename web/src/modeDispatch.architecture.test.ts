@@ -71,6 +71,12 @@ const AUDITED = [
   'components/RentRollTable.tsx',
   'components/SuiteLeaseEditor.tsx',
   'leaseLevelIssues.ts',
+  // D5.6. Result presentation: audited to prove it presents and does not
+  // compute.
+  'components/LeaseLevelResults.tsx',
+  'components/LeaseLevelOperatingStatement.tsx',
+  'components/LeaseLevelMetricSummary.tsx',
+  'leaseLevelFormat.ts',
 ];
 
 const MODE_LITERALS = new Set(['quick', 'detailed', 'lease_level']);
@@ -446,12 +452,20 @@ describe('the Lease-Level capability boundary', () => {
     for (const required of ['LeaseLevelWorkspace', 'RentRollTable', 'SuiteLeaseEditor']) {
       expect(paths, `${required} should exist at D5.5B`).toContain(required);
     }
+    // D5.6 transition: the result surfaces this gate owns now exist, and the
+    // ones D5.7/D5.8 own still must not.
+    for (const required of [
+      'LeaseLevelResults',
+      'LeaseLevelOperatingStatement',
+      'LeaseLevelMetricSummary',
+    ]) {
+      expect(paths, `${required} should exist at D5.6`).toContain(required);
+    }
     for (const forbidden of [
       'RentRollPasteImport',
-      'LeaseLevelOperatingStatement',
-      'MonthlyRentRollTable',
-      'LeaseLevelAuditCard',
       'LeaseLevelSensitivityPanel',
+      'LeaseLevelBreakEven',
+      'LeaseLevelAiPanel',
     ]) {
       expect(paths, `${forbidden} exists; a later gate owns it`).not.toContain(forbidden);
     }
@@ -484,27 +498,28 @@ describe('the Lease-Level capability boundary', () => {
     expect(sourceOf('leaseLevelTypes.ts')).toContain('lease: LeaseFormValues | null;');
   });
 
-  it('renders no Lease-Level results, and asks for no Lease-Level results views', () => {
-    // D5.6 owns every result surface. The proof that D5.5A did not start one:
-    // the workspace never calls `resultsViewsFor`, which still refuses this
-    // mode, and never reads a projection off the analysis the shell holds.
-    const workspace = sourceOf('components/LeaseLevelWorkspace.tsx');
-    // A *call*, not a mention: the module's own docstring names the function to
-    // explain why it does not use it, which is exactly the comment a reader
-    // needs and exactly what a naive substring check would forbid.
-    expect(workspace).not.toContain('resultsViewsFor(');
-    for (const forbidden of [
-      'monthly_projection',
-      'annual_projection',
-      'noi_by_year',
-      'tenant_improvements',
-      'physical_occupancy',
+  it('reads its result surfaces from the authoritative response only', () => {
+    // D5.6 transition. D5.5A asserted the workspace rendered *no* result at
+    // all, which was right while none existed. The successor invariant is that
+    // every rendered figure comes off the response rather than out of a
+    // calculation -- so the components may name those fields, and must not
+    // reduce, sum or average them.
+    for (const relative of [
+      'components/LeaseLevelResults.tsx',
+      'components/LeaseLevelOperatingStatement.tsx',
+      'components/LeaseLevelMetricSummary.tsx',
+      // The formatter too: a total slipped into a label would be the same
+      // mutant wearing a different hat (M25).
+      'leaseLevelFormat.ts',
     ]) {
-      expect(workspace, `the workspace renders ${forbidden}; D5.6 owns that`).not.toContain(
-        forbidden,
-      );
+      const source = sourceOf(relative);
+      for (const forbidden of ['.reduce(', 'Math.max(', 'Math.min(', '.filter((', 'sum(']) {
+        expect(source, `${relative} aggregates with ${forbidden}`).not.toContain(forbidden);
+      }
     }
-    expect(sourceOf('underwrite.ts')).toContain('UnsupportedOperatingModeError');
+    // Lease-Level result views exist and are its own.
+    expect(sourceOf('underwrite.ts')).toContain("case 'lease_level':");
+    expect(sourceOf('underwrite.ts')).toContain("{ id: 'operating-statement', label: 'Operating Statement' }");
   });
 
   it('the selector is now exactly as wide as the type', () => {
@@ -556,6 +571,11 @@ describe('the Lease-Level capability boundary', () => {
       'components/RentRollTable.tsx',
       'components/SuiteLeaseEditor.tsx',
       'leaseLevelIssues.ts',
+      // D5.6.
+      'components/LeaseLevelResults.tsx',
+      'components/LeaseLevelOperatingStatement.tsx',
+      'components/LeaseLevelMetricSummary.tsx',
+      'leaseLevelFormat.ts',
     ]) {
       const source = parse(relative);
       const offenders: string[] = [];
@@ -683,12 +703,17 @@ describe('mutation kills', () => {
     }
   });
 
-  it('M8: returning Quick result views for Lease-Level is caught', () => {
+  it('M8: returning Quick or Detailed result views for Lease-Level is caught', () => {
+    // D5.6 transition. The refusal became a list; the mutant it guards against
+    // is unchanged -- Lease-Level must not return `views`, which is Quick's
+    // array, nor Detailed's `[...views, ...]` extension of it.
     const text = sourceOf('underwrite.ts');
     const arm = text.slice(text.indexOf("case 'lease_level':"));
     const body = arm.slice(0, arm.indexOf('default:'));
-    expect(body).toContain('UnsupportedOperatingModeError');
     expect(body).not.toContain('return views');
+    expect(body).not.toContain('...views');
+    expect(body).not.toContain('owner-returns');
+    expect(body).toContain("{ id: 'summary', label: 'Summary' }");
   });
 
   it('M9: a default arm returning a mode instead of asserting is caught', () => {
@@ -793,5 +818,38 @@ describe('mutation kills', () => {
     ]) {
       expect(hook, `the opener never reads ${required}`).toContain(required);
     }
+  });
+
+  it('D5.6 M21/M22: a Lease-Level change reaching Quick or Detailed output is caught', () => {
+    // The behavioural proof that Quick and Detailed results are unchanged is
+    // their own suites, which run unedited. This is the structural half: the
+    // only way D5.6 could have moved a Quick or Detailed number is by adding a
+    // mode branch to a module all three modes render through. There is none.
+    //
+    // Listed by hand deliberately -- these are the shared rendering modules
+    // D5.6 reuses, and a new one joining them should be a conscious addition
+    // here rather than something a glob quietly absorbs.
+    for (const shared of [
+      'format.ts',
+      'components/CashFlowTable.tsx',
+      'components/ResultsSummaryPanel.tsx',
+      'components/OwnerSummaryPanel.tsx',
+      'components/SubNav.tsx',
+    ]) {
+      const source = sourceOf(shared);
+      for (const branch of ['lease_level', 'LeaseLevel', 'leaseLevel']) {
+        expect(
+          source,
+          `${shared} branches on ${branch}; Quick and Detailed render through it`,
+        ).not.toContain(branch);
+      }
+    }
+
+    // And the reverse direction: Lease-Level reuses `CashFlowTable` whole
+    // rather than forking it, which is what makes the shared module worth
+    // keeping branch-free.
+    expect(sourceOf('components/LeaseLevelResults.tsx')).toContain(
+      "import { CashFlowTable } from './CashFlowTable'",
+    );
   });
 });

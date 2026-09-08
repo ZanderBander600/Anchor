@@ -790,6 +790,10 @@ describe('initial vacancy', () => {
       initial_lease_up_months: null,
     });
 
+    // D5.6: Analyze succeeded, so the workspace moved to Results. Return to the
+    // rent roll to confirm the dormant figure survived the round trip.
+    await user.click(screen.getByRole('tab', { name: 'Rent Roll' }));
+    await user.click(within(dataRows()[3]).getByRole('button', { name: /Edit details for/ }));
     await user.selectOptions(
       screen.getByLabelText('Initial Vacancy Strategy'),
       'market_lease_up',
