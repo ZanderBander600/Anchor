@@ -597,17 +597,17 @@ describe('the one-way result table', () => {
 
     const table = await within(panel('one-way')).findByRole('table');
     const rows = within(table).getAllByRole('row');
-    // Header, baseline, then the three candidates in submitted order -- not
-    // sorted, not reordered.
-    expect(rows.slice(2).map((row) => within(row).getAllByRole('cell')[0].textContent)).toEqual([
+    // Header, then the three candidates in submitted order -- not sorted, not
+    // reordered, and with no synthetic row inserted among them.
+    expect(rows.slice(1).map((row) => within(row).getAllByRole('cell')[0].textContent)).toEqual([
       '10.10%',
       '19.00%',
-      '14.20%',
+      '14.20% Base',
     ]);
-    expect(rows.slice(2).map((row) => within(row).getByRole('rowheader').textContent)).toEqual([
+    expect(rows.slice(1).map((row) => within(row).getByRole('rowheader').textContent)).toEqual([
       '7.00%',
       '5.50%',
-      '6.25% Baseline',
+      '6.25%',
     ]);
   });
 
@@ -623,7 +623,7 @@ describe('the one-way result table', () => {
     const table = await within(panel('one-way')).findByRole('table');
     const cells = within(table)
       .getAllByRole('row')
-      .slice(2)
+      .slice(1)
       .map((row) => within(row).getAllByRole('cell')[0].textContent);
     expect(cells).toEqual(['N/A', '12.80%']);
     expect(cells).not.toContain('0.00%');
@@ -646,15 +646,17 @@ describe('the one-way result table', () => {
     await enterCandidates(user, panel('one-way'), 'Exit Cap Rate candidate value', ['5', '6']);
     await runIn(user, panel('one-way'));
 
-    const table = await within(panel('one-way')).findByRole('table');
+    // The response's own baseline, stated once above the table.
+    const line = await within(panel('one-way')).findByText(/^Baseline:/);
+    expect(line.textContent).toContain('Exit Cap Rate 6.25%');
+    expect(line.textContent).toContain('Levered IRR 14.20%');
+
+    // And no candidate is nominated as "closest to" it.
+    const table = within(panel('one-way')).getByRole('table');
     const marked = within(table)
       .getAllByRole('row')
-      .filter((row) => (row.textContent ?? '').includes('Baseline'));
-    // Exactly one: the response's own baseline row. No candidate is nominated
-    // as "closest to" the baseline.
-    expect(marked).toHaveLength(1);
-    expect(marked[0].textContent).toContain('6.25%');
-    expect(marked[0].textContent).toContain('14.20%');
+      .filter((row) => (row.textContent ?? '').includes('Base'));
+    expect(marked).toHaveLength(0);
   });
 
   it('formats each metric in its own units', async () => {
@@ -1267,5 +1269,345 @@ describe('the target and metric tables', () => {
       'headline_dscr',
       'exit_value',
     ]);
+  });
+});
+
+
+// =============================================================================
+// 12. D5.7A -- baseline stated once, axes stated directionally
+//
+// Presentation only. Every figure in this section is still the response's, and
+// each test is written so that the mutation it names fails it.
+// =============================================================================
+
+describe('D5.7A: the one-way baseline is stated once', () => {
+  /** The one-way panel's baseline context line. */
+  function baselineLines(): HTMLElement[] {
+    return within(panel('one-way')).queryAllByText(/^Baseline:/);
+  }
+
+  /** The candidate rows, header excluded. */
+  function candidateRows(): HTMLElement[] {
+    return within(within(panel('one-way')).getByRole('table'))
+      .getAllByRole('row')
+      .slice(1);
+  }
+
+  async function runSeries(values: string[]) {
+    const user = await openRisk();
+    await enterCandidates(user, panel('one-way'), 'Exit Cap Rate candidate value', values);
+    await runIn(user, panel('one-way'));
+    await within(panel('one-way')).findByRole('table');
+  }
+
+  it('M1: states the baseline once, above the table, and adds no baseline row', async () => {
+    mockOneWay.mockResolvedValue(
+      oneWayResult({
+        metric: 'equity_multiple',
+        baseline_assumption_value: 0.0625,
+        baseline_metric_value: 2.52,
+        assumption_values: [0.0575, 0.06, 0.0625, 0.065, 0.0675],
+        metric_values: [2.8, 2.66, 2.52, 2.4, 2.29],
+      }),
+    );
+    await runSeries(['5.75', '6', '6.25', '6.5', '6.75']);
+
+    // Exactly one baseline statement in the whole panel.
+    const lines = baselineLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toBe('Baseline: Exit Cap Rate 6.25% · Equity Multiple 2.52x');
+
+    // And it is above the table, not inside it.
+    const table = within(panel('one-way')).getByRole('table');
+    expect(within(table).queryAllByText(/^Baseline:/)).toHaveLength(0);
+    expect(
+      lines[0].compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // Five candidates in, five rows out: no sixth, synthetic, baseline row.
+    expect(candidateRows()).toHaveLength(5);
+  });
+
+  it('M2/M3/M7: keeps the candidate series whole, once each, in response order', async () => {
+    mockOneWay.mockResolvedValue(
+      oneWayResult({
+        metric: 'equity_multiple',
+        baseline_assumption_value: 0.0625,
+        baseline_metric_value: 2.52,
+        assumption_values: [0.0575, 0.06, 0.0625, 0.065, 0.0675],
+        metric_values: [2.8, 2.66, 2.52, 2.4, 2.29],
+      }),
+    );
+    await runSeries(['5.75', '6', '6.25', '6.5', '6.75']);
+
+    // The baseline candidate is neither dropped nor duplicated, and nothing is
+    // sorted by value or by performance.
+    expect(candidateRows().map((row) => within(row).getByRole('rowheader').textContent)).toEqual([
+      '5.75%',
+      '6.00%',
+      '6.25%',
+      '6.50%',
+      '6.75%',
+    ]);
+    expect(candidateRows().map((row) => within(row).getAllByRole('cell')[0].textContent)).toEqual([
+      '2.80x',
+      '2.66x',
+      '2.52x Base',
+      '2.40x',
+      '2.29x',
+    ]);
+  });
+
+  it('marks the exact baseline candidate Base and no other', async () => {
+    mockOneWay.mockResolvedValue(
+      oneWayResult({
+        metric: 'equity_multiple',
+        baseline_assumption_value: 0.0625,
+        baseline_metric_value: 2.52,
+        assumption_values: [0.0575, 0.06, 0.0625, 0.065, 0.0675],
+        metric_values: [2.8, 2.66, 2.52, 2.4, 2.29],
+      }),
+    );
+    await runSeries(['5.75', '6', '6.25', '6.5', '6.75']);
+
+    const marked = candidateRows().filter((row) => (row.textContent ?? '').includes('Base'));
+    expect(marked).toHaveLength(1);
+    expect(within(marked[0]).getByRole('rowheader').textContent).toBe('6.25%');
+  });
+
+  it('M4: marks no candidate when none equals the baseline exactly', async () => {
+    mockOneWay.mockResolvedValue(
+      oneWayResult({
+        baseline_assumption_value: 0.0625,
+        baseline_metric_value: 0.142,
+        // Two candidates straddle the baseline; neither is it.
+        assumption_values: [0.062, 0.063],
+        metric_values: [0.1431, 0.1409],
+      }),
+    );
+    await runSeries(['6.2', '6.3']);
+
+    // The context line still names the baseline the response gave.
+    expect(baselineLines()[0].textContent).toBe(
+      'Baseline: Exit Cap Rate 6.25% · Levered IRR 14.20%',
+    );
+    // But nothing nearby is promoted into standing for it.
+    expect(candidateRows().filter((row) => (row.textContent ?? '').includes('Base'))).toHaveLength(
+      0,
+    );
+    expect(candidateRows()).toHaveLength(2);
+  });
+
+  it('M5: reads the baseline metric from the response, never from the candidates', async () => {
+    mockOneWay.mockResolvedValue(
+      oneWayResult({
+        baseline_assumption_value: 0.0625,
+        // Deliberately not the mean, the median, the midpoint or any candidate.
+        baseline_metric_value: 0.0777,
+        assumption_values: [0.06, 0.0625, 0.065],
+        metric_values: [0.155, 0.128, 0.101],
+      }),
+    );
+    await runSeries(['6', '6.25', '6.5']);
+
+    expect(baselineLines()[0].textContent).toBe(
+      'Baseline: Exit Cap Rate 6.25% · Levered IRR 7.77%',
+    );
+    // The baseline candidate keeps its own metric: the context line did not
+    // overwrite the row, and the row did not overwrite the context line.
+    expect(candidateRows()[1].textContent).toContain('12.80%');
+  });
+
+  it('M6: shows an undefined baseline metric as N/A, never as zero', async () => {
+    mockOneWay.mockResolvedValue(
+      oneWayResult({
+        baseline_assumption_value: 0.0625,
+        baseline_metric_value: null,
+        assumption_values: [0.06, 0.0625],
+        metric_values: [0.155, 0.128],
+      }),
+    );
+    await runSeries(['6', '6.25']);
+
+    const line = baselineLines()[0].textContent ?? '';
+    expect(line).toBe('Baseline: Exit Cap Rate 6.25% · Levered IRR N/A');
+    expect(line).not.toContain('0.00%');
+    expect(line).not.toContain('0.00x');
+  });
+
+  it('sends the same request it always did', async () => {
+    mockOneWay.mockResolvedValue(oneWayResult());
+    await runSeries(['5.75', '6.25', '6.75']);
+
+    await waitFor(() => expect(mockOneWay).toHaveBeenCalledTimes(1));
+    // Nothing about the new presentation reached the wire: no baseline flag, no
+    // request for a baseline scenario, no extra candidate.
+    expect(mockOneWay.mock.calls[0][2]).toEqual({
+      assumption: 'exit_cap_rate',
+      metric: 'levered_irr',
+      values: [0.0575, 0.0625, 0.0675],
+    });
+  });
+});
+
+describe('D5.7A: the two-way corner names each axis and its direction', () => {
+  async function runDefaultGrid(user: ReturnType<typeof userEvent.setup>) {
+    await showTwoWay(user);
+    await enterCandidates(user, panel('two-way'), 'Row Exit Cap Rate candidate value', [
+      '6',
+      '6.5',
+    ]);
+    await enterCandidates(user, panel('two-way'), 'Column Purchase Price candidate value', [
+      '40000000',
+      '42500000',
+      '45000000',
+    ]);
+    await runIn(user, panel('two-way'));
+    await within(panel('two-way')).findByRole('table');
+  }
+
+  /** The matrix's upper-left header cell. */
+  function corner(): HTMLElement {
+    const table = within(panel('two-way')).getByRole('table');
+    return within(table).getAllByRole('columnheader')[0];
+  }
+
+  /** Its two lines, top to bottom. */
+  function cornerLines(): string[] {
+    return Array.from(corner().querySelectorAll('.sensitivity-axis-line')).map((line) =>
+      (line.textContent ?? '').trim(),
+    );
+  }
+
+  it('M8/M9: puts the column assumption first with a right arrow, the row assumption below with a down arrow', async () => {
+    const user = await openRisk();
+    mockTwoWay.mockResolvedValue(twoWayResult());
+
+    await runDefaultGrid(user);
+
+    const [first, second] = cornerLines();
+    // Column above row -- the approved order -- and each arrow on its own axis.
+    expect(first).toContain('Purchase Price');
+    expect(first).toContain('→');
+    expect(first).not.toContain('↓');
+    expect(second).toContain('Exit Cap Rate');
+    expect(second).toContain('↓');
+    expect(second).not.toContain('→');
+    expect(first).not.toContain('Exit Cap Rate');
+    expect(second).not.toContain('Purchase Price');
+  });
+
+  it('M14: says which axis is which in words, not by arrow alone', async () => {
+    const user = await openRisk();
+    mockTwoWay.mockResolvedValue(twoWayResult());
+
+    await runDefaultGrid(user);
+
+    const [first, second] = cornerLines();
+    expect(first).toContain('Column assumption: Purchase Price');
+    expect(second).toContain('Row assumption: Exit Cap Rate');
+    // The arrows are decoration on top of that, and are hidden from assistive
+    // technology so they are never read as content.
+    const arrows = Array.from(corner().querySelectorAll('.sensitivity-axis-arrow'));
+    expect(arrows).toHaveLength(2);
+    for (const arrow of arrows) {
+      expect(arrow.getAttribute('aria-hidden')).toBe('true');
+    }
+  });
+
+  it('M10: takes both labels from the response, for any pair of axes', async () => {
+    const user = await openRisk();
+    mockTwoWay.mockResolvedValue(
+      twoWayResult({
+        row_assumption: 'renewal_probability',
+        column_assumption: 'market_rent_psf',
+        baseline_row_value: 0.7,
+        baseline_column_value: 34,
+        row_values: [0.65, 0.75],
+        column_values: [32, 34, 36],
+      }),
+    );
+
+    await showTwoWay(user);
+    await user.selectOptions(control('lease-level-two-way-row-assumption'), 'renewal_probability');
+    await user.selectOptions(control('lease-level-two-way-column-assumption'), 'market_rent_psf');
+    await enterCandidates(user, panel('two-way'), 'Row Renewal Probability candidate value', [
+      '65',
+      '75',
+    ]);
+    await enterCandidates(user, panel('two-way'), 'Column Market Rent / SF candidate value', [
+      '32',
+      '34',
+      '36',
+    ]);
+    await runIn(user, panel('two-way'));
+    await within(panel('two-way')).findByRole('table');
+
+    const [first, second] = cornerLines();
+    expect(first).toBe('Column assumption: Market Rent / SF →');
+    expect(second).toBe('Row assumption: Renewal Probability ↓');
+    // Nothing is left over from the default pair.
+    expect(corner().textContent).not.toContain('Purchase Price');
+    expect(corner().textContent).not.toContain('Exit Cap Rate');
+  });
+
+  it('M11/M12/M13: leaves the matrix, its baseline cell and its values alone', async () => {
+    const user = await openRisk();
+    mockTwoWay.mockResolvedValue(twoWayResult({ baseline_row_value: 0.065 }));
+
+    await runDefaultGrid(user);
+
+    const table = within(panel('two-way')).getByRole('table');
+    // Column values are still the columns...
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .slice(1)
+        .map((cell) => cell.textContent),
+    ).toEqual(['$40,000,000', '$42,500,000', '$45,000,000']);
+    // ...and row values are still the rows.
+    const bodyRows = within(table).getAllByRole('row').slice(1);
+    expect(bodyRows.map((row) => within(row).getByRole('rowheader').textContent)).toEqual([
+      '6.00%',
+      '6.50%',
+    ]);
+    // Cell for cell, matrix[row][column] as the response sent it.
+    expect(
+      bodyRows.map((row) =>
+        within(row)
+          .getAllByRole('cell')
+          .map((cell) => cell.textContent),
+      ),
+    ).toEqual([
+      ['18.10%', '16.20%', '14.50%'],
+      ['15.20%', '13.40% (Base)', '11.80%'],
+    ]);
+    // The baseline sits at 6.50% x $42,500,000 -- the response's own
+    // intersection -- and nowhere else.
+    const marked = bodyRows.flatMap((row) =>
+      within(row)
+        .getAllByRole('cell')
+        .filter((cell) => (cell.textContent ?? '').includes('(Base)')),
+    );
+    expect(marked).toHaveLength(1);
+    expect(marked[0].textContent).toContain('13.40%');
+  });
+
+  it('keeps the baseline context line and the caption it already had', async () => {
+    const user = await openRisk();
+    mockTwoWay.mockResolvedValue(twoWayResult());
+
+    await runDefaultGrid(user);
+
+    const line = within(panel('two-way')).getByText(/^Baseline:/);
+    expect(line.textContent).toBe(
+      'Baseline: Exit Cap Rate 6.25%, Purchase Price $42,500,000, Levered IRR 14.20%',
+    );
+    // The caption still describes the orientation the same way round.
+    expect(
+      within(panel('two-way')).getByText(
+        'Levered IRR: Exit Cap Rate (rows) × Purchase Price (columns)',
+      ),
+    ).toBeTruthy();
   });
 });

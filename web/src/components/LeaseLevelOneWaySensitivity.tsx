@@ -164,10 +164,19 @@ export function LeaseLevelOneWaySensitivity({
  * scenario was underwritten and the metric has no unique answer. It is never
  * `0`, never blank, and never dropped.
  *
- * The baseline row is the response's own `baseline_assumption_value` /
- * `baseline_metric_value`. A candidate row is additionally marked as the
- * baseline only when its value **equals** that figure exactly; no nearest-value
- * search and no interpolation happens anywhere.
+ * **D5.7A -- the baseline is stated once, above the table.** It is the
+ * response's own `baseline_assumption_value` / `baseline_metric_value`, read
+ * and formatted; nothing here re-runs the analysis, infers the baseline from a
+ * candidate or averages anything. The standalone baseline *row* is gone,
+ * because an analyst who includes the baseline in the candidate series -- the
+ * usual case -- was reading the same figure twice.
+ *
+ * The candidate series itself is untouched: no value is deduplicated, dropped,
+ * reordered or synthesised, and the candidate that equals the baseline stays in
+ * the table like any other. It is merely marked `Base`, and only when it
+ * **equals** the baseline assumption value exactly. There is no nearest-value
+ * search and no interpolation, so a series that omits the baseline gets the
+ * context line and no highlighted row at all.
  */
 function OneWayResultTable({ result }: { result: LeaseLevelOneWaySensitivityResult }) {
   const assumption = targetLabel(result.assumption);
@@ -175,43 +184,43 @@ function OneWayResultTable({ result }: { result: LeaseLevelOneWaySensitivityResu
   const hasUndefined = result.metric_values.some((value) => value === null);
 
   return (
-    <div className="table-scroll sensitivity-result">
-      <table className="sensitivity-table sensitivity-one-way-table">
-        <caption className="sensitivity-caption">
-          {metric} across {assumption}
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">{assumption}</th>
-            <th scope="col">{metric}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr className="sensitivity-baseline-row">
-            <th scope="row">
-              {formatTargetValue(result.assumption, result.baseline_assumption_value)}
-              <span className="sensitivity-baseline-tag"> Baseline</span>
-            </th>
-            <td className="sensitivity-cell">
-              {formatSensitivityMetricValue(result.metric, result.baseline_metric_value)}
-            </td>
-          </tr>
-          {result.assumption_values.map((value, index) => {
-            const isBaseline = value === result.baseline_assumption_value;
-            return (
-              <tr key={index}>
-                <th scope="row">
-                  {formatTargetValue(result.assumption, value)}
-                  {isBaseline && <span className="sensitivity-baseline-tag"> Baseline</span>}
-                </th>
-                <td className={isBaseline ? 'sensitivity-cell sensitivity-baseline' : 'sensitivity-cell'}>
-                  {formatSensitivityMetricValue(result.metric, result.metric_values[index])}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="sensitivity-result">
+      <p className="sensitivity-baseline-line">
+        Baseline: {assumption}{' '}
+        {formatTargetValue(result.assumption, result.baseline_assumption_value)} · {metric}{' '}
+        {formatSensitivityMetricValue(result.metric, result.baseline_metric_value)}
+      </p>
+      <div className="table-scroll">
+        <table className="sensitivity-table sensitivity-one-way-table">
+          <caption className="sensitivity-caption">
+            {metric} across {assumption}
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">{assumption}</th>
+              <th scope="col">{metric}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {result.assumption_values.map((value, index) => {
+              const isBaseline = value === result.baseline_assumption_value;
+              return (
+                <tr key={index}>
+                  <th scope="row">{formatTargetValue(result.assumption, value)}</th>
+                  <td
+                    className={
+                      isBaseline ? 'sensitivity-cell sensitivity-baseline' : 'sensitivity-cell'
+                    }
+                  >
+                    {formatSensitivityMetricValue(result.metric, result.metric_values[index])}
+                    {isBaseline && <span className="sensitivity-baseline-tag"> Base</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
       {hasUndefined && <p className="sensitivity-note">{UNDEFINED_METRIC_NOTE}</p>}
     </div>
   );

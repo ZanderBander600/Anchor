@@ -209,6 +209,17 @@ export function LeaseLevelTwoWaySensitivity({
  * value equal `baseline_row_value` and `baseline_column_value` exactly -- the
  * two figures the response supplies for precisely this purpose. No nearest
  * value is searched for, and no baseline is placed by position.
+ *
+ * **D5.7A -- the corner says which way each assumption runs.** The column
+ * assumption is named first with a rightward cue, the row assumption second
+ * with a downward one, so the grid reads without the caption above it. Both
+ * labels come from the response's own axis ids; neither is hard-coded, and the
+ * order of the two lines is a statement about direction, not about the data.
+ * The arrows are decorative (`aria-hidden`) and the direction is carried in
+ * words as well, so a screen reader hears "Column assumption: Purchase Price"
+ * rather than a bare pair of labels. Nothing about the matrix itself moves:
+ * rows are still `row_values`, columns are still `column_values`, and
+ * `matrix[row][column]` is still rendered where the response puts it.
  */
 function TwoWayResultMatrix({ result }: { result: LeaseLevelTwoWaySensitivityResult }) {
   const rowLabel = targetLabel(result.row_assumption);
@@ -230,9 +241,21 @@ function TwoWayResultMatrix({ result }: { result: LeaseLevelTwoWaySensitivityRes
           </caption>
           <thead>
             <tr>
-              <th className="sensitivity-corner" scope="col">
-                <span className="sensitivity-row-axis">{rowLabel}</span>
-                <span className="sensitivity-column-axis">{columnLabel}</span>
+              <th className="sensitivity-corner sensitivity-axis-corner" scope="col">
+                <span className="sensitivity-axis-line">
+                  <span className="visually-hidden">Column assumption: </span>
+                  {columnLabel}
+                  <span className="sensitivity-axis-arrow" aria-hidden="true">
+                    {' →'}
+                  </span>
+                </span>
+                <span className="sensitivity-axis-line">
+                  <span className="visually-hidden">Row assumption: </span>
+                  {rowLabel}
+                  <span className="sensitivity-axis-arrow" aria-hidden="true">
+                    {' ↓'}
+                  </span>
+                </span>
               </th>
               {result.column_values.map((columnValue, columnIndex) => (
                 <th key={columnIndex} scope="col">

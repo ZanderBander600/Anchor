@@ -4177,11 +4177,6 @@ body {
   min-width: 22rem;
 }
 
-.sensitivity-baseline-row th,
-.sensitivity-baseline-row td {
-  border-bottom: 2px solid var(--color-border);
-}
-
 /* A percentage candidate needs `6.25`, not `84,000,000`, so it gets a field
    sized for what it holds. Five of these then read as one set of assumptions
    rather than as five widely-spaced boxes. */
@@ -4203,4 +4198,33 @@ body {
 .sensitivity-result .sensitivity-table th,
 .sensitivity-result .sensitivity-table td {
   padding: 0.45rem 1.1rem;
+}
+
+/* D5.7A -- the matrix corner states which way each assumption runs: the column
+   assumption on the first line with a rightward cue, the row assumption
+   directly beneath it with a downward one. Two short lines in a header cell,
+   left-aligned, no rotation and no diagonal rule -- the grid stays the dense
+   underwriting table it was, and the caption above it becomes a confirmation
+   rather than the only way to read the axes.
+
+   A new class rather than a change to `.sensitivity-row-axis` /
+   `.sensitivity-column-axis`: those two are the Quick and Detailed corner as
+   well, and this gate leaves them exactly as they are. */
+.sensitivity-axis-corner {
+  vertical-align: bottom;
+  line-height: 1.3;
+}
+
+.sensitivity-axis-line {
+  display: block;
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+/* Decorative: the arrows are `aria-hidden`, and the same direction is carried
+   in words for anyone who cannot see them. */
+.sensitivity-axis-arrow {
+  color: var(--color-text-muted);
 }
