@@ -31,6 +31,7 @@ from .ai import (
     AIProviderError,
     generate_ai_analysis,
     generate_detailed_ai_analysis,
+    generate_lease_level_ai_analysis,
 )
 from .analysis import (
     InvalidBreakEvenTargetError,
@@ -1007,6 +1008,25 @@ def break_even(
 # =============================================================================
 
 
+#: The top-level keys ``POST /ai/analysis`` consumes beside a Lease-Level input
+#: set. Declared so ``_require_lease_level_inputs`` keeps its unknown-key check
+#: live for everything else -- a mistyped ``target_leverd_irr`` is still
+#: reported rather than silently ignored (D5.2's rule, D5.8's endpoint).
+#:
+#: ``deal_context`` belongs here for the same reason it belongs in
+#: ``_DEAL_FIELDS``: this endpoint reads it (``_optional_deal_context``) and
+#: threads it to the model as the analyst's own stated strategy. Omitting it
+#: would make every real request from the app fail its unknown-key check --
+#: the client always sends the field, ``null`` included.
+_AI_HURDLE_FIELDS: tuple[str, ...] = (
+    "target_levered_irr",
+    "target_headline_dscr",
+    "target_equity_multiple",
+    "return_hurdle_metric",
+    "deal_context",
+)
+
+
 def _require_ai_hurdle_targets(payload: dict[str, Any]) -> tuple[float, float, float, ReturnHurdleMetric]:
     missing_fields = [
         field
@@ -1135,6 +1155,73 @@ def _ai_analysis_quick(payload: dict[str, Any]) -> AIAnalysis:
         ) from None
 
 
+def _ai_analysis_lease_level(payload: dict[str, Any]) -> AIAnalysis:
+    """D5.8: the 'lease_level' branch of ``POST /ai/analysis``.
+
+    Same endpoint, same mode discriminator, same response model -- no second
+    AI endpoint exists and none is needed. It validates with the same two
+    shared validators every other Lease-Level endpoint uses
+    (``_require_deal_terms`` and ``_require_lease_level_inputs``), runs the one
+    authoritative analysis exactly once through
+    ``analyze_lease_level_acquisition_with_projection``, and hands the result
+    to ``generate_lease_level_ai_analysis``.
+
+    That single analysis call is the only financial work here, and it is the
+    same call ``POST /analyze`` makes for this mode -- so the AI Analyst
+    describes the deal the analyst's own Analyze produced. Nothing else is
+    triggered: no sensitivity preset bundle (this mode has none, and the
+    analyst-directed runs stay in Risk where they belong), no break-even search
+    (this mode has none), and no alternate scenario. This endpoint reproduces
+    no financial formula of its own.
+
+    A rent roll that cannot be underwritten is refused exactly as ``/analyze``
+    refuses it, through the same ``LeaseValidationError`` shape, rather than
+    reaching the model as a partial context.
+    """
+
+    terms = _require_deal_terms(payload, mode_label="lease_level")
+    lease_level_inputs = _require_lease_level_inputs(payload, also_owned=_AI_HURDLE_FIELDS)
+    deal_context = _optional_deal_context(payload)
+    (
+        target_levered_irr,
+        target_headline_dscr,
+        target_equity_multiple,
+        return_hurdle_metric,
+    ) = _require_ai_hurdle_targets(payload)
+
+    try:
+        lease_level_results = analyze_lease_level_acquisition_with_projection(
+            terms,
+            lease_level_inputs.property_inputs,
+            lease_level_inputs.suites,
+            lease_level_inputs.leases,
+            market_leasing=lease_level_inputs.market_leasing,
+            operating_inputs=lease_level_inputs.operating_inputs,
+        )
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+
+    try:
+        return generate_lease_level_ai_analysis(
+            terms,
+            lease_level_inputs,
+            lease_level_results,
+            target_levered_irr=target_levered_irr,
+            target_equity_multiple=target_equity_multiple,
+            target_headline_dscr=target_headline_dscr,
+            return_hurdle_metric=return_hurdle_metric,
+            deal_context=deal_context,
+        )
+    except AIConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from None
+    except AIProviderError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+        ) from None
+
+
 @app.post("/ai/analysis", response_model=AIAnalysis)
 def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
     payload = dict(payload)
@@ -1157,10 +1244,7 @@ def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
         case OperatingMode.DETAILED:
             return _ai_analysis_detailed(payload)
         case OperatingMode.LEASE_LEVEL:
-            # D5.8 owns the Lease-Level AI context; AnalysisContext cannot represent it yet.
-            raise _unsupported_operating_mode(
-                operating_mode, endpoint="POST /ai/analysis"
-            )
+            return _ai_analysis_lease_level(payload)
         case _:
             raise _unsupported_operating_mode(
                 operating_mode, endpoint="POST /ai/analysis"

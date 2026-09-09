@@ -108,13 +108,24 @@ _AXES: dict[str, Any] = {
 #: refusal -- that its numbers, or its persisted inputs, survive a round trip
 #: against the deterministic pipeline.
 #:
+#: **Narrowed a third time.** D5.8 wired ``/ai/analysis`` and it moves out of
+#: this table on exactly the same terms as its predecessors: the gate that
+#: wires an endpoint owns proving the stronger property that replaces refusal.
+#: See ``tests/test_d5_8_lease_level_ai_analyst.py``, which shows the endpoint
+#: grounding a real Lease-Level analysis rather than declining to.
+#:
 #: What remains is what no gate in D5 will wire: presets and break-even are
-#: permanently refused for Lease-Level (no preset bundle exists, and guardrail
-#: G35 forbids a Lease-Level break-even), and AI belongs to D5.8.
+#: permanently refused for Lease-Level -- no standardized preset bundle exists
+#: for this mode, and guardrail G35 forbids a Lease-Level break-even.
+#:
+#: Those two refusals are *not* the same statement as "Lease-Level has no
+#: sensitivity analysis". D5.7 ships analyst-directed one-way and two-way
+#: Lease-Level sensitivity on its own endpoints; what ``/sensitivity/presets``
+#: refuses is the fixed Quick/Detailed preset package, which this mode does not
+#: have. D5.8's AI grounding makes that same distinction to the model.
 ENDPOINTS: tuple[tuple[str, str, dict[str, Any]], ...] = (
     ("post", "/sensitivity/presets", {"inputs": QUICK_INPUTS}),
     ("post", "/break-even", {"inputs": QUICK_INPUTS, **_HURDLES}),
-    ("post", "/ai/analysis", {"inputs": QUICK_INPUTS, **_HURDLES}),
 )
 
 #: Fields that only ever appear in a *successful* analysis. Their presence in a
@@ -280,7 +291,11 @@ def test_the_mode_parses_even_though_no_endpoint_serves_it() -> None:
         ("post", "/sensitivity", {"inputs": QUICK_INPUTS, **_AXES}),
         ("post", "/deals", {"name": "Quick deal", "inputs": QUICK_INPUTS}),
         ("post", "/deals/fingerprint", {"inputs": QUICK_INPUTS}),
-        *(e for e in ENDPOINTS if e[1] != "/ai/analysis"),
+        # Every remaining refusal-table endpoint. The ``/ai/analysis``
+        # exclusion this line used to carry is gone with the entry itself:
+        # a Quick AI request needs a provider, so it is exercised where the
+        # provider can be injected rather than over a live TestClient.
+        *ENDPOINTS,
     ),
     ids=lambda v: v if isinstance(v, str) else "",
 )
@@ -505,8 +520,39 @@ def test_a_lease_level_deal_is_never_duplicated_as_detailed(
     )
 
 
-def test_a_lease_level_ai_context_cannot_be_constructed() -> None:
-    with pytest.raises(UnsupportedOperatingModeError) as excinfo:
+
+class _FabricatedMode:
+    """A mode that is not an ``OperatingMode`` member.
+
+    Total dispatch means every arm is named and anything else is refused. That
+    "anything else" needs a stand-in to be testable at all, and it needs a
+    ``.value`` because ``UnsupportedOperatingModeError`` reports the mode by
+    name. Deliberately not a real enum member: the point is that it is not one.
+    """
+
+    value = "fabricated_mode"
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostic only
+        return "<fabricated_mode>"
+
+
+_FABRICATED_MODE = _FabricatedMode()
+
+def test_a_lease_level_ai_context_is_representable_but_still_validated() -> None:
+    """D5.8 replaces D5.1A's refusal -- and keeps the invariant underneath it.
+
+    D5.1A refused a Lease-Level ``AnalysisContext`` because the contract could
+    not describe one honestly: ``sensitivities`` and ``break_even`` were
+    required and typed to bundles this mode does not have. D5.8 made both
+    optional and the mode is representable, so the refusal is gone.
+
+    What must not be gone is the reason the refusal was safe: a context that
+    cannot be described honestly is still refused. The body below is the exact
+    one D5.1A used -- Lease-Level with nothing populated -- and it is still
+    rejected, now by name rather than by mode.
+    """
+
+    with pytest.raises(ValueError) as excinfo:
         AnalysisContext(
             operating_mode=OperatingMode.LEASE_LEVEL,
             inputs=None,
@@ -523,24 +569,54 @@ def test_a_lease_level_ai_context_cannot_be_constructed() -> None:
             deal_context=None,
         )
 
-    assert excinfo.value.operation == "AnalysisContext"
+    assert "LEASE_LEVEL" in str(excinfo.value)
+
+    # And a mode the contract still cannot represent is still refused as one.
+    with pytest.raises(UnsupportedOperatingModeError) as unsupported:
+        AnalysisContext(
+            operating_mode=_FABRICATED_MODE,  # type: ignore[arg-type]
+            inputs=None,
+            terms=None,
+            detailed_operating_inputs=None,
+            operating_projection=None,
+            results=None,
+            sensitivities=None,
+            break_even=None,
+            target_levered_irr=0.1,
+            target_equity_multiple=1.5,
+            target_headline_dscr=1.2,
+            return_hurdle_metric=None,
+            deal_context=None,
+        )
+
+    assert unsupported.value.operation == "AnalysisContext"
 
 
-def test_lease_level_is_never_presented_to_the_model_as_detailed() -> None:
+def test_an_unrepresentable_mode_is_never_presented_to_the_model_as_detailed() -> None:
     """Presentation refuses on its own, not merely because the context did.
 
-    Describing Lease-Level economics under Detailed's section names would be a
-    grounding failure, so this layer carries its own refusal rather than relying
-    on ``AnalysisContext`` being the only way in.
+    Describing one mode's economics under another mode's section names is a
+    grounding failure, so this layer carries its own refusal rather than
+    relying on ``AnalysisContext`` being the only way in. D5.1A demonstrated
+    that with Lease-Level, the only mode the presentation layer could not then
+    serve; D5.8 serves it, so the demonstration moves to a mode that still has
+    no arm -- the property being proved is unchanged, and is the reason D5.8
+    could add its arm safely.
+
+    That Lease-Level is now presented under its *own* section names, and never
+    Detailed's, is proved positively against a real payload in
+    ``tests/test_d5_8_lease_level_ai_analyst.py``.
     """
 
     stub = _bypass_construct(
         AnalysisContext,
-        operating_mode=OperatingMode.LEASE_LEVEL,
+        operating_mode=_FABRICATED_MODE,
         inputs=None,
         terms=None,
         detailed_operating_inputs=None,
         operating_projection=None,
+        lease_level_inputs=None,
+        lease_level_results=None,
         results=None,
         sensitivities=None,
         break_even=None,
@@ -557,14 +633,25 @@ def test_lease_level_is_never_presented_to_the_model_as_detailed() -> None:
     assert excinfo.value.operation == "build_presentation_payload"
 
 
-def test_the_ti_lc_exclusion_is_untouched_by_this_gate() -> None:
-    """D5.8 owns the presentation decision; D5.1A must not pre-empt it."""
+def test_the_ti_lc_exclusion_was_spent_by_the_gate_that_owned_it() -> None:
+    """D5.1A deferred the TI/LC presentation decision to D5.8, which took it.
+
+    Both fields now reach the model, and the allowlist that held them is empty.
+    The condition D4.5A attached to their release -- a reviewed presentation
+    *and* the grounding rules to interpret them by -- is checked here rather
+    than assumed: the rule that keeps leasing capital from being read as an
+    operating expense must exist in the shipped prompt.
+    """
 
     from anchor.ai.presentation import INTENTIONALLY_EXCLUDED_RESULT_FIELDS
+    from anchor.ai.prompts import build_system_prompt
 
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset(
-        {"tenant_improvements_by_year", "leasing_commissions_by_year"}
-    )
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
+
+    prompt = build_system_prompt()
+    assert "LEASING-CAPITAL RULE" in prompt
+    assert "BELOW net operating income" in prompt
+    assert "NOT operating expenses" in prompt
 
 
 # =============================================================================

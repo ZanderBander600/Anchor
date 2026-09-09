@@ -850,7 +850,18 @@ def test_g32_the_public_operating_mode_enum_is_published_behind_total_dispatch()
     # Every module that names the member must be a dispatch consumer -- the
     # member exists to be branched on, never to be imported into the financial
     # layers, which stay mode-blind.
-    permitted = {"api.py", "contracts.py", "store.py", "presentation.py"}
+    #
+    # D5.8 adds ``analyst.py``, which builds the Lease-Level ``AnalysisContext``
+    # and must therefore stamp the member on it. It is a context assembler, not
+    # a financial layer: the engine, leasing and analysis packages still name
+    # the member nowhere, which is what "mode-blind" was protecting.
+    permitted = {
+        "api.py",
+        "contracts.py",
+        "store.py",
+        "presentation.py",
+        "analyst.py",
+    }
     for source_file in _python_files_under(_ANCHOR_DIR):
         if "OperatingMode.LEASE_LEVEL" not in source_file.read_text(encoding="utf-8"):
             continue
@@ -908,45 +919,89 @@ def test_g34_the_ai_surface_changed_only_to_make_mode_dispatch_total() -> None:
 
     changed = _files_changed_since(_D4_5A_COMMIT, "src/anchor/ai")
 
+    # **Widened at D5.8, by one gate's exact scope.** D5.1A authorised two
+    # files, for a conversion that added refusals and no vocabulary. D5.8 is
+    # the gate that owns Lease-Level AI, so it necessarily touches the whole
+    # AI surface: the context contract gains the mode, the presentation layer
+    # gains its sections, the orchestrator gains its builder, the prompt gains
+    # the grounding rules those sections are read by, and the package exports
+    # the new entry points.
+    #
+    # ``provider.py`` is the one file that must NOT appear. It is the OpenAI
+    # boundary -- the model, the schema, the network call -- and grounding a
+    # third mode is a question about what Anchor sends, never about how it
+    # talks to a provider. Its absence here is the assertion.
     assert sorted(changed) == [
+        "src/anchor/ai/__init__.py",
+        "src/anchor/ai/analyst.py",
         "src/anchor/ai/contracts.py",
         "src/anchor/ai/presentation.py",
+        "src/anchor/ai/prompts.py",
     ], (
-        "the AI surface changed beyond D5.1A's authorised total-dispatch "
-        f"conversion: {changed}"
+        "the AI surface changed beyond D5.8's authorised Lease-Level grounding: "
+        f"{changed}"
+    )
+    assert _files_changed_since(_D4_5A_COMMIT, "src/anchor/ai/provider.py") == [], (
+        "the provider boundary must not change to ground a new mode"
     )
 
-    # The prompts are untouched: D5.1A adds no mode vocabulary to the model.
-    assert _files_changed_since(_D4_5A_COMMIT, "src/anchor/ai/prompts.py") == []
+    # The D4.5A TI/LC exclusion was spent by D5.8, the gate D4.5A named as its
+    # owner, and on the condition D4.5A attached: the fields reach the model
+    # only alongside the rule that says what they are.
+    from anchor.ai.presentation import INTENTIONALLY_EXCLUDED_RESULT_FIELDS
+    from anchor.ai.prompts import build_system_prompt
 
-    # The D4.5A TI/LC exclusion stands exactly as authorised.
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
+    assert "LEASING-CAPITAL RULE" in build_system_prompt()
+
+
+def test_g35_the_ai_exclusion_decision_was_succeeded_not_abandoned() -> None:
+    """**Guardrail 35, succeeded at D5.8.**
+
+    The original had two halves. The first -- TI and LC withheld from the model
+    -- was always explicitly a deferral to "the gate that gives them a reviewed
+    presentation and the grounding rules to interpret them". D5.8 is that gate,
+    so the allowlist is empty and the rule exists; that half is asserted in G34
+    above, where the file ledger for the same gate lives.
+
+    The second half is the one that must never lapse, and it is asserted here,
+    unchanged in force and sharpened in aim: **the AI layer still owns exactly
+    one door into leasing.** D5.8 hands it Lease-Level contracts, so a blanket
+    "names nothing Lease-Level" ban would now be false. What replaces it is the
+    dependency direction HD-D4-8 fixes: those contracts arrive through the
+    ``anchor.analysis`` facade, and the AI package still imports no
+    ``anchor.leasing`` module -- not the parser, not a builder, and above all
+    none of the modules that contain a leasing formula.
+    """
+
     from anchor.ai.presentation import INTENTIONALLY_EXCLUDED_RESULT_FIELDS
 
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset(
-        {"tenant_improvements_by_year", "leasing_commissions_by_year"}
-    )
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
 
-
-def test_g35_the_ai_exclusion_decision_is_intact() -> None:
-    """**Guardrail 35.** Stated behaviourally as well as by file identity: the
-    two fields remain deliberately excluded, and no Lease-Level contract has
-    been handed to the AI analyst."""
-
-    from anchor.ai.presentation import INTENTIONALLY_EXCLUDED_RESULT_FIELDS
-
-    assert {
-        "tenant_improvements_by_year",
-        "leasing_commissions_by_year",
-    } <= INTENTIONALLY_EXCLUDED_RESULT_FIELDS
-
-    # The AI layer legitimately consumes ``anchor.analysis`` for sensitivity
-    # and break-even. What it must not reach is the Lease-Level layer: neither
-    # the leasing package, nor the orchestrator, nor its result envelope.
+    # The AI layer legitimately consumes ``anchor.analysis`` for sensitivity,
+    # break-even and -- from D5.8 -- the Lease-Level input and result
+    # contracts. What it must not reach is the leasing package itself.
     for source_file in _python_files_under(_ANCHOR_DIR / "ai"):
         names = _imported_module_names(source_file)
         for name in names:
             assert not name.startswith("anchor.leasing"), (
                 f"{source_file.name} imports {name!r}"
+            )
+
+    # And it must still compute nothing: no leasing builder, no rollover, no
+    # recovery, no aggregation reaches it even by name.
+    for source_file in _python_files_under(_ANCHOR_DIR / "ai"):
+        text = source_file.read_text(encoding="utf-8")
+        for forbidden in (
+            "build_monthly_property_projection",
+            "aggregate_monthly_to_annual",
+            "build_recursive_rollover",
+            "build_initial_vacancy_rollover",
+            "build_lease_recovery_schedule",
+            "parse_lease_level_inputs",
+        ):
+            assert forbidden not in text, (
+                f"{source_file.name} reaches the leasing builder {forbidden}"
             )
             assert not name.startswith("anchor.analysis.lease_level"), (
                 f"{source_file.name} imports the Lease-Level orchestrator"
@@ -1107,21 +1162,43 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
                 "reaches leasing only through the anchor.analysis facade"
             )
 
-    # D5.8: the AI layer may *name* the mode to refuse it -- D5.1A put explicit
-    # Lease-Level arms in ``ai/contracts.py`` and ``ai/presentation.py`` for
-    # exactly that -- but it must reach no Lease-Level capability.
+    # **Amended at D5.8**, the gate the previous entry named as AI's owner.
+    # The AI layer may now consume the Lease-Level result envelope and the
+    # approved input set -- that is the whole capability D5.8 delivers.
+    #
+    # What stays absent is what D5.8 does not own, and the ledger is what keeps
+    # the two apart. Sensitivity is the sharp case: Lease-Level sensitivity
+    # exists and shipped at D5.7, so the temptation to have the AI request a
+    # run of its own is real. It must not. Sensitivity stays analyst-directed
+    # in Risk, and an AI request triggers no financial run beyond the one
+    # analysis it is describing.
     for source_file in _python_files_under(_ANCHOR_DIR / "ai"):
         text = source_file.read_text(encoding="utf-8")
         for forbidden in (
-            "analyze_lease_level_acquisition_with_projection",
             "run_lease_level_one_way_sensitivity",
             "run_lease_level_two_way_sensitivity",
+            "build_standard_lease_level_presets",
             "parse_lease_level_inputs",
-            "LeaseLevelAcquisitionResults",
         ):
             assert forbidden not in text, (
-                f"{source_file.name} reaches {forbidden}; D5.8 owns Lease-Level AI"
+                f"{source_file.name} reaches {forbidden}; the AI Analyst runs no "
+                "sensitivity of its own"
             )
+
+    # The orchestrator is the only AI module that may name the analysis entry
+    # point, and even there only in prose: D5.8's Lease-Level context builder
+    # *receives* an already-computed result rather than calling for one, so the
+    # AI Analyst can never describe a different analysis from the analyst's.
+    for source_file in _python_files_under(_ANCHOR_DIR / "ai"):
+        tree = _tree(source_file)
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "analyze_lease_level_acquisition_with_projection" not in called, (
+            f"{source_file.name} runs the Lease-Level analysis itself"
+        )
 
     # D5.4 wired persistence. What must still be absent from the store is the
     # transport parser -- storage reads its own rows, and routing them through

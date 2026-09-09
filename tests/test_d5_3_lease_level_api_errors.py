@@ -539,20 +539,24 @@ def test_detailed_terms_errors_are_unchanged(client: TestClient) -> None:
         ("/sensitivity/presets", {}),
         ("/break-even", {"target_levered_irr": 0.1, "target_headline_dscr": 1.2,
                          "target_equity_multiple": 1.5}),
-        ("/ai/analysis", {"target_levered_irr": 0.1, "target_headline_dscr": 1.2,
-                          "target_equity_multiple": 1.5}),
     ],
-    ids=["presets", "break-even", "ai"],
+    ids=["presets", "break-even"],
 )
 def test_the_gates_that_still_own_lease_level_keep_refusing(
     client: TestClient, path: str, extra: dict[str, Any]
 ) -> None:
-    """What no D5 gate wires, plus the one that belongs to a later gate.
+    """What no D5 gate wires.
 
-    Presets and break-even are refused for the whole of D5 -- there is no
-    Lease-Level preset bundle and guardrail G35 forbids a Lease-Level break-even
-    -- and AI is D5.8's. ``/deals`` and ``/deals/fingerprint`` left this list at
-    D5.4, which wired them.
+    Presets and break-even are refused for the whole of D5: there is no
+    Lease-Level preset bundle, and guardrail G35 forbids a Lease-Level
+    break-even. ``/deals`` and ``/deals/fingerprint`` left this list at D5.4,
+    and ``/ai/analysis`` at D5.8 -- each wired by the gate that owned it.
+
+    The presets refusal is narrower than it looks and must not be read as
+    "Lease-Level has no sensitivity". D5.7 ships analyst-directed one-way and
+    two-way Lease-Level sensitivity on its own endpoints; what this endpoint
+    refuses is the fixed Quick/Detailed *preset bundle*, which this mode does
+    not have.
 
     Each body is a *complete, valid* Lease-Level request, so the refusal can
     only be about the endpoint rather than about a missing field.

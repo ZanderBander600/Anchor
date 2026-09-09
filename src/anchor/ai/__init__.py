@@ -28,8 +28,10 @@ from __future__ import annotations
 from .analyst import (
     build_analysis_context,
     build_detailed_analysis_context,
+    build_lease_level_analysis_context,
     generate_ai_analysis,
     generate_detailed_ai_analysis,
+    generate_lease_level_ai_analysis,
 )
 from .contracts import AIAnalysis, AnalysisContext, DealStory
 from .provider import (
@@ -49,6 +51,8 @@ __all__ = [
     "DEFAULT_MODEL",
     "build_analysis_context",
     "build_detailed_analysis_context",
+    "build_lease_level_analysis_context",
     "generate_ai_analysis",
     "generate_detailed_ai_analysis",
+    "generate_lease_level_ai_analysis",
 ]

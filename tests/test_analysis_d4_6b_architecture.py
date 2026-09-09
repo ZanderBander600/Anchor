@@ -1258,7 +1258,6 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "src/anchor/analysis/break_even.py",
         "src/anchor/validation.py",
         "src/anchor/ingestion",
-        "src/anchor/ai/prompts.py",
         # The frontend's financial and transport modules. `web` as a whole was
         # asserted byte-identical until D5.1B, which had to edit the frontend's
         # mode-dispatch files for exactly the reason D5.1A edited the backend's.
@@ -1299,6 +1298,91 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "web/src/api.ts changed by more than addition since D4.6A; a shipped "
         f"Quick/Detailed client function was edited: {removed[:5]}"
     )
+
+    # ``src/anchor/ai/prompts.py`` was byte-identical until D5.8, the gate that
+    # gives the AI Analyst a third mode to describe. Byte-identity stopped being
+    # a statement of the rule there -- grounding a mode *is* prompt work -- so
+    # two stronger and more specific claims take its place.
+    import re
+
+    from anchor.ai.prompts import build_system_prompt
+
+    shipped_prompt = build_system_prompt()
+    baseline_source = subprocess.run(
+        ["git", "show", f"{_D4_6A_COMMIT}:src/anchor/ai/prompts.py"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=_PROJECT_ROOT,
+    ).stdout
+
+    def _model_facing(source: str) -> str:
+        """Just the prompt literal -- not the module's docstrings.
+
+        A removed docstring line is code documentation, covered by ordinary
+        review of the diff. What these claims protect is what the model is
+        actually told.
+        """
+
+        start_index = source.index("SYSTEM_PROMPT = textwrap.dedent(")
+        return source[start_index : source.index("def build_system_prompt", start_index)]
+
+    baseline_model_facing = _model_facing(baseline_source)
+
+    removed = [
+        line[1:].strip()
+        for line in subprocess.run(
+            ["git", "diff", "-U0", _D4_6A_COMMIT, "--", "src/anchor/ai/prompts.py"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=_PROJECT_ROOT,
+        ).stdout.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+
+    # Claim 1: every line of model-facing text D5.8 removed was a two-mode
+    # enumeration. The prompt said "either quick or detailed", "in both modes",
+    # "in either mode"; a third mode made each of those sentences false, and
+    # they were corrected rather than deleted. A line is also acceptable if its
+    # text still appears in the built prompt -- the paragraph was re-wrapped and
+    # nothing was actually dropped. Anything else is a rule that went missing,
+    # which is what byte-identity was really protecting.
+    two_mode_phrases = ("either", "both modes", "quick", "Quick", "detailed", "Detailed")
+    for line in removed:
+        if line == "" or line not in baseline_model_facing:
+            continue
+        assert any(phrase in line for phrase in two_mode_phrases) or (
+            line.strip('"') in shipped_prompt
+        ), (
+            "D5.8 removed a prompt line that was neither a two-mode "
+            f"enumeration nor re-wrapped elsewhere: {line!r}"
+        )
+
+    # Claim 2 -- the one that matters. Every numbered rule and every named rule
+    # block that shipped at D4.6A is still in the built system prompt, and the
+    # numbering is still unique, so the third mode's rules were appended rather
+    # than written over the top of Quick's and Detailed's.
+    baseline_rules = set(re.findall(r"^    (\d+[a-z]?)\. ", baseline_model_facing, re.M))
+    shipped_rules = re.findall(r"^(\d+[a-z]?)\. ", shipped_prompt, re.M)
+    assert baseline_rules, "the baseline rule scan found nothing; the regex drifted"
+    assert baseline_rules <= set(shipped_rules), (
+        "D5.8 dropped a numbered grounding rule: "
+        f"{sorted(baseline_rules - set(shipped_rules))}"
+    )
+    assert len(shipped_rules) == len(set(shipped_rules)), (
+        "a rule number is used twice; the third mode's rules overwrote an "
+        "existing rule's identifier"
+    )
+    for named_block in (
+        "GROUNDING RULES",
+        "DETAILED-MODE NOI RULE",
+        "OPERATING-MARGIN DISCIPLINE",
+        "DEAL CONTEXT RULES",
+        "STRUCTURE",
+        "DEAL STORY",
+    ):
+        assert named_block in shipped_prompt, f"D5.8 dropped the {named_block} block"
 
     # ``src/anchor/analysis/lease_level.py`` was byte-identical until D5.5C,
     # which wired two *existing* recovery validators into the orchestration that
@@ -1358,6 +1442,15 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "src/anchor/deals/__init__.py",
         "src/anchor/ai/contracts.py",
         "src/anchor/ai/presentation.py",
+        # D5.8 -- the gate that grounds the third mode for the AI Analyst.
+        # ``analyst.py`` gains the Lease-Level context builder, ``prompts.py``
+        # the grounding rules that context is read by, and ``__init__.py`` the
+        # two new entry points. ``provider.py`` is deliberately absent: the
+        # OpenAI boundary is not a grounding question, and G34 asserts its
+        # byte-identity by name.
+        "src/anchor/ai/analyst.py",
+        "src/anchor/ai/prompts.py",
+        "src/anchor/ai/__init__.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
                  "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):

@@ -227,13 +227,36 @@ def test_m7_api_error_mapping_was_not_touched() -> None:
 
     import subprocess
 
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", "6ccd225", "--", "src/anchor/api.py"],
+    # Byte-identity held until D5.8, which had to add the ``/ai/analysis``
+    # Lease-Level arm to ``api.py``. It stopped being a statement of the rule
+    # there, so the rule itself is asserted instead, and more precisely: **no
+    # blanket ``except ValueError`` was bolted onto the API.** That, not the
+    # file's bytes, is what would turn an internal invariant breach into a
+    # validation message telling an analyst their inputs were wrong.
+    #
+    # ``LeaseValidationError`` subclasses ``ValueError``, so the sensitivity
+    # handlers' pre-existing last-resort clauses are legitimate; ``test_m7b``
+    # below pins the ordering that makes them safe. What this asserts is that
+    # their number did not grow.
+    source = (REPO_ROOT / "src" / "anchor" / "api.py").read_text(encoding="utf-8")
+    baseline = subprocess.run(
+        ["git", "show", "6ccd225:src/anchor/api.py"],
         capture_output=True,
+        text=True,
+        check=True,
         cwd=REPO_ROOT,
+    ).stdout
+    assert source.count("except ValueError") == baseline.count("except ValueError"), (
+        "api.py gained or lost a bare `except ValueError` clause"
     )
-    assert changed.returncode == 0, changed.stderr.decode()
-    assert changed.stdout.decode().strip() == "", "api.py changed"
+
+    # And the structured Lease-Level mapping is still the one that runs: the
+    # helper that renders an issue list, and the handler that calls it, are
+    # both still present and unchanged in kind.
+    assert "_lease_validation_error_response" in source
+    assert source.count("except LeaseValidationError") >= baseline.count(
+        "except LeaseValidationError"
+    ), "api.py lost a structured LeaseValidationError handler"
 
 
 def test_m7b_the_structured_handler_precedes_any_generic_one() -> None:

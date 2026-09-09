@@ -703,10 +703,16 @@ def test_the_api_declares_only_literal_endpoint_owned_keys() -> None:
             # site that supplies it is checked by this same loop, so the value
             # still traces back to a reviewed constant.
             if isinstance(keyword.value, ast.Name):
+                # D5.8 adds ``_AI_HURDLE_FIELDS`` -- the four hurdle-target
+                # keys ``POST /ai/analysis`` consumes beside a Lease-Level
+                # input set. Same shape as its three predecessors and for the
+                # same reason: naming the endpoint's own keys is what keeps the
+                # unknown-key check live for every other key in the body.
                 assert keyword.value.id in {
                     "_TWO_WAY_FIELDS",
                     "_ONE_WAY_FIELDS",
                     "_DEAL_FIELDS",
+                    "_AI_HURDLE_FIELDS",
                     "also_owned",
                 }, f"owned keys came from {keyword.value.id!r}"
             else:

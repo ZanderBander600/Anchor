@@ -1295,6 +1295,80 @@ export async function updateLeaseLevelDeal(
   return (await response.json()) as Deal;
 }
 
+/** `POST /ai/analysis` with `operating_mode: "lease_level"` (D5.8).
+ *
+ * The same endpoint Quick and Detailed use, discriminated by `operating_mode`
+ * exactly as every other Lease-Level function here is. There is no second AI
+ * product and no second endpoint: the response is the identical `AIAnalysis`
+ * shape the other two modes return, so `AiAnalystPanel` renders it unchanged.
+ *
+ * `inputs` carries the whole approved rent roll, because the backend
+ * underwrites the deal to ground the interpretation -- the same analysis
+ * `analyzeLeaseLevelAcquisition` runs, from the same body. Nothing is computed
+ * here, and this function never talks to a model provider.
+ *
+ * A 503 (no provider configured) and a 502 (provider failed) are surfaced as
+ * their own messages, exactly as the Quick and Detailed clients do, so an
+ * absent API key reads as "the AI Analyst is not configured" rather than as a
+ * broken deal. */
+export async function fetchLeaseLevelAIAnalysis(
+  terms: AcquisitionTermsRequest,
+  inputs: LeaseLevelInputsRequest,
+  targetLeveredIrr: number,
+  targetEquityMultiple: number,
+  targetHeadlineDscr: number,
+  returnHurdleMetric: ReturnHurdleMetric,
+  dealContext: string | null,
+): Promise<AIAnalysis> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/ai/analysis`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operating_mode: 'lease_level',
+        terms,
+        ...inputs,
+        target_levered_irr: targetLeveredIrr,
+        target_equity_multiple: targetEquityMultiple,
+        target_headline_dscr: targetHeadlineDscr,
+        return_hurdle_metric: returnHurdleMetric,
+        deal_context: dealContext,
+      }),
+    });
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE);
+  }
+
+  // A rent roll the engine refuses is refused here in the same structured
+  // shape `analyzeLeaseLevelAcquisition` uses, so a lease-level issue list
+  // reaches the workspace rather than a flattened sentence.
+  if (response.status === 422) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw leaseLevelValidationError(payload);
+  }
+
+  if (response.status === 503) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string' ? body.detail : 'The AI Analyst is not configured.';
+    throw new ApiError(message);
+  }
+
+  if (response.status === 502) {
+    const body = await response.json().catch(() => null);
+    const message =
+      typeof body?.detail === 'string' ? body.detail : 'The AI Analyst request failed.';
+    throw new ApiError(message);
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`The AI analysis request failed (HTTP ${response.status}).`);
+  }
+
+  return (await response.json()) as AIAnalysis;
+}
+
 // =============================================================================
 // D5.7 -- Lease-Level sensitivity.
 //

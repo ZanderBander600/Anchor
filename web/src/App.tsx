@@ -1663,6 +1663,38 @@ export default function App() {
     }
   }
 
+  /** D5.8 -- Lease-Level "Generate AI Analysis".
+   *
+   * Reads the three hurdle targets from the same Risk-workspace fields Quick
+   * and Detailed use, through the same parsers, so a hurdle means the same
+   * thing in every mode. A malformed target is reported and nothing is sent.
+   *
+   * The analysis itself belongs to `useLeaseLevelDeal`, which owns the request
+   * body and the staleness rule; this function only supplies the targets. */
+  async function handleGenerateLeaseLevelAiAnalysis(): Promise<void> {
+    let targetLeveredIrr: number;
+    let targetEquityMultipleValue: number;
+    let targetHeadlineDscrValue: number;
+    try {
+      targetLeveredIrr = parsePercent('Target Levered IRR', targetLeveredIrrPercent);
+      targetEquityMultipleValue = parseNumber('Target Equity Multiple', targetEquityMultiple);
+      targetHeadlineDscrValue = parseNumber('Target Year 1 DSCR', targetHeadlineDscr);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setAiAnalysisError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    await leaseLevel.generateAiAnalysis(
+      targetLeveredIrr,
+      targetEquityMultipleValue,
+      targetHeadlineDscrValue,
+      returnHurdleMetric,
+    );
+  }
+
   async function runBreakEven(
     request: AcquisitionRequest,
     leveredIrrPercentInput: string,
@@ -2597,16 +2629,38 @@ export default function App() {
         />
       </WorkspacePanel>
 
+      {/* D5.8: the AI Analyst reads a Lease-Level analysis.
+        *
+        * The same `AiAnalystPanel` Quick and Detailed render, not a second AI
+        * product: the backend returns the identical report shape for all three
+        * modes, so there is nothing mode-specific to build here.
+        *
+        * Gated on `leaseLevel.results` for the reason the empty state says out
+        * loud. The AI Analyst interprets verified results; with nothing
+        * analyzed there is nothing to interpret, and offering the button
+        * anyway would invite exactly the invention this product forbids.
+        * `resetDownstream` clears the report with the results on any input
+        * edit, so what is on screen always describes the assumptions on
+        * screen. */}
       <WorkspacePanel
         id="ai"
         active={workspace}
         title="AI Analyst"
         subtitle="Narrative built strictly from the deterministic analysis."
       >
-        <div className="empty-state">
-          The AI Analyst does not yet read a Lease-Level analysis. A later gate
-          gives it the grounding rules it needs before it may describe one.
-        </div>
+        {leaseLevel.results ? (
+          <AiAnalystPanel
+            analysis={leaseLevel.aiAnalysis}
+            isLoading={leaseLevel.isGeneratingAiAnalysis}
+            error={leaseLevel.aiAnalysisError}
+            onGenerate={() => void handleGenerateLeaseLevelAiAnalysis()}
+          />
+        ) : (
+          <div className="empty-state">
+            Analyze the deal first. The AI Analyst interprets verified results; it never
+            calculates them.
+          </div>
+        )}
       </WorkspacePanel>
 
       <WorkspacePanel

@@ -21,11 +21,13 @@
  */
 
 import { useState } from 'react';
+import type { AIAnalysis, ReturnHurdleMetric } from './types';
 import {
   ApiError,
   LeaseLevelApiError,
   analyzeLeaseLevelAcquisition,
   createLeaseLevelDeal,
+  fetchLeaseLevelAIAnalysis,
   getDeal,
   updateLeaseLevelDeal,
 } from './api';
@@ -96,6 +98,28 @@ export interface LeaseLevelDealState {
    * result that is current. */
   results: LeaseLevelAcquisitionResults | null;
   isAnalyzing: boolean;
+  /** D5.8: the AI Analyst's interpretation of `results`, or `null`.
+   *
+   * Held beside `results` and cleared by the same `resetDownstream`, because it
+   * is downstream of exactly the same assumptions. An interpretation of an
+   * analysis the analyst has since edited away is worse than no interpretation:
+   * it reads as current and is not. There is deliberately no "stale" badge --
+   * the same rule `results` follows applies here, so an AI report that is
+   * visible is one written about the numbers on screen. */
+  aiAnalysis: AIAnalysis | null;
+  isGeneratingAiAnalysis: boolean;
+  aiAnalysisError: string | null;
+  /** Requests one AI interpretation of the current analysis.
+   *
+   * Requires `results` to be non-null: the AI Analyst interprets verified
+   * results and never conjures them, so with nothing analyzed there is nothing
+   * to interpret and the call is refused before it is made. */
+  generateAiAnalysis: (
+    targetLeveredIrr: number,
+    targetEquityMultiple: number,
+    targetHeadlineDscr: number,
+    returnHurdleMetric: ReturnHurdleMetric,
+  ) => Promise<void>;
   isSaving: boolean;
   /** The whole-request message from the last failure, analysis or save. */
   error: string | null;
@@ -340,6 +364,9 @@ export function useLeaseLevelDeal(options: {
 
   const [results, setResults] = useState<LeaseLevelAcquisitionResults | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(null);
+  const [isGeneratingAiAnalysis, setIsGeneratingAiAnalysis] = useState(false);
+  const [aiAnalysisError, setAiAnalysisError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -360,6 +387,13 @@ export function useLeaseLevelDeal(options: {
    * Detailed apply. Results are dropped, never recomputed automatically. */
   function resetDownstream() {
     setResults(null);
+    // D5.8: the AI report is downstream of the same assumptions the analysis
+    // is, so it is dropped by the same rule and at the same moment. Leaving it
+    // on screen beside cleared results would be the one genuinely misleading
+    // state this workspace could reach -- a narrative about numbers that are no
+    // longer there.
+    setAiAnalysis(null);
+    setAiAnalysisError(null);
     setError(null);
     setLeaseIssues([]);
     setTermsIssues([]);
@@ -504,6 +538,58 @@ export function useLeaseLevelDeal(options: {
       setError(recordFailure(caught, 'An unexpected error occurred while analyzing the deal.'));
     } finally {
       setIsAnalyzing(false);
+    }
+  }
+
+  /**
+   * D5.8 -- one AI interpretation of the analysis currently on screen.
+   *
+   * Sends the same request body `analyze` sent, so the backend grounds the
+   * interpretation in the same deal. It does **not** send `results`: the
+   * authoritative analysis is the backend's, and shipping a client-held copy
+   * back for the model to read would put a second version of the numbers on
+   * the wire.
+   *
+   * Refused outright when nothing has been analyzed. That guard is what makes
+   * "the AI Analyst never invents results" true at this layer rather than only
+   * in the prompt.
+   */
+  async function generateAiAnalysis(
+    targetLeveredIrr: number,
+    targetEquityMultiple: number,
+    targetHeadlineDscr: number,
+    returnHurdleMetric: ReturnHurdleMetric,
+  ): Promise<void> {
+    if (results === null) {
+      return;
+    }
+    setIsGeneratingAiAnalysis(true);
+    setAiAnalysisError(null);
+    try {
+      const request = buildRequest();
+      if (request === null) {
+        setAiAnalysisError(LEASE_LEVEL_BLANKS_MESSAGE);
+        return;
+      }
+      const analysis = await fetchLeaseLevelAIAnalysis(
+        request.terms,
+        request.inputs,
+        targetLeveredIrr,
+        targetEquityMultiple,
+        targetHeadlineDscr,
+        returnHurdleMetric,
+        dealContext.trim() || null,
+      );
+      setAiAnalysis(analysis);
+    } catch (caught) {
+      setAiAnalysis(null);
+      setAiAnalysisError(
+        caught instanceof Error
+          ? caught.message
+          : 'An unexpected error occurred while generating the AI analysis.',
+      );
+    } finally {
+      setIsGeneratingAiAnalysis(false);
     }
   }
 
@@ -824,6 +910,10 @@ export function useLeaseLevelDeal(options: {
     setPeriodView,
     results,
     isAnalyzing,
+    aiAnalysis,
+    isGeneratingAiAnalysis,
+    aiAnalysisError,
+    generateAiAnalysis,
     isSaving,
     error,
     saveError,

@@ -924,12 +924,35 @@ describe('mutation kills', () => {
     const literals = api.match(/operating_mode: 'lease_level'/g) ?? [];
     expect(
       literals.length,
-      'analyze, create, update and the two D5.7 sensitivity runs must each carry ' +
-        'the Lease-Level discriminator',
-    ).toBe(5);
+      'analyze, create, update, the two D5.7 sensitivity runs and the D5.8 AI ' +
+        'analysis must each carry the Lease-Level discriminator',
+    ).toBe(6);
     for (const forbidden of ["operating_mode: 'quick',\n    terms,\n    ...inputs"]) {
       expect(api, 'a Lease-Level body carries another mode').not.toContain(forbidden);
     }
+  });
+
+  it('M14: the AI Analyst cannot be run or left standing without a current analysis', () => {
+    // Two claims the UI cannot exercise, because the panel's own `results` gate
+    // stops the analyst reaching either. They are defence in depth beneath that
+    // gate -- and defence in depth that nothing asserts is defence that quietly
+    // disappears -- so they are pinned where they live.
+    const hook = sourceOf('useLeaseLevelDeal.ts');
+
+    // 1. The generator refuses outright with nothing analyzed. The AI Analyst
+    //    interprets verified results; it never conjures them.
+    expect(hook).toContain('if (results === null) {');
+
+    // 2. An input edit clears the report along with the results it describes.
+    //    Both lines sit inside `resetDownstream`, which is the one place
+    //    downstream state is dropped.
+    const reset = hook.slice(
+      hook.indexOf('function resetDownstream()'),
+      hook.indexOf('function recordFailure'),
+    );
+    expect(reset).toContain('setResults(null);');
+    expect(reset).toContain('setAiAnalysis(null);');
+    expect(reset).toContain('setAiAnalysisError(null);');
   });
 
   it('M13: the shell mounting another mode’s workspace for Lease-Level is caught', () => {

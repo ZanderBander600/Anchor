@@ -424,7 +424,15 @@ def test_intentional_exclusion_allowlists_hold_exactly_the_deferred_fields() -> 
     presentation.py with a comment explaining why and update this expectation
     to match -- never relax it to a containment check."""
 
+    # D5.8 empties the result allowlist. ``tenant_improvements_by_year`` and
+    # ``leasing_commissions_by_year`` were withheld at D4.5A pending a gate that
+    # could give them a reviewed presentation and the rules to read them by;
+    # D5.8 is that gate, so they are now formatted like every other
+    # ``AcquisitionResults`` field and governed by SYSTEM_PROMPT's
+    # LEASING-CAPITAL RULE.
+    #
+    # The allowlists stay, and stay exact. Empty is a statement -- every field
+    # of every one of these five contracts now reaches the model -- and the
+    # next field that should not still has to be named, with a reason.
     assert INTENTIONALLY_EXCLUDED_INPUT_FIELDS == frozenset()
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset(
-        {"tenant_improvements_by_year", "leasing_commissions_by_year"}
-    )
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()

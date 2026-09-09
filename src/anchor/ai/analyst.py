@@ -18,11 +18,22 @@ One AI Analyst architecture, not two parallel systems: both
 same ``_generate_from_context`` provider call -- mirroring exactly how the
 engine's ``analyze_acquisition``/``analyze_detailed_acquisition`` converge
 on one downstream calculation path.
+
+D5.8 adds the third arm, ``build_lease_level_analysis_context``/
+``generate_lease_level_ai_analysis``, into that same shape and that same
+provider call. It is the one arm that runs **no** analysis of its own: it
+receives the already-computed ``LeaseLevelAcquisitionResults`` the product
+flow produced, so the AI Analyst always interprets the exact analysis the
+analyst approved rather than a second run of its own. It calls no sensitivity
+preset builder and no break-even search either -- Lease-Level has neither, and
+inventing one at AI time is precisely what this module exists not to do.
 """
 
 from __future__ import annotations
 
 from ..analysis import (
+    LeaseLevelAcquisitionResults,
+    ParsedLeaseLevelInputs,
     ReturnHurdleMetric,
     build_standard_break_even_analysis,
     build_standard_detailed_break_even_analysis,
@@ -145,6 +156,58 @@ def build_detailed_analysis_context(
     )
 
 
+def build_lease_level_analysis_context(
+    terms: AcquisitionTerms,
+    lease_level_inputs: ParsedLeaseLevelInputs,
+    lease_level_results: LeaseLevelAcquisitionResults,
+    *,
+    target_levered_irr: float,
+    target_equity_multiple: float,
+    target_headline_dscr: float,
+    return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
+    deal_context: str | None = None,
+) -> AnalysisContext:
+    """Assemble one deterministic ``AnalysisContext`` for a Lease-Level deal
+    (D5.8).
+
+    **This function runs no analysis.** It differs from its two siblings above
+    in exactly that way, and deliberately: ``lease_level_results`` is supplied
+    by the caller, already computed by
+    ``analyze_lease_level_acquisition_with_projection`` through the product
+    flow the analyst drove. Calling the analysis again here would re-underwrite
+    the deal at AI time -- a second run that could disagree with the one on the
+    analyst's screen, for no benefit. Quick and Detailed call their engine
+    entry points because their contexts also need a preset bundle and a
+    break-even search, neither of which exists for this mode.
+
+    For the same reason **nothing is triggered on the side**: no sensitivity
+    preset call, no break-even search, no alternate scenario. ``sensitivities``
+    and ``break_even`` are ``None``, and the presentation layer says what each
+    absence means rather than leaving the model to guess.
+
+    ``results`` is passed as ``lease_level_results.results`` -- the identical
+    object, not a copy -- which ``AnalysisContext`` asserts.
+    """
+
+    return AnalysisContext(
+        operating_mode=OperatingMode.LEASE_LEVEL,
+        inputs=None,
+        terms=terms,
+        detailed_operating_inputs=None,
+        operating_projection=None,
+        lease_level_inputs=lease_level_inputs,
+        lease_level_results=lease_level_results,
+        results=lease_level_results.results,
+        sensitivities=None,
+        break_even=None,
+        target_levered_irr=target_levered_irr,
+        target_equity_multiple=target_equity_multiple,
+        target_headline_dscr=target_headline_dscr,
+        return_hurdle_metric=return_hurdle_metric,
+        deal_context=deal_context,
+    )
+
+
 def _generate_from_context(
     context: AnalysisContext, *, provider: OpenAIAnalystProvider | None = None
 ) -> AIAnalysis:
@@ -207,6 +270,41 @@ def generate_detailed_ai_analysis(
     context = build_detailed_analysis_context(
         terms,
         detailed_operating_inputs,
+        target_levered_irr=target_levered_irr,
+        target_equity_multiple=target_equity_multiple,
+        target_headline_dscr=target_headline_dscr,
+        return_hurdle_metric=return_hurdle_metric,
+        deal_context=deal_context,
+    )
+    return _generate_from_context(context, provider=provider)
+
+
+def generate_lease_level_ai_analysis(
+    terms: AcquisitionTerms,
+    lease_level_inputs: ParsedLeaseLevelInputs,
+    lease_level_results: LeaseLevelAcquisitionResults,
+    *,
+    target_levered_irr: float,
+    target_equity_multiple: float,
+    target_headline_dscr: float,
+    return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
+    deal_context: str | None = None,
+    provider: OpenAIAnalystProvider | None = None,
+) -> AIAnalysis:
+    """Build the deterministic Lease-Level context and return one AI Analyst
+    interpretation of it (D5.8).
+
+    The third arm of one AI Analyst architecture, not a second AI product: the
+    same ``AnalysisContext``, the same ``_generate_from_context`` provider call
+    and the same ``AIAnalysis`` back. It takes the already-computed
+    ``lease_level_results`` rather than a set of inputs to underwrite, so the
+    interpretation is always of the analysis the analyst approved.
+    """
+
+    context = build_lease_level_analysis_context(
+        terms,
+        lease_level_inputs,
+        lease_level_results,
         target_levered_irr=target_levered_irr,
         target_equity_multiple=target_equity_multiple,
         target_headline_dscr=target_headline_dscr,

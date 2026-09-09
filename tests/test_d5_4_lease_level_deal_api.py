@@ -420,14 +420,15 @@ def test_creating_with_an_analysis_snapshot_field_is_refused(client: TestClient)
         ("/sensitivity/presets", {}),
         ("/break-even", {"target_levered_irr": 0.1, "target_headline_dscr": 1.2,
                          "target_equity_multiple": 1.5}),
-        ("/ai/analysis", {"target_levered_irr": 0.1, "target_headline_dscr": 1.2,
-                          "target_equity_multiple": 1.5}),
     ],
-    ids=["presets", "break-even", "ai"],
+    ids=["presets", "break-even"],
 )
 def test_the_remaining_refusals_are_untouched(
     client: TestClient, path: str, extra: dict[str, Any]
 ) -> None:
+    """``/ai/analysis`` left this list at D5.8, the gate that wired it; the two
+    that remain are refused for the whole of D5."""
+
     response = client.post(path, json={**analyze_body(), **extra})
 
     assert response.status_code == 422

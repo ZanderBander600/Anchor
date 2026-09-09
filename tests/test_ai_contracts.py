@@ -6,7 +6,7 @@ frozen/slotted/kw-only shape, exact fields, and immutable tuple collections.
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, fields, is_dataclass
+from dataclasses import MISSING, FrozenInstanceError, fields, is_dataclass
 from typing import get_type_hints
 
 import pytest
@@ -249,12 +249,19 @@ def test_analysis_context_has_exact_fields_and_keyword_only_shape() -> None:
     contract_fields = fields(AnalysisContext)
 
     assert is_dataclass(AnalysisContext)
+    # D5.8 inserts ``lease_level_inputs``/``lease_level_results`` between the
+    # Detailed fields and ``results``, beside the mode-specific fields they sit
+    # with. They are the only two fields carrying a default, so a Quick or
+    # Detailed construction reads exactly as it did before this gate; every
+    # other field stays required, in its original order.
     assert tuple(field.name for field in contract_fields) == (
         "operating_mode",
         "inputs",
         "terms",
         "detailed_operating_inputs",
         "operating_projection",
+        "lease_level_inputs",
+        "lease_level_results",
         "results",
         "sensitivities",
         "break_even",
@@ -265,6 +272,16 @@ def test_analysis_context_has_exact_fields_and_keyword_only_shape() -> None:
         "deal_context",
     )
     assert all(field.kw_only for field in contract_fields)
+
+    # Exactly two defaults, and they are the two D5.8 added. ``sensitivities``
+    # and ``break_even`` became *optional* in this gate but deliberately did
+    # not become *defaulted*: a Quick or Detailed caller must still name them,
+    # so a bundle those modes have always supplied cannot go missing by simply
+    # not being mentioned.
+    defaulted = {
+        field.name for field in contract_fields if field.default is not MISSING
+    }
+    assert defaulted == {"lease_level_inputs", "lease_level_results"}
 
 
 def test_analysis_context_quick_mode_rejects_detailed_fields_populated() -> None:
