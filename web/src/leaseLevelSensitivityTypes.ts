@@ -88,3 +88,48 @@ export interface LeaseLevelTwoWaySensitivityResult {
   column_values: number[];
   matrix: (number | null)[][];
 }
+
+// =============================================================================
+// D5.8A -- the persisted snapshot contracts
+//
+// Mirrors ``OneWaySensitivitySnapshot``/``TwoWaySensitivitySnapshot`` in
+// `src/anchor/deals/contracts.py`. One completed run is a configuration and the
+// authoritative response it produced, stored and restored as one atomic value:
+// there is no shape here that can hold one without the other.
+//
+// `values` are the **visible candidate values** -- the strings the analyst
+// actually typed into the candidate editor, in the analyst's own order, exactly
+// as submitted. The response beside them carries the same values on the wire
+// scale; neither is derived from the other on restore, and no ladder metadata
+// (centre, step, count) is stored, because none of it was ever submitted.
+// =============================================================================
+
+/** The one-way question that was asked. */
+export interface LeaseLevelOneWaySensitivityConfiguration {
+  metric: LeaseLevelSensitivityMetricId;
+  assumption: LeaseLevelSensitivityTargetId;
+  values: string[];
+}
+
+/** One completed one-way run: the question and its authoritative answer. */
+export interface LeaseLevelOneWaySensitivitySnapshot {
+  configuration: LeaseLevelOneWaySensitivityConfiguration;
+  result: LeaseLevelOneWaySensitivityResult;
+}
+
+/** The two-way question that was asked. Rows and columns are distinct axes and
+ * stay distinct here -- a snapshot that lost which was which would restore a
+ * different question with the same numbers. */
+export interface LeaseLevelTwoWaySensitivityConfiguration {
+  metric: LeaseLevelSensitivityMetricId;
+  row_assumption: LeaseLevelSensitivityTargetId;
+  row_values: string[];
+  column_assumption: LeaseLevelSensitivityTargetId;
+  column_values: string[];
+}
+
+/** One completed two-way run. */
+export interface LeaseLevelTwoWaySensitivitySnapshot {
+  configuration: LeaseLevelTwoWaySensitivityConfiguration;
+  result: LeaseLevelTwoWaySensitivityResult;
+}

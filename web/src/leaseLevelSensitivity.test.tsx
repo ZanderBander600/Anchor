@@ -216,6 +216,8 @@ function savedDeal(suites: SuiteRequest[] = PLAIN_SUITES): Deal {
     deal_context: null,
     analysis_snapshot: null,
     ai_snapshot: null,
+    one_way_sensitivity_snapshot: null,
+    two_way_sensitivity_snapshot: null,
     created_at: '2027-01-04T09:00:00+00:00',
     updated_at: '2027-01-04T09:00:00+00:00',
   };
@@ -1176,6 +1178,13 @@ describe('what this workspace deliberately does not do', () => {
     await waitFor(() => expect(mockOneWay).toHaveBeenCalledTimes(2));
   });
 
+  // D5.8A: the only change here is the timeout. This test types seven
+  // eight-digit purchase prices one character at a time on top of a nine-value
+  // ladder, so it is the slowest in the file, and under a parallel run it was
+  // exceeding the suite's 5s default -- flakily red before this gate and after
+  // it, for a reason that has nothing to do with what it asserts. Every
+  // assertion below is untouched: no cap, no truncation, no warning, 9 x 7
+  // values submitted exactly as entered.
   it('M19: imposes no grid limit', async () => {
     const user = await openRisk();
     mockTwoWay.mockResolvedValue(twoWayResult());
@@ -1208,7 +1217,7 @@ describe('what this workspace deliberately does not do', () => {
     // 9 x 7 = 63 cells. Nothing capped, truncated or warned about.
     expect(mockTwoWay.mock.calls[0][2].row_values).toHaveLength(9);
     expect(mockTwoWay.mock.calls[0][2].column_values).toHaveLength(7);
-  });
+  }, 30_000);
 
   it('M17/M18: leaves Quick and Detailed Risk exactly as they were', async () => {
     const user = userEvent.setup();

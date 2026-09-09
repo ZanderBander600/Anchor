@@ -13,11 +13,27 @@ already-computed results (``anchor.engine.contracts``/``anchor.ai.contracts``
 result *shapes*, never calculation modules) -- see ``store.py``'s module
 docstring for the full architecture, its two-table Quick/Detailed split,
 and its numeric-representation rationale.
+
+Sprint D5.8A adds one more kind of cached, already-computed artifact:
+``OneWaySensitivitySnapshot``/``TwoWaySensitivitySnapshot``, the latest
+successful Lease-Level sensitivity runs, stored in their own
+``deal_sensitivity_snapshots`` table and written only through
+``update_one_way_sensitivity_snapshot``/``update_two_way_sensitivity_snapshot``.
+They are derived snapshots in exactly the sense ``ai_snapshot`` is -- guarded by
+the same canonical input fingerprint, never a source of truth, and never a
+calculation this layer performs.
 """
 
 from __future__ import annotations
 
-from .contracts import Deal, DealNotFoundError
+from .contracts import (
+    Deal,
+    DealNotFoundError,
+    OneWaySensitivityConfiguration,
+    OneWaySensitivitySnapshot,
+    TwoWaySensitivityConfiguration,
+    TwoWaySensitivitySnapshot,
+)
 from .fingerprint import (
     fingerprint_ai,
     fingerprint_detailed_inputs,
@@ -39,12 +55,18 @@ from .store import (
     update_deal,
     update_detailed_deal,
     update_lease_level_deal,
+    update_one_way_sensitivity_snapshot,
+    update_two_way_sensitivity_snapshot,
 )
 
 __all__ = [
     "Deal",
     "DealNotFoundError",
+    "OneWaySensitivityConfiguration",
+    "OneWaySensitivitySnapshot",
     "SnapshotValidationError",
+    "TwoWaySensitivityConfiguration",
+    "TwoWaySensitivitySnapshot",
     "create_deal",
     "create_detailed_deal",
     "create_lease_level_deal",
@@ -62,4 +84,6 @@ __all__ = [
     "update_deal",
     "update_detailed_deal",
     "update_lease_level_deal",
+    "update_one_way_sensitivity_snapshot",
+    "update_two_way_sensitivity_snapshot",
 ]

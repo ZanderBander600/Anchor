@@ -182,6 +182,24 @@ _PERMITTED_WEB = frozenset(
         # set already carried. It is named here because a reader tracing the
         # frontend history should find every accepted gate accounted for, not
         # because it needed an entry.
+        #
+        # D5.8A -- deal analysis persistence and AI product polish. It adds no
+        # new frontend module at all: the derived-analysis contracts land in
+        # ``leaseLevelSensitivityTypes.ts``, the client functions in ``api.ts``
+        # (still addition-only), the state in ``useLeaseLevelDeal.ts``, and the
+        # snapshot fields on ``Deal`` in ``types.ts`` -- every one of them
+        # already listed above.
+        #
+        # One entry is genuinely new. ``AiAnalystPanel.tsx`` is the shared AI
+        # report surface all three modes render, and this gate changes two things
+        # in it: the button reads "Regenerate Analysis" once a report exists, and
+        # the Break-Even Interpretation section is omitted when the deal has no
+        # break-even analysis to interpret. Both are additive props with
+        # backwards-compatible defaults, so Quick and Detailed render exactly the
+        # ten sections they always have; that Quick's and Detailed's Break-Even
+        # section survives is asserted directly, by test, rather than by this
+        # file's silence.
+        "web/src/components/AiAnalystPanel.tsx",
     }
 )
 

@@ -116,7 +116,7 @@ import type {
   V2FieldId,
 } from './types';
 import { assertNeverMode, byMode } from './operatingMode';
-import { LEASE_LEVEL_BLANKS_MESSAGE, useLeaseLevelDeal } from './useLeaseLevelDeal';
+import { useLeaseLevelDeal } from './useLeaseLevelDeal';
 import { LeaseLevelWorkspace } from './components/LeaseLevelWorkspace';
 import { LeaseLevelSensitivityWorkspace } from './components/LeaseLevelSensitivityWorkspace';
 
@@ -2624,8 +2624,7 @@ export default function App() {
       >
         <LeaseLevelSensitivityWorkspace
           rentRoll={leaseLevel.values.rentRoll}
-          buildRequest={leaseLevel.buildRequest}
-          blanksMessage={LEASE_LEVEL_BLANKS_MESSAGE}
+          sensitivity={leaseLevel.sensitivity}
         />
       </WorkspacePanel>
 
@@ -2635,25 +2634,44 @@ export default function App() {
         * product: the backend returns the identical report shape for all three
         * modes, so there is nothing mode-specific to build here.
         *
-        * Gated on `leaseLevel.results` for the reason the empty state says out
-        * loud. The AI Analyst interprets verified results; with nothing
-        * analyzed there is nothing to interpret, and offering the button
-        * anyway would invite exactly the invention this product forbids.
-        * `resetDownstream` clears the report with the results on any input
-        * edit, so what is on screen always describes the assumptions on
-        * screen. */}
+        * Gated for the reason the empty state says out loud. The AI Analyst
+        * interprets verified results; with nothing analyzed there is nothing to
+        * interpret, and offering the button anyway would invite exactly the
+        * invention this product forbids. `resetDownstream` clears the report on
+        * any input edit, so what is on screen always describes the assumptions
+        * on screen.
+        *
+        * D5.8A widens the gate by exactly one case: a report restored from the
+        * deal. A restored report is only ever handed back when its stored
+        * fingerprint still matches the deal's own assumptions, so its presence
+        * is itself evidence that these exact inputs were analyzed -- and
+        * reopening a saved deal must show the work that was done on it without
+        * making the analyst press Analyze again to see it. Lease-Level persists
+        * no base analysis snapshot (D5 decision A) and this does not change
+        * that: what is restored is the AI report, validated directly against the
+        * input fingerprint, with no cached financial result involved.
+        *
+        * The panel is told this deal has no break-even analysis to interpret:
+        * Lease-Level break-even is unsupported, so that section could only ever
+        * say none was supplied. */}
       <WorkspacePanel
         id="ai"
         active={workspace}
         title="AI Analyst"
-        subtitle="Narrative built strictly from the deterministic analysis."
+        subtitle="Analysis grounded in your underwriting results."
       >
-        {leaseLevel.results ? (
+        {leaseLevel.results || leaseLevel.aiAnalysis ? (
           <AiAnalystPanel
             analysis={leaseLevel.aiAnalysis}
             isLoading={leaseLevel.isGeneratingAiAnalysis}
             error={leaseLevel.aiAnalysisError}
             onGenerate={() => void handleGenerateLeaseLevelAiAnalysis()}
+            hasBreakEvenAnalysis={false}
+            analysisNote={
+              leaseLevel.isAiAnalysisRestored
+                ? 'Showing the last saved report for these assumptions.'
+                : null
+            }
           />
         ) : (
           <div className="empty-state">

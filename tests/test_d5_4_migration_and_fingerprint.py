@@ -531,13 +531,20 @@ def migrated(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     return path, context
 
 
-def test_the_migration_reaches_version_five(migrated) -> None:
+def test_the_migration_reaches_the_current_schema_version(migrated) -> None:
+    """D5.4 pinned this at 5. D5.8A moves it to 6 -- one purely additive table
+    (``deal_sensitivity_snapshots``), created by ``CREATE TABLE IF NOT EXISTS``
+    exactly as the six Lease-Level tables were, with no ALTER and no existing row
+    read or rewritten. The pin stays a literal rather than a read of
+    ``_SCHEMA_VERSION``: a test that imported the number it is checking would
+    pass for any value the production module happened to hold."""
+
     path, _ = migrated
     connection = sqlite3.connect(path)
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     connection.close()
 
-    assert version == 5
+    assert version == 6
 
 
 def test_the_migration_adds_all_six_lease_level_tables(migrated) -> None:
@@ -631,7 +638,7 @@ def test_the_migration_is_idempotent(migrated) -> None:
     suites = connection.execute("SELECT COUNT(*) FROM lease_level_suites").fetchone()[0]
     connection.close()
 
-    assert version == 5
+    assert version == 6
     assert suites == 0
     assert len(deals_store.list_deals(db_path=path)) == 2
 
@@ -647,7 +654,7 @@ def test_a_lease_level_deal_can_be_created_in_a_migrated_database(migrated) -> N
 
 
 def test_a_migrated_schema_matches_a_fresh_one(tmp_path: Path) -> None:
-    """Two routes to v5 must produce the same database.
+    """Two routes to the current schema version must produce the same database.
 
     A divergence would mean a deal behaves differently depending on when its
     database was created -- the kind of defect that only shows up on someone

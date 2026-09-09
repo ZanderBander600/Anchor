@@ -25,8 +25,10 @@ import type {
 import type {
   LeaseLevelOneWaySensitivityControls,
   LeaseLevelOneWaySensitivityResult,
+  LeaseLevelOneWaySensitivitySnapshot,
   LeaseLevelTwoWaySensitivityControls,
   LeaseLevelTwoWaySensitivityResult,
+  LeaseLevelTwoWaySensitivitySnapshot,
 } from './leaseLevelSensitivityTypes';
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
@@ -1418,4 +1420,104 @@ export async function runLeaseLevelTwoWaySensitivity(
     ...controls,
   });
   return (await response.json()) as LeaseLevelTwoWaySensitivityResult;
+}
+
+// =============================================================================
+// D5.8A -- Lease-Level derived-analysis persistence
+//
+// Three additions, all following the shapes Gate A6/A7 already established for
+// Quick and Detailed: one fingerprint fetch (the frontend never computes a
+// fingerprint -- it transports the opaque token this endpoint returns) and two
+// narrow snapshot writes that touch nothing but their own stored row.
+// =============================================================================
+
+/** Lease-Level counterpart of `fetchDealFingerprint` -- mirrors it exactly,
+ * over the same `terms`/`inputs` body every other Lease-Level call sends.
+ *
+ * The returned tokens are opaque. `financial_input_fingerprint` unlocks a
+ * sensitivity-snapshot write; `ai_context_fingerprint` unlocks an AI-snapshot
+ * write. The backend independently recomputes both from the deal's own stored
+ * assumptions and refuses a write it does not already agree with, so a token
+ * can never certify a snapshot as current when it is not. */
+export async function fetchLeaseLevelDealFingerprint(
+  terms: AcquisitionTermsRequest,
+  inputs: LeaseLevelInputsRequest,
+  dealContext?: string | null,
+): Promise<DealFingerprint> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/deals/fingerprint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operating_mode: 'lease_level',
+        terms,
+        ...inputs,
+        deal_context: dealContext ?? null,
+      }),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+  if (!response.ok) {
+    throw new ApiError(`The deal fingerprint could not be retrieved (HTTP ${response.status}).`);
+  }
+  return (await response.json()) as DealFingerprint;
+}
+
+/** `PUT /deals/{id}/sensitivity-snapshot/one-way` -- persists the latest
+ * SUCCESSFUL one-way run for an already-saved, not-dirty deal.
+ *
+ * Writes that one stored row and nothing else: never the assumptions, the name,
+ * Deal Context, the AI snapshot, the two-way snapshot, or the deal's save
+ * timestamp. Never called for a failed run, so a refusal can never replace the
+ * last good snapshot. */
+export async function updateDealOneWaySensitivitySnapshot(
+  dealId: string,
+  snapshot: LeaseLevelOneWaySensitivitySnapshot,
+  financialInputFingerprint: string,
+): Promise<Deal> {
+  return _putSensitivitySnapshot(dealId, 'one-way', snapshot, financialInputFingerprint);
+}
+
+/** `PUT /deals/{id}/sensitivity-snapshot/two-way` -- the two-way counterpart,
+ * with exactly the same contract and the same isolation guarantees. */
+export async function updateDealTwoWaySensitivitySnapshot(
+  dealId: string,
+  snapshot: LeaseLevelTwoWaySensitivitySnapshot,
+  financialInputFingerprint: string,
+): Promise<Deal> {
+  return _putSensitivitySnapshot(dealId, 'two-way', snapshot, financialInputFingerprint);
+}
+
+async function _putSensitivitySnapshot(
+  dealId: string,
+  kind: 'one-way' | 'two-way',
+  snapshot: LeaseLevelOneWaySensitivitySnapshot | LeaseLevelTwoWaySensitivitySnapshot,
+  financialInputFingerprint: string,
+): Promise<Deal> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/deals/${encodeURIComponent(dealId)}/sensitivity-snapshot/${kind}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sensitivity_snapshot: snapshot,
+          financial_input_fingerprint: financialInputFingerprint,
+        }),
+      },
+    );
+  } catch {
+    throw new ApiError(
+      'Could not reach the Anchor API. Confirm the backend is running at ' +
+        `${API_BASE_URL}.`,
+    );
+  }
+
+  return _handleDealResponse(response, 'The sensitivity analysis could not be cached');
 }

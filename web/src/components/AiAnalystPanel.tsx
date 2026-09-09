@@ -61,6 +61,33 @@ interface AiAnalystPanelProps {
   isLoading: boolean;
   error: string | null;
   onGenerate: () => void;
+  /**
+   * D5.8A: whether this deal has a break-even analysis to interpret.
+   *
+   * Quick and Detailed do -- the deterministic break-even layer answers five
+   * questions for both -- so the section stays exactly as it shipped. A
+   * Lease-Level deal has none: break-even is unsupported for that mode, so
+   * `break_even_analysis` can only ever say that none was supplied, and a
+   * navigation item whose whole content is "this was not provided" is worth
+   * less than no item at all. The panel is told the fact rather than the mode:
+   * this component has no business knowing which underwriting mode it is
+   * rendering, and the reason the section is absent is the absence of the
+   * analysis, not the name of the mode.
+   */
+  hasBreakEvenAnalysis?: boolean;
+  /**
+   * D5.8A: where the report on screen came from, when that is worth saying.
+   *
+   * `null` for a report generated in this session -- it came from the button
+   * the analyst just pressed and needs no explaining. It is supplied for a
+   * report restored from the deal, which arrives without anyone asking for it:
+   * reopening a saved deal shows a report the analyst did not generate in this
+   * session, and this says so rather than leaving them to wonder how current it
+   * is. (It is exactly as current as the assumptions on screen: a restored
+   * report is only ever handed back while its stored fingerprint still matches
+   * them.)
+   */
+  analysisNote?: string | null;
 }
 
 /**
@@ -79,8 +106,28 @@ interface AiAnalystPanelProps {
  * by reading. The Deal Story stays on Overview; it is deliberately not
  * duplicated here.
  */
-export function AiAnalystPanel({ analysis, isLoading, error, onGenerate }: AiAnalystPanelProps) {
+export function AiAnalystPanel({
+  analysis,
+  isLoading,
+  error,
+  onGenerate,
+  hasBreakEvenAnalysis = true,
+  analysisNote = null,
+}: AiAnalystPanelProps) {
   const [activeSection, setActiveSection] = useState<AiSectionId>('investment-view');
+
+  const sections = hasBreakEvenAnalysis
+    ? AI_SECTIONS
+    : AI_SECTIONS.filter((section) => section.id !== 'break-even');
+
+  // D5.8A: the button says which of the two things pressing it will do.
+  //
+  // A report on screen -- generated in this session, or restored from the deal
+  // because its stored fingerprint still matches these assumptions -- means the
+  // next press replaces it. No report means there is nothing yet, which is also
+  // exactly what an assumption edit leaves behind: the stale report is dropped,
+  // and the button honestly reads Generate again.
+  const generateLabel = analysis === null ? 'Generate AI Analysis' : 'Regenerate Analysis';
 
   return (
     <section className="card ai-analyst-panel">
@@ -92,7 +139,7 @@ export function AiAnalystPanel({ analysis, isLoading, error, onGenerate }: AiAna
           onClick={onGenerate}
           disabled={isLoading}
         >
-          {isLoading ? 'Generating…' : 'Generate AI Analysis'}
+          {isLoading ? 'Generating…' : generateLabel}
         </button>
       </div>
 
@@ -107,10 +154,14 @@ export function AiAnalystPanel({ analysis, isLoading, error, onGenerate }: AiAna
 
       {isLoading && <div className="sensitivity-status">Generating AI analysis…</div>}
 
+      {analysis && !isLoading && analysisNote !== null && (
+        <p className="field-hint ai-analyst-restored-note">{analysisNote}</p>
+      )}
+
       {analysis && !isLoading && (
         <div className="ai-analyst-body">
           <nav className="ai-analyst-nav" role="tablist" aria-label="AI report sections">
-            {AI_SECTIONS.map((section) => {
+            {sections.map((section) => {
               const isActive = section.id === activeSection;
               return (
                 <button
@@ -132,7 +183,7 @@ export function AiAnalystPanel({ analysis, isLoading, error, onGenerate }: AiAna
           </nav>
 
           <div className="ai-analyst-reader">
-            {AI_SECTIONS.map((section) => (
+            {sections.map((section) => (
               <div
                 key={section.id}
                 id={`ai-section-panel-${section.id}`}

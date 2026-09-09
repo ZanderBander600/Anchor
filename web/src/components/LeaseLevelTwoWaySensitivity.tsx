@@ -58,6 +58,11 @@ export interface LeaseLevelTwoWaySensitivityProps {
   isRunning: boolean;
   error: string | null;
   result: LeaseLevelTwoWaySensitivityResult | null;
+  /** D5.8A: where `result` came from, when that is worth saying -- `null` when
+   * it came from a run in this session and needs no explanation. The table is
+   * the same stored response either way; this only tells the reader whether
+   * they are looking at the run they just pressed or the last saved one. */
+  resultNote?: string | null;
 }
 
 export function LeaseLevelTwoWaySensitivity({
@@ -68,6 +73,7 @@ export function LeaseLevelTwoWaySensitivity({
   isRunning,
   error,
   result,
+  resultNote = null,
 }: LeaseLevelTwoWaySensitivityProps) {
   const rowTarget = sensitivityTarget(config.rowAssumption);
   const columnTarget = sensitivityTarget(config.columnAssumption);
@@ -192,6 +198,9 @@ export function LeaseLevelTwoWaySensitivity({
         </div>
       )}
 
+      {result && resultNote !== null && (
+        <p className="field-hint sensitivity-restored-note">{resultNote}</p>
+      )}
       {result && <TwoWayResultMatrix result={result} />}
     </div>
   );

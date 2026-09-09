@@ -1656,7 +1656,9 @@ describe('AI Analyst workflow', () => {
     expect(screen.getByRole('button', { name: 'Generating…' })).toHaveProperty('disabled', true);
 
     pending.resolve(makeAiAnalysis());
-    expect(await screen.findByRole('button', { name: 'Generate AI Analysis' })).toBeTruthy();
+    // D5.8A: with a report now on screen, the control says what pressing it
+    // again would do.
+    expect(await screen.findByRole('button', { name: 'Regenerate Analysis' })).toBeTruthy();
   });
 
   it('renders the mocked structured AI response, including strengths/risks/questions lists', async () => {
@@ -1760,7 +1762,9 @@ describe('AI Analyst workflow', () => {
       makeAiAnalysis({ investment_view: 'Second view.' }),
     );
     await goTo(user, 'AI Analyst');
-    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    // D5.8A: the same single control, now reading Regenerate Analysis because a
+    // report exists. It is still one button and still one request.
+    await user.click(screen.getByRole('button', { name: 'Regenerate Analysis' }));
 
     expect(await screen.findByText('Second view.')).toBeTruthy();
     expect(screen.queryByText('First view.')).toBeNull();
@@ -2398,6 +2402,8 @@ function makeDeal(overrides: Partial<Deal> = {}): Deal {
     deal_context: null,
     analysis_snapshot: null,
     ai_snapshot: null,
+    one_way_sensitivity_snapshot: null,
+    two_way_sensitivity_snapshot: null,
     created_at: '2026-09-01T12:00:00+00:00',
     updated_at: '2026-09-01T12:00:00+00:00',
     ...overrides,
@@ -2442,6 +2448,8 @@ function makeDetailedDeal(overrides: Partial<Deal> = {}): Deal {
     deal_context: null,
     analysis_snapshot: null,
     ai_snapshot: null,
+    one_way_sensitivity_snapshot: null,
+    two_way_sensitivity_snapshot: null,
     property_inputs: null,
     operating_inputs: null,
     market_leasing: null,
@@ -5706,7 +5714,8 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
     await screen.findByText('Deal Story');
 
-    expect(screen.getAllByRole('button', { name: 'Generate AI Analysis' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'Regenerate Analysis' }).length).toBe(1);
+    expect(screen.queryByRole('button', { name: 'Generate AI Analysis' })).toBeNull();
     expect(screen.queryByRole('button', { name: /Deal Story/i })).toBeNull();
   });
 
@@ -5722,7 +5731,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     expect(await screen.findByText('Deal Story')).toBeTruthy();
     expect(screen.getByText('AI Interpretation')).toBeTruthy();
     expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1);
-    expect(screen.getAllByRole('button', { name: 'Generate AI Analysis' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'Regenerate Analysis' }).length).toBe(1);
   });
 
   it('renders a Model Gap when the AI reports one', async () => {

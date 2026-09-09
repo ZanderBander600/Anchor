@@ -7,6 +7,10 @@ import type {
   MarketLeasingAssumptionsRequest,
   SuiteRequest,
 } from './leaseLevelTypes';
+import type {
+  LeaseLevelOneWaySensitivitySnapshot,
+  LeaseLevelTwoWaySensitivitySnapshot,
+} from './leaseLevelSensitivityTypes';
 
 export interface AcquisitionFormValues {
   purchasePrice: string;
@@ -435,6 +439,15 @@ export interface Deal {
    * `analysis_snapshot` above, plus whenever `deal_context` itself has
    * changed since the AI ran. Identical shape for both modes. */
   ai_snapshot: AIAnalysis | null;
+  /** D5.8A: the latest SUCCESSFUL Lease-Level one-way and two-way sensitivity
+   * runs for these exact assumptions, each a configuration and the
+   * authoritative response it produced. Held independently, so running one
+   * never disturbs the other, and `null` under exactly the conditions
+   * `ai_snapshot` is: none has been run, an assumption edit invalidated it, or
+   * the stored artifact could not be read. Deal Context is deliberately not
+   * part of their staleness rule -- a sensitivity run reads none. */
+  one_way_sensitivity_snapshot: LeaseLevelOneWaySensitivitySnapshot | null;
+  two_way_sensitivity_snapshot: LeaseLevelTwoWaySensitivitySnapshot | null;
   created_at: string;
   updated_at: string;
 }

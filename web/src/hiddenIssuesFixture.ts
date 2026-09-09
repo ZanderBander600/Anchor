@@ -137,6 +137,8 @@ export function savedDeal(): Deal {
     deal_context: null,
     analysis_snapshot: null,
     ai_snapshot: null,
+    one_way_sensitivity_snapshot: null,
+    two_way_sensitivity_snapshot: null,
     created_at: '2027-01-04T09:00:00+00:00',
     updated_at: '2027-01-04T09:00:00+00:00',
   };

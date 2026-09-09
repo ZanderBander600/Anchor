@@ -66,6 +66,7 @@ from .contracts import (
     AcquisitionTerms,
     DetailedOperatingInputs,
     OperatingMode,
+    UnsupportedOperatingModeError,
 )
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError, SnapshotValidationError
@@ -1895,6 +1896,77 @@ def update_deal_ai_snapshot(deal_id: str, payload: dict[str, Any] = Body(...)) -
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+    except SnapshotValidationError as error:
+        raise _snapshot_validation_error_response(error) from None
+
+
+# =============================================================================
+# Sprint D5.8A -- provenance-validated sensitivity-snapshot writes
+#
+# Two narrow endpoints, mirroring ``PUT /deals/{id}/ai-snapshot`` exactly: each
+# updates one persisted derived-analysis row and nothing else -- never the
+# assumptions, the name, Deal Context, the AI snapshot, the *other* sensitivity
+# snapshot, or the deal's save timestamp -- and each requires the provenance
+# fingerprint the run was performed under, which the store layer independently
+# verifies against the deal's own currently-stored assumptions and rejects (422)
+# on any mismatch.
+#
+# One endpoint per analysis kind, not one per UI component: the two exist because
+# the two snapshots are genuinely independent state (running one must never
+# erase the other), which is the same reason they are separate rows.
+# =============================================================================
+
+
+@app.put("/deals/{deal_id}/sensitivity-snapshot/one-way", response_model=Deal)
+def update_deal_one_way_sensitivity_snapshot(
+    deal_id: str, payload: dict[str, Any] = Body(...)
+) -> Deal:
+    raw_snapshot = _require_snapshot_dict(payload, "sensitivity_snapshot")
+    financial_input_fingerprint = _require_fingerprint_string(
+        payload, "financial_input_fingerprint"
+    )
+    try:
+        return deals_store.update_one_way_sensitivity_snapshot(
+            deal_id,
+            raw_snapshot,
+            financial_input_fingerprint=financial_input_fingerprint,
+        )
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+    except UnsupportedOperatingModeError as error:
+        raise _unsupported_operating_mode(
+            error.operating_mode,
+            endpoint="PUT /deals/{deal_id}/sensitivity-snapshot/one-way",
+        ) from None
+    except SnapshotValidationError as error:
+        raise _snapshot_validation_error_response(error) from None
+
+
+@app.put("/deals/{deal_id}/sensitivity-snapshot/two-way", response_model=Deal)
+def update_deal_two_way_sensitivity_snapshot(
+    deal_id: str, payload: dict[str, Any] = Body(...)
+) -> Deal:
+    raw_snapshot = _require_snapshot_dict(payload, "sensitivity_snapshot")
+    financial_input_fingerprint = _require_fingerprint_string(
+        payload, "financial_input_fingerprint"
+    )
+    try:
+        return deals_store.update_two_way_sensitivity_snapshot(
+            deal_id,
+            raw_snapshot,
+            financial_input_fingerprint=financial_input_fingerprint,
+        )
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+    except UnsupportedOperatingModeError as error:
+        raise _unsupported_operating_mode(
+            error.operating_mode,
+            endpoint="PUT /deals/{deal_id}/sensitivity-snapshot/two-way",
         ) from None
     except SnapshotValidationError as error:
         raise _snapshot_validation_error_response(error) from None

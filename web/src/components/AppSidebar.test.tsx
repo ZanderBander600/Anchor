@@ -38,6 +38,8 @@ function makeDeal(overrides: Partial<Deal> = {}): Deal {
     deal_context: null,
     analysis_snapshot: null,
     ai_snapshot: null,
+    one_way_sensitivity_snapshot: null,
+    two_way_sensitivity_snapshot: null,
     created_at: '2026-09-01T12:00:00+00:00',
     updated_at: '2026-09-01T12:00:00+00:00',
     ...overrides,

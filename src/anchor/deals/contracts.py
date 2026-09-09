@@ -60,7 +60,81 @@ from ..analysis import (
     MarketLeasingAssumptions,
     Suite,
 )
+from ..analysis.contracts import OneWaySensitivityResult, TwoWaySensitivityResult
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
+
+
+# =============================================================================
+# D5.8A -- persisted derived analytical state
+#
+# A completed analytical result belongs to the Deal that produced it, so the
+# latest successful Lease-Level sensitivity run survives navigation, a browser
+# refresh and an application restart. These four contracts describe exactly what
+# is stored for one such run, and nothing more.
+#
+# **Configuration, not assumptions.** A sensitivity configuration is an
+# analytical question the analyst asked -- which metric, which target, which
+# candidate values -- never an underwriting input. It reaches no engine and no
+# fingerprint; the fingerprint that guards a snapshot is computed from the
+# deal's own assumptions, exactly as every other snapshot's already is.
+#
+# **The candidate values are the strings the analyst actually submitted.** The
+# authoritative response already carries the same values on the wire scale, in
+# the same order, and that is what every number in the result was produced
+# from. What it cannot carry back is how the analyst *wrote* them -- ``6.25``
+# for an exit cap the wire spells ``0.0625`` -- and the candidate editor has to
+# be restored exactly as it was submitted, not re-derived from a scale
+# conversion this layer is not allowed to perform. So the visible values are
+# stored as the free text they are, beside the authoritative response, and
+# neither is computed from the other.
+#
+# **No ladder metadata.** Centre/step/count populate the candidate fields and
+# are never submitted, so there is nothing about them to persist: the visible
+# absolute candidate list is the configuration that was actually run.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OneWaySensitivityConfiguration:
+    """The one-way question that was asked: which metric, which target, and
+    the visible candidate values, in the analyst's own order."""
+
+    metric: str
+    assumption: str
+    values: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OneWaySensitivitySnapshot:
+    """One completed one-way run: the configuration submitted and the
+    authoritative response it produced, stored and restored together as a
+    single atomic snapshot -- never a configuration paired with some other
+    run's result."""
+
+    configuration: OneWaySensitivityConfiguration
+    result: OneWaySensitivityResult
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TwoWaySensitivityConfiguration:
+    """The two-way question that was asked. Rows and columns are distinct
+    axes and are stored as such -- a transposed restore would be a different
+    question with the same numbers."""
+
+    metric: str
+    row_assumption: str
+    row_values: tuple[str, ...]
+    column_assumption: str
+    column_values: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TwoWaySensitivitySnapshot:
+    """One completed two-way run, atomic in exactly the sense
+    ``OneWaySensitivitySnapshot`` is."""
+
+    configuration: TwoWaySensitivityConfiguration
+    result: TwoWaySensitivityResult
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -128,6 +202,22 @@ class Deal:
     deal_context: str | None
     analysis_snapshot: AcquisitionResults | DetailedAcquisitionResults | None
     ai_snapshot: AIAnalysis | None
+
+    # --- D5.8A -------------------------------------------------------
+    #
+    # The latest successful one-way and two-way sensitivity runs, held
+    # independently so running one never erases the other. Like every
+    # snapshot above, each is either ``None`` or already verified by the
+    # store layer to match this deal's exact current assumptions -- a
+    # ``Deal`` never carries a sensitivity result known to be stale.
+    #
+    # Defaulted to ``None`` so every existing construction site keeps
+    # working unchanged: a deal with no sensitivity ever run, a mode that
+    # does not offer the surface, and a legacy row all reach the same
+    # honest "nothing stored" state without any caller naming the field.
+    one_way_sensitivity_snapshot: OneWaySensitivitySnapshot | None = None
+    two_way_sensitivity_snapshot: TwoWaySensitivitySnapshot | None = None
+
     created_at: datetime
     updated_at: datetime
 

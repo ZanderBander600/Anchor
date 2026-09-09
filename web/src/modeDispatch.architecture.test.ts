@@ -924,35 +924,59 @@ describe('mutation kills', () => {
     const literals = api.match(/operating_mode: 'lease_level'/g) ?? [];
     expect(
       literals.length,
-      'analyze, create, update, the two D5.7 sensitivity runs and the D5.8 AI ' +
-        'analysis must each carry the Lease-Level discriminator',
-    ).toBe(6);
+      'analyze, create, update, the two D5.7 sensitivity runs, the D5.8 AI ' +
+        'analysis and the D5.8A fingerprint fetch must each carry the ' +
+        'Lease-Level discriminator',
+    ).toBe(7);
     for (const forbidden of ["operating_mode: 'quick',\n    terms,\n    ...inputs"]) {
       expect(api, 'a Lease-Level body carries another mode').not.toContain(forbidden);
     }
   });
 
   it('M14: the AI Analyst cannot be run or left standing without a current analysis', () => {
-    // Two claims the UI cannot exercise, because the panel's own `results` gate
-    // stops the analyst reaching either. They are defence in depth beneath that
-    // gate -- and defence in depth that nothing asserts is defence that quietly
-    // disappears -- so they are pinned where they live.
+    // Claims the UI cannot exercise, because the panel's own gate stops the
+    // analyst reaching them. They are defence in depth beneath that gate -- and
+    // defence in depth that nothing asserts is defence that quietly disappears
+    // -- so they are pinned where they live.
     const hook = sourceOf('useLeaseLevelDeal.ts');
 
-    // 1. The generator refuses outright with nothing analyzed. The AI Analyst
-    //    interprets verified results; it never conjures them.
-    expect(hook).toContain('if (results === null) {');
+    // 1. The generator refuses outright when nothing grounded exists for these
+    //    assumptions. D5.8A widens what counts as grounded by exactly one case:
+    //    a report restored from the deal, which is only ever restored when its
+    //    stored fingerprint still matches the deal's own assumptions. The guard
+    //    is still a refusal, and it still names both halves -- dropping either
+    //    one would let the AI Analyst be asked to interpret nothing.
+    expect(hook).toContain('if (results === null && aiAnalysis === null) {');
 
-    // 2. An input edit clears the report along with the results it describes.
-    //    Both lines sit inside `resetDownstream`, which is the one place
-    //    downstream state is dropped.
+    // 2. An input edit clears this session's report along with the results it
+    //    describes, inside `resetDownstream` -- the one place downstream state
+    //    is dropped. D5.8A adds the two sensitivity runs to the same place, for
+    //    the same reason: they are downstream of the same assumptions.
     const reset = hook.slice(
       hook.indexOf('function resetDownstream()'),
-      hook.indexOf('function recordFailure'),
+      hook.indexOf('async function fingerprintFor'),
     );
     expect(reset).toContain('setResults(null);');
-    expect(reset).toContain('setAiAnalysis(null);');
+    expect(reset).toContain('setLiveAiAnalysis(null);');
     expect(reset).toContain('setAiAnalysisError(null);');
+    expect(reset).toContain('setLiveOneWay(null);');
+    expect(reset).toContain('setLiveTwoWay(null);');
+
+    // 3. D5.8A's counterpart claim, and the one the gate's "unsaved edits" rule
+    //    rests on: an edit must NOT destroy the persisted snapshot. It belongs
+    //    to the assumptions it was produced from, stops being presented the
+    //    moment the assumptions on screen differ, and comes back if the analyst
+    //    puts them back. Clearing it here would throw away completed work over
+    //    an edit that was abandoned.
+    for (const destructive of [
+      'setRestoredAiAnalysis',
+      'setRestoredOneWay',
+      'setRestoredTwoWay',
+    ]) {
+      expect(reset, `resetDownstream destroys the persisted snapshot via ${destructive}`).not.toContain(
+        destructive,
+      );
+    }
   });
 
   it('M13: the shell mounting another mode’s workspace for Lease-Level is caught', () => {

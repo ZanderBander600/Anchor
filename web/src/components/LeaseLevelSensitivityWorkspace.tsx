@@ -15,45 +15,29 @@
  * simply does not offer it. A tab that refuses is worse than a tab that is not
  * there.
  *
- * **State is transient, and deliberately local.** A sensitivity configuration is
- * an analytical question, not an underwriting assumption: it is not persisted,
- * it is not fingerprinted, and changing it does not make the deal dirty. Keeping
- * it here rather than in `useLeaseLevelDeal` is what makes that structural --
- * there is no path from a control on this screen to the saved-snapshot
- * comparison. The workspace panels stay mounted (the ARIA tab pattern), so the
- * configuration survives a trip to Underwrite and back without being stored
- * anywhere.
+ * **State belongs to the deal (D5.8A).** It used to live here, in this
+ * component, which is exactly why a completed sensitivity vanished the moment
+ * the analyst opened another deal: the component unmounts and nothing outside
+ * it remembered the run. The configuration and the results now live in
+ * `useLeaseLevelDeal`, are hydrated per deal from the deal's own persisted
+ * state, and are cleared per deal on open -- so a matrix survives navigation, a
+ * refresh and a restart, and can never appear on a deal that did not produce
+ * it. A sensitivity configuration is still an analytical question rather than
+ * an underwriting assumption: changing it still marks nothing dirty, and it
+ * still reaches no fingerprint.
  *
  * **It computes nothing.** Candidate values are converted by the shipped unit
- * convention and sent; results are formatted and shown. No metric is derived,
- * no cell interpolated, no baseline inferred, no scenario ranked, and no run
- * cached, batched or shortened.
+ * convention and sent by the hook; results are formatted and shown. No metric
+ * is derived, no cell interpolated, no baseline inferred, no scenario ranked,
+ * and no run cached, batched or shortened. Nothing here re-runs a stored result
+ * to display it.
  */
 
-import { useState } from 'react';
 import { SubNav } from './SubNav';
-import { BLANK_LADDER_DRAFT } from '../leaseLevelSensitivityLadder';
 import { LeaseLevelOneWaySensitivity } from './LeaseLevelOneWaySensitivity';
 import { LeaseLevelTwoWaySensitivity } from './LeaseLevelTwoWaySensitivity';
-import type { OneWaySensitivityConfig } from './LeaseLevelOneWaySensitivity';
-import type { TwoWaySensitivityConfig } from './LeaseLevelTwoWaySensitivity';
-import {
-  ApiError,
-  runLeaseLevelOneWaySensitivity,
-  runLeaseLevelTwoWaySensitivity,
-} from '../api';
-import { FormValidationError } from '../convert';
-import { candidateToWireValue, sensitivityTarget } from '../leaseLevelSensitivity';
-import type { LeaseLevelSensitivityTargetId } from '../leaseLevelSensitivityTypes';
-import type {
-  LeaseLevelOneWaySensitivityResult,
-  LeaseLevelTwoWaySensitivityResult,
-} from '../leaseLevelSensitivityTypes';
-import type {
-  LeaseLevelInputsRequest,
-  SuiteRowFormValues,
-} from '../leaseLevelTypes';
-import type { AcquisitionTermsRequest } from '../types';
+import type { LeaseLevelSensitivityState } from '../useLeaseLevelDeal';
+import type { SuiteRowFormValues } from '../leaseLevelTypes';
 
 export type LeaseLevelSensitivityViewId = 'one-way' | 'two-way';
 
@@ -66,129 +50,26 @@ export interface LeaseLevelSensitivityWorkspaceProps {
   /** The rent roll as it stands, for the shadowing aid only. Never a financial
    * input to anything on this screen. */
   rentRoll: SuiteRowFormValues[];
-  /** The one authoritative Lease-Level request mapper -- literally the function
-   * Analyze calls. Returns `null` when a field is blank, having marked it. */
-  buildRequest: () => { terms: AcquisitionTermsRequest; inputs: LeaseLevelInputsRequest } | null;
-  /** What to say when `buildRequest` reported blanks. */
-  blanksMessage: string;
+  /** The deal's own sensitivity state: the analyst's question, the runs, and
+   * the two actions that submit them. */
+  sensitivity: LeaseLevelSensitivityState;
 }
 
-/** No candidate values yet is a question that has not been asked, not a run
- * with an empty answer. Stated rather than silently submitted. */
-const NO_VALUES_MESSAGE =
-  'Enter at least one candidate value before running the sensitivity.';
-
-const INITIAL_ONE_WAY: OneWaySensitivityConfig = {
-  metric: 'levered_irr',
-  assumption: 'exit_cap_rate',
-  values: [],
-  ladder: BLANK_LADDER_DRAFT,
-};
-
-const INITIAL_TWO_WAY: TwoWaySensitivityConfig = {
-  metric: 'levered_irr',
-  rowAssumption: 'exit_cap_rate',
-  rowValues: [],
-  rowLadder: BLANK_LADDER_DRAFT,
-  columnAssumption: 'purchase_price',
-  columnValues: [],
-  columnLadder: BLANK_LADDER_DRAFT,
-};
-
-/** Every candidate value for one target, converted by the shipped unit
- * convention, in the analyst's order. Throws `FormValidationError` for a blank
- * or unparseable entry so the workspace can report it by name. */
-function wireValues(assumption: LeaseLevelSensitivityTargetId, values: string[]): number[] {
-  const target = sensitivityTarget(assumption);
-  return values.map((value) => candidateToWireValue(target, value));
-}
+/** Said above a table that came back from persistence rather than from a run in
+ * this session.
+ *
+ * The table is identical either way -- it is the stored response, not a re-run
+ * and not a recomputation -- so this is provenance, not a caveat. It earns its
+ * place in one situation in particular: a new run that was refused leaves the
+ * error beside the previous successful table, and without this line the two
+ * would read as contradicting each other. */
+const RESTORED_NOTE = 'Showing the last saved run for these assumptions.';
 
 export function LeaseLevelSensitivityWorkspace({
   rentRoll,
-  buildRequest,
-  blanksMessage,
+  sensitivity,
 }: LeaseLevelSensitivityWorkspaceProps) {
-  const [view, setView] = useState<LeaseLevelSensitivityViewId>('one-way');
-  const [oneWay, setOneWay] = useState<OneWaySensitivityConfig>(INITIAL_ONE_WAY);
-  const [twoWay, setTwoWay] = useState<TwoWaySensitivityConfig>(INITIAL_TWO_WAY);
-  const [oneWayResult, setOneWayResult] = useState<LeaseLevelOneWaySensitivityResult | null>(null);
-  const [twoWayResult, setTwoWayResult] = useState<LeaseLevelTwoWaySensitivityResult | null>(null);
-  const [oneWayError, setOneWayError] = useState<string | null>(null);
-  const [twoWayError, setTwoWayError] = useState<string | null>(null);
-  const [isRunning, setIsRunning] = useState(false);
-
-  /** The message for a failed run.
-   *
-   * A backend refusal is surfaced as the backend worded it --
-   * `SENSITIVITY_TARGET_SHADOWED_BY_SUITE_OVERRIDE`,
-   * `NON_POSITIVE_FORWARD_EXIT_NOI`, an unsupported target, a repeated axis
-   * target. None of them is converted into `N/A`, a zero, a skipped cell or a
-   * partial table. */
-  function messageFor(caught: unknown): string {
-    if (caught instanceof ApiError || caught instanceof FormValidationError) {
-      return caught.message;
-    }
-    return 'An unexpected error occurred while running the sensitivity.';
-  }
-
-  async function runOneWay(): Promise<void> {
-    setOneWayError(null);
-    if (oneWay.values.length === 0) {
-      setOneWayError(NO_VALUES_MESSAGE);
-      return;
-    }
-    setIsRunning(true);
-    try {
-      const request = buildRequest();
-      if (request === null) {
-        setOneWayError(blanksMessage);
-        return;
-      }
-      const values = wireValues(oneWay.assumption, oneWay.values);
-      const result = await runLeaseLevelOneWaySensitivity(request.terms, request.inputs, {
-        assumption: oneWay.assumption,
-        values,
-        metric: oneWay.metric,
-      });
-      setOneWayResult(result);
-    } catch (caught) {
-      // A refused run has no partial answer, so the previous table is cleared
-      // rather than left on screen beside an error that contradicts it.
-      setOneWayResult(null);
-      setOneWayError(messageFor(caught));
-    } finally {
-      setIsRunning(false);
-    }
-  }
-
-  async function runTwoWay(): Promise<void> {
-    setTwoWayError(null);
-    if (twoWay.rowValues.length === 0 || twoWay.columnValues.length === 0) {
-      setTwoWayError(NO_VALUES_MESSAGE);
-      return;
-    }
-    setIsRunning(true);
-    try {
-      const request = buildRequest();
-      if (request === null) {
-        setTwoWayError(blanksMessage);
-        return;
-      }
-      const result = await runLeaseLevelTwoWaySensitivity(request.terms, request.inputs, {
-        row_assumption: twoWay.rowAssumption,
-        row_values: wireValues(twoWay.rowAssumption, twoWay.rowValues),
-        column_assumption: twoWay.columnAssumption,
-        column_values: wireValues(twoWay.columnAssumption, twoWay.columnValues),
-        metric: twoWay.metric,
-      });
-      setTwoWayResult(result);
-    } catch (caught) {
-      setTwoWayResult(null);
-      setTwoWayError(messageFor(caught));
-    } finally {
-      setIsRunning(false);
-    }
-  }
+  const { view, setView } = sensitivity;
 
   return (
     <div className="risk-workspace lease-level-sensitivity">
@@ -214,13 +95,14 @@ export function LeaseLevelSensitivityWorkspace({
         hidden={view !== 'one-way'}
       >
         <LeaseLevelOneWaySensitivity
-          config={oneWay}
-          onConfigChange={setOneWay}
+          config={sensitivity.oneWayConfig}
+          onConfigChange={sensitivity.setOneWayConfig}
           rentRoll={rentRoll}
-          onRun={() => void runOneWay()}
-          isRunning={isRunning}
-          error={oneWayError}
-          result={oneWayResult}
+          onRun={() => void sensitivity.runOneWay()}
+          isRunning={sensitivity.isRunning}
+          error={sensitivity.oneWayError}
+          result={sensitivity.oneWayResult?.result ?? null}
+          resultNote={sensitivity.isOneWayRestored ? RESTORED_NOTE : null}
         />
       </div>
 
@@ -231,13 +113,14 @@ export function LeaseLevelSensitivityWorkspace({
         hidden={view !== 'two-way'}
       >
         <LeaseLevelTwoWaySensitivity
-          config={twoWay}
-          onConfigChange={setTwoWay}
+          config={sensitivity.twoWayConfig}
+          onConfigChange={sensitivity.setTwoWayConfig}
           rentRoll={rentRoll}
-          onRun={() => void runTwoWay()}
-          isRunning={isRunning}
-          error={twoWayError}
-          result={twoWayResult}
+          onRun={() => void sensitivity.runTwoWay()}
+          isRunning={sensitivity.isRunning}
+          error={sensitivity.twoWayError}
+          result={sensitivity.twoWayResult?.result ?? null}
+          resultNote={sensitivity.isTwoWayRestored ? RESTORED_NOTE : null}
         />
       </div>
     </div>

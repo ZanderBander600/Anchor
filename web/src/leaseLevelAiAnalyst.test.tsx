@@ -197,6 +197,8 @@ function savedDeal(): Deal {
     deal_context: null,
     analysis_snapshot: null,
     ai_snapshot: null,
+    one_way_sensitivity_snapshot: null,
+    two_way_sensitivity_snapshot: null,
     created_at: '2027-01-04T09:00:00+00:00',
     updated_at: '2027-01-04T09:00:00+00:00',
   } as unknown as Deal;
@@ -297,8 +299,17 @@ describe('the Lease-Level AI Analyst workspace', () => {
     expect(await within(aiPanel()).findByText(ANALYSIS.executive_summary)).toBeTruthy();
     expect(within(aiPanel()).getByText(ANALYSIS.strengths[0])).toBeTruthy();
     expect(within(aiPanel()).getByText(ANALYSIS.risks[0])).toBeTruthy();
-    // Break-even absence is reported as the model worded it, not as a zero.
-    expect(within(aiPanel()).getByText(ANALYSIS.break_even_analysis)).toBeTruthy();
+    // D5.8A: Break-Even Interpretation is no longer among the sections a
+    // Lease-Level report offers. It was rendering the model's own wording for
+    // "no break-even was supplied" -- honest, but a navigation item whose entire
+    // content is a statement of absence is worth less than no item at all, and
+    // Lease-Level break-even is unsupported by design. The report itself is
+    // unchanged: the backend still returns the field, and this panel simply does
+    // not offer a section for it in this mode.
+    expect(within(aiPanel()).queryByText(ANALYSIS.break_even_analysis)).toBeNull();
+    expect(
+      within(aiPanel()).queryByRole('tab', { name: 'Break-Even Interpretation' }),
+    ).toBeNull();
   });
 
   it('sends the current assumptions and the hurdle targets, and nothing else', async () => {

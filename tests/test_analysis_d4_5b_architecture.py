@@ -1218,7 +1218,17 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
             f"store.py references {cached_result}; Lease-Level results are "
             "recomputed on open, never persisted (D5 decision A)"
         )
-    assert "_SCHEMA_VERSION = 5" in store
+    # D5.8A moved this to 6, adding one purely additive table
+    # (``deal_sensitivity_snapshots``) for the latest successful Lease-Level
+    # sensitivity runs. The assertion above is the one that matters and is
+    # unweakened: a persisted Lease-Level *financial result* is still forbidden
+    # by name, and D5.8A stores none -- a sensitivity snapshot is the response to
+    # an analyst-directed question, restored as-is and never recomputed, and the
+    # base Lease-Level analysis is still re-run from approved inputs on open.
+    assert "_SCHEMA_VERSION = 6" in store
+    assert "deal_sensitivity_snapshots" in store, (
+        "D5.8A should persist the latest Lease-Level sensitivity runs"
+    )
 
     # D5.3 ledger: the API reaches exactly the approved entry points.
     api_text = (_ANCHOR_DIR / "api.py").read_text(encoding="utf-8")
