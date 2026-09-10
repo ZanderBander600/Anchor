@@ -360,7 +360,18 @@ describe('the Lease-Level AI Analyst workspace', () => {
 // =============================================================================
 
 describe('a Lease-Level analysis that has gone stale', () => {
-  it('M14/39: editing an assumption clears the AI report with the results', async () => {
+  it('M14/39: editing an assumption marks the AI report out of date', async () => {
+    // **D5.8B reverses this test's original expectation, and states why.**
+    //
+    // D5.8 cleared the report on any edit, so a narrative could never describe
+    // numbers that were no longer on screen. That solved the misleading state by
+    // destroying the work -- and human review found the cost: an analyst who
+    // nudges one assumption loses a completed report they may have wanted to
+    // read against the change.
+    //
+    // The narrower fix is to keep it and say what it is. Everything the original
+    // was protecting is still protected below: the report is not presented as
+    // current, and it cannot be regenerated from an analysis nobody has run.
     const user = await openDeal();
     await analyze(user);
     await openAi(user);
@@ -370,13 +381,18 @@ describe('a Lease-Level analysis that has gone stale', () => {
     await editAnAssumption(user);
     await openAi(user);
 
-    // The narrative is gone, and so is the offer to produce one -- the results
-    // it described went with the edit.
-    expect(within(aiPanel()).queryByText(ANALYSIS.executive_summary)).toBeNull();
-    expect(aiPanel().textContent).toContain('Analyze the deal first');
-    expect(
-      within(aiPanel()).queryByRole('button', { name: /Generate AI Analysis/i }),
-    ).toBeNull();
+    // The report is still there -- and unmistakably not current.
+    expect(within(aiPanel()).getByText(ANALYSIS.executive_summary)).toBeTruthy();
+    expect(within(aiPanel()).getByText('Out of date')).toBeTruthy();
+    expect(within(aiPanel()).getByText(/assumptions have changed/i)).toBeTruthy();
+
+    // And it cannot be regenerated: the deterministic analysis it would have to
+    // be grounded in went with the edit, so the control is disabled and says so.
+    const regenerate = within(aiPanel()).getByRole('button', {
+      name: /Regenerate Analysis/i,
+    });
+    expect(regenerate).toHaveProperty('disabled', true);
+    expect(within(aiPanel()).getByText(/Analyze the deal again/i)).toBeTruthy();
   });
 
   it('M14/40: never submits a stale analysis after an edit', async () => {
@@ -393,12 +409,16 @@ describe('a Lease-Level analysis that has gone stale', () => {
     expect(mockAi).not.toHaveBeenCalled();
   });
 
-  it('M14/39a: the previous report does not reappear when results come back', async () => {
-    // The mutation this exists for: an edit that clears `results` but leaves
-    // `aiAnalysis` standing looks fine while the panel is gated shut -- and
-    // then puts the *old* narrative back on screen the moment a fresh Analyze
-    // reopens it, beside numbers it was never written about. So the check is
-    // made after the gate reopens, which is the only place the defect shows.
+  it('M14/39a: the previous report is still out of date after a fresh analysis', async () => {
+    // The mutant this exists for, restated for D5.8B.
+    //
+    // D5.8 asked: does an old narrative reappear beside numbers it was never
+    // written about? It answered by clearing it. D5.8B keeps it, so the same
+    // question has to be answered a harder way: does it reappear *as current*?
+    // Re-analysing is exactly where a naive implementation would drop the
+    // notice -- there are results again, so something might conclude the report
+    // matches them. It does not: the report describes the pre-edit inputs, and
+    // says so until it is regenerated.
     const user = await openDeal();
     await analyze(user);
     await openAi(user);
@@ -409,15 +429,16 @@ describe('a Lease-Level analysis that has gone stale', () => {
     await analyze(user);
     await openAi(user);
 
-    // Re-analysed, so the panel is open again -- and empty. The analyst is
-    // asked to generate a new interpretation rather than shown the old one.
-    expect(
-      within(aiPanel()).getByRole('button', { name: /Generate AI Analysis/i }),
-    ).toBeTruthy();
-    expect(within(aiPanel()).queryByText(ANALYSIS.executive_summary)).toBeNull();
-    expect(within(aiPanel()).queryByText(ANALYSIS.risks[0])).toBeNull();
+    expect(within(aiPanel()).getByText(ANALYSIS.executive_summary)).toBeTruthy();
+    expect(within(aiPanel()).getByText('Out of date')).toBeTruthy();
+    // Now that a deterministic analysis of the current inputs exists, the
+    // control is live again -- the analyst can act on the notice.
+    const regenerate = within(aiPanel()).getByRole('button', {
+      name: /Regenerate Analysis/i,
+    });
+    expect(regenerate).toHaveProperty('disabled', false);
     // Only the first generate ever ran: nothing was regenerated behind the
-    // analyst's back, and nothing was kept from before the edit.
+    // analyst's back.
     expect(mockAi).toHaveBeenCalledTimes(1);
   });
 

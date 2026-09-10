@@ -4228,3 +4228,54 @@ body {
 .sensitivity-axis-arrow {
   color: var(--color-text-muted);
 }
+
+/* D5.8B -- the out-of-date notice on a persisted analytical result.
+
+   Warning-toned, never negative-toned: the result was valid when it ran and is
+   still a faithful record of the inputs it ran against. Only the assumptions
+   have moved. It shares `--color-warning` with the intake review banner rather
+   than `--color-negative`, which belongs to `.error-banner` and to states where
+   something actually went wrong -- the two can appear together, and they must
+   not look alike when they do.
+
+   The state is carried by the words "Out of date", not by the colour, the
+   border or the badge shape, so it survives a monochrome display and a
+   colour-vision difference as well as it survives a screen reader. */
+.stale-notice {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--color-warning);
+  border-left-width: 3px;
+  border-radius: var(--radius-control);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.stale-notice-label {
+  flex-shrink: 0;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--color-warning);
+  color: var(--color-warning-bg);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.stale-notice-message {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+/* The reason a disabled Regenerate cannot be pressed yet. Plain hint text, set
+   beside the control it explains -- a greyed-out button with no stated reason
+   is the version of this an analyst has to guess at. */
+.ai-analyst-blocked-reason {
+  margin: 0 0 0.75rem;
+}

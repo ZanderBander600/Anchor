@@ -85,6 +85,10 @@ const AUDITED = [
   'components/LeaseLevelTwoWaySensitivity.tsx',
   'components/CandidateValueEditor.tsx',
   'leaseLevelSensitivity.ts',
+  // D5.8B. The out-of-date notice, shared by the AI panel and both sensitivity
+  // panels. It makes no mode decision and computes nothing -- it is audited so
+  // that it never starts.
+  'components/StaleAnalysisNotice.tsx',
 ];
 
 const MODE_LITERALS = new Set(['quick', 'detailed', 'lease_level']);
@@ -745,6 +749,9 @@ describe('the Lease-Level capability boundary', () => {
       'components/CandidateValueEditor.tsx',
       'leaseLevelSensitivity.ts',
       'leaseLevelSensitivityTypes.ts',
+      // D5.8B. It renders two strings; there is nothing for it to compute, and
+      // this holds that closed.
+      'components/StaleAnalysisNotice.tsx',
     ]) {
       const source = parse(relative);
       const offenders: string[] = [];
@@ -941,41 +948,57 @@ describe('mutation kills', () => {
     const hook = sourceOf('useLeaseLevelDeal.ts');
 
     // 1. The generator refuses outright when nothing grounded exists for these
-    //    assumptions. D5.8A widens what counts as grounded by exactly one case:
-    //    a report restored from the deal, which is only ever restored when its
-    //    stored fingerprint still matches the deal's own assumptions. The guard
-    //    is still a refusal, and it still names both halves -- dropping either
-    //    one would let the AI Analyst be asked to interpret nothing.
-    expect(hook).toContain('if (results === null && aiAnalysis === null) {');
+    //    assumptions. D5.8A widened what counts as grounded by one case -- a
+    //    report restored from the deal, whose stored fingerprint still matched
+    //    it. D5.8B narrows that back by the case D5.8A could not yet see: a
+    //    report that is on screen but OUT OF DATE evidences an analysis of
+    //    inputs the analyst has since changed, so it evidences nothing about
+    //    the inputs a new report would describe. The refusal is one named
+    //    predicate now, and the generator consults it before doing anything.
+    expect(hook).toContain('if (!canGenerateAiAnalysis) {');
+    expect(hook).toContain(
+      'results !== null || (aiAnalysis !== null && !isAiAnalysisStale)',
+    );
 
-    // 2. An input edit clears this session's report along with the results it
-    //    describes, inside `resetDownstream` -- the one place downstream state
-    //    is dropped. D5.8A adds the two sensitivity runs to the same place, for
-    //    the same reason: they are downstream of the same assumptions.
+    // 2. An input edit still drops the deterministic result, inside
+    //    `resetDownstream` -- the one place downstream state is dropped. That is
+    //    what makes claim 1 bite: with `results` gone, an out-of-date report is
+    //    the only thing left, and it cannot be regenerated from.
     const reset = hook.slice(
       hook.indexOf('function resetDownstream()'),
-      hook.indexOf('async function fingerprintFor'),
+      hook.indexOf('function currentProvenance()'),
     );
     expect(reset).toContain('setResults(null);');
-    expect(reset).toContain('setLiveAiAnalysis(null);');
     expect(reset).toContain('setAiAnalysisError(null);');
-    expect(reset).toContain('setLiveOneWay(null);');
-    expect(reset).toContain('setLiveTwoWay(null);');
+    expect(reset).toContain('setOneWayError(null);');
+    expect(reset).toContain('setTwoWayError(null);');
 
-    // 3. D5.8A's counterpart claim, and the one the gate's "unsaved edits" rule
-    //    rests on: an edit must NOT destroy the persisted snapshot. It belongs
-    //    to the assumptions it was produced from, stops being presented the
-    //    moment the assumptions on screen differ, and comes back if the analyst
-    //    puts them back. Clearing it here would throw away completed work over
-    //    an edit that was abandoned.
+    // 3. **D5.8B: an edit destroys no completed analytical work at all.**
+    //
+    //    D5.8A protected the persisted snapshot here and dropped this session's
+    //    copy. Human review asked for the result to stay visible and be marked
+    //    instead, so `resetDownstream` now clears neither -- and this asserts it
+    //    clears neither, which is the mutant "stale result deleted" in its most
+    //    direct form.
     for (const destructive of [
+      'setLiveAiAnalysis',
+      'setLiveOneWay',
+      'setLiveTwoWay',
       'setRestoredAiAnalysis',
       'setRestoredOneWay',
       'setRestoredTwoWay',
     ]) {
-      expect(reset, `resetDownstream destroys the persisted snapshot via ${destructive}`).not.toContain(
-        destructive,
-      );
+      expect(
+        reset,
+        `resetDownstream destroys completed analytical work via ${destructive}`,
+      ).not.toContain(destructive);
+    }
+
+    // 4. Staleness is derived, never stored, so it cannot go out of sync with
+    //    the assumptions it describes and cannot survive an exact revert. There
+    //    is no mutable flag to set.
+    for (const stored of ['setIsStale', 'setIsAiAnalysisStale', 'isStale, set']) {
+      expect(hook, `staleness is stored in state (${stored})`).not.toContain(stored);
     }
   });
 

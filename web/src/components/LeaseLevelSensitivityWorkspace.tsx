@@ -65,6 +65,34 @@ export interface LeaseLevelSensitivityWorkspaceProps {
  * would read as contradicting each other. */
 const RESTORED_NOTE = 'Showing the last saved run for these assumptions.';
 
+/** Said when a re-run was refused and the previous run is still on screen.
+ *
+ * D5.7 avoided this situation by clearing the table, which cost the analyst a
+ * completed run every time a re-run was refused. Keeping the table means saying
+ * whose result it is, so the refusal above it is never read as having produced
+ * it. */
+const PREVIOUS_RUN_NOTE = 'Showing your previous run. The new run was not completed.';
+
+/** Which single line, if any, belongs above a result.
+ *
+ * Ordered by what the analyst most needs to know. A refusal that left the old
+ * table standing is the most surprising state on this screen, so it is named
+ * first; provenance comes next; and a result produced by the run just pressed
+ * needs no line at all. The out-of-date notice is not in here -- it is a
+ * separate, more prominent element that can appear alongside any of these. */
+function resultNoteFor(
+  result: unknown,
+  { error, isRestored }: { error: string | null; isRestored: boolean },
+): string | null {
+  if (result === null) {
+    return null;
+  }
+  if (error !== null) {
+    return PREVIOUS_RUN_NOTE;
+  }
+  return isRestored ? RESTORED_NOTE : null;
+}
+
 export function LeaseLevelSensitivityWorkspace({
   rentRoll,
   sensitivity,
@@ -102,7 +130,11 @@ export function LeaseLevelSensitivityWorkspace({
           isRunning={sensitivity.isRunning}
           error={sensitivity.oneWayError}
           result={sensitivity.oneWayResult?.result ?? null}
-          resultNote={sensitivity.isOneWayRestored ? RESTORED_NOTE : null}
+          isStale={sensitivity.isOneWayStale}
+          resultNote={resultNoteFor(sensitivity.oneWayResult ?? null, {
+            error: sensitivity.oneWayError,
+            isRestored: sensitivity.isOneWayRestored,
+          })}
         />
       </div>
 
@@ -120,7 +152,11 @@ export function LeaseLevelSensitivityWorkspace({
           isRunning={sensitivity.isRunning}
           error={sensitivity.twoWayError}
           result={sensitivity.twoWayResult?.result ?? null}
-          resultNote={sensitivity.isTwoWayRestored ? RESTORED_NOTE : null}
+          isStale={sensitivity.isTwoWayStale}
+          resultNote={resultNoteFor(sensitivity.twoWayResult ?? null, {
+            error: sensitivity.twoWayError,
+            isRestored: sensitivity.isTwoWayRestored,
+          })}
         />
       </div>
     </div>

@@ -141,7 +141,14 @@ export function CandidateValueEditor({
             className="field-input"
             aria-label={`${legend} generator step`}
             value={ladder.step}
-            group={false}
+            // D5.8B: the same `group` the candidate fields and Centre already
+            // use, so a Purchase Price step reads `1,000,000` rather than
+            // `1000000`. It is the field's own unit metadata deciding, exactly
+            // as everywhere else -- a percentage step stays ungrouped, and no
+            // second thousands-separator rule exists to disagree with the
+            // first. `NumericInput` strips separators on the way in, so the
+            // ladder still receives `1000000` and generates the same values.
+            group={group}
             disabled={disabled}
             onChange={(next) => onLadderChange({ ...ladder, step: next })}
           />
@@ -153,6 +160,8 @@ export function CandidateValueEditor({
             className="field-input"
             aria-label={`${legend} generator count`}
             value={ladder.count}
+            // Count is how many values to produce, never a quantity of money or
+            // area, so it is ungrouped whatever the target is -- unchanged.
             group={false}
             disabled={disabled}
             onChange={(next) => onLadderChange({ ...ladder, count: next })}

@@ -2667,10 +2667,18 @@ export default function App() {
             error={leaseLevel.aiAnalysisError}
             onGenerate={() => void handleGenerateLeaseLevelAiAnalysis()}
             hasBreakEvenAnalysis={false}
+            isStale={leaseLevel.isAiAnalysisStale}
+            generateBlockedReason={
+              leaseLevel.canGenerateAiAnalysis
+                ? null
+                : 'Analyze the deal again before regenerating this report.'
+            }
             analysisNote={
-              leaseLevel.isAiAnalysisRestored
-                ? 'Showing the last saved report for these assumptions.'
-                : null
+              leaseLevel.aiAnalysisError !== null
+                ? 'Showing your previous report. The new one was not generated.'
+                : leaseLevel.isAiAnalysisRestored
+                  ? 'Showing the last saved report for these assumptions.'
+                  : null
             }
           />
         ) : (

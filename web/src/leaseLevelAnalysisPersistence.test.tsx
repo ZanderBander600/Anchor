@@ -43,11 +43,16 @@ import {
 } from './api';
 import appSource from './App.tsx?raw';
 import fixture from './leaseLevelResultsFixture.json';
+import {
+  ANALYSIS,
+  ONE_WAY_RESULT,
+  TWO_WAY_RESULT,
+  clone,
+  makeDeal,
+} from './leaseLevelDealFixture';
 import type { LeaseLevelAcquisitionResults } from './leaseLevelTypes';
 import type {
-  LeaseLevelOneWaySensitivityResult,
   LeaseLevelOneWaySensitivitySnapshot,
-  LeaseLevelTwoWaySensitivityResult,
   LeaseLevelTwoWaySensitivitySnapshot,
 } from './leaseLevelSensitivityTypes';
 import type { AIAnalysis, Deal } from './types';
@@ -98,179 +103,6 @@ const mockUpdateDeal = vi.mocked(updateLeaseLevelDeal);
 
 const HEALTHY = fixture.healthy as unknown as LeaseLevelAcquisitionResults;
 
-// =============================================================================
-// The deals, and the fake durable store behind them
-// =============================================================================
-
-const TERMS = {
-  purchase_price: 30_000_000,
-  hold_period: 7,
-  exit_cap_rate: 0.0625,
-  ltv: 0.6,
-  interest_rate: 0.0575,
-  amortization: 30,
-  acquisition_cost_pct: 0.01,
-  financing_fee_pct: 0.01,
-  disposition_cost_pct: 0.015,
-  annual_capex_reserve: 25_000,
-  io_period: 2,
-};
-
-const MARKET_LEASING = {
-  market_rent_psf: 34,
-  market_rent_growth: 0.03,
-  renewal_rent_psf: null,
-  renewal_rent_spread: 0,
-  renewal_term_months: 60,
-  successor_escalation_pct: 0.03,
-  renewal_downtime_months: 2,
-  renewal_free_rent_months: 1,
-  new_term_months: 60,
-  new_downtime_months: 9,
-  new_free_rent_months: 4,
-  renewal_ti_psf: 15,
-  new_ti_psf: 45,
-  leasing_commission_method: 'pct_of_total_contractual_base_rent',
-  renewal_lc_pct: 0.02,
-  new_lc_pct: 0.04,
-  renewal_probability: 0.7,
-  renewal_lease_type: 'nnn',
-  renewal_recovery_basis: null,
-  renewal_expense_stop_psf: null,
-  new_lease_type: 'nnn',
-  new_recovery_basis: null,
-  new_expense_stop_psf: null,
-} as const;
-
-function makeDeal(id: string, name: string): Deal {
-  return {
-    id,
-    name,
-    operating_mode: 'lease_level',
-    inputs: null,
-    detailed_operating_inputs: null,
-    terms: { ...TERMS },
-    property_inputs: { analysis_start_date: '2027-01-01', rentable_area_sf: 62_000 },
-    operating_inputs: {
-      other_income: 84_000,
-      other_income_growth: 0.025,
-      credit_loss_pct: 0.015,
-      property_taxes: 410_000,
-      insurance: 62_000,
-      utilities: 148_000,
-      repairs_maintenance: 96_000,
-      other_operating_expenses: 54_000,
-      management_fee_pct: 0.03,
-      expense_growth: 0.03,
-      recoverable_expense_ratio: 0.85,
-    },
-    market_leasing: MARKET_LEASING,
-    suites: [
-      {
-        suite_id: '100',
-        suite_area_sf: 40_000,
-        suite_label: 'Suite 100',
-        market_rent_psf: null,
-        market_leasing_override: null,
-        initial_vacancy: null,
-      },
-      {
-        suite_id: '200',
-        suite_area_sf: 22_000,
-        suite_label: 'Suite 200',
-        market_rent_psf: null,
-        market_leasing_override: null,
-        initial_vacancy: null,
-      },
-    ],
-    leases: [
-      {
-        lease_id: 'L-100',
-        suite_id: '100',
-        leased_area_sf: 40_000,
-        rent_commencement_date: '2023-06-01',
-        lease_expiration_date: '2029-05-31',
-        base_rent_psf: 31.25,
-        escalation_pct: 0.03,
-        escalation_basis: 'lease_anniversary',
-        lease_type: 'nnn',
-        tenant_name: 'Marlow Provisions',
-        lease_start_date: '2023-06-01',
-        origin: 'in_place',
-        recovery_basis: null,
-        expense_stop_psf: null,
-      },
-      {
-        lease_id: 'L-200',
-        suite_id: '200',
-        leased_area_sf: 22_000,
-        rent_commencement_date: '2022-01-01',
-        lease_expiration_date: '2027-12-31',
-        base_rent_psf: 29.4,
-        escalation_pct: 0,
-        escalation_basis: 'none',
-        lease_type: 'nnn',
-        tenant_name: 'Halbrook Analytics',
-        lease_start_date: null,
-        origin: 'in_place',
-        recovery_basis: null,
-        expense_stop_psf: null,
-      },
-    ],
-    deal_context: null,
-    analysis_snapshot: null,
-    ai_snapshot: null,
-    one_way_sensitivity_snapshot: null,
-    two_way_sensitivity_snapshot: null,
-    created_at: '2027-01-04T09:00:00+00:00',
-    updated_at: '2027-01-04T09:00:00+00:00',
-  } as unknown as Deal;
-}
-
-const ANALYSIS: AIAnalysis = {
-  executive_summary: 'A stabilised suburban asset with staggered rollover.',
-  investment_view: 'Proceed, subject to diligence on the 2029 expiries.',
-  strengths: ['Staggered lease expiries limit any single-year rollover.'],
-  risks: ['Year 1 levered cash flow is negative on lease-up capital.'],
-  return_drivers: ['Exit cap rate is the dominant driver.'],
-  downside_analysis: 'Coverage holds above the supplied hurdle throughout.',
-  capital_structure_analysis: 'Modest leverage with two interest-only years.',
-  break_even_analysis: 'Break-even was not supplied for this Lease-Level analysis.',
-  questions_to_investigate: ['Confirm the market rent assumption against comparables.'],
-  confidence_notes: ['No standardized sensitivity bundle was supplied.'],
-  deal_story: null,
-};
-
-/** The one-way answer. `metric_values[1]` is `null` on purpose: it must read
- * `N/A` after a restore, never `0.00%`. */
-const ONE_WAY_RESULT: LeaseLevelOneWaySensitivityResult = {
-  assumption: 'exit_cap_rate',
-  metric: 'levered_irr',
-  // The middle candidate IS the baseline, so the Base highlight has a row to
-  // sit on and a restore that lost it would be visible.
-  baseline_assumption_value: 0.0625,
-  baseline_metric_value: 0.142,
-  assumption_values: [0.06, 0.0625, 0.07],
-  metric_values: [0.1553, 0.142, null],
-};
-
-/** 2 rows x 3 columns -- non-square, so a transposed restore is a shape error
- * rather than a silent reorientation. */
-const TWO_WAY_RESULT: LeaseLevelTwoWaySensitivityResult = {
-  row_assumption: 'exit_cap_rate',
-  column_assumption: 'purchase_price',
-  metric: 'levered_irr',
-  baseline_row_value: 0.0625,
-  baseline_column_value: 30_000_000,
-  baseline_metric_value: 0.142,
-  row_values: [0.06, 0.065],
-  column_values: [29_000_000, 30_000_000, 31_000_000],
-  matrix: [
-    [0.181, 0.162, 0.145],
-    [0.152, 0.134, 0.118],
-  ],
-};
-
 /**
  * The durable side of the world.
  *
@@ -280,10 +112,6 @@ const TWO_WAY_RESULT: LeaseLevelTwoWaySensitivityResult = {
  * purely in-memory implementation appear to persist.
  */
 const stored = new Map<string, Deal>();
-
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
 
 function put(deal: Deal): void {
   stored.set(deal.id, clone(deal));
@@ -765,7 +593,13 @@ describe('browser refresh', () => {
 // =============================================================================
 
 describe('an underwriting edit', () => {
-  it('54, M20: stops presenting the report and returns the button to Generate', async () => {
+  it('M20: an edit stops all three being presented as current', async () => {
+    // **D5.8B changes what "stops presenting as current" looks like.**
+    //
+    // D5.8A withdrew the results. Human review asked for them back, marked
+    // rather than removed, so all three now stay on screen carrying the
+    // out-of-date notice. The mutant is unchanged and still killed: none of
+    // them may read as describing the assumptions now on screen.
     const user = await launch();
     await open(user, 'Deal A');
     await doTheWork(user);
@@ -774,11 +608,17 @@ describe('an underwriting edit', () => {
     await editPurchasePrice(user, '31000000');
 
     await goTo(user, 'AI Analyst');
-    expect(within(workspacePanel('ai')).queryByText(ANALYSIS.executive_summary)).toBeNull();
-    await goTo(user, 'Risk');
-    expect(within(sensitivityPanel('one-way')).queryByRole('table')).toBeNull();
-    await user.click(screen.getByRole('tab', { name: 'Two-Way' }));
-    expect(within(sensitivityPanel('two-way')).queryByRole('table')).toBeNull();
+    const ai = workspacePanel('ai');
+    expect(within(ai).getByText(ANALYSIS.executive_summary)).toBeTruthy();
+    expect(within(ai).getByText('Out of date')).toBeTruthy();
+
+    const one = await showSensitivity(user, 'One-Way');
+    expect(within(one).getByRole('table')).toBeTruthy();
+    expect(within(one).getByText('Out of date')).toBeTruthy();
+
+    const two = await showSensitivity(user, 'Two-Way');
+    expect(within(two).getByRole('table')).toBeTruthy();
+    expect(within(two).getByText('Out of date')).toBeTruthy();
   });
 
   it('11: undoing the edit brings the saved analysis back, without re-running it', async () => {
@@ -870,9 +710,16 @@ describe('a failed re-run', () => {
 
     // The refusal is surfaced as the backend worded it...
     expect(await within(scope).findByText(/NON_POSITIVE_FORWARD_EXIT_NOI/)).toBeTruthy();
-    // ...beside the previous successful run, labelled as what it is.
-    expect(within(scope).getByText(/Showing the last saved run/i)).toBeTruthy();
+    // ...beside the previous successful run, labelled as what it is. D5.8B
+    // changed the wording from "the last saved run" to "your previous run":
+    // the run is now kept whether it came from persistence or from this
+    // session, so the line names its relation to the failed attempt rather
+    // than its storage.
+    expect(within(scope).getByText(/Showing your previous run/i)).toBeTruthy();
     expect(within(scope).getByRole('table')).toBeTruthy();
+    // The inputs have not moved, so this is a current result beside a failed
+    // attempt -- not a stale one. The two states stay distinct.
+    expect(within(scope).queryByText('Out of date')).toBeNull();
     // And nothing was written: the failure did not replace the good snapshot.
     expect(mockSaveOneWay).toHaveBeenCalledTimes(1);
     expect(stored.get('deal-a')?.one_way_sensitivity_snapshot).not.toBeNull();
@@ -996,7 +843,15 @@ describe('AI Analyst product language', () => {
     expect(mockAi).toHaveBeenCalledTimes(1);
   });
 
-  it('54: an underwriting edit returns the button to Generate AI Analysis', async () => {
+  it('54: an underwriting edit blocks regeneration until the deal is analyzed again', async () => {
+    // **D5.8B replaces D5.8A's answer to the same requirement.**
+    //
+    // D5.8A dropped the report, so the panel fell back to "Analyze the deal
+    // first" and the button honestly read Generate. D5.8B keeps the report, so
+    // the button still reads Regenerate -- and the protection moves to where it
+    // belongs: the control is disabled, with the reason in words, because the
+    // deterministic analysis a new report would have to describe no longer
+    // exists.
     const user = await launch();
     await open(user, 'Deal A');
     await analyze(user);
@@ -1005,11 +860,12 @@ describe('AI Analyst product language', () => {
     await editPurchasePrice(user, '31000000');
     await goTo(user, 'AI Analyst');
 
-    // With the analysis and the report both stale, the panel is back to its
-    // "analyze first" state -- which is where Generate belongs.
+    const ai = workspacePanel('ai');
+    expect(within(ai).getByText('Out of date')).toBeTruthy();
     expect(
-      within(workspacePanel('ai')).getByText(/Analyze the deal first/i),
-    ).toBeTruthy();
+      within(ai).getByRole('button', { name: 'Regenerate Analysis' }),
+    ).toHaveProperty('disabled', true);
+    expect(within(ai).getByText(/Analyze the deal again/i)).toBeTruthy();
   });
 
   it('49, M18: Lease-Level offers no Break-Even Interpretation section', async () => {

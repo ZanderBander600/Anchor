@@ -200,6 +200,23 @@ _PERMITTED_WEB = frozenset(
         # section survives is asserted directly, by test, rather than by this
         # file's silence.
         "web/src/components/AiAnalystPanel.tsx",
+        # D5.8B -- stale-analysis presentation and the ladder Step formatting
+        # fix. One new module: `StaleAnalysisNotice.tsx`, the single component
+        # all three analytical surfaces use to say a result is out of date, so
+        # the three cannot drift into three different answers to the same
+        # question. Every other file this gate touches is already listed above.
+        #
+        # It renders text and nothing else -- no request, no state, no
+        # arithmetic -- and the staleness it displays is decided in
+        # `useLeaseLevelDeal.ts` by the same comparison D5.8A used to decide
+        # whether to restore a snapshot at all.
+        "web/src/components/StaleAnalysisNotice.tsx",
+        # D5.8B -- the saved Lease-Level deal both analytical-state suites drive.
+        # Named here for the same reason `hiddenIssuesFixture.ts` is: two test
+        # files import it, so it cannot carry a `.test.` extension and the filter
+        # below does not skip it. It is data and one clone helper; every mock and
+        # every assertion stays in the file that makes the claim.
+        "web/src/leaseLevelDealFixture.ts",
     }
 )
 

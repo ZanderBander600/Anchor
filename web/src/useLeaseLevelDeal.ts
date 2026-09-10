@@ -139,6 +139,23 @@ export interface LeaseLevelDealState {
    * place: after a failed regeneration, where the previous successful report is
    * still on screen beside an error explaining that the new one was refused. */
   isAiAnalysisRestored: boolean;
+  /** D5.8B: the report on screen describes underwriting assumptions the analyst
+   * has since changed.
+   *
+   * It is kept and shown -- it is real work, and a faithful record of the inputs
+   * it ran against -- but it must never read as current, so the panel carries a
+   * visible OUT OF DATE notice while this is true. Derived, never stored: it is
+   * the same comparison D5.8A used to decide whether to restore a snapshot at
+   * all, so putting the assumptions back exactly makes it false again with no
+   * re-run and no extra step. */
+  isAiAnalysisStale: boolean;
+  /** D5.8B: whether the AI Analyst can be asked for a report right now.
+   *
+   * `false` when the only thing on screen is an out-of-date report and no
+   * deterministic analysis of the current assumptions exists -- regenerating
+   * then would mean interpreting an analysis nobody has run. The deal has to be
+   * analyzed again first, and the panel says so. */
+  canGenerateAiAnalysis: boolean;
   /** Requests one AI interpretation of the current analysis.
    *
    * Requires something analytically grounded for these exact assumptions to
@@ -278,6 +295,14 @@ export interface LeaseLevelSensitivityState {
    * in this session. Used only to label it on screen. */
   isOneWayRestored: boolean;
   isTwoWayRestored: boolean;
+  /** D5.8B: this run describes underwriting assumptions that have since
+   * changed. Kept on screen, marked OUT OF DATE, and false again the moment the
+   * assumptions match it -- exactly as for the AI report above, and by the same
+   * comparison. Deal Context is deliberately not part of it: a sensitivity run
+   * reads none, so editing the stated strategy leaves these results as current
+   * as they were. */
+  isOneWayStale: boolean;
+  isTwoWayStale: boolean;
 
   oneWayError: string | null;
   twoWayError: string | null;
@@ -297,6 +322,48 @@ interface LeaseLevelSnapshot {
   dealName: string;
   values: LeaseLevelFormValues;
   dealContext: string;
+}
+
+/**
+ * D5.8B -- the inputs one analytical artifact was produced from.
+ *
+ * The frontend counterpart of the two fingerprints the backend stores beside a
+ * snapshot, in the form this layer actually has: the assumption strings the
+ * analyst submitted, and the Deal Context the AI Analyst read. Comparing an
+ * artifact against its own provenance is what lets a result outlive the inputs
+ * it describes and still say so, rather than being silently dropped or --
+ * worse -- silently kept.
+ *
+ * `dealName` is deliberately absent. It reaches no fingerprint and no
+ * calculation, so renaming a deal has never made an analysis stale and must not
+ * start now.
+ */
+interface AnalysisProvenance {
+  values: LeaseLevelFormValues;
+  dealContext: string;
+}
+
+/** One analytical artifact, carried with the inputs that produced it. */
+interface Produced<T> {
+  artifact: T;
+  producedFrom: AnalysisProvenance;
+}
+
+/** One artifact as the screen should show it.
+ *
+ * Internal to this hook. The components downstream receive `artifact` and
+ * `isStale` as separate props and never see `producedFrom` -- a presentation
+ * component has no business holding a copy of the rent roll. */
+interface Presented<T> {
+  artifact: T;
+  /** The inputs it was produced from. Kept so a later write can ask the same
+   * question again without re-deriving which slot the artifact came out of. */
+  producedFrom: AnalysisProvenance;
+  /** The inputs on screen have moved since this was produced. It is still a
+   * faithful record of the inputs it ran against -- it is simply not current. */
+  isStale: boolean;
+  /** It came back from persistence rather than from a run in this session. */
+  isRestored: boolean;
 }
 
 const BLANK_SNAPSHOT: LeaseLevelSnapshot = {
@@ -593,15 +660,19 @@ export function useLeaseLevelDeal(options: {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   // D5.8A -- two sources, one presented value.
   //
-  // `live*` is what this session produced for the assumptions on screen;
-  // `restored*` is the latest successful run read back from persistence, which
-  // is valid for the assumptions the deal was SAVED with. The derivation below
-  // presents the live one when there is one and the restored one only while the
-  // assumptions on screen are still the saved ones -- so a restored result can
-  // never be shown for inputs it was not produced from, and an edit that is
-  // undone brings the still-valid saved result back rather than requiring a
-  // re-run of work that was never lost.
-  const [liveAiAnalysis, setLiveAiAnalysis] = useState<AIAnalysis | null>(null);
+  // `live*` is what this session produced, carried with the inputs it was
+  // produced from; `restored*` is the latest successful run read back from
+  // persistence, which the backend only ever hands back when it still matches
+  // the assumptions the deal was SAVED with -- so its provenance IS
+  // `savedSnapshot`, and there is nothing extra to record for it.
+  //
+  // D5.8A presented the live one when there was one and the restored one only
+  // while the assumptions on screen were still the saved ones; anything else
+  // vanished. D5.8B keeps it on screen and marks it instead -- see
+  // `presentedAnalysis` below. Provenance is what makes that possible: a result
+  // can now outlive the inputs it describes, so it has to carry them.
+  const [liveAiAnalysis, setLiveAiAnalysis] =
+    useState<Produced<AIAnalysis> | null>(null);
   const [restoredAiAnalysis, setRestoredAiAnalysis] = useState<AIAnalysis | null>(null);
   const [isGeneratingAiAnalysis, setIsGeneratingAiAnalysis] = useState(false);
   const [aiAnalysisError, setAiAnalysisError] = useState<string | null>(null);
@@ -610,8 +681,10 @@ export function useLeaseLevelDeal(options: {
     useState<LeaseLevelSensitivityViewId>('one-way');
   const [oneWayConfig, setOneWayConfig] = useState<OneWaySensitivityConfig>(INITIAL_ONE_WAY);
   const [twoWayConfig, setTwoWayConfig] = useState<TwoWaySensitivityConfig>(INITIAL_TWO_WAY);
-  const [liveOneWay, setLiveOneWay] = useState<LeaseLevelOneWaySensitivitySnapshot | null>(null);
-  const [liveTwoWay, setLiveTwoWay] = useState<LeaseLevelTwoWaySensitivitySnapshot | null>(null);
+  const [liveOneWay, setLiveOneWay] =
+    useState<Produced<LeaseLevelOneWaySensitivitySnapshot> | null>(null);
+  const [liveTwoWay, setLiveTwoWay] =
+    useState<Produced<LeaseLevelTwoWaySensitivitySnapshot> | null>(null);
   const [restoredOneWay, setRestoredOneWay] =
     useState<LeaseLevelOneWaySensitivitySnapshot | null>(null);
   const [restoredTwoWay, setRestoredTwoWay] =
@@ -634,19 +707,94 @@ export function useLeaseLevelDeal(options: {
   const saveStatus: SaveStatus =
     currentDealId === null ? 'unsaved-deal' : isDirty ? 'unsaved-changes' : 'saved';
 
-  // D5.8A -- the two staleness questions, each asked of exactly what its own
-  // artifact depends on. `isUnderwritingDirty` is the frontend's read of the
-  // backend's financial-input fingerprint; adding Deal Context to it gives the
-  // AI-context fingerprint. Neither is authority: the backend recomputes both
-  // and refuses to hand back a snapshot whose stored fingerprint disagrees.
-  // These only decide what the screen presents between page loads.
+  // D5.8A -- may a completed artifact be written to the SAVED deal right now?
+  //
+  // One question per fingerprint, each asked of exactly what its own artifact
+  // depends on: `isUnderwritingDirty` is the frontend's read of the backend's
+  // financial-input fingerprint, and adding Deal Context to it gives the
+  // AI-context fingerprint. Neither is authority -- the backend recomputes both
+  // and refuses a write whose provenance it does not already agree with. These
+  // two only decide whether it is worth asking, and their only callers are the
+  // two persistence guards below.
+  //
+  // D5.8B: they are deliberately NOT what decides whether the screen calls
+  // something out of date. That question is about the inputs an artifact was
+  // produced from, which for a live artifact is not `savedSnapshot` at all --
+  // see `presentedAnalysis`.
   const isUnderwritingDirty = !isSameValues(values, savedSnapshot.values);
   const isAiDirty = isUnderwritingDirty || dealContext !== savedSnapshot.dealContext;
 
-  const aiAnalysis = liveAiAnalysis ?? (isAiDirty ? null : restoredAiAnalysis);
-  const isAiAnalysisRestored = liveAiAnalysis === null && aiAnalysis !== null;
-  const oneWayResult = liveOneWay ?? (isUnderwritingDirty ? null : restoredOneWay);
-  const twoWayResult = liveTwoWay ?? (isUnderwritingDirty ? null : restoredTwoWay);
+  /** What the deal's persisted artifacts were produced from.
+   *
+   * Not an assumption: a snapshot only ever reaches this hook non-`null`
+   * because the backend recomputed the deal's fingerprint on read and found it
+   * matching, so the stored assumptions -- which are exactly `savedSnapshot` --
+   * are the inputs it was produced from. */
+  const savedProvenance: AnalysisProvenance = {
+    values: savedSnapshot.values,
+    dealContext: savedSnapshot.dealContext,
+  };
+
+  /**
+   * D5.8B -- what to show, and whether it is current.
+   *
+   * The live artifact wins when there is one; otherwise the persisted one. What
+   * changed at this gate is the second half: an artifact whose inputs have moved
+   * is no longer dropped, it is returned with `isStale` set, so the screen can
+   * keep real work visible and say plainly that it describes earlier inputs.
+   *
+   * The staleness test is the same comparison D5.8A already used, asked of the
+   * artifact's own provenance instead of always of `savedSnapshot` -- there is
+   * no second staleness algorithm here, and the Deal Context distinction the
+   * two backend fingerprints draw is preserved exactly: it counts for the AI
+   * report and not for a sensitivity run.
+   */
+  function presentedAnalysis<T>(
+    live: Produced<T> | null,
+    restored: T | null,
+    { includeDealContext }: { includeDealContext: boolean },
+  ): Presented<T> | null {
+    const producedFrom = live !== null ? live.producedFrom : savedProvenance;
+    const artifact = live !== null ? live.artifact : restored;
+    if (artifact === null) {
+      return null;
+    }
+    const isStale =
+      !isSameValues(producedFrom.values, values) ||
+      (includeDealContext && producedFrom.dealContext !== dealContext);
+    return { artifact, producedFrom, isStale, isRestored: live === null };
+  }
+
+  const presentedAi = presentedAnalysis(liveAiAnalysis, restoredAiAnalysis, {
+    includeDealContext: true,
+  });
+  const presentedOneWay = presentedAnalysis(liveOneWay, restoredOneWay, {
+    includeDealContext: false,
+  });
+  const presentedTwoWay = presentedAnalysis(liveTwoWay, restoredTwoWay, {
+    includeDealContext: false,
+  });
+
+  const aiAnalysis = presentedAi?.artifact ?? null;
+  const isAiAnalysisStale = presentedAi?.isStale ?? false;
+  const isAiAnalysisRestored = (presentedAi?.isRestored ?? false) && !isAiAnalysisStale;
+  const oneWayResult = presentedOneWay?.artifact ?? null;
+  const twoWayResult = presentedTwoWay?.artifact ?? null;
+
+  /**
+   * D5.8B -- whether the AI Analyst may be asked for a report at all.
+   *
+   * `results` is a deterministic analysis of the assumptions currently on
+   * screen, so with one present the question is always answerable. Without one,
+   * a report that is itself current still proves these exact inputs were
+   * analyzed (D5.8A's widening) -- but a STALE report proves nothing about
+   * them, and regenerating from it would be asking the AI Analyst to interpret
+   * an analysis nobody has run. That is the stale-result protection this gate
+   * is required to keep, so it is enforced here rather than described in a
+   * message.
+   */
+  const canGenerateAiAnalysis =
+    results !== null || (aiAnalysis !== null && !isAiAnalysisStale);
 
   /** Editing any assumption invalidates the analysis that was run on the old
    * ones, and clears the issues raised against them -- the same rule Quick and
@@ -661,17 +809,23 @@ export function useLeaseLevelDeal(options: {
     //
     // D5.8A: what is dropped is this session's report, not the SAVED one. The
     // saved snapshot belongs to the assumptions it was produced from and is
-    // still valid for them; it stops being presented the moment the assumptions
-    // on screen differ (`isAiDirty` above), and comes back if the analyst puts
-    // them back. Deleting it here instead would destroy valid work over an edit
-    // the analyst went on to abandon.
-    setLiveAiAnalysis(null);
+    // still valid for them, and deleting it here would destroy valid work over
+    // an edit the analyst went on to abandon.
+    //
+    // D5.8B goes further and drops neither. An AI report and a sensitivity run
+    // are completed analytical work; an edit does not make them untrue, it makes
+    // them describe earlier inputs. Both stay exactly where they are and are
+    // marked `isStale` by `presentedAnalysis`, which compares each against the
+    // provenance it carries -- so the analyst keeps the reference and is told,
+    // in words, that it is not current. `results` is still dropped: the base
+    // deterministic analysis is the thing a fresh AI report would have to be
+    // grounded in, and a stale one must not be.
+    //
+    // What is cleared here is the errors. A refusal raised against a submission
+    // the analyst has since edited past is stale in a way a *message* cannot
+    // usefully be, and leaving it up would put a failure and a staleness notice
+    // on screen describing two different moments.
     setAiAnalysisError(null);
-    // D5.8A: sensitivity is downstream of the same assumptions, by the same
-    // rule, at the same moment -- and lives here now rather than inside the
-    // Risk workspace, so an edit reaches it whether that screen is open or not.
-    setLiveOneWay(null);
-    setLiveTwoWay(null);
     setOneWayError(null);
     setTwoWayError(null);
     setError(null);
@@ -687,6 +841,13 @@ export function useLeaseLevelDeal(options: {
    * what a valid fingerprint is, and this only transports the opaque strings it
    * returns.
    */
+  /** The inputs on screen at this moment -- what anything produced now was
+   * produced from. Captured at the call site rather than derived later, because
+   * "later" is exactly when the analyst may have edited them. */
+  function currentProvenance(): AnalysisProvenance {
+    return { values, dealContext };
+  }
+
   async function fingerprintFor(request: {
     terms: AcquisitionTermsRequest;
     inputs: LeaseLevelInputsRequest;
@@ -865,7 +1026,15 @@ export function useLeaseLevelDeal(options: {
     // without making the analyst press Analyze again first. The guard still
     // refuses outright when neither exists, which is what keeps "the AI Analyst
     // never invents results" true at this layer and not only in the prompt.
-    if (results === null && aiAnalysis === null) {
+    //
+    // D5.8B narrows it back by exactly the case D5.8A could not yet see: a
+    // report that is on screen but OUT OF DATE. It evidences an analysis of
+    // inputs the analyst has since changed, so it evidences nothing about the
+    // inputs a new report would have to describe. `canGenerateAiAnalysis` is
+    // that rule, and the shell disables the control on the same value -- but it
+    // is enforced here too, because a guard that lives only in a disabled
+    // attribute is not a guard.
+    if (!canGenerateAiAnalysis) {
       return;
     }
     setIsGeneratingAiAnalysis(true);
@@ -885,7 +1054,7 @@ export function useLeaseLevelDeal(options: {
         returnHurdleMetric,
         dealContext.trim() || null,
       );
-      setLiveAiAnalysis(analysis);
+      setLiveAiAnalysis({ artifact: analysis, producedFrom: currentProvenance() });
       persistAiSnapshot(request, analysis);
     } catch (caught) {
       // D5.8A: a failed regeneration destroys nothing. The previous successful
@@ -1021,7 +1190,7 @@ export function useLeaseLevelDeal(options: {
         metric: configuration.metric,
       });
       const snapshot: LeaseLevelOneWaySensitivitySnapshot = { configuration, result };
-      setLiveOneWay(snapshot);
+      setLiveOneWay({ artifact: snapshot, producedFrom: currentProvenance() });
       persistSensitivitySnapshot(
         request,
         (dealId, fingerprint) =>
@@ -1029,12 +1198,18 @@ export function useLeaseLevelDeal(options: {
         () => setRestoredOneWay(snapshot),
       );
     } catch (caught) {
-      // A refused run has no partial answer, so this session's table is
-      // cleared rather than left on screen as if the refusal had not happened.
-      // The last SUCCESSFUL run is untouched -- both in storage and, when the
-      // assumptions on screen are still the saved ones, on screen, where it is
-      // labelled as the saved run beside the error.
-      setLiveOneWay(null);
+      // D5.7 cleared this session's table here, so a refusal was never left on
+      // screen beside a table that appeared to answer it. D5.8B keeps the table
+      // and separates the two facts instead: the refusal is its own message, the
+      // previous run is labelled as the previous run, and if the inputs have
+      // moved it also carries the out-of-date notice. Three distinct states,
+      // three distinct pieces of text -- collapsing them into one was the only
+      // thing the old clearing actually prevented, and it cost the analyst a
+      // completed run every time a re-run was refused.
+      //
+      // Nothing about the kept result changes: it keeps the provenance it was
+      // produced under, so it is never relabelled as an answer to the run that
+      // just failed.
       setOneWayError(sensitivityMessageFor(caught));
     } finally {
       setIsRunningSensitivity(false);
@@ -1069,7 +1244,7 @@ export function useLeaseLevelDeal(options: {
         metric: configuration.metric,
       });
       const snapshot: LeaseLevelTwoWaySensitivitySnapshot = { configuration, result };
-      setLiveTwoWay(snapshot);
+      setLiveTwoWay({ artifact: snapshot, producedFrom: currentProvenance() });
       persistSensitivitySnapshot(
         request,
         (dealId, fingerprint) =>
@@ -1077,7 +1252,8 @@ export function useLeaseLevelDeal(options: {
         () => setRestoredTwoWay(snapshot),
       );
     } catch (caught) {
-      setLiveTwoWay(null);
+      // See `runOneWay` above: the matrix stays, the refusal is its own
+      // message, and neither is dressed up as the other.
       setTwoWayError(sensitivityMessageFor(caught));
     } finally {
       setIsRunningSensitivity(false);
@@ -1146,13 +1322,50 @@ export function useLeaseLevelDeal(options: {
    * matrices from attaching, and none of them can disturb another. A failure
    * here is reported through the header's save message and never as a failed
    * Save -- the assumptions are saved; it is the derived snapshot that is not.
+   *
+   * **Only a CURRENT artifact is attached (D5.8B).** Saving edited assumptions
+   * is the one moment an out-of-date result could be certified against inputs it
+   * was never produced from, because Save is what makes those inputs the deal's
+   * own. A stale artifact is therefore not written, and its `restored` slot is
+   * cleared -- the backend's read-time fingerprint check would stop serving it
+   * from this point anyway, and leaving it in that slot would let the next
+   * render read its provenance as the freshly-saved assumptions and call it
+   * current. It stays on screen through its `live` slot, out-of-date notice
+   * intact, because it is still the analyst's work.
    */
   async function attachSnapshotsAfterSave(
     dealId: string,
     request: { terms: AcquisitionTermsRequest; inputs: LeaseLevelInputsRequest },
     context: string | null,
   ): Promise<void> {
-    if (aiAnalysis === null && oneWayResult === null && twoWayResult === null) {
+    // Whatever is on screen goes on being on screen, held as this session's own
+    // result with the provenance it was produced under -- so a Save neither
+    // loses a stale reference nor promotes one to current.
+    if (presentedAi !== null) {
+      setLiveAiAnalysis(presentedAi);
+    }
+    if (presentedOneWay !== null) {
+      setLiveOneWay(presentedOneWay);
+    }
+    if (presentedTwoWay !== null) {
+      setLiveTwoWay(presentedTwoWay);
+    }
+
+    const attachAi = presentedAi !== null && !presentedAi.isStale;
+    const attachOneWay = presentedOneWay !== null && !presentedOneWay.isStale;
+    const attachTwoWay = presentedTwoWay !== null && !presentedTwoWay.isStale;
+
+    if (presentedAi !== null && presentedAi.isStale) {
+      setRestoredAiAnalysis(null);
+    }
+    if (presentedOneWay !== null && presentedOneWay.isStale) {
+      setRestoredOneWay(null);
+    }
+    if (presentedTwoWay !== null && presentedTwoWay.isStale) {
+      setRestoredTwoWay(null);
+    }
+
+    if (!attachAi && !attachOneWay && !attachTwoWay) {
       return;
     }
     try {
@@ -1161,30 +1374,35 @@ export function useLeaseLevelDeal(options: {
         request.inputs,
         context,
       );
-      if (aiAnalysis !== null) {
-        await updateDealAiSnapshot(dealId, aiAnalysis, fingerprint.ai_context_fingerprint);
-        setRestoredAiAnalysis(aiAnalysis);
+      if (attachAi && presentedAi !== null) {
+        await updateDealAiSnapshot(
+          dealId,
+          presentedAi.artifact,
+          fingerprint.ai_context_fingerprint,
+        );
+        setRestoredAiAnalysis(presentedAi.artifact);
       }
-      if (oneWayResult !== null) {
+      if (attachOneWay && presentedOneWay !== null) {
         await updateDealOneWaySensitivitySnapshot(
           dealId,
-          oneWayResult,
+          presentedOneWay.artifact,
           fingerprint.financial_input_fingerprint,
         );
-        setRestoredOneWay(oneWayResult);
+        setRestoredOneWay(presentedOneWay.artifact);
       }
-      if (twoWayResult !== null) {
+      if (attachTwoWay && presentedTwoWay !== null) {
         await updateDealTwoWaySensitivitySnapshot(
           dealId,
-          twoWayResult,
+          presentedTwoWay.artifact,
           fingerprint.financial_input_fingerprint,
         );
-        setRestoredTwoWay(twoWayResult);
+        setRestoredTwoWay(presentedTwoWay.artifact);
       }
     } catch {
       setSaveError(SENSITIVITY_CACHE_FAILURE_MESSAGE);
     }
   }
+
 
   function hydrate(deal: Deal): void {
     if (
@@ -1518,6 +1736,8 @@ export function useLeaseLevelDeal(options: {
     isGeneratingAiAnalysis,
     aiAnalysisError,
     isAiAnalysisRestored,
+    isAiAnalysisStale,
+    canGenerateAiAnalysis,
     generateAiAnalysis,
     sensitivity: {
       view: sensitivityView,
@@ -1528,8 +1748,10 @@ export function useLeaseLevelDeal(options: {
       setTwoWayConfig,
       oneWayResult,
       twoWayResult,
-      isOneWayRestored: liveOneWay === null && oneWayResult !== null,
-      isTwoWayRestored: liveTwoWay === null && twoWayResult !== null,
+      isOneWayRestored: (presentedOneWay?.isRestored ?? false) && !presentedOneWay!.isStale,
+      isTwoWayRestored: (presentedTwoWay?.isRestored ?? false) && !presentedTwoWay!.isStale,
+      isOneWayStale: presentedOneWay?.isStale ?? false,
+      isTwoWayStale: presentedTwoWay?.isStale ?? false,
       oneWayError,
       twoWayError,
       isRunning: isRunningSensitivity,

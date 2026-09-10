@@ -699,7 +699,14 @@ describe('a refused one-way run', () => {
     expect(within(panel('one-way')).queryByText('N/A')).toBeNull();
   });
 
-  it('M10: replaces a previous result rather than showing a partial one', async () => {
+  it('M10: a refused run is never dressed up as a result', async () => {
+    // **D5.8B changes how this is achieved, not what it protects.**
+    //
+    // D5.7 cleared the table on a refusal, so a failed run could never appear
+    // to have produced one. That also threw away a completed run every time a
+    // re-run was refused, which human review asked us to stop doing. The table
+    // now stays -- and is labelled as the previous run, so the refusal above it
+    // still cannot be read as having produced it.
     const user = await openRisk();
     mockOneWay.mockResolvedValue(oneWayResult());
 
@@ -711,11 +718,23 @@ describe('a refused one-way run', () => {
     await runIn(user, panel('one-way'));
 
     await waitFor(() => {
-      expect(within(panel('one-way')).queryByRole('table')).toBeNull();
+      expect(within(panel('one-way')).getByRole('alert').textContent).toContain(
+        'SENSITIVITY_TARGET_SHADOWED_BY_SUITE_OVERRIDE',
+      );
     });
-    expect(within(panel('one-way')).getByRole('alert').textContent).toContain(
-      'SENSITIVITY_TARGET_SHADOWED_BY_SUITE_OVERRIDE',
-    );
+    // The completed run survives the refusal, and says whose result it is.
+    expect(within(panel('one-way')).getByRole('table')).toBeTruthy();
+    expect(within(panel('one-way')).getByText(/Showing your previous run/i)).toBeTruthy();
+    // Still no partial answer: the table is exactly the successful run's two
+    // candidates, unchanged. The refused run contributed no row, no blank and
+    // no placeholder.
+    const rows = within(panel('one-way'))
+      .getByRole('table')
+      .querySelectorAll('tbody tr');
+    expect(Array.from(rows).map((row) => row.querySelector('th')?.textContent)).toEqual([
+      '6.00%',
+      '6.50%',
+    ]);
   });
 
   it('surfaces the repeated-axis refusal the runner already makes', async () => {

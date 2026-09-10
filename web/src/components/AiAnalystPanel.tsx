@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { STALE_AI_MESSAGE, StaleAnalysisNotice } from './StaleAnalysisNotice';
 import type { AIAnalysis } from '../types';
 
 interface AiAnalystListSectionProps {
@@ -88,6 +89,27 @@ interface AiAnalystPanelProps {
    * them.)
    */
   analysisNote?: string | null;
+  /**
+   * D5.8B: the report describes underwriting assumptions that have since
+   * changed.
+   *
+   * The report is still rendered in full -- it is completed work and a faithful
+   * record of the inputs it ran against -- with a visible OUT OF DATE notice
+   * above it. Deliberately not an error: nothing failed, and the notice never
+   * says it did. Quick and Detailed leave this unset and are unaffected.
+   */
+  isStale?: boolean;
+  /**
+   * D5.8B: why the analyst cannot regenerate right now, or `null` when they
+   * can.
+   *
+   * The one case that produces a reason is an out-of-date report with no
+   * deterministic analysis of the current assumptions behind it: there is
+   * nothing for a new report to be grounded in until the deal is analyzed
+   * again. Shown as text beside a disabled control, so the reason is readable
+   * rather than inferable from a greyed-out button.
+   */
+  generateBlockedReason?: string | null;
 }
 
 /**
@@ -113,6 +135,8 @@ export function AiAnalystPanel({
   onGenerate,
   hasBreakEvenAnalysis = true,
   analysisNote = null,
+  isStale = false,
+  generateBlockedReason = null,
 }: AiAnalystPanelProps) {
   const [activeSection, setActiveSection] = useState<AiSectionId>('investment-view');
 
@@ -127,7 +151,13 @@ export function AiAnalystPanel({
   // next press replaces it. No report means there is nothing yet, which is also
   // exactly what an assumption edit leaves behind: the stale report is dropped,
   // and the button honestly reads Generate again.
+  //
+  // D5.8B keeps the label reading Regenerate for an out-of-date report, because
+  // that is still what pressing it would do. What changes when the report is
+  // stale is whether it can be pressed at all, which is `generateBlockedReason`
+  // -- a disabled control with a stated reason, not a relabelled one.
   const generateLabel = analysis === null ? 'Generate AI Analysis' : 'Regenerate Analysis';
+  const isGenerateBlocked = generateBlockedReason !== null;
 
   return (
     <section className="card ai-analyst-panel">
@@ -137,13 +167,23 @@ export function AiAnalystPanel({
           type="button"
           className="btn btn-primary btn-sm"
           onClick={onGenerate}
-          disabled={isLoading}
+          disabled={isLoading || isGenerateBlocked}
         >
           {isLoading ? 'Generating…' : generateLabel}
         </button>
       </div>
 
+      {/* Three states, three pieces of text, never collapsed into one. The
+        * out-of-date notice describes the report; the error describes an
+        * attempt that failed; the blocked reason describes what the control
+        * needs before it will work. All three can be true at once. */}
+      {isStale && <StaleAnalysisNotice message={STALE_AI_MESSAGE} />}
+
       {error && <div className="error-banner">{error}</div>}
+
+      {isGenerateBlocked && (
+        <p className="field-hint ai-analyst-blocked-reason">{generateBlockedReason}</p>
+      )}
 
       {!analysis && !isLoading && !error && (
         <div className="ai-analyst-empty">
@@ -154,6 +194,11 @@ export function AiAnalystPanel({
 
       {isLoading && <div className="sensitivity-status">Generating AI analysis…</div>}
 
+      {/* Rendered whether or not the report is stale: after a refused
+        * regeneration the analyst needs both facts at once -- the report
+        * describes earlier inputs, AND it is not the answer to the call that
+        * just failed. The caller decides which sentence applies; suppressing it
+        * here would collapse two states into one. */}
       {analysis && !isLoading && analysisNote !== null && (
         <p className="field-hint ai-analyst-restored-note">{analysisNote}</p>
       )}

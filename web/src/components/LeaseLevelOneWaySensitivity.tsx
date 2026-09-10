@@ -13,6 +13,7 @@
  */
 
 import { CandidateValueEditor } from './CandidateValueEditor';
+import { STALE_SENSITIVITY_MESSAGE, StaleAnalysisNotice } from './StaleAnalysisNotice';
 import type { LadderDraft } from '../leaseLevelSensitivityLadder';
 import {
   LEASE_LEVEL_SENSITIVITY_METRICS,
@@ -59,6 +60,15 @@ export interface LeaseLevelOneWaySensitivityProps {
    * the same stored response either way; this only tells the reader whether
    * they are looking at the run they just pressed or the last saved one. */
   resultNote?: string | null;
+  /**
+   * D5.8B: this run describes underwriting assumptions that have since changed.
+   *
+   * The table stays exactly as it is -- metric, target, candidate values,
+   * baseline context, every row and the Base highlight -- with a visible OUT OF
+   * DATE notice attached to it. It is a completed run against real inputs, not
+   * a failure, and the notice never says otherwise.
+   */
+  isStale?: boolean;
 }
 
 export function LeaseLevelOneWaySensitivity({
@@ -70,6 +80,7 @@ export function LeaseLevelOneWaySensitivity({
   error,
   result,
   resultNote = null,
+  isStale = false,
 }: LeaseLevelOneWaySensitivityProps) {
   const target = sensitivityTarget(config.assumption);
   const notice = shadowingNotice(target, rentRoll);
@@ -156,6 +167,10 @@ export function LeaseLevelOneWaySensitivity({
         </div>
       )}
 
+      {/* Attached to the result it describes, above it, so the two are read
+        * together. A refused re-run renders its own message separately: a
+        * stale table and a failed attempt are different facts. */}
+      {result && isStale && <StaleAnalysisNotice message={STALE_SENSITIVITY_MESSAGE} />}
       {result && resultNote !== null && (
         <p className="field-hint sensitivity-restored-note">{resultNote}</p>
       )}
