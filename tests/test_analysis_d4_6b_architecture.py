@@ -1339,10 +1339,19 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     # exact source span out of today's file leaves the D4.6A module's source
     # text exactly, CRLF normalised to LF and nothing else. Every other engine
     # file -- every calculator -- is still byte-identical.
+    #
+    # Narrowed again at D6.2, the gate that wires the Business Plan into the
+    # engine, by exactly one more file: ``engine/acquisition.py``. It is held to
+    # a source-region claim by ``tests/test_d6_2_owner_cash_flow_architecture.py``
+    # -- every function outside D6.2's enumerated surface is source-identical to
+    # the pre-D6.2 module -- and ``contracts.py`` to the D6.1 + D6.2 additive
+    # claim. ``debt.py``, ``returns.py``, ``noi.py``, ``operating_projection.py``
+    # and ``__init__.py`` stay byte-identical to D4.6A.
     engine_changed = [
         path
         for path in _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine")
-        if path != "src/anchor/engine/contracts.py"
+        if path
+        not in ("src/anchor/engine/contracts.py", "src/anchor/engine/acquisition.py")
     ]
     assert engine_changed == [], f"src/anchor/engine changed: {engine_changed}"
 
@@ -1655,13 +1664,15 @@ def test_g37_detects_a_real_difference_rather_than_reporting_none() -> None:
     ], "G37's change detection is not reporting a difference that exists"
 
     # And the helper is discriminating rather than merely always non-empty:
-    # unchanged paths are not reported. Since D6.1 the engine
-    # tree differs from D4.6A in exactly one file -- the additive
-    # ``OwnerCapitalSchedule`` contract, see G37 above -- so the helper must
-    # name that file and none of its unchanged siblings: discrimination inside
-    # a single directory, which is a sharper proof than an empty result.
+    # unchanged paths are not reported. Since D6.2 the engine tree differs from
+    # D4.6A in exactly two files -- the D6.1/D6.2 contracts and the D6.2
+    # acquisition wiring, see G37 above -- so the helper must name those two
+    # and none of their unchanged siblings (debt, returns, NOI, the Detailed
+    # projection): discrimination inside a single directory, which is a sharper
+    # proof than an empty result.
     assert _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine") == [
-        "src/anchor/engine/contracts.py"
+        "src/anchor/engine/acquisition.py",
+        "src/anchor/engine/contracts.py",
     ]
 
 
@@ -1862,9 +1873,14 @@ def test_g40_no_preset_bundle_was_invented() -> None:
     # importing ``anchor.leasing``. A parser is not a preset bundle, which is
     # what this guardrail is about -- the assertions below still forbid any
     # ``build_*`` or ``*Presets`` Lease-Level export.
+    #
+    # D6.2 adds ``analyze_lease_level_acquisition_with_business_plan``: the
+    # Lease-Level Business Plan entry point, which resolves a plan and calls the
+    # one bridge. An analysis entry point, not a preset bundle.
     assert sorted(lease_level_exports) == [
         "LEASE_LEVEL_SUPPORTED_ASSUMPTIONS",
         "LEASE_LEVEL_SUPPORTED_METRICS",
+        "analyze_lease_level_acquisition_with_business_plan",
         "analyze_lease_level_acquisition_with_projection",
         "parse_lease_level_inputs",
         "run_lease_level_one_way_sensitivity",

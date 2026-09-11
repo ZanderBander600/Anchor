@@ -225,8 +225,8 @@ class OwnerCapitalSchedule:
     month. Producing it is the resolver's job
     (``anchor.business_plan.resolve_business_plan``), which owns every item,
     the month-to-hold-year bucketing, the owner-expense active-year rule and
-    the post-hold classification. The engine will be able to consume this
-    contract without importing the Business Plan package.
+    the post-hold classification. The engine consumes this contract without
+    importing the Business Plan package.
 
     - ``closing_project_capital`` -- project capital at closing (``T0``).
     - ``project_capital_by_year`` -- project capital in each hold year, Years
@@ -247,9 +247,13 @@ class OwnerCapitalSchedule:
     so it is refused rather than given one -- the same reasoning
     ``OperatingCapitalSchedule`` applies.
 
-    **Unwired at D6.1.** No acquisition, debt or returns calculation reads
-    this contract yet; D6.2 owns that wiring. This dataclass performs no
-    calculation of its own.
+    **Wired at D6.2.** ``analyze_acquisition_from_operating_projection``
+    consumes it through its ``owner_capital`` keyword; ``None`` there means
+    the all-zero schedule. Closing capital raises the Initial Equity
+    Requirement and the unlevered basis; the annual series reduce owner cash
+    flow. The debt, NOI and exit calculations never read it, and neither
+    does any calculation read ``post_hold_project_capital``, which the result
+    only discloses. This dataclass performs no calculation of its own.
     """
 
     closing_project_capital: float
@@ -381,6 +385,30 @@ class AcquisitionResults:
     the gross market-value estimate, never reduced by ``disposition_costs``,
     and ``noi_by_year`` is never reduced by ``capex_by_year`` -- CapEx is
     modeled strictly below NOI, in the cash-flow series only.
+
+    Phase 6 Gate D6.2 (``docs/architecture/D6_BUSINESS_PLAN_CONVENTIONS.md``
+    Sections 6, 8 and 10) appends the owner cash-flow fields, after every
+    pre-existing field and in the conventions' order:
+
+    - ``closing_project_capital``, ``project_capital_by_year``,
+      ``post_hold_project_capital`` and ``owner_expenses_by_year`` report the
+      resolved ``OwnerCapitalSchedule`` the engine consumed. The post-hold
+      figure is **disclosure only** -- no cash flow, return or closing figure
+      subtracts it.
+    - ``property_cash_flow_by_year``, ``unlevered_owner_cash_flow_by_year`` and
+      ``levered_owner_cash_flow_by_year`` are the authoritative owner
+      cash-flow chain (NOI, less the reserve and TI/LC; less project capital
+      and owner expenses; less debt service).
+    - ``total_closing_uses`` and ``total_closing_sources`` are Sources & Uses
+      at closing. They are algebraically equal; compare them within
+      tolerance.
+
+    ``initial_equity`` keeps its name and is the Initial Equity Requirement:
+    it now includes closing project capital. ``capex_by_year`` stays the
+    recurring reserve alone and the TI/LC fields stay the leasing-capital
+    authority -- project capital is never merged into any of them. No field
+    here is defaulted: an older stored result lacks them and must decode as
+    absent, never with fabricated zeros (Section 14).
     """
 
     going_in_cap_rate: float
@@ -411,6 +439,15 @@ class AcquisitionResults:
     unlevered_cash_yield_by_year: tuple[float | None, ...]
     cumulative_operating_distributions_by_year: tuple[float, ...]
     year_1_debt_yield: float | None
+    closing_project_capital: float
+    project_capital_by_year: tuple[float, ...]
+    post_hold_project_capital: float
+    owner_expenses_by_year: tuple[float, ...]
+    property_cash_flow_by_year: tuple[float, ...]
+    unlevered_owner_cash_flow_by_year: tuple[float, ...]
+    levered_owner_cash_flow_by_year: tuple[float, ...]
+    total_closing_uses: float
+    total_closing_sources: float
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

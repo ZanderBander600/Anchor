@@ -165,8 +165,20 @@ def test_leasing_package_imports_only_stdlib_its_own_modules_and_contracts() -> 
 #: A re-export, never a copy: the implementation owner stays
 #: ``leasing/parsing.py``, and ``lease_level.py`` is deliberately left
 #: byte-identical rather than made to carry a transport concern.
+#:
+#: Extended at D6.2 with ``business_plan_analysis.py``: the Business Plan entry
+#: point for a Lease-Level deal accepts the same rent-roll arguments the bridge
+#: does, so it must name their **types**. It imports ``anchor.leasing.contracts``
+#: and nothing else from the leasing package -- no builder, no validator --
+#: which ``test_the_business_plan_entry_points_import_leasing_types_only`` pins.
 _PERMITTED_LEASING_IMPORTERS = frozenset(
-    {"lease_level.py", "lease_level_sensitivity.py", "contracts.py", "__init__.py"}
+    {
+        "lease_level.py",
+        "lease_level_sensitivity.py",
+        "contracts.py",
+        "__init__.py",
+        "business_plan_analysis.py",
+    }
 )
 
 
@@ -232,6 +244,7 @@ def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
 
     assert importers == [
         "anchor/analysis/__init__.py",
+        "anchor/analysis/business_plan_analysis.py",
         "anchor/analysis/contracts.py",
         "anchor/analysis/lease_level.py",
         "anchor/analysis/lease_level_sensitivity.py",
@@ -245,6 +258,41 @@ def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
             f"analysis/__init__.py defines {forbidden!r}; it must re-export the "
             "parser, never reimplement it"
         )
+
+
+def test_the_business_plan_entry_points_import_leasing_types_only() -> None:
+    """D6.2's ``analysis/business_plan_analysis.py`` names the five Lease-Level
+    input **types** its Lease-Level entry point accepts, and nothing else from
+    the leasing package -- no builder, no validator, no parser. It reaches the
+    leasing *behaviour* only through the one bridge,
+    ``analyze_lease_level_acquisition_with_projection``."""
+
+    module = _ANALYSIS_DIR / "business_plan_analysis.py"
+    names = [
+        name
+        for name in _imported_module_names(module)
+        if name.startswith("anchor.leasing")
+    ]
+    assert sorted(names) == ["anchor.leasing.contracts"], (
+        "the Business Plan entry points reach a leasing module other than contracts.py"
+    )
+
+    imported_symbols = sorted(
+        alias.name
+        for node in ast.walk(
+            ast.parse(module.read_text(encoding="utf-8"), filename=module.name)
+        )
+        if isinstance(node, ast.ImportFrom)
+        and (node.module or "").endswith("leasing.contracts")
+        for alias in node.names
+    )
+    assert imported_symbols == [
+        "Lease",
+        "LeaseLevelOperatingInputs",
+        "LeaseLevelPropertyInputs",
+        "MarketLeasingAssumptions",
+        "Suite",
+    ], f"the Business Plan entry points import {imported_symbols}; types only"
 
 
 def test_the_envelope_module_imports_types_only() -> None:

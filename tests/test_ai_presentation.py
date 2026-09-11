@@ -434,5 +434,20 @@ def test_intentional_exclusion_allowlists_hold_exactly_the_deferred_fields() -> 
     # The allowlists stay, and stay exact. Empty is a statement -- every field
     # of every one of these five contracts now reaches the model -- and the
     # next field that should not still has to be named, with a reason.
+    #
+    # Phase 6 Gate D6.2 names the next ones: its nine owner cash-flow result
+    # fields, withheld until D6.8 grounds them (see presentation.py).
     assert INTENTIONALLY_EXCLUDED_INPUT_FIELDS == frozenset()
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset(
+        {
+            "closing_project_capital",
+            "project_capital_by_year",
+            "post_hold_project_capital",
+            "owner_expenses_by_year",
+            "property_cash_flow_by_year",
+            "unlevered_owner_cash_flow_by_year",
+            "levered_owner_cash_flow_by_year",
+            "total_closing_uses",
+            "total_closing_sources",
+        }
+    )

@@ -135,6 +135,15 @@ def test_build_report_only_formats_precomputed_engine_values() -> None:
             results.cumulative_operating_distributions_by_year
         ),
         year_1_debt_yield=results.year_1_debt_yield,
+        closing_project_capital=results.closing_project_capital,
+        project_capital_by_year=results.project_capital_by_year,
+        post_hold_project_capital=results.post_hold_project_capital,
+        owner_expenses_by_year=results.owner_expenses_by_year,
+        property_cash_flow_by_year=results.property_cash_flow_by_year,
+        unlevered_owner_cash_flow_by_year=results.unlevered_owner_cash_flow_by_year,
+        levered_owner_cash_flow_by_year=results.levered_owner_cash_flow_by_year,
+        total_closing_uses=results.total_closing_uses,
+        total_closing_sources=results.total_closing_sources,
     )
 
     report = build_report(inputs, mutated)

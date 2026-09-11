@@ -796,7 +796,15 @@ def test_analyze_acquisition_signature_has_no_snapshot_or_deal_parameter() -> No
     import inspect
 
     signature = inspect.signature(analyze_acquisition)
-    assert list(signature.parameters) == ["inputs"]
+    # D6.2 adds exactly one keyword-only parameter: the resolved Business Plan
+    # (``OwnerCapitalSchedule``), defaulting to the empty plan. It is a
+    # calculation input, not a persisted snapshot or a deal.
+    assert list(signature.parameters) == ["inputs", "owner_capital"]
+    owner_capital = signature.parameters["owner_capital"]
+    assert owner_capital.kind is inspect.Parameter.KEYWORD_ONLY
+    assert owner_capital.default is None
+    for name in signature.parameters:
+        assert "snapshot" not in name and "deal" not in name
 
 
 # =============================================================================

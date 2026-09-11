@@ -211,12 +211,19 @@ def test_the_existing_entry_points_remain_callable_without_the_channel() -> None
 
     signature = inspect.signature(analyze_acquisition_from_operating_projection)
     parameters = list(signature.parameters.values())
+    # D6.2 appends the keyword-only ``owner_capital`` (the resolved Business
+    # Plan) after it. ``operating_capital`` keeps its position and its
+    # ``None`` default, so every positional caller is unaffected.
     assert [p.name for p in parameters] == [
         "operating_projection",
         "terms",
         "operating_capital",
+        "owner_capital",
     ]
-    assert parameters[-1].default is None
+    assert parameters[2].default is None
+    assert parameters[2].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters[3].default is None
+    assert parameters[3].kind is inspect.Parameter.KEYWORD_ONLY
 
     # The public mode entry points take no operating capital at all.
     for entry_point in (
