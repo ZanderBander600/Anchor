@@ -30,15 +30,26 @@
 
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
+import { withLfLineEndings } from './testSourceText';
 
 /** Every production source file, read as text. Vite's `?raw` rather than
  * `node:fs`, so the suite needs no Node type definitions and runs in the same
- * jsdom environment as every other test in this project. */
-const SOURCES = import.meta.glob('./**/*.{ts,tsx}', {
-  query: '?raw',
-  eager: true,
-  import: 'default',
-}) as Record<string, string>;
+ * jsdom environment as every other test in this project.
+ *
+ * D5.9: normalised to LF as it is loaded. Several assertions below encode a
+ * line break, and `?raw` returns whatever the working tree holds -- CRLF for a
+ * file git checked out that way. Without this, those assertions depended on
+ * how a file sat on disk, and the `not.toContain` ones passed vacuously on a
+ * CRLF file rather than failing. */
+const SOURCES = Object.fromEntries(
+  Object.entries(
+    import.meta.glob('./**/*.{ts,tsx}', {
+      query: '?raw',
+      eager: true,
+      import: 'default',
+    }) as Record<string, string>,
+  ).map(([path, text]) => [path, withLfLineEndings(text)]),
+) as Record<string, string>;
 
 function sourceOf(relative: string): string {
   const key = `./${relative}`;

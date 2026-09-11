@@ -20,12 +20,20 @@ import { resolveRowIssues } from './leaseLevelIssues';
 import type { SubmittedRentRoll } from './leaseLevelIssues';
 import type { LeaseLevelIssue } from './leaseLevelTypes';
 
-import editorSource from './components/SuiteLeaseEditor.tsx?raw';
-import tableSource from './components/RentRollTable.tsx?raw';
-import issuesSource from './leaseLevelIssues.ts?raw';
-import workspaceSource from './components/LeaseLevelWorkspace.tsx?raw';
+import editorSourceText from './components/SuiteLeaseEditor.tsx?raw';
+import tableSourceText from './components/RentRollTable.tsx?raw';
+import issuesSourceText from './leaseLevelIssues.ts?raw';
+import workspaceSourceText from './components/LeaseLevelWorkspace.tsx?raw';
+import { withLfLineEndings } from './testSourceText';
 
 import { HIDDEN_RECOVERY_ISSUE, savedDeal } from './hiddenIssuesFixture';
+
+// D5.9: source text is normalised to LF where it is loaded, so no assertion in
+// this file depends on how the working tree happens to store a line break.
+const editorSource = withLfLineEndings(editorSourceText);
+const tableSource = withLfLineEndings(tableSourceText);
+const issuesSource = withLfLineEndings(issuesSourceText);
+const workspaceSource = withLfLineEndings(workspaceSourceText);
 
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');

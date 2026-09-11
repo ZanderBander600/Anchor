@@ -2544,8 +2544,13 @@ export default function App() {
   //
   // Its own component and its own state, mounted beside the two existing render
   // trees rather than woven into either. Deliberately not `UnderwriteWorkspace`:
-  // Lease-Level has no Results sub-navigation until D5.6, and `resultsViewsFor`
-  // still refuses this mode, which is exactly the honest state of things.
+  // Lease-Level has its own Results sub-navigation (D5.6), rendered inside
+  // `LeaseLevelWorkspace`.
+  //
+  // D5.9: Lease-Level has no Owner Summary, so Overview points to where its
+  // results are. Until D5.9 this panel still carried the D5.5A placeholder --
+  // results "arrive in a later gate" and "are not built yet" -- which had been
+  // untrue since D5.6. A copy change only; no Overview surface is added.
   const leaseLevelWorkspace = (
     <>
       <WorkspacePanel
@@ -2555,8 +2560,8 @@ export default function App() {
         subtitle="A concise view of the investment, key returns, and what drives the story."
       >
         <div className="empty-state">
-          Lease-Level results arrive in a later gate. Enter the deal on Underwrite;
-          Analyze runs the engine, and the result surfaces are not built yet.
+          Lease-Level results are on Underwrite, under Results: Summary, Operating
+          Statement and Cash Flow. Enter the rent roll there and click Analyze.
         </div>
       </WorkspacePanel>
 
@@ -2696,8 +2701,8 @@ export default function App() {
         subtitle="Source documents and the assumptions extracted from them."
       >
         <div className="empty-state">
-          Lease-Level rent rolls are entered by hand. Document extraction for a
-          rent roll is deliberately out of scope for this sprint.
+          Lease-Level rent rolls are entered by hand on Underwrite. Document
+          extraction is not available for a rent roll.
         </div>
       </WorkspacePanel>
     </>

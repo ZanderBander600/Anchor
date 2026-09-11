@@ -41,7 +41,8 @@ import {
   updateDealTwoWaySensitivitySnapshot,
   updateLeaseLevelDeal,
 } from './api';
-import appSource from './App.tsx?raw';
+import appSourceText from './App.tsx?raw';
+import { withLfLineEndings } from './testSourceText';
 import fixture from './leaseLevelResultsFixture.json';
 import {
   ANALYSIS,
@@ -56,6 +57,10 @@ import type {
   LeaseLevelTwoWaySensitivitySnapshot,
 } from './leaseLevelSensitivityTypes';
 import type { AIAnalysis, Deal } from './types';
+
+// D5.9: normalised to LF where it is loaded, so no assertion in this file
+// depends on how the working tree happens to store a line break.
+const appSource = withLfLineEndings(appSourceText);
 
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');

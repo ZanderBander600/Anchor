@@ -38,6 +38,7 @@ import { LeaseLevelOperatingStatement } from './components/LeaseLevelOperatingSt
 import type { OperatingPeriodView } from './components/LeaseLevelOperatingStatement';
 import type { LeaseLevelAcquisitionResults } from './leaseLevelTypes';
 import fixture from './leaseLevelResultsFixture.json';
+import { withLfLineEndings } from './testSourceText';
 
 const HEALTHY = fixture.healthy as unknown as LeaseLevelAcquisitionResults;
 
@@ -53,7 +54,9 @@ async function readCss(path: string): Promise<string> {
       readFileSync: (file: string, encoding: string) => string;
     }>;
   const fs = await load('node:fs');
-  return fs.readFileSync(path, 'utf8');
+  // D5.9: `ruleFor` below matches a selector list across a line break, so the
+  // text is normalised to LF here, once, whatever the working tree holds.
+  return withLfLineEndings(fs.readFileSync(path, 'utf8'));
 }
 
 beforeAll(async () => {

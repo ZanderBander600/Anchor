@@ -361,6 +361,25 @@ describe('the Lease-Level Risk workspace', () => {
     expect(screen.queryByText(/arrives in a later gate/i)).toBeNull();
   });
 
+  it('D5.9: Overview and Documents describe Lease-Level as it ships', async () => {
+    // Both panels carried D5.5A-era placeholders: Overview said the results
+    // "arrive in a later gate" and "are not built yet" -- untrue since D5.6 --
+    // and Documents spoke of "this sprint". Neither is an analyst's word.
+    const user = await openRisk();
+
+    await user.click(screen.getByRole('tab', { name: 'Overview' }));
+    const overview = document.getElementById('workspace-panel-overview') as HTMLElement;
+    expect(overview.textContent).toContain('Lease-Level results are on Underwrite, under Results');
+
+    await user.click(screen.getByRole('tab', { name: 'Documents' }));
+    const documents = document.getElementById('workspace-panel-documents') as HTMLElement;
+    expect(documents.textContent).toContain('Lease-Level rent rolls are entered by hand');
+
+    for (const text of [overview.textContent, documents.textContent]) {
+      expect(text).not.toMatch(/\bgate\b|\bsprint\b|not built|engine|backend/i);
+    }
+  });
+
   it('offers One-Way and Two-Way, and no Break-Even', async () => {
     await openRisk();
 

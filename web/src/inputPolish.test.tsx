@@ -20,11 +20,20 @@ import { buildAcquisitionTermsRequest } from './convert';
 import type { LeaseLevelAcquisitionResults } from './leaseLevelTypes';
 import { savedDeal } from './hiddenIssuesFixture';
 
-import workspaceSource from './components/LeaseLevelWorkspace.tsx?raw';
-import tableSource from './components/RentRollTable.tsx?raw';
-import editorSource from './components/SuiteLeaseEditor.tsx?raw';
-import convertSource from './leaseLevelConvert.ts?raw';
-import appSource from './App.tsx?raw';
+import workspaceSourceText from './components/LeaseLevelWorkspace.tsx?raw';
+import tableSourceText from './components/RentRollTable.tsx?raw';
+import editorSourceText from './components/SuiteLeaseEditor.tsx?raw';
+import convertSourceText from './leaseLevelConvert.ts?raw';
+import appSourceText from './App.tsx?raw';
+import { withLfLineEndings } from './testSourceText';
+
+// D5.9: source text is normalised to LF where it is loaded, so no assertion in
+// this file depends on how the working tree happens to store a line break.
+const workspaceSource = withLfLineEndings(workspaceSourceText);
+const tableSource = withLfLineEndings(tableSourceText);
+const editorSource = withLfLineEndings(editorSourceText);
+const convertSource = withLfLineEndings(convertSourceText);
+const appSource = withLfLineEndings(appSourceText);
 
 
 
@@ -596,14 +605,16 @@ describe('desktop space utilisation', () => {
 
 describe('M16: no financial math arrived with the formatter', () => {
   it('the formatter parses no numbers at all', async () => {
-    const source = (await import('./numberFormat?raw')).default as string;
+    const source = withLfLineEndings((await import('./numberFormat?raw')).default as string);
     for (const forbidden of ['Number(', 'parseFloat', 'parseInt', 'toFixed', 'Math.']) {
       expect(source, `numberFormat uses ${forbidden}`).not.toContain(forbidden);
     }
   });
 
   it('the shared input performs no calculation', async () => {
-    const source = (await import('./components/NumericInput?raw')).default as string;
+    const source = withLfLineEndings(
+      (await import('./components/NumericInput?raw')).default as string,
+    );
     for (const forbidden of ['Number(', 'parseFloat', 'parseInt', 'toFixed', 'Math.']) {
       expect(source, `NumericInput uses ${forbidden}`).not.toContain(forbidden);
     }

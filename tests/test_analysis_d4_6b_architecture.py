@@ -30,8 +30,10 @@ import ast
 import collections
 import dataclasses
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
@@ -217,6 +219,17 @@ _PERMITTED_WEB = frozenset(
         # below does not skip it. It is data and one clone helper; every mock and
         # every assertion stays in the file that makes the claim.
         "web/src/leaseLevelDealFixture.ts",
+        # D5.9 -- hardening. One new module, and it is test-only: the line-ending
+        # normaliser every test that reads source or stylesheet text passes it
+        # through, so no structural assertion depends on whether git checked a
+        # file out with LF or CRLF. Named here for the same reason the two
+        # fixtures above are -- seven test files import it, so it cannot carry a
+        # `.test.` extension. No production module imports it, and it performs
+        # one string replacement and nothing else.
+        #
+        # This is also the first entry the widened discovery below had to see
+        # while the file was still untracked: before D5.9, G37 could not.
+        "web/src/testSourceText.ts",
     }
 )
 
@@ -229,15 +242,14 @@ def _unexpected_web(changed: Iterable[str]) -> set[str]:
     that are production-named but test-only are enumerated above rather than
     pattern-matched.
 
-    **Known limitation, owned by D5.9.** ``changed`` comes from ``git diff``,
-    which does not report untracked files, so a brand-new frontend module that
-    has never been ``git add``-ed is invisible to this rule until it is staged
-    or committed. First recorded at D5.5E; restated here because D5.7B measured
-    it -- an unratified file dropped into ``web/src`` survives the guardrail
-    while untracked and is rejected the moment git can see it. Every file that
-    reaches a commit, and therefore every file that reaches review or CI, is
-    covered. Widening the discovery mechanism is D5.9 hardening and is
-    deliberately not attempted here.
+    **Untracked files: closed at D5.9.** Until then ``changed`` came from
+    ``git diff`` alone, which does not report untracked files, so a brand-new
+    frontend module that had never been ``git add``-ed was invisible to this
+    rule until it was staged (first recorded at D5.5E, measured at D5.7B).
+    ``_files_changed_since`` now also asks git for every untracked, unignored
+    path, so such a module is rejected the moment it exists on disk -- proved
+    against a real throwaway repository by
+    ``test_g37_sees_an_untracked_module_without_writing_the_index``.
     """
 
     return {
@@ -319,23 +331,73 @@ def _python_files_under(directory: Path) -> list[Path]:
     return sorted(directory.rglob("*.py"))
 
 
-def _files_changed_since(commit: str, repo_relative: str) -> list[str]:
-    """Paths under ``repo_relative`` that differ from ``commit``.
+def _git(arguments: list[str], *, root: Path = _PROJECT_ROOT) -> str:
+    """Run one git query against ``root`` without ever writing its index.
 
-    ``git diff`` rather than a raw byte comparison against ``git show``: blobs
-    are stored with LF and this working tree checks out CRLF, so comparing
-    bytes would report every file as modified. Git applies the same
-    normalisation it uses to decide whether a file is dirty, which is exactly
-    the question being asked.
+    **D5.9.** Porcelain ``git diff`` is not read-only: when a working file's
+    timestamp has moved but its content has not, it rewrites the index's stat
+    cache on the way out, and ``--no-optional-locks`` does not stop it (measured
+    on git 2.55). Nothing is staged by that, but a guardrail has no business
+    writing the developer's index at all. So every query runs against a private
+    copy of the index, handed to git through ``GIT_INDEX_FILE``: git reads
+    exactly what it would have read, and anything it chooses to write lands in
+    a temporary file that is then discarded.
     """
 
-    completed = subprocess.run(
-        ["git", "diff", "--name-only", commit, "--", repo_relative],
+    index_path = subprocess.run(
+        ["git", "rev-parse", "--git-path", "index"],
         capture_output=True,
-        cwd=_PROJECT_ROOT,
+        text=True,
+        check=True,
+        cwd=root,
+    ).stdout.strip()
+    with tempfile.TemporaryDirectory() as scratch:
+        private_index = Path(scratch) / "index"
+        shutil.copyfile(root / index_path, private_index)
+        completed = subprocess.run(
+            ["git", *arguments],
+            capture_output=True,
+            text=True,
+            cwd=root,
+            env={**os.environ, "GIT_INDEX_FILE": str(private_index)},
+        )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
+
+
+def _files_changed_since(
+    commit: str, repo_relative: str, *, root: Path = _PROJECT_ROOT
+) -> list[str]:
+    """Paths under ``repo_relative`` that differ from ``commit`` -- tracked or not.
+
+    Two read-only questions, and a path is reported if either answers yes:
+
+    * ``git diff --name-only <commit>`` -- every **tracked** path whose content
+      differs from ``commit``: modified, added, or deleted. ``git diff`` rather
+      than a raw byte comparison against ``git show``: blobs are stored with LF
+      and this working tree checks out CRLF, so comparing bytes would report
+      every file as modified. Git applies the same normalisation it uses to
+      decide whether a file is dirty, which is exactly the question being asked.
+    * ``git ls-files --others --exclude-standard`` -- every file git does not
+      track yet but would pick up on the next ``git add``. **D5.9.** Until this
+      gate the first query was the only one, and it cannot see a file that has
+      never been added: a new module dropped into ``web/src`` -- or into
+      ``src/anchor/engine`` -- survived every clause of this guardrail until
+      someone staged it. Ignored files (``node_modules``, build output, caches)
+      are excluded by the repository's own ignore rules rather than by a second
+      list kept here.
+
+    Neither query stages anything, and both run through ``_git``, so the index
+    is not written either.
+    """
+
+    tracked = _git(["diff", "--name-only", commit, "--", repo_relative], root=root)
+    untracked = _git(
+        ["ls-files", "--others", "--exclude-standard", "--", repo_relative], root=root
     )
-    assert completed.returncode == 0, completed.stderr.decode()
-    return [line.strip() for line in completed.stdout.decode().splitlines() if line.strip()]
+    return sorted(
+        {line.strip() for line in (*tracked.splitlines(), *untracked.splitlines()) if line.strip()}
+    )
 
 
 def _fresh_interpreter(statement: str) -> subprocess.CompletedProcess[bytes]:
@@ -1320,13 +1382,7 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     # inside a function nobody thought to name.
     removed = [
         line
-        for line in subprocess.run(
-            ["git", "diff", "-U0", _D4_6A_COMMIT, "--", "web/src/api.ts"],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=_PROJECT_ROOT,
-        ).stdout.splitlines()
+        for line in _git(["diff", "-U0", _D4_6A_COMMIT, "--", "web/src/api.ts"]).splitlines()
         if line.startswith("-") and not line.startswith("---")
     ]
     assert removed == [], (
@@ -1366,13 +1422,9 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
 
     removed = [
         line[1:].strip()
-        for line in subprocess.run(
-            ["git", "diff", "-U0", _D4_6A_COMMIT, "--", "src/anchor/ai/prompts.py"],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=_PROJECT_ROOT,
-        ).stdout.splitlines()
+        for line in _git(
+            ["diff", "-U0", _D4_6A_COMMIT, "--", "src/anchor/ai/prompts.py"]
+        ).splitlines()
         if line.startswith("-") and not line.startswith("---")
     ]
 
@@ -1429,13 +1481,9 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     # step-number comment.
     removed = [
         line
-        for line in subprocess.run(
-            ["git", "diff", "-U0", _D4_6A_COMMIT, "--", "src/anchor/analysis/lease_level.py"],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=_PROJECT_ROOT,
-        ).stdout.splitlines()
+        for line in _git(
+            ["diff", "-U0", _D4_6A_COMMIT, "--", "src/anchor/analysis/lease_level.py"]
+        ).splitlines()
         if line.startswith("-") and not line.startswith("---")
     ]
     for line in removed:
@@ -1594,6 +1642,134 @@ def test_g37_detects_a_real_difference_rather_than_reporting_none() -> None:
     # And a path that cannot have changed reports nothing, so the helper is
     # discriminating rather than merely always non-empty.
     assert _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine") == []
+
+
+def _throwaway_repository(root: Path) -> str:
+    """A real git repository in ``root`` with one committed frontend module and
+    one committed engine module. Returns the baseline commit.
+
+    Configured locally, so neither the fixture nor anything run against it
+    depends on -- or touches -- the developer's own repository or settings.
+    """
+
+    def run(*arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments], capture_output=True, text=True, check=True, cwd=root
+        ).stdout
+
+    run("init", "-q")
+    for key, value in (
+        ("user.name", "Anchor D5.9 fixture"),
+        ("user.email", "fixture@invalid"),
+        ("commit.gpgsign", "false"),
+    ):
+        run("config", key, value)
+    (root / "web" / "src").mkdir(parents=True)
+    (root / "web" / "src" / "App.tsx").write_text("export {};\n", encoding="utf-8")
+    (root / "src" / "anchor" / "engine").mkdir(parents=True)
+    (root / "src" / "anchor" / "engine" / "core.py").write_text("X = 1\n", encoding="utf-8")
+    (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    run("add", ".")
+    run("commit", "-q", "-m", "baseline")
+    return run("rev-parse", "HEAD").strip()
+
+
+def test_g37_sees_an_untracked_module_without_writing_the_index(tmp_path: Path) -> None:
+    """**D5.9 -- M1.** An unratified production module is rejected while it is
+    still untracked, and finding it writes nothing to git.
+
+    Driven against a real throwaway repository rather than a mocked ``git``, so
+    what is proved is git's own behaviour: the file genuinely is untracked, and
+    ``git diff`` genuinely cannot see it. The Anchor repository and its index
+    are never involved.
+    """
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    baseline = _throwaway_repository(repository)
+    index = repository / ".git" / "index"
+
+    intruder = "web/src/unapprovedFinancialLogic.ts"
+    (repository / intruder).write_text("export const irr = 0.1;\n", encoding="utf-8")
+    engine_intruder = "src/anchor/engine/shadow_irr.py"
+    (repository / engine_intruder).write_text("IRR = 0.1\n", encoding="utf-8")
+    # Two things that must NOT be reported: an ignored dependency, and a
+    # tracked file whose timestamp moved while its content did not. The second
+    # is also the exact condition under which porcelain ``git diff`` rewrites
+    # the index, so it is what makes the index assertion below mean something.
+    (repository / "web" / "node_modules").mkdir()
+    (repository / "web" / "node_modules" / "dependency.js").write_text("1\n", encoding="utf-8")
+    app = repository / "web" / "src" / "App.tsx"
+    later = app.stat().st_mtime + 120
+    os.utime(app, (later, later))
+    index_before = index.read_bytes()
+
+    # The frontend clause rejects it, by name, while it is untracked.
+    changed_web = _files_changed_since(baseline, "web", root=repository)
+    assert changed_web == [intruder]
+    assert _unexpected_web(changed_web) == {intruder}
+    # The financial clauses see the same thing: a new, never-added engine
+    # module is a change to the engine.
+    assert _files_changed_since(baseline, "src/anchor/engine", root=repository) == [
+        engine_intruder
+    ]
+
+    # Nothing was staged, and the index is byte-for-byte what it was.
+    assert index.read_bytes() == index_before, "G37 wrote the index"
+    staged = subprocess.run(
+        ["git", "ls-files"], capture_output=True, text=True, check=True, cwd=repository
+    ).stdout.split()
+    assert intruder not in staged and engine_intruder not in staged
+
+    # The blind spot this closes, shown rather than asserted from memory: the
+    # tracked-change query G37 relied on alone until D5.9 does not see either
+    # file. (Run last and directly, because it is also the call that rewrites
+    # the index.)
+    blind = subprocess.run(
+        ["git", "diff", "--name-only", baseline, "--", "web", "src"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=repository,
+    ).stdout.split()
+    assert intruder not in blind and engine_intruder not in blind
+    assert index.read_bytes() != index_before, (
+        "plain git diff did not refresh the index here, so the index assertion "
+        "above proves less than it claims"
+    )
+
+
+def test_g37_untracked_discovery_leaves_the_allowlist_as_strict_as_it_was(
+    tmp_path: Path,
+) -> None:
+    """**D5.9.** Widening what G37 can *see* did not widen what it *permits*.
+
+    An untracked file is subject to exactly the same literal allowlist and the
+    same test-source extension filter as a tracked one: a ratified path is
+    accepted, an untracked ``.test.ts`` is excused, and an untracked
+    ``.test.helpers.ts`` is not.
+    """
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    baseline = _throwaway_repository(repository)
+
+    for relative in (
+        "web/src/StaleAnalysisNotice.tsx",
+        "web/src/components/StaleAnalysisNotice.tsx",
+        "web/src/unapproved.test.ts",
+        "web/src/unapproved.test.helpers.ts",
+    ):
+        (repository / relative).parent.mkdir(parents=True, exist_ok=True)
+        (repository / relative).write_text("export {};\n", encoding="utf-8")
+
+    changed = _files_changed_since(baseline, "web", root=repository)
+    assert len(changed) == 4
+    assert _unexpected_web(changed) == {
+        # Right name, wrong directory: a literal path, not a basename match.
+        "web/src/StaleAnalysisNotice.tsx",
+        "web/src/unapproved.test.helpers.ts",
+    }
 
 
 @pytest.mark.parametrize(

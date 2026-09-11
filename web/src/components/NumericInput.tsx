@@ -18,9 +18,20 @@
  * `step`/spinner behaviour was never used on these fields anyway. Ungrouped
  * fields -- percentages, months, years -- keep `type="number"` exactly as they
  * had it, so nothing changes for them at all.
+ *
+ * **A whole-field selection survives the swap (D5.9).** Keyboard focus selects
+ * the entire displayed value before the focus event fires, so "Tab in, type a
+ * new number" replaces it -- ordinary native behaviour. Swapping the grouped
+ * display for raw digits is a programmatic value change, and that collapses
+ * any selection to a caret at the end: until D5.9, `50,000,000`, Tab, `48000000`
+ * became `5000000048000000`. So when the whole display was selected at the
+ * moment of focus and the display is about to change, the selection is
+ * restored once the raw digits are committed. Nothing is selected that the
+ * browser had not already selected: a click, whose caret lands after focus, and
+ * a partial selection are both left exactly as they were.
  */
 
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { ChangeEvent, CSSProperties } from 'react';
 import { groupDigits, stripGroups } from '../numberFormat';
 
@@ -52,9 +63,21 @@ export function NumericInput({
 }: NumericInputProps) {
   const [editing, setEditing] = useState(false);
   const grouped = group && !editing;
+  const input = useRef<HTMLInputElement>(null);
+  const restoreWholeSelection = useRef(false);
+
+  // Runs after React has written the raw digits and before the next keystroke
+  // is handled, so the restored selection is the one typing replaces.
+  useLayoutEffect(() => {
+    if (editing && restoreWholeSelection.current) {
+      input.current?.select();
+    }
+    restoreWholeSelection.current = false;
+  }, [editing]);
 
   return (
     <input
+      ref={input}
       id={id}
       className={className}
       // Only a grouped field leaves `type="number"`, and only because it must.
@@ -66,7 +89,16 @@ export function NumericInput({
       placeholder={placeholder}
       style={style}
       {...aria}
-      onFocus={() => setEditing(true)}
+      onFocus={(event) => {
+        const field = event.currentTarget;
+        restoreWholeSelection.current =
+          // Only when the display is about to change under the selection...
+          field.value !== value &&
+          // ...and the browser had selected all of it.
+          field.selectionStart === 0 &&
+          field.selectionEnd === field.value.length;
+        setEditing(true);
+      }}
       onBlur={() => setEditing(false)}
       onChange={(event: ChangeEvent<HTMLInputElement>) =>
         // Stripped on the way in, so form state never holds a separator --

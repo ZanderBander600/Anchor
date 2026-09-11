@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BreakEvenPanel } from './BreakEvenPanel';
-import type { BreakEvenResult, ReturnHurdleMetric, StandardBreakEvenAnalysis } from '../types';
+import type {
+  BreakEvenResult,
+  ReturnHurdleMetric,
+  StandardBreakEvenAnalysis,
+  StandardDetailedBreakEvenAnalysis,
+} from '../types';
 
 afterEach(() => {
   cleanup();
@@ -118,7 +123,7 @@ function makeEquityMultipleAnalysis(
 const noop = () => {};
 
 interface BuildPropsOverrides {
-  analysis?: StandardBreakEvenAnalysis | null;
+  analysis?: StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis | null;
   isLoading?: boolean;
   error?: string | null;
   targetLeveredIrrPercent?: string;
@@ -364,5 +369,176 @@ describe('BreakEvenPanel -- Equity Multiple return hurdle', () => {
     expect(screen.getByText('Not found in tested range')).toBeTruthy();
     expect(screen.queryByText(/impossible/i)).toBeNull();
     expect(screen.queryByText(/no solution exists/i)).toBeNull();
+  });
+});
+
+// =============================================================================
+// D5.9 -- only a solved result shows a threshold.
+//
+// Every test above feeds the panel contract-consistent results: `solved` with a
+// value, `no_solution_in_range` with `null`. Against data like that, the card's
+// two-part check (`status === 'solved'` AND a non-null value) cannot be told
+// apart from either half alone, or from the two joined by `||` -- and each of
+// those weakenings survived this file. The status is the authority on whether a
+// threshold was found; the value is only what to print once it was. So these
+// tests hold each half independently, in both result shapes the panel renders:
+// Quick's five cards and Detailed's three (Gate 14 -- no `min_noi_growth` or
+// `min_current_noi`, because Detailed has neither assumption). Lease-Level has
+// no Break-Even surface at all; that absence is asserted where the Lease-Level
+// workspaces render (`leaseLevelSensitivity.test.tsx`,
+// `leaseLevelAiAnalyst.test.tsx`, `modeDispatch.architecture.test.ts`).
+// =============================================================================
+
+/** The Detailed shape: the three results that exist for Detailed inputs. */
+function makeDetailedAnalysis(
+  overrides: Partial<StandardDetailedBreakEvenAnalysis> = {},
+): StandardDetailedBreakEvenAnalysis {
+  const quick = makeAnalysis();
+  return {
+    max_purchase_price: quick.max_purchase_price,
+    max_exit_cap_rate: quick.max_exit_cap_rate,
+    max_interest_rate: quick.max_interest_rate,
+    ...overrides,
+  };
+}
+
+/** One card, found by its title. */
+function card(title: string): HTMLElement {
+  const match = Array.from(document.querySelectorAll<HTMLElement>('.break-even-card')).find(
+    (candidate) => candidate.querySelector('.break-even-title')?.textContent === title,
+  );
+  if (match === undefined) {
+    throw new Error(`No break-even card titled ${title}`);
+  }
+  return match;
+}
+
+/** The headline of one card: the threshold, or the no-solution note. */
+function headline(title: string): HTMLElement {
+  return card(title).querySelector('.break-even-value') as HTMLElement;
+}
+
+const SHAPES = [
+  {
+    mode: 'Quick',
+    build: (overrides: Partial<StandardBreakEvenAnalysis> = {}) => makeAnalysis(overrides),
+    solved: {
+      'Maximum Purchase Price': '$46,820,000',
+      'Maximum Exit Cap': '6.12%',
+      'Minimum NOI Growth': '4.17%',
+      'Maximum Interest Rate': '4.61%',
+      'Minimum Current NOI': '$2,585,000',
+    } as Record<string, string>,
+    absent: [] as string[],
+  },
+  {
+    mode: 'Detailed',
+    build: (overrides: Partial<StandardDetailedBreakEvenAnalysis> = {}) =>
+      makeDetailedAnalysis(overrides),
+    solved: {
+      'Maximum Purchase Price': '$46,820,000',
+      'Maximum Exit Cap': '6.12%',
+      'Maximum Interest Rate': '4.61%',
+    } as Record<string, string>,
+    absent: ['Minimum NOI Growth', 'Minimum Current NOI'],
+  },
+] as const;
+
+describe.each(SHAPES)('BreakEvenPanel -- $mode: only a solved result shows a threshold', (shape) => {
+  it('renders every solved threshold as a value, in exactly the cards the mode has', () => {
+    render(<BreakEvenPanel {...baseProps({ analysis: shape.build() })} />);
+
+    const titles = Array.from(document.querySelectorAll('.break-even-title')).map(
+      (title) => title.textContent,
+    );
+    expect(titles).toEqual(Object.keys(shape.solved));
+    for (const absent of shape.absent) {
+      expect(screen.queryByText(absent)).toBeNull();
+    }
+    for (const [title, value] of Object.entries(shape.solved)) {
+      expect(headline(title).textContent, title).toBe(value);
+      expect(headline(title).classList.contains('break-even-no-solution'), title).toBe(false);
+    }
+    expect(screen.queryByText('Not found in tested range')).toBeNull();
+  });
+
+  it('shows no threshold for a no-solution result, and leaves the solved cards alone', () => {
+    const analysis = shape.build({
+      max_purchase_price: makeResult({
+        status: 'no_solution_in_range',
+        solved_assumption_value: null,
+        solved_metric_value: null,
+      }),
+    });
+    render(<BreakEvenPanel {...baseProps({ analysis })} />);
+
+    expect(headline('Maximum Purchase Price').textContent).toBe('Not found in tested range');
+    expect(headline('Maximum Purchase Price').classList.contains('break-even-no-solution')).toBe(
+      true,
+    );
+    // The baseline and the searched interval are still reported: the card says
+    // where it looked, never that no answer exists anywhere.
+    expect(card('Maximum Purchase Price').textContent).toContain('Current: $50,000,000');
+    expect(card('Maximum Purchase Price').textContent).toContain(
+      'Search range: $25,000,000 – $75,000,000',
+    );
+    expect(screen.getAllByText('Not found in tested range')).toHaveLength(1);
+    expect(headline('Maximum Exit Cap').textContent).toBe('6.12%');
+    expect(headline('Maximum Interest Rate').textContent).toBe('4.61%');
+  });
+
+  it('lets the status decide: a value on a result that was not solved is never shown (M4a, M4c)', () => {
+    // Outside the backend contract, which pairs `no_solution_in_range` with a
+    // null value. The panel must not rescue a threshold the search did not
+    // find: the figure below appears nowhere, not even formatted.
+    const analysis = shape.build({
+      max_purchase_price: makeResult({
+        status: 'no_solution_in_range',
+        solved_assumption_value: 46_820_000,
+        solved_metric_value: 0.10001,
+      }),
+    });
+    render(<BreakEvenPanel {...baseProps({ analysis })} />);
+
+    expect(headline('Maximum Purchase Price').textContent).toBe('Not found in tested range');
+    expect(headline('Maximum Purchase Price').classList.contains('break-even-no-solution')).toBe(
+      true,
+    );
+    expect(screen.queryByText('$46,820,000')).toBeNull();
+  });
+
+  it('never shows an absent threshold as a figure -- not zero, not N/A (M4b, M4c)', () => {
+    // The mirror case: a `solved` status with no value to print. A missing
+    // number must not be rendered as one.
+    const analysis = shape.build({
+      max_purchase_price: makeResult({
+        status: 'solved',
+        solved_assumption_value: null,
+        solved_metric_value: null,
+      }),
+    });
+    render(<BreakEvenPanel {...baseProps({ analysis })} />);
+
+    const text = headline('Maximum Purchase Price').textContent;
+    expect(text).toBe('Not found in tested range');
+    expect(text).not.toMatch(/\$0\b|0\.00%|N\/A/);
+    expect(headline('Maximum Purchase Price').classList.contains('break-even-no-solution')).toBe(
+      true,
+    );
+  });
+
+  it('does not treat a status it does not recognise as solved (M4d)', () => {
+    // `solved` is the only status that means a threshold was found. A status
+    // this version does not know is not evidence of one, even with a value.
+    const analysis = shape.build({
+      max_purchase_price: makeResult({
+        status: 'pending' as BreakEvenResult['status'],
+        solved_assumption_value: 46_820_000,
+      }),
+    });
+    render(<BreakEvenPanel {...baseProps({ analysis })} />);
+
+    expect(headline('Maximum Purchase Price').textContent).toBe('Not found in tested range');
+    expect(screen.queryByText('$46,820,000')).toBeNull();
   });
 });

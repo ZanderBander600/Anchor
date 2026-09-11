@@ -3,6 +3,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import { OwnerSummaryPanel } from './OwnerSummaryPanel';
 import { buildOwnerSummaryData } from '../ownerSummary';
 import type { OwnerSummarySource } from '../ownerSummary';
+import { withLfLineEndings } from '../testSourceText';
 import type {
   AcquisitionRequest,
   AcquisitionResults,
@@ -609,7 +610,7 @@ describe('null and edge-case display', () => {
 describe('architecture guardrail: no financial formulas in the component', () => {
   it('contains no multiplication, division, or addition operator, and only the two explicitly-permitted subtractions', async () => {
     const source = await import('./OwnerSummaryPanel.tsx?raw');
-    const raw: string = source.default;
+    const raw: string = withLfLineEndings(source.default);
     const executable = raw
       .replace(/\/\*[\s\S]*?\*\//g, '') // block comments, including JSDoc
       .replace(/\/\/.*$/gm, '') // line comments

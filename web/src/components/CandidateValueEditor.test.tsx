@@ -19,7 +19,7 @@
 
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CandidateValueEditor } from './CandidateValueEditor';
 import { sensitivityTarget } from '../leaseLevelSensitivity';
@@ -245,5 +245,78 @@ describe('a currency-per-square-foot target (Market Rent / SF)', () => {
 
     expect((screen.getByLabelText(`${LEGEND} 1`) as HTMLInputElement).value).toBe('1,500');
     expect(stepField().value).toBe('1,500');
+  });
+});
+
+// =============================================================================
+// D5.9 -- keyboard replacement reaches every grouped sensitivity field
+// =============================================================================
+
+/** Keyboard focus in Chromium's order: whole display selected, then focus.
+ * `NumericInput.test.tsx` holds the measured reasoning. */
+function focusAsTheBrowserDoes(field: HTMLInputElement): void {
+  act(() => {
+    field.setSelectionRange(0, field.value.length);
+    field.focus();
+  });
+}
+
+describe('D5.9: Tab-and-type replaces in the sensitivity editor', () => {
+  it('10: a Purchase Price candidate is replaced, not appended to', async () => {
+    const user = userEvent.setup({ delay: null });
+    const { onChange } = renderEditor('purchase_price');
+
+    await user.click(screen.getByRole('button', { name: 'Add Value' }));
+    const candidate = () => screen.getByLabelText(`${LEGEND} 1`) as HTMLInputElement;
+    await typeAndBlur(user, candidate(), '50000000');
+    expect(candidate().value).toBe('50,000,000');
+
+    focusAsTheBrowserDoes(candidate());
+    await user.keyboard('48000000');
+    await user.tab();
+
+    expect(candidate().value).toBe('48,000,000');
+    expect(onChange).toHaveBeenLastCalledWith(['48000000']);
+  });
+
+  it('10: Centre is replaced, not appended to', async () => {
+    const user = userEvent.setup({ delay: null });
+    const { emittedLadder } = renderEditor('purchase_price');
+
+    await typeAndBlur(user, centreField(), '30000000');
+    focusAsTheBrowserDoes(centreField());
+    await user.keyboard('32000000');
+    await user.tab();
+
+    expect(centreField().value).toBe('32,000,000');
+    expect(emittedLadder().center).toBe('32000000');
+  });
+
+  it('11: Step is replaced and keeps its D5.8B grouped display', async () => {
+    const user = userEvent.setup({ delay: null });
+    const { emittedLadder } = renderEditor('purchase_price');
+
+    await typeAndBlur(user, stepField(), '1000000');
+    expect(stepField().value).toBe('1,000,000');
+
+    focusAsTheBrowserDoes(stepField());
+    await user.keyboard('2000000');
+    await user.tab();
+
+    expect(stepField().value).toBe('2,000,000');
+    expect(emittedLadder().step).toBe('2000000');
+  });
+
+  it('11: a percentage Step is still ungrouped and still replaced', async () => {
+    const user = userEvent.setup({ delay: null });
+    const { emittedLadder } = renderEditor('exit_cap_rate');
+
+    await typeAndBlur(user, stepField(), '0.25');
+    await user.click(stepField());
+    await user.keyboard('{Control>}a{/Control}0.5');
+    await user.tab();
+
+    expect(stepField().value).toBe('0.5');
+    expect(emittedLadder().step).toBe('0.5');
   });
 });

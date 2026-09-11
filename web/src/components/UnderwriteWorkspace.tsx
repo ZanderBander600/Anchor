@@ -122,7 +122,7 @@ export function UnderwriteWorkspace({
                 >
                   {results === null ? (
                     <div className="empty-state">
-                      Analyze the deal to see the full engine output for these assumptions.
+                      Analyze the deal to view results.
                     </div>
                   ) : (
                     <div className="underwrite-results-shell">

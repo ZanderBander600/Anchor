@@ -6863,7 +6863,11 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
     render(<App />);
     await openUnderwriteTab(user, 'Results');
 
-    expect(within(underwritePanel('results')).getByText(/Analyze the deal to see/)).toBeTruthy();
+    expect(
+      within(underwritePanel('results')).getByText('Analyze the deal to view results.'),
+    ).toBeTruthy();
+    // D5.9: product copy, not the implementation's vocabulary.
+    expect(underwritePanel('results').textContent).not.toMatch(/engine|backend|payload/i);
     expect(document.querySelector('[aria-label="Results views"]')).toBeNull();
   });
 
