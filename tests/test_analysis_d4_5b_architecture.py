@@ -891,9 +891,23 @@ def test_g33_the_whole_engine_package_is_unchanged_since_d4_5a() -> None:
     it. D4.5B is additive and sits above the engine; this is the complete proof
     of that, and it subsumes any per-function claim about ``noi.py`` or
     ``operating_projection.py``.
+
+    **Narrowed at D6.1 -- and not weakened.** D6.1 adds the generic
+    ``OwnerCapitalSchedule`` engine contract to ``engine/contracts.py``, which
+    the D6 gate specification places there so the engine can later consume it
+    without importing ``anchor.business_plan``. That one file is therefore
+    exempt from byte-identity here and held to a stronger, more specific claim
+    by ``tests/test_business_plan_architecture.py``: cutting that one class's
+    exact source span out of today's file leaves the D4.5A module's source
+    text exactly, CRLF normalised to LF and nothing else. Every other engine
+    file is still byte-identical to D4.5A.
     """
 
-    changed = _files_changed_since(_D4_5A_COMMIT, "src/anchor/engine")
+    changed = [
+        path
+        for path in _files_changed_since(_D4_5A_COMMIT, "src/anchor/engine")
+        if path != "src/anchor/engine/contracts.py"
+    ]
 
     assert changed == [], (
         f"the engine changed at D4.5B: {changed}. The engine is frozen at this "

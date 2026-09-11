@@ -1329,9 +1329,24 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     assertion above.
     """
 
-    # Financial authority: byte-identical since D4.6A, no exceptions.
+    # Financial authority: byte-identical since D4.6A, no exceptions -- save
+    # one, narrowed at D6.1 and not weakened. D6.1 adds the generic
+    # ``OwnerCapitalSchedule`` engine contract to ``engine/contracts.py``, where
+    # the D6 gate specification places it so the engine can later consume it
+    # without importing ``anchor.business_plan``. That file alone is exempt
+    # from byte-identity and held to a stronger, more specific claim by
+    # ``tests/test_business_plan_architecture.py``: cutting that one class's
+    # exact source span out of today's file leaves the D4.6A module's source
+    # text exactly, CRLF normalised to LF and nothing else. Every other engine
+    # file -- every calculator -- is still byte-identical.
+    engine_changed = [
+        path
+        for path in _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine")
+        if path != "src/anchor/engine/contracts.py"
+    ]
+    assert engine_changed == [], f"src/anchor/engine changed: {engine_changed}"
+
     for area in (
-        "src/anchor/engine",
         # ``src/anchor/leasing`` as a whole was asserted byte-identical until
         # D5.2, which adds the structural transport boundary ``parsing.py`` and
         # the two structural issue codes it raises. Neither is financial, so the
@@ -1639,9 +1654,15 @@ def test_g37_detects_a_real_difference_rather_than_reporting_none() -> None:
         "web/src/index.css"
     ], "G37's change detection is not reporting a difference that exists"
 
-    # And a path that cannot have changed reports nothing, so the helper is
-    # discriminating rather than merely always non-empty.
-    assert _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine") == []
+    # And the helper is discriminating rather than merely always non-empty:
+    # unchanged paths are not reported. Since D6.1 the engine
+    # tree differs from D4.6A in exactly one file -- the additive
+    # ``OwnerCapitalSchedule`` contract, see G37 above -- so the helper must
+    # name that file and none of its unchanged siblings: discrimination inside
+    # a single directory, which is a sharper proof than an empty result.
+    assert _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine") == [
+        "src/anchor/engine/contracts.py"
+    ]
 
 
 def _throwaway_repository(root: Path) -> str:

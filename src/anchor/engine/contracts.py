@@ -215,6 +215,87 @@ class OperatingCapitalSchedule:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class OwnerCapitalSchedule:
+    """Owner-level Business Plan capital, resolved to closing and annual
+    dollars (``docs/architecture/D6_BUSINESS_PLAN_CONVENTIONS.md`` Sections 4,
+    5, 13 and 19; Gate D6.1).
+
+    **This is a generic engine contract.** It carries completed dollars and
+    nothing else: no plan item, identifier, description, category or model
+    month. Producing it is the resolver's job
+    (``anchor.business_plan.resolve_business_plan``), which owns every item,
+    the month-to-hold-year bucketing, the owner-expense active-year rule and
+    the post-hold classification. The engine will be able to consume this
+    contract without importing the Business Plan package.
+
+    - ``closing_project_capital`` -- project capital at closing (``T0``).
+    - ``project_capital_by_year`` -- project capital in each hold year, Years
+      1..H in chronological order.
+    - ``owner_expenses_by_year`` -- owner expenses in each hold year, Years
+      1..H in chronological order.
+    - ``post_hold_project_capital`` -- project capital scheduled after the
+      hold. **Disclosure only**: it is never part of
+      ``project_capital_by_year`` and no hold-year or closing cash flow may
+      subtract it (Section 19).
+
+    Both annual series hold exactly ``hold_period`` values, so they have the
+    same length and at least one entry. There is deliberately no post-hold
+    owner-expense figure (Section 5).
+
+    Every figure is finite and ``>= 0``. A negative figure would be capital
+    or expense *income*, for which the ratified conventions have no meaning,
+    so it is refused rather than given one -- the same reasoning
+    ``OperatingCapitalSchedule`` applies.
+
+    **Unwired at D6.1.** No acquisition, debt or returns calculation reads
+    this contract yet; D6.2 owns that wiring. This dataclass performs no
+    calculation of its own.
+    """
+
+    closing_project_capital: float
+    project_capital_by_year: tuple[float, ...]
+    owner_expenses_by_year: tuple[float, ...]
+    post_hold_project_capital: float
+
+    def __post_init__(self) -> None:
+        if len(self.project_capital_by_year) != len(self.owner_expenses_by_year):
+            raise ValueError(
+                "OwnerCapitalSchedule requires one project-capital and one "
+                "owner-expense figure per hold year; got "
+                f"{len(self.project_capital_by_year)} and "
+                f"{len(self.owner_expenses_by_year)}."
+            )
+        if not self.project_capital_by_year:
+            raise ValueError(
+                "OwnerCapitalSchedule requires at least one hold year; a hold "
+                "period is a whole number of years greater than or equal to 1."
+            )
+        figures: list[tuple[str, float]] = [
+            ("closing_project_capital", self.closing_project_capital),
+        ]
+        for name, series in (
+            ("project_capital_by_year", self.project_capital_by_year),
+            ("owner_expenses_by_year", self.owner_expenses_by_year),
+        ):
+            figures.extend(
+                (f"{name}[{year}]", amount) for year, amount in enumerate(series)
+            )
+        figures.append(
+            ("post_hold_project_capital", self.post_hold_project_capital)
+        )
+        for name, amount in figures:
+            if not isfinite(amount):
+                raise NonFiniteResultError(name, amount)
+            if amount < 0.0:
+                raise ValueError(
+                    f"{name} is {amount!r}; an owner-capital figure is finite "
+                    "and greater than or equal to 0. A negative figure would be "
+                    "capital or expense income, for which there is no "
+                    "convention."
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AcquisitionCashFlows:
     """Underwriting V2 Gate 2 adds ``disposition_costs``. ``exit_value``
     remains the gross, unmodified market-value estimate; disposition costs
