@@ -51,11 +51,14 @@ Every financial calculation must have automated tests.
 
 Every bug fix should receive a regression test when practical.
 
+For Project Anchor work, verification scope is governed by `docs/development/ANCHOR_DEVELOPMENT_PROTOCOL.md`. Follow its risk-tier policy and run full suites when that protocol requires them rather than as a universal completion requirement.
+
 Before declaring implementation complete:
-1. Run relevant targeted tests.
-2. Run the full test suite.
-3. Report the test results.
-4. Review git diff for unintended changes.
+1. Assign the gate a risk tier under the protocol.
+2. Run relevant targeted tests.
+3. Complete the verification that risk tier requires, including full suites where the protocol calls for them. A full suite is not required for every Tier 3 or Tier 4 change.
+4. Report the test results.
+5. Review git diff for unintended changes.
 
 ## Git
 
