@@ -17,7 +17,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+from ..analysis import ParsedLeaseLevelInputs
 from ..analysis.contracts import (
+    LeaseLevelAcquisitionResults,
     ReturnHurdleMetric,
     StandardBreakEvenAnalysis,
     StandardDetailedBreakEvenAnalysis,
@@ -29,6 +31,7 @@ from ..contracts import (
     AcquisitionTerms,
     DetailedOperatingInputs,
     OperatingMode,
+    UnsupportedOperatingModeError,
 )
 from ..engine.contracts import AcquisitionResults, OperatingProjection
 
@@ -60,6 +63,40 @@ class AnalysisContext:
     the AI Analyst always sees the exact same raw decimals the
     deterministic engine and analysis layers produced.
 
+    **D5.8 -- the third mode.** A ``LEASE_LEVEL`` context has ``terms``
+    populated (Lease-Level shares the same eleven-field ``AcquisitionTerms``
+    Detailed uses), plus ``lease_level_inputs`` -- the five analyst-approved
+    leasing input records -- and ``lease_level_results``, the authoritative
+    ``LeaseLevelAcquisitionResults`` envelope. ``inputs``,
+    ``detailed_operating_inputs`` and ``operating_projection`` are all ``None``:
+    Lease-Level has no ``current_noi``/``noi_growth`` and no Detailed operating
+    projection, and fabricates neither to resemble a mode it is not.
+
+    ``results`` is still the same ``AcquisitionResults`` for all three modes,
+    and for Lease-Level it is **the same object** as
+    ``lease_level_results.results`` -- one returns engine, joined at the
+    existing seam, never a Lease-Level copy of a return figure.
+
+    **``sensitivities`` and ``break_even`` are optional as of D5.8**, which is
+    what lets a Lease-Level context exist at all. The two ``None`` values mean
+    different things and are never collapsed into "unsupported":
+
+      * ``sensitivities=None`` means *no standardized preset bundle was
+        supplied with this context*. Lease-Level sensitivity is supported and
+        shipped (D5.7): it is analyst-directed, one axis or two at a time,
+        chosen in Risk. What Lease-Level does not have is Quick's and
+        Detailed's fixed preset package, so there is nothing standardized to
+        attach here. Presenting this absence as "sensitivity is unsupported for
+        this mode" would be false.
+      * ``break_even=None`` means *break-even was not supplied*, and for
+        Lease-Level it genuinely does not exist (guardrail G35). The absence is
+        the honest answer; a zero, a placeholder or a "not enough data" result
+        would not be.
+
+    Quick and Detailed still require both to be populated, asserted below, so
+    the optionality is a widening for the third mode only and cannot silently
+    empty the other two.
+
     ``deal_context`` (Owner Return Metrics V3 Gate A4) is the optional,
     user-authored free text from the active ``Deal`` (``anchor.deals.
     contracts``), threaded in separately from every deterministic field
@@ -75,9 +112,16 @@ class AnalysisContext:
     terms: AcquisitionTerms | None
     detailed_operating_inputs: DetailedOperatingInputs | None
     operating_projection: OperatingProjection | None
+    # Defaulted to ``None`` so a Quick or Detailed construction reads exactly
+    # as it did before D5.8. ``sensitivities``/``break_even`` deliberately get
+    # no default: those two became optional in this gate, and a default would
+    # let a Quick or Detailed caller drop a bundle it has always supplied by
+    # simply not mentioning it.
+    lease_level_inputs: ParsedLeaseLevelInputs | None = None
+    lease_level_results: LeaseLevelAcquisitionResults | None = None
     results: AcquisitionResults
-    sensitivities: StandardSensitivityPresets | StandardDetailedSensitivityPresets
-    break_even: StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis
+    sensitivities: StandardSensitivityPresets | StandardDetailedSensitivityPresets | None
+    break_even: StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis | None
     target_levered_irr: float
     target_equity_multiple: float
     target_headline_dscr: float
@@ -85,6 +129,13 @@ class AnalysisContext:
     deal_context: str | None
 
     def __post_init__(self) -> None:
+        # D5.1A: total dispatch. Previously ``if QUICK: ... else: <DETAILED
+        # invariants>``, so a third mode would have been validated against
+        # Detailed's required-field rules and, on passing them, presented to the
+        # model as a Detailed deal. Each mode now states its own invariants.
+        # A mode this contract cannot yet represent honestly is refused by name
+        # -- see D7/D5.8, which owns making ``sensitivities``/``break_even``
+        # optional so Lease-Level can be represented at all.
         if self.operating_mode is OperatingMode.QUICK:
             if self.inputs is None:
                 raise ValueError("A QUICK AnalysisContext must have 'inputs' populated.")
@@ -97,7 +148,9 @@ class AnalysisContext:
                     "A QUICK AnalysisContext must not have 'terms', "
                     "'detailed_operating_inputs', or 'operating_projection' populated."
                 )
-        else:
+            self._require_standard_scenario_analysis("QUICK")
+            self._reject_lease_level_fields("QUICK")
+        elif self.operating_mode is OperatingMode.DETAILED:
             if (
                 self.terms is None
                 or self.detailed_operating_inputs is None
@@ -112,6 +165,68 @@ class AnalysisContext:
                     "A DETAILED AnalysisContext must not have 'inputs' populated -- "
                     "current_noi/noi_growth/occupancy do not exist in this path."
                 )
+            self._require_standard_scenario_analysis("DETAILED")
+            self._reject_lease_level_fields("DETAILED")
+        elif self.operating_mode is OperatingMode.LEASE_LEVEL:
+            # D5.8. The mode is representable now that ``sensitivities`` and
+            # ``break_even`` are optional -- the exact widening D5.1A named as
+            # the blocker when it wrote the refusal this arm replaces.
+            if self.terms is None:
+                raise ValueError(
+                    "A LEASE_LEVEL AnalysisContext must have 'terms' populated."
+                )
+            if self.lease_level_inputs is None or self.lease_level_results is None:
+                raise ValueError(
+                    "A LEASE_LEVEL AnalysisContext must have 'lease_level_inputs' "
+                    "and 'lease_level_results' populated."
+                )
+            if (
+                self.inputs is not None
+                or self.detailed_operating_inputs is not None
+                or self.operating_projection is not None
+            ):
+                raise ValueError(
+                    "A LEASE_LEVEL AnalysisContext must not have 'inputs', "
+                    "'detailed_operating_inputs', or 'operating_projection' "
+                    "populated -- none of them exists in this path."
+                )
+            # One returns engine. ``results`` is not a Lease-Level copy of the
+            # envelope's returns; it is the identical object, so a figure can
+            # never be presented twice with two values.
+            if self.results is not self.lease_level_results.results:
+                raise ValueError(
+                    "A LEASE_LEVEL AnalysisContext's 'results' must be the same "
+                    "object as 'lease_level_results.results'."
+                )
+        else:
+            raise UnsupportedOperatingModeError(
+                self.operating_mode, operation="AnalysisContext"
+            )
+
+    def _require_standard_scenario_analysis(self, mode_label: str) -> None:
+        """D5.8: the two fields became optional so Lease-Level could exist.
+
+        Quick and Detailed are held to exactly what they carried before, here,
+        so the widening cannot quietly empty a mode that has always supplied
+        both. A Quick or Detailed context with ``sensitivities=None`` is not a
+        mode with no preset bundle -- it is a context that lost one.
+        """
+
+        if self.sensitivities is None:
+            raise ValueError(
+                f"A {mode_label} AnalysisContext must have 'sensitivities' populated."
+            )
+        if self.break_even is None:
+            raise ValueError(
+                f"A {mode_label} AnalysisContext must have 'break_even' populated."
+            )
+
+    def _reject_lease_level_fields(self, mode_label: str) -> None:
+        if self.lease_level_inputs is not None or self.lease_level_results is not None:
+            raise ValueError(
+                f"A {mode_label} AnalysisContext must not have "
+                "'lease_level_inputs' or 'lease_level_results' populated."
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

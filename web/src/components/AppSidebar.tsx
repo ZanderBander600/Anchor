@@ -1,5 +1,6 @@
 import { formatCurrency } from '../format';
 import type { Deal } from '../types';
+import { assertNeverMode, operatingModeLabel } from '../operatingMode';
 
 /** Maximum saved deals surfaced in the sidebar's Recent Deals list. The full
  * list always remains one click away in the Deal Library view -- the sidebar
@@ -56,10 +57,24 @@ function IconBuilding() {
  * `AcquisitionTerms` (Detailed) -- read from whichever the deal actually
  * populated, never fabricated for the other mode. This is a read of stored
  * assumptions, not a calculation. */
-function purchasePriceOf(deal: Deal): number {
-  return deal.operating_mode === 'detailed'
-    ? (deal.terms?.purchase_price ?? 0)
-    : (deal.inputs?.purchase_price ?? 0);
+function purchasePriceOf(deal: Deal): number | null {
+  switch (deal.operating_mode) {
+    case 'quick':
+      return deal.inputs?.purchase_price ?? null;
+    case 'detailed':
+      return deal.terms?.purchase_price ?? null;
+    case 'lease_level':
+      // D5.5A: a Lease-Level deal has `terms`, so its purchase price is its
+      // own. Until D5.4 persisted one there was nothing to read and this
+      // returned `null`; reading Quick's `inputs` would have shown a number
+      // from a contract this deal does not populate, which is the substitution
+      // the D5.1B guardrail was written to prevent. `terms` is the shared
+      // `AcquisitionTerms` Detailed reads on the line above -- one contract,
+      // one field, read the same way in both modes.
+      return deal.terms?.purchase_price ?? null;
+    default:
+      return assertNeverMode(deal.operating_mode);
+  }
 }
 
 export interface AppSidebarProps {
@@ -161,7 +176,7 @@ export function AppSidebar({
                   <span className="sidebar-deal-text">
                     <span className="sidebar-deal-name">{deal.name}</span>
                     <span className="sidebar-deal-meta">
-                      {deal.operating_mode === 'detailed' ? 'Detailed' : 'Quick'} ·{' '}
+                      {operatingModeLabel(deal.operating_mode)} ·{' '}
                       {formatCurrency(purchasePriceOf(deal))}
                     </span>
                   </span>

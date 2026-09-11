@@ -239,8 +239,19 @@ def _evidence_payload(context: Any) -> dict[str, Any]:
 
 
 def _deal_story_prompt_block() -> str:
+    """Just the Deal Story section.
+
+    "Everything after the header" was the whole tail until D5.8, which appended
+    the LEASING-CAPITAL and LEASE-LEVEL grounding rules after it. Those are
+    grounding rules for a third mode, not part of the owner surface's spec, and
+    reading them as Deal Story text made this section look like it restated
+    rules it does not mention. The block now ends where they begin.
+    """
+
     prompt = build_system_prompt()
-    return prompt[prompt.index("DEAL STORY (the nested") :]
+    block = prompt[prompt.index("DEAL STORY (the nested") :]
+    appended_rules = block.find("LEASING-CAPITAL RULE")
+    return block if appended_rules == -1 else block[:appended_rules]
 
 
 @pytest.fixture()

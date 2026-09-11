@@ -14,6 +14,7 @@ import type {
 // arithmetic. Avoids a Node `fs`/`url` dependency (this frontend has no
 // Node type definitions wired into its app tsconfig) for a single test.
 import ownerSummarySource from './ownerSummary.ts?raw';
+import { withLfLineEndings } from './testSourceText';
 
 // =============================================================================
 // Fixtures -- every field is a distinct, non-zero value (where the field
@@ -649,7 +650,8 @@ describe('Deal-Context-only difference', () => {
 // =============================================================================
 
 describe('ownerSummary.ts architecture guardrail: no financial formulas', () => {
-  const rawSource = ownerSummarySource;
+  // D5.9: normalised to LF, because the check below splits on "\n".
+  const rawSource = withLfLineEndings(ownerSummarySource);
 
   function stripNonExecutableText(source: string): string {
     return source

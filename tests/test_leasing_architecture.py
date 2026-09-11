@@ -156,8 +156,17 @@ def test_leasing_package_imports_only_stdlib_its_own_modules_and_contracts() -> 
 #: Narrowed from "nothing may" to "exactly these may" -- the ban is not lifted,
 #: it is reduced to its complement, and D4.6B widened that complement by
 #: exactly one named file.
+#: Extended at D5.3 with ``__init__.py``: the analysis package's public facade
+#: re-exports the D5.2 structural parser (and the ``LeaseValidationError`` the
+#: entry point raises) so ``api.py`` can reach them without importing
+#: ``anchor.leasing`` itself -- which is the dependency direction HD-D4-8 forbids
+#: and which the guardrails below still enforce for every other module.
+#:
+#: A re-export, never a copy: the implementation owner stays
+#: ``leasing/parsing.py``, and ``lease_level.py`` is deliberately left
+#: byte-identical rather than made to carry a transport concern.
 _PERMITTED_LEASING_IMPORTERS = frozenset(
-    {"lease_level.py", "lease_level_sensitivity.py", "contracts.py"}
+    {"lease_level.py", "lease_level_sensitivity.py", "contracts.py", "__init__.py"}
 )
 
 
@@ -197,10 +206,17 @@ def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
     """The complement of the guardrail above, stated positively so that a
     fourth leasing consumer cannot appear in a package nobody parametrized.
 
-    Three files, each for a stated reason: the bridge, the envelope it returns,
-    and the D4.6B sensitivity runners that call the bridge once per scenario.
-    ``analysis/sensitivity.py`` and ``analysis/break_even.py`` are deliberately
-    **not** on this list and are byte-identical to their pre-D4.6B state."""
+    Four files, each for a stated reason: the bridge, the envelope it returns,
+    the D4.6B sensitivity runners that call the bridge once per scenario, and --
+    from D5.3 -- the package facade that re-exports the D5.2 parser to the
+    delivery layer. ``analysis/sensitivity.py`` and ``analysis/break_even.py``
+    are deliberately **not** on this list and are byte-identical to their
+    pre-D4.6B state.
+
+    The facade is a re-export only. ``__init__.py`` imports two names and one
+    error class from ``leasing.parsing``/``leasing.validation``; it defines no
+    parsing behaviour, so the leasing layer still has exactly one
+    implementation owner."""
 
     importers = sorted(
         str(source_file.relative_to(_SRC_DIR)).replace("\\", "/")
@@ -215,10 +231,20 @@ def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
     )
 
     assert importers == [
+        "anchor/analysis/__init__.py",
         "anchor/analysis/contracts.py",
         "anchor/analysis/lease_level.py",
         "anchor/analysis/lease_level_sensitivity.py",
     ]
+
+    # The facade re-exports; it does not parse. Anything more than imports and
+    # ``__all__`` entries would make the analysis package a second owner.
+    facade = (_SRC_DIR / "anchor" / "analysis" / "__init__.py").read_text(encoding="utf-8")
+    for forbidden in ("def parse_", "class Parsed", "dataclasses.fields", "get_type_hints"):
+        assert forbidden not in facade, (
+            f"analysis/__init__.py defines {forbidden!r}; it must re-export the "
+            "parser, never reimplement it"
+        )
 
 
 def test_the_envelope_module_imports_types_only() -> None:
@@ -455,12 +481,20 @@ def test_the_rent_module_is_the_only_one_that_touches_rent_fields() -> None:
     ), f"{rent_module} must contain the compound-escalation term"
 
 
-def test_leasing_package_contains_only_the_gate_d4_3_modules() -> None:
+def test_leasing_package_contains_only_its_approved_modules() -> None:
     """D0 Gate D1.0 files, plus D1.1's ``calendar.py``, D1.2's ``rent.py``,
     D1.3's ``aggregation.py``, D2.1's ``market.py``, D2.2/D2.3's
     ``rollover.py``, D2.4's ``leasing_costs.py``, D3.1's ``recoveries.py``
-    (D3 conventions Section 14), D4.1's ``expenses.py`` and D4.3's
-    ``projection.py`` (D4 Section 27.1)."""
+    (D3 conventions Section 14), D4.1's ``expenses.py``, D4.3's
+    ``projection.py`` (D4 Section 27.1), and D5.2's ``parsing.py``.
+
+    **Extended at D5.2, and not weakened.** The inventory is a ledger of
+    deliberate additions, not a freeze -- every module above arrived through a
+    gate that named it. ``parsing.py`` is the structural transport boundary
+    (raw JSON -> frozen contracts); it holds no financial rule, which the
+    guardrails in ``tests/test_d5_2_parsing_architecture.py`` enforce
+    structurally rather than by keeping it out of the package.
+    """
 
     assert {path.name for path in _leasing_source_files()} == {
         "__init__.py",
@@ -470,6 +504,7 @@ def test_leasing_package_contains_only_the_gate_d4_3_modules() -> None:
         "expenses.py",
         "leasing_costs.py",
         "market.py",
+        "parsing.py",
         "projection.py",
         "recoveries.py",
         "rent.py",

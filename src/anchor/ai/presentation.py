@@ -18,10 +18,20 @@ numbers.
 prompts`` needs: it turns one ``AnalysisContext`` into a fully
 JSON-serializable, presentation-formatted evidence payload for the model
 -facing user prompt, branching only on ``context.operating_mode`` to decide
-*which* already-computed fields to include (Quick's ``base_inputs`` vs.
+*which* already-computed fields to include (Quick's ``base_inputs``,
 Detailed's ``base_terms``/``base_detailed_operating_inputs``/
-``operating_projection``) -- never introducing a new calculation for either
-mode. The raw ``AnalysisContext`` (and therefore every raw decimal) remains
+``operating_projection``, or Lease-Level's rent roll, annual operating
+statement, leasing capital, occupancy and exit window) -- never introducing a
+new calculation for any of them.
+
+D5.8 adds the third mode and no arithmetic with it. The Lease-Level sections
+read ``annual_projection`` -- the canonical annual view the shared returns
+engine itself consumed -- rather than re-aggregating the monthly projection
+that produced it, so there is exactly one arithmetic path to every figure the
+model is shown. The full ``12H + 12`` monthly statement is deliberately not
+serialized: everything the model needs from it is already in the annual view
+and the exit window, and sending it would be a second copy of the same
+economics at roughly an order of magnitude more tokens. The raw ``AnalysisContext`` (and therefore every raw decimal) remains
 available unchanged wherever else it is needed -- this module only changes
 what the model is shown, never what Anchor stores or computes.
 """
@@ -30,12 +40,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..analysis.contracts import BreakEvenResult, BreakEvenStatus, TwoWaySensitivityResult
+from ..analysis import ParsedLeaseLevelInputs
+from ..analysis.contracts import (
+    BreakEvenResult,
+    BreakEvenStatus,
+    LeaseLevelAcquisitionResults,
+    TwoWaySensitivityResult,
+)
 from ..contracts import (
     AcquisitionInputs,
     AcquisitionTerms,
     DetailedOperatingInputs,
     OperatingMode,
+    UnsupportedOperatingModeError,
 )
 from ..engine.contracts import AcquisitionResults, OperatingProjection
 from .contracts import AnalysisContext
@@ -75,6 +92,22 @@ _PERCENT_FIELDS: frozenset[str] = frozenset(
         "levered_cash_on_cash_by_year",
         "unlevered_cash_yield_by_year",
         "year_1_debt_yield",
+        # D5.8 -- Lease-Level rates. ``physical_occupancy_at_year_end`` and
+        # ``average_physical_occupancy_over_year`` are two genuinely different
+        # occupancy measures (a snapshot and an average) and are deliberately
+        # named and presented as two, never collapsed into one figure.
+        "physical_occupancy_at_year_end",
+        "average_physical_occupancy_over_year",
+        "credit_loss_pct",
+        "other_income_growth",
+        "recoverable_expense_ratio",
+        "market_rent_growth",
+        "renewal_rent_spread",
+        "successor_escalation_pct",
+        "renewal_lc_pct",
+        "new_lc_pct",
+        "renewal_probability",
+        "escalation_pct",
     }
 )
 _MULTIPLE_FIELDS: frozenset[str] = frozenset(
@@ -135,6 +168,19 @@ _CURRENCY_FIELDS: frozenset[str] = frozenset(
         # Owner Return Metrics V3 Gate A4: a dollar schedule, formatted
         # identically to noi_by_year/capex_by_year above.
         "cumulative_operating_distributions_by_year",
+        # Sprint D Gate D4.5A's below-NOI operating-capital channel, presented
+        # from D5.8 onward -- see the allowlist note below.
+        "tenant_improvements_by_year",
+        "leasing_commissions_by_year",
+        # D5.8 -- the Lease-Level annual operating statement's own dollar
+        # lines, each read verbatim off ``AnnualOperatingProjection``.
+        "contractual_base_rent_by_year",
+        "cash_base_rent_by_year",
+        "free_rent_by_year",
+        "expense_recovery_by_year",
+        "credit_loss_by_year",
+        "fixed_operating_expenses_by_year",
+        "exit_window_leasing_costs",
     }
 )
 _YEAR_FIELDS: frozenset[str] = frozenset(
@@ -144,6 +190,57 @@ _YEAR_FIELDS: frozenset[str] = frozenset(
         # Underwriting V2 Gate 7: whole years of interest-only debt before
         # scheduled principal amortization begins.
         "io_period",
+    }
+)
+
+# D5.8 -- the Lease-Level vocabulary. Four kinds the first two modes never
+# needed, because neither has a rent roll: square feet, dollars per square foot,
+# months of term/downtime/free rent, and a calendar date.
+#
+# Every name below is a field of an already-computed Lease-Level contract. None
+# of them is derived here; they are classified so that the same
+# ``format_metric_value`` that refuses an unknown Quick/Detailed field keeps
+# refusing an unknown Lease-Level one, rather than guessing a convention.
+_AREA_FIELDS: frozenset[str] = frozenset(
+    {
+        "rentable_area_sf",
+        "suite_area_sf",
+        "leased_area_sf",
+        "occupied_area_at_year_end",
+        "vacant_area_at_year_end",
+    }
+)
+_PSF_FIELDS: frozenset[str] = frozenset(
+    {
+        "market_rent_psf",
+        "renewal_rent_psf",
+        "base_rent_psf",
+        "renewal_ti_psf",
+        "new_ti_psf",
+        "expense_stop_psf",
+        "renewal_expense_stop_psf",
+        "new_expense_stop_psf",
+    }
+)
+_MONTH_FIELDS: frozenset[str] = frozenset(
+    {
+        "renewal_term_months",
+        "new_term_months",
+        "renewal_downtime_months",
+        "new_downtime_months",
+        "renewal_free_rent_months",
+        "new_free_rent_months",
+        "downtime_months",
+        "free_rent_months",
+        "initial_lease_up_months",
+    }
+)
+_DATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "analysis_start_date",
+        "lease_start_date",
+        "rent_commencement_date",
+        "lease_expiration_date",
     }
 )
 
@@ -180,12 +277,22 @@ _YEAR_FIELDS: frozenset[str] = frozenset(
 # and every recurring owner-return metric. When D5 gives them a reviewed
 # presentation and the grounding rules to interpret them, both entries come
 # out of this allowlist exactly as Gate A4 removed A2's four.
+#
+# **D5.8 removes them, on exactly those terms.** ``tenant_improvements_by_year``
+# and ``leasing_commissions_by_year`` are now formatted in ``_format_results``
+# like every other ``AcquisitionResults`` field, and the model is given the
+# grounding rules that make them interpretable rather than merely visible: the
+# LEASING-CAPITAL RULE in ``SYSTEM_PROMPT`` states that they sit **below NOI**,
+# reduce owner cash flow, and touch neither NOI, DSCR, debt yield nor exit NOI.
+# Presenting the numbers without that rule was the risk the deferral existed to
+# avoid, and it is the rule -- not the deferral -- that retires it.
+#
+# The allowlist itself stays, and stays empty on purpose: a future field that
+# should not reach the model still has to be named here, with a reason.
 # =============================================================================
 
 INTENTIONALLY_EXCLUDED_INPUT_FIELDS: frozenset[str] = frozenset()
-INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset(
-    {"tenant_improvements_by_year", "leasing_commissions_by_year"}
-)
+INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset()
 INTENTIONALLY_EXCLUDED_TERMS_FIELDS: frozenset[str] = frozenset()
 INTENTIONALLY_EXCLUDED_DETAILED_OPERATING_FIELDS: frozenset[str] = frozenset()
 INTENTIONALLY_EXCLUDED_OPERATING_PROJECTION_FIELDS: frozenset[str] = frozenset()
@@ -245,6 +352,28 @@ def format_multiple(value: float, *, decimals: int = 2) -> str:
     return f"{value:.{decimals}f}x"
 
 
+def format_area(value: float) -> str:
+    """Square feet, grouped, with the unit. Formatting only."""
+
+    return f"{value:,.0f} SF"
+
+
+def format_psf(value: float) -> str:
+    """Dollars per square foot. Formatting only -- never a rate times an area."""
+
+    return f"${value:,.2f}/SF"
+
+
+def format_months(value: float) -> str:
+    """A count of months, carrying its unit so a term is never read as a year
+    count or a dollar figure. Fractional months are real in this model
+    (downtime is not rounded), so a non-integer value keeps one decimal."""
+
+    if float(value).is_integer():
+        return f"{value:,.0f} months"
+    return f"{value:,.1f} months"
+
+
 def format_metric_value(field_name: str, value: float | int | None) -> str:
     """Format one raw value per the presentation convention for
     ``field_name`` (an ``AcquisitionInputs``/``AcquisitionResults``/
@@ -265,6 +394,13 @@ def format_metric_value(field_name: str, value: float | int | None) -> str:
         return format_multiple(value)
     if field_name in _CURRENCY_FIELDS:
         return format_currency(value)
+    # D5.8 -- the Lease-Level kinds.
+    if field_name in _AREA_FIELDS:
+        return format_area(value)
+    if field_name in _PSF_FIELDS:
+        return format_psf(value)
+    if field_name in _MONTH_FIELDS:
+        return format_months(value)
     raise UnknownPresentationFieldError(field_name)
 
 
@@ -563,6 +699,17 @@ def _format_results(results: AcquisitionResults) -> dict[str, Any]:
         "year_1_debt_yield": format_metric_value(
             "year_1_debt_yield", results.year_1_debt_yield
         ),
+        # D4.5A's below-NOI leasing capital, presented from D5.8. Shared by all
+        # three modes, because the channel is the shared engine's: a Quick or
+        # Detailed deal simply carries zeroes here. The rule that stops it being
+        # read as an operating expense is in SYSTEM_PROMPT, and Lease-Level
+        # additionally gets its own labelled section.
+        "tenant_improvements_by_year": _format_tuple(
+            "tenant_improvements_by_year", results.tenant_improvements_by_year
+        ),
+        "leasing_commissions_by_year": _format_tuple(
+            "leasing_commissions_by_year", results.leasing_commissions_by_year
+        ),
     }
 
 
@@ -658,6 +805,429 @@ def _format_break_even_result(result: BreakEvenResult) -> dict[str, Any]:
 
 
 # =============================================================================
+# D5.8 -- Lease-Level formatters
+#
+# Every function below reads one already-computed field off
+# ``ParsedLeaseLevelInputs`` (the analyst's approved assumptions) or
+# ``LeaseLevelAcquisitionResults`` (the authoritative envelope) and formats it.
+# Nothing here sums a series, averages an occupancy, aggregates a month into a
+# year, nets a cost against a revenue line, or derives a return. The annual
+# operating statement the model is shown is ``annual_projection`` verbatim --
+# the same object the returns were computed from -- so a figure the AI Analyst
+# quotes and a figure Anchor rendered on screen cannot disagree.
+# =============================================================================
+
+
+def _format_date(value: object) -> str:
+    """A calendar date as ISO ``YYYY-MM-DD``. Formatting only; no month
+    arithmetic happens anywhere in this module."""
+
+    return str(value)
+
+
+def _format_lease_level_property_inputs(inputs: ParsedLeaseLevelInputs) -> dict[str, Any]:
+    return {
+        "analysis_start_date": _format_date(inputs.property_inputs.analysis_start_date),
+        "rentable_area_sf": format_metric_value(
+            "rentable_area_sf", inputs.property_inputs.rentable_area_sf
+        ),
+    }
+
+
+def _format_lease_level_operating_inputs(inputs: ParsedLeaseLevelInputs) -> dict[str, Any]:
+    """The property-level operating assumptions an analyst approved. The same
+    eleven fields ``LeaseLevelOperatingInputs`` carries, none added."""
+
+    operating = inputs.operating_inputs
+    return {
+        "other_income": format_metric_value("other_income", operating.other_income),
+        "other_income_growth": format_metric_value(
+            "other_income_growth", operating.other_income_growth
+        ),
+        "credit_loss_pct": format_metric_value("credit_loss_pct", operating.credit_loss_pct),
+        "property_taxes": format_metric_value("property_taxes", operating.property_taxes),
+        "insurance": format_metric_value("insurance", operating.insurance),
+        "utilities": format_metric_value("utilities", operating.utilities),
+        "repairs_maintenance": format_metric_value(
+            "repairs_maintenance", operating.repairs_maintenance
+        ),
+        "other_operating_expenses": format_metric_value(
+            "other_operating_expenses", operating.other_operating_expenses
+        ),
+        "management_fee_pct": format_metric_value(
+            "management_fee_pct", operating.management_fee_pct
+        ),
+        "expense_growth": format_metric_value("expense_growth", operating.expense_growth),
+        "recoverable_expense_ratio": format_metric_value(
+            "recoverable_expense_ratio", operating.recoverable_expense_ratio
+        ),
+    }
+
+
+def _format_market_leasing(market: Any) -> dict[str, Any]:
+    """The renewal/new-tenant assumptions behind every rollover in the model.
+
+    Supplied so the model can *discuss* rollover exposure -- renewal
+    probability, downtime, free rent, the TI and LC an assumed rollover costs
+    -- without reconstructing a single lease. Enum members are rendered by
+    value; every number is formatted, none combined.
+    """
+
+    return {
+        "market_rent_psf": format_metric_value("market_rent_psf", market.market_rent_psf),
+        "market_rent_growth": format_metric_value(
+            "market_rent_growth", market.market_rent_growth
+        ),
+        "renewal_probability": format_metric_value(
+            "renewal_probability", market.renewal_probability
+        ),
+        "renewal_rent_psf": format_metric_value("renewal_rent_psf", market.renewal_rent_psf),
+        "renewal_rent_spread": format_metric_value(
+            "renewal_rent_spread", market.renewal_rent_spread
+        ),
+        "renewal_term_months": format_metric_value(
+            "renewal_term_months", market.renewal_term_months
+        ),
+        "renewal_downtime_months": format_metric_value(
+            "renewal_downtime_months", market.renewal_downtime_months
+        ),
+        "renewal_free_rent_months": format_metric_value(
+            "renewal_free_rent_months", market.renewal_free_rent_months
+        ),
+        "renewal_ti_psf": format_metric_value("renewal_ti_psf", market.renewal_ti_psf),
+        "renewal_lc_pct": format_metric_value("renewal_lc_pct", market.renewal_lc_pct),
+        "renewal_lease_type": market.renewal_lease_type.value,
+        "new_term_months": format_metric_value("new_term_months", market.new_term_months),
+        "new_downtime_months": format_metric_value(
+            "new_downtime_months", market.new_downtime_months
+        ),
+        "new_free_rent_months": format_metric_value(
+            "new_free_rent_months", market.new_free_rent_months
+        ),
+        "new_ti_psf": format_metric_value("new_ti_psf", market.new_ti_psf),
+        "new_lc_pct": format_metric_value("new_lc_pct", market.new_lc_pct),
+        "new_lease_type": market.new_lease_type.value,
+        "successor_escalation_pct": format_metric_value(
+            "successor_escalation_pct", market.successor_escalation_pct
+        ),
+        "leasing_commission_method": market.leasing_commission_method.value,
+    }
+
+
+def _format_suite(suite: Any) -> dict[str, Any]:
+    """One suite as the analyst approved it.
+
+    Descriptive, not economic: an identifier, its area, whether it carries its
+    own market-leasing override, and -- for a suite with no lease at the
+    analysis start -- the explicit vacancy strategy that decides whether it is
+    held vacant or leased up, and how long the lease-up takes. That strategy is
+    what makes initial vacancy and future lease-up discussable without
+    reconstructing the leasing chain.
+    """
+
+    vacancy = suite.initial_vacancy
+    return {
+        "suite_id": suite.suite_id,
+        "suite_label": suite.suite_label,
+        "suite_area_sf": format_metric_value("suite_area_sf", suite.suite_area_sf),
+        "market_rent_psf": (
+            format_metric_value("market_rent_psf", suite.market_rent_psf)
+            if suite.market_rent_psf is not None
+            else None
+        ),
+        "has_market_leasing_override": suite.market_leasing_override is not None,
+        "initial_vacancy_strategy": (
+            vacancy.strategy.value if vacancy is not None else None
+        ),
+        "initial_lease_up_months": (
+            format_metric_value("initial_lease_up_months", vacancy.initial_lease_up_months)
+            if vacancy is not None
+            else None
+        ),
+    }
+
+
+def _format_lease(lease: Any) -> dict[str, Any]:
+    """One in-place lease as the analyst approved it: who, where, how much,
+    and -- the field that drives every rollover -- when it expires."""
+
+    return {
+        "lease_id": lease.lease_id,
+        "suite_id": lease.suite_id,
+        "tenant_name": lease.tenant_name,
+        "leased_area_sf": format_metric_value("leased_area_sf", lease.leased_area_sf),
+        "rent_commencement_date": _format_date(lease.rent_commencement_date),
+        "lease_expiration_date": _format_date(lease.lease_expiration_date),
+        "base_rent_psf": format_metric_value("base_rent_psf", lease.base_rent_psf),
+        "escalation_pct": format_metric_value("escalation_pct", lease.escalation_pct),
+        "escalation_basis": lease.escalation_basis.value,
+        "lease_type": lease.lease_type.value,
+    }
+
+
+def _format_rent_roll(inputs: ParsedLeaseLevelInputs) -> dict[str, Any]:
+    """The approved rent roll: the suites, the in-place leases, and how many of
+    each. ``len`` is a count of records, not a financial derivation -- no area,
+    rent or cost is totalled here; the authoritative area totals are
+    ``rentable_area_sf`` above and the occupied/vacant series below."""
+
+    return {
+        "suite_count": len(inputs.suites),
+        "known_lease_count": len(inputs.leases),
+        "suites": tuple(_format_suite(suite) for suite in inputs.suites),
+        "known_leases": tuple(_format_lease(lease) for lease in inputs.leases),
+    }
+
+
+def _format_lease_level_annual_operating(
+    lease_level: LeaseLevelAcquisitionResults,
+) -> dict[str, Any]:
+    """The Lease-Level annual operating statement, in statement order.
+
+    Read straight off ``annual_projection`` -- the canonical annual view, and
+    the same object the shared returns engine consumed. The monthly projection
+    is deliberately *not* re-aggregated here: it already produced these figures,
+    and summing it a second time would create a second arithmetic path for
+    every line the model is about to quote.
+
+    Line order is the operating statement's own, so the model reads revenue,
+    then recoveries, then expenses, then NOI -- and finds TI and LC nowhere
+    among them (they are their own section, below NOI, further down).
+    """
+
+    annual = lease_level.annual_projection
+    return {
+        "contractual_base_rent_by_year": _format_tuple(
+            "contractual_base_rent_by_year", annual.contractual_base_rent_by_year
+        ),
+        "free_rent_by_year": _format_tuple("free_rent_by_year", annual.free_rent_by_year),
+        "cash_base_rent_by_year": _format_tuple(
+            "cash_base_rent_by_year", annual.cash_base_rent_by_year
+        ),
+        "expense_recovery_by_year": _format_tuple(
+            "expense_recovery_by_year", annual.expense_recovery_by_year
+        ),
+        "other_income_by_year": _format_tuple(
+            "other_income_by_year", annual.other_income_by_year
+        ),
+        "credit_loss_by_year": _format_tuple(
+            "credit_loss_by_year", annual.credit_loss_by_year
+        ),
+        "effective_gross_income_by_year": _format_tuple(
+            "effective_gross_income_by_year", annual.effective_gross_income_by_year
+        ),
+        "property_taxes_by_year": _format_tuple(
+            "property_taxes_by_year", annual.property_taxes_by_year
+        ),
+        "insurance_by_year": _format_tuple("insurance_by_year", annual.insurance_by_year),
+        "utilities_by_year": _format_tuple("utilities_by_year", annual.utilities_by_year),
+        "repairs_maintenance_by_year": _format_tuple(
+            "repairs_maintenance_by_year", annual.repairs_maintenance_by_year
+        ),
+        "other_operating_expenses_by_year": _format_tuple(
+            "other_operating_expenses_by_year", annual.other_operating_expenses_by_year
+        ),
+        "fixed_operating_expenses_by_year": _format_tuple(
+            "fixed_operating_expenses_by_year", annual.fixed_operating_expenses_by_year
+        ),
+        "management_fee_by_year": _format_tuple(
+            "management_fee_by_year", annual.management_fee_by_year
+        ),
+        "total_operating_expenses_by_year": _format_tuple(
+            "total_operating_expenses_by_year", annual.total_operating_expenses_by_year
+        ),
+        "noi_by_year": _format_tuple("noi_by_year", annual.noi_by_year),
+        "going_in_cap_rate": format_metric_value(
+            "going_in_cap_rate", annual.going_in_cap_rate
+        ),
+    }
+
+
+def _format_lease_level_leasing_costs(
+    lease_level: LeaseLevelAcquisitionResults,
+) -> dict[str, Any]:
+    """Tenant Improvements and Leasing Commissions -- the owner's leasing
+    capital, presented as its own section precisely so it is never read as an
+    operating expense.
+
+    Both series are read off ``annual_projection``; the classification note
+    travels with them so the numbers and their meaning cannot be separated by a
+    model skimming section names. The rule it states is the shipped financial
+    convention, not a presentation choice: TI and LC sit below NOI in every
+    month of the model, so NOI, DSCR, debt yield and exit NOI structurally
+    cannot contain them.
+    """
+
+    annual = lease_level.annual_projection
+    return {
+        "classification": "below_noi_owner_leasing_capital",
+        "tenant_improvements_by_year": _format_tuple(
+            "tenant_improvements_by_year", annual.tenant_improvements_by_year
+        ),
+        "leasing_commissions_by_year": _format_tuple(
+            "leasing_commissions_by_year", annual.leasing_commissions_by_year
+        ),
+        "note": (
+            "Tenant Improvements and Leasing Commissions are owner leasing "
+            "capital costs incurred BELOW net operating income. They reduce "
+            "owner cash flow and therefore the equity multiple and both IRRs. "
+            "They are NOT operating expenses: they are not in "
+            "total_operating_expenses_by_year, they do not reduce NOI, they do "
+            "not affect DSCR or debt yield, and they do not enter exit NOI. "
+            "They may fall in any hold year, including the final one."
+        ),
+    }
+
+
+def _format_lease_level_occupancy(
+    lease_level: LeaseLevelAcquisitionResults,
+) -> dict[str, Any]:
+    """Two different occupancy measures, kept two.
+
+    ``physical_occupancy_at_year_end`` is a snapshot on the last day of each
+    hold year; ``average_physical_occupancy_over_year`` is the average of that
+    year's twelve monthly values. A year with a mid-year rollover can differ
+    sharply between them, which is exactly the trajectory an analyst wants
+    described -- so they are labelled separately and never merged into one
+    "occupancy" figure.
+    """
+
+    annual = lease_level.annual_projection
+    return {
+        "physical_occupancy_at_year_end": _format_tuple(
+            "physical_occupancy_at_year_end", annual.physical_occupancy_at_year_end
+        ),
+        "average_physical_occupancy_over_year": _format_tuple(
+            "average_physical_occupancy_over_year",
+            annual.average_physical_occupancy_over_year,
+        ),
+        "occupied_area_at_year_end": _format_tuple(
+            "occupied_area_at_year_end", annual.occupied_area_at_year_end
+        ),
+        "vacant_area_at_year_end": _format_tuple(
+            "vacant_area_at_year_end", annual.vacant_area_at_year_end
+        ),
+        "rentable_area_sf": format_metric_value(
+            "rentable_area_sf", lease_level.monthly_projection.rentable_area_sf
+        ),
+        "note": (
+            "physical_occupancy_at_year_end is a point-in-time snapshot at each "
+            "hold year's end; average_physical_occupancy_over_year is that "
+            "year's average across its twelve months. They are two different "
+            "measures -- cite whichever you mean by name, and never present one "
+            "as the other or blend them into a single occupancy figure."
+        ),
+    }
+
+
+def _format_lease_level_exit(lease_level: LeaseLevelAcquisitionResults) -> dict[str, Any]:
+    """The forward twelve-month exit valuation window.
+
+    The single most misreadable thing about this mode, so it is stated rather
+    than implied: months ``12H+1`` through ``12H+12`` are a **valuation
+    window**, not a hold year. The investor does not own the asset through
+    them; they exist so the terminal cap rate is applied to a forward NOI
+    rather than to a trailing one.
+
+    ``exit_window_leasing_costs`` is that window's TI plus LC. It is a
+    **disclosed diagnostic and is deducted from nothing** -- not from exit NOI
+    (which structurally cannot contain leasing capital), not from exit value,
+    not from net sale proceeds. It is here as rollover context for an analyst
+    judging what a buyer inherits, and the note says so, because a model shown
+    a cost beside a valuation will otherwise subtract it.
+    """
+
+    annual = lease_level.annual_projection
+    results = lease_level.results
+    return {
+        "window": "months 12H+1 through 12H+12, immediately after the hold period",
+        "window_note": (
+            "This is a VALUATION window, not an additional hold year. The "
+            "investor does not own or operate the property during these twelve "
+            "months and receives no cash flow from them. They exist only so the "
+            "exit cap rate is applied to a forward-looking twelve-month NOI. "
+            "Never describe them as Hold Year H+1, never add them to the hold "
+            "period, and never treat their NOI as owner cash flow."
+        ),
+        "exit_noi": format_metric_value("exit_noi", annual.exit_noi),
+        "exit_value": format_metric_value("exit_value", results.exit_value),
+        "disposition_costs": format_metric_value(
+            "disposition_costs", results.disposition_costs
+        ),
+        "net_sale_proceeds": format_metric_value(
+            "net_sale_proceeds", results.net_sale_proceeds
+        ),
+        "exit_window_leasing_costs": format_metric_value(
+            "exit_window_leasing_costs", annual.exit_window_leasing_costs
+        ),
+        "exit_window_leasing_costs_note": (
+            "Disclosed as rollover audit context only. Tenant Improvements and "
+            "Leasing Commissions falling in the valuation window are NOT "
+            "deducted from exit NOI, exit value or net sale proceeds, and were "
+            "not deducted anywhere upstream either -- leasing capital sits "
+            "below NOI in every month, so exit NOI never contained it. Do not "
+            "subtract this figure from any exit number."
+        ),
+    }
+
+
+def _lease_level_sensitivity_availability() -> dict[str, Any]:
+    """What ``sensitivities=None`` means for this mode, said explicitly.
+
+    Absence of a standardized bundle is not absence of the capability. Anchor
+    ships analyst-directed one-way and two-way Lease-Level sensitivity (D5.7);
+    what it does not have is Quick's and Detailed's fixed preset package, so
+    there is no standardized bundle to attach to this context. A model left to
+    infer the reason for a missing section will report the capability as
+    missing, so the reason is supplied.
+    """
+
+    return {
+        "standardized_bundle_supplied": False,
+        "note": (
+            "No standardized sensitivity bundle was supplied with this "
+            "analysis. This does NOT mean sensitivity analysis is unsupported "
+            "or unavailable for a Lease-Level deal: Anchor supports "
+            "analyst-directed one-way and two-way sensitivity over Lease-Level "
+            "assumptions, run on demand with the analyst's own chosen values. "
+            "Unlike Quick and Detailed, this mode has no fixed preset package, "
+            "so no precomputed bundle accompanies this context. State that no "
+            "sensitivity results were supplied here; never state that "
+            "sensitivity cannot be run."
+        ),
+    }
+
+
+def _break_even_availability_note() -> dict[str, Any]:
+    """What ``break_even=None`` means for this mode.
+
+    Deliberately **not** named ``_lease_level_break_even_*``. Guardrail G35
+    (D4.6B) forbids any definition whose name pairs "lease_level" with
+    "break_even", because such a name is how a Lease-Level break-even
+    implementation would arrive. This function is the opposite of one -- it
+    reports that no break-even exists -- and its name says so rather than
+    tripping, or widening, a guardrail that is still doing its job.
+
+    Break-even is genuinely not part of the Lease-Level model. ``None`` is the
+    correct and complete answer; a zero, a placeholder threshold or a
+    "not enough data" result would each be a fabrication.
+    """
+
+    return {
+        "supplied": False,
+        "note": (
+            "Break-even analysis was not supplied for this Lease-Level "
+            "analysis. Do not state, estimate or imply any break-even "
+            "threshold, and do not treat its absence as a zero, a failure or a "
+            "result that could not be computed. In break_even_analysis, say "
+            "plainly that break-even was not supplied for this analysis and "
+            "discuss downside using the supplied operating, coverage and "
+            "return evidence instead."
+        ),
+    }
+
+
+# =============================================================================
 # Top-level payload
 # =============================================================================
 
@@ -730,6 +1300,69 @@ def _format_detailed_break_even(context: AnalysisContext) -> dict[str, Any]:
     }
 
 
+def _add_quick_sections(payload: dict[str, Any], context: AnalysisContext) -> None:
+    """The Quick-mode sections of the presentation payload, extracted at D5.1A
+    so ``build_presentation_payload`` can resolve its mode *before* formatting
+    anything. Behavior is unchanged."""
+
+    assert context.inputs is not None
+    payload["base_inputs"] = _format_inputs(context.inputs)
+    payload["sensitivities"] = _format_quick_sensitivities(context)
+    payload["break_even"] = _format_quick_break_even(context)
+
+
+def _add_detailed_sections(payload: dict[str, Any], context: AnalysisContext) -> None:
+    """The Detailed-mode sections, extracted at D5.1A alongside
+    ``_add_quick_sections``. Behavior is unchanged."""
+
+    assert context.terms is not None
+    assert context.detailed_operating_inputs is not None
+    assert context.operating_projection is not None
+    payload["base_terms"] = _format_terms(context.terms)
+    payload["base_detailed_operating_inputs"] = _format_detailed_operating_inputs(
+        context.detailed_operating_inputs
+    )
+    payload["operating_projection"] = _format_operating_projection(
+        context.operating_projection
+    )
+    payload["sensitivities"] = _format_detailed_sensitivities(context)
+    payload["break_even"] = _format_detailed_break_even(context)
+
+
+def _add_lease_level_sections(payload: dict[str, Any], context: AnalysisContext) -> None:
+    """The Lease-Level sections (D5.8).
+
+    Nine sections, each named for what an analyst would call it, and each read
+    off one already-computed contract. The two availability sections are not
+    padding: they are the only way a reader of this payload can tell a mode
+    without a standardized sensitivity bundle apart from a mode where
+    sensitivity does not exist -- a distinction Lease-Level depends on, because
+    only one of those two is true of it.
+    """
+
+    assert context.terms is not None
+    assert context.lease_level_inputs is not None
+    assert context.lease_level_results is not None
+    lease_level_inputs = context.lease_level_inputs
+    lease_level = context.lease_level_results
+
+    payload["base_terms"] = _format_terms(context.terms)
+    payload["property"] = _format_lease_level_property_inputs(lease_level_inputs)
+    payload["base_lease_level_operating_inputs"] = _format_lease_level_operating_inputs(
+        lease_level_inputs
+    )
+    payload["market_leasing_assumptions"] = _format_market_leasing(
+        lease_level_inputs.market_leasing
+    )
+    payload["rent_roll"] = _format_rent_roll(lease_level_inputs)
+    payload["annual_operating_projection"] = _format_lease_level_annual_operating(lease_level)
+    payload["leasing_and_capital_costs"] = _format_lease_level_leasing_costs(lease_level)
+    payload["occupancy"] = _format_lease_level_occupancy(lease_level)
+    payload["exit_window"] = _format_lease_level_exit(lease_level)
+    payload["sensitivity_availability"] = _lease_level_sensitivity_availability()
+    payload["break_even_availability"] = _break_even_availability_note()
+
+
 def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
     """Return the complete presentation-formatted, JSON-serializable
     evidence payload for ``context`` -- currency in $/K/M, rates/IRRs as
@@ -768,6 +1401,33 @@ def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
     deterministic data.
     """
 
+    # D5.1A: mode dispatch runs FIRST, before any payload is assembled.
+    #
+    # Previously ``if QUICK: ... else: <Detailed sections>``, so a third mode
+    # would have reached the Detailed arm and tripped an ``assert`` -- or, had
+    # those asserts been absent, been described to the model under Detailed's
+    # section names. Presenting one mode's economics under another mode's labels
+    # is a grounding failure, not a mislabelling.
+    #
+    # Resolving the section builder up front (rather than branching at the end)
+    # means an unsupported mode is refused before a single field is formatted.
+    # That matters beyond tidiness: the shared ``base_results``/``hurdle_*``
+    # block above assumes fields a mode this function cannot serve is not
+    # obliged to populate, so formatting first would surface an unsupported mode
+    # as an ``AttributeError`` from deep inside a formatter instead of as the
+    # explicit refusal it is.
+    match context.operating_mode:
+        case OperatingMode.QUICK:
+            add_mode_sections = _add_quick_sections
+        case OperatingMode.DETAILED:
+            add_mode_sections = _add_detailed_sections
+        case OperatingMode.LEASE_LEVEL:
+            add_mode_sections = _add_lease_level_sections
+        case _:
+            raise UnsupportedOperatingModeError(
+                context.operating_mode, operation="build_presentation_payload"
+            )
+
     payload: dict[str, Any] = {
         "operating_mode": context.operating_mode.value,
         "base_results": _format_results(context.results),
@@ -787,23 +1447,6 @@ def build_presentation_payload(context: AnalysisContext) -> dict[str, Any]:
     if context.deal_context is not None and context.deal_context.strip():
         payload["deal_context"] = context.deal_context.strip()
 
-    if context.operating_mode is OperatingMode.QUICK:
-        assert context.inputs is not None
-        payload["base_inputs"] = _format_inputs(context.inputs)
-        payload["sensitivities"] = _format_quick_sensitivities(context)
-        payload["break_even"] = _format_quick_break_even(context)
-    else:
-        assert context.terms is not None
-        assert context.detailed_operating_inputs is not None
-        assert context.operating_projection is not None
-        payload["base_terms"] = _format_terms(context.terms)
-        payload["base_detailed_operating_inputs"] = _format_detailed_operating_inputs(
-            context.detailed_operating_inputs
-        )
-        payload["operating_projection"] = _format_operating_projection(
-            context.operating_projection
-        )
-        payload["sensitivities"] = _format_detailed_sensitivities(context)
-        payload["break_even"] = _format_detailed_break_even(context)
+    add_mode_sections(payload, context)
 
     return payload

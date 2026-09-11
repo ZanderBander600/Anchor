@@ -90,6 +90,11 @@
   --sidebar-width-narrow: 200px;
   --sidebar-width-rail: 64px;
   --workspace-max: 1360px;
+  /* D5.5E: the wider region a rent roll earns. Scalar assumption forms stay
+     at `--workspace-max`, where a column of labelled inputs is comfortable
+     to read; a nine-column grid is not, and Human Pass #1 found it scrolling
+     horizontally while hundreds of pixels sat unused beside it. */
+  --workspace-wide: 1800px;
 
   color-scheme: light;
 }
@@ -2051,6 +2056,12 @@ body {
   margin: 0 auto;
 }
 
+/* Opted into by the Lease-Level Underwrite panel alone. Quick and Detailed
+   never receive it, so their layout is untouched. */
+.workspace-panel-wide {
+  max-width: var(--workspace-wide);
+}
+
 .workspace-panel-head {
   margin-bottom: var(--sp-5);
 }
@@ -3199,4 +3210,1072 @@ body {
   .workspace-panel-fill .underwrite-tab-panel:not([hidden]) {
     justify-content: flex-start;
   }
+}
+
+/* ==========================================================================
+   D5.5A -- Lease-Level workspace.
+
+   Additive only. Nothing above is edited: the workspace reuses the existing
+   `.underwrite`, `.assumption-*` and `.field-*` rules wholesale, so Quick and
+   Detailed render byte-identically to before. What is new here is the inline
+   field error (available to every mode, used so far only by Lease-Level) and
+   two small Lease-Level-specific blocks.
+   ========================================================================== */
+
+/* The backend's message for one field, shown under the input it names.
+   `role="alert"` carries it to assistive technology; the input points at it
+   with `aria-describedby`. */
+.field-error {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--color-negative);
+}
+
+.field-input[aria-invalid='true'] {
+  border-color: var(--color-negative);
+}
+
+.field-input[aria-invalid='true']:focus {
+  border-color: var(--color-negative);
+  box-shadow: 0 0 0 3px rgba(167, 43, 43, 0.12);
+}
+
+/* Standing guidance under a section heading -- never an error, never a
+   calculated value. */
+.field-hint {
+  margin: 0 0 var(--sp-2);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  max-width: 62ch;
+}
+
+/* Issues the workspace could not anchor to a field: suite and lease paths
+   until D5.5B builds the rows, and whole-submission issues that belong to no
+   single input. Listed rather than dropped. */
+.lease-level-issue-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.lease-level-issue-list code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.82em;
+  opacity: 0.85;
+}
+
+/* Rent-roll counts. A count of loaded rows, not a financial total: no area,
+   rent or occupancy figure is computed anywhere in this workspace. */
+.lease-level-roll-counts {
+  display: flex;
+  gap: var(--sp-4);
+  margin: 0 0 var(--sp-2);
+}
+
+.lease-level-roll-counts div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.lease-level-roll-counts dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.lease-level-roll-counts dd {
+  margin: 0;
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+/* ==========================================================================
+   D5.5B -- the rent roll.
+
+   Additive only. One primary grid, one row per suite, plus the advanced
+   editor beside it. Nothing above is edited: Quick and Detailed render
+   byte-identically to before.
+   ========================================================================== */
+
+.rent-roll-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* Area reconciliation: the D5.0 display-only carve-out. Styled as an entry
+   aid, deliberately not as a validation result -- the backend owns that. */
+.area-reconciliation {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  padding: var(--sp-3);
+}
+
+.area-reconciliation-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+  margin: 0;
+}
+
+.area-reconciliation-figures div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.area-reconciliation-figures dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.area-reconciliation-figures dd {
+  margin: 0;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.area-reconciliation-note {
+  margin: var(--sp-2) 0 0;
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+
+.area-reconciliation-note-warn {
+  color: var(--color-negative);
+}
+
+.rent-roll-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.rent-roll-table th[scope='col'] {
+  text-align: left;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 2px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.rent-roll-table td,
+.rent-roll-table th[scope='row'] {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--color-divider);
+  vertical-align: top;
+  font-weight: 400;
+  text-align: left;
+}
+
+/* The suite identifier stays put while the rest of the row scrolls. */
+.rent-roll-table th[scope='row'] {
+  position: sticky;
+  left: 0;
+  background: var(--color-surface);
+  z-index: 1;
+}
+
+.rent-roll-row-error th[scope='row'] {
+  background: var(--danger-soft);
+}
+
+.rent-roll-input {
+  width: 100%;
+  min-width: 7rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  font-size: 0.85rem;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.rent-roll-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(22, 50, 79, 0.12);
+}
+
+.rent-roll-input[aria-invalid='true'] {
+  border-color: var(--color-negative);
+}
+
+.rent-roll-empty {
+  color: var(--color-text-muted);
+}
+
+/* Occupied / vacant. The word is always rendered, so the state is never
+   carried by colour alone. */
+.status-pill {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.status-occupied {
+  background: var(--color-positive-bg);
+  border-color: #b9e2c6;
+  color: var(--color-positive);
+}
+
+.status-vacant {
+  background: var(--color-surface-muted, #f1f2f4);
+  color: var(--color-text-muted);
+}
+
+.status-pill:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.rent-roll-actions {
+  white-space: nowrap;
+}
+
+.rent-roll-flag {
+  display: inline-block;
+  margin-left: 0.3rem;
+  color: var(--color-negative);
+  font-weight: 700;
+}
+
+.rent-roll-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin-top: var(--sp-3);
+}
+
+.rent-roll-note {
+  margin: 0;
+  max-width: 52ch;
+}
+
+/* The advanced editor. A panel beside the grid rather than a modal: entering
+   thirty suites through five modals apiece is sixty open/save cycles. */
+.suite-editor {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.suite-editor-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  border-bottom: 1px solid var(--color-divider);
+  padding-bottom: var(--sp-2);
+}
+
+.suite-editor-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.suite-editor-subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.suite-editor-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.suite-editor-section-title {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.suite-editor-override-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.field-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.field-with-action {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.field-action {
+  white-space: nowrap;
+}
+
+.field-hint-inline {
+  margin: 0;
+  max-width: none;
+}
+
+/* D5.5D -- issues the drawer owns but cannot anchor to a control.
+   Reuses `.error-banner`; the lead line only explains why they are here. */
+.suite-editor-banner-lead {
+  margin: 0 0 0.4rem;
+  font-size: 0.82rem;
+}
+
+/* ==========================================================================
+   D5.5E -- desktop space utilisation.
+
+   The rent roll widens; the scalar assumption forms deliberately do not. The
+   asymmetry is the point: a nine-column grid wants the desk, a column of
+   labelled inputs wants a readable measure.
+   ========================================================================== */
+
+/* Inside the widened Lease-Level panel, the four scalar sections stay at the
+   normal readable width rather than stretching with the grid. */
+.lease-level-scalar-panel {
+  max-width: var(--workspace-max);
+}
+
+/* Cell inputs fill the width their column is given instead of demanding a
+   uniform 7rem each -- which is what forced the table to overflow even on a
+   wide desktop, and what clipped the Delete action. */
+.rent-roll-input {
+  min-width: 0;
+  width: 100%;
+}
+
+.rent-roll-table {
+  table-layout: fixed;
+}
+
+/* Column widths sized to their content: identifiers and enums stay compact,
+   free text gets the room. Percentages of the table, so the grid stays fluid
+   rather than pinned to a pixel measurement that only suits one screen. */
+.rent-roll-col-suite {
+  width: 9%;
+}
+.rent-roll-col-area {
+  width: 9%;
+}
+.rent-roll-col-status {
+  width: 9%;
+}
+.rent-roll-col-tenant {
+  width: 18%;
+}
+.rent-roll-col-expiry {
+  width: 13%;
+}
+.rent-roll-col-rent {
+  width: 10%;
+}
+.rent-roll-col-type {
+  width: 12%;
+}
+.rent-roll-col-market-rent {
+  width: 11%;
+}
+.rent-roll-col-actions {
+  width: 9%;
+}
+
+/* The sticky suite column needs an opaque background and a visible edge, or
+   the cells scrolling beneath it read as overlapping it. */
+.rent-roll-table thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--color-surface);
+}
+
+.rent-roll-table th[scope='row'],
+.rent-roll-table thead th:first-child {
+  box-shadow: 1px 0 0 var(--color-divider);
+}
+
+/* Details and Delete sit side by side and must both stay legible. */
+.rent-roll-actions {
+  display: flex;
+  gap: 0.25rem;
+  align-items: flex-start;
+}
+
+.rent-roll-actions .btn {
+  padding-left: 0.4rem;
+  padding-right: 0.4rem;
+}
+
+/* The drawer uses the same widened region, but its own controls keep a sane
+   measure -- the goal is to use blank page space, not to grow input boxes. */
+.suite-editor .assumption-field-grid {
+  max-width: var(--workspace-max);
+}
+
+@media (max-width: 1279px) {
+  /* Below a comfortable desktop the grid returns to its natural widths and
+     scrolls horizontally, which is the right fallback rather than a redesign. */
+  .rent-roll-table {
+    table-layout: auto;
+  }
+
+  .rent-roll-input {
+    min-width: 7rem;
+  }
+}
+
+/* ==========================================================================
+   D5.6 -- Lease-Level results.
+
+   Institutional density: line items as rows, periods as columns, numbers
+   right-aligned, a strong NOI line, and section bands that group revenue from
+   expenses without a card around every figure.
+   ========================================================================== */
+
+.lease-level-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--sp-4);
+}
+
+.lease-level-metric-card {
+  min-width: 0;
+}
+
+.lease-level-metric-grid {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.lease-level-metric dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.lease-level-metric dd {
+  margin: 0.1rem 0 0;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+/* The three figures an analyst reads first. */
+.lease-level-metric-emphasis dd {
+  font-size: 1.4rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.lease-level-metric-note {
+  margin: 0.2rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  max-width: 42ch;
+}
+
+.lease-level-statement-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-2);
+}
+
+.lease-level-statement-head .card-title {
+  margin: 0;
+}
+
+/* Line-item labels stay put while the periods scroll. A monthly statement is
+   96 columns wide for a seven-year hold; without this the analyst loses which
+   row they are reading two screens in. */
+.lease-level-statement-table th[scope='row'] {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--color-surface);
+  text-align: left;
+  font-weight: 400;
+  white-space: nowrap;
+  box-shadow: 1px 0 0 var(--color-divider);
+}
+
+/* The corner cell, named rather than positional: with the D5.6A period band
+   the head has two rows, and `thead th:first-child` would also have caught the
+   first month column and pinned it to the left edge. */
+/* Qualified with the table class deliberately. `.cash-flow-table th` sets
+   `text-align: right` -- right for a column of figures, wrong for a cell
+   holding a word -- and at (0,1,1) it outranks a bare class at (0,1,0). Every
+   label cell in this table therefore names the table too. */
+.lease-level-statement-table th.lease-level-statement-corner {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: var(--color-surface);
+  text-align: left;
+  vertical-align: bottom;
+  box-shadow: 1px 0 0 var(--color-divider);
+}
+
+/* One width for the label column, declared once.
+
+   The phase labels below stick at exactly this offset, so the two must never
+   drift: a hard-coded `left` that disagreed with the real column width would
+   slide the label under the line items or leave a gap beside them. Wide enough
+   for the longest label the statement has ("Physical Occupancy at Year End")
+   without wrapping. */
+.lease-level-statement-table {
+  --ll-label-col: 17rem;
+}
+
+.lease-level-statement-corner,
+.lease-level-statement-table th[scope='row'] {
+  width: var(--ll-label-col);
+  min-width: var(--ll-label-col);
+}
+
+.lease-level-statement-table td {
+  white-space: nowrap;
+}
+
+/* A section band, not a card: it separates revenue from expenses without
+   turning every group into a panel.
+
+   The cell is not sticky. It spans every column, so it has nowhere to slide --
+   a sticky box is clamped to its containing block, and here the two are the
+   same width. The label inside it is what moves. */
+.lease-level-statement-table th[scope='rowgroup'] {
+  text-align: left;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  background: var(--color-surface-muted, #f1f2f4);
+  padding: 0.4rem 0.75rem;
+  border-top: 1px solid var(--color-border);
+  box-shadow: none;
+}
+
+/* Sticky to the visible table, not to a span within it: a section applies to
+   every column, so its title should stay readable wherever the analyst has
+   scrolled to. Otherwise the band stays and the words leave, and the reader
+   gets an unexplained empty stripe.
+
+   `left: 0` puts it in the line-item column, which is where the section it
+   names is read from. That is a different scope from the phase labels, which
+   stick at `--ll-label-col` because they describe columns rather than rows --
+   the two must not be given the same offset.
+
+   Opaque, so nothing scrolls through it, and above the cells it passes over. */
+.lease-level-statement-section-label {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: inline-block;
+  background: var(--color-surface-muted, #f1f2f4);
+  padding-right: 0.75rem;
+}
+
+/* Net operating income is the line the whole statement builds to, and it is
+   not part of the expense block above it. It carries no section band -- the row
+   names itself, and a band repeating the words was the duplication D5.6A
+   removed -- so the separation has to come from the row.
+
+   Rules above and below, a tint, more air and a larger face together read as a
+   section of one line rather than as the last row of Operating Expenses. */
+/* Net operating income: a ruled subtotal, the way an underwriting model draws
+   one, not a shaded panel.
+
+   The fill is gone. A tint across the row -- and a stronger one behind the
+   label -- read as a selected row rather than as a total, and the darker label
+   cell made it worse by looking like a highlighted cell in a spreadsheet. What
+   carries the emphasis instead is what carries it on paper: a heavy rule above,
+   a light one below, bold figures, and more air above the line than below it,
+   so the row reads as closing the block above rather than opening the one
+   below. */
+.lease-level-statement-noi th,
+.lease-level-statement-noi td {
+  font-weight: 700;
+  font-size: 0.9rem;
+  padding-top: 0.85rem;
+  padding-bottom: 0.45rem;
+  border-top: 2px solid var(--color-accent);
+  border-bottom: 1px solid var(--color-border);
+  background: none;
+}
+
+/* The label in the accent colour, and nothing else: no fill, so the sticky
+   cell keeps the plain opaque surface it needs and matches the rest of the
+   row exactly. */
+.lease-level-statement-table tr.lease-level-statement-noi th[scope='row'] {
+  background: var(--color-surface);
+  color: var(--color-accent);
+  letter-spacing: 0.01em;
+  /* Restated here because `th[scope='row']` sets `font-weight: 400` for the
+     ordinary line items at (0,2,1), which outranks the NOI rule's (0,1,1). The
+     label was rendering at normal weight while its own figures were bold. */
+  font-weight: 700;
+}
+
+/* A little air under the total before the next section opens. */
+.lease-level-statement-standalone + .lease-level-statement-group th[scope='rowgroup'] {
+  padding-top: 0.85rem;
+}
+
+/* Contra revenue -- free rent and credit loss. They sit among positives with
+   no heading to say they come off, so they are shown the way they behave: a
+   leading minus, and red. The "Less:" label stays, because colour is the
+   weakest of the three cues and the first to be lost. */
+.lease-level-statement-contra th[scope='row'],
+.lease-level-statement-contra td {
+  color: var(--color-negative);
+}
+
+/* ---------------------------------------------------------------------------
+   D5.6A -- hold period vs the Forward 12 valuation window.
+
+   The canonical monthly projection runs twelve months past the sale. Those
+   months are real forecast, not another year of ownership, so they are marked
+   as different in purpose rather than dimmed as if they were invalid.
+
+   Three cues, deliberately, because no one of them survives every way of
+   reading the table: a textual band header (which is what a screen reader
+   gets), a full-height rule at the boundary (visible while scrolling
+   vertically), and a faint tint across the forward columns (visible at any
+   horizontal scroll position, including when the boundary itself is off
+   screen).
+   --------------------------------------------------------------------------- */
+
+.lease-level-statement-table th.lease-level-statement-period {
+  position: relative;
+  /* Leading edge, not centred and not trailing. Without the table qualifier
+     this lost to `.cash-flow-table th` and the phase name drifted to the far
+     end of its span -- so "Forward 12 Months" sat over the last month of the
+     window rather than the first. */
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-muted, #f1f2f4);
+  display: table-cell;
+}
+
+/* The phase label sits at the left edge of its own band and travels with the
+   scroll, so an analyst three years into a 72-column table still knows whether
+   they are in the hold period or the valuation window.
+
+   It stops at the next phase for free: a sticky element cannot leave its
+   containing block, and the containing block here is the band cell. So the
+   Hold Period label slides as far as the sale and then goes with its band,
+   rather than crossing into the Forward 12 columns and mislabelling them.
+
+   Opaque, because on the last stretch of the hold band it slides over the
+   "Sale / Hold End" marker and needs to read as a layer rather than a
+   collision. */
+.lease-level-statement-period-label {
+  position: sticky;
+  left: var(--ll-label-col);
+  z-index: 1;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding-right: 0.75rem;
+  /* Matches the band it sits in, stated rather than inherited so the layering
+     does not depend on which of the two bands the label belongs to. */
+  background: var(--color-surface-muted, #f1f2f4);
+}
+
+.lease-level-statement-period-note {
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--color-text-muted);
+}
+
+/* Sits at the right-hand edge of the hold band -- which is the boundary -- so
+   the marker lands on the sale without a column of its own. */
+.lease-level-statement-sale {
+  float: right;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  padding-left: 1.5rem;
+}
+
+.lease-level-statement-forward {
+  background: var(--color-surface-muted, #f1f2f4);
+}
+
+.lease-level-statement-table td.lease-level-statement-forward {
+  background: color-mix(in srgb, var(--color-surface-muted, #f1f2f4) 55%, transparent);
+}
+
+/* The sale itself. A rule the full height of the table, on the first forward
+   month, so the boundary is unmistakable however far down the analyst has
+   scrolled. */
+.lease-level-statement-boundary {
+  border-left: 3px solid var(--color-text-muted);
+}
+
+/* The row labels sit above the tinted columns as they scroll past. */
+.lease-level-statement-table th[scope='row'] {
+  z-index: 2;
+}
+
+/* -------------------------------------------------------------------------
+   D5.7 -- the Lease-Level sensitivity workspace.
+
+   Institutional underwriting furniture, not a new visual language: the same
+   navy/white palette, the same spacing scale, the same `.field` inputs and the
+   same `.sensitivity-table` the Quick and Detailed matrices already use. The
+   builder is a dense strip of controls above a dense table, because that is
+   how an analyst reads a scenario grid.
+   ------------------------------------------------------------------------- */
+
+.lease-level-sensitivity {
+  gap: var(--sp-5);
+}
+
+.sensitivity-builder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.sensitivity-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+
+.sensitivity-select {
+  min-width: 220px;
+}
+
+/* Each axis of a two-way grid is one bordered block, so "which values are the
+   rows" is answered by the layout rather than by reading labels. */
+.sensitivity-axis {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.sensitivity-axis-title {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-candidates {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.sensitivity-candidates-legend {
+  padding: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-candidate-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.sensitivity-candidate {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+
+.sensitivity-candidate-affix {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-candidate-input {
+  width: 6.5rem;
+  border: none;
+  background: transparent;
+  padding: var(--sp-2) 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.sensitivity-candidate-remove {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: var(--sp-1);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.sensitivity-candidate-remove:hover:not(:disabled) {
+  color: var(--color-accent);
+  background: rgba(15, 44, 76, 0.08);
+}
+
+.sensitivity-add-value,
+.sensitivity-ladder-apply {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+}
+
+.sensitivity-add-value:hover:not(:disabled),
+.sensitivity-ladder-apply:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.sensitivity-candidate-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+/* The generator sits below the values it fills, visibly subordinate to them:
+   the candidate fields are the assumptions, this is only a way to type them. */
+.sensitivity-ladder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3);
+  padding-top: var(--sp-2);
+  border-top: 1px dashed var(--color-border);
+}
+
+.sensitivity-ladder-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  padding-bottom: var(--sp-2);
+}
+
+.sensitivity-ladder-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-ladder-field .field-input {
+  width: 7rem;
+}
+
+.sensitivity-shadow-notice {
+  margin: 0;
+  padding: var(--sp-3);
+  border-left: 3px solid var(--color-text-muted);
+  background: var(--color-surface-muted);
+  font-size: 0.78rem;
+  color: var(--color-text);
+}
+
+.sensitivity-run-row {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+}
+
+.sensitivity-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.sensitivity-caption {
+  caption-side: top;
+  text-align: left;
+  padding-bottom: var(--sp-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.sensitivity-baseline-line,
+.sensitivity-note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+/* A one-way answer is two columns; letting it stretch to 1800px would put the
+   assumption and its metric at opposite ends of the screen. */
+.sensitivity-one-way-table {
+  width: auto;
+  min-width: 22rem;
+}
+
+/* A percentage candidate needs `6.25`, not `84,000,000`, so it gets a field
+   sized for what it holds. Five of these then read as one set of assumptions
+   rather than as five widely-spaced boxes. */
+.sensitivity-candidate-input-narrow {
+  width: 4rem;
+}
+
+/* A result grid sizes to its own content. `.sensitivity-table` is 100% wide
+   because Quick's preset matrices fill a card; a five-column Lease-Level grid
+   stretched across an 1800px workspace puts the exit cap and its answer at
+   opposite ends of the screen. Wider grids still scroll inside `.table-scroll`.
+   Scoped to the Lease-Level result wrapper, so Quick and Detailed are
+   untouched. */
+.sensitivity-result .sensitivity-table {
+  width: auto;
+  min-width: 32rem;
+}
+
+.sensitivity-result .sensitivity-table th,
+.sensitivity-result .sensitivity-table td {
+  padding: 0.45rem 1.1rem;
+}
+
+/* D5.7A -- the matrix corner states which way each assumption runs: the column
+   assumption on the first line with a rightward cue, the row assumption
+   directly beneath it with a downward one. Two short lines in a header cell,
+   left-aligned, no rotation and no diagonal rule -- the grid stays the dense
+   underwriting table it was, and the caption above it becomes a confirmation
+   rather than the only way to read the axes.
+
+   A new class rather than a change to `.sensitivity-row-axis` /
+   `.sensitivity-column-axis`: those two are the Quick and Detailed corner as
+   well, and this gate leaves them exactly as they are. */
+.sensitivity-axis-corner {
+  vertical-align: bottom;
+  line-height: 1.3;
+}
+
+.sensitivity-axis-line {
+  display: block;
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+/* Decorative: the arrows are `aria-hidden`, and the same direction is carried
+   in words for anyone who cannot see them. */
+.sensitivity-axis-arrow {
+  color: var(--color-text-muted);
+}
+
+/* D5.8B -- the out-of-date notice on a persisted analytical result.
+
+   Warning-toned, never negative-toned: the result was valid when it ran and is
+   still a faithful record of the inputs it ran against. Only the assumptions
+   have moved. It shares `--color-warning` with the intake review banner rather
+   than `--color-negative`, which belongs to `.error-banner` and to states where
+   something actually went wrong -- the two can appear together, and they must
+   not look alike when they do.
+
+   The state is carried by the words "Out of date", not by the colour, the
+   border or the badge shape, so it survives a monochrome display and a
+   colour-vision difference as well as it survives a screen reader. */
+.stale-notice {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--color-warning);
+  border-left-width: 3px;
+  border-radius: var(--radius-control);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.stale-notice-label {
+  flex-shrink: 0;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--color-warning);
+  color: var(--color-warning-bg);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.stale-notice-message {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+/* The reason a disabled Regenerate cannot be pressed yet. Plain hint text, set
+   beside the control it explains -- a greyed-out button with no stated reason
+   is the version of this an analyst has to guess at. */
+.ai-analyst-blocked-reason {
+  margin: 0 0 0.75rem;
 }

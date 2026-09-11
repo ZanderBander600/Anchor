@@ -273,9 +273,14 @@ def test_g6_the_bridge_is_the_only_lease_level_orchestrator() -> None:
             for name in _imported_module_names(path)
         )
     )
+    # D5.3 adds the delivery layer. ``api.py`` calls the bridge exactly as
+    # sensitivity does -- through the analysis facade, once per request, with no
+    # builder or engine call of its own -- so it widens the *consumer* list by
+    # one named file and leaves the ban on a second orchestrator untouched.
     assert importers == [
         "anchor/analysis/__init__.py",
         "anchor/analysis/lease_level_sensitivity.py",
+        "anchor/api.py",
     ]
 
 
@@ -809,39 +814,61 @@ def test_g31_no_engine_module_knows_the_terminal_rule() -> None:
             assert forbidden not in text, f"{source_file.name} mentions {forbidden}"
 
 
-def test_g32_the_public_operating_mode_enum_is_unchanged() -> None:
-    """**Guardrail 32.** ``OperatingMode.LEASE_LEVEL`` was **deliberately not
-    added** at D4.5B.
+def test_g32_the_public_operating_mode_enum_is_published_behind_total_dispatch() -> None:
+    """**Guardrail 32, succeeded at D5.1A.**
 
-    Every consumer of the enum branches ``is DETAILED`` / ``is QUICK`` with an
-    implicit else. Adding the member would make ``POST /analyze`` accept
-    ``"lease_level"`` and silently run it as Quick, across roughly eight
-    endpoints, instead of the 422 it correctly returns today. Publishing the
-    mode is a wider change than this gate authorises; see the D4.5B
-    exhaustive-mode report. D4.6B re-confirmed the deferral (Section 38.10):
-    Lease-Level sensitivity is distinguished by **function identity**, exactly
-    as Quick and Detailed already are, so it needs no enum member either.
+    D4.5B refused to add ``OperatingMode.LEASE_LEVEL`` because every consumer
+    branched ``is DETAILED`` / ``is QUICK`` with an implicit else: the member
+    would not have created a third branch, it would have joined whichever branch
+    the else happened to be, and ``POST /analyze`` would have answered
+    ``"lease_level"`` with Quick economics under a Lease-Level label.
 
-    **Narrowed at D4.6B, and not weakened.** The check was a bare
-    ``"LEASE_LEVEL"`` substring scan, which is only a proxy for the real rule:
-    ``anchor.analysis.lease_level_sensitivity`` legitimately declares
-    ``LEASE_LEVEL_SUPPORTED_ASSUMPTIONS``, a sensitivity *target* tuple with
-    nothing to do with the operating-mode enum. The rule that matters is now
-    stated directly, in three parts -- the enum's members, the absence of any
-    ``OperatingMode.LEASE_LEVEL`` reference anywhere in the tree (the
-    orchestrator no longer excepted), and the enum declaration read
-    structurally rather than by substring.
+    The deferral was never "this member is undesirable"; it was "this member is
+    unsafe *while dispatch is exhaustive-by-omission*". D5.1A removed the
+    precondition rather than the intent, in that order -- total dispatch first,
+    member second -- so the guardrail now asserts the state that makes
+    publication safe rather than the absence that avoided the question.
+
+    The three original parts are preserved, each in its succeeded form: the
+    enum's exact membership, that ``OperatingMode.LEASE_LEVEL`` references are
+    now legitimate but only inside dispatch, and the structural reading of the
+    enum declaration. Exhaustiveness itself is proved in
+    ``tests/test_d5_1a_operating_mode_total_dispatch.py``, which is the file
+    this guardrail now depends on rather than duplicating.
     """
 
     from anchor.contracts import OperatingMode
 
-    assert {member.value for member in OperatingMode} == {"quick", "detailed"}
-    assert not hasattr(OperatingMode, "LEASE_LEVEL")
+    assert {member.value for member in OperatingMode} == {
+        "quick",
+        "detailed",
+        "lease_level",
+    }
+    assert hasattr(OperatingMode, "LEASE_LEVEL")
+    assert OperatingMode("lease_level") is OperatingMode.LEASE_LEVEL
 
+    # Every module that names the member must be a dispatch consumer -- the
+    # member exists to be branched on, never to be imported into the financial
+    # layers, which stay mode-blind.
+    #
+    # D5.8 adds ``analyst.py``, which builds the Lease-Level ``AnalysisContext``
+    # and must therefore stamp the member on it. It is a context assembler, not
+    # a financial layer: the engine, leasing and analysis packages still name
+    # the member nowhere, which is what "mode-blind" was protecting.
+    permitted = {
+        "api.py",
+        "contracts.py",
+        "store.py",
+        "presentation.py",
+        "analyst.py",
+    }
     for source_file in _python_files_under(_ANCHOR_DIR):
-        assert "OperatingMode.LEASE_LEVEL" not in source_file.read_text(
-            encoding="utf-8"
-        ), f"{source_file.name} references a Lease-Level operating mode"
+        if "OperatingMode.LEASE_LEVEL" not in source_file.read_text(encoding="utf-8"):
+            continue
+        assert source_file.name in permitted, (
+            f"{source_file.name} names OperatingMode.LEASE_LEVEL; only the mode "
+            "dispatch consumers may"
+        )
 
     operating_mode_class = next(
         node
@@ -855,12 +882,7 @@ def test_g32_the_public_operating_mode_enum_is_unchanged() -> None:
         for target in node.targets
         if isinstance(target, ast.Name)
     ]
-    assert declared == ["QUICK", "DETAILED"], declared
-
-
-# =============================================================================
-# Guardrails 33-35 -- Quick, Detailed and the AI surface are untouched
-# =============================================================================
+    assert declared == ["QUICK", "DETAILED", "LEASE_LEVEL"], declared
 
 
 def test_g33_the_whole_engine_package_is_unchanged_since_d4_5a() -> None:
@@ -879,37 +901,107 @@ def test_g33_the_whole_engine_package_is_unchanged_since_d4_5a() -> None:
     )
 
 
-def test_g34_the_ai_surface_is_unchanged_since_d4_5a() -> None:
-    """**Guardrail 34.** The narrow D4.5A exception -- excluding the two TI/LC
-    fields from AI presentation -- stands exactly as authorised. D4.5B neither
-    widens it nor quietly reverses it, and adds no Lease-Level presentation of
-    its own."""
+def test_g34_the_ai_surface_changed_only_to_make_mode_dispatch_total() -> None:
+    """**Guardrail 34, narrowed at D5.1A -- and not weakened.**
+
+    The original asserted byte-identity of the whole ``src/anchor/ai`` tree
+    since D4.5A. D5.1A must edit two files in that tree -- ``contracts.py`` and
+    ``presentation.py`` -- because both carried ``if QUICK: ... else:
+    <Detailed>`` dispatch, which is exactly the hazard this gate exists to
+    close. Byte-identity is therefore no longer the right statement of the rule.
+
+    What the guardrail was actually protecting was never the bytes: it was that
+    **no Lease-Level AI presentation is smuggled in, and the TI/LC exclusion is
+    neither widened nor reversed**. Both survive verbatim, now stated directly:
+    the prompt surface is still byte-identical (D5.1A changes no prompt), and
+    only the two dispatch files moved. D5.8 owns the presentation decision.
+    """
 
     changed = _files_changed_since(_D4_5A_COMMIT, "src/anchor/ai")
 
-    assert changed == [], f"the AI surface changed at D4.5B: {changed}"
+    # **Widened at D5.8, by one gate's exact scope.** D5.1A authorised two
+    # files, for a conversion that added refusals and no vocabulary. D5.8 is
+    # the gate that owns Lease-Level AI, so it necessarily touches the whole
+    # AI surface: the context contract gains the mode, the presentation layer
+    # gains its sections, the orchestrator gains its builder, the prompt gains
+    # the grounding rules those sections are read by, and the package exports
+    # the new entry points.
+    #
+    # ``provider.py`` is the one file that must NOT appear. It is the OpenAI
+    # boundary -- the model, the schema, the network call -- and grounding a
+    # third mode is a question about what Anchor sends, never about how it
+    # talks to a provider. Its absence here is the assertion.
+    assert sorted(changed) == [
+        "src/anchor/ai/__init__.py",
+        "src/anchor/ai/analyst.py",
+        "src/anchor/ai/contracts.py",
+        "src/anchor/ai/presentation.py",
+        "src/anchor/ai/prompts.py",
+    ], (
+        "the AI surface changed beyond D5.8's authorised Lease-Level grounding: "
+        f"{changed}"
+    )
+    assert _files_changed_since(_D4_5A_COMMIT, "src/anchor/ai/provider.py") == [], (
+        "the provider boundary must not change to ground a new mode"
+    )
+
+    # The D4.5A TI/LC exclusion was spent by D5.8, the gate D4.5A named as its
+    # owner, and on the condition D4.5A attached: the fields reach the model
+    # only alongside the rule that says what they are.
+    from anchor.ai.presentation import INTENTIONALLY_EXCLUDED_RESULT_FIELDS
+    from anchor.ai.prompts import build_system_prompt
+
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
+    assert "LEASING-CAPITAL RULE" in build_system_prompt()
 
 
-def test_g35_the_ai_exclusion_decision_is_intact() -> None:
-    """**Guardrail 35.** Stated behaviourally as well as by file identity: the
-    two fields remain deliberately excluded, and no Lease-Level contract has
-    been handed to the AI analyst."""
+def test_g35_the_ai_exclusion_decision_was_succeeded_not_abandoned() -> None:
+    """**Guardrail 35, succeeded at D5.8.**
+
+    The original had two halves. The first -- TI and LC withheld from the model
+    -- was always explicitly a deferral to "the gate that gives them a reviewed
+    presentation and the grounding rules to interpret them". D5.8 is that gate,
+    so the allowlist is empty and the rule exists; that half is asserted in G34
+    above, where the file ledger for the same gate lives.
+
+    The second half is the one that must never lapse, and it is asserted here,
+    unchanged in force and sharpened in aim: **the AI layer still owns exactly
+    one door into leasing.** D5.8 hands it Lease-Level contracts, so a blanket
+    "names nothing Lease-Level" ban would now be false. What replaces it is the
+    dependency direction HD-D4-8 fixes: those contracts arrive through the
+    ``anchor.analysis`` facade, and the AI package still imports no
+    ``anchor.leasing`` module -- not the parser, not a builder, and above all
+    none of the modules that contain a leasing formula.
+    """
 
     from anchor.ai.presentation import INTENTIONALLY_EXCLUDED_RESULT_FIELDS
 
-    assert {
-        "tenant_improvements_by_year",
-        "leasing_commissions_by_year",
-    } <= INTENTIONALLY_EXCLUDED_RESULT_FIELDS
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
 
-    # The AI layer legitimately consumes ``anchor.analysis`` for sensitivity
-    # and break-even. What it must not reach is the Lease-Level layer: neither
-    # the leasing package, nor the orchestrator, nor its result envelope.
+    # The AI layer legitimately consumes ``anchor.analysis`` for sensitivity,
+    # break-even and -- from D5.8 -- the Lease-Level input and result
+    # contracts. What it must not reach is the leasing package itself.
     for source_file in _python_files_under(_ANCHOR_DIR / "ai"):
         names = _imported_module_names(source_file)
         for name in names:
             assert not name.startswith("anchor.leasing"), (
                 f"{source_file.name} imports {name!r}"
+            )
+
+    # And it must still compute nothing: no leasing builder, no rollover, no
+    # recovery, no aggregation reaches it even by name.
+    for source_file in _python_files_under(_ANCHOR_DIR / "ai"):
+        text = source_file.read_text(encoding="utf-8")
+        for forbidden in (
+            "build_monthly_property_projection",
+            "aggregate_monthly_to_annual",
+            "build_recursive_rollover",
+            "build_initial_vacancy_rollover",
+            "build_lease_recovery_schedule",
+            "parse_lease_level_inputs",
+        ):
+            assert forbidden not in text, (
+                f"{source_file.name} reaches the leasing builder {forbidden}"
             )
             assert not name.startswith("anchor.analysis.lease_level"), (
                 f"{source_file.name} imports the Lease-Level orchestrator"
@@ -940,23 +1032,50 @@ def test_g35_the_ai_exclusion_decision_is_intact() -> None:
 # =============================================================================
 
 
-def test_hd_d4_9_the_mode_is_not_publishable_yet() -> None:
-    """The enum is the gate. While ``lease_level`` is not a member, no payload
-    can name it and no dispatch can mis-route it."""
+def test_hd_d4_9_superseded_the_mode_is_published_and_parses_as_valid() -> None:
+    """**HD-D4-9, discharged at D5.1A.**
+
+    The enum was the gate: while ``lease_level`` named no member, no payload
+    could carry it and no dispatch could mis-route it. That was a holding
+    position, and D5.1A discharges it in the required order -- total dispatch
+    first, member second.
+
+    The successor invariant is the one that now matters, and it is a
+    *distinction* rather than a refusal: ``"lease_level"`` parses as a valid
+    mode, while an unknown token still does not. Collapsing the two would tell a
+    caller that ``"lease_level"`` is not a mode, which stopped being true the
+    moment the member was published. Whether any given endpoint *serves* the
+    mode is a separate question, asserted in the endpoint matrix below.
+    """
 
     from anchor.contracts import OperatingMode
 
-    assert {member.value for member in OperatingMode} == {"quick", "detailed"}
+    assert {member.value for member in OperatingMode} == {
+        "quick",
+        "detailed",
+        "lease_level",
+    }
+
+    assert OperatingMode("lease_level") is OperatingMode.LEASE_LEVEL
 
     with pytest.raises(ValueError):
-        OperatingMode("lease_level")
+        OperatingMode("leaselevel")
 
 
-def test_hd_d4_9_the_api_rejects_the_mode_rather_than_running_quick() -> None:
-    """The behavioural half, through the real endpoint.
+def test_hd_d4_9_superseded_the_api_never_answers_lease_level_with_quick() -> None:
+    """**The behavioural half, discharged at D5.3.**
 
-    A 422 is the required outcome. The failure this guards against is a 200
-    carrying Quick results -- an answer to a question nobody asked.
+    Until D5.3 this asserted a flat 422: the mode parsed but no endpoint
+    served it. ``POST /analyze`` now *does* serve Lease-Level, so the outcome
+    under test changes -- but the failure it was written to catch does not.
+    That failure was never "a 200": it was **a 200 carrying Quick results**,
+    an answer to a question nobody asked.
+
+    Stated directly now. A Quick-shaped body labelled ``lease_level`` names
+    none of the five Lease-Level input objects, so it must be refused for
+    saying nothing the Lease-Level engine can read -- never quietly
+    underwritten with ``current_noi`` and ``noi_growth``, which that engine
+    does not have.
     """
 
     from fastapi.testclient import TestClient
@@ -979,18 +1098,40 @@ def test_hd_d4_9_the_api_rejects_the_mode_rather_than_running_quick() -> None:
     response = TestClient(app).post("/analyze", json=payload)
 
     assert response.status_code == 422, (
-        f"POST /analyze accepted operating_mode='lease_level' with "
-        f"{response.status_code}; an unpublished mode must be rejected, never "
-        "silently dispatched to Quick"
+        f"POST /analyze answered a Quick-shaped operating_mode='lease_level' "
+        f"body with {response.status_code}; it names no Lease-Level inputs, so "
+        "it must be refused rather than dispatched to Quick"
     )
-    assert "operating_mode" in response.text
+
+    # The assertion that has always mattered: no Quick economics came back.
+    assert "levered_irr" not in response.text
+    assert "equity_multiple" not in response.text
+
+    # And the refusal explains what is actually wrong -- a missing terms
+    # object -- rather than claiming the mode is unsupported, which it no
+    # longer is.
+    assert "terms" in str(response.json()["detail"])
 
 
-def test_hd_d4_9_no_public_surface_mentions_the_mode() -> None:
-    """No half-wiring anywhere: not in the API, the web layer, persistence,
-    ingestion or the AI surface."""
+def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> None:
+    """**HD-D4-9's anti-half-wiring rule, succeeded at D5.1A.**
 
-    candidates = [
+    The original banned the strings ``LEASE_LEVEL``/``lease_level`` anywhere in
+    the API, persistence, ingestion or AI surfaces, because at D4 *any* mention
+    would have been half-wiring: publication was supposed to land atomically.
+
+    D5.1A published the **mode vocabulary** and nothing else, so the string
+    ban became the wrong instrument -- refusing a mode by name requires naming
+    it. The intent was restated then as the thing that actually matters: no
+    capability may leak in ahead of the gate that owns it.
+
+    **Amended at D5.3** (analysis and sensitivity) and **D5.4** (persistence).
+    The rule is a ledger rather than a ban: each gate adds exactly what it owns,
+    and the surfaces no gate has reached must stay unreached. D5.8 owns AI, and
+    it is asserted absent below.
+    """
+
+    surfaces = [
         _ANCHOR_DIR / "api.py",
         *(
             path
@@ -999,28 +1140,133 @@ def test_hd_d4_9_no_public_surface_mentions_the_mode() -> None:
         ),
     ]
 
-    for source_file in candidates:
+    # The delivery layer must still not construct leasing contracts itself,
+    # and must still not reach the leasing package directly: the dependency
+    # direction HD-D4-8 fixes is leasing -> analysis -> engine, so D5.3
+    # reaches the parser and the runners through the analysis facade.
+    # **Narrowed at D5.4.** Until then the delivery layer named no leasing
+    # contract at all, and banning the names was a fair proxy for banning the
+    # dependency. D5.4 persists Lease-Level deals as *typed* contracts, so
+    # ``deals`` must name ``Suite`` and ``Lease`` -- storing them as untyped rows
+    # or raw dicts is precisely what the gate forbids.
+    #
+    # The rule that survives is the dependency direction itself: those types
+    # arrive through ``anchor.analysis``, never by importing ``anchor.leasing``,
+    # so the leasing layer keeps exactly one door (HD-D4-8).
+    forbidden_capability = ("anchor.leasing", "from ..leasing", "from .leasing")
+    for source_file in surfaces:
         text = source_file.read_text(encoding="utf-8")
-        for forbidden in ("LEASE_LEVEL", "lease_level"):
+        for forbidden in forbidden_capability:
             assert forbidden not in text, (
-                f"{source_file.name} mentions {forbidden!r}; publication is "
-                "deferred to D5 and must land atomically"
+                f"{source_file.name} imports {forbidden!r}; the delivery layer "
+                "reaches leasing only through the anchor.analysis facade"
             )
 
+    # **Amended at D5.8**, the gate the previous entry named as AI's owner.
+    # The AI layer may now consume the Lease-Level result envelope and the
+    # approved input set -- that is the whole capability D5.8 delivers.
+    #
+    # What stays absent is what D5.8 does not own, and the ledger is what keeps
+    # the two apart. Sensitivity is the sharp case: Lease-Level sensitivity
+    # exists and shipped at D5.7, so the temptation to have the AI request a
+    # run of its own is real. It must not. Sensitivity stays analyst-directed
+    # in Risk, and an AI request triggers no financial run beyond the one
+    # analysis it is describing.
+    for source_file in _python_files_under(_ANCHOR_DIR / "ai"):
+        text = source_file.read_text(encoding="utf-8")
+        for forbidden in (
+            "run_lease_level_one_way_sensitivity",
+            "run_lease_level_two_way_sensitivity",
+            "build_standard_lease_level_presets",
+            "parse_lease_level_inputs",
+        ):
+            assert forbidden not in text, (
+                f"{source_file.name} reaches {forbidden}; the AI Analyst runs no "
+                "sensitivity of its own"
+            )
 
-def test_hd_d4_9_the_exhaustive_dispatch_hazard_is_recorded() -> None:
-    """The evidence for the deferral, kept executable.
+    # The orchestrator is the only AI module that may name the analysis entry
+    # point, and even there only in prose: D5.8's Lease-Level context builder
+    # *receives* an already-computed result rather than calling for one, so the
+    # AI Analyst can never describe a different analysis from the analyst's.
+    for source_file in _python_files_under(_ANCHOR_DIR / "ai"):
+        tree = _tree(source_file)
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "analyze_lease_level_acquisition_with_projection" not in called, (
+            f"{source_file.name} runs the Lease-Level analysis itself"
+        )
 
-    Each of these sites branches on exactly one mode and lets the other fall
-    through. The count is not asserted exactly -- that would break on unrelated
-    edits -- but the *shape* is: every mode comparison in these modules is an
-    identity test against a single member, which is precisely what makes a
-    third member unsafe. If someone refactors these into exhaustive dispatch
-    (a match statement, or an explicit else that raises), this test starts
-    failing and the deferral can be revisited.
+    # D5.4 wired persistence. What must still be absent from the store is the
+    # transport parser -- storage reads its own rows, and routing them through
+    # the HTTP parser would couple the database format to the wire format so
+    # neither could change alone -- and any cached Lease-Level financial result.
+    store = (_ANCHOR_DIR / "deals" / "store.py").read_text(encoding="utf-8")
+    assert "lease_level_deals" in store, "D5.4 should persist Lease-Level deals"
+    assert "parse_lease_level_inputs" not in store, (
+        "store.py must not depend on the HTTP transport parser"
+    )
+    for cached_result in (
+        "LeaseLevelAcquisitionResults",
+        "MonthlyPropertyProjection",
+        "AnnualOperatingProjection",
+    ):
+        assert cached_result not in store, (
+            f"store.py references {cached_result}; Lease-Level results are "
+            "recomputed on open, never persisted (D5 decision A)"
+        )
+    # D5.8A moved this to 6, adding one purely additive table
+    # (``deal_sensitivity_snapshots``) for the latest successful Lease-Level
+    # sensitivity runs. The assertion above is the one that matters and is
+    # unweakened: a persisted Lease-Level *financial result* is still forbidden
+    # by name, and D5.8A stores none -- a sensitivity snapshot is the response to
+    # an analyst-directed question, restored as-is and never recomputed, and the
+    # base Lease-Level analysis is still re-run from approved inputs on open.
+    assert "_SCHEMA_VERSION = 6" in store
+    assert "deal_sensitivity_snapshots" in store, (
+        "D5.8A should persist the latest Lease-Level sensitivity runs"
+    )
+
+    # D5.3 ledger: the API reaches exactly the approved entry points.
+    api_text = (_ANCHOR_DIR / "api.py").read_text(encoding="utf-8")
+    assert "case OperatingMode.LEASE_LEVEL:" in api_text
+    assert "_unsupported_operating_mode" in api_text
+    for wired in (
+        "analyze_lease_level_acquisition_with_projection",
+        "run_lease_level_one_way_sensitivity",
+        "run_lease_level_two_way_sensitivity",
+        "parse_lease_level_inputs",
+    ):
+        assert wired in api_text, f"D5.3 should wire {wired}"
+    for not_yet in ("build_standard_lease_level", "lease_level_break_even"):
+        assert not_yet not in api_text, f"{not_yet} belongs to no D5 gate"
+
+
+def test_hd_d4_9_superseded_the_exhaustive_dispatch_hazard_is_closed() -> None:
+    """**The trigger D4 armed, fired and discharged at D5.1A.**
+
+    The original counted implicit two-mode dispatch sites and required at least
+    eight, with this instruction to its future reader, quoted from the D4.5B
+    source: *"If someone refactors these into exhaustive dispatch (a match
+    statement, or an explicit else that raises), this test starts failing and
+    the deferral can be revisited."*
+
+    That is precisely what D5.1A did, so the test fired as designed and is
+    inverted here rather than deleted. The hazard it recorded -- every mode
+    comparison in these four modules being an identity test against a single
+    member, which is what made a third member unsafe -- must now be **absent**.
+
+    Kept deliberately narrow and independent of
+    ``tests/test_d5_1a_operating_mode_total_dispatch.py``: that file proves
+    exhaustiveness over the live enum, whereas this one preserves D4's own
+    framing of the danger (single-member identity tests with a live fallthrough)
+    so the historical record stays executable rather than becoming a comment.
     """
 
-    implicit_dispatch: list[str] = []
+    surviving: list[str] = []
 
     for source_file in (
         _ANCHOR_DIR / "api.py",
@@ -1037,13 +1283,32 @@ def test_hd_d4_9_the_exhaustive_dispatch_hazard_is_recorded() -> None:
             if not any(isinstance(op, ast.Is) for op in test.ops):
                 continue
             names = _referenced_names(test)
-            if {"QUICK", "DETAILED"} & names:
-                implicit_dispatch.append(f"{source_file.name}:{node.lineno}")
+            if not ({"QUICK", "DETAILED", "LEASE_LEVEL"} & names):
+                continue
 
-    assert len(implicit_dispatch) >= 8, (
-        "the exhaustive-dispatch hazard that justifies HD-D4-9 is no longer "
-        f"visible (found {implicit_dispatch}); re-examine whether publication "
-        "is now safe rather than leaving a stale deferral in place"
+            # Walk to the end of the if/elif chain. The hazard is a *live*
+            # fallthrough -- an ``else`` that does something other than raise,
+            # meaning "every mode I did not name behaves like this one".
+            tail = node
+            while (
+                tail.orelse
+                and len(tail.orelse) == 1
+                and isinstance(tail.orelse[0], ast.If)
+            ):
+                tail = tail.orelse[0]
+            if not tail.orelse:
+                continue
+            if any(
+                isinstance(stmt, ast.Raise)
+                for stmt in ast.walk(ast.Module(body=tail.orelse, type_ignores=[]))
+            ):
+                continue
+            surviving.append(f"{source_file.name}:{node.lineno}")
+
+    assert surviving == [], (
+        "the exhaustive-dispatch hazard HD-D4-9 recorded is back: these sites "
+        "test one OperatingMode member and let every other member fall through "
+        f"into that branch's sibling behavior: {surviving}"
     )
 
 

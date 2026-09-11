@@ -30,6 +30,7 @@ import {
   uploadOm,
 } from './api';
 import { formatCurrency, formatMultiple, formatPercent } from './format';
+import { groupDigits } from './numberFormat';
 import {
   BLANK_DETAILED_FORM_VALUES,
   BLANK_FORM_VALUES,
@@ -113,6 +114,19 @@ const mockUpdateDealAnalysisSnapshot = vi.mocked(updateDealAnalysisSnapshot);
 const mockUpdateDealAiSnapshot = vi.mocked(updateDealAiSnapshot);
 const mockFetchDealFingerprint = vi.mocked(fetchDealFingerprint);
 const mockFetchDetailedDealFingerprint = vi.mocked(fetchDetailedDealFingerprint);
+
+/**
+ * D5.5E: currency and area inputs display grouped while they are not focused.
+ *
+ * The value behind them is unchanged -- every request assertion in this file
+ * still expects the plain number, and passes. Derived from the app's own
+ * formatter rather than hard-coding commas in each assertion; `numberFormat.test.ts`
+ * pins that formatter against literal expectations, so the rule is stated once
+ * and consumed here.
+ */
+function shown(raw: string): string {
+  return groupDigits(raw);
+}
 
 function missingField(field_id: string): FieldCandidates {
   return { field_id, candidates: [] };
@@ -871,8 +885,8 @@ describe('App workflow', () => {
   it('renders all nine assumption fields blank on initial load (U10)', () => {
     render(<App />);
 
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
-    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown(''));
+    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', shown(''));
     expect(screen.getByLabelText(/^Occupancy/)).toHaveProperty('value', '');
     expect(screen.getByLabelText(/^NOI Growth/)).toHaveProperty('value', '');
     expect(screen.getByLabelText(/^Hold Period/)).toHaveProperty('value', '');
@@ -888,7 +902,7 @@ describe('App workflow', () => {
     expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '');
     expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '');
     expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '');
-    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', shown(''));
     expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '');
   });
 
@@ -1642,7 +1656,9 @@ describe('AI Analyst workflow', () => {
     expect(screen.getByRole('button', { name: 'Generating…' })).toHaveProperty('disabled', true);
 
     pending.resolve(makeAiAnalysis());
-    expect(await screen.findByRole('button', { name: 'Generate AI Analysis' })).toBeTruthy();
+    // D5.8A: with a report now on screen, the control says what pressing it
+    // again would do.
+    expect(await screen.findByRole('button', { name: 'Regenerate Analysis' })).toBeTruthy();
   });
 
   it('renders the mocked structured AI response, including strengths/risks/questions lists', async () => {
@@ -1746,7 +1762,9 @@ describe('AI Analyst workflow', () => {
       makeAiAnalysis({ investment_view: 'Second view.' }),
     );
     await goTo(user, 'AI Analyst');
-    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+    // D5.8A: the same single control, now reading Regenerate Analysis because a
+    // report exists. It is still one button and still one request.
+    await user.click(screen.getByRole('button', { name: 'Regenerate Analysis' }));
 
     expect(await screen.findByText('Second view.')).toBeTruthy();
     expect(screen.queryByText('First view.')).toBeNull();
@@ -1798,7 +1816,7 @@ describe('OM ingestion workflow', () => {
     await goTo(user, 'Documents');
     await user.click(screen.getByRole('button', { name: 'Use approved values' }));
 
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('48000000'));
     expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '6');
   });
 
@@ -1816,7 +1834,7 @@ describe('OM ingestion workflow', () => {
     await goTo(user, 'Documents');
     await user.click(screen.getByRole('button', { name: 'Use approved values' }));
 
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('48000000'));
     // Exit Cap Rate was never approved -- it must stay blank (U10), not fall
     // back to a default value.
     expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '');
@@ -1975,7 +1993,7 @@ describe('Excel ingestion workflow', () => {
 
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      BLANK_FORM_VALUES.purchasePrice,
+      shown(BLANK_FORM_VALUES.purchasePrice),
     );
   });
 
@@ -2038,7 +2056,7 @@ describe('Excel ingestion workflow', () => {
     // Editing the review must not touch the still-untouched active form.
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      BLANK_FORM_VALUES.purchasePrice,
+      shown(BLANK_FORM_VALUES.purchasePrice),
     );
   });
 
@@ -2051,7 +2069,7 @@ describe('Excel ingestion workflow', () => {
     expect(await screen.findByText('Acquisition Costs is required.')).toBeTruthy();
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      BLANK_FORM_VALUES.purchasePrice,
+      shown(BLANK_FORM_VALUES.purchasePrice),
     );
 
     await completeBlankedV2ReviewFields(user);
@@ -2059,7 +2077,7 @@ describe('Excel ingestion workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('48000000'));
     });
     expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '0');
     expect(screen.queryByRole('button', { name: 'Approve & Load Assumptions' })).toBeNull();
@@ -2074,9 +2092,9 @@ describe('Excel ingestion workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('48000000'));
     });
-    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', '2400000');
+    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', shown('2400000'));
     expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '0');
     expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '0');
     expect(mockAnalyze).not.toHaveBeenCalled();
@@ -2138,7 +2156,7 @@ describe('Excel ingestion workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('48000000'));
     });
     expect(mockAnalyze).not.toHaveBeenCalled();
   });
@@ -2151,7 +2169,7 @@ describe('Excel ingestion workflow', () => {
     await goTo(user, 'Documents');
     await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('48000000'));
     });
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
@@ -2171,7 +2189,7 @@ describe('Excel ingestion workflow', () => {
     expect(screen.queryByRole('button', { name: 'Approve & Load Assumptions' })).toBeNull();
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      BLANK_FORM_VALUES.purchasePrice,
+      shown(BLANK_FORM_VALUES.purchasePrice),
     );
   });
 
@@ -2232,7 +2250,7 @@ describe('Excel ingestion workflow', () => {
     ).toBeTruthy();
     // A failed upload must not corrupt values already entered in the form,
     // and must never create a review panel of its own.
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', DEFAULT_FORM_VALUES.purchasePrice);
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown(DEFAULT_FORM_VALUES.purchasePrice));
     expect(screen.queryByLabelText('Excel Review Purchase Price')).toBeNull();
     expect(mockAnalyze).not.toHaveBeenCalled();
   });
@@ -2376,9 +2394,16 @@ function makeDeal(overrides: Partial<Deal> = {}): Deal {
     inputs: GOLDEN_DEAL_REQUEST,
     terms: null,
     detailed_operating_inputs: null,
+    property_inputs: null,
+    operating_inputs: null,
+    market_leasing: null,
+    suites: null,
+    leases: null,
     deal_context: null,
     analysis_snapshot: null,
     ai_snapshot: null,
+    one_way_sensitivity_snapshot: null,
+    two_way_sensitivity_snapshot: null,
     created_at: '2026-09-01T12:00:00+00:00',
     updated_at: '2026-09-01T12:00:00+00:00',
     ...overrides,
@@ -2423,6 +2448,13 @@ function makeDetailedDeal(overrides: Partial<Deal> = {}): Deal {
     deal_context: null,
     analysis_snapshot: null,
     ai_snapshot: null,
+    one_way_sensitivity_snapshot: null,
+    two_way_sensitivity_snapshot: null,
+    property_inputs: null,
+    operating_inputs: null,
+    market_leasing: null,
+    suites: null,
+    leases: null,
     created_at: '2026-09-01T12:00:00+00:00',
     updated_at: '2026-09-01T12:00:00+00:00',
     ...overrides,
@@ -2507,8 +2539,8 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
 
-    expect(await screen.findByLabelText(/^Purchase Price/)).toHaveProperty('value', '50000000');
-    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', '2500000');
+    expect(await screen.findByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('50000000'));
+    expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty('value', shown('2500000'));
     expect(screen.getByLabelText(/^Occupancy/)).toHaveProperty('value', '95');
     expect(screen.getByLabelText(/^NOI Growth/)).toHaveProperty('value', '3');
     expect(screen.getByLabelText(/^Hold Period/)).toHaveProperty('value', '5');
@@ -2533,7 +2565,7 @@ describe('Deal persistence workflow', () => {
     expect(await screen.findByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '0');
     expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '0');
     expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '0');
-    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '0');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', shown('0'));
     expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '0');
   });
 
@@ -2554,7 +2586,7 @@ describe('Deal persistence workflow', () => {
     expect(await screen.findByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '2');
     expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '1');
     expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '2.5');
-    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '50000');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', shown('50000'));
     expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
     expect(screen.queryByText(/Additional underwriting assumptions/)).toBeNull();
   });
@@ -2635,11 +2667,11 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'New Deal' }));
 
     expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '');
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown(''));
     expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '');
     expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '');
     expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '');
-    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', shown(''));
     expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '');
     expect(screen.getByRole('button', { name: 'Save Deal' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Update Deal' })).toBeNull();
@@ -2738,7 +2770,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       expect(await screen.findByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '2');
       expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '1');
       expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '2.5');
-      expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '50000');
+      expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', shown('50000'));
       expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
     });
 
@@ -2820,7 +2852,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       await user.click(screen.getByRole('button', { name: 'Close' }));
 
       expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '');
-      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown(''));
       expect(screen.getByRole('button', { name: 'Save Deal' })).toBeTruthy();
       expect(screen.getByText('Unsaved deal')).toBeTruthy();
     });
@@ -3103,7 +3135,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       render(<App />);
 
       await user.click(screen.getByRole('button', { name: 'New Deal' }));
-      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown(''));
 
       const file = new File(['PK'], 'anchor_input.xlsx', {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -3112,7 +3144,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       await screen.findByText(/Workbook parsed successfully/);
 
       // Still requires review and approval, exactly like a non-blank deal.
-      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+      expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown(''));
       expect(screen.getByLabelText('Excel Review Purchase Price')).toHaveProperty(
         'value',
         String(GOLDEN_DEAL_REQUEST.purchase_price),
@@ -3129,7 +3161,7 @@ describe('Deal persistence workflow -- Phase C', () => {
 
       expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
         'value',
-        DEFAULT_FORM_VALUES.purchasePrice,
+        shown(DEFAULT_FORM_VALUES.purchasePrice),
       );
     });
 
@@ -3161,7 +3193,7 @@ describe('Deal persistence workflow -- Phase C', () => {
       await user.click(screen.getByRole('button', { name: 'Close' }));
       expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
         'value',
-        DEFAULT_FORM_VALUES.purchasePrice,
+        shown(DEFAULT_FORM_VALUES.purchasePrice),
       );
     });
   });
@@ -3292,11 +3324,11 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
     await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      DEFAULT_FORM_VALUES.purchasePrice,
+      shown(DEFAULT_FORM_VALUES.purchasePrice),
     );
     expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty(
       'value',
-      DEFAULT_FORM_VALUES.currentNoi,
+      shown(DEFAULT_FORM_VALUES.currentNoi),
     );
   });
 
@@ -3390,7 +3422,7 @@ describe('Detailed Underwrite mode (Gate 6)', () => {
     await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      DEFAULT_FORM_VALUES.purchasePrice,
+      shown(DEFAULT_FORM_VALUES.purchasePrice),
     );
   });
 
@@ -3837,7 +3869,7 @@ describe('Detailed Excel ingestion workflow (Gate 10)', () => {
 
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+      shown(BLANK_DETAILED_FORM_VALUES.terms.purchasePrice),
     );
   });
 
@@ -3904,8 +3936,8 @@ describe('Detailed Excel ingestion workflow (Gate 10)', () => {
     await goTo(user, 'Documents');
     await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
 
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
-    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', '800000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('10000000'));
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', shown('800000'));
     expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
     expect(screen.getByLabelText(/^Expense Growth/)).toHaveProperty('value', '3');
   });
@@ -3930,7 +3962,7 @@ describe('Detailed Excel ingestion workflow (Gate 10)', () => {
     expect(screen.queryByLabelText('Detailed Excel Review Purchase Price')).toBeNull();
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+      shown(BLANK_DETAILED_FORM_VALUES.terms.purchasePrice),
     );
   });
 
@@ -4044,7 +4076,7 @@ describe('Detailed Excel ingestion workflow (Gate 10)', () => {
 
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+      shown(BLANK_DETAILED_FORM_VALUES.terms.purchasePrice),
     );
   });
 
@@ -4141,7 +4173,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
       'ariaSelected',
       'true',
     );
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('10000000'));
     expect(screen.getByLabelText(/^Hold Period/)).toHaveProperty('value', '5');
     expect(screen.getByLabelText(/^Exit Cap Rate/)).toHaveProperty('value', '6.5');
     expect(screen.getByLabelText(/^LTV/)).toHaveProperty('value', '60');
@@ -4150,16 +4182,16 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
     expect(screen.getByLabelText(/^Acquisition Costs/)).toHaveProperty('value', '2');
     expect(screen.getByLabelText(/^Financing Fee/)).toHaveProperty('value', '1');
     expect(screen.getByLabelText(/^Disposition Costs/)).toHaveProperty('value', '2.5');
-    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', '50000');
+    expect(screen.getByLabelText(/^Annual CapEx Reserve/)).toHaveProperty('value', shown('50000'));
     expect(screen.getByLabelText(/^Interest-Only Period/)).toHaveProperty('value', '2');
-    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', '800000');
-    expect(screen.getByLabelText(/^Other Income/)).toHaveProperty('value', '20000');
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', shown('800000'));
+    expect(screen.getByLabelText(/^Other Income/)).toHaveProperty('value', shown('20000'));
     expect(screen.getByLabelText(/^Vacancy & Credit Loss/)).toHaveProperty('value', '5');
-    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', '60000');
-    expect(screen.getByLabelText(/^Insurance/)).toHaveProperty('value', '20000');
-    expect(screen.getByLabelText(/^Utilities/)).toHaveProperty('value', '25000');
-    expect(screen.getByLabelText(/^Repairs & Maintenance/)).toHaveProperty('value', '20000');
-    expect(screen.getByLabelText(/^Other Operating Expenses/)).toHaveProperty('value', '16000');
+    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', shown('60000'));
+    expect(screen.getByLabelText(/^Insurance/)).toHaveProperty('value', shown('20000'));
+    expect(screen.getByLabelText(/^Utilities/)).toHaveProperty('value', shown('25000'));
+    expect(screen.getByLabelText(/^Repairs & Maintenance/)).toHaveProperty('value', shown('20000'));
+    expect(screen.getByLabelText(/^Other Operating Expenses/)).toHaveProperty('value', shown('16000'));
     expect(screen.getByLabelText(/^Management Fee/)).toHaveProperty('value', '5');
     expect(screen.getByLabelText(/^Revenue Growth/)).toHaveProperty('value', '3');
     expect(screen.getByLabelText(/^Expense Growth/)).toHaveProperty('value', '3');
@@ -4340,7 +4372,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
 
     expect(screen.getByText(/^Saved/)).toBeTruthy();
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('10000000'));
   });
 
   it('approving a Detailed Excel review with different values marks the saved deal dirty', async () => {
@@ -4372,7 +4404,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
     await user.click(screen.getByRole('button', { name: 'Approve & Load Assumptions' }));
 
     expect(screen.getByText('Unsaved changes')).toBeTruthy();
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '12000000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('12000000'));
   });
 
   it('Duplicate preserves operating mode and all 22 Detailed assumptions', async () => {
@@ -4422,7 +4454,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
     await waitFor(() => expect(mockDeleteDeal).toHaveBeenCalledWith(deal.id));
     await user.click(screen.getByRole('button', { name: 'Close' }));
 
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown(''));
     expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '');
     expect(screen.getByText('Unsaved deal')).toBeTruthy();
     confirmSpy.mockRestore();
@@ -4463,7 +4495,7 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
     );
     expect(screen.queryByText('Key Returns')).toBeNull();
     expect(screen.getByText(/Enter assumptions and click/)).toBeTruthy();
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('10000000'));
   });
 
   it('opening a Quick deal after a Detailed deal was open leaves no Detailed assumptions/results attached to the Quick workspace', async () => {
@@ -4500,7 +4532,7 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
     expect(operatingStatement()).toBeNull();
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      DEFAULT_FORM_VALUES.purchasePrice,
+      shown(DEFAULT_FORM_VALUES.purchasePrice),
     );
   });
 });
@@ -4551,7 +4583,7 @@ describe('Detailed OM ingestion workflow (Gate 12)', () => {
 
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+      shown(BLANK_DETAILED_FORM_VALUES.terms.purchasePrice),
     );
   });
 
@@ -4602,10 +4634,10 @@ describe('Detailed OM ingestion workflow (Gate 12)', () => {
     await goTo(user, 'Documents');
     await user.click(screen.getByRole('button', { name: 'Use approved values' }));
 
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
-    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', '800000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('10000000'));
+    expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty('value', shown('800000'));
     // Not approved -- stays blank, never defaulted.
-    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', shown(''));
   });
 
   it('explicit zero survives review and approval', async () => {
@@ -4618,7 +4650,7 @@ describe('Detailed OM ingestion workflow (Gate 12)', () => {
     await goTo(user, 'Documents');
     await user.click(screen.getByRole('button', { name: 'Use approved values' }));
 
-    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', '0');
+    expect(screen.getByLabelText(/^Property Taxes/)).toHaveProperty('value', shown('0'));
   });
 
   it('Approve never automatically calls Analyze', async () => {
@@ -4647,7 +4679,7 @@ describe('Detailed OM ingestion workflow (Gate 12)', () => {
     expect(screen.queryByText('Potential Base Rent: $800,000', { exact: false })).toBeNull();
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      BLANK_DETAILED_FORM_VALUES.terms.purchasePrice,
+      shown(BLANK_DETAILED_FORM_VALUES.terms.purchasePrice),
     );
   });
 });
@@ -4694,7 +4726,7 @@ describe('Detailed OM saved-deal safety (Gate 12)', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel Review' }));
 
     expect(screen.getByText(/^Saved/)).toBeTruthy();
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '10000000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('10000000'));
   });
 
   it('Approve with a changed value marks the saved deal dirty, and Save returns it to Saved', async () => {
@@ -5682,7 +5714,8 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
     await screen.findByText('Deal Story');
 
-    expect(screen.getAllByRole('button', { name: 'Generate AI Analysis' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'Regenerate Analysis' }).length).toBe(1);
+    expect(screen.queryByRole('button', { name: 'Generate AI Analysis' })).toBeNull();
     expect(screen.queryByRole('button', { name: /Deal Story/i })).toBeNull();
   });
 
@@ -5698,7 +5731,7 @@ describe('AI Deal Story workflow (Gate B4)', () => {
     expect(await screen.findByText('Deal Story')).toBeTruthy();
     expect(screen.getByText('AI Interpretation')).toBeTruthy();
     expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1);
-    expect(screen.getAllByRole('button', { name: 'Generate AI Analysis' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'Regenerate Analysis' }).length).toBe(1);
   });
 
   it('renders a Model Gap when the AI reports one', async () => {
@@ -5993,7 +6026,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
 
     await waitFor(() => expect(mockGetDeal).toHaveBeenCalledWith('deal-1'));
     expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '111 Main St');
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '50000000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('50000000'));
   });
 
   it('6. New Deal from the sidebar clears the workspace and lands on Underwrite', async () => {
@@ -6010,7 +6043,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     await user.click(within(sidebar()).getByRole('button', { name: 'New Deal' }));
 
     expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '');
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown(''));
     expect(activeWorkspace()).toBe('Underwrite');
   });
 
@@ -6143,11 +6176,11 @@ describe('Sprint C Gate C2 -- app shell', () => {
 
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      DEFAULT_FORM_VALUES.purchasePrice,
+      shown(DEFAULT_FORM_VALUES.purchasePrice),
     );
     expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty(
       'value',
-      DEFAULT_FORM_VALUES.currentNoi,
+      shown(DEFAULT_FORM_VALUES.currentNoi),
     );
     expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', 'In Progress');
   });
@@ -6461,7 +6494,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     expect(panel('overview').querySelector('.owner-summary-panel')).toBeTruthy();
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      DEFAULT_FORM_VALUES.purchasePrice,
+      shown(DEFAULT_FORM_VALUES.purchasePrice),
     );
   });
 
@@ -6830,7 +6863,11 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
     render(<App />);
     await openUnderwriteTab(user, 'Results');
 
-    expect(within(underwritePanel('results')).getByText(/Analyze the deal to see/)).toBeTruthy();
+    expect(
+      within(underwritePanel('results')).getByText('Analyze the deal to view results.'),
+    ).toBeTruthy();
+    // D5.9: product copy, not the implementation's vocabulary.
+    expect(underwritePanel('results').textContent).not.toMatch(/engine|backend|payload/i);
     expect(document.querySelector('[aria-label="Results views"]')).toBeNull();
   });
 
@@ -6846,11 +6883,11 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
 
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      DETAILED_GOLDEN_FORM_VALUES.terms.purchasePrice,
+      shown(DETAILED_GOLDEN_FORM_VALUES.terms.purchasePrice),
     );
     expect(screen.getByLabelText(/^Gross Potential Rent/)).toHaveProperty(
       'value',
-      DETAILED_GOLDEN_FORM_VALUES.operating.grossPotentialRent,
+      shown(DETAILED_GOLDEN_FORM_VALUES.operating.grossPotentialRent),
     );
     expect(screen.getByLabelText(/^Interest Rate/)).toHaveProperty(
       'value',
@@ -6869,11 +6906,11 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
 
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty(
       'value',
-      DEFAULT_FORM_VALUES.purchasePrice,
+      shown(DEFAULT_FORM_VALUES.purchasePrice),
     );
     expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty(
       'value',
-      DEFAULT_FORM_VALUES.currentNoi,
+      shown(DEFAULT_FORM_VALUES.currentNoi),
     );
   });
 
@@ -7142,7 +7179,7 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
     await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
     expect(screen.getByLabelText(/^Current NOI/)).toHaveProperty(
       'value',
-      DEFAULT_FORM_VALUES.currentNoi,
+      shown(DEFAULT_FORM_VALUES.currentNoi),
     );
     expect(screen.queryByLabelText(/^Gross Potential Rent/)).toBeNull();
     // The selected tab is shared navigation state, so it carries across.
@@ -7646,7 +7683,7 @@ describe('Sprint C Gate C4 -- Documents', () => {
 
     // Approval still loads the assumptions and never runs Analyze itself.
     await waitFor(() => expect(activeWorkspace()).toBe('Underwrite'));
-    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', '48000000');
+    expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('48000000'));
     expect(mockAnalyze).not.toHaveBeenCalled();
   });
 });

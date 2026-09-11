@@ -6,6 +6,7 @@ import { SubNav } from './SubNav';
 import { OPERATIONS_VIEWS, UNDERWRITE_TABS, resultsViewsFor, sectionsForView } from '../underwrite';
 import type { FieldSection, ResultsViewId, UnderwriteTabId } from '../underwrite';
 import type { AcquisitionResults, OperatingMode } from '../types';
+import { requireUnderwriteWorkspaceMode } from '../operatingMode';
 
 export interface UnderwriteWorkspaceProps {
   operatingMode: OperatingMode;
@@ -84,7 +85,11 @@ export function UnderwriteWorkspace({
   // Detailed Operations carries 12 assumptions across three distinct concerns
   // and earns sub-navigation; Quick Operations carries four and does not.
   // The same architecture, sized to the content.
-  const hasOperationsSubNav = operatingMode === 'detailed';
+  // D5.1B: narrowed explicitly rather than assumed. `operatingMode === 'detailed'`
+  // silently answered "no sub-nav" for every mode that is not Detailed, which
+  // is right for Quick and an unverified guess for anything else.
+  const hasOperationsSubNav =
+    requireUnderwriteWorkspaceMode(operatingMode, 'the Underwrite workspace') === 'detailed';
   const availableResultsViews = resultsViewsFor(operatingMode);
 
   return (
@@ -117,7 +122,7 @@ export function UnderwriteWorkspace({
                 >
                   {results === null ? (
                     <div className="empty-state">
-                      Analyze the deal to see the full engine output for these assumptions.
+                      Analyze the deal to view results.
                     </div>
                   ) : (
                     <div className="underwrite-results-shell">

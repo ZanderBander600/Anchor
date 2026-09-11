@@ -1,5 +1,6 @@
 import { formatCurrency } from '../format';
 import type { Deal } from '../types';
+import { assertNeverMode, operatingModeLabel } from '../operatingMode';
 
 export interface DealLibraryPanelProps {
   deals: Deal[];
@@ -25,10 +26,24 @@ function formatUpdatedAt(iso: string): string {
  * both `AcquisitionInputs` (Quick) and `AcquisitionTerms` (Detailed) --
  * reads it from whichever one the deal actually populated, never
  * fabricating a value for the other mode. */
-function purchasePriceOf(deal: Deal): number {
-  return deal.operating_mode === 'detailed'
-    ? (deal.terms?.purchase_price ?? 0)
-    : (deal.inputs?.purchase_price ?? 0);
+function purchasePriceOf(deal: Deal): number | null {
+  switch (deal.operating_mode) {
+    case 'quick':
+      return deal.inputs?.purchase_price ?? null;
+    case 'detailed':
+      return deal.terms?.purchase_price ?? null;
+    case 'lease_level':
+      // D5.5A: a Lease-Level deal has `terms`, so its purchase price is its
+      // own. Until D5.4 persisted one there was nothing to read and this
+      // returned `null`; reading Quick's `inputs` would have shown a number
+      // from a contract this deal does not populate, which is the substitution
+      // the D5.1B guardrail was written to prevent. `terms` is the shared
+      // `AcquisitionTerms` Detailed reads on the line above -- one contract,
+      // one field, read the same way in both modes.
+      return deal.terms?.purchase_price ?? null;
+    default:
+      return assertNeverMode(deal.operating_mode);
+  }
 }
 
 /**
@@ -90,7 +105,7 @@ export function DealLibraryPanel({
                   <span
                     className={`deal-library-row-mode deal-library-row-mode-${deal.operating_mode}`}
                   >
-                    {deal.operating_mode === 'detailed' ? 'Detailed' : 'Quick'}
+                    {operatingModeLabel(deal.operating_mode)}
                   </span>
                 </span>
                 <span className="deal-library-row-meta">

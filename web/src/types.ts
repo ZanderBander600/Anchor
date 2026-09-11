@@ -1,3 +1,17 @@
+// D5.4/D5.5A: the Lease-Level transport contracts live in their own module
+// (see `leaseLevelTypes.ts`); only the `Deal` shape below needs to name them.
+import type {
+  LeaseLevelOperatingInputsRequest,
+  LeaseLevelPropertyInputsRequest,
+  LeaseRequest,
+  MarketLeasingAssumptionsRequest,
+  SuiteRequest,
+} from './leaseLevelTypes';
+import type {
+  LeaseLevelOneWaySensitivitySnapshot,
+  LeaseLevelTwoWaySensitivitySnapshot,
+} from './leaseLevelSensitivityTypes';
+
 export interface AcquisitionFormValues {
   purchasePrice: string;
   currentNoi: string;
@@ -172,7 +186,7 @@ export interface AcquisitionResults {
 // =============================================================================
 
 /** Mirrors ``OperatingMode`` in ``src/anchor/contracts.py``. */
-export type OperatingMode = 'quick' | 'detailed';
+export type OperatingMode = 'quick' | 'detailed' | 'lease_level';
 
 export interface AcquisitionTermsFormValues {
   purchasePrice: string;
@@ -394,6 +408,15 @@ export interface Deal {
   inputs: AcquisitionRequest | null;
   terms: AcquisitionTermsRequest | null;
   detailed_operating_inputs: DetailedOperatingInputsRequest | null;
+  /** D5.4: the five Lease-Level input objects. `null` for Quick and Detailed
+   * deals, exactly as `inputs` is `null` for the other two -- the mode says
+   * which grouping is populated, and a deal never carries two. `terms` above is
+   * shared with Detailed and is populated for Lease-Level too. */
+  property_inputs: LeaseLevelPropertyInputsRequest | null;
+  operating_inputs: LeaseLevelOperatingInputsRequest | null;
+  market_leasing: MarketLeasingAssumptionsRequest | null;
+  suites: SuiteRequest[] | null;
+  leases: LeaseRequest[] | null;
   /** Owner Return Metrics V3 Gate A4: optional, user-authored free text
    * describing the investment strategy/business plan -- never an
    * underwriting input, `null` when no context was supplied (including
@@ -416,6 +439,15 @@ export interface Deal {
    * `analysis_snapshot` above, plus whenever `deal_context` itself has
    * changed since the AI ran. Identical shape for both modes. */
   ai_snapshot: AIAnalysis | null;
+  /** D5.8A: the latest SUCCESSFUL Lease-Level one-way and two-way sensitivity
+   * runs for these exact assumptions, each a configuration and the
+   * authoritative response it produced. Held independently, so running one
+   * never disturbs the other, and `null` under exactly the conditions
+   * `ai_snapshot` is: none has been run, an assumption edit invalidated it, or
+   * the stored artifact could not be read. Deal Context is deliberately not
+   * part of their staleness rule -- a sensitivity run reads none. */
+  one_way_sensitivity_snapshot: LeaseLevelOneWaySensitivitySnapshot | null;
+  two_way_sensitivity_snapshot: LeaseLevelTwoWaySensitivitySnapshot | null;
   created_at: string;
   updated_at: string;
 }

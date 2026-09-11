@@ -31,9 +31,21 @@ from .ai import (
     AIProviderError,
     generate_ai_analysis,
     generate_detailed_ai_analysis,
+    generate_lease_level_ai_analysis,
 )
 from .analysis import (
     InvalidBreakEvenTargetError,
+    LeaseLevelAcquisitionResults,
+    LeaseValidationError,
+    OneWaySensitivityResult,
+    ParsedLeaseLevelInputs,
+    SensitivityTargetShadowedBySuiteOverrideError,
+    analyze_lease_level_acquisition_with_projection,
+    parse_lease_level_inputs,
+    run_detailed_one_way_sensitivity,
+    run_lease_level_one_way_sensitivity,
+    run_lease_level_two_way_sensitivity,
+    run_one_way_sensitivity,
     ReturnHurdleMetric,
     StandardBreakEvenAnalysis,
     StandardDetailedBreakEvenAnalysis,
@@ -54,10 +66,16 @@ from .contracts import (
     AcquisitionTerms,
     DetailedOperatingInputs,
     OperatingMode,
+    UnsupportedOperatingModeError,
 )
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError, SnapshotValidationError
-from .deals.fingerprint import fingerprint_ai, fingerprint_detailed_inputs, fingerprint_quick_inputs
+from .deals.fingerprint import (
+    fingerprint_ai,
+    fingerprint_detailed_inputs,
+    fingerprint_lease_level_inputs,
+    fingerprint_quick_inputs,
+)
 from .engine import (
     AcquisitionResults,
     DetailedAcquisitionResults,
@@ -207,6 +225,72 @@ def _validation_error_detail(error: InputValidationError) -> list[dict[str, Any]
     ]
 
 
+def _lease_validation_error_detail(error: LeaseValidationError) -> list[dict[str, Any]]:
+    """D5.3: a ``LeaseValidationError`` as a structured 422 detail.
+
+    The Lease-Level counterpart to ``_validation_error_detail`` above, and
+    deliberately its own shape rather than a translation into the Quick/Detailed
+    one. The two streams answer different questions and carry different
+    locators: ``InputIssue`` names a flat ``field_id``, while a
+    ``LeaseValidationIssue`` names a ``path`` into a nested, variable-arity rent
+    roll (``suites[2].suite_area_sf``) and a stable ``code`` a UI can branch on.
+    Flattening either into the other would throw away exactly the part a
+    consumer needs to anchor an error to the row that caused it.
+
+    One shape serves both structural parsing and downstream domain validation,
+    per D8 -- a malformed field and an out-of-domain field reach a caller
+    identically, differing only in ``code``.
+    """
+
+    return [
+        {
+            "code": issue.code.value,
+            "path": issue.path,
+            "message": issue.message,
+            "severity": issue.severity.value,
+        }
+        for issue in error.result.issues
+    ]
+
+
+def _lease_validation_error_response(error: LeaseValidationError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=_lease_validation_error_detail(error),
+    )
+
+
+def _unsupported_operating_mode(
+    operating_mode: OperatingMode, *, endpoint: str
+) -> HTTPException:
+    """D5.1A: the explicit refusal a *total* ``OperatingMode`` dispatch raises
+    for a valid mode this endpoint has no implementation for.
+
+    Deliberately distinct from the *unparseable*-mode error raised by
+    ``_require_operating_mode`` and the two inline parse guards: that one means
+    the submitted string names no ``OperatingMode`` member at all, and its
+    message enumerates the members that exist. This one means the caller named a
+    real, currently-valid member that this particular endpoint does not serve --
+    which is exactly the state every Lease-Level surface is in until the gate
+    that implements it (D5.3 analysis, D5.4 persistence, D5.8 AI). Collapsing the
+    two would tell a caller that ``"lease_level"`` is not a mode, which stops
+    being true the moment the member is published.
+
+    Carries no financial knowledge, parses nothing, and dispatches nothing: it
+    formats one 422 so no endpoint hand-writes the same payload, and so a mode
+    becomes supported by replacing a ``case`` arm rather than by editing an
+    error string.
+    """
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=(
+            f"operating_mode {operating_mode.value!r} is not supported by "
+            f"{endpoint}."
+        ),
+    )
+
+
 def _analyze_detailed(payload: dict[str, Any]) -> DetailedAcquisitionResults:
     """Detailed Operating Model V2.1 Gate 5 (mode routing) / Gate 4
     (response shape): the 'detailed' operating_mode branch of ``/analyze``.
@@ -253,8 +337,97 @@ def _analyze_detailed(payload: dict[str, Any]) -> DetailedAcquisitionResults:
     return analyze_detailed_acquisition_with_projection(terms, detailed_inputs)
 
 
-@app.post("/analyze", response_model=AcquisitionResults | DetailedAcquisitionResults)
-def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults | DetailedAcquisitionResults:
+def _analyze_quick(payload: dict[str, Any]) -> AcquisitionResults:
+    """D5.1A: the 'quick' operating_mode branch of ``POST /analyze``,
+    extracted verbatim so the endpoint's mode dispatch can be total -- one
+    explicit arm per mode -- rather than a Detailed test with an implicit
+    Quick fallthrough. Behavior is unchanged: the same validator, the same
+    engine call, the same bare ``AcquisitionResults`` response.
+    Named symmetrically with ``_analyze_detailed``."""
+
+    try:
+        inputs = validate_acquisition_inputs(payload)
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+    return analyze_acquisition(inputs)
+
+
+def _require_lease_level_inputs(
+    payload: dict[str, Any], *, also_owned: tuple[str, ...] = ()
+) -> ParsedLeaseLevelInputs:
+    """Reconstruct the five Lease-Level input contracts from the raw body.
+
+    Hands the payload to ``parse_lease_level_inputs`` **whole**. Pre-selecting
+    the keys it owns would silently discard a typo -- ``suite_are_sf`` beside
+    ``suite_area_sf`` -- which is precisely the failure D5.2's unknown-field
+    detection exists to catch, and the parser already knows that ``terms`` and
+    ``operating_mode`` belong to other owners.
+
+    This adapter constructs no ``Suite``, ``Lease`` or assumptions record
+    itself: doing so would put a second, untested wire format beside the
+    ratified one.
+
+    ``also_owned`` names the top-level keys *this endpoint* consumes beside the
+    Lease-Level inputs -- the row/column/metric controls a sensitivity body
+    carries. Declaring them keeps the unknown-key check live for everything
+    else, so ``row_assumtion`` is still reported rather than silently ignored.
+    """
+
+    try:
+        return parse_lease_level_inputs(payload, externally_owned_keys=also_owned)
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+
+
+def _analyze_lease_level(payload: dict[str, Any]) -> LeaseLevelAcquisitionResults:
+    """D5.3: the 'lease_level' branch of ``/analyze``.
+
+    Composes the two input owners -- shared ``AcquisitionTerms`` validation and
+    D5.2 structural parsing -- and delegates to the D4.5B entry point. It calls
+    no leasing builder, runs no month arithmetic and reads no result field: the
+    deterministic pipeline remains the sole financial authority, and this
+    function's whole job is to turn JSON into its arguments.
+
+    Returns ``LeaseLevelAcquisitionResults`` unchanged -- the monthly
+    projection, the annual projection derived from it, and the same generic
+    ``AcquisitionResults`` Quick and Detailed produce. No transport copy is
+    made, so the audit trail a caller sees is the one the engine used.
+
+    ``LeaseValidationError`` covers both phases and both surface as a structured
+    422: a malformed rent roll (D5.2) and an unanalysable one -- a mid-month
+    analysis start, an unreconciled area, ``NON_POSITIVE_FORWARD_EXIT_NOI`` --
+    reach the caller through one shape, distinguished by ``code``.
+    """
+
+    terms = _require_deal_terms(payload, mode_label="lease_level")
+    inputs = _require_lease_level_inputs(payload)
+
+    try:
+        return analyze_lease_level_acquisition_with_projection(
+            terms,
+            inputs.property_inputs,
+            inputs.suites,
+            inputs.leases,
+            market_leasing=inputs.market_leasing,
+            operating_inputs=inputs.operating_inputs,
+        )
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+
+
+@app.post(
+    "/analyze",
+    response_model=(
+        AcquisitionResults | DetailedAcquisitionResults | LeaseLevelAcquisitionResults
+    ),
+)
+def analyze(
+    payload: dict[str, Any] = Body(...),
+) -> AcquisitionResults | DetailedAcquisitionResults | LeaseLevelAcquisitionResults:
     """Detailed Operating Model V2.1 Gate 5: gains an optional
     ``operating_mode`` discriminator (``"quick"`` default / ``"detailed"``).
     A ``"quick"``/absent ``operating_mode`` request is unaffected -- the
@@ -283,18 +456,17 @@ def analyze(payload: dict[str, Any] = Body(...)) -> AcquisitionResults | Detaile
             ),
         ) from None
 
-    if operating_mode is OperatingMode.DETAILED:
-        return _analyze_detailed(payload)
-
-    try:
-        inputs = validate_acquisition_inputs(payload)
-    except InputValidationError as error:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=_validation_error_detail(error),
-        ) from None
-
-    return analyze_acquisition(inputs)
+    match operating_mode:
+        case OperatingMode.QUICK:
+            return _analyze_quick(payload)
+        case OperatingMode.DETAILED:
+            return _analyze_detailed(payload)
+        case OperatingMode.LEASE_LEVEL:
+            return _analyze_lease_level(payload)
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /analyze"
+            )
 
 
 # =============================================================================
@@ -362,13 +534,13 @@ def _sensitivity_detailed(payload: dict[str, Any]) -> TwoWaySensitivityResult:
         ) from None
 
 
-@app.post("/sensitivity", response_model=TwoWaySensitivityResult)
-def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
-    payload = dict(payload)
-    operating_mode = _require_operating_mode(payload)
-
-    if operating_mode is OperatingMode.DETAILED:
-        return _sensitivity_detailed(payload)
+def _sensitivity_quick(payload: dict[str, Any]) -> TwoWaySensitivityResult:
+    """D5.1A: the 'quick' operating_mode branch of ``POST /sensitivity``,
+    extracted verbatim so the endpoint's mode dispatch can be total -- one
+    explicit arm per mode -- rather than a Detailed test with an implicit
+    Quick fallthrough. Behavior is unchanged: the same validator and the
+    same ``run_two_way_sensitivity`` call.
+    Named symmetrically with ``_sensitivity_detailed``."""
 
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
@@ -426,6 +598,202 @@ def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
         ) from None
 
 
+_TWO_WAY_FIELDS = (
+    "row_assumption",
+    "row_values",
+    "column_assumption",
+    "column_values",
+    "metric",
+)
+
+_ONE_WAY_FIELDS = ("assumption", "values", "metric")
+
+#: Top-level keys a ``/deals`` body carries beside the Lease-Level inputs.
+#: A literal tuple, reviewed here: these are the keys *this endpoint family*
+#: consumes, and nothing derived from the request may ever join them -- a typo
+#: must never be able to excuse itself by appearing in the owned set.
+_DEAL_FIELDS = ("name", "deal_context")
+
+
+def _require_fields(payload: dict[str, Any], fields: tuple[str, ...]) -> None:
+    missing = [field for field in fields if field not in payload]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Missing required field(s): {', '.join(missing)}.",
+        )
+
+
+def _sensitivity_lease_level(payload: dict[str, Any]) -> TwoWaySensitivityResult:
+    """D5.3: the 'lease_level' branch of two-way ``/sensitivity``.
+
+    Delegates to the shipped D4.6B runner, which re-underwrites the complete
+    deterministic pipeline once per cell from the same immutable baseline. This
+    adapter interpolates nothing, caches nothing and evaluates no cell itself.
+
+    Candidate values stay **absolute**, exactly as the runner defines them --
+    never a relative shock. Refusals keep their identities: an unsupported
+    target, an unsupported metric, and a target shadowed by a suite override are
+    three different answers, and the last one refuses the whole run rather than
+    quietly perturbing a property default that some suite overrides anyway.
+    """
+
+    terms = _require_deal_terms(payload, mode_label="lease_level")
+    inputs = _require_lease_level_inputs(payload, also_owned=_TWO_WAY_FIELDS)
+    _require_fields(payload, _TWO_WAY_FIELDS)
+
+    try:
+        return run_lease_level_two_way_sensitivity(
+            terms,
+            inputs.property_inputs,
+            inputs.suites,
+            inputs.leases,
+            market_leasing=inputs.market_leasing,
+            operating_inputs=inputs.operating_inputs,
+            row_assumption=payload["row_assumption"],
+            row_values=payload["row_values"],
+            column_assumption=payload["column_assumption"],
+            column_values=payload["column_values"],
+            metric=payload["metric"],
+        )
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+    except SensitivityTargetShadowedBySuiteOverrideError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except (UnknownAssumptionError, UnknownMetricError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+
+
+@app.post("/sensitivity", response_model=TwoWaySensitivityResult)
+def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    match operating_mode:
+        case OperatingMode.QUICK:
+            return _sensitivity_quick(payload)
+        case OperatingMode.DETAILED:
+            return _sensitivity_detailed(payload)
+        case OperatingMode.LEASE_LEVEL:
+            return _sensitivity_lease_level(payload)
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /sensitivity"
+            )
+
+
+# =============================================================================
+# D5.3 -- one-way sensitivity
+#
+# A new endpoint rather than a dimension flag on ``/sensitivity``: adding a
+# discriminator there would change a request contract Quick and Detailed already
+# depend on, to describe a differently-shaped question. The two-way contract is
+# left exactly as shipped.
+#
+# Served for **all three** modes (D5.0 decision D3, an approved scope
+# expansion). All three one-way runners already exist and are tested; an
+# endpoint that refused Quick and Detailed would be advertising a limitation
+# that is not real, and would read as a defect rather than a boundary.
+#
+# Every mode returns the same ``OneWaySensitivityResult`` the runners return --
+# no per-mode response shape, and no reformatting here.
+# =============================================================================
+
+
+def _one_way_quick(payload: dict[str, Any]) -> OneWaySensitivityResult:
+    inputs = _require_deal_inputs(payload)
+    _require_fields(payload, _ONE_WAY_FIELDS)
+    return run_one_way_sensitivity(
+        inputs,
+        assumption=payload["assumption"],
+        values=payload["values"],
+        metric=payload["metric"],
+    )
+
+
+def _one_way_detailed(payload: dict[str, Any]) -> OneWaySensitivityResult:
+    terms = _require_deal_terms(payload)
+    detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    _require_fields(payload, _ONE_WAY_FIELDS)
+    return run_detailed_one_way_sensitivity(
+        terms,
+        detailed_operating_inputs,
+        assumption=payload["assumption"],
+        values=payload["values"],
+        metric=payload["metric"],
+    )
+
+
+def _one_way_lease_level(payload: dict[str, Any]) -> OneWaySensitivityResult:
+    terms = _require_deal_terms(payload, mode_label="lease_level")
+    inputs = _require_lease_level_inputs(payload, also_owned=_ONE_WAY_FIELDS)
+    _require_fields(payload, _ONE_WAY_FIELDS)
+    try:
+        return run_lease_level_one_way_sensitivity(
+            terms,
+            inputs.property_inputs,
+            inputs.suites,
+            inputs.leases,
+            market_leasing=inputs.market_leasing,
+            operating_inputs=inputs.operating_inputs,
+            assumption=payload["assumption"],
+            values=payload["values"],
+            metric=payload["metric"],
+        )
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+    except SensitivityTargetShadowedBySuiteOverrideError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+
+
+@app.post("/sensitivity/one-way", response_model=OneWaySensitivityResult)
+def sensitivity_one_way(
+    payload: dict[str, Any] = Body(...),
+) -> OneWaySensitivityResult:
+    """Vary one approved assumption across absolute candidate values.
+
+    Exposes the shipped one-way runners for every mode. Each performs
+    ``1 + len(values)`` complete re-underwrites -- one baseline plus one per
+    candidate -- with no caching and no shortcut, so a cell's value is always a
+    full deterministic analysis rather than an interpolation.
+    """
+
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    try:
+        match operating_mode:
+            case OperatingMode.QUICK:
+                return _one_way_quick(payload)
+            case OperatingMode.DETAILED:
+                return _one_way_detailed(payload)
+            case OperatingMode.LEASE_LEVEL:
+                return _one_way_lease_level(payload)
+            case _:
+                raise _unsupported_operating_mode(
+                    operating_mode, endpoint="POST /sensitivity/one-way"
+                )
+    except (UnknownAssumptionError, UnknownMetricError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+        ) from None
+    except InputValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_validation_error_detail(error),
+        ) from None
+
+
 def _sensitivity_presets_detailed(
     payload: dict[str, Any]
 ) -> StandardDetailedSensitivityPresets:
@@ -434,18 +802,13 @@ def _sensitivity_presets_detailed(
     return build_standard_detailed_presets(terms, detailed_operating_inputs)
 
 
-@app.post(
-    "/sensitivity/presets",
-    response_model=StandardSensitivityPresets | StandardDetailedSensitivityPresets,
-)
-def sensitivity_presets(
-    payload: dict[str, Any] = Body(...),
-) -> StandardSensitivityPresets | StandardDetailedSensitivityPresets:
-    payload = dict(payload)
-    operating_mode = _require_operating_mode(payload)
-
-    if operating_mode is OperatingMode.DETAILED:
-        return _sensitivity_presets_detailed(payload)
+def _sensitivity_presets_quick(payload: dict[str, Any]) -> StandardSensitivityPresets:
+    """D5.1A: the 'quick' operating_mode branch of ``POST /sensitivity/presets``,
+    extracted verbatim so the endpoint's mode dispatch can be total -- one
+    explicit arm per mode -- rather than a Detailed test with an implicit
+    Quick fallthrough. Behavior is unchanged: the same validator and the
+    same ``build_standard_presets`` call.
+    Named symmetrically with ``_sensitivity_presets_detailed``."""
 
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
@@ -463,6 +826,33 @@ def sensitivity_presets(
         ) from None
 
     return build_standard_presets(inputs)
+
+
+@app.post(
+    "/sensitivity/presets",
+    response_model=StandardSensitivityPresets | StandardDetailedSensitivityPresets,
+)
+def sensitivity_presets(
+    payload: dict[str, Any] = Body(...),
+) -> StandardSensitivityPresets | StandardDetailedSensitivityPresets:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    match operating_mode:
+        case OperatingMode.QUICK:
+            return _sensitivity_presets_quick(payload)
+        case OperatingMode.DETAILED:
+            return _sensitivity_presets_detailed(payload)
+        case OperatingMode.LEASE_LEVEL:
+            # Lease-Level ships no preset bundle -- deliberately, per D4.6B/D5.0 decision D4.
+            # This refusal is permanent for D5, not a staging placeholder.
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /sensitivity/presets"
+            )
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /sensitivity/presets"
+            )
 
 
 # =============================================================================
@@ -515,18 +905,14 @@ def _break_even_detailed(payload: dict[str, Any]) -> StandardDetailedBreakEvenAn
         ) from None
 
 
-@app.post(
-    "/break-even",
-    response_model=StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis,
-)
-def break_even(
-    payload: dict[str, Any] = Body(...),
-) -> StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis:
-    payload = dict(payload)
-    operating_mode = _require_operating_mode(payload)
-
-    if operating_mode is OperatingMode.DETAILED:
-        return _break_even_detailed(payload)
+def _break_even_quick(payload: dict[str, Any]) -> StandardBreakEvenAnalysis:
+    """D5.1A: the 'quick' operating_mode branch of ``POST /break-even``,
+    extracted verbatim so the endpoint's mode dispatch can be total -- one
+    explicit arm per mode -- rather than a Detailed test with an implicit
+    Quick fallthrough. Behavior is unchanged: the same validator, the same
+    hurdle parsing and the same ``build_standard_break_even_analysis``
+    call.
+    Named symmetrically with ``_break_even_detailed``."""
 
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
@@ -585,6 +971,33 @@ def break_even(
         ) from None
 
 
+@app.post(
+    "/break-even",
+    response_model=StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis,
+)
+def break_even(
+    payload: dict[str, Any] = Body(...),
+) -> StandardBreakEvenAnalysis | StandardDetailedBreakEvenAnalysis:
+    payload = dict(payload)
+    operating_mode = _require_operating_mode(payload)
+
+    match operating_mode:
+        case OperatingMode.QUICK:
+            return _break_even_quick(payload)
+        case OperatingMode.DETAILED:
+            return _break_even_detailed(payload)
+        case OperatingMode.LEASE_LEVEL:
+            # Lease-Level break-even does not exist and is not planned for D5 (guardrail G35).
+            # This refusal is permanent for D5, not a staging placeholder.
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /break-even"
+            )
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /break-even"
+            )
+
+
 # =============================================================================
 # Phase 9A / Detailed Operating Model V2.1 Gate 9 -- AI Analyst
 #
@@ -594,6 +1007,25 @@ def break_even(
 # or OpenAI call of its own. Gains the same ``operating_mode`` discriminator
 # as ``/analyze`` (Gate 5) -- a "quick"/absent request is unaffected.
 # =============================================================================
+
+
+#: The top-level keys ``POST /ai/analysis`` consumes beside a Lease-Level input
+#: set. Declared so ``_require_lease_level_inputs`` keeps its unknown-key check
+#: live for everything else -- a mistyped ``target_leverd_irr`` is still
+#: reported rather than silently ignored (D5.2's rule, D5.8's endpoint).
+#:
+#: ``deal_context`` belongs here for the same reason it belongs in
+#: ``_DEAL_FIELDS``: this endpoint reads it (``_optional_deal_context``) and
+#: threads it to the model as the analyst's own stated strategy. Omitting it
+#: would make every real request from the app fail its unknown-key check --
+#: the client always sends the field, ``null`` included.
+_AI_HURDLE_FIELDS: tuple[str, ...] = (
+    "target_levered_irr",
+    "target_headline_dscr",
+    "target_equity_multiple",
+    "return_hurdle_metric",
+    "deal_context",
+)
 
 
 def _require_ai_hurdle_targets(payload: dict[str, Any]) -> tuple[float, float, float, ReturnHurdleMetric]:
@@ -670,24 +1102,13 @@ def _ai_analysis_detailed(payload: dict[str, Any]) -> AIAnalysis:
         ) from None
 
 
-@app.post("/ai/analysis", response_model=AIAnalysis)
-def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
-    payload = dict(payload)
-    operating_mode_raw = payload.pop("operating_mode", OperatingMode.QUICK.value)
-    try:
-        operating_mode = OperatingMode(operating_mode_raw)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                "operating_mode must be one of "
-                f"{[member.value for member in OperatingMode]}; "
-                f"got {operating_mode_raw!r}."
-            ),
-        ) from None
-
-    if operating_mode is OperatingMode.DETAILED:
-        return _ai_analysis_detailed(payload)
+def _ai_analysis_quick(payload: dict[str, Any]) -> AIAnalysis:
+    """D5.1A: the 'quick' operating_mode branch of ``POST /ai/analysis``,
+    extracted verbatim so the endpoint's mode dispatch can be total -- one
+    explicit arm per mode -- rather than a Detailed test with an implicit
+    Quick fallthrough. Behavior is unchanged: the same validator and the
+    same ``generate_ai_analysis`` call.
+    Named symmetrically with ``_ai_analysis_detailed``."""
 
     raw_inputs = payload.get("inputs")
     if not isinstance(raw_inputs, dict):
@@ -733,6 +1154,102 @@ def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
         ) from None
+
+
+def _ai_analysis_lease_level(payload: dict[str, Any]) -> AIAnalysis:
+    """D5.8: the 'lease_level' branch of ``POST /ai/analysis``.
+
+    Same endpoint, same mode discriminator, same response model -- no second
+    AI endpoint exists and none is needed. It validates with the same two
+    shared validators every other Lease-Level endpoint uses
+    (``_require_deal_terms`` and ``_require_lease_level_inputs``), runs the one
+    authoritative analysis exactly once through
+    ``analyze_lease_level_acquisition_with_projection``, and hands the result
+    to ``generate_lease_level_ai_analysis``.
+
+    That single analysis call is the only financial work here, and it is the
+    same call ``POST /analyze`` makes for this mode -- so the AI Analyst
+    describes the deal the analyst's own Analyze produced. Nothing else is
+    triggered: no sensitivity preset bundle (this mode has none, and the
+    analyst-directed runs stay in Risk where they belong), no break-even search
+    (this mode has none), and no alternate scenario. This endpoint reproduces
+    no financial formula of its own.
+
+    A rent roll that cannot be underwritten is refused exactly as ``/analyze``
+    refuses it, through the same ``LeaseValidationError`` shape, rather than
+    reaching the model as a partial context.
+    """
+
+    terms = _require_deal_terms(payload, mode_label="lease_level")
+    lease_level_inputs = _require_lease_level_inputs(payload, also_owned=_AI_HURDLE_FIELDS)
+    deal_context = _optional_deal_context(payload)
+    (
+        target_levered_irr,
+        target_headline_dscr,
+        target_equity_multiple,
+        return_hurdle_metric,
+    ) = _require_ai_hurdle_targets(payload)
+
+    try:
+        lease_level_results = analyze_lease_level_acquisition_with_projection(
+            terms,
+            lease_level_inputs.property_inputs,
+            lease_level_inputs.suites,
+            lease_level_inputs.leases,
+            market_leasing=lease_level_inputs.market_leasing,
+            operating_inputs=lease_level_inputs.operating_inputs,
+        )
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+
+    try:
+        return generate_lease_level_ai_analysis(
+            terms,
+            lease_level_inputs,
+            lease_level_results,
+            target_levered_irr=target_levered_irr,
+            target_equity_multiple=target_equity_multiple,
+            target_headline_dscr=target_headline_dscr,
+            return_hurdle_metric=return_hurdle_metric,
+            deal_context=deal_context,
+        )
+    except AIConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from None
+    except AIProviderError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+        ) from None
+
+
+@app.post("/ai/analysis", response_model=AIAnalysis)
+def ai_analysis(payload: dict[str, Any] = Body(...)) -> AIAnalysis:
+    payload = dict(payload)
+    operating_mode_raw = payload.pop("operating_mode", OperatingMode.QUICK.value)
+    try:
+        operating_mode = OperatingMode(operating_mode_raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "operating_mode must be one of "
+                f"{[member.value for member in OperatingMode]}; "
+                f"got {operating_mode_raw!r}."
+            ),
+        ) from None
+
+    match operating_mode:
+        case OperatingMode.QUICK:
+            return _ai_analysis_quick(payload)
+        case OperatingMode.DETAILED:
+            return _ai_analysis_detailed(payload)
+        case OperatingMode.LEASE_LEVEL:
+            return _ai_analysis_lease_level(payload)
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /ai/analysis"
+            )
 
 
 # =============================================================================
@@ -1083,12 +1600,24 @@ def _require_deal_inputs(payload: dict[str, Any]) -> AcquisitionInputs:
         ) from None
 
 
-def _require_deal_terms(payload: dict[str, Any]) -> AcquisitionTerms:
+def _require_deal_terms(
+    payload: dict[str, Any], *, mode_label: str = "detailed"
+) -> AcquisitionTerms:
+    """The one shared ``AcquisitionTerms`` gate, used by Detailed and, from
+    D5.3, by Lease-Level.
+
+    Both modes deliberately share ``validate_acquisition_terms``: purchase
+    price, LTV, amortisation and the rest mean the same thing whichever engine
+    consumes them, and a Lease-Level-specific copy would be a second place for
+    those rules to drift. ``mode_label`` only names the mode in the
+    missing-object message, so Detailed's wording is unchanged.
+    """
+
     raw_terms = payload.get("terms")
     if not isinstance(raw_terms, dict):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="A 'detailed' operating_mode request must include a 'terms' object.",
+            detail=f"A {mode_label!r} operating_mode request must include a 'terms' object.",
         )
     try:
         return validate_acquisition_terms(raw_terms)
@@ -1136,15 +1665,31 @@ def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
     operating_mode = _require_operating_mode(payload)
     deal_context = _optional_deal_context(payload)
 
-    if operating_mode is OperatingMode.DETAILED:
-        terms = _require_deal_terms(payload)
-        detailed_inputs = _require_deal_detailed_operating_inputs(payload)
-        return deals_store.create_detailed_deal(
-            name, terms, detailed_inputs, deal_context=deal_context
-        )
-
-    inputs = _require_deal_inputs(payload)
-    return deals_store.create_deal(name, inputs, deal_context=deal_context)
+    match operating_mode:
+        case OperatingMode.QUICK:
+            inputs = _require_deal_inputs(payload)
+            return deals_store.create_deal(name, inputs, deal_context=deal_context)
+        case OperatingMode.DETAILED:
+            terms = _require_deal_terms(payload)
+            detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+            return deals_store.create_detailed_deal(
+                name, terms, detailed_inputs, deal_context=deal_context
+            )
+        case OperatingMode.LEASE_LEVEL:
+            terms = _require_deal_terms(payload, mode_label="lease_level")
+            inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+            return deals_store.create_lease_level_deal(
+                name,
+                terms,
+                inputs.property_inputs,
+                inputs.operating_inputs,
+                inputs.market_leasing,
+                inputs.suites,
+                inputs.leases,
+                deal_context=deal_context,
+            )
+        case _:
+            raise _unsupported_operating_mode(operating_mode, endpoint="POST /deals")
 
 
 @app.get("/deals", response_model=list[Deal])
@@ -1179,15 +1724,36 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
     deal_context = _optional_deal_context(payload)
 
     try:
-        if operating_mode is OperatingMode.DETAILED:
-            terms = _require_deal_terms(payload)
-            detailed_inputs = _require_deal_detailed_operating_inputs(payload)
-            return deals_store.update_detailed_deal(
-                deal_id, name, terms, detailed_inputs, deal_context=deal_context
-            )
-
-        inputs = _require_deal_inputs(payload)
-        return deals_store.update_deal(deal_id, name, inputs, deal_context=deal_context)
+        match operating_mode:
+            case OperatingMode.QUICK:
+                inputs = _require_deal_inputs(payload)
+                return deals_store.update_deal(
+                    deal_id, name, inputs, deal_context=deal_context
+                )
+            case OperatingMode.DETAILED:
+                terms = _require_deal_terms(payload)
+                detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+                return deals_store.update_detailed_deal(
+                    deal_id, name, terms, detailed_inputs, deal_context=deal_context
+                )
+            case OperatingMode.LEASE_LEVEL:
+                terms = _require_deal_terms(payload, mode_label="lease_level")
+                inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+                return deals_store.update_lease_level_deal(
+                    deal_id,
+                    name,
+                    terms,
+                    inputs.property_inputs,
+                    inputs.operating_inputs,
+                    inputs.market_leasing,
+                    inputs.suites,
+                    inputs.leases,
+                    deal_context=deal_context,
+                )
+            case _:
+                raise _unsupported_operating_mode(
+                    operating_mode, endpoint="PUT /deals/{deal_id}"
+                )
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
@@ -1250,13 +1816,31 @@ def deal_fingerprint(payload: dict[str, Any] = Body(...)) -> _FingerprintRespons
     operating_mode = _require_operating_mode(payload)
     deal_context = _optional_deal_context(payload)
 
-    if operating_mode is OperatingMode.DETAILED:
-        terms = _require_deal_terms(payload)
-        detailed_inputs = _require_deal_detailed_operating_inputs(payload)
-        financial_input_fingerprint = fingerprint_detailed_inputs(terms, detailed_inputs)
-    else:
-        inputs = _require_deal_inputs(payload)
-        financial_input_fingerprint = fingerprint_quick_inputs(inputs)
+    match operating_mode:
+        case OperatingMode.QUICK:
+            inputs = _require_deal_inputs(payload)
+            financial_input_fingerprint = fingerprint_quick_inputs(inputs)
+        case OperatingMode.DETAILED:
+            terms = _require_deal_terms(payload)
+            detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+            financial_input_fingerprint = fingerprint_detailed_inputs(
+                terms, detailed_inputs
+            )
+        case OperatingMode.LEASE_LEVEL:
+            terms = _require_deal_terms(payload, mode_label="lease_level")
+            inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+            financial_input_fingerprint = fingerprint_lease_level_inputs(
+                terms,
+                inputs.property_inputs,
+                inputs.suites,
+                inputs.leases,
+                market_leasing=inputs.market_leasing,
+                operating_inputs=inputs.operating_inputs,
+            )
+        case _:
+            raise _unsupported_operating_mode(
+                operating_mode, endpoint="POST /deals/fingerprint"
+            )
 
     ai_context_fingerprint = fingerprint_ai(
         analysis_fingerprint=financial_input_fingerprint, deal_context=deal_context
@@ -1312,6 +1896,77 @@ def update_deal_ai_snapshot(deal_id: str, payload: dict[str, Any] = Body(...)) -
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+    except SnapshotValidationError as error:
+        raise _snapshot_validation_error_response(error) from None
+
+
+# =============================================================================
+# Sprint D5.8A -- provenance-validated sensitivity-snapshot writes
+#
+# Two narrow endpoints, mirroring ``PUT /deals/{id}/ai-snapshot`` exactly: each
+# updates one persisted derived-analysis row and nothing else -- never the
+# assumptions, the name, Deal Context, the AI snapshot, the *other* sensitivity
+# snapshot, or the deal's save timestamp -- and each requires the provenance
+# fingerprint the run was performed under, which the store layer independently
+# verifies against the deal's own currently-stored assumptions and rejects (422)
+# on any mismatch.
+#
+# One endpoint per analysis kind, not one per UI component: the two exist because
+# the two snapshots are genuinely independent state (running one must never
+# erase the other), which is the same reason they are separate rows.
+# =============================================================================
+
+
+@app.put("/deals/{deal_id}/sensitivity-snapshot/one-way", response_model=Deal)
+def update_deal_one_way_sensitivity_snapshot(
+    deal_id: str, payload: dict[str, Any] = Body(...)
+) -> Deal:
+    raw_snapshot = _require_snapshot_dict(payload, "sensitivity_snapshot")
+    financial_input_fingerprint = _require_fingerprint_string(
+        payload, "financial_input_fingerprint"
+    )
+    try:
+        return deals_store.update_one_way_sensitivity_snapshot(
+            deal_id,
+            raw_snapshot,
+            financial_input_fingerprint=financial_input_fingerprint,
+        )
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+    except UnsupportedOperatingModeError as error:
+        raise _unsupported_operating_mode(
+            error.operating_mode,
+            endpoint="PUT /deals/{deal_id}/sensitivity-snapshot/one-way",
+        ) from None
+    except SnapshotValidationError as error:
+        raise _snapshot_validation_error_response(error) from None
+
+
+@app.put("/deals/{deal_id}/sensitivity-snapshot/two-way", response_model=Deal)
+def update_deal_two_way_sensitivity_snapshot(
+    deal_id: str, payload: dict[str, Any] = Body(...)
+) -> Deal:
+    raw_snapshot = _require_snapshot_dict(payload, "sensitivity_snapshot")
+    financial_input_fingerprint = _require_fingerprint_string(
+        payload, "financial_input_fingerprint"
+    )
+    try:
+        return deals_store.update_two_way_sensitivity_snapshot(
+            deal_id,
+            raw_snapshot,
+            financial_input_fingerprint=financial_input_fingerprint,
+        )
+    except DealNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+    except UnsupportedOperatingModeError as error:
+        raise _unsupported_operating_mode(
+            error.operating_mode,
+            endpoint="PUT /deals/{deal_id}/sensitivity-snapshot/two-way",
         ) from None
     except SnapshotValidationError as error:
         raise _snapshot_validation_error_response(error) from None

@@ -145,18 +145,49 @@ import json
 import os
 import sqlite3
 import uuid
+from enum import Enum
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from ..ai.contracts import AIAnalysis
-from ..contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs, OperatingMode
+from ..analysis import (
+    EscalationBasis,
+    InitialVacancyAssumptions,
+    InitialVacancyStrategy,
+    Lease,
+    LeaseLevelOperatingInputs,
+    LeaseLevelPropertyInputs,
+    LeaseOrigin,
+    LeaseType,
+    LeasingCommissionMethod,
+    MarketLeasingAssumptions,
+    RecoveryBasis,
+    Suite,
+)
+from ..contracts import (
+    AcquisitionInputs,
+    AcquisitionTerms,
+    DetailedOperatingInputs,
+    OperatingMode,
+    UnsupportedOperatingModeError,
+)
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults, OperatingProjection
-from .contracts import Deal, DealNotFoundError
-from .fingerprint import fingerprint_ai, fingerprint_detailed_inputs, fingerprint_quick_inputs
+from .contracts import (
+    Deal,
+    DealNotFoundError,
+    OneWaySensitivitySnapshot,
+    TwoWaySensitivitySnapshot,
+)
+from .fingerprint import (
+    fingerprint_ai,
+    fingerprint_detailed_inputs,
+    fingerprint_lease_level_inputs,
+    fingerprint_quick_inputs,
+)
 
 _DEFAULT_DB_PATH = Path("data/anchor.db")
 
@@ -185,7 +216,27 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # ``DEFAULT`` literal, same reasoning as ``deal_context``: a legacy row
 # backfills to ``NULL`` on every one, which is exactly "no cached snapshot
 # exists yet" -- never a fabricated cached result.
-_SCHEMA_VERSION = 4
+# Sprint D5.8A: schema version 6 adds one purely additive table,
+# ``deal_sensitivity_snapshots``, created unconditionally by ``_connect`` via
+# CREATE TABLE IF NOT EXISTS exactly as the Detailed pair was at version 2 and
+# the Lease-Level family at version 5. No ALTER, no existing row read or
+# rewritten, and the new table simply starts empty for every deal that already
+# exists.
+_SCHEMA_VERSION = 6
+
+
+class PersistedDealDataError(RuntimeError):
+    """Stored data could not be decoded into an authoritative contract.
+
+    Distinct from a validation error, which describes something a *caller*
+    submitted and can fix. This describes the database disagreeing with the code
+    -- an enum token no longer in the enum, an override JSON that will not parse,
+    a parent row whose children are missing.
+
+    Raised rather than repaired. A store that quietly substituted a default for
+    an unreadable ``lease_type`` would hand the engine a rent roll nobody
+    authored, and the resulting numbers would look entirely ordinary.
+    """
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS deals (
@@ -271,6 +322,224 @@ CREATE TABLE IF NOT EXISTS detailed_operating_inputs (
     expense_growth            REAL NOT NULL
 )
 """
+
+# =============================================================================
+# Sprint D5.4 -- Lease-Level persistence, schema version 5.
+#
+# Six tables, following the Detailed precedent exactly: a new table family per
+# mode rather than a discriminator column, because ``operating_mode`` is not
+# stored anywhere -- it is inferred from which table a row lives in. That keeps
+# ``deals`` and ``detailed_deals`` byte-untouched by this gate.
+#
+# Fixed-arity contracts stay flat and typed, so SQLite stores a float as a REAL
+# and returns it bit-identical. Only the two genuinely variable-arity
+# collections become relational rows.
+#
+# The single JSON column is ``lease_level_suites.market_leasing_override``, and
+# it is JSON because the domain says the record is atomic: a suite supplies a
+# whole ``MarketLeasingAssumptions`` or none of one (D0 24.2). Twenty-three
+# nullable columns would make a *partial* override representable in storage,
+# which the domain forbids -- the shape would permit a state no analyst can
+# author and no validator would catch.
+#
+# No ON DELETE CASCADE is declared: this module never enables
+# ``PRAGMA foreign_keys``, matching its existing posture, so a declared cascade
+# would be decorative. Child rows are deleted explicitly, in the same
+# transaction as the parent, exactly as ``detailed_operating_inputs`` already is.
+# =============================================================================
+
+_CREATE_LEASE_LEVEL_DEALS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_deals (
+    id                    TEXT PRIMARY KEY,
+    name                  TEXT NOT NULL,
+    purchase_price        REAL NOT NULL,
+    hold_period           INTEGER NOT NULL,
+    exit_cap_rate         REAL NOT NULL,
+    ltv                   REAL NOT NULL,
+    interest_rate         REAL NOT NULL,
+    amortization          INTEGER NOT NULL,
+    acquisition_cost_pct  REAL NOT NULL,
+    financing_fee_pct     REAL NOT NULL,
+    disposition_cost_pct  REAL NOT NULL,
+    annual_capex_reserve  REAL NOT NULL,
+    io_period             INTEGER NOT NULL,
+    deal_context          TEXT,
+    ai_snapshot                         TEXT,
+    ai_snapshot_schema_version          INTEGER,
+    ai_snapshot_fingerprint             TEXT,
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
+)
+"""
+
+# Deliberately no ``analysis_snapshot`` columns. D5 decision A: Lease-Level
+# results are recomputed from approved inputs on open, so there is no cached
+# financial artifact to store, to go stale, or to be served as current. Absent
+# columns are a stronger guarantee than an unused nullable one -- there is
+# nowhere for a future gate to put one by accident.
+
+_CREATE_LEASE_LEVEL_PROPERTY_INPUTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_property_inputs (
+    deal_id              TEXT PRIMARY KEY REFERENCES lease_level_deals(id),
+    analysis_start_date  TEXT NOT NULL,
+    rentable_area_sf     REAL NOT NULL
+)
+"""
+
+_CREATE_LEASE_LEVEL_OPERATING_INPUTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_operating_inputs (
+    deal_id                    TEXT PRIMARY KEY REFERENCES lease_level_deals(id),
+    other_income               REAL NOT NULL,
+    other_income_growth        REAL NOT NULL,
+    credit_loss_pct            REAL NOT NULL,
+    property_taxes             REAL NOT NULL,
+    insurance                  REAL NOT NULL,
+    utilities                  REAL NOT NULL,
+    repairs_maintenance        REAL NOT NULL,
+    other_operating_expenses   REAL NOT NULL,
+    management_fee_pct         REAL NOT NULL,
+    expense_growth             REAL NOT NULL,
+    recoverable_expense_ratio  REAL NOT NULL
+)
+"""
+
+_CREATE_LEASE_LEVEL_MARKET_LEASING_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_market_leasing (
+    deal_id                    TEXT PRIMARY KEY REFERENCES lease_level_deals(id),
+    market_rent_psf            REAL NOT NULL,
+    market_rent_growth         REAL NOT NULL,
+    renewal_rent_psf           REAL,
+    renewal_rent_spread        REAL NOT NULL,
+    renewal_term_months        INTEGER NOT NULL,
+    successor_escalation_pct   REAL NOT NULL,
+    renewal_downtime_months    REAL NOT NULL,
+    renewal_free_rent_months   REAL NOT NULL,
+    new_term_months            INTEGER NOT NULL,
+    new_downtime_months        REAL NOT NULL,
+    new_free_rent_months       REAL NOT NULL,
+    renewal_ti_psf             REAL NOT NULL,
+    new_ti_psf                 REAL NOT NULL,
+    leasing_commission_method  TEXT NOT NULL,
+    renewal_lc_pct             REAL NOT NULL,
+    new_lc_pct                 REAL NOT NULL,
+    renewal_probability        REAL NOT NULL,
+    renewal_lease_type         TEXT NOT NULL,
+    renewal_recovery_basis     TEXT,
+    renewal_expense_stop_psf   REAL,
+    new_lease_type             TEXT NOT NULL,
+    new_recovery_basis         TEXT,
+    new_expense_stop_psf       REAL
+)
+"""
+
+# ``ordinal`` is display metadata: it preserves the order the analyst entered
+# the rent roll in, and is excluded from the economic fingerprint, so reordering
+# rows never invalidates a snapshot. The composite primary key is the domain's
+# own identity rule -- one suite id per deal -- and nothing more. No CHECK
+# constraint restates a financial domain: ``renewal_probability`` bounds belong
+# to the D2 validator, in one place.
+_CREATE_LEASE_LEVEL_SUITES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_suites (
+    deal_id                  TEXT NOT NULL REFERENCES lease_level_deals(id),
+    suite_id                 TEXT NOT NULL,
+    ordinal                  INTEGER NOT NULL,
+    suite_area_sf            REAL NOT NULL,
+    suite_label              TEXT,
+    market_rent_psf          REAL,
+    market_leasing_override  TEXT,
+    initial_vacancy_strategy            TEXT,
+    initial_vacancy_lease_up_months     REAL,
+    PRIMARY KEY (deal_id, suite_id)
+)
+"""
+
+_CREATE_LEASE_LEVEL_LEASES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS lease_level_leases (
+    deal_id                 TEXT NOT NULL REFERENCES lease_level_deals(id),
+    lease_id                TEXT NOT NULL,
+    ordinal                 INTEGER NOT NULL,
+    suite_id                TEXT NOT NULL,
+    leased_area_sf          REAL NOT NULL,
+    rent_commencement_date  TEXT NOT NULL,
+    lease_expiration_date   TEXT NOT NULL,
+    base_rent_psf           REAL NOT NULL,
+    escalation_pct          REAL NOT NULL,
+    escalation_basis        TEXT NOT NULL,
+    lease_type              TEXT NOT NULL,
+    tenant_name             TEXT,
+    lease_start_date        TEXT,
+    origin                  TEXT NOT NULL,
+    recovery_basis          TEXT,
+    expense_stop_psf        REAL,
+    PRIMARY KEY (deal_id, lease_id)
+)
+"""
+
+# =============================================================================
+# Sprint D5.8A -- persisted derived analytical state, schema version 6.
+#
+# One table, not one per analysis type and not a column family on each mode's
+# parent row.
+#
+# **Why its own table rather than more columns.** ``analysis_snapshot`` and
+# ``ai_snapshot`` are single-valued per deal, so a column pair each was the
+# smallest thing that worked (Gate A6). Sensitivity is not: a deal holds a
+# latest one-way *and* a latest two-way, independently, and running one must
+# never disturb the other. Two rows discriminated by ``analysis_kind`` make that
+# independence structural -- there is no single row a write could clobber -- and
+# it costs one table instead of six columns on each of three parent tables.
+#
+# **Operating-mode identity comes for free.** A deal id lives in exactly one of
+# ``deals``/``detailed_deals``/``lease_level_deals`` (all three mint fresh
+# ``uuid4`` hex strings), so the mode is already determined by which table holds
+# the id -- the same rule this module has used since the Detailed split. A
+# second, stored copy of the mode here would be a value that could disagree with
+# it, so there is none. D5.8A writes only Lease-Level rows; the table is
+# mode-blind so a later gate can adopt it without a migration.
+#
+# **The payload is one atomic versioned JSON document.** ``snapshot`` holds the
+# whole ``{configuration, result}`` pair, so a configuration can never be
+# persisted beside another run's result -- they are written and read as one
+# value or not at all. This is a DERIVED snapshot, exactly like ``ai_snapshot``;
+# it authorises nothing about how Suites, Leases or assumptions are stored,
+# which stay relational and untouched.
+#
+# ``source_fingerprint`` is the canonical financial-input fingerprint of the
+# assumptions the run was actually performed against (never the AI-context one:
+# a sensitivity run reads no ``deal_context``). ``schema_version`` lets a future
+# contract change invalidate old rows rather than crash on them.
+#
+# No ON DELETE CASCADE, for the reason stated above ``lease_level_suites``: this
+# module never enables ``PRAGMA foreign_keys``, so a declared cascade would be
+# decorative and would leave orphan rows behind a schema that looked safe.
+# ``delete_deal`` removes these rows explicitly, in the same transaction as the
+# parent.
+# =============================================================================
+
+_ONE_WAY_KIND = "one_way"
+_TWO_WAY_KIND = "two_way"
+
+_CREATE_DEAL_SENSITIVITY_SNAPSHOTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS deal_sensitivity_snapshots (
+    deal_id            TEXT NOT NULL,
+    analysis_kind      TEXT NOT NULL,
+    snapshot           TEXT NOT NULL,
+    schema_version     INTEGER NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    generated_at       TEXT NOT NULL,
+    PRIMARY KEY (deal_id, analysis_kind)
+)
+"""
+
+
+_LEASE_LEVEL_CHILD_TABLES = (
+    "lease_level_property_inputs",
+    "lease_level_operating_inputs",
+    "lease_level_market_leasing",
+    "lease_level_suites",
+    "lease_level_leases",
+)
+
 
 # Underwriting V2 Gate 5's five new columns, in the order they are added to
 # a pre-V2 database by ``_migrate``: (column name, SQLite column type,
@@ -359,6 +628,11 @@ _DETAILED_OPERATING_COLUMNS: tuple[str, ...] = (
 
 _ANALYSIS_SNAPSHOT_SCHEMA_VERSION = 1
 _AI_SNAPSHOT_SCHEMA_VERSION = 1
+# D5.8A: the serialized ``{configuration, result}`` contract for one persisted
+# sensitivity run. Bumping this makes every stored row of the old shape decode
+# as absent rather than as a wrongly-shaped result -- the same graceful
+# invalidation ``_decode_snapshot`` already gives the other two.
+_SENSITIVITY_SNAPSHOT_SCHEMA_VERSION = 1
 
 
 class SnapshotValidationError(ValueError):
@@ -401,6 +675,19 @@ def _coerce_snapshot_value(hint: Any, value: Any) -> Any:
             raise SnapshotValidationError(
                 f"Expected a list or tuple for a tuple-typed field, got {type(value).__name__}."
             )
+        # D5.8A: coerce the *elements* too, by the element type the hint
+        # declares. Until this gate every tuple field held a scalar
+        # (``tuple[float, ...]``, ``tuple[str, ...]``) for which element
+        # coercion is the identity, so no existing snapshot decodes any
+        # differently. ``TwoWaySensitivityResult.matrix`` is the first
+        # ``tuple[tuple[...], ...]``, and without this its rows would decode as
+        # the JSON ``list``s they arrived as -- a matrix that compares unequal
+        # to the one that was stored, and a round-trip that silently is not
+        # one.
+        element_hints = get_args(hint)
+        if len(element_hints) == 2 and element_hints[1] is Ellipsis:
+            element_hint = element_hints[0]
+            return tuple(_coerce_snapshot_value(element_hint, item) for item in value)
         return tuple(value)
     if dataclasses.is_dataclass(hint):
         return _dataclass_from_json(hint, value)
@@ -465,7 +752,21 @@ def _ai_snapshot_from_dict(data: dict) -> AIAnalysis:
     return _dataclass_from_json(AIAnalysis, data)
 
 
-def _encode_snapshot(value: AcquisitionResults | DetailedAcquisitionResults | AIAnalysis) -> str:
+def _one_way_sensitivity_snapshot_from_dict(data: dict) -> OneWaySensitivitySnapshot:
+    return _dataclass_from_json(OneWaySensitivitySnapshot, data)
+
+
+def _two_way_sensitivity_snapshot_from_dict(data: dict) -> TwoWaySensitivitySnapshot:
+    return _dataclass_from_json(TwoWaySensitivitySnapshot, data)
+
+
+def _encode_snapshot(
+    value: AcquisitionResults
+    | DetailedAcquisitionResults
+    | AIAnalysis
+    | OneWaySensitivitySnapshot
+    | TwoWaySensitivitySnapshot,
+) -> str:
     """Canonical JSON encoding for any snapshot dataclass -- ``asdict``
     recurses into nested dataclasses (``DetailedAcquisitionResults.
     operating_projection``/``.results``) automatically; a tuple field
@@ -501,6 +802,51 @@ def _decode_snapshot(
         return decoder(json.loads(raw_json))
     except Exception:
         return None
+
+
+def _read_sensitivity_snapshots(
+    connection: sqlite3.Connection, deal_id: str, *, expected_fingerprint: str
+) -> tuple[OneWaySensitivitySnapshot | None, TwoWaySensitivitySnapshot | None]:
+    """D5.8A -- the latest one-way and two-way runs stored for ``deal_id``,
+    each returned only if it still matches ``expected_fingerprint`` (the
+    fingerprint of the deal's own currently-stored assumptions) and still
+    decodes under the current contract.
+
+    Read through the same ``_decode_snapshot`` gate every other snapshot passes:
+    absent, schema-incompatible, fingerprint-stale or malformed all resolve to
+    ``None``, and none of them raises -- an unreadable derived artifact must
+    never block opening a deal, and a stale one must never be handed back as
+    current.
+
+    The two are looked up independently and neither can affect the other: a
+    one-way row that has gone stale, gone missing or gone unreadable leaves the
+    two-way matrix exactly where it was.
+    """
+
+    decoders = {
+        _ONE_WAY_KIND: _one_way_sensitivity_snapshot_from_dict,
+        _TWO_WAY_KIND: _two_way_sensitivity_snapshot_from_dict,
+    }
+    decoded: dict[str, Any] = {_ONE_WAY_KIND: None, _TWO_WAY_KIND: None}
+    rows = connection.execute(
+        "SELECT * FROM deal_sensitivity_snapshots WHERE deal_id = ?", (deal_id,)
+    ).fetchall()
+    for row in rows:
+        kind = row["analysis_kind"]
+        decoder = decoders.get(kind)
+        if decoder is None:
+            # A kind this build does not know about is ignored, never guessed
+            # at -- the same posture as an incompatible schema version.
+            continue
+        decoded[kind] = _decode_snapshot(
+            raw_json=row["snapshot"],
+            stored_schema_version=row["schema_version"],
+            current_schema_version=_SENSITIVITY_SNAPSHOT_SCHEMA_VERSION,
+            stored_fingerprint=row["source_fingerprint"],
+            expected_fingerprint=expected_fingerprint,
+            decoder=decoder,
+        )
+    return decoded[_ONE_WAY_KIND], decoded[_TWO_WAY_KIND]
 
 
 def _validate_provenance(
@@ -599,6 +945,17 @@ def _migrate(connection: sqlite3.Connection) -> None:
                 f"ALTER TABLE detailed_deals ADD COLUMN {column_name} {column_type}"
             )
 
+    # D5.4 -- schema version 5 adds the six ``lease_level_*`` tables. There is
+    # no ALTER here, and deliberately nothing to write: the tables are created
+    # unconditionally by ``_connect`` via CREATE TABLE IF NOT EXISTS, exactly as
+    # the Detailed pair was at version 2, so a v4 database gains the new family
+    # without a single existing row being read or rewritten. The safest
+    # migration available is one that touches no existing data.
+    # D5.8A -- schema version 6 adds ``deal_sensitivity_snapshots``. Nothing to
+    # do here for the same reason version 5 had nothing to do: the table is
+    # created unconditionally by ``_connect`` via CREATE TABLE IF NOT EXISTS, so
+    # a v5 (or v1) database gains it without a single existing row being read or
+    # rewritten, and every pre-existing deal simply has no rows in it yet.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -634,6 +991,13 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_TABLE_SQL)
     connection.execute(_CREATE_DETAILED_DEALS_TABLE_SQL)
     connection.execute(_CREATE_DETAILED_OPERATING_INPUTS_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_DEALS_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_PROPERTY_INPUTS_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_OPERATING_INPUTS_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_MARKET_LEASING_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_SUITES_TABLE_SQL)
+    connection.execute(_CREATE_LEASE_LEVEL_LEASES_TABLE_SQL)
+    connection.execute(_CREATE_DEAL_SENSITIVITY_SNAPSHOTS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -645,6 +1009,500 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+
+# =============================================================================
+# Sprint D5.4 -- Lease-Level storage codec.
+#
+# A *trusted* boundary, deliberately separate from ``leasing/parsing.py``. That
+# module answers "can this untrusted JSON become a contract"; this one answers
+# "restore the contract this store wrote". Routing rows through the HTTP parser
+# would make persistence inherit transport semantics -- unknown-key reporting,
+# request-shaped error paths -- for data the store itself produced, and would
+# couple the database format to the wire format so neither could change alone.
+#
+# Everything here is contract-driven: column tuples come from
+# ``dataclasses.fields``, so a field added to ``Suite`` or ``Lease`` is a schema
+# change this module notices rather than silently drops.
+# =============================================================================
+
+
+def _column_names(contract: type) -> tuple[str, ...]:
+    return tuple(field.name for field in dataclasses.fields(contract))
+
+
+_LEASE_LEVEL_OPERATING_COLUMNS = _column_names(LeaseLevelOperatingInputs)
+_LEASE_LEVEL_MARKET_COLUMNS = _column_names(MarketLeasingAssumptions)
+
+#: ``MarketLeasingAssumptions`` fields by name, with the enum type each enum
+#: field must be restored to. Derived from the contract so a new enum field
+#: cannot be silently decoded as a bare string.
+_MARKET_ENUM_FIELDS: dict[str, type] = {
+    "leasing_commission_method": LeasingCommissionMethod,
+    "renewal_lease_type": LeaseType,
+    "renewal_recovery_basis": RecoveryBasis,
+    "new_lease_type": LeaseType,
+    "new_recovery_basis": RecoveryBasis,
+}
+
+_LEASE_ENUM_FIELDS: dict[str, type] = {
+    "escalation_basis": EscalationBasis,
+    "lease_type": LeaseType,
+    "origin": LeaseOrigin,
+    "recovery_basis": RecoveryBasis,
+}
+
+_LEASE_DATE_FIELDS = (
+    "rent_commencement_date",
+    "lease_expiration_date",
+    "lease_start_date",
+)
+
+
+def _encode_enum(value: object) -> str | None:
+    """An enum as its wire token. ``None`` stays ``None``."""
+
+    if value is None:
+        return None
+    assert isinstance(value, Enum)
+    return value.value
+
+
+def _decode_enum(value: object, enum_type: type, *, path: str) -> object:
+    """A stored token back into its authoritative member.
+
+    A token the enum no longer recognises is a data-integrity failure, not a
+    reason to pick a default: silently substituting ``NNN`` for an unreadable
+    ``lease_type`` would hand the engine a lease nobody wrote, and the resulting
+    recoveries would look perfectly ordinary.
+    """
+
+    if value is None:
+        return None
+    try:
+        return enum_type(value)
+    except ValueError:
+        raise PersistedDealDataError(
+            f"{path} holds {value!r}, which is not a valid "
+            f"{enum_type.__name__} value."
+        ) from None
+
+
+def _encode_date(value: object) -> str | None:
+    """ISO-8601 TEXT -- the same spelling the wire and the fingerprint use, so
+    one value has one representation everywhere. No timezone is introduced: a
+    lease date is a calendar date, not an instant."""
+
+    if value is None:
+        return None
+    assert isinstance(value, date)
+    return value.isoformat()
+
+
+def _decode_date(value: object, *, path: str) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        raise PersistedDealDataError(
+            f"{path} holds {value!r}, which is not an ISO-8601 date."
+        ) from None
+
+
+def _encode_market_leasing_override(
+    override: MarketLeasingAssumptions | None,
+) -> str | None:
+    """The one approved nested-JSON column.
+
+    ``MarketLeasingAssumptions`` is atomic by design -- a suite supplies the
+    whole record or none of it -- so the two states this column can hold are
+    exactly the two the domain permits. Canonical (sorted-key, tight) JSON, with
+    dates and enums going through the same encoders the columns use, so the
+    stored bytes are a function of the value and nothing else.
+
+    Floats are written by ``json`` in ``repr`` form, which round-trips a Python
+    float exactly; a test pins that over the whole contract rather than trusting
+    it.
+    """
+
+    if override is None:
+        return None
+
+    payload = {
+        name: (
+            _encode_enum(value)
+            if isinstance(value, Enum)
+            else _encode_date(value)
+            if isinstance(value, date)
+            else value
+        )
+        for name, value in dataclasses.asdict(override).items()
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _decode_market_leasing_override(
+    raw: object, *, path: str
+) -> MarketLeasingAssumptions | None:
+    """Rebuild the authoritative contract -- never hand back a raw dict.
+
+    A dict would type-check nowhere and blow up somewhere far from here, inside
+    a rollover builder reading ``.renewal_probability`` off a mapping.
+    """
+
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(str(raw))
+    except ValueError:
+        raise PersistedDealDataError(
+            f"{path} does not hold valid JSON."
+        ) from None
+    if not isinstance(payload, dict):
+        raise PersistedDealDataError(f"{path} does not hold a JSON object.")
+
+    expected = set(_LEASE_LEVEL_MARKET_COLUMNS)
+    if set(payload) != expected:
+        missing = sorted(expected - set(payload))
+        unexpected = sorted(set(payload) - expected)
+        raise PersistedDealDataError(
+            f"{path} is not a complete MarketLeasingAssumptions record "
+            f"(missing={missing}, unexpected={unexpected})."
+        )
+
+    for name, enum_type in _MARKET_ENUM_FIELDS.items():
+        payload[name] = _decode_enum(payload[name], enum_type, path=f"{path}.{name}")
+    return MarketLeasingAssumptions(**payload)
+
+
+def _suite_row_values(deal_id: str, ordinal: int, suite: Suite) -> tuple[object, ...]:
+    initial_vacancy = suite.initial_vacancy
+    return (
+        deal_id,
+        suite.suite_id,
+        ordinal,
+        suite.suite_area_sf,
+        suite.suite_label,
+        suite.market_rent_psf,
+        _encode_market_leasing_override(suite.market_leasing_override),
+        _encode_enum(initial_vacancy.strategy) if initial_vacancy is not None else None,
+        initial_vacancy.initial_lease_up_months if initial_vacancy is not None else None,
+    )
+
+
+def _suite_from_row(row: sqlite3.Row) -> Suite:
+    suite_id = row["suite_id"]
+    strategy = row["initial_vacancy_strategy"]
+    initial_vacancy = (
+        InitialVacancyAssumptions(
+            strategy=_decode_enum(
+                strategy,
+                InitialVacancyStrategy,
+                path=f"suite {suite_id!r} initial_vacancy_strategy",
+            ),
+            initial_lease_up_months=row["initial_vacancy_lease_up_months"],
+        )
+        if strategy is not None
+        else None
+    )
+    return Suite(
+        suite_id=suite_id,
+        suite_area_sf=row["suite_area_sf"],
+        suite_label=row["suite_label"],
+        market_rent_psf=row["market_rent_psf"],
+        market_leasing_override=_decode_market_leasing_override(
+            row["market_leasing_override"],
+            path=f"suite {suite_id!r} market_leasing_override",
+        ),
+        initial_vacancy=initial_vacancy,
+    )
+
+
+def _lease_row_values(deal_id: str, ordinal: int, lease: Lease) -> tuple[object, ...]:
+    return (
+        deal_id,
+        lease.lease_id,
+        ordinal,
+        lease.suite_id,
+        lease.leased_area_sf,
+        _encode_date(lease.rent_commencement_date),
+        _encode_date(lease.lease_expiration_date),
+        lease.base_rent_psf,
+        lease.escalation_pct,
+        _encode_enum(lease.escalation_basis),
+        _encode_enum(lease.lease_type),
+        lease.tenant_name,
+        _encode_date(lease.lease_start_date),
+        _encode_enum(lease.origin),
+        _encode_enum(lease.recovery_basis),
+        lease.expense_stop_psf,
+    )
+
+
+def _lease_from_row(row: sqlite3.Row) -> Lease:
+    lease_id = row["lease_id"]
+    decoded: dict[str, object] = {
+        "lease_id": lease_id,
+        "suite_id": row["suite_id"],
+        "leased_area_sf": row["leased_area_sf"],
+        "base_rent_psf": row["base_rent_psf"],
+        "escalation_pct": row["escalation_pct"],
+        "tenant_name": row["tenant_name"],
+        "expense_stop_psf": row["expense_stop_psf"],
+    }
+    for name in _LEASE_DATE_FIELDS:
+        decoded[name] = _decode_date(row[name], path=f"lease {lease_id!r} {name}")
+    for name, enum_type in _LEASE_ENUM_FIELDS.items():
+        decoded[name] = _decode_enum(row[name], enum_type, path=f"lease {lease_id!r} {name}")
+    return Lease(**decoded)
+
+
+def _lease_level_property_inputs_from_row(row: sqlite3.Row) -> LeaseLevelPropertyInputs:
+    return LeaseLevelPropertyInputs(
+        analysis_start_date=_decode_date(
+            row["analysis_start_date"], path="property_inputs.analysis_start_date"
+        ),
+        rentable_area_sf=row["rentable_area_sf"],
+    )
+
+
+def _lease_level_operating_inputs_from_row(row: sqlite3.Row) -> LeaseLevelOperatingInputs:
+    return LeaseLevelOperatingInputs(
+        **{name: row[name] for name in _LEASE_LEVEL_OPERATING_COLUMNS}
+    )
+
+
+def _market_leasing_from_row(row: sqlite3.Row) -> MarketLeasingAssumptions:
+    values: dict[str, object] = {
+        name: row[name] for name in _LEASE_LEVEL_MARKET_COLUMNS
+    }
+    for name, enum_type in _MARKET_ENUM_FIELDS.items():
+        values[name] = _decode_enum(values[name], enum_type, path=f"market_leasing.{name}")
+    return MarketLeasingAssumptions(**values)
+
+
+def _write_lease_level_children(
+    connection: sqlite3.Connection,
+    deal_id: str,
+    property_inputs: LeaseLevelPropertyInputs,
+    operating_inputs: LeaseLevelOperatingInputs,
+    market_leasing: MarketLeasingAssumptions,
+    suites: tuple[Suite, ...],
+    leases: tuple[Lease, ...],
+) -> None:
+    """Write every child row for one Lease-Level deal.
+
+    Called inside the caller's transaction, after any existing children have
+    been removed, so an update is a whole-rent-roll replacement rather than a
+    row-by-row diff. Replacement is the simpler correct thing here: a rent roll
+    is submitted whole, ids are the only identity, and a diff would have to
+    invent an answer for a suite that changed id.
+    """
+
+    connection.execute(
+        "INSERT INTO lease_level_property_inputs "
+        "(deal_id, analysis_start_date, rentable_area_sf) VALUES (?, ?, ?)",
+        (
+            deal_id,
+            _encode_date(property_inputs.analysis_start_date),
+            property_inputs.rentable_area_sf,
+        ),
+    )
+    connection.execute(
+        f"""
+        INSERT INTO lease_level_operating_inputs
+            (deal_id, {", ".join(_LEASE_LEVEL_OPERATING_COLUMNS)})
+        VALUES (?, {", ".join("?" for _ in _LEASE_LEVEL_OPERATING_COLUMNS)})
+        """,
+        (
+            deal_id,
+            *(getattr(operating_inputs, name) for name in _LEASE_LEVEL_OPERATING_COLUMNS),
+        ),
+    )
+    market_values = [
+        _encode_enum(getattr(market_leasing, name))
+        if name in _MARKET_ENUM_FIELDS
+        else getattr(market_leasing, name)
+        for name in _LEASE_LEVEL_MARKET_COLUMNS
+    ]
+    connection.execute(
+        f"""
+        INSERT INTO lease_level_market_leasing
+            (deal_id, {", ".join(_LEASE_LEVEL_MARKET_COLUMNS)})
+        VALUES (?, {", ".join("?" for _ in _LEASE_LEVEL_MARKET_COLUMNS)})
+        """,
+        (deal_id, *market_values),
+    )
+    connection.executemany(
+        """
+        INSERT INTO lease_level_suites
+            (deal_id, suite_id, ordinal, suite_area_sf, suite_label,
+             market_rent_psf, market_leasing_override,
+             initial_vacancy_strategy, initial_vacancy_lease_up_months)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [_suite_row_values(deal_id, ordinal, suite) for ordinal, suite in enumerate(suites)],
+    )
+    connection.executemany(
+        """
+        INSERT INTO lease_level_leases
+            (deal_id, lease_id, ordinal, suite_id, leased_area_sf,
+             rent_commencement_date, lease_expiration_date, base_rent_psf,
+             escalation_pct, escalation_basis, lease_type, tenant_name,
+             lease_start_date, origin, recovery_basis, expense_stop_psf)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [_lease_row_values(deal_id, ordinal, lease) for ordinal, lease in enumerate(leases)],
+    )
+
+
+def _delete_lease_level_children(connection: sqlite3.Connection, deal_id: str) -> None:
+    """Remove every child row for one deal.
+
+    Explicit rather than by ``ON DELETE CASCADE``: this module never enables
+    ``PRAGMA foreign_keys``, so a declared cascade would silently do nothing and
+    leave orphans behind a reassuring-looking schema.
+    """
+
+    for table in _LEASE_LEVEL_CHILD_TABLES:
+        connection.execute(f"DELETE FROM {table} WHERE deal_id = ?", (deal_id,))
+
+
+def _lease_level_input_fingerprint(
+    connection: sqlite3.Connection, row: sqlite3.Row
+) -> str:
+    """D5.8A -- the canonical financial-input fingerprint of the Lease-Level
+    deal ``row`` **as it is currently stored**, rebuilt from its own rows.
+
+    Used by the three write paths that must independently verify a caller's
+    provenance token rather than trust it (``update_ai_snapshot`` and the two
+    sensitivity writers below). It calls the same
+    ``fingerprint_lease_level_inputs`` the read path calls, over the same six
+    contracts, so there is exactly one definition of what a Lease-Level deal
+    fingerprints to and no possibility of the read and write sides drifting.
+
+    Raises ``PersistedDealDataError`` through ``_row_to_lease_level_deal`` if a
+    child row is missing -- a deal that cannot be reassembled has no fingerprint,
+    and inventing one would let a snapshot be certified against assumptions
+    nobody could read back.
+    """
+
+    deal = _row_to_lease_level_deal(connection, row, include_snapshots=False)
+    assert deal.terms is not None
+    assert deal.property_inputs is not None
+    assert deal.operating_inputs is not None
+    assert deal.market_leasing is not None
+    assert deal.suites is not None
+    assert deal.leases is not None
+    return fingerprint_lease_level_inputs(
+        deal.terms,
+        deal.property_inputs,
+        deal.suites,
+        deal.leases,
+        market_leasing=deal.market_leasing,
+        operating_inputs=deal.operating_inputs,
+    )
+
+
+def _row_to_lease_level_deal(
+    connection: sqlite3.Connection, row: sqlite3.Row, *, include_snapshots: bool = True
+) -> Deal:
+    """Reassemble one Lease-Level deal from its parent row and children."""
+
+    deal_id = row["id"]
+
+    def one(table: str) -> sqlite3.Row:
+        child = connection.execute(
+            f"SELECT * FROM {table} WHERE deal_id = ?", (deal_id,)
+        ).fetchone()
+        if child is None:
+            raise PersistedDealDataError(
+                f"Lease-Level deal {deal_id!r} has no {table} row."
+            )
+        return child
+
+    # Ordered by the display ordinal the analyst's own submission order set --
+    # not by id. Canonical id order belongs to the fingerprint alone, and
+    # letting it govern display would reorder a rent roll under the analyst.
+    suite_rows = connection.execute(
+        "SELECT * FROM lease_level_suites WHERE deal_id = ? ORDER BY ordinal",
+        (deal_id,),
+    ).fetchall()
+    lease_rows = connection.execute(
+        "SELECT * FROM lease_level_leases WHERE deal_id = ? ORDER BY ordinal",
+        (deal_id,),
+    ).fetchall()
+
+    deal_context = row["deal_context"]
+    terms = _terms_from_row(row)
+    property_inputs = _lease_level_property_inputs_from_row(one("lease_level_property_inputs"))
+    operating_inputs = _lease_level_operating_inputs_from_row(
+        one("lease_level_operating_inputs")
+    )
+    market_leasing = _market_leasing_from_row(one("lease_level_market_leasing"))
+    suites = tuple(_suite_from_row(suite_row) for suite_row in suite_rows)
+    leases = tuple(_lease_from_row(lease_row) for lease_row in lease_rows)
+
+    ai_snapshot = None
+    one_way_sensitivity_snapshot = None
+    two_way_sensitivity_snapshot = None
+    if include_snapshots:
+        analysis_fingerprint = fingerprint_lease_level_inputs(
+            terms,
+            property_inputs,
+            suites,
+            leases,
+            market_leasing=market_leasing,
+            operating_inputs=operating_inputs,
+        )
+        ai_snapshot = _decode_snapshot(
+            raw_json=row["ai_snapshot"],
+            stored_schema_version=row["ai_snapshot_schema_version"],
+            current_schema_version=_AI_SNAPSHOT_SCHEMA_VERSION,
+            stored_fingerprint=row["ai_snapshot_fingerprint"],
+            expected_fingerprint=fingerprint_ai(
+                analysis_fingerprint=analysis_fingerprint, deal_context=deal_context
+            ),
+            decoder=_ai_snapshot_from_dict,
+        )
+        # D5.8A. Guarded by the *financial-input* fingerprint, not the AI one: a
+        # sensitivity run reads no Deal Context, so editing the stated strategy
+        # invalidates the AI report and leaves the matrix exactly as valid as it
+        # was. The two staleness rules differ because the two analyses genuinely
+        # depend on different things.
+        (
+            one_way_sensitivity_snapshot,
+            two_way_sensitivity_snapshot,
+        ) = _read_sensitivity_snapshots(
+            connection, deal_id, expected_fingerprint=analysis_fingerprint
+        )
+
+    return Deal(
+        id=deal_id,
+        name=row["name"],
+        operating_mode=OperatingMode.LEASE_LEVEL,
+        inputs=None,
+        terms=terms,
+        detailed_operating_inputs=None,
+        property_inputs=property_inputs,
+        operating_inputs=operating_inputs,
+        market_leasing=market_leasing,
+        suites=suites,
+        leases=leases,
+        deal_context=deal_context,
+        # D5 decision A: never restored from persistence, and there is no column
+        # it could be restored from. D5.8A does not reverse this -- the AI report
+        # and the sensitivity runs below are restored from their own snapshots,
+        # each validated against the same input fingerprint, without any cached
+        # base result being needed to prove either is current.
+        analysis_snapshot=None,
+        ai_snapshot=ai_snapshot,
+        one_way_sensitivity_snapshot=one_way_sensitivity_snapshot,
+        two_way_sensitivity_snapshot=two_way_sensitivity_snapshot,
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
 
 def _inputs_from_row(row: sqlite3.Row) -> AcquisitionInputs:
     return AcquisitionInputs(
@@ -1012,6 +1870,112 @@ def update_detailed_deal(
 # =============================================================================
 
 
+
+def create_lease_level_deal(
+    name: str,
+    terms: AcquisitionTerms,
+    property_inputs: LeaseLevelPropertyInputs,
+    operating_inputs: LeaseLevelOperatingInputs,
+    market_leasing: MarketLeasingAssumptions,
+    suites: tuple[Suite, ...],
+    leases: tuple[Lease, ...],
+    *,
+    deal_context: str | None = None,
+    db_path: Path | None = None,
+) -> Deal:
+    """Persist one Lease-Level deal: parent row plus every child row.
+
+    Takes **typed contracts**, never a mapping. The API layer has already turned
+    the request body into these through the D5.2 parser; handing this function
+    raw JSON would give the store a second, divergent notion of the wire format
+    and make the database schema hostage to the HTTP one.
+
+    Parent and children are written in one transaction, so a failure part-way
+    cannot leave a deal with half a rent roll.
+
+    Persists inputs only. There is no analysis-snapshot column to write, by
+    design (D5 decision A) -- opening the deal re-runs the engine.
+    """
+
+    deal_id = uuid.uuid4().hex
+    now = _utc_now_iso()
+
+    with _connect(db_path) as connection:
+        connection.execute(
+            f"""
+            INSERT INTO lease_level_deals
+                (id, name, {", ".join(_TERMS_COLUMNS)}, deal_context,
+                 created_at, updated_at)
+            VALUES (?, ?, {", ".join("?" for _ in _TERMS_COLUMNS)}, ?, ?, ?)
+            """,
+            (deal_id, name, *_terms_values(terms), deal_context, now, now),
+        )
+        _write_lease_level_children(
+            connection,
+            deal_id,
+            property_inputs,
+            operating_inputs,
+            market_leasing,
+            suites,
+            leases,
+        )
+
+    return get_deal(deal_id, db_path=db_path)
+
+
+def update_lease_level_deal(
+    deal_id: str,
+    name: str,
+    terms: AcquisitionTerms,
+    property_inputs: LeaseLevelPropertyInputs,
+    operating_inputs: LeaseLevelOperatingInputs,
+    market_leasing: MarketLeasingAssumptions,
+    suites: tuple[Suite, ...],
+    leases: tuple[Lease, ...],
+    *,
+    deal_context: str | None = None,
+    db_path: Path | None = None,
+) -> Deal:
+    """Replace one Lease-Level deal's approved input state.
+
+    The rent roll is replaced wholesale -- children deleted, then rewritten --
+    rather than diffed row by row. A rent roll is submitted whole, ``suite_id``
+    is its only identity, and a diff would need an answer for a suite whose id
+    changed that no submission actually expresses. Wholesale replacement has
+    exactly one meaning.
+
+    All of it in one transaction: a mid-update failure leaves the previous rent
+    roll intact rather than a half-replaced one.
+    """
+
+    with _connect(db_path) as connection:
+        cursor = connection.execute(
+            f"""
+            UPDATE lease_level_deals
+            SET name = ?,
+                {", ".join(f"{column} = ?" for column in _TERMS_COLUMNS)},
+                deal_context = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (name, *_terms_values(terms), deal_context, _utc_now_iso(), deal_id),
+        )
+        if cursor.rowcount == 0:
+            raise DealNotFoundError(deal_id)
+
+        _delete_lease_level_children(connection, deal_id)
+        _write_lease_level_children(
+            connection,
+            deal_id,
+            property_inputs,
+            operating_inputs,
+            market_leasing,
+            suites,
+            leases,
+        )
+
+    return get_deal(deal_id, db_path=db_path)
+
 def get_deal(deal_id: str, *, db_path: Path | None = None) -> Deal:
     """Return the deal with ``deal_id``, dispatching by which table
     actually holds it: ``deals`` (Quick) first, then ``detailed_deals`` +
@@ -1029,7 +1993,15 @@ def get_deal(deal_id: str, *, db_path: Path | None = None) -> Deal:
             "SELECT * FROM detailed_deals WHERE id = ?", (deal_id,)
         ).fetchone()
         if detailed_row is None:
-            raise DealNotFoundError(deal_id)
+            # D5.4: the third table family. Probed last, so Quick and Detailed
+            # lookups are unchanged, and returned as LEASE_LEVEL by construction
+            # -- the mode is which table the row lives in, never a guess.
+            lease_level_row = connection.execute(
+                "SELECT * FROM lease_level_deals WHERE id = ?", (deal_id,)
+            ).fetchone()
+            if lease_level_row is None:
+                raise DealNotFoundError(deal_id)
+            return _row_to_lease_level_deal(connection, lease_level_row)
 
         operating_row = connection.execute(
             "SELECT * FROM detailed_operating_inputs WHERE deal_id = ?", (deal_id,)
@@ -1058,6 +2030,16 @@ def list_deals(*, db_path: Path | None = None) -> list[Deal]:
     with _connect(db_path) as connection:
         quick_rows = connection.execute("SELECT * FROM deals").fetchall()
         detailed_rows = connection.execute("SELECT * FROM detailed_deals").fetchall()
+        lease_level_rows = connection.execute(
+            "SELECT * FROM lease_level_deals"
+        ).fetchall()
+        # Built inside the connection block: a Lease-Level deal is assembled
+        # from five child tables, so its reader needs the live connection --
+        # unlike the flat Quick/Detailed rows, which are complete on their own.
+        lease_level_deals = [
+            _row_to_lease_level_deal(connection, row, include_snapshots=False)
+            for row in lease_level_rows
+        ]
         operating_rows_by_deal_id = {
             row["deal_id"]: row
             for row in connection.execute("SELECT * FROM detailed_operating_inputs")
@@ -1076,7 +2058,9 @@ def list_deals(*, db_path: Path | None = None) -> list[Deal]:
     # matches the ordering "SELECT * FROM deals ORDER BY updated_at DESC"
     # already produced for Quick-only queries before this gate.
     return sorted(
-        [*quick_deals, *detailed_deals], key=lambda deal: deal.updated_at, reverse=True
+        [*quick_deals, *detailed_deals, *lease_level_deals],
+        key=lambda deal: deal.updated_at,
+        reverse=True,
     )
 
 
@@ -1088,6 +2072,17 @@ def delete_deal(deal_id: str, *, db_path: Path | None = None) -> None:
     together with its ``detailed_deals`` row."""
 
     with _connect(db_path) as connection:
+        # D5.8A: derived analytical state is removed first, for every mode,
+        # before any parent row is looked at -- so a deal that turns out to live
+        # in the Quick table leaves no sensitivity row behind either. Explicit
+        # rather than by cascade for the reason stated below: this module never
+        # enables ``PRAGMA foreign_keys``, so a declared ON DELETE CASCADE would
+        # do nothing at all. Deleting unconditionally is also what makes it
+        # impossible to add a fourth mode later and forget this line.
+        connection.execute(
+            "DELETE FROM deal_sensitivity_snapshots WHERE deal_id = ?", (deal_id,)
+        )
+
         cursor = connection.execute("DELETE FROM deals WHERE id = ?", (deal_id,))
         if cursor.rowcount > 0:
             return
@@ -1097,6 +2092,17 @@ def delete_deal(deal_id: str, *, db_path: Path | None = None) -> None:
         )
         cursor = connection.execute(
             "DELETE FROM detailed_deals WHERE id = ?", (deal_id,)
+        )
+        if cursor.rowcount > 0:
+            return
+
+        # D5.4: children first, then the parent, in one transaction. Explicit
+        # rather than by cascade, because this module never enables
+        # ``PRAGMA foreign_keys`` -- a declared ON DELETE CASCADE would do
+        # nothing and leave orphan suites behind a schema that looked safe.
+        _delete_lease_level_children(connection, deal_id)
+        cursor = connection.execute(
+            "DELETE FROM lease_level_deals WHERE id = ?", (deal_id,)
         )
         if cursor.rowcount == 0:
             raise DealNotFoundError(deal_id)
@@ -1140,25 +2146,69 @@ def duplicate_deal(
     original = get_deal(deal_id, db_path=db_path)
     new_name = name if name else f"{original.name} (Copy)"
 
-    if original.operating_mode is OperatingMode.QUICK:
-        assert original.inputs is not None
-        new_deal = create_deal(
-            new_name, original.inputs, deal_context=original.deal_context, db_path=db_path
-        )
-        analysis_fingerprint = fingerprint_quick_inputs(original.inputs)
-    else:
-        assert original.terms is not None
-        assert original.detailed_operating_inputs is not None
-        new_deal = create_detailed_deal(
-            new_name,
-            original.terms,
-            original.detailed_operating_inputs,
-            deal_context=original.deal_context,
-            db_path=db_path,
-        )
-        analysis_fingerprint = fingerprint_detailed_inputs(
-            original.terms, original.detailed_operating_inputs
-        )
+    # D5.1A: total dispatch. This branch was ``if QUICK: ... else: <Detailed
+    # copy>``, so a deal of any third mode would have been duplicated *as a
+    # Detailed deal* -- silently rewriting the copy's operating mode and, with
+    # it, which engine later underwrites it. That is a data-corruption path, not
+    # merely a wrong error message, which is why it is closed here rather than
+    # in the gate that adds the mode's own persistence.
+    match original.operating_mode:
+        case OperatingMode.QUICK:
+            assert original.inputs is not None
+            new_deal = create_deal(
+                new_name,
+                original.inputs,
+                deal_context=original.deal_context,
+                db_path=db_path,
+            )
+            analysis_fingerprint = fingerprint_quick_inputs(original.inputs)
+        case OperatingMode.DETAILED:
+            assert original.terms is not None
+            assert original.detailed_operating_inputs is not None
+            new_deal = create_detailed_deal(
+                new_name,
+                original.terms,
+                original.detailed_operating_inputs,
+                deal_context=original.deal_context,
+                db_path=db_path,
+            )
+            analysis_fingerprint = fingerprint_detailed_inputs(
+                original.terms, original.detailed_operating_inputs
+            )
+        case OperatingMode.LEASE_LEVEL:
+            # D5.4 implements what D5.1A made safe. The copy keeps its own mode
+            # -- the whole point of the arm D5.1A added, since the implicit
+            # ``else`` it replaced would have written a *Detailed* deal here and
+            # silently changed which engine underwrites the copy.
+            assert original.terms is not None
+            assert original.property_inputs is not None
+            assert original.operating_inputs is not None
+            assert original.market_leasing is not None
+            assert original.suites is not None
+            assert original.leases is not None
+            new_deal = create_lease_level_deal(
+                new_name,
+                original.terms,
+                original.property_inputs,
+                original.operating_inputs,
+                original.market_leasing,
+                original.suites,
+                original.leases,
+                deal_context=original.deal_context,
+                db_path=db_path,
+            )
+            analysis_fingerprint = fingerprint_lease_level_inputs(
+                original.terms,
+                original.property_inputs,
+                original.suites,
+                original.leases,
+                market_leasing=original.market_leasing,
+                operating_inputs=original.operating_inputs,
+            )
+        case _:
+            raise UnsupportedOperatingModeError(
+                original.operating_mode, operation="duplicate_deal"
+            )
 
     if original.analysis_snapshot is not None:
         new_deal = update_analysis_snapshot(
@@ -1168,7 +2218,32 @@ def duplicate_deal(
             db_path=db_path,
         )
 
-    if original.ai_snapshot is not None:
+    # D5.8A -- the copy starts with no derived analytical state of its own,
+    # except where a shipped mode already promised otherwise.
+    #
+    # An AI report and a sensitivity matrix are analytical *outputs* associated
+    # with the deal instance that produced them; "Duplicate" copies the
+    # underwriting, and a copy that silently arrived carrying somebody else's
+    # analysis would read as work the analyst had done on it. So:
+    #
+    #   * ``deal_sensitivity_snapshots`` rows are never copied, for any mode.
+    #     There is no code below that copies them, which is the strongest form
+    #     of that rule -- ``create_*_deal`` writes no row into that table and
+    #     nothing here adds one.
+    #
+    #   * A Lease-Level AI report is never copied. Lease-Level AI persistence is
+    #     new in this gate, so there is no shipped behavior to preserve and the
+    #     rule applies from the start.
+    #
+    #   * Quick's and Detailed's ``analysis_snapshot``/``ai_snapshot`` copying is
+    #     UNCHANGED. It is a deliberate, documented and separately tested Gate A6
+    #     decision (the cached result is mathematically still valid for a copy
+    #     whose assumptions and Deal Context begin byte-identical), and D5.8A is
+    #     explicitly forbidden from regressing either of those two modes.
+    if (
+        original.ai_snapshot is not None
+        and original.operating_mode is not OperatingMode.LEASE_LEVEL
+    ):
         new_deal = update_ai_snapshot(
             new_deal.id,
             dataclasses.asdict(original.ai_snapshot),
@@ -1330,32 +2405,237 @@ def update_ai_snapshot(
             detailed_row = connection.execute(
                 "SELECT * FROM detailed_deals WHERE id = ?", (deal_id,)
             ).fetchone()
-            if detailed_row is None:
-                raise DealNotFoundError(deal_id)
-            operating_row = connection.execute(
-                "SELECT * FROM detailed_operating_inputs WHERE deal_id = ?", (deal_id,)
-            ).fetchone()
-            if operating_row is None:
-                raise DealNotFoundError(deal_id)
+            if detailed_row is not None:
+                operating_row = connection.execute(
+                    "SELECT * FROM detailed_operating_inputs WHERE deal_id = ?", (deal_id,)
+                ).fetchone()
+                if operating_row is None:
+                    raise DealNotFoundError(deal_id)
 
-            analysis_fingerprint = fingerprint_detailed_inputs(
-                _terms_from_row(detailed_row), _detailed_operating_inputs_from_row(operating_row)
-            )
-            expected_fingerprint = fingerprint_ai(
-                analysis_fingerprint=analysis_fingerprint, deal_context=detailed_row["deal_context"]
-            )
-            _validate_provenance(
-                provided_fingerprint=ai_context_fingerprint,
-                expected_fingerprint=expected_fingerprint,
-                label="ai_snapshot's ai_context_fingerprint",
-            )
-            connection.execute(
-                """
-                UPDATE detailed_deals
-                SET ai_snapshot = ?, ai_snapshot_schema_version = ?, ai_snapshot_fingerprint = ?
-                WHERE id = ?
-                """,
-                (encoded, _AI_SNAPSHOT_SCHEMA_VERSION, expected_fingerprint, deal_id),
-            )
+                analysis_fingerprint = fingerprint_detailed_inputs(
+                    _terms_from_row(detailed_row),
+                    _detailed_operating_inputs_from_row(operating_row),
+                )
+                expected_fingerprint = fingerprint_ai(
+                    analysis_fingerprint=analysis_fingerprint,
+                    deal_context=detailed_row["deal_context"],
+                )
+                _validate_provenance(
+                    provided_fingerprint=ai_context_fingerprint,
+                    expected_fingerprint=expected_fingerprint,
+                    label="ai_snapshot's ai_context_fingerprint",
+                )
+                connection.execute(
+                    """
+                    UPDATE detailed_deals
+                    SET ai_snapshot = ?, ai_snapshot_schema_version = ?,
+                        ai_snapshot_fingerprint = ?
+                    WHERE id = ?
+                    """,
+                    (encoded, _AI_SNAPSHOT_SCHEMA_VERSION, expected_fingerprint, deal_id),
+                )
+            else:
+                # D5.8A -- the third arm.
+                #
+                # ``lease_level_deals`` has carried the three ``ai_snapshot``
+                # columns, and ``_row_to_lease_level_deal`` has decoded them,
+                # since D5.4 -- but nothing could ever write one, because this
+                # function stopped looking after ``detailed_deals`` and raised
+                # ``DealNotFoundError`` for a Lease-Level id. That is the exact
+                # reason a Lease-Level AI report vanished on navigation: it was
+                # never persisted at all. No schema change is needed to fix it;
+                # the storage was already there and only the write path was
+                # missing.
+                lease_level_row = connection.execute(
+                    "SELECT * FROM lease_level_deals WHERE id = ?", (deal_id,)
+                ).fetchone()
+                if lease_level_row is None:
+                    raise DealNotFoundError(deal_id)
+
+                analysis_fingerprint = _lease_level_input_fingerprint(
+                    connection, lease_level_row
+                )
+                expected_fingerprint = fingerprint_ai(
+                    analysis_fingerprint=analysis_fingerprint,
+                    deal_context=lease_level_row["deal_context"],
+                )
+                _validate_provenance(
+                    provided_fingerprint=ai_context_fingerprint,
+                    expected_fingerprint=expected_fingerprint,
+                    label="ai_snapshot's ai_context_fingerprint",
+                )
+                connection.execute(
+                    """
+                    UPDATE lease_level_deals
+                    SET ai_snapshot = ?, ai_snapshot_schema_version = ?,
+                        ai_snapshot_fingerprint = ?
+                    WHERE id = ?
+                    """,
+                    (encoded, _AI_SNAPSHOT_SCHEMA_VERSION, expected_fingerprint, deal_id),
+                )
 
     return get_deal(deal_id, db_path=db_path)
+
+
+# =============================================================================
+# Sprint D5.8A -- provenance-validated sensitivity-snapshot writes
+#
+# The only two functions in this module that ever write to
+# ``deal_sensitivity_snapshots``, and they follow Gate A7's contract exactly:
+# the caller supplies the fingerprint the run was actually performed under
+# (obtained from ``POST /deals/fingerprint``), this layer independently
+# recomputes the fingerprint the deal's CURRENTLY STORED assumptions demand, and
+# a mismatch is refused with nothing persisted. The caller's token only ever
+# unlocks a write this module's own recomputation already agrees with.
+#
+# Two things follow structurally from the ``(deal_id, analysis_kind)`` primary
+# key and the ``INSERT .. ON CONFLICT .. DO UPDATE`` below:
+#
+#   * one-way and two-way never touch each other -- different rows, different
+#     statements, no shared column;
+#   * a re-run replaces the latest snapshot for its own kind atomically, in a
+#     single statement, so no intermediate state exists where the new
+#     configuration is stored beside the old result.
+#
+# Only a SUCCESSFUL run ever reaches here. A validation failure, a shadowed
+# target, a ``NON_POSITIVE_FORWARD_EXIT_NOI`` refusal or a transport error
+# produces no result to pass in, so the previous successful snapshot is left
+# untouched by construction rather than by a rule someone has to remember.
+# =============================================================================
+
+
+def _update_sensitivity_snapshot(
+    deal_id: str,
+    kind: str,
+    snapshot: OneWaySensitivitySnapshot | TwoWaySensitivitySnapshot,
+    *,
+    financial_input_fingerprint: str,
+    db_path: Path | None,
+) -> Deal:
+    """The shared body of the two public writers below."""
+
+    encoded = _encode_snapshot(snapshot)
+
+    # ``get_deal`` opens its own connection and must run only after this block
+    # has committed -- same rule as ``update_ai_snapshot`` above.
+    with _connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT * FROM lease_level_deals WHERE id = ?", (deal_id,)
+        ).fetchone()
+        if row is None:
+            # Total dispatch, D5.1A's rule: a deal that exists in another mode's
+            # table is refused *by name* rather than falling through to a
+            # not-found error that would read as a missing deal. D5.8A ships this
+            # surface for Lease-Level only; Quick and Detailed recompute their
+            # standardized preset bundle on every Analyze and have no
+            # analyst-configured sensitivity to keep.
+            mode = _operating_mode_of(connection, deal_id)
+            if mode is None:
+                raise DealNotFoundError(deal_id)
+            raise UnsupportedOperatingModeError(
+                mode, operation="update_sensitivity_snapshot"
+            )
+
+        expected_fingerprint = _lease_level_input_fingerprint(connection, row)
+        _validate_provenance(
+            provided_fingerprint=financial_input_fingerprint,
+            expected_fingerprint=expected_fingerprint,
+            label=f"{kind} sensitivity snapshot's financial_input_fingerprint",
+        )
+        connection.execute(
+            """
+            INSERT INTO deal_sensitivity_snapshots
+                (deal_id, analysis_kind, snapshot, schema_version,
+                 source_fingerprint, generated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (deal_id, analysis_kind) DO UPDATE SET
+                snapshot = excluded.snapshot,
+                schema_version = excluded.schema_version,
+                source_fingerprint = excluded.source_fingerprint,
+                generated_at = excluded.generated_at
+            """,
+            (
+                deal_id,
+                kind,
+                encoded,
+                _SENSITIVITY_SNAPSHOT_SCHEMA_VERSION,
+                expected_fingerprint,
+                _utc_now_iso(),
+            ),
+        )
+
+    return get_deal(deal_id, db_path=db_path)
+
+
+def _operating_mode_of(
+    connection: sqlite3.Connection, deal_id: str
+) -> OperatingMode | None:
+    """Which mode's table holds ``deal_id``, or ``None`` if no table does.
+
+    The mode is not stored anywhere -- it is which table the row lives in -- so
+    this is the one honest way to answer the question, and it stays in one
+    place rather than being re-derived at each call site.
+    """
+
+    for table, mode in (
+        ("deals", OperatingMode.QUICK),
+        ("detailed_deals", OperatingMode.DETAILED),
+        ("lease_level_deals", OperatingMode.LEASE_LEVEL),
+    ):
+        found = connection.execute(
+            f"SELECT 1 FROM {table} WHERE id = ?", (deal_id,)
+        ).fetchone()
+        if found is not None:
+            return mode
+    return None
+
+
+def update_one_way_sensitivity_snapshot(
+    deal_id: str,
+    snapshot: dict[str, Any],
+    *,
+    financial_input_fingerprint: str,
+    db_path: Path | None = None,
+) -> Deal:
+    """Replace ``deal_id``'s latest successful one-way sensitivity snapshot.
+
+    ``snapshot`` is the ``{configuration, result}`` pair as one document.
+    ``financial_input_fingerprint`` must equal the canonical fingerprint of
+    ``deal_id``'s own currently-stored Lease-Level assumptions. Raises
+    ``SnapshotValidationError`` (persisting nothing) if it does not, or if
+    ``snapshot`` is malformed; ``DealNotFoundError`` if ``deal_id`` exists in no
+    table; ``UnsupportedOperatingModeError`` if it is a Quick or Detailed deal.
+
+    Leaves the two-way snapshot, the AI snapshot, the assumptions, the name,
+    Deal Context and ``updated_at`` completely untouched.
+    """
+
+    return _update_sensitivity_snapshot(
+        deal_id,
+        _ONE_WAY_KIND,
+        _one_way_sensitivity_snapshot_from_dict(snapshot),
+        financial_input_fingerprint=financial_input_fingerprint,
+        db_path=db_path,
+    )
+
+
+def update_two_way_sensitivity_snapshot(
+    deal_id: str,
+    snapshot: dict[str, Any],
+    *,
+    financial_input_fingerprint: str,
+    db_path: Path | None = None,
+) -> Deal:
+    """Replace ``deal_id``'s latest successful two-way sensitivity snapshot.
+
+    Mirrors ``update_one_way_sensitivity_snapshot`` exactly, over the other
+    ``analysis_kind``, and leaves the one-way snapshot untouched.
+    """
+
+    return _update_sensitivity_snapshot(
+        deal_id,
+        _TWO_WAY_KIND,
+        _two_way_sensitivity_snapshot_from_dict(snapshot),
+        financial_input_fingerprint=financial_input_fingerprint,
+        db_path=db_path,
+    )

@@ -22,6 +22,37 @@ class OperatingMode(StrEnum):
 
     QUICK = "quick"
     DETAILED = "detailed"
+    LEASE_LEVEL = "lease_level"
+
+
+class UnsupportedOperatingModeError(ValueError):
+    """D5.1A: raised by a *total* ``OperatingMode`` dispatch for a valid mode
+    the operation in question has no implementation for.
+
+    The counterpart, one layer down, of ``api._unsupported_operating_mode``'s
+    422: this is what a domain-layer consumer (``anchor.deals``, ``anchor.ai``)
+    raises rather than letting an unhandled mode fall into a sibling mode's
+    branch. It exists because those layers must not import ``fastapi``, and
+    because "this mode is not implemented here" is a genuine domain fact rather
+    than an HTTP concern.
+
+    Deliberately a ``ValueError`` subclass, matching every other refusal
+    contract in this codebase (``InputValidationError``,
+    ``LeaseValidationError``, ``SensitivityTargetShadowedBySuiteOverrideError``),
+    so an existing ``except ValueError`` boundary keeps working unchanged.
+
+    ``operation`` names the specific thing that is unsupported -- not the mode
+    in general -- because the same mode is routinely supported by one operation
+    and not another while a sprint is mid-flight.
+    """
+
+    def __init__(self, operating_mode: "OperatingMode", *, operation: str) -> None:
+        self.operating_mode = operating_mode
+        self.operation = operation
+        super().__init__(
+            f"Operating mode {operating_mode.value!r} is not supported by "
+            f"{operation}."
+        )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

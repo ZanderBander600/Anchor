@@ -3,6 +3,7 @@ import {
   DETAILED_OPERATING_FIELD_GROUPS,
   TERMS_FIELD_GROUPS,
 } from './convert';
+import { assertNeverMode } from './operatingMode';
 import type {
   AcquisitionFormValues,
   AcquisitionTermsFormValues,
@@ -35,17 +36,47 @@ export type ResultsViewId = 'summary' | 'cash-flow' | 'owner-returns' | 'operati
 
 /** Detailed adds the Operating Statement; Quick has no operating projection,
  * so it has no such view -- the sub-nav is derived from what the mode
- * actually produces rather than showing a dead entry. */
+ * actually produces rather than showing a dead entry.
+ *
+ * D5.1B: total dispatch. Previously `if (mode === 'detailed')`, which meant
+ * every other mode silently received *Quick's* result navigation -- three tabs
+ * describing an analysis that mode had not run.
+ *
+ * Never returns an empty list: a caller feeds the result straight into a
+ * `SubNav` and a `resultsView` state value, so an empty array would render a
+ * Results tab with no sub-navigation and a selected view that does not exist --
+ * a broken surface that looks like a loading state.
+ *
+ * Every mode names its own views explicitly. None inherits another's. */
 export function resultsViewsFor(mode: OperatingMode): { id: ResultsViewId; label: string }[] {
   const views: { id: ResultsViewId; label: string }[] = [
     { id: 'summary', label: 'Summary' },
     { id: 'cash-flow', label: 'Cash Flow' },
     { id: 'owner-returns', label: 'Owner Returns' },
   ];
-  if (mode === 'detailed') {
-    views.push({ id: 'operating-statement', label: 'Operating Statement' });
+  switch (mode) {
+    case 'quick':
+      return views;
+    case 'detailed':
+      return [...views, { id: 'operating-statement', label: 'Operating Statement' }];
+    case 'lease_level':
+      // D5.6 transition. This refused Lease-Level by name while nothing could
+      // render it -- the honest answer then, and the reason the refusal existed
+      // rather than a silent fallback to Quick's three tabs.
+      //
+      // Lease-Level now has its own three, and they are not Quick's plus one:
+      // it has an operating statement (Quick has no operating projection at
+      // all) and it has no Owner Returns, because that surface needs a single
+      // growth rate per mode and Lease-Level's growth emerges from per-lease
+      // escalation and rollover rather than from any one assumption.
+      return [
+        { id: 'summary', label: 'Summary' },
+        { id: 'operating-statement', label: 'Operating Statement' },
+        { id: 'cash-flow', label: 'Cash Flow' },
+      ];
+    default:
+      return assertNeverMode(mode);
   }
-  return views;
 }
 
 /** One assumption input, fully resolved: its display configuration comes from
@@ -59,6 +90,15 @@ export interface ResolvedField {
   suffix?: string;
   value: string;
   onChange: (value: string) => void;
+  /** D5.5A: the backend's message for this field, when the last submission was
+   * refused because of it.
+   *
+   * Optional and additive. Quick and Detailed never set it -- they keep the
+   * single page-level banner they have always had -- so the grid they render is
+   * byte-identical to before. Lease-Level sets it because its issue stream
+   * carries a `path` that names the exact field, which is the whole reason that
+   * locator exists. The grid never derives this: it renders what it is given. */
+  error?: string;
 }
 
 export interface FieldSection {

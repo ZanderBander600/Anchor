@@ -115,6 +115,10 @@ import type {
   StandardSensitivityPresets,
   V2FieldId,
 } from './types';
+import { assertNeverMode, byMode } from './operatingMode';
+import { useLeaseLevelDeal } from './useLeaseLevelDeal';
+import { LeaseLevelWorkspace } from './components/LeaseLevelWorkspace';
+import { LeaseLevelSensitivityWorkspace } from './components/LeaseLevelSensitivityWorkspace';
 
 /** Owner Return Metrics V3 Gate A6: `Deal.analysis_snapshot`'s type is
  * `AcquisitionResults | DetailedAcquisitionResults | null` at the shared
@@ -1375,6 +1379,26 @@ export default function App() {
     setView('workspace');
   }
 
+  // ===========================================================================
+  // D5.5A -- Lease-Level workspace state.
+  //
+  // A hook rather than a third block of `useState` calls. Quick's and
+  // Detailed's state trees stay exactly where they are (the D5.0 review put a
+  // general `App.tsx` extraction out of D5 scope), and this shell gains one
+  // call plus the reads below -- not another two hundred lines, and not a home
+  // for D5.5B's rent-roll editors.
+  // ===========================================================================
+  const leaseLevel = useLeaseLevelDeal({
+    onDealsChanged: () => {
+      void loadSavedDeals();
+    },
+    // Lease-Level persists no analysis snapshot (decision D5), so a reopened
+    // deal has nothing for Overview to show and lands where the work is.
+    onOpened: () => {
+      setWorkspace('underwrite');
+    },
+  });
+
   /**
    * Detailed Operating Model V2.1 Gate 11: dispatches by `deal.operating_mode`
    * -- a Quick deal populates `values`/`savedSnapshot` and switches to Quick
@@ -1389,80 +1413,135 @@ export default function App() {
    * assumptions/results.
    */
   async function handleOpenDeal(deal: Deal) {
-    if (deal.operating_mode === 'detailed') {
-      if (!confirmDiscardIfDetailedDirty()) {
+    // D5.5A: total dispatch, checked by the compiler.
+    //
+    // D5.1B narrowed the wire mode first and then branched two ways over the
+    // closed result. With three modes implemented there is nothing left to
+    // narrow, so the branch itself becomes the total form: a switch naming
+    // every published mode, ending in `assertNeverMode`. Each arm is one call
+    // to that mode's own opener -- the bodies below are the D5.1B bodies,
+    // moved rather than rewritten, so Quick and Detailed open exactly as they
+    // did.
+    switch (deal.operating_mode) {
+      case 'quick':
+        return openQuickDealFromLibrary(deal);
+      case 'detailed':
+        return openDetailedDealFromLibrary(deal);
+      case 'lease_level':
+        return openLeaseLevelDealFromLibrary(deal);
+      default:
+        return assertNeverMode(deal.operating_mode);
+    }
+  }
+
+  /** D5.5A: opens a saved Lease-Level deal.
+   *
+   * Every scalar hydrates, and the Suites and Leases hydrate with them and are
+   * carried through untouched -- D5.5A cannot edit a rent roll, but it must
+   * never lose one. No Quick field is read and no Detailed operating input is
+   * fabricated: a Lease-Level deal has neither, and inventing one to fill a
+   * shape would be presenting a number nobody underwrote.
+   *
+   * Lands on Underwrite rather than Overview because Lease-Level persists no
+   * analysis snapshot (decision D5) -- it re-runs on demand, so Overview would
+   * have nothing to show. */
+  async function openLeaseLevelDealFromLibrary(deal: Deal) {
+    setDealsError(null);
+    try {
+      const opened = await leaseLevel.open(deal.id);
+      if (!opened) {
         return;
       }
-      setDealsError(null);
-      try {
-        const fullDeal = await getDeal(deal.id);
-        if (fullDeal.terms === null || fullDeal.detailed_operating_inputs === null) {
-          throw new Error('Detailed deal is missing terms/detailed_operating_inputs.');
-        }
-        const openedValues: DetailedFormValues = {
-          terms: buildDetailedTermsFormValuesFromRequest(fullDeal.terms),
-          operating: buildDetailedOperatingFormValuesFromRequest(
-            fullDeal.detailed_operating_inputs,
-          ),
-        };
-        setDetailedValues(openedValues);
-        setDetailedDealName(fullDeal.name);
-        setDetailedDealContext(fullDeal.deal_context ?? '');
-        setCurrentDetailedDealId(fullDeal.id);
-        setLastDetailedSavedAt(fullDeal.updated_at);
-        setDetailedSavedSnapshot({
-          dealName: fullDeal.name,
-          values: openedValues,
-          dealContext: fullDeal.deal_context ?? '',
-        });
-        resetDetailedDownstreamAnalysisState();
-        // Owner Return Metrics V3 Gate A6: hydrate the SAME state a live
-        // Analyze/Generate AI Analysis populates -- never a separate
-        // "historical snapshot viewer" render path. `lastDetailedRequest`
-        // is also restored alongside a valid analysis snapshot (not just
-        // `detailedResults`) so "Generate AI Analysis" works immediately
-        // on the reopened deal without first requiring a fresh Analyze
-        // click -- it is exactly the terms/detailedOperatingInputs that
-        // produced the restored snapshot, since a snapshot is only ever
-        // returned when it matches the deal's current assumptions.
-        // Deliberately does not touch sensitivity/break-even state, which
-        // Gate A6 does not persist -- those remain empty until recomputed.
-        let hasRestoredAnalysis = false;
-        if (
-          fullDeal.analysis_snapshot !== null &&
-          isDetailedAnalysisSnapshot(fullDeal.analysis_snapshot)
-        ) {
-          hasRestoredAnalysis = true;
-          setDetailedResults(fullDeal.analysis_snapshot);
-          setLastDetailedRequest({
-            terms: fullDeal.terms,
-            detailedOperatingInputs: fullDeal.detailed_operating_inputs,
-          });
-        }
-        if (fullDeal.ai_snapshot !== null) {
-          setDetailedAiAnalysis(fullDeal.ai_snapshot);
-        }
-        // Sprint C Gate C2 (spec section 12.4): a reopened deal whose
-        // persisted analysis snapshot was restored opens on Overview -- there
-        // is something to read. One without a valid snapshot opens on
-        // Underwrite rather than on an empty Overview. This is a navigation
-        // decision only: it never changes whether a snapshot is restored, and
-        // never fabricates one.
-        setWorkspace(hasRestoredAnalysis ? 'overview' : 'underwrite');
-        clearSaveDetailedDealError();
-        clearDetailedIntakeFeedback();
-        setOperatingMode('detailed');
-        setView('workspace');
-      } catch (apiError) {
-        if (apiError instanceof ApiError) {
-          setDealsError(apiError.message);
-        } else {
-          setDealsError('An unexpected error occurred while opening the deal.');
-        }
+      setOperatingMode('lease_level');
+      setView('workspace');
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDealsError(apiError.message);
+      } else {
+        setDealsError('An unexpected error occurred while opening the deal.');
       }
+    }
+  }
+
+  /** Detailed Operating Model V2.1 Gate 11 -- unchanged behaviour, moved out
+   * of `handleOpenDeal` at D5.5A so the dispatch above could become a
+   * compiler-checked switch. Only the target mode's state is touched. */
+  async function openDetailedDealFromLibrary(deal: Deal) {
+    if (!confirmDiscardIfDetailedDirty()) {
       return;
     }
+    setDealsError(null);
+    try {
+      const fullDeal = await getDeal(deal.id);
+      if (fullDeal.terms === null || fullDeal.detailed_operating_inputs === null) {
+        throw new Error('Detailed deal is missing terms/detailed_operating_inputs.');
+      }
+      const openedValues: DetailedFormValues = {
+        terms: buildDetailedTermsFormValuesFromRequest(fullDeal.terms),
+        operating: buildDetailedOperatingFormValuesFromRequest(
+          fullDeal.detailed_operating_inputs,
+        ),
+      };
+      setDetailedValues(openedValues);
+      setDetailedDealName(fullDeal.name);
+      setDetailedDealContext(fullDeal.deal_context ?? '');
+      setCurrentDetailedDealId(fullDeal.id);
+      setLastDetailedSavedAt(fullDeal.updated_at);
+      setDetailedSavedSnapshot({
+        dealName: fullDeal.name,
+        values: openedValues,
+        dealContext: fullDeal.deal_context ?? '',
+      });
+      resetDetailedDownstreamAnalysisState();
+      // Owner Return Metrics V3 Gate A6: hydrate the SAME state a live
+      // Analyze/Generate AI Analysis populates -- never a separate
+      // "historical snapshot viewer" render path. `lastDetailedRequest`
+      // is also restored alongside a valid analysis snapshot (not just
+      // `detailedResults`) so "Generate AI Analysis" works immediately
+      // on the reopened deal without first requiring a fresh Analyze
+      // click -- it is exactly the terms/detailedOperatingInputs that
+      // produced the restored snapshot, since a snapshot is only ever
+      // returned when it matches the deal's current assumptions.
+      // Deliberately does not touch sensitivity/break-even state, which
+      // Gate A6 does not persist -- those remain empty until recomputed.
+      let hasRestoredAnalysis = false;
+      if (
+        fullDeal.analysis_snapshot !== null &&
+        isDetailedAnalysisSnapshot(fullDeal.analysis_snapshot)
+      ) {
+        hasRestoredAnalysis = true;
+        setDetailedResults(fullDeal.analysis_snapshot);
+        setLastDetailedRequest({
+          terms: fullDeal.terms,
+          detailedOperatingInputs: fullDeal.detailed_operating_inputs,
+        });
+      }
+      if (fullDeal.ai_snapshot !== null) {
+        setDetailedAiAnalysis(fullDeal.ai_snapshot);
+      }
+      // Sprint C Gate C2 (spec section 12.4): a reopened deal whose
+      // persisted analysis snapshot was restored opens on Overview -- there
+      // is something to read. One without a valid snapshot opens on
+      // Underwrite rather than on an empty Overview. This is a navigation
+      // decision only: it never changes whether a snapshot is restored, and
+      // never fabricates one.
+      setWorkspace(hasRestoredAnalysis ? 'overview' : 'underwrite');
+      clearSaveDetailedDealError();
+      clearDetailedIntakeFeedback();
+      setOperatingMode('detailed');
+      setView('workspace');
+    } catch (apiError) {
+      if (apiError instanceof ApiError) {
+        setDealsError(apiError.message);
+      } else {
+        setDealsError('An unexpected error occurred while opening the deal.');
+      }
+    }
+  }
 
+  /** Quick's Open Deal path -- unchanged behaviour, moved out of
+   * `handleOpenDeal` at D5.5A alongside the Detailed one. */
+  async function openQuickDealFromLibrary(deal: Deal) {
     if (!confirmDiscardIfDirty()) {
       return;
     }
@@ -1582,6 +1661,38 @@ export default function App() {
         setDealsError('An unexpected error occurred while deleting the deal.');
       }
     }
+  }
+
+  /** D5.8 -- Lease-Level "Generate AI Analysis".
+   *
+   * Reads the three hurdle targets from the same Risk-workspace fields Quick
+   * and Detailed use, through the same parsers, so a hurdle means the same
+   * thing in every mode. A malformed target is reported and nothing is sent.
+   *
+   * The analysis itself belongs to `useLeaseLevelDeal`, which owns the request
+   * body and the staleness rule; this function only supplies the targets. */
+  async function handleGenerateLeaseLevelAiAnalysis(): Promise<void> {
+    let targetLeveredIrr: number;
+    let targetEquityMultipleValue: number;
+    let targetHeadlineDscrValue: number;
+    try {
+      targetLeveredIrr = parsePercent('Target Levered IRR', targetLeveredIrrPercent);
+      targetEquityMultipleValue = parseNumber('Target Equity Multiple', targetEquityMultiple);
+      targetHeadlineDscrValue = parseNumber('Target Year 1 DSCR', targetHeadlineDscr);
+    } catch (validationError) {
+      if (validationError instanceof FormValidationError) {
+        setAiAnalysisError(validationError.message);
+        return;
+      }
+      throw validationError;
+    }
+
+    await leaseLevel.generateAiAnalysis(
+      targetLeveredIrr,
+      targetEquityMultipleValue,
+      targetHeadlineDscrValue,
+      returnHurdleMetric,
+    );
   }
 
   async function runBreakEven(
@@ -1842,25 +1953,55 @@ export default function App() {
    *
    * Dispatches to the active operating mode's own analysis path, never
    * both. */
+  // D5.5A: the shell's chrome, resolved per mode.
+  //
+  // D5.1B narrowed the wide mode once, here, and let the sites below stay
+  // two-way ternaries over the closed result. With a third mode implemented
+  // those ternaries would have to become nested ones -- and a nested ternary
+  // that omits an arm is exactly the exhaustive-by-omission hazard this sprint
+  // exists to remove, silently reinstated by a formatting choice.
+  //
+  // `byMode` takes a `Record<OperatingMode, T>`, so the compiler requires all
+  // three arms and will require a fourth the day a fourth mode is published.
+  // Each site below is still one expression naming one value per mode; nothing
+  // about Quick's or Detailed's own render trees is restructured.
   function handleAnalyzeFromHeader() {
-    if (operatingMode === 'detailed') {
-      void runDetailedAnalyze();
-      return;
-    }
-    void runQuickAnalyze();
+    byMode(operatingMode, {
+      quick: () => void runQuickAnalyze(),
+      detailed: () => void runDetailedAnalyze(),
+      lease_level: () => void leaseLevel.analyze(),
+    })();
   }
 
   /** Sprint C Gate C2: the deal the sidebar should mark active is whichever
-   * one the *currently selected* operating mode has open -- the other mode's
-   * open deal stays untouched in the background, exactly as it always has. */
-  const activeDealId = operatingMode === 'detailed' ? currentDetailedDealId : currentDealId;
+   * one the *currently selected* operating mode has open -- the other modes'
+   * open deals stay untouched in the background, exactly as they always have. */
+  const activeDealId = byMode(operatingMode, {
+    quick: currentDealId,
+    detailed: currentDetailedDealId,
+    lease_level: leaseLevel.currentDealId,
+  });
 
   function handleNewDealFromSidebar() {
-    if (operatingMode === 'detailed') {
-      handleNewDetailedDeal();
+    byMode(operatingMode, {
+      quick: handleNewDeal,
+      detailed: handleNewDetailedDeal,
+      lease_level: handleNewLeaseLevelDeal,
+    })();
+  }
+
+  /** Lease-Level's New Deal, mirroring `handleNewDetailedDeal`: the same
+   * discard guard, the same landing on a blank Underwrite workspace, and the
+   * same preservation of the currently selected mode. It never seeds a suite,
+   * a lease or a demo tenant -- a new Lease-Level deal is genuinely empty, and
+   * a fabricated rent roll would be an assumption nobody made. */
+  function handleNewLeaseLevelDeal() {
+    if (!leaseLevel.confirmDiscardIfDirty()) {
       return;
     }
-    handleNewDeal();
+    leaseLevel.resetToBlank();
+    setWorkspace('underwrite');
+    setView('workspace');
   }
 
   /** Deal-header overflow actions. Both reuse the same by-id handlers the
@@ -1878,7 +2019,11 @@ export default function App() {
       return;
     }
     const name =
-      (operatingMode === 'detailed' ? detailedDealName : dealName).trim() || 'Untitled Deal';
+      byMode(operatingMode, {
+        quick: dealName,
+        detailed: detailedDealName,
+        lease_level: leaseLevel.dealName,
+      }).trim() || 'Untitled Deal';
     if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) {
       return;
     }
@@ -2395,7 +2540,173 @@ export default function App() {
     </>
   );
 
-  const isDetailed = operatingMode === 'detailed';
+  // D5.5A: the Lease-Level workspace.
+  //
+  // Its own component and its own state, mounted beside the two existing render
+  // trees rather than woven into either. Deliberately not `UnderwriteWorkspace`:
+  // Lease-Level has its own Results sub-navigation (D5.6), rendered inside
+  // `LeaseLevelWorkspace`.
+  //
+  // D5.9: Lease-Level has no Owner Summary, so Overview points to where its
+  // results are. Until D5.9 this panel still carried the D5.5A placeholder --
+  // results "arrive in a later gate" and "are not built yet" -- which had been
+  // untrue since D5.6. A copy change only; no Overview surface is added.
+  const leaseLevelWorkspace = (
+    <>
+      <WorkspacePanel
+        id="overview"
+        active={workspace}
+        title="Overview"
+        subtitle="A concise view of the investment, key returns, and what drives the story."
+      >
+        <div className="empty-state">
+          Lease-Level results are on Underwrite, under Results: Summary, Operating
+          Statement and Cash Flow. Enter the rent roll there and click Analyze.
+        </div>
+      </WorkspacePanel>
+
+      <WorkspacePanel
+        id="underwrite"
+        active={workspace}
+        title="Underwrite"
+        subtitle="Every assumption behind the numbers, tab by tab."
+        /* D5.5E: only the Lease-Level Underwrite panel widens, because only it
+         * contains a rent roll. Quick and Detailed keep their own width. */
+        className="workspace-panel-fill workspace-panel-wide"
+      >
+        <LeaseLevelWorkspace
+          values={leaseLevel.values}
+          activeSection={leaseLevel.activeSection}
+          onSectionChange={leaseLevel.setActiveSection}
+          onTermsFieldChange={leaseLevel.onTermsFieldChange}
+          onPropertyFieldChange={leaseLevel.onPropertyFieldChange}
+          onOperatingFieldChange={leaseLevel.onOperatingFieldChange}
+          onMarketFieldChange={leaseLevel.onMarketFieldChange}
+          dealContext={leaseLevel.dealContext}
+          onDealContextChange={leaseLevel.onDealContextChange}
+          isSubmitting={leaseLevel.isAnalyzing || leaseLevel.isSaving}
+          leaseIssues={leaseLevel.leaseIssues}
+          termsIssues={leaseLevel.termsIssues}
+          error={leaseLevel.error}
+          issuesByRow={leaseLevel.issuesByRow}
+          area={leaseLevel.area}
+          editorRowId={leaseLevel.editorRowId}
+          onOpenEditor={leaseLevel.openEditor}
+          onCloseEditor={leaseLevel.closeEditor}
+          onAddRow={leaseLevel.addRow}
+          onDeleteRow={leaseLevel.deleteRow}
+          onSuiteFieldChange={leaseLevel.updateSuiteField}
+          onLeaseFieldChange={leaseLevel.updateLeaseField}
+          onVacancyFieldChange={leaseLevel.updateVacancyField}
+          onOverrideFieldChange={leaseLevel.updateOverrideField}
+          onToggleOverride={leaseLevel.toggleOverride}
+          onToggleOccupancy={leaseLevel.toggleOccupancy}
+          onUseSuiteArea={leaseLevel.useSuiteArea}
+          analysis={leaseLevel.results}
+          isAnalyzing={leaseLevel.isAnalyzing}
+          resultsView={leaseLevel.resultsView}
+          onResultsViewChange={leaseLevel.setResultsView}
+          periodView={leaseLevel.periodView}
+          onPeriodViewChange={leaseLevel.setPeriodView}
+        />
+      </WorkspacePanel>
+
+      {/* D5.7: Risk is now the Lease-Level sensitivity workspace. AI Analyst and
+        * Documents remain D5.8 and post-D5, and each still says which gate owns
+        * it rather than rendering Quick's panel with no data behind it -- an
+        * empty surface that looks broken is worse than one that says what it is
+        * waiting for.
+        *
+        * The subtitle names sensitivity alone: Lease-Level break-even is not
+        * supported, and this workspace deliberately offers no break-even tab
+        * rather than a tab that refuses. */}
+      <WorkspacePanel
+        id="risk"
+        active={workspace}
+        title="Risk"
+        subtitle="One-way and two-way sensitivity over the assumptions on Underwrite."
+        className="workspace-panel-wide"
+      >
+        <LeaseLevelSensitivityWorkspace
+          rentRoll={leaseLevel.values.rentRoll}
+          sensitivity={leaseLevel.sensitivity}
+        />
+      </WorkspacePanel>
+
+      {/* D5.8: the AI Analyst reads a Lease-Level analysis.
+        *
+        * The same `AiAnalystPanel` Quick and Detailed render, not a second AI
+        * product: the backend returns the identical report shape for all three
+        * modes, so there is nothing mode-specific to build here.
+        *
+        * Gated for the reason the empty state says out loud. The AI Analyst
+        * interprets verified results; with nothing analyzed there is nothing to
+        * interpret, and offering the button anyway would invite exactly the
+        * invention this product forbids. `resetDownstream` clears the report on
+        * any input edit, so what is on screen always describes the assumptions
+        * on screen.
+        *
+        * D5.8A widens the gate by exactly one case: a report restored from the
+        * deal. A restored report is only ever handed back when its stored
+        * fingerprint still matches the deal's own assumptions, so its presence
+        * is itself evidence that these exact inputs were analyzed -- and
+        * reopening a saved deal must show the work that was done on it without
+        * making the analyst press Analyze again to see it. Lease-Level persists
+        * no base analysis snapshot (D5 decision A) and this does not change
+        * that: what is restored is the AI report, validated directly against the
+        * input fingerprint, with no cached financial result involved.
+        *
+        * The panel is told this deal has no break-even analysis to interpret:
+        * Lease-Level break-even is unsupported, so that section could only ever
+        * say none was supplied. */}
+      <WorkspacePanel
+        id="ai"
+        active={workspace}
+        title="AI Analyst"
+        subtitle="Analysis grounded in your underwriting results."
+      >
+        {leaseLevel.results || leaseLevel.aiAnalysis ? (
+          <AiAnalystPanel
+            analysis={leaseLevel.aiAnalysis}
+            isLoading={leaseLevel.isGeneratingAiAnalysis}
+            error={leaseLevel.aiAnalysisError}
+            onGenerate={() => void handleGenerateLeaseLevelAiAnalysis()}
+            hasBreakEvenAnalysis={false}
+            isStale={leaseLevel.isAiAnalysisStale}
+            generateBlockedReason={
+              leaseLevel.canGenerateAiAnalysis
+                ? null
+                : 'Analyze the deal again before regenerating this report.'
+            }
+            analysisNote={
+              leaseLevel.aiAnalysisError !== null
+                ? 'Showing your previous report. The new one was not generated.'
+                : leaseLevel.isAiAnalysisRestored
+                  ? 'Showing the last saved report for these assumptions.'
+                  : null
+            }
+          />
+        ) : (
+          <div className="empty-state">
+            Analyze the deal first. The AI Analyst interprets verified results; it never
+            calculates them.
+          </div>
+        )}
+      </WorkspacePanel>
+
+      <WorkspacePanel
+        id="documents"
+        active={workspace}
+        title="Documents"
+        subtitle="Source documents and the assumptions extracted from them."
+      >
+        <div className="empty-state">
+          Lease-Level rent rolls are entered by hand on Underwrite. Document
+          extraction is not available for a rent roll.
+        </div>
+      </WorkspacePanel>
+    </>
+  );
 
   return (
     <div className="app-shell">
@@ -2425,24 +2736,52 @@ export default function App() {
         ) : (
           <>
             <DealHeader
-              dealName={isDetailed ? detailedDealName : dealName}
-              onDealNameChange={isDetailed ? handleDetailedDealNameChange : handleDealNameChange}
+              dealName={byMode(operatingMode, {
+                quick: dealName,
+                detailed: detailedDealName,
+                lease_level: leaseLevel.dealName,
+              })}
+              onDealNameChange={byMode(operatingMode, {
+                quick: handleDealNameChange,
+                detailed: handleDetailedDealNameChange,
+                lease_level: leaseLevel.onDealNameChange,
+              })}
               operatingMode={operatingMode}
               onOperatingModeChange={setOperatingMode}
               isSavedDeal={activeDealId !== null}
-              isSaving={isDetailed ? isSavingDetailedDeal : isSavingDeal}
-              saveStatus={isDetailed ? detailedSaveStatus : saveStatus}
-              lastSavedAt={isDetailed ? lastDetailedSavedAt : lastSavedAt}
-              error={isDetailed ? saveDetailedDealError : saveDealError}
+              isSaving={byMode(operatingMode, {
+                quick: isSavingDeal,
+                detailed: isSavingDetailedDeal,
+                lease_level: leaseLevel.isSaving,
+              })}
+              saveStatus={byMode(operatingMode, {
+                quick: saveStatus,
+                detailed: detailedSaveStatus,
+                lease_level: leaseLevel.saveStatus,
+              })}
+              lastSavedAt={byMode(operatingMode, {
+                quick: lastSavedAt,
+                detailed: lastDetailedSavedAt,
+                lease_level: leaseLevel.lastSavedAt,
+              })}
+              error={byMode(operatingMode, {
+                quick: saveDealError,
+                detailed: saveDetailedDealError,
+                lease_level: leaseLevel.saveError,
+              })}
               onSaveDeal={() => {
-                if (isDetailed) {
-                  void handleSaveDetailedDeal();
-                  return;
-                }
-                void handleSaveDeal();
+                byMode(operatingMode, {
+                  quick: () => void handleSaveDeal(),
+                  detailed: () => void handleSaveDetailedDeal(),
+                  lease_level: () => void leaseLevel.save(),
+                })();
               }}
               onAnalyze={handleAnalyzeFromHeader}
-              isAnalyzing={isDetailed ? isDetailedSubmitting : isSubmitting}
+              isAnalyzing={byMode(operatingMode, {
+                quick: isSubmitting,
+                detailed: isDetailedSubmitting,
+                lease_level: leaseLevel.isAnalyzing,
+              })}
               onDuplicateDeal={handleDuplicateCurrentDeal}
               onDeleteDeal={handleDeleteCurrentDeal}
             />
@@ -2454,9 +2793,22 @@ export default function App() {
                * its error belongs to the frame rather than to one panel --
                * otherwise a validation failure raised while the analyst is on
                * Risk would be reported on a workspace they cannot see. */}
-              {(isDetailed ? detailedError : error) && (
+              {/* D5.5A: Lease-Level is deliberately absent from this frame-level
+                * banner. Its refusals carry a `path` that names the exact field,
+                * and the workspace anchors them there; repeating the joined
+                * message here would show the same failure twice, once without
+                * the locator that makes it actionable. */}
+              {byMode(operatingMode, {
+                quick: error,
+                detailed: detailedError,
+                lease_level: null,
+              }) && (
                 <div className="error-banner workspace-error">
-                  {isDetailed ? detailedError : error}
+                  {byMode(operatingMode, {
+                    quick: error,
+                    detailed: detailedError,
+                    lease_level: null,
+                  })}
                 </div>
               )}
 
@@ -2464,7 +2816,11 @@ export default function App() {
                 <div className="error-banner workspace-error">{dealsError}</div>
               )}
 
-              {isDetailed ? detailedWorkspaces : quickWorkspaces}
+              {byMode(operatingMode, {
+                quick: quickWorkspaces,
+                detailed: detailedWorkspaces,
+                lease_level: leaseLevelWorkspace,
+              })}
             </div>
           </>
         )}

@@ -27,10 +27,14 @@ proven rather than asserted.
 from __future__ import annotations
 
 import ast
+import collections
 import dataclasses
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -76,6 +80,183 @@ _ENTRY_POINT = "analyze_lease_level_acquisition_with_projection"
 #: Everything this gate touches lives in one new module, so the Quick and
 #: Detailed sensitivity and break-even sources must still be identical to it.
 _D4_6A_COMMIT = "15e910d"
+
+#: The Sprint-D merge commit -- the base every D5 gate branches from, and the
+#: correct baseline for any file that did not yet exist at D4.6A (notably
+#: ``lease_level_sensitivity.py``, which D4.6B itself created).
+_D5_BASE_COMMIT = "4f8a648"
+
+
+#: The frontend files a completed D5 gate has ratified, and the only ones
+#: permitted to differ from ``_D4_6A_COMMIT``.
+#:
+#: G37 asserted the whole ``web`` tree byte-identical until D5.1B, which had to
+#: edit the frontend's mode-dispatch files for exactly the reason D5.1A edited
+#: the backend's. Byte-identity stopped being the statement of the rule there;
+#: *"only the explicitly accepted frontend integration files from completed D5
+#: product gates have changed"* is. Each gate widens this set by the smallest
+#: amount its own scope requires, and a broad Quick/Detailed refactor is a stop
+#: condition precisely because it could not happen without appearing here.
+#:
+#: Every entry is a literal repository path. There is deliberately no pattern,
+#: no prefix rule and no directory glob: a set of names is the only form of this
+#: list that a reviewer can read and a future gate cannot quietly widen.
+#:
+#: Hoisted to module scope at D5.7B so the rule below can be exercised against a
+#: synthetic file list. A real one only ever contains what the repository
+#: happens to hold, which can prove the guardrail accepts the tree as it stands
+#: but never that it would reject anything.
+_PERMITTED_WEB = frozenset(
+    {
+        # D5.1B -- the mode-dispatch surface itself.
+        "web/src/App.tsx",
+        "web/src/types.ts",
+        "web/src/underwrite.ts",
+        "web/src/operatingMode.ts",
+        "web/src/components/AppSidebar.tsx",
+        "web/src/components/DealHeader.tsx",
+        "web/src/components/DealLibraryPanel.tsx",
+        "web/src/components/OwnerSummaryPanel.tsx",
+        "web/src/components/UnderwriteWorkspace.tsx",
+        # D5.5A -- new, and read by no other mode.
+        "web/src/leaseLevelTypes.ts",
+        "web/src/leaseLevelConvert.ts",
+        "web/src/useLeaseLevelDeal.ts",
+        "web/src/components/LeaseLevelWorkspace.tsx",
+        # D5.5A -- shipped files, extended additively.
+        "web/src/api.ts",
+        "web/src/index.css",
+        "web/src/components/AssumptionFieldGrid.tsx",
+        # D5.5B -- the rent-roll editor. Three new modules no other mode reads,
+        # and no further shipped file touched: the gate that makes suites and
+        # leases editable adds components rather than reworking the shell.
+        "web/src/leaseLevelIssues.ts",
+        "web/src/components/RentRollTable.tsx",
+        "web/src/components/SuiteLeaseEditor.tsx",
+        # D5.5D -- a shared test fixture. Named without ``.test.`` because two
+        # test files import it, so the extension filter below does not catch it.
+        "web/src/hiddenIssuesFixture.ts",
+        # D5.5E -- display-only thousands grouping. Two new modules, both pure
+        # presentation: the formatter is string-in/string-out and parses no
+        # number, and the input it feeds performs no arithmetic. They are shared
+        # by all three modes deliberately, which is why they are their own
+        # primitive rather than a change to any mode's form.
+        "web/src/numberFormat.ts",
+        "web/src/components/NumericInput.tsx",
+        # D5.6 -- the result surfaces. Four new modules, all presentation: they
+        # render the authoritative response and compute nothing, which
+        # ``modeDispatch.architecture.test.ts`` holds closed on the TypeScript
+        # side. `leaseLevelResultsFixture.json` is two captured `/analyze`
+        # responses, listed here for the same reason `hiddenIssuesFixture.ts`
+        # is -- the extension filter below only skips ``.test.ts``/``.test.tsx``.
+        "web/src/leaseLevelFormat.ts",
+        "web/src/leaseLevelResultsFixture.json",
+        "web/src/components/LeaseLevelResults.tsx",
+        "web/src/components/LeaseLevelMetricSummary.tsx",
+        "web/src/components/LeaseLevelOperatingStatement.tsx",
+        # D5.7 -- the Lease-Level sensitivity workspace, ratified at D5.7B.
+        #
+        # Seven new modules and no further shipped file touched beyond the four
+        # already listed above (``App.tsx`` mounts the workspace, ``api.ts``
+        # gains the two client functions the additive-only assertion above still
+        # covers, ``index.css`` is appended to, and ``useLeaseLevelDeal.ts``
+        # supplies the request the workspace sends). Quick and Detailed keep
+        # their own sensitivity panel untouched: ``SensitivityPanel.tsx`` is
+        # absent from this list and absent from the diff.
+        #
+        # All seven are presentation or vocabulary. That they compute no lease
+        # economics is not asserted here but on the TypeScript side, by
+        # ``modeDispatch.architecture.test.ts`` (G-M7), which parses each of them
+        # and rejects a single arithmetic operator. The one approved carve-out,
+        # ``leaseLevelSensitivityLadder.ts``, generates candidate values an
+        # analyst can see and edit before any run and is proved unreachable from
+        # a result surface by that same file.
+        "web/src/leaseLevelSensitivityTypes.ts",
+        "web/src/leaseLevelSensitivity.ts",
+        "web/src/leaseLevelSensitivityLadder.ts",
+        "web/src/components/LeaseLevelSensitivityWorkspace.tsx",
+        "web/src/components/LeaseLevelOneWaySensitivity.tsx",
+        "web/src/components/LeaseLevelTwoWaySensitivity.tsx",
+        "web/src/components/CandidateValueEditor.tsx",
+        # D5.7A -- presentation polish. It added no file: the baseline context
+        # line and the directional matrix corner changed two of the sensitivity
+        # components above and appended to ``index.css``, all four of which this
+        # set already carried. It is named here because a reader tracing the
+        # frontend history should find every accepted gate accounted for, not
+        # because it needed an entry.
+        #
+        # D5.8A -- deal analysis persistence and AI product polish. It adds no
+        # new frontend module at all: the derived-analysis contracts land in
+        # ``leaseLevelSensitivityTypes.ts``, the client functions in ``api.ts``
+        # (still addition-only), the state in ``useLeaseLevelDeal.ts``, and the
+        # snapshot fields on ``Deal`` in ``types.ts`` -- every one of them
+        # already listed above.
+        #
+        # One entry is genuinely new. ``AiAnalystPanel.tsx`` is the shared AI
+        # report surface all three modes render, and this gate changes two things
+        # in it: the button reads "Regenerate Analysis" once a report exists, and
+        # the Break-Even Interpretation section is omitted when the deal has no
+        # break-even analysis to interpret. Both are additive props with
+        # backwards-compatible defaults, so Quick and Detailed render exactly the
+        # ten sections they always have; that Quick's and Detailed's Break-Even
+        # section survives is asserted directly, by test, rather than by this
+        # file's silence.
+        "web/src/components/AiAnalystPanel.tsx",
+        # D5.8B -- stale-analysis presentation and the ladder Step formatting
+        # fix. One new module: `StaleAnalysisNotice.tsx`, the single component
+        # all three analytical surfaces use to say a result is out of date, so
+        # the three cannot drift into three different answers to the same
+        # question. Every other file this gate touches is already listed above.
+        #
+        # It renders text and nothing else -- no request, no state, no
+        # arithmetic -- and the staleness it displays is decided in
+        # `useLeaseLevelDeal.ts` by the same comparison D5.8A used to decide
+        # whether to restore a snapshot at all.
+        "web/src/components/StaleAnalysisNotice.tsx",
+        # D5.8B -- the saved Lease-Level deal both analytical-state suites drive.
+        # Named here for the same reason `hiddenIssuesFixture.ts` is: two test
+        # files import it, so it cannot carry a `.test.` extension and the filter
+        # below does not skip it. It is data and one clone helper; every mock and
+        # every assertion stays in the file that makes the claim.
+        "web/src/leaseLevelDealFixture.ts",
+        # D5.9 -- hardening. One new module, and it is test-only: the line-ending
+        # normaliser every test that reads source or stylesheet text passes it
+        # through, so no structural assertion depends on whether git checked a
+        # file out with LF or CRLF. Named here for the same reason the two
+        # fixtures above are -- seven test files import it, so it cannot carry a
+        # `.test.` extension. No production module imports it, and it performs
+        # one string replacement and nothing else.
+        #
+        # This is also the first entry the widened discovery below had to see
+        # while the file was still untracked: before D5.9, G37 could not.
+        "web/src/testSourceText.ts",
+    }
+)
+
+
+def _unexpected_web(changed: Iterable[str]) -> set[str]:
+    """The changed ``web`` paths no completed gate has ratified.
+
+    The extension filter excludes test sources and nothing else: a production
+    module cannot escape the list by being a ``.ts`` file, and the two fixtures
+    that are production-named but test-only are enumerated above rather than
+    pattern-matched.
+
+    **Untracked files: closed at D5.9.** Until then ``changed`` came from
+    ``git diff`` alone, which does not report untracked files, so a brand-new
+    frontend module that had never been ``git add``-ed was invisible to this
+    rule until it was staged (first recorded at D5.5E, measured at D5.7B).
+    ``_files_changed_since`` now also asks git for every untracked, unignored
+    path, so such a module is rejected the moment it exists on disk -- proved
+    against a real throwaway repository by
+    ``test_g37_sees_an_untracked_module_without_writing_the_index``.
+    """
+
+    return {
+        path
+        for path in changed
+        if not path.endswith(".test.ts") and not path.endswith(".test.tsx")
+    } - _PERMITTED_WEB
 
 
 # =============================================================================
@@ -150,23 +331,73 @@ def _python_files_under(directory: Path) -> list[Path]:
     return sorted(directory.rglob("*.py"))
 
 
-def _files_changed_since(commit: str, repo_relative: str) -> list[str]:
-    """Paths under ``repo_relative`` that differ from ``commit``.
+def _git(arguments: list[str], *, root: Path = _PROJECT_ROOT) -> str:
+    """Run one git query against ``root`` without ever writing its index.
 
-    ``git diff`` rather than a raw byte comparison against ``git show``: blobs
-    are stored with LF and this working tree checks out CRLF, so comparing
-    bytes would report every file as modified. Git applies the same
-    normalisation it uses to decide whether a file is dirty, which is exactly
-    the question being asked.
+    **D5.9.** Porcelain ``git diff`` is not read-only: when a working file's
+    timestamp has moved but its content has not, it rewrites the index's stat
+    cache on the way out, and ``--no-optional-locks`` does not stop it (measured
+    on git 2.55). Nothing is staged by that, but a guardrail has no business
+    writing the developer's index at all. So every query runs against a private
+    copy of the index, handed to git through ``GIT_INDEX_FILE``: git reads
+    exactly what it would have read, and anything it chooses to write lands in
+    a temporary file that is then discarded.
     """
 
-    completed = subprocess.run(
-        ["git", "diff", "--name-only", commit, "--", repo_relative],
+    index_path = subprocess.run(
+        ["git", "rev-parse", "--git-path", "index"],
         capture_output=True,
-        cwd=_PROJECT_ROOT,
+        text=True,
+        check=True,
+        cwd=root,
+    ).stdout.strip()
+    with tempfile.TemporaryDirectory() as scratch:
+        private_index = Path(scratch) / "index"
+        shutil.copyfile(root / index_path, private_index)
+        completed = subprocess.run(
+            ["git", *arguments],
+            capture_output=True,
+            text=True,
+            cwd=root,
+            env={**os.environ, "GIT_INDEX_FILE": str(private_index)},
+        )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
+
+
+def _files_changed_since(
+    commit: str, repo_relative: str, *, root: Path = _PROJECT_ROOT
+) -> list[str]:
+    """Paths under ``repo_relative`` that differ from ``commit`` -- tracked or not.
+
+    Two read-only questions, and a path is reported if either answers yes:
+
+    * ``git diff --name-only <commit>`` -- every **tracked** path whose content
+      differs from ``commit``: modified, added, or deleted. ``git diff`` rather
+      than a raw byte comparison against ``git show``: blobs are stored with LF
+      and this working tree checks out CRLF, so comparing bytes would report
+      every file as modified. Git applies the same normalisation it uses to
+      decide whether a file is dirty, which is exactly the question being asked.
+    * ``git ls-files --others --exclude-standard`` -- every file git does not
+      track yet but would pick up on the next ``git add``. **D5.9.** Until this
+      gate the first query was the only one, and it cannot see a file that has
+      never been added: a new module dropped into ``web/src`` -- or into
+      ``src/anchor/engine`` -- survived every clause of this guardrail until
+      someone staged it. Ignored files (``node_modules``, build output, caches)
+      are excluded by the repository's own ignore rules rather than by a second
+      list kept here.
+
+    Neither query stages anything, and both run through ``_git``, so the index
+    is not written either.
+    """
+
+    tracked = _git(["diff", "--name-only", commit, "--", repo_relative], root=root)
+    untracked = _git(
+        ["ls-files", "--others", "--exclude-standard", "--", repo_relative], root=root
     )
-    assert completed.returncode == 0, completed.stderr.decode()
-    return [line.strip() for line in completed.stdout.decode().splitlines() if line.strip()]
+    return sorted(
+        {line.strip() for line in (*tracked.splitlines(), *untracked.splitlines()) if line.strip()}
+    )
 
 
 def _fresh_interpreter(statement: str) -> subprocess.CompletedProcess[bytes]:
@@ -937,17 +1168,34 @@ def test_g33_no_arbitrary_grid_limit_exists() -> None:
 # =============================================================================
 
 
-def test_g34_operating_mode_lease_level_remains_absent() -> None:
-    """**Guardrail 34.** HD-D4-9 unchanged. Lease-Level sensitivity is
-    distinguished by function identity; D5 owns public mode publication."""
+def test_g34_operating_mode_lease_level_is_published_but_sensitivity_stays_mode_blind() -> None:
+    """**Guardrail 34, succeeded at D5.1A.**
+
+    D4.6B re-confirmed HD-D4-9's deferral and added its own, independent reason
+    for wanting no enum member: Lease-Level sensitivity is distinguished by
+    **function identity**, exactly as Quick and Detailed already are, so the
+    runners never needed one.
+
+    D5.1A publishes the member for the *delivery* layers that genuinely must
+    dispatch on it. That does not touch this module's reason for existing, so
+    the half of the guardrail that mattered to D4.6B is unchanged and is the
+    half asserted most strongly here: ``lease_level_sensitivity`` still never
+    names or imports ``OperatingMode``. If the mode ever leaks into the
+    sensitivity layer, the analysis package has started dispatching on an enum
+    instead of on function identity, and that is a real architectural
+    regression -- which is why this assertion survives verbatim.
+    """
 
     from anchor.contracts import OperatingMode
 
-    assert {member.value for member in OperatingMode} == {"quick", "detailed"}
-    assert not hasattr(OperatingMode, "LEASE_LEVEL")
-    with pytest.raises(ValueError):
-        OperatingMode("lease_level")
+    assert {member.value for member in OperatingMode} == {
+        "quick",
+        "detailed",
+        "lease_level",
+    }
+    assert OperatingMode("lease_level") is OperatingMode.LEASE_LEVEL
 
+    # Unchanged from D4.6B, and the point of this guardrail.
     assert "OperatingMode" not in _referenced_names(_tree(_SENSITIVITY))
     assert not any(
         name.endswith("OperatingMode") for name in _imported_module_names(_SENSITIVITY)
@@ -1004,24 +1252,524 @@ def test_g37_analysis_break_even_is_byte_identical_since_d4_6a() -> None:
     assert changed == [], f"analysis/break_even.py changed: {changed}"
 
 
-def test_g37_the_engine_leasing_ai_and_delivery_layers_are_unchanged() -> None:
-    """Nothing financial moved. The whole re-underwrite is the D4.5B pipeline
-    exactly as it shipped."""
+def _pipeline_call_names(source: str, function: str) -> list[str]:
+    """The ordered names of every function one named function calls."""
 
+    tree = ast.parse(source)
+    target = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == function
+    )
+    names: list[str] = []
+    for node in ast.walk(target):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        if isinstance(callee, ast.Name):
+            names.append(callee.id)
+        elif isinstance(callee, ast.Attribute):
+            names.append(callee.attr)
+    return names
+
+
+def _assert_lease_level_pipeline_only_gained_validators() -> None:
+    """D5.5C added validator calls to the Lease-Level orchestration and nothing
+    else. Proved by differencing the multiset of calls it makes, then checking
+    that every builder call survives in its original relative order."""
+
+    before = subprocess.run(
+        ["git", "show", f"{_D4_6A_COMMIT}:src/anchor/analysis/lease_level.py"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=_PROJECT_ROOT,
+    ).stdout
+    after = (
+        _PROJECT_ROOT / "src" / "anchor" / "analysis" / "lease_level.py"
+    ).read_text(encoding="utf-8")
+
+    function = "analyze_lease_level_acquisition_with_projection"
+    old_calls = _pipeline_call_names(before, function)
+    new_calls = _pipeline_call_names(after, function)
+
+    added = collections.Counter(new_calls) - collections.Counter(old_calls)
+    removed = collections.Counter(old_calls) - collections.Counter(new_calls)
+
+    assert removed == collections.Counter(), (
+        f"D5.5C removed calls from the Lease-Level pipeline: {sorted(removed)}"
+    )
+    assert set(added) <= {
+        "require_valid_recovery_inputs",
+        "require_valid_successor_recovery_assumptions",
+        # The loop that reaches each suite's override.
+        "enumerate",
+    }, f"D5.5C added a non-validator call: {sorted(added)}"
+
+    # And the surviving calls keep their relative order, so no builder moved.
+    surviving = [name for name in new_calls if name in set(old_calls)]
+    assert surviving == old_calls, "D5.5C reordered the Lease-Level pipeline"
+
+
+def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> None:
+    """**Narrowed at D5.1A -- and not weakened.**
+
+    The original asserted byte-identity across eleven areas since D4.6A. Five of
+    them are mode-dispatch consumers that D5.1A must edit by definition
+    (``api.py``, ``contracts.py``, ``deals``, ``ai``), so whole-tree identity
+    stopped being a statement of the rule.
+
+    The rule it was protecting is *"nothing financial moved"*, and that is
+    asserted here undiminished: every engine, leasing and analysis module is
+    still byte-identical, as is ``validation.py`` and the whole web tree. The
+    five dispatch files are permitted to change, and are then held to a
+    stronger, more specific claim than byte-identity could give -- that the only
+    thing which changed in them is mode routing, proved by
+    ``tests/test_d5_1a_operating_mode_total_dispatch.py`` and by G34's TI/LC
+    assertion above.
+    """
+
+    # Financial authority: byte-identical since D4.6A, no exceptions.
     for area in (
         "src/anchor/engine",
-        "src/anchor/leasing",
-        "src/anchor/ai",
-        "src/anchor/deals",
-        "src/anchor/ingestion",
-        "src/anchor/api.py",
-        "src/anchor/contracts.py",
-        "src/anchor/validation.py",
+        # ``src/anchor/leasing`` as a whole was asserted byte-identical until
+        # D5.2, which adds the structural transport boundary ``parsing.py`` and
+        # the two structural issue codes it raises. Neither is financial, so the
+        # rule is now stated over the modules that carry leasing *economics* --
+        # every builder, every convention, every rule. ``validation.py`` and
+        # ``__init__.py`` are excluded here and held to a stronger, more specific
+        # claim by ``tests/test_d5_2_parsing_architecture.py``: the parser can
+        # name no domain code, run no validator and perform no arithmetic.
+        "src/anchor/leasing/aggregation.py",
+        "src/anchor/leasing/calendar.py",
+        "src/anchor/leasing/contracts.py",
+        "src/anchor/leasing/expenses.py",
+        "src/anchor/leasing/leasing_costs.py",
+        "src/anchor/leasing/market.py",
+        "src/anchor/leasing/projection.py",
+        "src/anchor/leasing/recoveries.py",
+        "src/anchor/leasing/rent.py",
+        "src/anchor/leasing/rollover.py",
         "src/anchor/analysis/contracts.py",
-        "src/anchor/analysis/lease_level.py",
-        "web",
+        "src/anchor/analysis/sensitivity.py",
+        "src/anchor/analysis/break_even.py",
+        "src/anchor/validation.py",
+        "src/anchor/ingestion",
+        # The frontend's financial and transport modules. `web` as a whole was
+        # asserted byte-identical until D5.1B, which had to edit the frontend's
+        # mode-dispatch files for exactly the reason D5.1A edited the backend's.
+        # Whole-tree identity therefore stopped being the statement of the rule;
+        # "nothing financial moved" is, and these are the frontend files that
+        # could carry financial or transport meaning. Every one is untouched.
+        "web/src/convert.ts",
+        "web/src/format.ts",
+        "web/src/liveMetrics.ts",
+        "web/src/ownerSummary.ts",
     ):
         assert _files_changed_since(_D4_6A_COMMIT, area) == [], f"{area} changed"
+
+    # ``web/src/api.ts`` was byte-identical until D5.5A, which is the gate that
+    # gives the analyst a Lease-Level workflow and therefore the gate that must
+    # add the three client functions it calls. Byte-identity stopped being a
+    # statement of the rule there, so a stronger and more specific one takes its
+    # place: **the file changed only by addition.** Not one line that existed at
+    # D4.6A was removed or edited, so every Quick and Detailed client function --
+    # its URL, its body, its error handling, its 422 parse -- is exactly the code
+    # that shipped, proved by the diff rather than by reading it.
+    #
+    # This is deliberately stronger than "only these functions changed": it
+    # forbids a one-character edit anywhere in the shipped surface, including
+    # inside a function nobody thought to name.
+    removed = [
+        line
+        for line in _git(["diff", "-U0", _D4_6A_COMMIT, "--", "web/src/api.ts"]).splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+    assert removed == [], (
+        "web/src/api.ts changed by more than addition since D4.6A; a shipped "
+        f"Quick/Detailed client function was edited: {removed[:5]}"
+    )
+
+    # ``src/anchor/ai/prompts.py`` was byte-identical until D5.8, the gate that
+    # gives the AI Analyst a third mode to describe. Byte-identity stopped being
+    # a statement of the rule there -- grounding a mode *is* prompt work -- so
+    # two stronger and more specific claims take its place.
+    import re
+
+    from anchor.ai.prompts import build_system_prompt
+
+    shipped_prompt = build_system_prompt()
+    baseline_source = subprocess.run(
+        ["git", "show", f"{_D4_6A_COMMIT}:src/anchor/ai/prompts.py"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=_PROJECT_ROOT,
+    ).stdout
+
+    def _model_facing(source: str) -> str:
+        """Just the prompt literal -- not the module's docstrings.
+
+        A removed docstring line is code documentation, covered by ordinary
+        review of the diff. What these claims protect is what the model is
+        actually told.
+        """
+
+        start_index = source.index("SYSTEM_PROMPT = textwrap.dedent(")
+        return source[start_index : source.index("def build_system_prompt", start_index)]
+
+    baseline_model_facing = _model_facing(baseline_source)
+
+    removed = [
+        line[1:].strip()
+        for line in _git(
+            ["diff", "-U0", _D4_6A_COMMIT, "--", "src/anchor/ai/prompts.py"]
+        ).splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+
+    # Claim 1: every line of model-facing text D5.8 removed was a two-mode
+    # enumeration. The prompt said "either quick or detailed", "in both modes",
+    # "in either mode"; a third mode made each of those sentences false, and
+    # they were corrected rather than deleted. A line is also acceptable if its
+    # text still appears in the built prompt -- the paragraph was re-wrapped and
+    # nothing was actually dropped. Anything else is a rule that went missing,
+    # which is what byte-identity was really protecting.
+    two_mode_phrases = ("either", "both modes", "quick", "Quick", "detailed", "Detailed")
+    for line in removed:
+        if line == "" or line not in baseline_model_facing:
+            continue
+        assert any(phrase in line for phrase in two_mode_phrases) or (
+            line.strip('"') in shipped_prompt
+        ), (
+            "D5.8 removed a prompt line that was neither a two-mode "
+            f"enumeration nor re-wrapped elsewhere: {line!r}"
+        )
+
+    # Claim 2 -- the one that matters. Every numbered rule and every named rule
+    # block that shipped at D4.6A is still in the built system prompt, and the
+    # numbering is still unique, so the third mode's rules were appended rather
+    # than written over the top of Quick's and Detailed's.
+    baseline_rules = set(re.findall(r"^    (\d+[a-z]?)\. ", baseline_model_facing, re.M))
+    shipped_rules = re.findall(r"^(\d+[a-z]?)\. ", shipped_prompt, re.M)
+    assert baseline_rules, "the baseline rule scan found nothing; the regex drifted"
+    assert baseline_rules <= set(shipped_rules), (
+        "D5.8 dropped a numbered grounding rule: "
+        f"{sorted(baseline_rules - set(shipped_rules))}"
+    )
+    assert len(shipped_rules) == len(set(shipped_rules)), (
+        "a rule number is used twice; the third mode's rules overwrote an "
+        "existing rule's identifier"
+    )
+    for named_block in (
+        "GROUNDING RULES",
+        "DETAILED-MODE NOI RULE",
+        "OPERATING-MARGIN DISCIPLINE",
+        "DEAL CONTEXT RULES",
+        "STRUCTURE",
+        "DEAL STORY",
+    ):
+        assert named_block in shipped_prompt, f"D5.8 dropped the {named_block} block"
+
+    # ``src/anchor/analysis/lease_level.py`` was byte-identical until D5.5C,
+    # which wired two *existing* recovery validators into the orchestration that
+    # had never called them. It is financial-authority-adjacent -- it sequences
+    # every builder -- so byte-identity is replaced by two claims that are
+    # together stronger than it was, rather than by a weaker file list.
+    #
+    # Claim 1: nothing executable was removed. Every deleted line is prose or a
+    # step-number comment.
+    removed = [
+        line
+        for line in _git(
+            ["diff", "-U0", _D4_6A_COMMIT, "--", "src/anchor/analysis/lease_level.py"]
+        ).splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+    for line in removed:
+        body = line[1:].strip()
+        assert body == "" or body.startswith("#") or not body.endswith((")", ",", ":")), (
+            "D5.5C removed executable code from the Lease-Level orchestration: "
+            f"{line}"
+        )
+
+    # Claim 2 -- the one that matters. The ordered sequence of calls the
+    # orchestration makes is the D4.6A sequence with exactly the two validator
+    # calls inserted: no builder added, removed, reordered or replaced. A change
+    # to the analysis pipeline itself cannot hide behind a validation gate.
+    _assert_lease_level_pipeline_only_gained_validators()
+
+
+    # ``lease_level_sensitivity.py`` did not exist at D4.6A -- D4.6B created it
+    # -- so its baseline is the Sprint-D merge this gate branched from.
+    assert (
+        _files_changed_since(
+            _D5_BASE_COMMIT, "src/anchor/analysis/lease_level_sensitivity.py"
+        )
+        == []
+    )
+
+    # Delivery layers: only the mode-dispatch consumers moved.
+    # D5.3 added ``analysis/__init__.py`` (the parser facade) and D5.4 extended
+    # it with the Lease-Level input contract types plus
+    # ``deals/fingerprint.py``. Each is re-export or persistence, never
+    # financial logic -- the ten leasing economics modules above are still
+    # byte-identical, which is what "nothing financial moved" actually means.
+    permitted = {
+        "src/anchor/api.py",
+        "src/anchor/contracts.py",
+        "src/anchor/analysis/__init__.py",
+        "src/anchor/deals/contracts.py",
+        "src/anchor/deals/store.py",
+        "src/anchor/deals/fingerprint.py",
+        "src/anchor/deals/__init__.py",
+        "src/anchor/ai/contracts.py",
+        "src/anchor/ai/presentation.py",
+        # D5.8 -- the gate that grounds the third mode for the AI Analyst.
+        # ``analyst.py`` gains the Lease-Level context builder, ``prompts.py``
+        # the grounding rules that context is read by, and ``__init__.py`` the
+        # two new entry points. ``provider.py`` is deliberately absent: the
+        # OpenAI boundary is not a grounding question, and G34 asserts its
+        # byte-identity by name.
+        "src/anchor/ai/analyst.py",
+        "src/anchor/ai/prompts.py",
+        "src/anchor/ai/__init__.py",
+    }
+    for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
+                 "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):
+        unexpected = set(_files_changed_since(_D4_6A_COMMIT, area)) - permitted
+        assert unexpected == set(), (
+            f"{area} changed beyond D5.1A's mode-dispatch scope: {sorted(unexpected)}"
+        )
+
+    # D5.2: ``leasing/validation.py`` gained exactly the two structural parsing
+    # codes D8 approved, and nothing else. Asserted on the enum rather than the
+    # file, because the enum is what other layers depend on.
+    from anchor.leasing.validation import LeaseIssueCode
+
+    structural = {"UNKNOWN_FIELD", "MALFORMED_FIELD"}
+    assert structural <= {code.name for code in LeaseIssueCode}
+    assert not {
+        code.name
+        for code in LeaseIssueCode
+        if code.name.startswith(("PARSE_", "MISSING_FIELD", "STRUCTURAL_"))
+    }, "an unapproved structural parse code was added"
+
+    # D5.1B: the frontend changed only its mode-dispatch surface. Its own
+    # guardrails (`web/src/modeDispatch.architecture.test.ts`) prove the change
+    # was dispatch and nothing else; this pins the file list from the backend
+    # side so a frontend gate cannot quietly widen without a reviewer noticing.
+    #
+    # The list itself is ``_PERMITTED_WEB``, at the top of this module, where
+    # each gate's widening is recorded with the reason for it. Read it there:
+    # this assertion is only the moment the tree is measured against it.
+    unexpected_web = _unexpected_web(_files_changed_since(_D4_6A_COMMIT, "web"))
+    assert unexpected_web == set(), (
+        f"web changed beyond D5.1B's mode-dispatch scope: {sorted(unexpected_web)}"
+    )
+
+
+def test_g37_the_web_allowlist_would_reject_an_unratified_file() -> None:
+    """**D5.7B.** G37's frontend clause has teeth, proved rather than assumed.
+
+    G37 measures the repository as it stands. A passing run therefore shows only
+    that the tree contains nothing unratified *today* -- which is equally what a
+    guardrail rewritten to permit everything would show. The rule is exercised
+    here on file lists chosen for the purpose, so the difference is visible.
+
+    Three shapes of weakening are killed: a wildcard or prefix rule in place of
+    the literal set, an extension filter widened until a production module slips
+    through it, and an entry that quietly re-admits a mode whose files this gate
+    claims are untouched.
+    """
+
+    ratified = sorted(_PERMITTED_WEB)
+
+    # The tree as ratified is accepted. This is the baseline the assertions
+    # below are measured against -- without it, a rule that rejected everything
+    # would look like a rule with teeth.
+    assert _unexpected_web(ratified) == set()
+
+    # M2. An unrelated production module appearing in the frontend is rejected,
+    # and named in the failure rather than silently absorbed.
+    intruder = "web/src/unapprovedFinancialLogic.ts"
+    assert _unexpected_web([*ratified, intruder]) == {intruder}
+
+    # M4. The same intruder alone is still rejected, so no prefix rule, glob or
+    # ``web/src/**`` wildcard can have replaced the literal set: any of those
+    # would return an empty difference here.
+    assert _unexpected_web([intruder]) == {intruder}
+    for entry in ratified:
+        assert not set(entry) & set("*?[]"), f"{entry} is a pattern, not a path"
+        assert entry.startswith("web/"), f"{entry} is not a frontend path"
+
+    # The extension filter excuses test sources and nothing else. A production
+    # module does not escape by being a ``.ts`` file, and a name that merely
+    # contains ``.test.`` is not a test source either.
+    assert _unexpected_web(["web/src/unapproved.test.ts"]) == set()
+    assert _unexpected_web(["web/src/unapproved.test.tsx"]) == set()
+    assert _unexpected_web(["web/src/unapproved.test.helpers.ts"]) == {
+        "web/src/unapproved.test.helpers.ts"
+    }
+
+    # Quick and Detailed keep their own sensitivity surface. D5.7 built the
+    # Lease-Level one beside it rather than migrating them onto it, so this file
+    # is deliberately absent from the ratified set and would be reported.
+    quick = "web/src/components/SensitivityPanel.tsx"
+    assert quick not in _PERMITTED_WEB
+    assert _unexpected_web([quick]) == {quick}
+
+
+def test_g37_detects_a_real_difference_rather_than_reporting_none() -> None:
+    """**D5.7B.** The mechanism G37's financial clauses rest on actually works.
+
+    Every byte-identity assertion in G37 has the form ``_files_changed_since(...)
+    == []``. All of them would pass vacuously together if that helper ever
+    stopped reporting differences -- a mistyped commit, a wrong working
+    directory, a swallowed error -- and the failure would be silent, because a
+    guardrail that finds nothing looks exactly like a tree that changed nothing.
+
+    So the helper is shown to report a difference where one genuinely exists.
+    ``index.css`` is used because it is ratified above: every completed
+    Lease-Level gate has appended to it, so it differs from ``_D4_6A_COMMIT`` by
+    construction and will keep differing.
+    """
+
+    assert _files_changed_since(_D4_6A_COMMIT, "web/src/index.css") == [
+        "web/src/index.css"
+    ], "G37's change detection is not reporting a difference that exists"
+
+    # And a path that cannot have changed reports nothing, so the helper is
+    # discriminating rather than merely always non-empty.
+    assert _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine") == []
+
+
+def _throwaway_repository(root: Path) -> str:
+    """A real git repository in ``root`` with one committed frontend module and
+    one committed engine module. Returns the baseline commit.
+
+    Configured locally, so neither the fixture nor anything run against it
+    depends on -- or touches -- the developer's own repository or settings.
+    """
+
+    def run(*arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments], capture_output=True, text=True, check=True, cwd=root
+        ).stdout
+
+    run("init", "-q")
+    for key, value in (
+        ("user.name", "Anchor D5.9 fixture"),
+        ("user.email", "fixture@invalid"),
+        ("commit.gpgsign", "false"),
+    ):
+        run("config", key, value)
+    (root / "web" / "src").mkdir(parents=True)
+    (root / "web" / "src" / "App.tsx").write_text("export {};\n", encoding="utf-8")
+    (root / "src" / "anchor" / "engine").mkdir(parents=True)
+    (root / "src" / "anchor" / "engine" / "core.py").write_text("X = 1\n", encoding="utf-8")
+    (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    run("add", ".")
+    run("commit", "-q", "-m", "baseline")
+    return run("rev-parse", "HEAD").strip()
+
+
+def test_g37_sees_an_untracked_module_without_writing_the_index(tmp_path: Path) -> None:
+    """**D5.9 -- M1.** An unratified production module is rejected while it is
+    still untracked, and finding it writes nothing to git.
+
+    Driven against a real throwaway repository rather than a mocked ``git``, so
+    what is proved is git's own behaviour: the file genuinely is untracked, and
+    ``git diff`` genuinely cannot see it. The Anchor repository and its index
+    are never involved.
+    """
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    baseline = _throwaway_repository(repository)
+    index = repository / ".git" / "index"
+
+    intruder = "web/src/unapprovedFinancialLogic.ts"
+    (repository / intruder).write_text("export const irr = 0.1;\n", encoding="utf-8")
+    engine_intruder = "src/anchor/engine/shadow_irr.py"
+    (repository / engine_intruder).write_text("IRR = 0.1\n", encoding="utf-8")
+    # Two things that must NOT be reported: an ignored dependency, and a
+    # tracked file whose timestamp moved while its content did not. The second
+    # is also the exact condition under which porcelain ``git diff`` rewrites
+    # the index, so it is what makes the index assertion below mean something.
+    (repository / "web" / "node_modules").mkdir()
+    (repository / "web" / "node_modules" / "dependency.js").write_text("1\n", encoding="utf-8")
+    app = repository / "web" / "src" / "App.tsx"
+    later = app.stat().st_mtime + 120
+    os.utime(app, (later, later))
+    index_before = index.read_bytes()
+
+    # The frontend clause rejects it, by name, while it is untracked.
+    changed_web = _files_changed_since(baseline, "web", root=repository)
+    assert changed_web == [intruder]
+    assert _unexpected_web(changed_web) == {intruder}
+    # The financial clauses see the same thing: a new, never-added engine
+    # module is a change to the engine.
+    assert _files_changed_since(baseline, "src/anchor/engine", root=repository) == [
+        engine_intruder
+    ]
+
+    # Nothing was staged, and the index is byte-for-byte what it was.
+    assert index.read_bytes() == index_before, "G37 wrote the index"
+    staged = subprocess.run(
+        ["git", "ls-files"], capture_output=True, text=True, check=True, cwd=repository
+    ).stdout.split()
+    assert intruder not in staged and engine_intruder not in staged
+
+    # The blind spot this closes, shown rather than asserted from memory: the
+    # tracked-change query G37 relied on alone until D5.9 does not see either
+    # file. (Run last and directly, because it is also the call that rewrites
+    # the index.)
+    blind = subprocess.run(
+        ["git", "diff", "--name-only", baseline, "--", "web", "src"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=repository,
+    ).stdout.split()
+    assert intruder not in blind and engine_intruder not in blind
+    assert index.read_bytes() != index_before, (
+        "plain git diff did not refresh the index here, so the index assertion "
+        "above proves less than it claims"
+    )
+
+
+def test_g37_untracked_discovery_leaves_the_allowlist_as_strict_as_it_was(
+    tmp_path: Path,
+) -> None:
+    """**D5.9.** Widening what G37 can *see* did not widen what it *permits*.
+
+    An untracked file is subject to exactly the same literal allowlist and the
+    same test-source extension filter as a tracked one: a ratified path is
+    accepted, an untracked ``.test.ts`` is excused, and an untracked
+    ``.test.helpers.ts`` is not.
+    """
+
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    baseline = _throwaway_repository(repository)
+
+    for relative in (
+        "web/src/StaleAnalysisNotice.tsx",
+        "web/src/components/StaleAnalysisNotice.tsx",
+        "web/src/unapproved.test.ts",
+        "web/src/unapproved.test.helpers.ts",
+    ):
+        (repository / relative).parent.mkdir(parents=True, exist_ok=True)
+        (repository / relative).write_text("export {};\n", encoding="utf-8")
+
+    changed = _files_changed_since(baseline, "web", root=repository)
+    assert len(changed) == 4
+    assert _unexpected_web(changed) == {
+        # Right name, wrong directory: a literal path, not a basename match.
+        "web/src/StaleAnalysisNotice.tsx",
+        "web/src/unapproved.test.helpers.ts",
+    }
 
 
 @pytest.mark.parametrize(
@@ -1087,10 +1835,17 @@ def test_g40_no_preset_bundle_was_invented() -> None:
     lease_level_exports = [
         name for name in analysis_package.__all__ if "lease_level" in name.lower()
     ]
+    # D5.3 adds ``parse_lease_level_inputs`` (its envelope,
+    # ``ParsedLeaseLevelInputs``, is not matched by this filter's snake_case
+    # test), re-exported so the delivery layer can reach the parser without
+    # importing ``anchor.leasing``. A parser is not a preset bundle, which is
+    # what this guardrail is about -- the assertions below still forbid any
+    # ``build_*`` or ``*Presets`` Lease-Level export.
     assert sorted(lease_level_exports) == [
         "LEASE_LEVEL_SUPPORTED_ASSUMPTIONS",
         "LEASE_LEVEL_SUPPORTED_METRICS",
         "analyze_lease_level_acquisition_with_projection",
+        "parse_lease_level_inputs",
         "run_lease_level_one_way_sensitivity",
         "run_lease_level_two_way_sensitivity",
     ]
