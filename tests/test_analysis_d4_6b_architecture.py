@@ -1335,9 +1335,10 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     # the D6 gate specification places it so the engine can later consume it
     # without importing ``anchor.business_plan``. That file alone is exempt
     # from byte-identity and held to a stronger, more specific claim by
-    # ``tests/test_business_plan_architecture.py``: removing that one class
-    # reproduces the D4.6A module's AST exactly. Every other engine file --
-    # every calculator -- is still byte-identical.
+    # ``tests/test_business_plan_architecture.py``: cutting that one class's
+    # exact source span out of today's file leaves the D4.6A module's source
+    # text exactly, CRLF normalised to LF and nothing else. Every other engine
+    # file -- every calculator -- is still byte-identical.
     engine_changed = [
         path
         for path in _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine")

@@ -897,9 +897,10 @@ def test_g33_the_whole_engine_package_is_unchanged_since_d4_5a() -> None:
     the D6 gate specification places there so the engine can later consume it
     without importing ``anchor.business_plan``. That one file is therefore
     exempt from byte-identity here and held to a stronger, more specific claim
-    by ``tests/test_business_plan_architecture.py``: removing that one class
-    reproduces the D4.5A module's AST exactly. Every other engine file is
-    still byte-identical to D4.5A.
+    by ``tests/test_business_plan_architecture.py``: cutting that one class's
+    exact source span out of today's file leaves the D4.5A module's source
+    text exactly, CRLF normalised to LF and nothing else. Every other engine
+    file is still byte-identical to D4.5A.
     """
 
     changed = [

@@ -23,6 +23,7 @@ developer's index.
 from __future__ import annotations
 
 import ast
+import difflib
 import inspect
 import os
 from pathlib import Path
@@ -111,8 +112,9 @@ def _referenced_names(node: ast.AST) -> set[str]:
     return names
 
 
-def _git(arguments: list[str]) -> str:
-    """One read-only git query against a private copy of the index."""
+def _git_bytes(arguments: list[str]) -> bytes:
+    """One read-only git query against a private copy of the index, returning
+    git's output undecoded and untranslated."""
 
     index_path = subprocess.run(
         ["git", "rev-parse", "--git-path", "index"],
@@ -127,12 +129,17 @@ def _git(arguments: list[str]) -> str:
         completed = subprocess.run(
             ["git", *arguments],
             capture_output=True,
-            text=True,
             cwd=_PROJECT_ROOT,
             env={**os.environ, "GIT_INDEX_FILE": str(private_index)},
         )
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
     return completed.stdout
+
+
+def _git(arguments: list[str]) -> str:
+    """One read-only git query against a private copy of the index."""
+
+    return _git_bytes(arguments).decode("utf-8")
 
 
 def _files_changed_since(commit: str, repo_relative: str) -> list[str]:
@@ -371,35 +378,270 @@ def test_the_frontend_contains_no_business_plan_implementation() -> None:
             assert vocabulary not in text, f"{source_file.name} mentions {vocabulary}"
 
 
+# =============================================================================
+# engine/contracts.py changed only by adding OwnerCapitalSchedule -- as source
+# text, not merely as an AST
+# =============================================================================
+
+
+_CONTRACTS_GUARDRAIL_FAILURE = "engine/contracts.py changed by more than adding OwnerCapitalSchedule"
+
+
+def _lf(text: str) -> str:
+    """CRLF -> LF, and nothing else.
+
+    The D5.9 source-reading convention (``web/src/testSourceText.ts``), applied
+    at the test boundary: blobs are stored with LF and this working tree
+    checks out CRLF, so the line terminator is the one thing that may differ.
+    No other character is touched -- a lone ``\\r``, trailing whitespace, a
+    blank line and a comment all still count.
+    """
+
+    return text.replace("\r\n", "\n")
+
+
+def _baseline_engine_contracts(commit: str) -> str:
+    return _lf(_git_bytes(["show", f"{commit}:{_ENGINE_CONTRACTS}"]).decode("utf-8"))
+
+
+def _current_engine_contracts() -> str:
+    # ``read_bytes`` rather than ``read_text``: universal-newline decoding
+    # would also rewrite a lone ``\r``, which is more normalisation than _lf
+    # grants.
+    return _lf((_PROJECT_ROOT / _ENGINE_CONTRACTS).read_bytes().decode("utf-8"))
+
+
+def _without_owner_capital_schedule(source: str) -> str:
+    """``source`` with the ``OwnerCapitalSchedule`` addition cut out as text.
+
+    The AST is used only to *locate* the class. It is never the equality
+    oracle, and no source is regenerated from it. The removal rule is exactly:
+
+    * every line from the class's first decorator (its ``class`` line, if it
+      has none) through its last line, inclusive; and
+    * the two blank lines immediately after it -- the PEP 8 separator the
+      addition brought with it. Both must be empty, so anything placed there
+      fails here rather than being swept up with the class.
+
+    Nothing above the decorator is removed: a comment introducing the class
+    is not part of the class, is not authorised, and is left behind to fail
+    the comparison.
+    """
+
+    matches = [
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.ClassDef) and node.name == "OwnerCapitalSchedule"
+    ]
+    assert len(matches) == 1, f"expected one OwnerCapitalSchedule, found {len(matches)}"
+    (node,) = matches
+    assert node.end_lineno is not None
+
+    lines = source.split("\n")
+    first = min([node.lineno, *(decorator.lineno for decorator in node.decorator_list)]) - 1
+    after = node.end_lineno  # index of the first line after the class
+    separator = lines[after : after + 2]
+    assert separator == ["", ""], (
+        f"{_CONTRACTS_GUARDRAIL_FAILURE}: the class must be followed by exactly "
+        f"its two blank separator lines, found {separator!r}"
+    )
+
+    # The span is the class and only the class: parsed on its own it is one
+    # top-level statement, that ClassDef.
+    removed = ast.parse("\n".join(lines[first : after + 2])).body
+    assert [(type(statement), getattr(statement, "name", None)) for statement in removed] == [
+        (ast.ClassDef, "OwnerCapitalSchedule")
+    ]
+
+    return "\n".join(lines[:first] + lines[after + 2 :])
+
+
+def _assert_only_owner_capital_schedule_added(baseline: str, current: str) -> None:
+    """Both arguments already LF-normalised. The comparison is ``==`` on text."""
+
+    remainder = _without_owner_capital_schedule(current)
+    assert remainder == baseline, (
+        f"{_CONTRACTS_GUARDRAIL_FAILURE}:\n"
+        + "".join(
+            difflib.unified_diff(
+                baseline.splitlines(keepends=True),
+                remainder.splitlines(keepends=True),
+                "baseline",
+                "current without OwnerCapitalSchedule",
+                n=1,
+            )
+        )
+    )
+
+
 @pytest.mark.parametrize(
     "baseline", [_D6_BASE_COMMIT, _D4_6A_COMMIT, _D4_5A_COMMIT], ids=["d6-base", "d4.6a", "d4.5a"]
 )
 def test_engine_contracts_changed_only_by_adding_owner_capital_schedule(baseline: str) -> None:
     """The stronger claim that replaces byte-identity for ``engine/contracts.py``.
 
-    Removing the ``OwnerCapitalSchedule`` class from today's module must
-    reproduce the baseline module's AST exactly: not one existing import,
-    class, field, docstring or function was touched, and nothing else was
-    added. This backs the D6.1 narrowing of G33 and G37.
+    Cutting the ``OwnerCapitalSchedule`` class's exact source span out of
+    today's file must leave the baseline file's source text exactly, CRLF
+    normalised to LF and nothing else: not one existing import, class, field,
+    docstring, function, blank line or byte of whitespace was touched, and
+    nothing else was added. This backs the D6.1 narrowing of G33 (D4.5A
+    baseline) and G37 (D4.6A baseline); each baseline is compared on its own.
+
+    Hardened at D6.1 closeout. The first version compared ASTs, which cannot
+    see comments, blank lines or formatting.
     """
 
-    baseline_tree = ast.parse(_git(["show", f"{baseline}:{_ENGINE_CONTRACTS}"]))
-    current_tree = ast.parse((_PROJECT_ROOT / _ENGINE_CONTRACTS).read_text(encoding="utf-8"))
+    baseline_source = _baseline_engine_contracts(baseline)
+    assert "OwnerCapitalSchedule" not in baseline_source
 
-    def class_names(tree: ast.Module) -> list[str]:
-        return [node.name for node in tree.body if isinstance(node, ast.ClassDef)]
+    _assert_only_owner_capital_schedule_added(baseline_source, _current_engine_contracts())
 
-    assert "OwnerCapitalSchedule" not in class_names(baseline_tree)
-    assert class_names(current_tree).count("OwnerCapitalSchedule") == 1
 
-    without_addition = ast.Module(
-        body=[
-            node
-            for node in current_tree.body
-            if not (isinstance(node, ast.ClassDef) and node.name == "OwnerCapitalSchedule")
-        ],
-        type_ignores=[],
+# --- Self-tests: the guardrail above has teeth --------------------------------
+#
+# Each runs the guardrail's own helpers over the real files, in memory: the
+# current ``engine/contracts.py`` as the working tree holds it, and the
+# pre-D6.1 module as ``908499c`` holds it. (D4.5A, D4.6A and 908499c hold the
+# same bytes for that file.) Nothing is written to disk.
+
+
+def test_the_line_ending_normalisation_rewrites_crlf_and_nothing_else() -> None:
+    assert _lf("a\r\nb\rc\n  \n# d\t\n") == "a\nb\rc\n  \n# d\t\n"
+
+
+def test_the_contracts_guardrail_accepts_owner_capital_schedule_alone() -> None:
+    """Self-test A. The committed D6.1 addition passes -- whether the working
+    tree checks the file out with LF or CRLF."""
+
+    baseline = _baseline_engine_contracts(_D6_BASE_COMMIT)
+    current = _current_engine_contracts()
+
+    _assert_only_owner_capital_schedule_added(baseline, current)
+    _assert_only_owner_capital_schedule_added(baseline, _lf(current.replace("\n", "\r\n")))
+
+    removed_lines = len(current.split("\n")) - len(baseline.split("\n"))
+    class_source = ast.get_source_segment(current, _class_node(current, "OwnerCapitalSchedule"))
+    assert class_source is not None
+    # The ``class`` statement, its one decorator line and its two separator
+    # lines, and no more.
+    assert removed_lines == len(class_source.split("\n")) + 1 + 2
+
+
+#: Edits to pre-D6.1 source outside the class: ``(old, new, ast_visible)``.
+#: ``ast_visible=False`` marks an edit the superseded AST oracle accepted.
+_EDITS_TO_EXISTING_SOURCE = [
+    pytest.param(
+        '"one leasing-commission figure per hold year; got "',
+        '"one leasing-commission value per hold year; got "',
+        True,
+        id="existing-code-line",
+    ),
+    pytest.param(
+        '"""Underwriting V2 Gate 2 adds ``disposition_costs``.',
+        '"""Underwriting V2 Gate 2 added ``disposition_costs``.',
+        True,
+        id="existing-docstring",
+    ),
+    pytest.param(
+        "from math import isfinite\n",
+        "from math import isfinite, isnan\n",
+        True,
+        id="existing-import",
+    ),
+    pytest.param(
+        "        for name, series in (\n"
+        '            ("tenant_improvements_by_year",',
+        "        # tampered\n"
+        "        for name, series in (\n"
+        '            ("tenant_improvements_by_year",',
+        False,
+        id="comment-in-existing-class",
+    ),
+    pytest.param(
+        "from dataclasses import dataclass\n",
+        "from dataclasses import dataclass \n",
+        False,
+        id="trailing-whitespace",
+    ),
+    pytest.param(
+        "from typing import Protocol\n",
+        "from typing import Protocol\n\n",
+        False,
+        id="reformatted-blank-line",
+    ),
+]
+
+
+@pytest.mark.parametrize(("old", "new", "ast_visible"), _EDITS_TO_EXISTING_SOURCE)
+def test_the_contracts_guardrail_rejects_an_edit_to_existing_source(
+    old: str, new: str, ast_visible: bool
+) -> None:
+    """Self-test B. Changing one pre-D6.1 line fails the guardrail -- including
+    the comment, whitespace and blank-line edits an AST comparison cannot see."""
+
+    baseline = _baseline_engine_contracts(_D6_BASE_COMMIT)
+    current = _current_engine_contracts()
+    # The edited text is pre-D6.1 source, present once, and not in the class.
+    assert baseline.count(old) == 1 and current.count(old) == 1
+    tampered = current.replace(old, new)
+
+    with pytest.raises(AssertionError, match=_CONTRACTS_GUARDRAIL_FAILURE):
+        _assert_only_owner_capital_schedule_added(baseline, tampered)
+
+    old_oracle_passes = ast.dump(ast.parse(_without_owner_capital_schedule(tampered))) == ast.dump(
+        ast.parse(baseline)
     )
-    assert ast.dump(without_addition) == ast.dump(baseline_tree), (
-        f"engine/contracts.py changed by more than adding OwnerCapitalSchedule since {baseline}"
-    )
+    assert old_oracle_passes is not ast_visible
+
+
+_UNRELATED_DATACLASS = (
+    "@dataclass(frozen=True, slots=True, kw_only=True)\n"
+    "class UnrelatedSchedule:\n"
+    "    amount: float\n"
+    "\n"
+    "\n"
+)
+_OWNER_CAPITAL_DECORATOR = "@dataclass(frozen=True, slots=True, kw_only=True)\nclass OwnerCapitalSchedule:"
+_NEXT_CLASS = "@dataclass(frozen=True, slots=True, kw_only=True)\nclass AcquisitionCashFlows:"
+
+#: Unrelated additions: ``(anchor, replacement)``, or ``(None, appended)``.
+_UNRELATED_ADDITIONS = [
+    pytest.param(None, "\n\nUNRELATED_LIMIT = 1.0\n", id="constant"),
+    pytest.param(None, "\n\ndef unrelated_helper() -> None:\n    return None\n", id="function"),
+    pytest.param(_NEXT_CLASS, _UNRELATED_DATACLASS + _NEXT_CLASS, id="class-beside-the-addition"),
+    pytest.param(
+        "from typing import Protocol\n",
+        "from typing import Protocol\nfrom os import environ\n",
+        id="import",
+    ),
+    pytest.param(
+        _OWNER_CAPITAL_DECORATOR,
+        "# Introduced at D6.1.\n" + _OWNER_CAPITAL_DECORATOR,
+        id="comment-above-the-addition",
+    ),
+    pytest.param(
+        "\n\n\n" + _NEXT_CLASS,
+        "\n# End of D6.1.\n\n\n" + _NEXT_CLASS,
+        id="comment-below-the-addition",
+    ),
+]
+
+
+@pytest.mark.parametrize(("anchor", "replacement"), _UNRELATED_ADDITIONS)
+def test_the_contracts_guardrail_rejects_an_unrelated_addition(
+    anchor: str | None, replacement: str
+) -> None:
+    """Self-test C. Adding anything beside ``OwnerCapitalSchedule`` fails the
+    guardrail -- including a comment or class placed immediately next to it,
+    where a loose removal rule would sweep it up with the class."""
+
+    baseline = _baseline_engine_contracts(_D6_BASE_COMMIT)
+    current = _current_engine_contracts()
+    if anchor is None:
+        tampered = current + replacement
+    else:
+        assert current.count(anchor) == 1
+        tampered = current.replace(anchor, replacement)
+
+    with pytest.raises(AssertionError, match=_CONTRACTS_GUARDRAIL_FAILURE):
+        _assert_only_owner_capital_schedule_added(baseline, tampered)
