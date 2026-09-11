@@ -30,7 +30,9 @@ Supersedes: exploratory D6.0 alternatives where this document makes an explicit 
 - Every D6 gate follows `docs/development/ANCHOR_DEVELOPMENT_PROTOCOL.md`.
   §22 gives the default risk tier for each gate.
 - §25 lists the decisions this document leaves to named implementation gates.
-  Those gates must decide them explicitly, never incidentally.
+  Those gates must decide them explicitly, never incidentally. None of them
+  alters a financial definition. No financial-definition question remains
+  open before D6.1.
 
 Notation used below:
 
@@ -138,11 +140,24 @@ Conceptual contract: `CapitalPlanItem`.
 
 | Field | Rules |
 |---|---|
-| `item_id` | Stable, opaque, nonempty, unique within the Business Plan. It has no financial meaning. The normal UI may mint UUIDs, but the contract must not require UUID format. A reasonable storage length limit may be enforced later. |
+| `item_id` | Stable, opaque, nonempty, unique across the entire Business Plan (see "Item ID namespace" below). It has no financial meaning. The normal UI may mint UUIDs, but the contract must not require UUID format. A reasonable storage length limit may be enforced later. |
 | `description` | Required and nonempty. Used for reporting and audit. |
 | `category` | Reporting metadata **only**. |
 | `month` | An integer model-month index (§4). `bool` is rejected. Must be `>= 0`. The core financial contract sets no maximum. |
 | `amount` | Nominal dollars. Must be finite and `>= 0`. Zero is allowed. |
+
+### Item ID namespace
+
+The Business Plan has **one shared item-ID namespace**. Every `item_id`
+across all `CapitalPlanItem` and `OwnerExpenseItem` entries must be unique
+when considered together.
+
+For example, `CapitalPlanItem(item_id="abc")` and
+`OwnerExpenseItem(item_id="abc")` in the same Business Plan is invalid.
+
+IDs remain stable, opaque and nonempty, and carry no financial meaning. The
+normal UI may mint UUIDs; the financial contract must not require UUID
+syntax.
 
 ### Capital categories
 
@@ -223,18 +238,58 @@ Conceptual contract: `OwnerExpenseItem`.
 
 | Field | Rules |
 |---|---|
-| `item_id` | Same identity rules as `CapitalPlanItem.item_id`. |
+| `item_id` | Same identity rules as `CapitalPlanItem.item_id`, in the same shared namespace (§3). |
 | `description` | Required and nonempty. |
 | `category` | Reporting metadata **only**. |
 | `annual_amount` | Fixed nominal dollars per hold year. Must be finite and `>= 0`. |
-| `first_year` | An integer hold year. `bool` is rejected. |
-| `last_year` | An integer hold year, or `None`. `bool` is rejected. |
+| `first_year` | An integer hold year. `bool` is rejected. Must be `>= 1`. |
+| `last_year` | An integer hold year, or `None`. `bool` is rejected. When an integer, must be `>= first_year`. `None` means "through the current underwriting hold period" (see below). |
 
 Ratified reporting-only categories:
 
 - `ASSET_MANAGEMENT`
 - `LEGAL_PARTNERSHIP`
 - `OTHER`
+
+### Owner expense timing
+
+- **No Year-0 owner expense.** `first_year >= 1`. Closing-time costs belong
+  in closing / acquisition economics (§10), not in this ongoing owner-expense
+  contract.
+- **`last_year = None`** means "through the current underwriting hold
+  period". It does **not** mean forever.
+- **Explicit `last_year`** must satisfy `last_year >= first_year`.
+
+Financial treatment. The resolver computes each item's **active years**:
+
+```
+active years = [first_year .. last_year] ∩ [1 .. H]
+
+where last_year = None is read as last_year = H
+```
+
+`OE_y` is the sum of `annual_amount` over every item whose active years
+include `y`. Only active years affect financial results.
+
+| `H` | `first_year` | `last_year` | Active years (financial effect) |
+|---|---|---|---|
+| 5 | 2 | `None` | 2, 3, 4, 5 |
+| 5 | 4 | 8 | 4, 5 (years 6-8 have no financial effect) |
+| 5 | 7 | 10 | none (no financial effect) |
+
+Items that extend beyond, or lie entirely beyond, the hold period are
+accepted. Their out-of-hold years have no financial effect.
+
+- **No aggregate post-hold owner-expense dollar result.** Unlike post-hold
+  project capital (§19), D6 creates no "post-hold owner expenses" total. A
+  recurring expense with `last_year = None` has no meaningful finite
+  post-hold total.
+- The resolver may expose reporting / audit treatment classifying each item
+  as **fully inside hold**, **partially outside hold** or **fully outside
+  hold**. The exact reporting contract is finalized in D6.1 (§25). It carries
+  no financial effect beyond the active-years rule above.
+- **Changing the hold period re-resolves every owner-expense item.** A
+  `None`-ended item therefore extends automatically through the new hold.
 
 ### Behavior
 
@@ -279,6 +334,32 @@ Legacy recurring-cash-flow fields may remain for backward compatibility.
 "Recurring" terminology is **not** the conceptual authority for D6, because
 project capital, TI/LC and owner expenses may all be non-recurring.
 
+### Authoritative owner cash-flow chain
+
+```
+NOI
+ |
+ v
+Property Cash Flow
+ |
+ v
+Unlevered Owner Cash Flow
+ |
+ v
+Levered Owner Cash Flow
+ |
+ v
+Equity Cash Flow
+```
+
+- D6.2 establishes these as **authoritative financial result series**. The
+  Unlevered Project Cash Flow series is derived from Unlevered Owner Cash Flow
+  as defined below.
+- Metrics consume these authoritative series rather than creating parallel
+  owner-cash-flow equations wherever possible (§8).
+- Existing UCF / LCF expression ordering is preserved where necessary to meet
+  the ratified D5 neutral-input bit-identity oracle (§14).
+
 ### Definitions
 
 NOI is the unchanged output of the operating mode.
@@ -317,6 +398,38 @@ t = H          Levered Owner Cash Flow_H + Net Sale Proceeds to Equity
   operations differently (for example, the existing levered cash-flow and
   recurring levered cash-flow expressions). Tests must not assert bitwise
   equality between such expressions. Compare them within tolerance.
+
+### Legacy recurring cash-flow fields
+
+- Legacy recurring cash-flow fields and helpers are kept where backward
+  compatibility requires them.
+- The authoritative D6 vocabulary is Property Cash Flow, Unlevered Owner Cash
+  Flow, Levered Owner Cash Flow and Equity Cash Flow.
+- D6.2 should avoid creating independent duplicate financial formulas solely
+  to preserve legacy naming. Where technically compatible with the D5
+  bit-identity requirements, legacy fields should consume / reuse the
+  authoritative owner cash-flow results.
+- Existing arithmetic grouping is preserved where necessary for bit-compatible
+  D5 outputs.
+- Economically, the legacy recurring levered and recurring unlevered series
+  follow Levered Owner Cash Flow and Unlevered Owner Cash Flow, so project
+  capital and owner expenses reduce them (§8).
+- New D6 UI, AI and architecture documentation must use the Owner Cash Flow
+  terminology. Do not introduce "recurring" terminology into any new D6
+  concept whose series contains non-recurring project capital or leasing
+  capital.
+
+### Legacy cumulative operating distribution field
+
+- `cumulative_operating_distributions_by_year` remains for backward
+  compatibility.
+- Its economics follow the authoritative Levered Owner Cash Flow series:
+  project capital and owner expenses reduce it.
+- It is a legacy compatibility field. Its naming is **not** D6 product
+  vocabulary.
+- New UI and AI must not describe a negative amount as a "negative
+  distribution". Describe it as **negative owner cash flow** or as a **Net
+  Additional Equity Requirement** (§7), as appropriate.
 
 ---
 
@@ -372,6 +485,37 @@ Equity Multiple             = TCR / TEI        when TEI > 0
 - It follows that `TEI = Initial Equity Requirement + sum of Net Additional
   Equity Requirement_y` (compare within floating-point tolerance).
 
+### Existing return metrics under D6
+
+**Principle.** If an existing metric represents owner / project cash
+economics, Phase 6 Project Capital and Owner Expenses must affect it
+consistently. A misleading D5 numerator must **not** be preserved merely to
+avoid moving a metric.
+
+| Metric | Series / numerator | Denominator / basis | D6 effect |
+|---|---|---|---|
+| Levered IRR | Equity Cash Flow | n/a | Affected through Equity Cash Flow. |
+| Unlevered IRR | Unlevered Project Cash Flow | n/a | Affected through Unlevered Project Cash Flow. |
+| Equity Multiple | Total Cash Returned | Total Equity Invested | Affected. Future negative Equity Cash Flow periods increase Total Equity Invested. |
+| Levered Cash-on-Cash (annual) | Levered Owner Cash Flow_y | Initial Equity Requirement | Numerator affected. Closing Project Capital raises the denominator. Future Net Additional Equity Requirements do **not** change the denominator. |
+| Unlevered Cash Yield (annual) | Unlevered Owner Cash Flow_y | Purchase Price + Acquisition Costs + Closing Project Capital | Numerator affected. Closing Project Capital raises the basis. Future project capital does **not** retroactively change the basis. |
+| Cumulative operating distributions (legacy) | Running sum of Levered Owner Cash Flow | n/a | Affected (§6). |
+
+- **IRR.** The IRR **algorithm** is unchanged (§9, D10). Only its input
+  series change.
+- **Equity Multiple** continues to use
+  `Total Cash Returned / Total Equity Invested`, as defined above.
+- **Cash-on-Cash remains a return on INITIAL equity, not on cumulative
+  invested equity.** Its denominator is the existing fixed `initial_equity`,
+  which Closing Project Capital increases (§4, §10). D6 does not silently
+  redefine this metric; any cumulative-equity variant would need a separate
+  ratified convention.
+- **Cash Yield basis.** Financing fees remain outside the unlevered basis,
+  as in the existing owner return metrics v3 convention. The basis is fixed
+  at acquisition, as before.
+- The existing zero-denominator convention (`None` when the denominator is
+  exactly `0.0`) is unchanged for both annual yield metrics.
+
 ### New result fields
 
 These fields are ratified conceptually:
@@ -397,6 +541,8 @@ Specifically:
 - `capex_by_year` stays the Recurring CapEx Reserve only;
 - `tenant_improvements_by_year` and `leasing_commissions_by_year` stay the
   leasing-capital authority.
+
+There is deliberately **no** aggregate post-hold owner-expense field (§5).
 
 ---
 
@@ -496,8 +642,8 @@ Deferred:
 | Debt yield | IRR |
 | Loan amount | Equity multiple |
 | Debt service | Profit |
-| Remaining loan balance | Cash-on-cash and cash-yield metrics, where those metrics consume owner cash flow |
-| Exit NOI | |
+| Remaining loan balance | Cash-on-cash and cash yield (§8) |
+| Exit NOI | Cumulative operating distributions, legacy field (§6) |
 | Gross exit value | |
 | Disposition costs | |
 | Net sale proceeds (directly) | |
@@ -537,9 +683,10 @@ analyze_acquisition_from_operating_projection(...)
 ```
 
 - The generic engine schedule knows only T0 and annual amounts.
-- The resolver owns items, categories, months, hold-year bucketing and the
-  post-hold disclosure.
-- The engine never subtracts post-hold amounts.
+- The resolver owns items, categories, months, hold-year bucketing, the
+  owner-expense active-year intersection (§5) and the post-hold disclosure.
+- The engine never subtracts post-hold amounts, including out-of-hold
+  owner-expense years.
 - `anchor.leasing` must not depend on `anchor.business_plan`.
 
 ---
@@ -632,8 +779,12 @@ The core financial contract:
 - allows zero-dollar items;
 - rejects negative amounts;
 - rejects non-finite amounts;
-- rejects duplicate IDs;
-- rejects `bool` for integer month and year fields.
+- rejects duplicate IDs across the whole Business Plan (capital and
+  owner-expense items share one namespace, §3);
+- rejects `bool` for integer month and year fields;
+- rejects `OwnerExpenseItem.first_year < 1`;
+- rejects an integer `OwnerExpenseItem.last_year < first_year`;
+- accepts owner-expense years beyond the hold period (§5).
 
 Practical UI / API payload limits may be added later for operational reasons.
 Such limits must not change financial semantics.
@@ -653,6 +804,10 @@ Capital scheduled after the hold period (`month > 12H`):
 
 This keeps the plan intact without pretending the seller funds post-sale
 work.
+
+Owner expenses follow the active-years rule in §5 instead. Their
+out-of-hold years have no financial effect, and there is no aggregate
+post-hold owner-expense dollar result.
 
 ---
 
@@ -768,6 +923,9 @@ the exact numerical golden cases.
 | D13 | Required threading + AST guardrail | APPROVED |
 | D14 | TI/LC duplication residual risk accepted | APPROVED |
 | D15 | Model-month timing | APPROVED |
+| D16 | Owner expense timing: `first_year >= 1`; `last_year = None` means through the current hold; active years = item range ∩ `1..H`; no post-hold owner-expense total (§5) | APPROVED |
+| D17 | One shared item-ID namespace across the Business Plan (§3) | APPROVED |
+| D18 | Existing owner / project cash metrics follow the authoritative owner cash-flow series; Cash-on-Cash stays a return on initial equity (§6, §8) | APPROVED |
 
 ---
 
@@ -776,12 +934,21 @@ the exact numerical golden cases.
 The named gate must settle each of these explicitly, consistent with the
 conventions above. None of them may be settled incidentally.
 
+Every item below is an implementation or reporting detail. None of them
+alters a financial convention. **No financial-definition question remains
+open before D6.1.**
+
+Resolved by D6.0A final convention resolution, and no longer open:
+
+- `OwnerExpenseItem` year validation and hold-period treatment: §5, D16.
+- Shared item-ID namespace: §3, D17.
+- Existing return metrics and legacy cash-flow fields under D6: §6, §8, D18.
+
 | Item | Owning gate |
 |---|---|
 | Contract type names, module layout and enum string values | D6.1 |
-| `OwnerExpenseItem` year validation: the lower bound on `first_year`, how `last_year` relates to `first_year`, what `last_year = None` means, and how years beyond the hold period are treated and disclosed | D6.1 |
-| Whether capital-item and owner-expense-item IDs share one uniqueness namespace | D6.1 |
-| Which existing fields change when owner cash flow gains project capital and owner expenses: the legacy recurring-cash-flow series, cash-on-cash, cash yield (including its basis) and cumulative operating distributions. Each change must be documented | D6.2 |
+| Exact reporting / audit contract for owner-expense hold-period treatment (fully inside / partially outside / fully outside hold), within §5 | D6.1 |
+| Implementation mechanism by which legacy fields reuse the authoritative owner cash-flow series while preserving D5 bit identity, within §6 and §8 | D6.2 |
 | IRR status / reason enum names and values | D6.3 |
 | Break-even handling of undefined IRR (within §16) | D6.4 |
 | Persistence schema, migration version and the mechanism for empty-plan fingerprint preservation | D6.5 |
