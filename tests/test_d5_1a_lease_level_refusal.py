@@ -646,7 +646,23 @@ def test_the_ti_lc_exclusion_was_spent_by_the_gate_that_owned_it() -> None:
     from anchor.ai.presentation import INTENTIONALLY_EXCLUDED_RESULT_FIELDS
     from anchor.ai.prompts import build_system_prompt
 
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
+    # D6.2 withholds its own nine owner cash-flow fields until D6.8; the
+    # allowlist holds exactly those, and TI/LC stay out of it.
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset(
+        {
+            "closing_project_capital",
+            "project_capital_by_year",
+            "post_hold_project_capital",
+            "owner_expenses_by_year",
+            "property_cash_flow_by_year",
+            "unlevered_owner_cash_flow_by_year",
+            "levered_owner_cash_flow_by_year",
+            "total_closing_uses",
+            "total_closing_sources",
+        }
+    )
+    assert "tenant_improvements_by_year" not in INTENTIONALLY_EXCLUDED_RESULT_FIELDS
+    assert "leasing_commissions_by_year" not in INTENTIONALLY_EXCLUDED_RESULT_FIELDS
 
     prompt = build_system_prompt()
     assert "LEASING-CAPITAL RULE" in prompt

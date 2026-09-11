@@ -96,6 +96,17 @@ def test_context_carries_every_acquisition_results_field() -> None:
         "unlevered_cash_yield_by_year",
         "cumulative_operating_distributions_by_year",
         "year_1_debt_yield",
+        # D6.2 owner cash-flow fields: carried on the context's results, but
+        # withheld from the model until D6.8 (INTENTIONALLY_EXCLUDED_RESULT_FIELDS).
+        "closing_project_capital",
+        "project_capital_by_year",
+        "post_hold_project_capital",
+        "owner_expenses_by_year",
+        "property_cash_flow_by_year",
+        "unlevered_owner_cash_flow_by_year",
+        "levered_owner_cash_flow_by_year",
+        "total_closing_uses",
+        "total_closing_sources",
     }
 
 

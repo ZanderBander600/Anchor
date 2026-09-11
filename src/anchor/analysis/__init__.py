@@ -50,6 +50,11 @@ from .contracts import (
     StandardSensitivityPresets,
     TwoWaySensitivityResult,
 )
+from .business_plan_analysis import (
+    analyze_detailed_acquisition_with_business_plan,
+    analyze_lease_level_acquisition_with_business_plan,
+    analyze_quick_acquisition_with_business_plan,
+)
 from .lease_level import analyze_lease_level_acquisition_with_projection
 from .lease_level_sensitivity import (
     LEASE_LEVEL_SUPPORTED_ASSUMPTIONS,
@@ -181,6 +186,12 @@ __all__ = [
     # Lease-Level acquisition orchestration (D4.5B)
     "LeaseLevelAcquisitionResults",
     "analyze_lease_level_acquisition_with_projection",
+    # Business Plan entry points (D6.2) -- one per operating mode, each
+    # resolving the plan once and handing the generic owner-capital schedule
+    # to that mode's unchanged entry point.
+    "analyze_quick_acquisition_with_business_plan",
+    "analyze_detailed_acquisition_with_business_plan",
+    "analyze_lease_level_acquisition_with_business_plan",
     # Lease-Level sensitivity (D4.6B) -- the third parallel runner pair. No
     # OperatingMode member accompanies it: the mode is distinguished by
     # function identity, and D5 owns public mode publication.

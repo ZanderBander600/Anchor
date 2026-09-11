@@ -9,10 +9,15 @@ and never the reverse. The engine will consume only the resolved
 ``OwnerCapitalSchedule``; it must never learn what a plan item, identifier,
 description, category or model month is.
 
-D6.1 is **unwired**: no acquisition-analysis path consumes a Business Plan, so
-no D5 financial output can move. These tests are the mechanical proof. D6.2
-owns the engine bridge and is expected to narrow the "unwired" and
-"unchanged" clauses below by exactly what its own scope requires.
+D6.1 was **unwired**: no acquisition-analysis path consumed a Business Plan,
+so no D5 financial output could move. D6.2 wires it, and narrows the "unwired"
+and "unchanged" clauses below by exactly what its own scope requires: one
+module outside the package imports the plan
+(``anchor/analysis/business_plan_analysis.py``), the engine and the
+Lease-Level bridge take the resolved ``OwnerCapitalSchedule`` -- never a
+plan -- and ``engine/contracts.py`` gains the enumerated D6.2
+``AcquisitionResults`` fields. ``tests/test_d6_2_owner_cash_flow_architecture.py``
+holds the D6.2-specific claims.
 
 Mirrors ``test_leasing_architecture.py``: AST-parsed import graphs rather than
 runtime imports, plus fresh-interpreter checks. Every git query runs against a
@@ -52,16 +57,30 @@ _D4_6A_COMMIT = "15e910d"
 #: The D5 production financial paths D6.1 must leave untouched (gate
 #: specification Part W). ``src/anchor/engine`` as a whole is here except
 #: ``contracts.py``, which is held to the stronger additive-only claim below.
+#:
+#: **Narrowed at D6.2** by exactly its authorized production files --
+#: ``engine/acquisition.py``, ``analysis/lease_level.py``, the new
+#: ``analysis/business_plan_analysis.py``, ``analysis/__init__.py`` and
+#: ``ai/presentation.py`` -- each held to its own, more specific claim in
+#: ``tests/test_d6_2_owner_cash_flow_architecture.py``, whose ledger pins the
+#: complete D6.2 file set. Every path still listed is byte-identical to the D6
+#: base, including sensitivity, break-even, persistence, the API and the web.
 _UNCHANGED_FINANCIAL_PATHS = (
     "src/anchor/engine/__init__.py",
-    "src/anchor/engine/acquisition.py",
     "src/anchor/engine/returns.py",
     "src/anchor/engine/debt.py",
     "src/anchor/engine/noi.py",
     "src/anchor/engine/operating_projection.py",
     "src/anchor/leasing",
-    "src/anchor/analysis",
-    "src/anchor/ai",
+    "src/anchor/analysis/contracts.py",
+    "src/anchor/analysis/sensitivity.py",
+    "src/anchor/analysis/break_even.py",
+    "src/anchor/analysis/lease_level_sensitivity.py",
+    "src/anchor/ai/__init__.py",
+    "src/anchor/ai/analyst.py",
+    "src/anchor/ai/contracts.py",
+    "src/anchor/ai/prompts.py",
+    "src/anchor/ai/provider.py",
     "src/anchor/deals",
     "src/anchor/api.py",
     "src/anchor/contracts.py",
@@ -218,11 +237,19 @@ def test_only_the_resolver_imports_the_engine_contract() -> None:
 # =============================================================================
 
 
-def test_no_module_outside_the_package_imports_anchor_business_plan() -> None:
+def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -> None:
     """Stated over the whole source tree, so an importer cannot appear in a
     package nobody thought to list. This covers acquisition, debt, returns,
     the rest of the engine, ``anchor.leasing``, analysis, deals, AI, the API
-    and every top-level module."""
+    and every top-level module.
+
+    **Narrowed at D6.2 -- by exactly one named file.** D6.2 wires the plan into
+    analysis, and it does so in one place:
+    ``anchor/analysis/business_plan_analysis.py`` resolves a plan and hands the
+    generic ``OwnerCapitalSchedule`` to a mode's entry point. The engine, the
+    Lease-Level bridge, leasing, sensitivity, break-even, deals, AI and the API
+    still import nothing from ``anchor.business_plan`` (D6.4 and D6.5 own the
+    next consumers)."""
 
     importers = sorted(
         str(source_file.relative_to(_SRC_DIR)).replace("\\", "/")
@@ -234,17 +261,35 @@ def test_no_module_outside_the_package_imports_anchor_business_plan() -> None:
         )
     )
 
-    assert importers == [], f"anchor.business_plan is imported by {importers}"
+    assert importers == ["anchor/analysis/business_plan_analysis.py"], (
+        f"anchor.business_plan is imported by {importers}"
+    )
 
 
 def test_importing_the_engine_and_leasing_does_not_pull_in_the_business_plan() -> None:
+    """**Narrowed at D6.2.** ``anchor.analysis`` now carries the Business Plan
+    entry points, so importing it legitimately loads the plan package; that
+    half is dropped and asserted positively below. The engine and the leasing
+    layer -- the two the conventions name (Section 13) -- still must not."""
+
     completed = _fresh_interpreter(
         "import sys; "
         "import anchor.engine, anchor.engine.acquisition, anchor.engine.debt, "
-        "anchor.engine.returns, anchor.engine.contracts, anchor.leasing, "
-        "anchor.analysis; "
+        "anchor.engine.returns, anchor.engine.contracts, anchor.leasing; "
         "assert 'anchor.business_plan' not in sys.modules, "
         "sorted(m for m in sys.modules if m.startswith('anchor.business_plan'))"
+    )
+    assert completed.returncode == 0, completed.stderr.decode()
+
+
+def test_the_business_plan_entry_points_depend_on_the_plan_and_the_engine() -> None:
+    """The positive half: the D6.2 entry-point module is a real bridge, pulling
+    in both the plan package and the shared engine."""
+
+    completed = _fresh_interpreter(
+        "import sys; import anchor.analysis.business_plan_analysis; "
+        "assert 'anchor.business_plan' in sys.modules; "
+        "assert 'anchor.engine.acquisition' in sys.modules"
     )
     assert completed.returncode == 0, completed.stderr.decode()
 
@@ -314,9 +359,11 @@ def test_the_business_plan_package_does_not_re_export_the_engine_contract() -> N
 # =============================================================================
 
 
-def test_owner_capital_schedule_is_referenced_only_by_its_contract_and_resolver() -> None:
-    """No engine calculator, analysis orchestrator, API or persistence module
-    names the new contract. D6.2 owns the first consumer."""
+def test_owner_capital_schedule_is_referenced_only_by_its_producer_and_consumers() -> None:
+    """**Narrowed at D6.2 -- by exactly two named files.** The contract is
+    produced by the resolver and consumed by the engine's acquisition module;
+    the Lease-Level bridge names it only to pass it through. No debt, returns,
+    NOI, sensitivity, break-even, API, AI or persistence module names it."""
 
     def mentions(source_file: Path) -> bool:
         tree = ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
@@ -335,12 +382,36 @@ def test_owner_capital_schedule_is_referenced_only_by_its_contract_and_resolver(
     )
 
     assert referencing == [
+        "anchor/analysis/lease_level.py",
         "anchor/business_plan/resolver.py",
+        "anchor/engine/acquisition.py",
         "anchor/engine/contracts.py",
     ]
 
 
-def test_acquisition_entry_points_take_no_business_plan() -> None:
+#: The D6.2 owner-capital surface: every engine or bridge entry point that takes
+#: the resolved schedule, and nothing else. Each takes it keyword-only, named
+#: ``owner_capital``, defaulting to ``None`` (the empty plan).
+_OWNER_CAPITAL_ENTRY_POINTS = frozenset(
+    {
+        "anchor.engine.acquisition.analyze_acquisition_from_operating_projection",
+        "anchor.engine.acquisition.analyze_acquisition",
+        "anchor.engine.acquisition.analyze_detailed_acquisition_with_projection",
+        "anchor.analysis.lease_level.analyze_lease_level_acquisition_with_projection",
+    }
+)
+
+
+def test_the_engine_and_the_bridge_take_owner_capital_never_a_business_plan() -> None:
+    """**Succeeds D6.1's "unwired" test at D6.2 -- and is not weakened.**
+
+    D6.1 asserted no entry point took either name. D6.2 wires exactly one of
+    them, at exactly the enumerated entry points: the generic, resolved
+    ``OwnerCapitalSchedule``. The other half is unchanged -- no engine or
+    Lease-Level bridge function accepts a ``BusinessPlan``, so plan items never
+    reach either. ``analyze_detailed_acquisition`` keeps its pinned
+    ``(terms, detailed_inputs)`` signature and takes neither."""
+
     from anchor.analysis import lease_level
     from anchor.engine import acquisition
 
@@ -348,15 +419,52 @@ def test_acquisition_entry_points_take_no_business_plan() -> None:
         inspect.signature(
             acquisition.analyze_acquisition_from_operating_projection
         ).parameters
-    ) == ["operating_projection", "terms", "operating_capital"]
+    ) == ["operating_projection", "terms", "operating_capital", "owner_capital"]
+
+    takers: set[str] = set()
     for module in (acquisition, lease_level):
         for name, function in inspect.getmembers(module, inspect.isfunction):
-            if not name.startswith("analyze"):
+            if function.__module__ != module.__name__ or not name.startswith("analyze"):
                 continue
-            for parameter in inspect.signature(function).parameters:
-                assert "business_plan" not in parameter and "owner_capital" not in parameter, (
-                    f"{module.__name__}.{name} takes {parameter!r}; D6.1 is unwired"
+            for parameter_name, parameter in inspect.signature(function).parameters.items():
+                assert "business_plan" not in parameter_name, (
+                    f"{module.__name__}.{name} takes {parameter_name!r}; the engine "
+                    "and the bridge consume only the resolved OwnerCapitalSchedule"
                 )
+                if "owner_capital" in parameter_name:
+                    assert parameter_name == "owner_capital"
+                    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+                    assert parameter.default is None
+                    takers.add(f"{module.__name__}.{name}")
+
+    assert takers == _OWNER_CAPITAL_ENTRY_POINTS
+    assert list(inspect.signature(acquisition.analyze_detailed_acquisition).parameters) == [
+        "terms",
+        "detailed_inputs",
+    ]
+
+
+def test_the_business_plan_entry_points_require_the_plan() -> None:
+    """The three D6.2 Business Plan entry points take ``business_plan`` as a
+    required keyword -- a plan is never silently defaulted there. A caller
+    with no plan uses the mode's own entry point, which is the empty plan."""
+
+    from anchor.analysis import business_plan_analysis
+
+    functions = {
+        name: function
+        for name, function in inspect.getmembers(business_plan_analysis, inspect.isfunction)
+        if function.__module__ == business_plan_analysis.__name__
+    }
+    assert sorted(functions) == [
+        "analyze_detailed_acquisition_with_business_plan",
+        "analyze_lease_level_acquisition_with_business_plan",
+        "analyze_quick_acquisition_with_business_plan",
+    ]
+    for name, function in functions.items():
+        parameter = inspect.signature(function).parameters["business_plan"]
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY, name
+        assert parameter.default is inspect.Parameter.empty, name
 
 
 # =============================================================================
@@ -384,7 +492,12 @@ def test_the_frontend_contains_no_business_plan_implementation() -> None:
 # =============================================================================
 
 
-_CONTRACTS_GUARDRAIL_FAILURE = "engine/contracts.py changed by more than adding OwnerCapitalSchedule"
+# Used as a ``pytest.raises(match=...)`` pattern by the self-tests, so it holds
+# no regex metacharacters beyond the harmless ``.`` in the file name.
+_CONTRACTS_GUARDRAIL_FAILURE = (
+    "engine/contracts.py changed beyond the authorized D6 additions -- "
+    "D6.1 OwnerCapitalSchedule and D6.2 AcquisitionResults fields"
+)
 
 
 def _lf(text: str) -> str:
@@ -456,10 +569,89 @@ def _without_owner_capital_schedule(source: str) -> str:
     return "\n".join(lines[:first] + lines[after + 2 :])
 
 
-def _assert_only_owner_capital_schedule_added(baseline: str, current: str) -> None:
+#: ``main`` after D6.1, immediately before D6.2.
+_D6_1_MERGE = "7e67cde"
+
+#: D6.2's additions to ``AcquisitionResults``, exactly as they must read:
+#: appended after every pre-existing field, in the conventions' order, and with
+#: no default -- an old stored result must decode as absent, never with
+#: fabricated zeros (D6 conventions Section 14).
+_D6_2_RESULT_FIELD_LINES = [
+    "    closing_project_capital: float",
+    "    project_capital_by_year: tuple[float, ...]",
+    "    post_hold_project_capital: float",
+    "    owner_expenses_by_year: tuple[float, ...]",
+    "    property_cash_flow_by_year: tuple[float, ...]",
+    "    unlevered_owner_cash_flow_by_year: tuple[float, ...]",
+    "    levered_owner_cash_flow_by_year: tuple[float, ...]",
+    "    total_closing_uses: float",
+    "    total_closing_sources: float",
+]
+
+
+def _class_lines(source: str, class_name: str) -> tuple[int, int, int]:
+    """0-based ``(first, docstring_close, end)`` for a class: its first line
+    (decorator included), the line holding its docstring's closing quotes, and
+    the index just past its last line."""
+
+    node = _class_node(source, class_name)
+    first = min([node.lineno, *(decorator.lineno for decorator in node.decorator_list)]) - 1
+    docstring = node.body[0]
+    assert (
+        isinstance(docstring, ast.Expr)
+        and isinstance(docstring.value, ast.Constant)
+        and isinstance(docstring.value.value, str)
+        and docstring.end_lineno is not None
+        and node.end_lineno is not None
+    )
+    return first, docstring.end_lineno - 1, node.end_lineno
+
+
+def _with_baseline_acquisition_results(source: str, baseline: str) -> str:
+    """``source`` with ``AcquisitionResults`` put back to the baseline's text,
+    after proving D6.2 changed that class in exactly two ways, as text:
+
+    * prose appended to the end of its docstring -- every existing docstring
+      line, the decorator and the ``class`` line are unchanged; and
+    * exactly the nine ``_D6_2_RESULT_FIELD_LINES`` appended after its last
+      existing field -- every existing field keeps its name, annotation, order
+      and whitespace, and nothing else is added.
+
+    The AST only locates the class and its docstring. The comparisons are
+    ``==`` on source lines."""
+
+    lines, baseline_lines = source.split("\n"), baseline.split("\n")
+    first, close, end = _class_lines(source, "AcquisitionResults")
+    base_first, base_close, base_end = _class_lines(baseline, "AcquisitionResults")
+    current_class = lines[first:end]
+    baseline_class = baseline_lines[base_first:base_end]
+    kept = base_close - base_first  # lines before the docstring's closing quotes
+
+    assert current_class[:kept] == baseline_class[:kept], (
+        f"{_CONTRACTS_GUARDRAIL_FAILURE}: an existing line of AcquisitionResults' "
+        "header or docstring changed"
+    )
+    appended = current_class[kept : close - first]
+    assert all('"""' not in line for line in appended)
+    assert current_class[close - first :] == baseline_class[kept:] + _D6_2_RESULT_FIELD_LINES, (
+        f"{_CONTRACTS_GUARDRAIL_FAILURE}: AcquisitionResults' fields changed by more "
+        "than appending the nine D6.2 fields"
+    )
+    return "\n".join(lines[:first] + baseline_class + lines[end:])
+
+
+def _without_authorized_additions(source: str, baseline: str) -> str:
+    """``source`` minus D6.1's ``OwnerCapitalSchedule`` and with D6.2's
+    ``AcquisitionResults`` additions reverted -- each only after it is proved
+    to be exactly the authorized addition."""
+
+    return _with_baseline_acquisition_results(_without_owner_capital_schedule(source), baseline)
+
+
+def _assert_only_authorized_additions(baseline: str, current: str) -> None:
     """Both arguments already LF-normalised. The comparison is ``==`` on text."""
 
-    remainder = _without_owner_capital_schedule(current)
+    remainder = _without_authorized_additions(current, baseline)
     assert remainder == baseline, (
         f"{_CONTRACTS_GUARDRAIL_FAILURE}:\n"
         + "".join(
@@ -467,7 +659,7 @@ def _assert_only_owner_capital_schedule_added(baseline: str, current: str) -> No
                 baseline.splitlines(keepends=True),
                 remainder.splitlines(keepends=True),
                 "baseline",
-                "current without OwnerCapitalSchedule",
+                "current without the authorized D6 additions",
                 n=1,
             )
         )
@@ -477,24 +669,51 @@ def _assert_only_owner_capital_schedule_added(baseline: str, current: str) -> No
 @pytest.mark.parametrize(
     "baseline", [_D6_BASE_COMMIT, _D4_6A_COMMIT, _D4_5A_COMMIT], ids=["d6-base", "d4.6a", "d4.5a"]
 )
-def test_engine_contracts_changed_only_by_adding_owner_capital_schedule(baseline: str) -> None:
+def test_engine_contracts_changed_only_by_the_authorized_d6_additions(baseline: str) -> None:
     """The stronger claim that replaces byte-identity for ``engine/contracts.py``.
 
     Cutting the ``OwnerCapitalSchedule`` class's exact source span out of
-    today's file must leave the baseline file's source text exactly, CRLF
-    normalised to LF and nothing else: not one existing import, class, field,
-    docstring, function, blank line or byte of whitespace was touched, and
-    nothing else was added. This backs the D6.1 narrowing of G33 (D4.5A
-    baseline) and G37 (D4.6A baseline); each baseline is compared on its own.
+    today's file, and reverting D6.2's proven ``AcquisitionResults`` additions,
+    must leave the baseline file's source text exactly, CRLF normalised to LF
+    and nothing else: not one other import, class, field, docstring, function,
+    blank line or byte of whitespace was touched, and nothing else was added.
+    This backs the D6.1 and D6.2 narrowings of G33 (D4.5A baseline) and G37
+    (D4.6A baseline); each baseline is compared on its own.
 
-    Hardened at D6.1 closeout. The first version compared ASTs, which cannot
-    see comments, blank lines or formatting.
+    Hardened at D6.1 closeout (the first version compared ASTs, which cannot
+    see comments, blank lines or formatting). **Extended at D6.2** by exactly
+    one more authorized surface -- the result-contract additions -- with its
+    own text-level proof, rather than by exempting the file.
     """
 
     baseline_source = _baseline_engine_contracts(baseline)
     assert "OwnerCapitalSchedule" not in baseline_source
+    assert "closing_project_capital" not in baseline_source
 
-    _assert_only_owner_capital_schedule_added(baseline_source, _current_engine_contracts())
+    _assert_only_authorized_additions(baseline_source, _current_engine_contracts())
+
+
+def test_since_d6_1_contracts_changed_only_in_acquisition_results_and_a_docstring() -> None:
+    """Against the D6.1 merge itself: D6.2's only changes to the module are the
+    ``AcquisitionResults`` additions and ``OwnerCapitalSchedule``'s docstring,
+    which now says the contract is wired. The schedule's fields and validation
+    are unchanged since D6.1."""
+
+    baseline = _baseline_engine_contracts(_D6_1_MERGE)
+    current = _current_engine_contracts()
+
+    remainder = _with_baseline_acquisition_results(
+        _without_owner_capital_schedule(current), _without_owner_capital_schedule(baseline)
+    )
+    assert remainder == _without_owner_capital_schedule(baseline), _CONTRACTS_GUARDRAIL_FAILURE
+
+    def without_docstring(source: str) -> str:
+        node = _class_node(source, "OwnerCapitalSchedule")
+        return ast.dump(ast.Module(body=node.body[1:], type_ignores=[])) + ast.dump(
+            ast.Module(body=[ast.Expr(d) for d in node.decorator_list], type_ignores=[])
+        )
+
+    assert without_docstring(current) == without_docstring(baseline)
 
 
 # --- Self-tests: the guardrail above has teeth --------------------------------
@@ -509,22 +728,28 @@ def test_the_line_ending_normalisation_rewrites_crlf_and_nothing_else() -> None:
     assert _lf("a\r\nb\rc\n  \n# d\t\n") == "a\nb\rc\n  \n# d\t\n"
 
 
-def test_the_contracts_guardrail_accepts_owner_capital_schedule_alone() -> None:
-    """Self-test A. The committed D6.1 addition passes -- whether the working
-    tree checks the file out with LF or CRLF."""
+def test_the_contracts_guardrail_accepts_the_authorized_additions() -> None:
+    """Self-test A. The committed D6.1 and D6.2 additions pass -- whether the
+    working tree checks the file out with LF or CRLF -- and they account for
+    every added line."""
 
     baseline = _baseline_engine_contracts(_D6_BASE_COMMIT)
     current = _current_engine_contracts()
 
-    _assert_only_owner_capital_schedule_added(baseline, current)
-    _assert_only_owner_capital_schedule_added(baseline, _lf(current.replace("\n", "\r\n")))
+    _assert_only_authorized_additions(baseline, current)
+    _assert_only_authorized_additions(baseline, _lf(current.replace("\n", "\r\n")))
 
-    removed_lines = len(current.split("\n")) - len(baseline.split("\n"))
+    added_lines = len(current.split("\n")) - len(baseline.split("\n"))
     class_source = ast.get_source_segment(current, _class_node(current, "OwnerCapitalSchedule"))
     assert class_source is not None
-    # The ``class`` statement, its one decorator line and its two separator
-    # lines, and no more.
-    assert removed_lines == len(class_source.split("\n")) + 1 + 2
+    first, close, _ = _class_lines(current, "AcquisitionResults")
+    base_first, base_close, _ = _class_lines(baseline, "AcquisitionResults")
+    appended_prose = (close - first) - (base_close - base_first)
+    # D6.1: the ``class`` statement, its one decorator line and its two
+    # separator lines. D6.2: the docstring prose and the nine fields. No more.
+    assert added_lines == (
+        len(class_source.split("\n")) + 1 + 2 + appended_prose + len(_D6_2_RESULT_FIELD_LINES)
+    )
 
 
 #: Edits to pre-D6.1 source outside the class: ``(old, new, ast_visible)``.
@@ -586,11 +811,11 @@ def test_the_contracts_guardrail_rejects_an_edit_to_existing_source(
     tampered = current.replace(old, new)
 
     with pytest.raises(AssertionError, match=_CONTRACTS_GUARDRAIL_FAILURE):
-        _assert_only_owner_capital_schedule_added(baseline, tampered)
+        _assert_only_authorized_additions(baseline, tampered)
 
-    old_oracle_passes = ast.dump(ast.parse(_without_owner_capital_schedule(tampered))) == ast.dump(
-        ast.parse(baseline)
-    )
+    old_oracle_passes = ast.dump(
+        ast.parse(_without_authorized_additions(tampered, baseline))
+    ) == ast.dump(ast.parse(baseline))
     assert old_oracle_passes is not ast_visible
 
 
@@ -644,4 +869,67 @@ def test_the_contracts_guardrail_rejects_an_unrelated_addition(
         tampered = current.replace(anchor, replacement)
 
     with pytest.raises(AssertionError, match=_CONTRACTS_GUARDRAIL_FAILURE):
-        _assert_only_owner_capital_schedule_added(baseline, tampered)
+        _assert_only_authorized_additions(baseline, tampered)
+
+
+#: Changes to ``AcquisitionResults`` beyond D6.2's exact authorization:
+#: ``(old, new)``, each ``old`` present once in the current module.
+_UNAUTHORIZED_RESULT_CHANGES = [
+    pytest.param(
+        "    total_closing_sources: float\n",
+        "    total_closing_sources: float\n    total_equity_invested: float\n",
+        id="d6-3-field-added-early",
+    ),
+    pytest.param(
+        "    total_closing_sources: float\n",
+        "    total_closing_sources: float = 0.0\n",
+        id="field-given-a-default",
+    ),
+    pytest.param(
+        "    total_closing_uses: float\n    total_closing_sources: float\n",
+        "    total_closing_sources: float\n    total_closing_uses: float\n",
+        id="fields-reordered",
+    ),
+    pytest.param(
+        "    year_1_debt_yield: float | None\n    closing_project_capital: float\n",
+        "    closing_project_capital: float\n    year_1_debt_yield: float | None\n",
+        id="inserted-before-an-existing-field",
+    ),
+    pytest.param(
+        "    year_1_debt_yield: float | None\n    closing_project_capital: float\n",
+        "    year_1_debt_yield: float\n    closing_project_capital: float\n",
+        id="existing-annotation-changed",
+    ),
+    pytest.param(
+        "    modeled strictly below NOI, in the cash-flow series only.\n",
+        "    modelled strictly below NOI, in the cash-flow series only.\n",
+        id="existing-docstring-line-edited",
+    ),
+    pytest.param(
+        "    post_hold_project_capital: float\n    owner_expenses_by_year: tuple[float, ...]\n",
+        "    owner_expenses_by_year: tuple[float, ...]\n",
+        id="d6-2-field-missing",
+    ),
+    pytest.param(
+        "    closing_project_capital: float\n    project_capital_by_year: tuple[float, ...]\n"
+        "    post_hold_project_capital",
+        "    closing_project_capital: float\n    project_capital_by_year: tuple[float | None, ...]\n"
+        "    post_hold_project_capital",
+        id="d6-2-field-retyped",
+    ),
+]
+
+
+@pytest.mark.parametrize(("old", "new"), _UNAUTHORIZED_RESULT_CHANGES)
+def test_the_contracts_guardrail_rejects_an_unauthorized_result_change(old: str, new: str) -> None:
+    """Self-test D (D6.2). The result-contract authorization is exact: a D6.3
+    field, a default, a reorder, an insertion among the existing fields, an
+    edited existing annotation or docstring line, a missing or retyped D6.2
+    field -- each fails."""
+
+    baseline = _baseline_engine_contracts(_D6_BASE_COMMIT)
+    current = _current_engine_contracts()
+    assert current.count(old) == 1, old
+
+    with pytest.raises(AssertionError, match=_CONTRACTS_GUARDRAIL_FAILURE):
+        _assert_only_authorized_additions(baseline, current.replace(old, new))

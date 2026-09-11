@@ -58,6 +58,17 @@ ACQUISITION_RESULTS_FIELDS = (
     ("unlevered_cash_yield_by_year", tuple[float | None, ...]),
     ("cumulative_operating_distributions_by_year", tuple[float, ...]),
     ("year_1_debt_yield", float | None),
+    # Phase 6 Gate D6.2 -- the owner cash-flow fields, appended after every
+    # pre-existing field in the D6 conventions' order (Section 8).
+    ("closing_project_capital", float),
+    ("project_capital_by_year", tuple[float, ...]),
+    ("post_hold_project_capital", float),
+    ("owner_expenses_by_year", tuple[float, ...]),
+    ("property_cash_flow_by_year", tuple[float, ...]),
+    ("unlevered_owner_cash_flow_by_year", tuple[float, ...]),
+    ("levered_owner_cash_flow_by_year", tuple[float, ...]),
+    ("total_closing_uses", float),
+    ("total_closing_sources", float),
 )
 
 

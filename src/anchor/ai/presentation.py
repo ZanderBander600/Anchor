@@ -289,10 +289,34 @@ _DATE_FIELDS: frozenset[str] = frozenset(
 #
 # The allowlist itself stays, and stays empty on purpose: a future field that
 # should not reach the model still has to be named here, with a reason.
+#
+# **Phase 6 Gate D6.2 re-uses the precedent for exactly nine fields.** D6.2
+# adds the owner cash-flow result fields to ``AcquisitionResults``
+# (``docs/architecture/D6_BUSINESS_PLAN_CONVENTIONS.md`` Sections 6, 8 and 10).
+# They are **deliberately withheld from the AI Analyst**: D6.8 owns AI grounding
+# for the Business Plan, and presenting project capital, owner expenses, owner
+# cash flow or Sources & Uses without the grounding rules that say what they are
+# -- capital sits below NOI, spending capital does not create value, a negative
+# owner cash flow is not a "negative distribution", post-hold capital is
+# disclosure only -- is the risk this deferral exists to avoid. When D6.8 gives
+# them a reviewed presentation and those rules, they come out of this allowlist
+# exactly as D5.8 removed TI/LC.
 # =============================================================================
 
 INTENTIONALLY_EXCLUDED_INPUT_FIELDS: frozenset[str] = frozenset()
-INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset()
+INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset(
+    {
+        "closing_project_capital",
+        "project_capital_by_year",
+        "post_hold_project_capital",
+        "owner_expenses_by_year",
+        "property_cash_flow_by_year",
+        "unlevered_owner_cash_flow_by_year",
+        "levered_owner_cash_flow_by_year",
+        "total_closing_uses",
+        "total_closing_sources",
+    }
+)
 INTENTIONALLY_EXCLUDED_TERMS_FIELDS: frozenset[str] = frozenset()
 INTENTIONALLY_EXCLUDED_DETAILED_OPERATING_FIELDS: frozenset[str] = frozenset()
 INTENTIONALLY_EXCLUDED_OPERATING_PROJECTION_FIELDS: frozenset[str] = frozenset()

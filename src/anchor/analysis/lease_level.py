@@ -45,7 +45,7 @@ from typing import Iterable
 
 from ..contracts import AcquisitionTerms
 from ..engine.acquisition import analyze_acquisition_from_operating_projection
-from ..engine.contracts import OperatingCapitalSchedule
+from ..engine.contracts import OperatingCapitalSchedule, OwnerCapitalSchedule
 from ..leasing import (
     AnnualOperatingProjection,
     InitialVacancyRollover,
@@ -87,6 +87,7 @@ def analyze_lease_level_acquisition_with_projection(
     *,
     market_leasing: MarketLeasingAssumptions,
     operating_inputs: LeaseLevelOperatingInputs,
+    owner_capital: OwnerCapitalSchedule | None = None,
 ) -> LeaseLevelAcquisitionResults:
     """Run one complete Lease-Level acquisition analysis.
 
@@ -141,6 +142,13 @@ def analyze_lease_level_acquisition_with_projection(
     14. **Assemble the generic ``OperatingCapitalSchedule``** directly from the
         annual projection's hold-period TI and LC arrays, and call the shared
         engine.
+
+    **Owner capital is passed through too (D6.2).** ``owner_capital`` is the
+    generic ``OwnerCapitalSchedule`` a caller resolved from a Business Plan
+    (``anchor.analysis.business_plan_analysis``). It is handed to the shared
+    engine untouched; ``None`` means an empty plan. This module never sees a
+    plan item and applies no owner-capital arithmetic -- project capital stays
+    a channel separate from the rent roll's TI and LC.
 
     **The operating-capital arrays are passed through, never recomputed.** D4.4
     already produced exactly ``H`` hold-year values by a reducer that
@@ -326,7 +334,7 @@ def analyze_lease_level_acquisition_with_projection(
         leasing_commissions_by_year=annual_projection.leasing_commissions_by_year,
     )
     results = analyze_acquisition_from_operating_projection(
-        annual_projection, terms, operating_capital
+        annual_projection, terms, operating_capital, owner_capital=owner_capital
     )
 
     return LeaseLevelAcquisitionResults(

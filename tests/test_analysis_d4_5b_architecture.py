@@ -277,8 +277,13 @@ def test_g6_the_bridge_is_the_only_lease_level_orchestrator() -> None:
     # sensitivity does -- through the analysis facade, once per request, with no
     # builder or engine call of its own -- so it widens the *consumer* list by
     # one named file and leaves the ban on a second orchestrator untouched.
+    # D6.2 adds the Business Plan entry points. Their Lease-Level function
+    # resolves a plan and calls this exact bridge once -- no builder, no engine
+    # call of its own -- so the consumer list widens by one named file and the
+    # ban on a second orchestrator is again untouched.
     assert importers == [
         "anchor/analysis/__init__.py",
+        "anchor/analysis/business_plan_analysis.py",
         "anchor/analysis/lease_level_sensitivity.py",
         "anchor/api.py",
     ]
@@ -416,10 +421,22 @@ def test_g13_no_assumption_has_a_default() -> None:
 
     signature = inspect.signature(analyze_lease_level_acquisition_with_projection)
 
+    # **Narrowed at D6.2 -- by exactly one parameter, and not weakened.**
+    # ``owner_capital`` is the generic resolved Business Plan, passed through to
+    # the shared engine untouched. Its ``None`` default is not an invented
+    # assumption: it is the empty plan -- no capital, no owner expense -- which
+    # is exactly what every pre-D6.2 caller already analysed, and it mirrors the
+    # engine's own ``operating_capital=None``. Every *assumption* still has no
+    # default.
     for name, parameter in signature.parameters.items():
+        if name == "owner_capital":
+            assert parameter.default is None
+            assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+            continue
         assert parameter.default is inspect.Parameter.empty, (
             f"parameter {name!r} has the default {parameter.default!r}"
         )
+    assert list(signature.parameters)[-1] == "owner_capital"
 
 
 # =============================================================================
@@ -901,12 +918,21 @@ def test_g33_the_whole_engine_package_is_unchanged_since_d4_5a() -> None:
     exact source span out of today's file leaves the D4.5A module's source
     text exactly, CRLF normalised to LF and nothing else. Every other engine
     file is still byte-identical to D4.5A.
+
+    **Narrowed again at D6.2 -- by exactly one more file.** D6.2 wires the
+    resolved Business Plan into ``engine/acquisition.py``. That file is held to
+    a source-region claim by ``tests/test_d6_2_owner_cash_flow_architecture.py``
+    (every function outside D6.2's enumerated surface is source-identical to
+    the pre-D6.2 module), and ``contracts.py`` to the D6.1 + D6.2 additive
+    claim. ``debt.py``, ``returns.py``, ``noi.py``, ``operating_projection.py``
+    and ``__init__.py`` remain byte-identical to D4.5A.
     """
 
     changed = [
         path
         for path in _files_changed_since(_D4_5A_COMMIT, "src/anchor/engine")
-        if path != "src/anchor/engine/contracts.py"
+        if path
+        not in ("src/anchor/engine/contracts.py", "src/anchor/engine/acquisition.py")
     ]
 
     assert changed == [], (
@@ -965,8 +991,30 @@ def test_g34_the_ai_surface_changed_only_to_make_mode_dispatch_total() -> None:
     from anchor.ai.presentation import INTENTIONALLY_EXCLUDED_RESULT_FIELDS
     from anchor.ai.prompts import build_system_prompt
 
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
+    # D6.2 re-uses the allowlist for its own nine owner cash-flow fields
+    # (deferred to D6.8). TI and LC are not among them, and never return.
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == _D6_2_DEFERRED_RESULT_FIELDS
+    assert "tenant_improvements_by_year" not in INTENTIONALLY_EXCLUDED_RESULT_FIELDS
+    assert "leasing_commissions_by_year" not in INTENTIONALLY_EXCLUDED_RESULT_FIELDS
     assert "LEASING-CAPITAL RULE" in build_system_prompt()
+
+
+#: The only result fields withheld from the AI Analyst: D6.2's owner cash-flow
+#: fields, deferred to the D6.8 grounding gate. Stated exactly, never as a
+#: containment check.
+_D6_2_DEFERRED_RESULT_FIELDS = frozenset(
+    {
+        "closing_project_capital",
+        "project_capital_by_year",
+        "post_hold_project_capital",
+        "owner_expenses_by_year",
+        "property_cash_flow_by_year",
+        "unlevered_owner_cash_flow_by_year",
+        "levered_owner_cash_flow_by_year",
+        "total_closing_uses",
+        "total_closing_sources",
+    }
+)
 
 
 def test_g35_the_ai_exclusion_decision_was_succeeded_not_abandoned() -> None:
@@ -990,7 +1038,9 @@ def test_g35_the_ai_exclusion_decision_was_succeeded_not_abandoned() -> None:
 
     from anchor.ai.presentation import INTENTIONALLY_EXCLUDED_RESULT_FIELDS
 
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == frozenset()
+    # Empty of TI/LC for good; D6.2's deferred owner cash-flow fields are the
+    # only entries (see G34).
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == _D6_2_DEFERRED_RESULT_FIELDS
 
     # The AI layer legitimately consumes ``anchor.analysis`` for sensitivity,
     # break-even and -- from D5.8 -- the Lease-Level input and result
