@@ -315,6 +315,16 @@ INTENTIONALLY_EXCLUDED_RESULT_FIELDS: frozenset[str] = frozenset(
         "levered_owner_cash_flow_by_year",
         "total_closing_uses",
         "total_closing_sources",
+        # Phase 6 Gate D6.3 -- the project-return summary and the IRR status
+        # enum. Withheld on exactly the same terms: D6.8 owns the grounding
+        # that says a Net Additional Equity Requirement is an annual net figure
+        # (not a capital call) and how each IRR status is explained.
+        "net_additional_equity_requirement_by_year",
+        "total_equity_invested",
+        "total_cash_returned",
+        "total_profit",
+        "unlevered_irr_status",
+        "levered_irr_status",
     }
 )
 INTENTIONALLY_EXCLUDED_TERMS_FIELDS: frozenset[str] = frozenset()

@@ -107,6 +107,14 @@ def test_context_carries_every_acquisition_results_field() -> None:
         "levered_owner_cash_flow_by_year",
         "total_closing_uses",
         "total_closing_sources",
+        # D6.3 project-return summary and IRR statuses: carried, but withheld
+        # from the model until D6.8.
+        "net_additional_equity_requirement_by_year",
+        "total_equity_invested",
+        "total_cash_returned",
+        "total_profit",
+        "unlevered_irr_status",
+        "levered_irr_status",
     }
 
 

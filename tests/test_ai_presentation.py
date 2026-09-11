@@ -449,5 +449,13 @@ def test_intentional_exclusion_allowlists_hold_exactly_the_deferred_fields() -> 
             "levered_owner_cash_flow_by_year",
             "total_closing_uses",
             "total_closing_sources",
+            # D6.3: the project-return summary and the IRR statuses, on the
+            # same terms.
+            "net_additional_equity_requirement_by_year",
+            "total_equity_invested",
+            "total_cash_returned",
+            "total_profit",
+            "unlevered_irr_status",
+            "levered_irr_status",
         }
     )

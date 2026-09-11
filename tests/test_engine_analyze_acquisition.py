@@ -19,6 +19,7 @@ import anchor.engine as engine_package
 import anchor.engine.acquisition as acquisition_module
 from anchor.contracts import AcquisitionInputs
 from anchor.engine import AcquisitionResults, analyze_acquisition
+from anchor.engine.contracts import IrrStatus
 from anchor.engine.acquisition import calculate_acquisition_cash_flows
 
 
@@ -69,6 +70,13 @@ ACQUISITION_RESULTS_FIELDS = (
     ("levered_owner_cash_flow_by_year", tuple[float, ...]),
     ("total_closing_uses", float),
     ("total_closing_sources", float),
+    # Phase 6 Gate D6.3 -- the project-return summary and the IRR statuses.
+    ("net_additional_equity_requirement_by_year", tuple[float, ...]),
+    ("total_equity_invested", float),
+    ("total_cash_returned", float),
+    ("total_profit", float),
+    ("unlevered_irr_status", IrrStatus),
+    ("levered_irr_status", IrrStatus),
 )
 
 

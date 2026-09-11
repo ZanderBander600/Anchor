@@ -1190,8 +1190,23 @@ def test_the_owner_cash_flow_fields_do_not_reach_the_ai_analyst(mode: str) -> No
     formatted = _format_results(run(mode, COMMON_PLAN))
 
     assert not set(formatted) & set(D6_2_FIELDS)
+    # D6.3 withholds its project-return fields on the same terms, so the
+    # excluded set is the D6.2 fields plus those six (D6.8 owns all of them).
     assert (
         {field.name for field in dataclasses.fields(AcquisitionResults)} - set(formatted)
         == INTENTIONALLY_EXCLUDED_RESULT_FIELDS
-        == frozenset(D6_2_FIELDS)
+        == frozenset(D6_2_FIELDS) | D6_3_FIELDS
     )
+
+
+#: The six result fields D6.3 adds after D6.2's nine.
+D6_3_FIELDS = frozenset(
+    {
+        "net_additional_equity_requirement_by_year",
+        "total_equity_invested",
+        "total_cash_returned",
+        "total_profit",
+        "unlevered_irr_status",
+        "levered_irr_status",
+    }
+)
