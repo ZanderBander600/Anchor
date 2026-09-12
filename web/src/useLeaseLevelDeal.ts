@@ -51,6 +51,13 @@ import {
   reconcileArea,
 } from './leaseLevelConvert';
 import { EMPTY_SUBMITTED_RENT_ROLL, resolveRowIssues } from './leaseLevelIssues';
+import { BUSINESS_PLAN_INCOMPLETE_MESSAGE, useBusinessPlan } from './useBusinessPlan';
+import { blankBusinessPlanDraft, isSameBusinessPlanDraft } from './businessPlan';
+import type {
+  BusinessPlanDraft,
+  BusinessPlanFieldIssue,
+  BusinessPlanInput,
+} from './businessPlan';
 import type { RowIssues, SubmittedRentRoll } from './leaseLevelIssues';
 import type { LeaseLevelSectionId } from './components/LeaseLevelWorkspace';
 import { BLANK_LADDER_DRAFT } from './leaseLevelSensitivityLadder';
@@ -100,6 +107,13 @@ export interface LeaseLevelDealState {
   saveStatus: SaveStatus;
   lastSavedAt: string | null;
   isDirty: boolean;
+
+  /** D6.6: this deal's Business Plan as the shared editor shows it, the issues
+   * the editor should mark, and the one edit handler -- which joins the same
+   * dirty snapshot and the same downstream reset as every other assumption. */
+  businessPlan: BusinessPlanDraft;
+  businessPlanIssues: BusinessPlanFieldIssue[];
+  onBusinessPlanChange: (next: BusinessPlanDraft) => void;
 
   activeSection: LeaseLevelSectionId;
   setActiveSection: (section: LeaseLevelSectionId) => void;
@@ -247,7 +261,7 @@ export interface LeaseLevelDealState {
    * the tabs that hold them exactly as Analyze does. Calling it neither dirties
    * the deal, clears the analysis, nor persists anything.
    */
-  buildRequest: () => { terms: AcquisitionTermsRequest; inputs: LeaseLevelInputsRequest } | null;
+  buildRequest: () => LeaseLevelRequest | null;
 
   analyze: () => Promise<void>;
   save: () => Promise<void>;
@@ -318,9 +332,20 @@ export interface LeaseLevelSensitivityState {
 export const LEASE_LEVEL_BLANKS_MESSAGE =
   'Some assumptions are still blank. They are marked on the tab that holds them.';
 
+/** D6.6: everything one Lease-Level request carries -- the terms, the rent-roll
+ * inputs and the deal's Business Plan -- built together by `buildRequest`, so
+ * no caller can send the deal without its plan. */
+export interface LeaseLevelRequest {
+  terms: AcquisitionTermsRequest;
+  inputs: LeaseLevelInputsRequest;
+  businessPlan: BusinessPlanInput;
+}
+
 interface LeaseLevelSnapshot {
   dealName: string;
   values: LeaseLevelFormValues;
+  /** D6.6: part of the one dirty comparison, like every other assumption. */
+  businessPlan: BusinessPlanDraft;
   dealContext: string;
 }
 
@@ -340,6 +365,10 @@ interface LeaseLevelSnapshot {
  */
 interface AnalysisProvenance {
   values: LeaseLevelFormValues;
+  /** D6.6: a Business Plan edit moves every analytical artifact out of date,
+   * exactly as an assumption edit does -- both backend fingerprints include a
+   * non-empty plan. */
+  businessPlan: BusinessPlanDraft;
   dealContext: string;
 }
 
@@ -366,11 +395,15 @@ interface Presented<T> {
   isRestored: boolean;
 }
 
-const BLANK_SNAPSHOT: LeaseLevelSnapshot = {
-  dealName: '',
-  values: BLANK_LEASE_LEVEL_FORM_VALUES,
-  dealContext: '',
-};
+/** A new blank snapshot on every call, so no two deals share a plan's arrays. */
+function blankSnapshot(): LeaseLevelSnapshot {
+  return {
+    dealName: '',
+    values: BLANK_LEASE_LEVEL_FORM_VALUES,
+    businessPlan: blankBusinessPlanDraft(),
+    dealContext: '',
+  };
+}
 
 /**
  * Dirty comparison over everything the deal submits.
@@ -383,7 +416,9 @@ function isSameSnapshot(a: LeaseLevelSnapshot, b: LeaseLevelSnapshot): boolean {
   if (a.dealName !== b.dealName || a.dealContext !== b.dealContext) {
     return false;
   }
-  return isSameValues(a.values, b.values);
+  return (
+    isSameValues(a.values, b.values) && isSameBusinessPlanDraft(a.businessPlan, b.businessPlan)
+  );
 }
 
 /**
@@ -645,13 +680,18 @@ export function useLeaseLevelDeal(options: {
    * always lands on Underwrite: no analysis snapshot is persisted for this mode
    * (decision D5), so Overview would be empty. */
   onOpened: () => void;
+  /** D6.6: called when Analyze or Save is stopped by the Business Plan, so the
+   * shell can put Underwrite -- where the marked rows are -- on screen. */
+  onRevealBusinessPlan: () => void;
 }): LeaseLevelDealState {
   const [values, setValues] = useState<LeaseLevelFormValues>(BLANK_LEASE_LEVEL_FORM_VALUES);
   const [dealName, setDealName] = useState('');
   const [dealContext, setDealContext] = useState('');
   const [currentDealId, setCurrentDealId] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
-  const [savedSnapshot, setSavedSnapshot] = useState<LeaseLevelSnapshot>(BLANK_SNAPSHOT);
+  const [savedSnapshot, setSavedSnapshot] = useState<LeaseLevelSnapshot>(blankSnapshot);
+  // D6.6: the deal's Business Plan, through the one hook all three modes use.
+  const businessPlanState = useBusinessPlan();
   const [activeSection, setActiveSection] = useState<LeaseLevelSectionId>('acquisition');
   const [resultsView, setResultsView] = useState<ResultsViewId>('summary');
   const [periodView, setPeriodView] = useState<OperatingPeriodView>('annual');
@@ -703,7 +743,10 @@ export function useLeaseLevelDeal(options: {
   // so they are resolved against this rather than against the current roll.
   const [submitted, setSubmitted] = useState<SubmittedRentRoll>(EMPTY_SUBMITTED_RENT_ROLL);
 
-  const isDirty = !isSameSnapshot({ dealName, values, dealContext }, savedSnapshot);
+  const isDirty = !isSameSnapshot(
+    { dealName, values, businessPlan: businessPlanState.draft, dealContext },
+    savedSnapshot,
+  );
   const saveStatus: SaveStatus =
     currentDealId === null ? 'unsaved-deal' : isDirty ? 'unsaved-changes' : 'saved';
 
@@ -721,7 +764,9 @@ export function useLeaseLevelDeal(options: {
   // something out of date. That question is about the inputs an artifact was
   // produced from, which for a live artifact is not `savedSnapshot` at all --
   // see `presentedAnalysis`.
-  const isUnderwritingDirty = !isSameValues(values, savedSnapshot.values);
+  const isUnderwritingDirty =
+    !isSameValues(values, savedSnapshot.values) ||
+    !isSameBusinessPlanDraft(businessPlanState.draft, savedSnapshot.businessPlan);
   const isAiDirty = isUnderwritingDirty || dealContext !== savedSnapshot.dealContext;
 
   /** What the deal's persisted artifacts were produced from.
@@ -732,6 +777,7 @@ export function useLeaseLevelDeal(options: {
    * are the inputs it was produced from. */
   const savedProvenance: AnalysisProvenance = {
     values: savedSnapshot.values,
+    businessPlan: savedSnapshot.businessPlan,
     dealContext: savedSnapshot.dealContext,
   };
 
@@ -761,6 +807,7 @@ export function useLeaseLevelDeal(options: {
     }
     const isStale =
       !isSameValues(producedFrom.values, values) ||
+      !isSameBusinessPlanDraft(producedFrom.businessPlan, businessPlanState.draft) ||
       (includeDealContext && producedFrom.dealContext !== dealContext);
     return { artifact, producedFrom, isStale, isRestored: live === null };
   }
@@ -832,6 +879,7 @@ export function useLeaseLevelDeal(options: {
     setLeaseIssues([]);
     setTermsIssues([]);
     setSubmitted(EMPTY_SUBMITTED_RENT_ROLL);
+    businessPlanState.clearApiIssues();
   }
 
   /** D5.8A -- the fingerprint tokens for the request just submitted.
@@ -845,16 +893,14 @@ export function useLeaseLevelDeal(options: {
    * produced from. Captured at the call site rather than derived later, because
    * "later" is exactly when the analyst may have edited them. */
   function currentProvenance(): AnalysisProvenance {
-    return { values, dealContext };
+    return { values, businessPlan: businessPlanState.draft, dealContext };
   }
 
-  async function fingerprintFor(request: {
-    terms: AcquisitionTermsRequest;
-    inputs: LeaseLevelInputsRequest;
-  }) {
+  async function fingerprintFor(request: LeaseLevelRequest) {
     return fetchLeaseLevelDealFingerprint(
       request.terms,
       request.inputs,
+      request.businessPlan,
       dealContext.trim() || null,
     );
   }
@@ -908,6 +954,20 @@ export function useLeaseLevelDeal(options: {
     setDealContext(value);
   }
 
+  /** D6.6: a Business Plan edit is an underwriting edit. It marks the deal
+   * dirty through the snapshot above and drops the analysis exactly as any
+   * other assumption does; persisted results go out of date rather than away. */
+  function onBusinessPlanChange(next: BusinessPlanDraft) {
+    businessPlanState.change(next);
+    resetDownstream();
+  }
+
+  /** D6.6: Analyze or Save was stopped by the plan -- put its rows on screen. */
+  function revealBusinessPlan() {
+    setActiveSection('acquisition');
+    options.onRevealBusinessPlan();
+  }
+
   /**
    * Submit and surface, never disable.
    *
@@ -953,9 +1013,16 @@ export function useLeaseLevelDeal(options: {
     });
   }
 
-  function buildRequest(): { terms: AcquisitionTermsRequest; inputs: LeaseLevelInputsRequest } | null {
+  /** D6.6: the request, or which of the two things stopped it -- a blank
+   * assumption, or the Business Plan -- so each caller can say the right one. */
+  function prepareRequest():
+    | { ok: true; request: LeaseLevelRequest }
+    | { ok: false; reason: 'blanks' | 'business_plan'; message: string } {
     const blanks = collectBlankScalarIssues(values);
     const rowBlanks = collectRentRollBlankIssues(values);
+    // D6.6: asked on every attempt, so the plan's own rows are marked even when
+    // a blank elsewhere is what stops this request.
+    const businessPlan = businessPlanState.prepare();
     if (
       blanks.leaseIssues.length > 0 ||
       blanks.termsIssues.length > 0 ||
@@ -964,15 +1031,31 @@ export function useLeaseLevelDeal(options: {
       captureSubmitted(null);
       setLeaseIssues([...blanks.leaseIssues, ...rowBlanks]);
       setTermsIssues(blanks.termsIssues);
-      return null;
+      return { ok: false, reason: 'blanks', message: LEASE_LEVEL_BLANKS_MESSAGE };
+    }
+    if (businessPlan === null) {
+      return {
+        ok: false,
+        reason: 'business_plan',
+        message: BUSINESS_PLAN_INCOMPLETE_MESSAGE,
+      };
     }
     const inputs = buildLeaseLevelInputsRequest(values);
     captureSubmitted(inputs.leases.map((lease) => lease.suite_id));
 
     return {
-      terms: buildLeaseLevelTermsRequest(values.terms),
-      inputs,
+      ok: true,
+      request: {
+        terms: buildLeaseLevelTermsRequest(values.terms),
+        inputs,
+        businessPlan,
+      },
     };
+  }
+
+  function buildRequest(): LeaseLevelRequest | null {
+    const prepared = prepareRequest();
+    return prepared.ok ? prepared.request : null;
   }
 
   async function analyze(): Promise<void> {
@@ -980,13 +1063,23 @@ export function useLeaseLevelDeal(options: {
     setError(null);
     setLeaseIssues([]);
     setTermsIssues([]);
+    let submittedPlan: BusinessPlanInput | null = null;
     try {
-      const request = buildRequest();
-      if (request === null) {
-        setError(LEASE_LEVEL_BLANKS_MESSAGE);
+      const prepared = prepareRequest();
+      if (!prepared.ok) {
+        setError(prepared.message);
+        if (prepared.reason === 'business_plan') {
+          revealBusinessPlan();
+        }
         return;
       }
-      const analysis = await analyzeLeaseLevelAcquisition(request.terms, request.inputs);
+      const { request } = prepared;
+      submittedPlan = request.businessPlan;
+      const analysis = await analyzeLeaseLevelAcquisition(
+        request.terms,
+        request.inputs,
+        request.businessPlan,
+      );
       setResults(analysis);
       // D5.6: Analyze must visibly do something. Landing on Results is what
       // makes a successful run self-evident rather than something the analyst
@@ -995,6 +1088,9 @@ export function useLeaseLevelDeal(options: {
     } catch (caught) {
       setResults(null);
       setError(recordFailure(caught, 'An unexpected error occurred while analyzing the deal.'));
+      if (businessPlanState.recordApiFailure(caught, submittedPlan)) {
+        revealBusinessPlan();
+      }
     } finally {
       setIsAnalyzing(false);
     }
@@ -1040,14 +1136,16 @@ export function useLeaseLevelDeal(options: {
     setIsGeneratingAiAnalysis(true);
     setAiAnalysisError(null);
     try {
-      const request = buildRequest();
-      if (request === null) {
-        setAiAnalysisError(LEASE_LEVEL_BLANKS_MESSAGE);
+      const prepared = prepareRequest();
+      if (!prepared.ok) {
+        setAiAnalysisError(prepared.message);
         return;
       }
+      const { request } = prepared;
       const analysis = await fetchLeaseLevelAIAnalysis(
         request.terms,
         request.inputs,
+        request.businessPlan,
         targetLeveredIrr,
         targetEquityMultiple,
         targetHeadlineDscr,
@@ -1086,7 +1184,7 @@ export function useLeaseLevelDeal(options: {
    * the assumptions they describe actually become the saved ones.
    */
   function persistAiSnapshot(
-    request: { terms: AcquisitionTermsRequest; inputs: LeaseLevelInputsRequest },
+    request: LeaseLevelRequest,
     analysis: AIAnalysis,
   ): void {
     const dealId = currentDealId;
@@ -1143,7 +1241,7 @@ export function useLeaseLevelDeal(options: {
    * successful snapshot -- that is structural, not a rule to remember.
    */
   function persistSensitivitySnapshot(
-    request: { terms: AcquisitionTermsRequest; inputs: LeaseLevelInputsRequest },
+    request: LeaseLevelRequest,
     write: (dealId: string, fingerprint: string) => Promise<unknown>,
     remember: () => void,
   ): void {
@@ -1171,11 +1269,12 @@ export function useLeaseLevelDeal(options: {
     }
     setIsRunningSensitivity(true);
     try {
-      const request = buildRequest();
-      if (request === null) {
-        setOneWayError(LEASE_LEVEL_BLANKS_MESSAGE);
+      const prepared = prepareRequest();
+      if (!prepared.ok) {
+        setOneWayError(prepared.message);
         return;
       }
+      const { request } = prepared;
       // The configuration is captured here, from what is actually being
       // submitted, so the snapshot below can never pair one run's question with
       // another run's answer.
@@ -1184,7 +1283,11 @@ export function useLeaseLevelDeal(options: {
         assumption: oneWayConfig.assumption,
         values: [...oneWayConfig.values],
       };
-      const result = await runLeaseLevelOneWaySensitivity(request.terms, request.inputs, {
+      const result = await runLeaseLevelOneWaySensitivity(
+        request.terms,
+        request.inputs,
+        request.businessPlan,
+        {
         assumption: configuration.assumption,
         values: wireValues(configuration.assumption, configuration.values),
         metric: configuration.metric,
@@ -1224,11 +1327,12 @@ export function useLeaseLevelDeal(options: {
     }
     setIsRunningSensitivity(true);
     try {
-      const request = buildRequest();
-      if (request === null) {
-        setTwoWayError(LEASE_LEVEL_BLANKS_MESSAGE);
+      const prepared = prepareRequest();
+      if (!prepared.ok) {
+        setTwoWayError(prepared.message);
         return;
       }
+      const { request } = prepared;
       const configuration = {
         metric: twoWayConfig.metric,
         row_assumption: twoWayConfig.rowAssumption,
@@ -1236,7 +1340,11 @@ export function useLeaseLevelDeal(options: {
         column_assumption: twoWayConfig.columnAssumption,
         column_values: [...twoWayConfig.columnValues],
       };
-      const result = await runLeaseLevelTwoWaySensitivity(request.terms, request.inputs, {
+      const result = await runLeaseLevelTwoWaySensitivity(
+        request.terms,
+        request.inputs,
+        request.businessPlan,
+        {
         row_assumption: configuration.row_assumption,
         row_values: wireValues(configuration.row_assumption, configuration.row_values),
         column_assumption: configuration.column_assumption,
@@ -1278,23 +1386,35 @@ export function useLeaseLevelDeal(options: {
     setSaveError(null);
     setLeaseIssues([]);
     setTermsIssues([]);
+    let submittedPlan: BusinessPlanInput | null = null;
     try {
-      const request = buildRequest();
-      if (request === null) {
-        setSaveError(LEASE_LEVEL_BLANKS_MESSAGE);
+      const prepared = prepareRequest();
+      if (!prepared.ok) {
+        setSaveError(prepared.message);
+        if (prepared.reason === 'business_plan') {
+          revealBusinessPlan();
+        }
         return;
       }
-      const { terms, inputs } = request;
+      // D6.6: the plan travels with every save, including one that only
+      // renamed the deal -- an absent plan would be read as an empty one.
+      const { terms, inputs, businessPlan } = prepared.request;
+      submittedPlan = businessPlan;
       const name = dealName.trim() || 'Untitled Deal';
       const context = dealContext.trim() || null;
       const deal = currentDealId
-        ? await updateLeaseLevelDeal(currentDealId, name, terms, inputs, context)
-        : await createLeaseLevelDeal(name, terms, inputs, context);
+        ? await updateLeaseLevelDeal(currentDealId, name, terms, inputs, businessPlan, context)
+        : await createLeaseLevelDeal(name, terms, inputs, businessPlan, context);
       setCurrentDealId(deal.id);
       setDealName(deal.name);
       setDealContext(deal.deal_context ?? '');
       setLastSavedAt(deal.updated_at);
-      setSavedSnapshot({ dealName: deal.name, values, dealContext: deal.deal_context ?? '' });
+      setSavedSnapshot({
+        dealName: deal.name,
+        values,
+        businessPlan: businessPlanState.draft,
+        dealContext: deal.deal_context ?? '',
+      });
       // D5.8A -- attach whatever analytical work is currently on screen to the
       // deal that has just become its saved form.
       //
@@ -1306,10 +1426,13 @@ export function useLeaseLevelDeal(options: {
       // same request is the provenance the backend will independently agree
       // with. Awaited rather than fired, because Save is the moment the analyst
       // is told their work is stored.
-      await attachSnapshotsAfterSave(deal.id, { terms, inputs }, context);
+      await attachSnapshotsAfterSave(deal.id, { terms, inputs, businessPlan }, context);
       options.onDealsChanged();
     } catch (caught) {
       setSaveError(recordFailure(caught, 'An unexpected error occurred while saving the deal.'));
+      if (businessPlanState.recordApiFailure(caught, submittedPlan)) {
+        revealBusinessPlan();
+      }
     } finally {
       setIsSaving(false);
     }
@@ -1335,7 +1458,7 @@ export function useLeaseLevelDeal(options: {
    */
   async function attachSnapshotsAfterSave(
     dealId: string,
-    request: { terms: AcquisitionTermsRequest; inputs: LeaseLevelInputsRequest },
+    request: LeaseLevelRequest,
     context: string | null,
   ): Promise<void> {
     // Whatever is on screen goes on being on screen, held as this session's own
@@ -1372,6 +1495,7 @@ export function useLeaseLevelDeal(options: {
       const fingerprint = await fetchLeaseLevelDealFingerprint(
         request.terms,
         request.inputs,
+        request.businessPlan,
         context,
       );
       if (attachAi && presentedAi !== null) {
@@ -1433,6 +1557,8 @@ export function useLeaseLevelDeal(options: {
       // purchase price is decoded by exactly one function.
       buildDetailedTermsFormValuesFromRequest(deal.terms),
     );
+    // D6.6: the plan exactly as stored -- its item IDs, values and row order.
+    const openedPlan = businessPlanState.load(deal.business_plan);
     setValues(opened);
     setDealName(deal.name);
     setDealContext(deal.deal_context ?? '');
@@ -1441,6 +1567,7 @@ export function useLeaseLevelDeal(options: {
     setSavedSnapshot({
       dealName: deal.name,
       values: opened,
+      businessPlan: openedPlan,
       dealContext: deal.deal_context ?? '',
     });
     setActiveSection('acquisition');
@@ -1504,11 +1631,13 @@ export function useLeaseLevelDeal(options: {
 
   function resetToBlank(): void {
     setValues(BLANK_LEASE_LEVEL_FORM_VALUES);
+    // D6.6: a new deal has no Business Plan -- no rows, nothing assumed.
+    businessPlanState.reset();
     setDealName('');
     setDealContext('');
     setCurrentDealId(null);
     setLastSavedAt(null);
-    setSavedSnapshot(BLANK_SNAPSHOT);
+    setSavedSnapshot(blankSnapshot());
     setActiveSection('acquisition');
     setEditorRowId(null);
     setSubmitted(EMPTY_SUBMITTED_RENT_ROLL);
@@ -1724,6 +1853,9 @@ export function useLeaseLevelDeal(options: {
     saveStatus,
     lastSavedAt,
     isDirty,
+    businessPlan: businessPlanState.draft,
+    businessPlanIssues: businessPlanState.issues,
+    onBusinessPlanChange,
     activeSection,
     setActiveSection,
     resultsView,

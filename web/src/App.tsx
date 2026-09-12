@@ -119,6 +119,23 @@ import { assertNeverMode, byMode } from './operatingMode';
 import { useLeaseLevelDeal } from './useLeaseLevelDeal';
 import { LeaseLevelWorkspace } from './components/LeaseLevelWorkspace';
 import { LeaseLevelSensitivityWorkspace } from './components/LeaseLevelSensitivityWorkspace';
+import { BusinessPlanEditor } from './components/BusinessPlanEditor';
+import { BUSINESS_PLAN_INCOMPLETE_MESSAGE, useBusinessPlan } from './useBusinessPlan';
+import {
+  blankBusinessPlanDraft,
+  emptyBusinessPlanInput,
+  isSameBusinessPlanDraft,
+} from './businessPlan';
+import type { BusinessPlanDraft, BusinessPlanInput } from './businessPlan';
+
+/** Phase 6 Gate D6.6: what one Quick analysis ran on -- the fourteen
+ * assumptions and the Business Plan, held as one value, so the break-even
+ * re-runs, the AI Analyst and the snapshot provenance that read it later can
+ * never pair these inputs with a different plan. */
+interface QuickAnalyzedRequest {
+  inputs: AcquisitionRequest;
+  businessPlan: BusinessPlanInput;
+}
 
 /** Owner Return Metrics V3 Gate A6: `Deal.analysis_snapshot`'s type is
  * `AcquisitionResults | DetailedAcquisitionResults | null` at the shared
@@ -186,6 +203,9 @@ export default function App() {
   const [detailedValues, setDetailedValues] = useState<DetailedFormValues>(
     BLANK_DETAILED_FORM_VALUES,
   );
+  // Phase 6 Gate D6.6: the Detailed deal's Business Plan -- the one shared hook,
+  // over Detailed's own open deal. Quick never reads it.
+  const detailedBusinessPlan = useBusinessPlan();
   const [detailedResults, setDetailedResults] = useState<DetailedAcquisitionResults | null>(
     null,
   );
@@ -205,6 +225,7 @@ export default function App() {
   const [lastDetailedRequest, setLastDetailedRequest] = useState<{
     terms: AcquisitionTermsRequest;
     detailedOperatingInputs: DetailedOperatingInputsRequest;
+    businessPlan: BusinessPlanInput;
   } | null>(null);
   const [detailedTargetLeveredIrrPercent, setDetailedTargetLeveredIrrPercent] = useState(
     DEFAULT_TARGET_LEVERED_IRR_PERCENT,
@@ -244,6 +265,7 @@ export default function App() {
     setDetailedBreakEven(null);
     setDetailedBreakEvenError(null);
     clearDetailedAiAnalysis();
+    detailedBusinessPlan.clearApiIssues();
   }
 
   // Detailed Operating Model V2.1 Gate 10: Detailed Excel ingestion.
@@ -470,11 +492,14 @@ export default function App() {
   interface DetailedDealSnapshot {
     dealName: string;
     values: DetailedFormValues;
+    /** D6.6: part of the one dirty comparison, like every other assumption. */
+    businessPlan: BusinessPlanDraft;
     dealContext: string;
   }
   const BLANK_DETAILED_SNAPSHOT: DetailedDealSnapshot = {
     dealName: '',
     values: BLANK_DETAILED_FORM_VALUES,
+    businessPlan: blankBusinessPlanDraft(),
     dealContext: '',
   };
   const [detailedSavedSnapshot, setDetailedSavedSnapshot] =
@@ -482,6 +507,9 @@ export default function App() {
 
   function isSameDetailedSnapshot(a: DetailedDealSnapshot, b: DetailedDealSnapshot): boolean {
     if (a.dealName !== b.dealName || a.dealContext !== b.dealContext) {
+      return false;
+    }
+    if (!isSameBusinessPlanDraft(a.businessPlan, b.businessPlan)) {
       return false;
     }
     const termsKeys = Object.keys(a.values.terms) as (keyof AcquisitionTermsFormValues)[];
@@ -493,7 +521,12 @@ export default function App() {
   }
 
   const isDetailedDirty = !isSameDetailedSnapshot(
-    { dealName: detailedDealName, values: detailedValues, dealContext: detailedDealContext },
+    {
+      dealName: detailedDealName,
+      values: detailedValues,
+      businessPlan: detailedBusinessPlan.draft,
+      dealContext: detailedDealContext,
+    },
     detailedSavedSnapshot,
   );
   const detailedSaveStatus: SaveStatus =
@@ -552,6 +585,7 @@ export default function App() {
     // land on Underwrite, where the work starts.
     setWorkspace('underwrite');
     setDetailedValues(BLANK_DETAILED_FORM_VALUES);
+    detailedBusinessPlan.reset();
     setDetailedDealName('');
     setDetailedDealContext('');
     setCurrentDetailedDealId(null);
@@ -568,6 +602,9 @@ export default function App() {
    * `handleDetailedSubmit` already uses. Never persists `detailedResults`,
    * AI output, or any other calculated value; never calls `/analyze`. */
   async function handleSaveDetailedDeal() {
+    // D6.6: the plan is prepared first so its rows are marked even when a
+    // scalar assumption is what stops the save.
+    const businessPlan = detailedBusinessPlan.prepare();
     let terms;
     let detailedOperatingInputs;
     try {
@@ -580,6 +617,11 @@ export default function App() {
       }
       throw validationError;
     }
+    if (businessPlan === null) {
+      setSaveDetailedDealError(BUSINESS_PLAN_INCOMPLETE_MESSAGE);
+      revealBusinessPlan();
+      return;
+    }
 
     const name = detailedDealName.trim() || 'Untitled Deal';
 
@@ -591,9 +633,18 @@ export default function App() {
       // Owner Return Metrics V3 Gate A7: mirrors handleSaveDeal's
       // provenance-validated snapshot-attachment flow exactly -- see its
       // comment.
+      // D6.6: the plan travels with every save -- an absent plan would be read
+      // as an empty one and clear what is stored.
       const deal = currentDetailedDealId
-        ? await updateDetailedDeal(currentDetailedDealId, name, terms, detailedOperatingInputs, dealContext)
-        : await createDetailedDeal(name, terms, detailedOperatingInputs, dealContext);
+        ? await updateDetailedDeal(
+            currentDetailedDealId,
+            name,
+            terms,
+            detailedOperatingInputs,
+            businessPlan,
+            dealContext,
+          )
+        : await createDetailedDeal(name, terms, detailedOperatingInputs, businessPlan, dealContext);
       setCurrentDetailedDealId(deal.id);
       setDetailedDealName(deal.name);
       setDetailedDealContext(deal.deal_context ?? '');
@@ -601,6 +652,7 @@ export default function App() {
       setDetailedSavedSnapshot({
         dealName: deal.name,
         values: detailedValues,
+        businessPlan: detailedBusinessPlan.draft,
         dealContext: deal.deal_context ?? '',
       });
       // Sprint C Gate C2 -- see handleSaveDeal.
@@ -610,6 +662,7 @@ export default function App() {
         const fingerprint = await fetchDetailedDealFingerprint(
           terms,
           detailedOperatingInputs,
+          businessPlan,
           dealContext,
         );
         await updateDealAnalysisSnapshot(
@@ -622,6 +675,9 @@ export default function App() {
         }
       }
     } catch (apiError) {
+      if (detailedBusinessPlan.recordApiFailure(apiError, businessPlan)) {
+        revealBusinessPlan();
+      }
       if (apiError instanceof ApiError) {
         setSaveDetailedDealError(apiError.message);
       } else {
@@ -667,6 +723,22 @@ export default function App() {
     resetDetailedDownstreamAnalysisState();
   }
 
+  /** Phase 6 Gate D6.6: a Business Plan edit is an underwriting edit -- the
+   * same downstream reset, and the same dirty snapshot, as any other Detailed
+   * assumption. */
+  function handleDetailedBusinessPlanChange(next: BusinessPlanDraft) {
+    detailedBusinessPlan.change(next);
+    resetDetailedDownstreamAnalysisState();
+  }
+
+  /** Phase 6 Gate D6.6: Analyze or Save was stopped by the Business Plan, so
+   * put its marked rows on screen. Navigation only, shared by Quick and
+   * Detailed exactly as the Underwrite tab state already is. */
+  function revealBusinessPlan() {
+    setWorkspace('underwrite');
+    setUnderwriteTab('acquisition');
+  }
+
   /** Detailed Operating Model V2.1 Gate 14: the Detailed counterpart of
    * `runBreakEven`, over `terms`/`detailedOperatingInputs` instead of a
    * single `AcquisitionRequest`, delegating to
@@ -674,6 +746,7 @@ export default function App() {
   async function runDetailedBreakEven(
     terms: AcquisitionTermsRequest,
     detailedOperatingInputs: DetailedOperatingInputsRequest,
+    businessPlan: BusinessPlanInput,
     leveredIrrPercentInput: string,
     equityMultipleInput: string,
     headlineDscrInput: string,
@@ -701,6 +774,7 @@ export default function App() {
       const analysis = await fetchDetailedBreakEvenAnalysis(
         terms,
         detailedOperatingInputs,
+        businessPlan,
         targetLeveredIrr,
         targetEquityMultipleValue,
         targetHeadlineDscrValue,
@@ -726,6 +800,7 @@ export default function App() {
       void runDetailedBreakEven(
         lastDetailedRequest.terms,
         lastDetailedRequest.detailedOperatingInputs,
+        lastDetailedRequest.businessPlan,
         value,
         detailedTargetEquityMultiple,
         detailedTargetHeadlineDscr,
@@ -740,6 +815,7 @@ export default function App() {
       void runDetailedBreakEven(
         lastDetailedRequest.terms,
         lastDetailedRequest.detailedOperatingInputs,
+        lastDetailedRequest.businessPlan,
         detailedTargetLeveredIrrPercent,
         value,
         detailedTargetHeadlineDscr,
@@ -754,6 +830,7 @@ export default function App() {
       void runDetailedBreakEven(
         lastDetailedRequest.terms,
         lastDetailedRequest.detailedOperatingInputs,
+        lastDetailedRequest.businessPlan,
         detailedTargetLeveredIrrPercent,
         detailedTargetEquityMultiple,
         value,
@@ -768,6 +845,7 @@ export default function App() {
       void runDetailedBreakEven(
         lastDetailedRequest.terms,
         lastDetailedRequest.detailedOperatingInputs,
+        lastDetailedRequest.businessPlan,
         detailedTargetLeveredIrrPercent,
         detailedTargetEquityMultiple,
         detailedTargetHeadlineDscr,
@@ -786,6 +864,9 @@ export default function App() {
   async function runDetailedAnalyze() {
     resetDetailedDownstreamAnalysisState();
 
+    // D6.6: prepared first so its rows are marked even when a scalar
+    // assumption is what stops the analysis.
+    const businessPlan = detailedBusinessPlan.prepare();
     let terms;
     let detailedOperatingInputs;
     try {
@@ -798,10 +879,19 @@ export default function App() {
       }
       throw validationError;
     }
+    if (businessPlan === null) {
+      setDetailedError(BUSINESS_PLAN_INCOMPLETE_MESSAGE);
+      revealBusinessPlan();
+      return;
+    }
 
     setIsDetailedSubmitting(true);
     try {
-      const nextResults = await analyzeDetailedAcquisition(terms, detailedOperatingInputs);
+      const nextResults = await analyzeDetailedAcquisition(
+        terms,
+        detailedOperatingInputs,
+        businessPlan,
+      );
       setDetailedResults(nextResults);
       // Owner Return Metrics V3 Gate A6: silently refresh the persisted
       // analysis snapshot for an already-saved, not-dirty deal -- fired
@@ -823,6 +913,7 @@ export default function App() {
             const fingerprint = await fetchDetailedDealFingerprint(
               terms,
               detailedOperatingInputs,
+              businessPlan,
               detailedDealContext.trim() || null,
             );
             await updateDealAnalysisSnapshot(
@@ -839,6 +930,9 @@ export default function App() {
         })();
       }
     } catch (apiError) {
+      if (detailedBusinessPlan.recordApiFailure(apiError, businessPlan)) {
+        revealBusinessPlan();
+      }
       if (apiError instanceof ApiError) {
         setDetailedError(apiError.message);
       } else {
@@ -848,7 +942,7 @@ export default function App() {
       return;
     }
     setIsDetailedSubmitting(false);
-    setLastDetailedRequest({ terms, detailedOperatingInputs });
+    setLastDetailedRequest({ terms, detailedOperatingInputs, businessPlan });
     // Sprint C Gate C2 (spec section 12.4): a SUCCESSFUL analysis moves the
     // analyst to Overview -- the owner-facing read of what they just
     // produced. Placed after the error path's early `return` above, so a
@@ -857,7 +951,11 @@ export default function App() {
 
     setIsDetailedSensitivityLoading(true);
     try {
-      const presets = await fetchDetailedSensitivityPresets(terms, detailedOperatingInputs);
+      const presets = await fetchDetailedSensitivityPresets(
+        terms,
+        detailedOperatingInputs,
+        businessPlan,
+      );
       setDetailedSensitivity(presets);
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -872,6 +970,7 @@ export default function App() {
     await runDetailedBreakEven(
       terms,
       detailedOperatingInputs,
+      businessPlan,
       detailedTargetLeveredIrrPercent,
       detailedTargetEquityMultiple,
       detailedTargetHeadlineDscr,
@@ -919,6 +1018,13 @@ export default function App() {
       }
       throw validationError;
     }
+    // D6.6: the AI Analyst grounds its report in the deal's own plan (D6.8), so
+    // the request carries it exactly as Analyze did.
+    const businessPlan = detailedBusinessPlan.prepare();
+    if (businessPlan === null) {
+      setDetailedAiAnalysisError(BUSINESS_PLAN_INCOMPLETE_MESSAGE);
+      return;
+    }
 
     setIsDetailedAiAnalysisLoading(true);
     setDetailedAiAnalysisError(null);
@@ -926,6 +1032,7 @@ export default function App() {
       const analysis = await fetchDetailedAIAnalysis(
         terms,
         detailedOperatingInputs,
+        businessPlan,
         targetLeveredIrr,
         targetEquityMultipleValue,
         targetHeadlineDscrValue,
@@ -943,6 +1050,7 @@ export default function App() {
             const fingerprint = await fetchDetailedDealFingerprint(
               terms,
               detailedOperatingInputs,
+              businessPlan,
               detailedDealContext.trim() || null,
             );
             await updateDealAiSnapshot(
@@ -970,6 +1078,9 @@ export default function App() {
   }
 
   const [values, setValues] = useState<AcquisitionFormValues>(BLANK_FORM_VALUES);
+  // Phase 6 Gate D6.6: the Quick deal's Business Plan -- the same shared hook
+  // Detailed and Lease-Level use, over Quick's own open deal.
+  const quickBusinessPlan = useBusinessPlan();
   const [results, setResults] = useState<AcquisitionResults | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -978,7 +1089,7 @@ export default function App() {
   const [isSensitivityLoading, setIsSensitivityLoading] = useState(false);
   const [sensitivityError, setSensitivityError] = useState<string | null>(null);
 
-  const [lastRequest, setLastRequest] = useState<AcquisitionRequest | null>(null);
+  const [lastRequest, setLastRequest] = useState<QuickAnalyzedRequest | null>(null);
   const [targetLeveredIrrPercent, setTargetLeveredIrrPercent] = useState(
     DEFAULT_TARGET_LEVERED_IRR_PERCENT,
   );
@@ -1045,11 +1156,14 @@ export default function App() {
   interface DealSnapshot {
     dealName: string;
     values: AcquisitionFormValues;
+    /** D6.6: part of the one dirty comparison, like every other assumption. */
+    businessPlan: BusinessPlanDraft;
     dealContext: string;
   }
   const BLANK_SNAPSHOT: DealSnapshot = {
     dealName: '',
     values: BLANK_FORM_VALUES,
+    businessPlan: blankBusinessPlanDraft(),
     dealContext: '',
   };
   const [savedSnapshot, setSavedSnapshot] = useState<DealSnapshot>(BLANK_SNAPSHOT);
@@ -1058,11 +1172,17 @@ export default function App() {
     if (a.dealName !== b.dealName || a.dealContext !== b.dealContext) {
       return false;
     }
+    if (!isSameBusinessPlanDraft(a.businessPlan, b.businessPlan)) {
+      return false;
+    }
     const fieldKeys = Object.keys(a.values) as (keyof AcquisitionFormValues)[];
     return fieldKeys.every((key) => a.values[key] === b.values[key]);
   }
 
-  const isDirty = !isSameSnapshot({ dealName, values, dealContext }, savedSnapshot);
+  const isDirty = !isSameSnapshot(
+    { dealName, values, businessPlan: quickBusinessPlan.draft, dealContext },
+    savedSnapshot,
+  );
   const saveStatus: SaveStatus =
     currentDealId === null ? 'unsaved-deal' : isDirty ? 'unsaved-changes' : 'saved';
 
@@ -1099,10 +1219,20 @@ export default function App() {
     setBreakEvenError(null);
     setAiAnalysis(null);
     setAiAnalysisError(null);
+    quickBusinessPlan.clearApiIssues();
   }
 
   function handleFieldChange(key: keyof AcquisitionFormValues, value: string) {
     setValues((previous) => ({ ...previous, [key]: value }));
+    resetDownstreamAnalysisState();
+    clearSaveDealError();
+  }
+
+  /** Phase 6 Gate D6.6: a Business Plan edit is an underwriting edit -- the
+   * same downstream reset, and the same dirty snapshot, as any other Quick
+   * assumption. */
+  function handleQuickBusinessPlanChange(next: BusinessPlanDraft) {
+    quickBusinessPlan.change(next);
     resetDownstreamAnalysisState();
     clearSaveDealError();
   }
@@ -1268,6 +1398,7 @@ export default function App() {
     // Sprint C Gate C2 (spec section 12.4) -- see resetToBlankDetailedDeal.
     setWorkspace('underwrite');
     setValues(BLANK_FORM_VALUES);
+    quickBusinessPlan.reset();
     setDealName('');
     setDealContext('');
     setCurrentDealId(null);
@@ -1279,6 +1410,9 @@ export default function App() {
   }
 
   async function handleSaveDeal() {
+    // D6.6: prepared first so its rows are marked even when a scalar
+    // assumption is what stops the save.
+    const businessPlan = quickBusinessPlan.prepare();
     let request: AcquisitionRequest;
     try {
       request = buildAcquisitionRequest(values);
@@ -1288,6 +1422,11 @@ export default function App() {
         return;
       }
       throw validationError;
+    }
+    if (businessPlan === null) {
+      setSaveDealError(BUSINESS_PLAN_INCOMPLETE_MESSAGE);
+      revealBusinessPlan();
+      return;
     }
 
     const name = dealName.trim() || 'Untitled Deal';
@@ -1303,14 +1442,23 @@ export default function App() {
       // success, before any snapshot is attached, so a subsequent Save
       // retry can never create a second deal even if the snapshot-
       // attachment step below fails.
+      //
+      // D6.6: the plan travels with every save, including one that changed
+      // only an unrelated field -- an absent plan would be read as an empty
+      // one and clear what is stored.
       const deal = currentDealId
-        ? await updateDeal(currentDealId, name, request, dealContextToSave)
-        : await createDeal(name, request, dealContextToSave);
+        ? await updateDeal(currentDealId, name, request, businessPlan, dealContextToSave)
+        : await createDeal(name, request, businessPlan, dealContextToSave);
       setCurrentDealId(deal.id);
       setDealName(deal.name);
       setDealContext(deal.deal_context ?? '');
       setLastSavedAt(deal.updated_at);
-      setSavedSnapshot({ dealName: deal.name, values, dealContext: deal.deal_context ?? '' });
+      setSavedSnapshot({
+        dealName: deal.name,
+        values,
+        businessPlan: quickBusinessPlan.draft,
+        dealContext: deal.deal_context ?? '',
+      });
       // Sprint C Gate C2: refresh the shared deal list so the sidebar's
       // Recent Deals reflects the save. Read-only; never blocks the save.
       void loadSavedDeals();
@@ -1326,13 +1474,16 @@ export default function App() {
       // analysis snapshot was already preserved automatically by the
       // backend's own read-time fingerprint check.
       if (results !== null) {
-        const fingerprint = await fetchDealFingerprint(request, dealContextToSave);
+        const fingerprint = await fetchDealFingerprint(request, businessPlan, dealContextToSave);
         await updateDealAnalysisSnapshot(deal.id, results, fingerprint.financial_input_fingerprint);
         if (aiAnalysis !== null) {
           await updateDealAiSnapshot(deal.id, aiAnalysis, fingerprint.ai_context_fingerprint);
         }
       }
     } catch (apiError) {
+      if (quickBusinessPlan.recordApiFailure(apiError, businessPlan)) {
+        revealBusinessPlan();
+      }
       if (apiError instanceof ApiError) {
         setSaveDealError(apiError.message);
       } else {
@@ -1395,6 +1546,10 @@ export default function App() {
     // Lease-Level persists no analysis snapshot (decision D5), so a reopened
     // deal has nothing for Overview to show and lands where the work is.
     onOpened: () => {
+      setWorkspace('underwrite');
+    },
+    // D6.6: the plan's marked rows are on Underwrite.
+    onRevealBusinessPlan: () => {
       setWorkspace('underwrite');
     },
   });
@@ -1482,6 +1637,8 @@ export default function App() {
           fullDeal.detailed_operating_inputs,
         ),
       };
+      // D6.6: the plan exactly as stored -- item IDs, values and row order.
+      const openedBusinessPlan = detailedBusinessPlan.load(fullDeal.business_plan);
       setDetailedValues(openedValues);
       setDetailedDealName(fullDeal.name);
       setDetailedDealContext(fullDeal.deal_context ?? '');
@@ -1490,6 +1647,7 @@ export default function App() {
       setDetailedSavedSnapshot({
         dealName: fullDeal.name,
         values: openedValues,
+        businessPlan: openedBusinessPlan,
         dealContext: fullDeal.deal_context ?? '',
       });
       resetDetailedDownstreamAnalysisState();
@@ -1514,6 +1672,7 @@ export default function App() {
         setLastDetailedRequest({
           terms: fullDeal.terms,
           detailedOperatingInputs: fullDeal.detailed_operating_inputs,
+          businessPlan: fullDeal.business_plan ?? emptyBusinessPlanInput(),
         });
       }
       if (fullDeal.ai_snapshot !== null) {
@@ -1552,6 +1711,8 @@ export default function App() {
         throw new Error('Quick deal is missing inputs.');
       }
       const openedValues = buildFormValuesFromAcquisitionInputs(fullDeal.inputs);
+      // D6.6: the plan exactly as stored -- item IDs, values and row order.
+      const openedBusinessPlan = quickBusinessPlan.load(fullDeal.business_plan);
       setValues(openedValues);
       setDealName(fullDeal.name);
       setDealContext(fullDeal.deal_context ?? '');
@@ -1560,6 +1721,7 @@ export default function App() {
       setSavedSnapshot({
         dealName: fullDeal.name,
         values: openedValues,
+        businessPlan: openedBusinessPlan,
         dealContext: fullDeal.deal_context ?? '',
       });
       resetDownstreamAnalysisState();
@@ -1572,7 +1734,10 @@ export default function App() {
       ) {
         hasRestoredAnalysis = true;
         setResults(fullDeal.analysis_snapshot);
-        setLastRequest(fullDeal.inputs);
+        setLastRequest({
+          inputs: fullDeal.inputs,
+          businessPlan: fullDeal.business_plan ?? emptyBusinessPlanInput(),
+        });
       }
       if (fullDeal.ai_snapshot !== null) {
         setAiAnalysis(fullDeal.ai_snapshot);
@@ -1696,7 +1861,7 @@ export default function App() {
   }
 
   async function runBreakEven(
-    request: AcquisitionRequest,
+    request: QuickAnalyzedRequest,
     leveredIrrPercentInput: string,
     equityMultipleInput: string,
     headlineDscrInput: string,
@@ -1722,7 +1887,8 @@ export default function App() {
     setBreakEvenError(null);
     try {
       const analysis = await fetchBreakEvenAnalysis(
-        request,
+        request.inputs,
+        request.businessPlan,
         targetLeveredIrr,
         targetEquityMultipleValue,
         targetHeadlineDscrValue,
@@ -1820,7 +1986,8 @@ export default function App() {
     setAiAnalysisError(null);
     try {
       const analysis = await fetchAIAnalysis(
-        lastRequest,
+        lastRequest.inputs,
+        lastRequest.businessPlan,
         targetLeveredIrr,
         targetEquityMultipleValue,
         targetHeadlineDscrValue,
@@ -1838,7 +2005,11 @@ export default function App() {
       if (currentDealId !== null && !isDirty) {
         void (async () => {
           try {
-            const fingerprint = await fetchDealFingerprint(lastRequest, dealContext.trim() || null);
+            const fingerprint = await fetchDealFingerprint(
+              lastRequest.inputs,
+              lastRequest.businessPlan,
+              dealContext.trim() || null,
+            );
             await updateDealAiSnapshot(currentDealId, analysis, fingerprint.ai_context_fingerprint);
             clearSaveDealError();
           } catch {
@@ -1872,6 +2043,9 @@ export default function App() {
     setAiAnalysis(null);
     setAiAnalysisError(null);
 
+    // D6.6: prepared first so its rows are marked even when a scalar
+    // assumption is what stops the analysis.
+    const businessPlan = quickBusinessPlan.prepare();
     let request;
     try {
       request = buildAcquisitionRequest(values);
@@ -1882,17 +2056,26 @@ export default function App() {
       }
       throw validationError;
     }
+    if (businessPlan === null) {
+      setError(BUSINESS_PLAN_INCOMPLETE_MESSAGE);
+      revealBusinessPlan();
+      return;
+    }
 
     setIsSubmitting(true);
     try {
-      const nextResults = await analyzeAcquisition(request);
+      const nextResults = await analyzeAcquisition(request, businessPlan);
       setResults(nextResults);
       // Owner Return Metrics V3 Gate A6/A7: mirrors handleDetailedSubmit's
       // silent background cache refresh exactly -- see its comment.
       if (currentDealId !== null && !isDirty) {
         void (async () => {
           try {
-            const fingerprint = await fetchDealFingerprint(request, dealContext.trim() || null);
+            const fingerprint = await fetchDealFingerprint(
+              request,
+              businessPlan,
+              dealContext.trim() || null,
+            );
             await updateDealAnalysisSnapshot(
               currentDealId,
               nextResults,
@@ -1907,6 +2090,9 @@ export default function App() {
         })();
       }
     } catch (apiError) {
+      if (quickBusinessPlan.recordApiFailure(apiError, businessPlan)) {
+        revealBusinessPlan();
+      }
       if (apiError instanceof ApiError) {
         setError(apiError.message);
       } else {
@@ -1916,13 +2102,13 @@ export default function App() {
       return;
     }
     setIsSubmitting(false);
-    setLastRequest(request);
+    setLastRequest({ inputs: request, businessPlan });
     // Sprint C Gate C2 (spec section 12.4) -- see runDetailedAnalyze.
     setWorkspace('overview');
 
     setIsSensitivityLoading(true);
     try {
-      const presets = await fetchSensitivityPresets(request);
+      const presets = await fetchSensitivityPresets(request, businessPlan);
       setSensitivity(presets);
     } catch (apiError) {
       if (apiError instanceof ApiError) {
@@ -1935,7 +2121,7 @@ export default function App() {
     }
 
     await runBreakEven(
-      request,
+      { inputs: request, businessPlan },
       targetLeveredIrrPercent,
       targetEquityMultiple,
       targetHeadlineDscr,
@@ -2107,6 +2293,15 @@ export default function App() {
           onOperationsViewChange={setOperationsView}
           resultsView={resultsView}
           onResultsViewChange={setResultsView}
+          businessPlan={
+            <BusinessPlanEditor
+              plan={detailedBusinessPlan.draft}
+              onChange={handleDetailedBusinessPlanChange}
+              issues={detailedBusinessPlan.issues}
+              holdPeriod={detailedValues.terms.holdPeriod}
+              disabled={isDetailedSubmitting}
+            />
+          }
           results={detailedResults?.results ?? null}
           resultsViews={
             detailedResults
@@ -2318,7 +2513,7 @@ export default function App() {
               operatingMode: 'quick',
               dealName,
               dealContext,
-              inputs: lastRequest,
+              inputs: lastRequest.inputs,
               results,
               breakEven,
             })}
@@ -2351,6 +2546,15 @@ export default function App() {
           onOperationsViewChange={setOperationsView}
           resultsView={resultsView}
           onResultsViewChange={setResultsView}
+          businessPlan={
+            <BusinessPlanEditor
+              plan={quickBusinessPlan.draft}
+              onChange={handleQuickBusinessPlanChange}
+              issues={quickBusinessPlan.issues}
+              holdPeriod={values.holdPeriod}
+              disabled={isSubmitting}
+            />
+          }
           results={results}
           resultsViews={
             results
@@ -2608,6 +2812,15 @@ export default function App() {
           onResultsViewChange={leaseLevel.setResultsView}
           periodView={leaseLevel.periodView}
           onPeriodViewChange={leaseLevel.setPeriodView}
+          businessPlan={
+            <BusinessPlanEditor
+              plan={leaseLevel.businessPlan}
+              onChange={leaseLevel.onBusinessPlanChange}
+              issues={leaseLevel.businessPlanIssues}
+              holdPeriod={leaseLevel.values.terms.holdPeriod}
+              disabled={leaseLevel.isAnalyzing || leaseLevel.isSaving}
+            />
+          }
         />
       </WorkspacePanel>
 

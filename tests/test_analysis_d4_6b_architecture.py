@@ -230,6 +230,23 @@ _PERMITTED_WEB = frozenset(
         # This is also the first entry the widened discovery below had to see
         # while the file was still untracked: before D5.9, G37 could not.
         "web/src/testSourceText.ts",
+        # Phase 6 D6.6 -- the Business Plan input UI. Three new production
+        # modules, each shared by all three modes rather than one per mode: the
+        # draft-to-contract boundary (`businessPlan.ts`), the one state hook
+        # every mode holds its plan through (`useBusinessPlan.ts`) and the one
+        # editor (`BusinessPlanEditor.tsx`). None computes economics:
+        # `web/src/businessPlan.test.ts` holds all three to a single,
+        # display-only arithmetic expression (the model-month timing tag) and
+        # forbids resolver and result vocabulary. Every shipped file D6.6 edits
+        # -- App.tsx, types.ts, api.ts, useLeaseLevelDeal.ts, the two
+        # workspaces and index.css -- is already listed above; `convert.ts`,
+        # `format.ts`, `liveMetrics.ts` and `ownerSummary.ts` stay untouched.
+        "web/src/businessPlan.ts",
+        "web/src/useBusinessPlan.ts",
+        "web/src/components/BusinessPlanEditor.tsx",
+        # D6.6 -- the reference plan three D6.6 test files import. Test-only
+        # data, named without `.test.` for the same reason as the fixtures above.
+        "web/src/businessPlanFixture.ts",
     }
 )
 
@@ -1451,9 +1468,23 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         for line in _git(["diff", "-U0", _D4_6A_COMMIT, "--", "web/src/api.ts"]).splitlines()
         if line.startswith("-") and not line.startswith("---")
     ]
-    assert removed == [], (
-        "web/src/api.ts changed by more than addition since D4.6A; a shipped "
-        f"Quick/Detailed client function was edited: {removed[:5]}"
+    # Phase 6 Gate D6.6 is the gate that makes every deal-state request carry
+    # the deal's Business Plan, and two D4.6A-era lines could not do that by
+    # addition alone: Quick ``/analyze`` and the Quick presets each built their
+    # whole body in one expression. Each is REWRITTEN, not deleted -- the
+    # replacement sends the same body plus ``business_plan``. The rule stays
+    # exact rather than becoming a pattern: these two lines, in this order, and
+    # nothing else. Every other D6.6 change to a D4.6A-era line of ``api.ts`` is
+    # an addition, and every deal-state body -- the D5-era Lease-Level ones
+    # included -- is pinned behaviourally and by AST in
+    # ``web/src/businessPlanRequests.test.ts``.
+    d6_6_rewritten = [
+        "-      body: JSON.stringify(request),",
+        "-      body: JSON.stringify({ inputs }),",
+    ]
+    assert removed == d6_6_rewritten, (
+        "web/src/api.ts changed by more than addition since D4.6A beyond D6.6's "
+        f"two rewritten request lines; a shipped client function was edited: {removed[:5]}"
     )
 
     # ``src/anchor/ai/prompts.py`` was byte-identical until D5.8, the gate that

@@ -90,6 +90,7 @@ function leaseLevelDeal(): Deal {
     suites: null,
     leases: null,
     deal_context: null,
+    business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,
     ai_snapshot: null,
     one_way_sensitivity_snapshot: null,

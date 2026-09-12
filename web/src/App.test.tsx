@@ -59,6 +59,10 @@ import type {
   TwoWaySensitivityResult,
 } from './types';
 
+/** D6.6: every request carrying deal state now carries the Business Plan. A
+ * deal with none sends this explicit empty plan -- never an omitted one. */
+const EMPTY_PLAN = { capital_items: [], owner_expense_items: [] };
+
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');
   return {
@@ -960,6 +964,7 @@ describe('App workflow', () => {
         annual_capex_reserve: 0,
         io_period: 0,
       }),
+      EMPTY_PLAN,
     );
   });
 
@@ -991,6 +996,7 @@ describe('App workflow', () => {
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     expect(mockAnalyze).toHaveBeenCalledWith(
       expect.objectContaining({ hold_period: 5, io_period: 10 }),
+      EMPTY_PLAN,
     );
   });
 
@@ -1009,6 +1015,7 @@ describe('App workflow', () => {
         financing_fee_pct: 0.01,
         disposition_cost_pct: 0.025,
       }),
+      EMPTY_PLAN,
     );
   });
 
@@ -1248,7 +1255,7 @@ describe('App workflow', () => {
       disposition_cost_pct: 0,
       annual_capex_reserve: 0,
       io_period: 0,
-    });
+    }, EMPTY_PLAN);
   });
 });
 
@@ -1276,7 +1283,7 @@ describe('Sensitivity analysis workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
     await waitFor(() => expect(sensitivityHeading()).not.toBeNull());
 
-    expect(mockFetchSensitivityPresets).toHaveBeenCalledWith(mockAnalyze.mock.calls[0][0]);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledWith(mockAnalyze.mock.calls[0][0], EMPTY_PLAN);
   });
 
   it('clears sensitivity results when an assumption is edited after a successful analysis', async () => {
@@ -1355,6 +1362,7 @@ describe('Break-even analysis workflow', () => {
 
     expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledWith(
       mockAnalyze.mock.calls[0][0],
+      EMPTY_PLAN,
       0.10,
       1.50,
       1.20,
@@ -1386,10 +1394,10 @@ describe('Break-even analysis workflow', () => {
     expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
     const lastCall =
       mockFetchBreakEvenAnalysis.mock.calls[mockFetchBreakEvenAnalysis.mock.calls.length - 1];
-    expect(lastCall[1]).toBeCloseTo(0.12);
-    expect(lastCall[2]).toBeCloseTo(1.50);
-    expect(lastCall[3]).toBeCloseTo(1.20);
-    expect(lastCall[4]).toBe('levered_irr');
+    expect(lastCall[2]).toBeCloseTo(0.12);
+    expect(lastCall[3]).toBeCloseTo(1.50);
+    expect(lastCall[4]).toBeCloseTo(1.20);
+    expect(lastCall[5]).toBe('levered_irr');
   });
 
   it('changing the DSCR hurdle refreshes only break-even', async () => {
@@ -1415,10 +1423,10 @@ describe('Break-even analysis workflow', () => {
     expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
     const lastCall =
       mockFetchBreakEvenAnalysis.mock.calls[mockFetchBreakEvenAnalysis.mock.calls.length - 1];
-    expect(lastCall[1]).toBeCloseTo(0.10);
-    expect(lastCall[2]).toBeCloseTo(1.50);
-    expect(lastCall[3]).toBeCloseTo(1.3);
-    expect(lastCall[4]).toBe('levered_irr');
+    expect(lastCall[2]).toBeCloseTo(0.10);
+    expect(lastCall[3]).toBeCloseTo(1.50);
+    expect(lastCall[4]).toBeCloseTo(1.3);
+    expect(lastCall[5]).toBe('levered_irr');
   });
 
   it('changing the target Equity Multiple reruns only break-even, treating "1.65" as 1.65x not a percentage', async () => {
@@ -1444,9 +1452,9 @@ describe('Break-even analysis workflow', () => {
     expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
     const lastCall =
       mockFetchBreakEvenAnalysis.mock.calls[mockFetchBreakEvenAnalysis.mock.calls.length - 1];
-    expect(lastCall[1]).toBeCloseTo(0.10);
-    expect(lastCall[2]).toBeCloseTo(1.65);
-    expect(lastCall[3]).toBeCloseTo(1.20);
+    expect(lastCall[2]).toBeCloseTo(0.10);
+    expect(lastCall[3]).toBeCloseTo(1.65);
+    expect(lastCall[4]).toBeCloseTo(1.20);
   });
 
   it('switching the return-hurdle toggle to Equity Multiple reruns only break-even and updates only the three return-hurdle cards', async () => {
@@ -1501,7 +1509,7 @@ describe('Break-even analysis workflow', () => {
     });
     const lastCall =
       mockFetchBreakEvenAnalysis.mock.calls[mockFetchBreakEvenAnalysis.mock.calls.length - 1];
-    expect(lastCall[4]).toBe('equity_multiple');
+    expect(lastCall[5]).toBe('equity_multiple');
 
     expect(mockAnalyze).toHaveBeenCalledTimes(1);
     expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
@@ -1630,6 +1638,7 @@ describe('AI Analyst workflow', () => {
     expect(mockFetchAIAnalysis).toHaveBeenCalledTimes(1);
     expect(mockFetchAIAnalysis).toHaveBeenCalledWith(
       mockAnalyze.mock.calls[0][0],
+      EMPTY_PLAN,
       0.10,
       1.50,
       1.20,
@@ -2175,7 +2184,7 @@ describe('Excel ingestion workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
-    expect(mockAnalyze).toHaveBeenCalledWith(makeAcquisitionRequest());
+    expect(mockAnalyze).toHaveBeenCalledWith(makeAcquisitionRequest(), EMPTY_PLAN);
   });
 
   it('Cancel Review discards the pending review and leaves active assumptions unchanged', async () => {
@@ -2400,6 +2409,7 @@ function makeDeal(overrides: Partial<Deal> = {}): Deal {
     suites: null,
     leases: null,
     deal_context: null,
+    business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,
     ai_snapshot: null,
     one_way_sensitivity_snapshot: null,
@@ -2446,6 +2456,7 @@ function makeDetailedDeal(overrides: Partial<Deal> = {}): Deal {
       expense_growth: 0.03,
     },
     deal_context: null,
+    business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,
     ai_snapshot: null,
     one_way_sensitivity_snapshot: null,
@@ -2488,7 +2499,7 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, EMPTY_PLAN, null);
     expect(mockUpdateDeal).not.toHaveBeenCalled();
     expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
     expect(await screen.findByText(/^Saved/)).toBeTruthy();
@@ -2509,7 +2520,13 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Update Deal' }));
 
     await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
-    expect(mockUpdateDeal).toHaveBeenCalledWith('deal-1', '111 Main St', GOLDEN_DEAL_REQUEST, null);
+    expect(mockUpdateDeal).toHaveBeenCalledWith(
+      'deal-1',
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      EMPTY_PLAN,
+      null,
+    );
     expect(mockCreateDeal).not.toHaveBeenCalled();
   });
 
@@ -2649,6 +2666,7 @@ describe('Deal persistence workflow', () => {
         ...GOLDEN_DEAL_REQUEST,
         purchase_price: 60_000_000,
       },
+      EMPTY_PLAN,
       null,
     );
   });
@@ -2711,7 +2729,7 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, EMPTY_PLAN, null);
   });
 });
 
@@ -3526,8 +3544,16 @@ describe('AI Analyst in Detailed mode (Gate 9)', () => {
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
 
     await waitFor(() => expect(mockFetchDetailedAIAnalysis).toHaveBeenCalledTimes(1));
-    const [terms, detailedOperatingInputs, targetIrr, targetEquityMultiple, targetDscr, metric] =
-      mockFetchDetailedAIAnalysis.mock.calls[0];
+    const [
+      terms,
+      detailedOperatingInputs,
+      businessPlan,
+      targetIrr,
+      targetEquityMultiple,
+      targetDscr,
+      metric,
+    ] = mockFetchDetailedAIAnalysis.mock.calls[0];
+    expect(businessPlan).toEqual(EMPTY_PLAN);
     expect(terms).toEqual({
       purchase_price: 10_000_000,
       hold_period: 5,
@@ -3689,10 +3715,18 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
 
     await waitFor(() => expect(mockFetchDetailedBreakEvenAnalysis).toHaveBeenCalledTimes(1));
     expect(mockFetchBreakEvenAnalysis).not.toHaveBeenCalled();
-    const [terms, detailedOperatingInputs, targetIrr, targetEquityMultiple, targetDscr, metric] =
-      mockFetchDetailedBreakEvenAnalysis.mock.calls[0];
+    const [
+      terms,
+      detailedOperatingInputs,
+      businessPlan,
+      targetIrr,
+      targetEquityMultiple,
+      targetDscr,
+      metric,
+    ] = mockFetchDetailedBreakEvenAnalysis.mock.calls[0];
     expect(terms).toEqual(DETAILED_GOLDEN_TERMS_REQUEST);
     expect(detailedOperatingInputs).toEqual(DETAILED_GOLDEN_OPERATING_REQUEST);
+    expect(businessPlan).toEqual(EMPTY_PLAN);
     expect(targetIrr).toBeCloseTo(0.1);
     expect(targetEquityMultiple).toBeCloseTo(1.5);
     expect(targetDscr).toBeCloseTo(1.2);
@@ -3709,7 +3743,7 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
 
     await waitFor(() => expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1));
     expect(mockFetchDetailedSensitivityPresets).not.toHaveBeenCalled();
-    expect(mockFetchSensitivityPresets).toHaveBeenCalledWith(mockAnalyze.mock.calls[0][0]);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledWith(mockAnalyze.mock.calls[0][0], EMPTY_PLAN);
     // Quick's own preset bundle still has its exit_cap_noi_growth tab.
     await goTo(user, 'Risk');
     expect(await screen.findByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeTruthy();
@@ -4136,6 +4170,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
       'Golden Detailed Deal',
       GOLDEN_DETAILED_TERMS_REQUEST,
       GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
+      EMPTY_PLAN,
       null,
     );
     expect(mockUpdateDetailedDeal).not.toHaveBeenCalled();
@@ -4274,6 +4309,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
       deal.name,
       { ...GOLDEN_DETAILED_TERMS_REQUEST, purchase_price: 11_000_000 },
       GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
+      EMPTY_PLAN,
       null,
     );
   });
@@ -4925,7 +4961,12 @@ describe('Deal Context (Gate A4)', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, 'Value-add play.');
+    expect(mockCreateDeal).toHaveBeenCalledWith(
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      EMPTY_PLAN,
+      'Value-add play.',
+    );
   });
 
   it('reopening a deal restores its exact Deal Context', async () => {
@@ -5048,7 +5089,7 @@ describe('Deal Context (Gate A4)', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, EMPTY_PLAN, null);
     expect(screen.queryByText(/error/i)).toBeNull();
   });
 
@@ -5368,7 +5409,8 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     // provenance-validated dedicated endpoint. The cleared AI (frontend
     // state already nulled it on the context edit) is never re-attached.
     await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
-    const [, , , dealContextArg] = mockUpdateDeal.mock.calls[0];
+    const [, , , businessPlanArg, dealContextArg] = mockUpdateDeal.mock.calls[0];
+    expect(businessPlanArg).toEqual(EMPTY_PLAN);
     expect(dealContextArg).toBe('Updated strategy.');
     await waitFor(() =>
       expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
@@ -5416,7 +5458,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     // provenance-validated dedicated endpoints against the newly-created
     // deal's id.
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, EMPTY_PLAN, null);
     await waitFor(() =>
       expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
         'deal-1',
@@ -6106,7 +6148,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, EMPTY_PLAN, null);
     expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
   });
 
@@ -6116,7 +6158,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     await analyzeQuickGoldenDeal(user);
 
     expect(mockAnalyze).toHaveBeenCalledTimes(1);
-    expect(mockAnalyze).toHaveBeenCalledWith(GOLDEN_DEAL_REQUEST);
+    expect(mockAnalyze).toHaveBeenCalledWith(GOLDEN_DEAL_REQUEST, EMPTY_PLAN);
     // Same downstream chain as the form's own submit button.
     await waitFor(() => expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
@@ -7098,7 +7140,7 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
-    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledWith(GOLDEN_DEAL_REQUEST));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledWith(GOLDEN_DEAL_REQUEST, EMPTY_PLAN));
   });
 
   it('23b. Analyze is reachable from every Underwrite tab', async () => {

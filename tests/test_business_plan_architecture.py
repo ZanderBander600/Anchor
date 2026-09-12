@@ -102,7 +102,12 @@ _UNCHANGED_FINANCIAL_PATHS = (
     "src/anchor/deals/__init__.py",
     "src/anchor/contracts.py",
     "src/anchor/validation.py",
-    "web",
+    # **Narrowed at D6.6** by ``web``: the Business Plan input UI is the
+    # frontend's D6 gate, and it is web-only. What the frontend may still never
+    # do -- resolve a plan into an owner-capital schedule, or compute its
+    # economics -- is held by
+    # ``test_the_frontend_edits_the_business_plan_but_never_resolves_it`` below
+    # and by the TypeScript guards in ``web/src/businessPlan.test.ts``.
 )
 
 
@@ -536,12 +541,29 @@ def test_d5_financial_paths_are_unchanged_since_the_d6_base(path: str) -> None:
     assert _files_changed_since(_D6_BASE_COMMIT, path) == [], f"{path} changed at D6.1"
 
 
-def test_the_frontend_contains_no_business_plan_implementation() -> None:
+def test_the_frontend_edits_the_business_plan_but_never_resolves_it() -> None:
+    """D6.1 asserted the frontend held no Business Plan at all, which was true
+    until D6.6 gave the analyst an editor for it. The successor invariant is the
+    one that always mattered: the frontend edits the plan's inputs and never
+    resolves them -- no owner-capital schedule, no resolver, no bucketing of
+    dollars into hold years. The backend resolver stays the only one."""
+
     for source_file in sorted((_PROJECT_ROOT / "web" / "src").rglob("*")):
         if not source_file.is_file() or source_file.suffix not in {".ts", ".tsx"}:
             continue
+        # Test sources name this vocabulary in order to forbid it (the D6.6
+        # TypeScript guard does exactly that), so they are excluded here as G37
+        # excludes them -- by the `.test.` infix, and nothing broader.
+        if source_file.name.endswith((".test.ts", ".test.tsx")):
+            continue
         text = source_file.read_text(encoding="utf-8")
-        for vocabulary in ("BusinessPlan", "business_plan", "OwnerCapitalSchedule", "ownerCapital"):
+        for vocabulary in (
+            "OwnerCapitalSchedule",
+            "ownerCapital",
+            "owner_capital",
+            "resolve_business_plan",
+            "resolveBusinessPlan",
+        ):
             assert vocabulary not in text, f"{source_file.name} mentions {vocabulary}"
 
 
