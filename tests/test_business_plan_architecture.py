@@ -82,9 +82,11 @@ _UNCHANGED_FINANCIAL_PATHS = (
     "src/anchor/engine/operating_projection.py",
     "src/anchor/leasing",
     "src/anchor/analysis/contracts.py",
+    # **Narrowed at D6.8** by exactly ``ai/contracts.py`` and ``ai/prompts.py``
+    # -- the context contract gains the plan, and the prompt gains the Business
+    # Plan and IRR-status rules -- held to the grounding and ledger claims in
+    # ``tests/test_d6_8_ai_grounding_architecture.py``.
     "src/anchor/ai/__init__.py",
-    "src/anchor/ai/contracts.py",
-    "src/anchor/ai/prompts.py",
     "src/anchor/ai/provider.py",
     # ``deals`` as a whole until the D6.3 closeout, which authorised exactly one
     # decoder branch in ``deals/store.py`` (IrrStatus rehydration), held to its
@@ -294,8 +296,14 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
         )
     )
 
+    # **Narrowed at D6.8 -- by exactly two named files.** The AI context
+    # contract carries the plan, and the presentation layer shows its items;
+    # what each may import is pinned by
+    # ``tests/test_d6_4_business_plan_threading_architecture.py``.
     assert importers == [
         "anchor/ai/analyst.py",
+        "anchor/ai/contracts.py",
+        "anchor/ai/presentation.py",
         "anchor/analysis/break_even.py",
         "anchor/analysis/business_plan_analysis.py",
         "anchor/analysis/lease_level_sensitivity.py",

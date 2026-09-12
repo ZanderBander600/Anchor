@@ -290,12 +290,19 @@ def test_every_valid_legacy_snapshot_is_still_current(
 ) -> None:
     """The load-bearing one: a stored snapshot is served only while its stored
     fingerprint equals one recomputed from the deal -- plan included. Had the
-    empty plan moved a digest, every one of these would silently vanish."""
+    empty plan moved a digest, every one of these would silently vanish.
+
+    **D6.8.** The legacy AI report is the one exception, deliberately: it was
+    generated before the Business Plan grounding existed, so the AI snapshot
+    version bump retires it even though its fingerprint still matches
+    (``test_legacy_fingerprints_are_preserved`` proves that it does). Every
+    deterministic snapshot stays current -- the version is the AI report's
+    alone."""
 
     db, manifest = legacy
     deal = deals_store.get_deal(manifest["deals"][mode]["id"], db_path=db)
 
-    assert deal.ai_snapshot is not None
+    assert deal.ai_snapshot is None
     if mode == "lease_level":
         assert deal.one_way_sensitivity_snapshot is not None
         assert deal.two_way_sensitivity_snapshot is not None
@@ -337,8 +344,10 @@ def test_an_invalid_legacy_snapshot_is_absent_and_the_deal_still_reanalyzes(
     detailed = deals_store.get_deal(ids["detailed"], db_path=db)
     lease_level = deals_store.get_deal(ids["lease_level"], db_path=db)
 
-    assert quick.analysis_snapshot is None and quick.ai_snapshot is not None
-    assert detailed.analysis_snapshot is None and detailed.ai_snapshot is not None
+    # D6.8: every legacy AI report is pre-grounding, so it is absent here for
+    # that reason alone (see ``test_every_valid_legacy_snapshot_is_still_current``).
+    assert quick.analysis_snapshot is None and quick.ai_snapshot is None
+    assert detailed.analysis_snapshot is None and detailed.ai_snapshot is None
     assert lease_level.one_way_sensitivity_snapshot is None
     assert lease_level.two_way_sensitivity_snapshot is not None
 

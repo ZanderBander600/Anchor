@@ -709,7 +709,18 @@ _DETAILED_OPERATING_COLUMNS: tuple[str, ...] = (
 # =============================================================================
 
 _ANALYSIS_SNAPSHOT_SCHEMA_VERSION = 1
-_AI_SNAPSHOT_SCHEMA_VERSION = 1
+# Phase 6 Gate D6.8: 2. For ``ai_snapshot`` this version is also the AI
+# report's compatibility with the grounding it was generated under -- and D6.8
+# changed that grounding (the Business Plan & Capital Economics section and its
+# rules) without changing any deal input, so a pre-D6.8 report still matches its
+# deal's fingerprint exactly. Only ``ai_snapshot`` carries this version, so the
+# bump makes every such report decode as absent (the analyst regenerates) while
+# the deal fingerprints, the analysis snapshot and both sensitivity snapshots
+# stay exactly as current as they were. Within one version nothing else
+# changes: the fingerprint check still decides currency, so an exact revert
+# restores a report. No migration -- the version is a value in the existing
+# column, written on every AI snapshot write.
+_AI_SNAPSHOT_SCHEMA_VERSION = 2
 # D5.8A: the serialized ``{configuration, result}`` contract for one persisted
 # sensitivity run. Bumping this makes every stored row of the old shape decode
 # as absent rather than as a wrongly-shaped result -- the same graceful

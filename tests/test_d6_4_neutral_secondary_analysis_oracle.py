@@ -65,6 +65,23 @@ def _cases(side: dict) -> set[str]:
     return {name for name in side if not name.startswith("_") and not name.endswith("#bp")}
 
 
+#: Phase 6 Gate D6.8 appends one field to ``AnalysisContext``: ``business_plan``,
+#: the plan its results were computed with. A context built with no plan carries
+#: the empty plan there, and that is the only difference -- so an ``ai_context``
+#: case is compared with that one key set aside, after asserting it holds exactly
+#: the empty plan. Every other field -- results, bundles, targets -- still has to
+#: match ba804ca bit for bit, and the user prompts still match byte for byte.
+_D6_8_CONTEXT_FIELD = "business_plan"
+_EMPTY_PLAN = {"capital_items": [], "owner_expense_items": []}
+
+
+def _comparable(name: str, value: object) -> object:
+    if not name.endswith("/ai_context") or not isinstance(value, dict):
+        return value
+    assert value[_D6_8_CONTEXT_FIELD] == _EMPTY_PLAN, name
+    return {key: item for key, item in value.items() if key != _D6_8_CONTEXT_FIELD}
+
+
 def test_the_two_sides_are_the_two_trees_on_one_corpus(oracle: tuple[dict, dict]) -> None:
     baseline, current = oracle
 
@@ -97,7 +114,9 @@ def test_the_two_sides_are_the_two_trees_on_one_corpus(oracle: tuple[dict, dict]
 
 def test_no_neutral_secondary_output_moved_since_ba804ca(oracle: tuple[dict, dict]) -> None:
     baseline, current = oracle
-    moved = sorted(name for name in _cases(baseline) if current[name] != baseline[name])
+    moved = sorted(
+        name for name in _cases(baseline) if _comparable(name, current[name]) != baseline[name]
+    )
     assert moved == []
 
 
@@ -106,7 +125,9 @@ def test_the_explicit_empty_plan_reproduces_ba804ca_bit_for_bit(
 ) -> None:
     baseline, current = oracle
     moved = sorted(
-        name for name in _cases(baseline) if current[name + "#bp"] != baseline[name]
+        name
+        for name in _cases(baseline)
+        if _comparable(name, current[name + "#bp"]) != baseline[name]
     )
     assert moved == []
 

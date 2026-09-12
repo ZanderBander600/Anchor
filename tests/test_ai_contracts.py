@@ -17,6 +17,7 @@ from anchor.analysis import (
     build_standard_break_even_analysis,
     build_standard_presets,
 )
+from anchor.business_plan import BusinessPlan
 from anchor.contracts import AcquisitionInputs, OperatingMode
 from anchor.engine import analyze_acquisition
 
@@ -103,6 +104,8 @@ def _make_context(**overrides: object) -> AnalysisContext:
         "target_headline_dscr": 1.20,
         "return_hurdle_metric": ReturnHurdleMetric.LEVERED_IRR,
         "deal_context": None,
+        # D6.8: required, never defaulted -- the plan ``results`` was computed with.
+        "business_plan": BusinessPlan(),
     }
     values.update(overrides)
     return AnalysisContext(**values)  # type: ignore[arg-type]
@@ -270,6 +273,9 @@ def test_analysis_context_has_exact_fields_and_keyword_only_shape() -> None:
         "target_headline_dscr",
         "return_hurdle_metric",
         "deal_context",
+        # D6.8: the Business Plan ``results`` was computed with -- appended,
+        # and required like every field but the two D5.8 defaults below.
+        "business_plan",
     )
     assert all(field.kw_only for field in contract_fields)
 

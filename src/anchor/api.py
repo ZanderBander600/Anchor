@@ -1116,11 +1116,10 @@ def break_even(
 #: would make every real request from the app fail its unknown-key check --
 #: the client always sends the field, ``null`` included.
 #:
-#: D6.5: the Business Plan reaches the AI Analyst only mechanically -- the plan
-#: the request carries is the plan its deterministic analysis uses -- with no
-#: grounding prose and no D6 result field exposed to the model. D6.8 owns that;
-#: until it lands, a submitted plan moves the headline returns the model reads
-#: without the model being told why (accepted D6.4/D6.5 sequencing debt).
+#: D6.5 threaded the Business Plan to the AI Analyst mechanically -- the plan
+#: the request carries is the plan its deterministic analysis uses. D6.8 grounds
+#: it: every arm, Lease-Level included, hands that same plan to the context the
+#: model is shown, beside the deterministic D6 results it produced.
 _AI_HURDLE_FIELDS: tuple[str, ...] = (
     "target_levered_irr",
     "target_headline_dscr",
@@ -1321,6 +1320,7 @@ def _ai_analysis_lease_level(payload: dict[str, Any]) -> AIAnalysis:
             target_headline_dscr=target_headline_dscr,
             return_hurdle_metric=return_hurdle_metric,
             deal_context=deal_context,
+            business_plan=business_plan,
         )
     except AIConfigurationError as error:
         raise HTTPException(

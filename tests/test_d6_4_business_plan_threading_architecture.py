@@ -150,7 +150,14 @@ _PRIVATE_TAKERS = {
         "_build_detailed_break_even_result": "business_plan",
     },
     "lease_level_sensitivity": {"_scenario_metric": "owner_capital"},
-    "analyst": {},
+    # D6.8: the Lease-Level AI arm takes the plan too, and -- unlike the Quick
+    # and Detailed boundary -- with no default. It receives results computed
+    # elsewhere, so no caller is plan-free by construction; the caller must name
+    # the plan those results used (``tests/test_d6_8_ai_grounding_architecture.py``).
+    "analyst": {
+        "build_lease_level_analysis_context": "business_plan",
+        "generate_lease_level_ai_analysis": "business_plan",
+    },
 }
 
 #: Where a plan is resolved: once per invocation, for the base hold period.
@@ -965,6 +972,20 @@ _BUSINESS_PLAN_IMPORTS = {
     "anchor/analysis/break_even.py": {"BusinessPlan", "resolve_business_plan"},
     "anchor/analysis/lease_level_sensitivity.py": {"BusinessPlan", "resolve_business_plan"},
     "anchor/ai/analyst.py": {"BusinessPlan"},
+    # Widened at D6.8 by exactly the two AI files that ground the plan. The
+    # context contract names it; the presentation layer reads its items for
+    # display, asks the resolver which bucket each capital item falls in, and
+    # reads the resolver's own owner-expense hold-treatment report. Neither
+    # computes a total (``tests/test_d6_8_ai_grounding_architecture.py``).
+    "anchor/ai/contracts.py": {"BusinessPlan"},
+    "anchor/ai/presentation.py": {
+        "BusinessPlan",
+        "CapitalPlanItem",
+        "OwnerExpenseHoldTreatment",
+        "OwnerExpenseItem",
+        "owner_expense_hold_treatments",
+        "resolve_business_plan",
+    },
     # Widened at D6.5 by exactly the state/API layer. None of them resolves a
     # plan: the API parses one and passes it on, the Deal contract and the
     # fingerprint name the contract, and the store rebuilds items and hands

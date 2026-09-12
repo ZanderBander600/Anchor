@@ -32,8 +32,15 @@ Phase 6 Gate D6.4 threads the deal's Business Plan, mechanically, through the
 Quick and Detailed arms: the base analysis runs through the mode's D6 Business
 Plan entry point, and the same plan reaches the preset bundle and the
 break-even bundle, so every number in the context carries the same plan.
-``BusinessPlan()`` is the default for callers that supply none. What the AI is
-told about the plan is D6.8's; nothing here changes the prompt.
+``BusinessPlan()`` is the default for callers that supply none.
+
+Phase 6 Gate D6.8 completes the threading: every arm hands the same plan to
+``AnalysisContext`` itself, so the presentation layer can ground the model in
+the plan's own items beside the deterministic totals. The Lease-Level arm now
+takes the plan too -- required, because its results arrive already computed and
+only the caller knows which plan produced them. Nothing here reads a plan item
+or computes a figure; what the model is told lives in ``presentation`` and
+``prompts``.
 """
 
 from __future__ import annotations
@@ -112,6 +119,7 @@ def build_analysis_context(
         target_headline_dscr=target_headline_dscr,
         return_hurdle_metric=return_hurdle_metric,
         deal_context=deal_context,
+        business_plan=business_plan,
     )
 
 
@@ -173,6 +181,7 @@ def build_detailed_analysis_context(
         target_headline_dscr=target_headline_dscr,
         return_hurdle_metric=return_hurdle_metric,
         deal_context=deal_context,
+        business_plan=business_plan,
     )
 
 
@@ -186,6 +195,7 @@ def build_lease_level_analysis_context(
     target_headline_dscr: float,
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
     deal_context: str | None = None,
+    business_plan: BusinessPlan,
 ) -> AnalysisContext:
     """Assemble one deterministic ``AnalysisContext`` for a Lease-Level deal
     (D5.8).
@@ -207,6 +217,12 @@ def build_lease_level_analysis_context(
 
     ``results`` is passed as ``lease_level_results.results`` -- the identical
     object, not a copy -- which ``AnalysisContext`` asserts.
+
+    ``business_plan`` (D6.8) is the plan ``lease_level_results`` was computed
+    with, and it is **required**: this arm receives its results rather than
+    producing them, so there is no plan-free caller for whom the empty plan is
+    true by construction. ``POST /ai/analysis`` passes the request's own plan,
+    the same one it handed to the analysis.
     """
 
     return AnalysisContext(
@@ -225,6 +241,7 @@ def build_lease_level_analysis_context(
         target_headline_dscr=target_headline_dscr,
         return_hurdle_metric=return_hurdle_metric,
         deal_context=deal_context,
+        business_plan=business_plan,
     )
 
 
@@ -316,6 +333,7 @@ def generate_lease_level_ai_analysis(
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
     deal_context: str | None = None,
     provider: OpenAIAnalystProvider | None = None,
+    business_plan: BusinessPlan,
 ) -> AIAnalysis:
     """Build the deterministic Lease-Level context and return one AI Analyst
     interpretation of it (D5.8).
@@ -325,6 +343,9 @@ def generate_lease_level_ai_analysis(
     and the same ``AIAnalysis`` back. It takes the already-computed
     ``lease_level_results`` rather than a set of inputs to underwrite, so the
     interpretation is always of the analysis the analyst approved.
+
+    ``business_plan`` (D6.8) is required, for the reason
+    ``build_lease_level_analysis_context`` gives.
     """
 
     context = build_lease_level_analysis_context(
@@ -336,5 +357,6 @@ def generate_lease_level_ai_analysis(
         target_headline_dscr=target_headline_dscr,
         return_hurdle_metric=return_hurdle_metric,
         deal_context=deal_context,
+        business_plan=business_plan,
     )
     return _generate_from_context(context, provider=provider)

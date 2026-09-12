@@ -707,7 +707,13 @@ def test_a_business_plan_is_resolved_in_exactly_one_module() -> None:
     resolution site is enumerated, and pinned to ``owner_capital =
     resolve_business_plan(business_plan, hold_period=<base>.hold_period)``, by
     ``tests/test_d6_4_business_plan_threading_architecture.py``. The engine,
-    the Lease-Level bridge, AI, the API and persistence still resolve nothing."""
+    the Lease-Level bridge, the API and persistence still resolve nothing.
+
+    **Narrowed at D6.8 -- by exactly ``ai/presentation.py``**, which resolves a
+    single capital item at a unit amount only to name the bucket the resolver
+    places it in (closing, a hold year, or after the hold). It reads no
+    resulting dollar figure; every total the model sees is the engine's own
+    (``tests/test_d6_8_ai_grounding_architecture.py``)."""
 
     resolvers = sorted(
         str(path.relative_to(_SRC_DIR)).replace("\\", "/")
@@ -719,6 +725,7 @@ def test_a_business_plan_is_resolved_in_exactly_one_module() -> None:
         )
     )
     assert resolvers == [
+        "anchor/ai/presentation.py",
         "anchor/analysis/break_even.py",
         "anchor/analysis/business_plan_analysis.py",
         "anchor/analysis/lease_level_sensitivity.py",
