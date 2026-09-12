@@ -175,7 +175,12 @@ from ..contracts import (
     OperatingMode,
     UnsupportedOperatingModeError,
 )
-from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults, OperatingProjection
+from ..engine.contracts import (
+    AcquisitionResults,
+    DetailedAcquisitionResults,
+    IrrStatus,
+    OperatingProjection,
+)
 from .contracts import (
     Deal,
     DealNotFoundError,
@@ -664,6 +669,19 @@ def _coerce_snapshot_value(hint: Any, value: Any) -> Any:
     if value is None:
         return None
     hint = _unwrap_optional(hint)
+    if hint is IrrStatus:
+        # D6.3 closeout: a stored IRR status token back into its member, so a
+        # decoded snapshot carries the enum the result contract declares rather
+        # than a bare ``str`` (JSON is unchanged: the member serialises to the
+        # same token). Strict, like ``_decode_enum``: an unknown token is invalid
+        # data, never a default -- on the read path the snapshot is then absent
+        # and recomputed, on a write it is refused.
+        try:
+            return IrrStatus(value)
+        except (ValueError, TypeError) as error:
+            raise SnapshotValidationError(
+                f"{value!r} is not a valid IrrStatus value."
+            ) from error
     if get_origin(hint) is tuple:
         # A genuine JSON round-trip (the API layer's normal path) always
         # produces a ``list`` here; ``duplicate_deal``'s internal

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from math import isfinite
 
-from .contracts import OwnerReturnMetrics, ReturnMetrics, ensure_finite
+from .contracts import IrrStatus, OwnerReturnMetrics, ReturnMetrics, ensure_finite
 
 
 # =============================================================================
@@ -80,6 +80,25 @@ def calculate_min_dscr(*, dscr_by_year: tuple[float | None, ...]) -> float | Non
 # =============================================================================
 
 
+def _equity_cash_flow_totals(
+    levered_cash_flows: tuple[float, ...],
+) -> tuple[float, float]:
+    """The Equity Cash Flow split by sign: ``(positive_total, negative_total)``.
+
+    Gate D6.3: the one decomposition behind both the Equity Multiple and the
+    project-return summary, so the two can never disagree. ``positive_total``
+    sums every cash flow strictly greater than 0 and ``negative_total`` every
+    one strictly less than 0; a cash flow of exactly ``0`` -- ``-0.0``
+    included -- contributes to neither. These are the Equity Multiple's own
+    expressions, moved here unchanged, so no existing figure moves by a bit. A
+    side with no cash flows sums to ``0``, as it always has.
+    """
+
+    positive_total = sum(cf for cf in levered_cash_flows if cf > 0.0)
+    negative_total = sum(cf for cf in levered_cash_flows if cf < 0.0)
+    return positive_total, negative_total
+
+
 def calculate_equity_multiple(*, levered_cash_flows: tuple[float, ...]) -> float | None:
     """Return the Equity Multiple, or ``None`` if the denominator is zero.
 
@@ -87,10 +106,13 @@ def calculate_equity_multiple(*, levered_cash_flows: tuple[float, ...]) -> float
     ``negative_total`` sums every levered cash flow strictly less than 0. A
     cash flow of exactly ``0`` contributes to neither total. Equity Multiple
     is never reported as infinity.
+
+    Gate D6.3: both totals come from ``_equity_cash_flow_totals``, which the
+    project-return summary also reads -- ``Total Cash Returned / Total Equity
+    Invested`` whenever this multiple is reported.
     """
 
-    positive_total = sum(cf for cf in levered_cash_flows if cf > 0.0)
-    negative_total = sum(cf for cf in levered_cash_flows if cf < 0.0)
+    positive_total, negative_total = _equity_cash_flow_totals(levered_cash_flows)
 
     if negative_total == 0.0:
         return None
@@ -99,6 +121,65 @@ def calculate_equity_multiple(*, levered_cash_flows: tuple[float, ...]) -> float
     if not isfinite(equity_multiple):
         return None
     return equity_multiple
+
+
+# =============================================================================
+# Project returns -- Phase 6 Gate D6.3
+#
+# ``docs/architecture/D6_BUSINESS_PLAN_CONVENTIONS.md`` Sections 7 and 8. Every
+# figure is read off the Equity Cash Flow (``levered_cash_flows``, t = 0..H)
+# by sign alone. The cause of a negative period -- closing equity, project
+# capital, owner expenses, TI/LC, debt service or an operating loss -- is
+# deliberately irrelevant: these are the project's *net* equity economics.
+# =============================================================================
+
+
+def calculate_project_return_totals(
+    *, levered_cash_flows: tuple[float, ...]
+) -> tuple[float, float, float]:
+    """Return ``(total_cash_returned, total_equity_invested, total_profit)``.
+
+    - ``Total Cash Returned`` = the sum of every positive Equity Cash Flow
+      period.
+    - ``Total Equity Invested`` = the absolute value of the sum of every
+      negative period, ``T0`` included.
+    - ``Total Profit`` = ``Total Cash Returned - Total Equity Invested``; it
+      may be negative.
+
+    A period of exactly ``0`` (``-0.0`` included) counts on neither side, and
+    no assumption is made about the sign of ``T0``: the signs decide. Both
+    totals come from ``_equity_cash_flow_totals`` -- the Equity Multiple's own
+    decomposition -- so whenever the multiple is reported it equals
+    ``total_cash_returned / total_equity_invested`` to the bit, and the two can
+    never diverge. A side with no periods is ``0.0``.
+    """
+
+    positive_total, negative_total = _equity_cash_flow_totals(levered_cash_flows)
+    total_cash_returned = ensure_finite("total_cash_returned", float(positive_total))
+    total_equity_invested = ensure_finite(
+        "total_equity_invested", float(abs(negative_total))
+    )
+    total_profit = ensure_finite(
+        "total_profit", total_cash_returned - total_equity_invested
+    )
+    return total_cash_returned, total_equity_invested, total_profit
+
+
+def calculate_net_additional_equity_requirement_by_year(
+    *, levered_cash_flows: tuple[float, ...]
+) -> tuple[float, ...]:
+    """Return ``(NAER_1, .., NAER_H)``: ``NAER_y = max(-ECF_y, 0)`` for every
+    hold year -- the deficit of a negative Equity Cash Flow year, and ``0.0``
+    for any other year. ``T0`` is excluded (the Initial Equity Requirement is
+    ``initial_equity``), so the tuple has length ``H``.
+
+    An **annual net** requirement: a large expenditure and a larger receipt in
+    the same year net to zero. It is not a capital call, not a peak intra-year
+    funding need and not evidence of when equity must be contributed. Post-hold
+    Business Plan capital never appears, because it is not in the Equity Cash
+    Flow."""
+
+    return tuple(-cf if cf < 0.0 else 0.0 for cf in levered_cash_flows[1:])
 
 
 # =============================================================================
@@ -113,18 +194,26 @@ def _first_nonzero_index(cash_flows: tuple[float, ...]) -> int | None:
     return None
 
 
-def _is_valid_irr_series(cash_flows: tuple[float, ...], t0: int) -> bool:
-    """Apply the frozen validity (sign) rules to the nonzero subsequence.
+def _irr_validity_failure(cash_flows: tuple[float, ...], t0: int) -> IrrStatus | None:
+    """Apply the frozen validity (sign) rules to the nonzero subsequence and
+    return the rule the series fails, or ``None`` when it is valid.
 
     Zero cash flows are ignored for sign-change analysis only; every cash
     flow retains its original annual time index elsewhere. The nonzero
     subsequence must have at least one negative and one positive value, its
     first nonzero entry must be negative, and it must have exactly one sign
     change.
+
+    Gate D6.3: formerly ``_is_valid_irr_series``, returning a bool. The checks,
+    their order and the sign loop are unchanged -- only the failing rule is now
+    named. The first-nonzero check runs first, exactly as before, so a series
+    with no negative cash flow reports ``FIRST_NONZERO_NOT_NEGATIVE``. Once it
+    has passed, the loop always sees a negative entry, so a series that still
+    fails either has no positive cash flow or changes sign more than once.
     """
 
     if cash_flows[t0] >= 0.0:
-        return False
+        return IrrStatus.FIRST_NONZERO_NOT_NEGATIVE
 
     has_negative = False
     has_positive = False
@@ -143,7 +232,11 @@ def _is_valid_irr_series(cash_flows: tuple[float, ...], t0: int) -> bool:
             sign_changes += 1
         previous_sign = sign
 
-    return has_negative and has_positive and sign_changes == 1
+    if has_negative and has_positive and sign_changes == 1:
+        return None
+    if not has_positive:
+        return IrrStatus.NO_POSITIVE_CASH_FLOW
+    return IrrStatus.MULTIPLE_SIGN_CHANGES
 
 
 def _evaluate_horner(cash_flows: tuple[float, ...], t0: int, x: float) -> float | None:
@@ -166,8 +259,18 @@ def _evaluate_horner(cash_flows: tuple[float, ...], t0: int, x: float) -> float 
     return horner_value
 
 
-def _solve_x_star(cash_flows: tuple[float, ...], t0: int) -> float | None:
-    """Run the frozen bracket-expansion and bisection procedure for ``x``."""
+def _solve_x_star(
+    cash_flows: tuple[float, ...], t0: int
+) -> tuple[float | None, IrrStatus]:
+    """Run the frozen bracket-expansion and bisection procedure for ``x``.
+
+    Gate D6.3: every exit now also names why it was taken. The procedure --
+    every evaluation, comparison, constant, bound and iteration -- is
+    unchanged; only each ``return`` carries an ``IrrStatus`` beside the value
+    it always returned. A found root is ``DEFINED``; exceeding the ``1e12``
+    search bound is ``ROOT_OUTSIDE_SEARCH_DOMAIN``; a non-finite evaluation, or
+    the defensive post-loop guard, is ``NUMERICAL_FAILURE``.
+    """
 
     max_abs_cash_flow = max(abs(cf) for cf in cash_flows)
 
@@ -176,36 +279,36 @@ def _solve_x_star(cash_flows: tuple[float, ...], t0: int) -> float | None:
 
     f_low = _evaluate_horner(cash_flows, t0, x_low)
     if f_low is None:
-        return None
+        return None, IrrStatus.NUMERICAL_FAILURE
     f_high = _evaluate_horner(cash_flows, t0, x_high)
     if f_high is None:
-        return None
+        return None, IrrStatus.NUMERICAL_FAILURE
 
     if f_high == 0.0:
-        return x_high
+        return x_high, IrrStatus.DEFINED
 
     while f_high < 0.0:
         if x_high >= 1e12:
-            return None
+            return None, IrrStatus.ROOT_OUTSIDE_SEARCH_DOMAIN
         x_high = min(2 * x_high, 1e12)
         f_high = _evaluate_horner(cash_flows, t0, x_high)
         if f_high is None:
-            return None
+            return None, IrrStatus.NUMERICAL_FAILURE
         if f_high == 0.0:
-            return x_high
+            return x_high, IrrStatus.DEFINED
 
     for _ in range(256):
         x_mid = (x_low + x_high) / 2
         f_mid = _evaluate_horner(cash_flows, t0, x_mid)
         if f_mid is None:
-            return None
+            return None, IrrStatus.NUMERICAL_FAILURE
 
         if f_mid == 0.0:
-            return x_mid
+            return x_mid, IrrStatus.DEFINED
         if abs(f_mid) <= 1e-10 * max_abs_cash_flow:
-            return x_mid
+            return x_mid, IrrStatus.DEFINED
         if (x_high - x_low) <= 1e-12 * max(1.0, abs(x_mid)):
-            return x_mid
+            return x_mid, IrrStatus.DEFINED
 
         if f_mid < 0.0:
             x_low = x_mid
@@ -214,8 +317,8 @@ def _solve_x_star(cash_flows: tuple[float, ...], t0: int) -> float | None:
 
     x_star = (x_low + x_high) / 2
     if isfinite(x_star) and x_star > 0.0:
-        return x_star
-    return None
+        return x_star, IrrStatus.DEFINED
+    return None, IrrStatus.NUMERICAL_FAILURE
 
 
 def _convert_x_star_to_irr(x_star: float | None) -> float | None:
@@ -228,6 +331,41 @@ def _convert_x_star_to_irr(x_star: float | None) -> float | None:
     return irr
 
 
+def evaluate_irr(cash_flows: tuple[float, ...]) -> tuple[float | None, IrrStatus]:
+    """Run the frozen IRR procedure and return ``(irr, status)``: the IRR, or
+    ``None``, and the ``IrrStatus`` that explains it (Gate D6.3).
+
+    **This is the IRR procedure, not a classifier beside it.** ``calculate_irr``
+    returns this function's first element and nothing else, so the status can
+    never describe a different computation from the one that produced the
+    value. The steps, in order:
+
+    1. no nonzero cash flow -> ``NO_NONZERO_CASH_FLOW``;
+    2. the frozen sign rules (``_irr_validity_failure``) -> the rule failed;
+    3. the bracket-and-bisection solver (``_solve_x_star``) -> its exit;
+    4. conversion of the root back to a rate; the defensive guard there reports
+       ``NUMERICAL_FAILURE``.
+
+    A value is returned only with ``DEFINED``; every other status comes with
+    ``None``.
+    """
+
+    t0 = _first_nonzero_index(cash_flows)
+    if t0 is None:
+        return None, IrrStatus.NO_NONZERO_CASH_FLOW
+    validity_failure = _irr_validity_failure(cash_flows, t0)
+    if validity_failure is not None:
+        return None, validity_failure
+
+    x_star, solver_status = _solve_x_star(cash_flows, t0)
+    if x_star is None:
+        return None, solver_status
+    irr = _convert_x_star_to_irr(x_star)
+    if irr is None:
+        return None, IrrStatus.NUMERICAL_FAILURE
+    return irr, IrrStatus.DEFINED
+
+
 def calculate_irr(cash_flows: tuple[float, ...]) -> float | None:
     """Return the annual periodic IRR for ``cash_flows``, or ``None``.
 
@@ -237,14 +375,14 @@ def calculate_irr(cash_flows: tuple[float, ...]) -> float | None:
     and ``docs/phase_2_deterministic_engine.md`` "IRR". The identical
     procedure is used for both unlevered and levered cash-flow series -- no
     separate mathematical implementation exists for either.
+
+    Gate D6.3: the procedure now lives in ``evaluate_irr``, which also reports
+    why an IRR is unavailable. This function returns exactly its value -- the
+    same float, or ``None``, for every series as before.
     """
 
-    t0 = _first_nonzero_index(cash_flows)
-    if t0 is None or not _is_valid_irr_series(cash_flows, t0):
-        return None
-
-    x_star = _solve_x_star(cash_flows, t0)
-    return _convert_x_star_to_irr(x_star)
+    irr, _ = evaluate_irr(cash_flows)
+    return irr
 
 
 # =============================================================================
@@ -260,7 +398,13 @@ def calculate_return_metrics(
     levered_cash_flows: tuple[float, ...],
 ) -> ReturnMetrics:
     """Compute the Phase 2D return metrics from already-assembled Phase 2A/
-    2B/2C outputs."""
+    2B/2C outputs.
+
+    Gate D6.3: each IRR comes from ``evaluate_irr`` together with its
+    ``IrrStatus`` (the value is exactly ``calculate_irr``'s), and the
+    project-return summary is read off ``levered_cash_flows`` -- the Equity
+    Cash Flow -- once, here. This is the one authority for all of them;
+    ``AcquisitionResults`` threads them unchanged."""
 
     dscr_by_year = calculate_dscr_by_year(
         noi_by_year=noi_by_year, annual_debt_service=annual_debt_service
@@ -268,8 +412,16 @@ def calculate_return_metrics(
     headline_dscr = calculate_headline_dscr(dscr_by_year=dscr_by_year)
     min_dscr = calculate_min_dscr(dscr_by_year=dscr_by_year)
     equity_multiple = calculate_equity_multiple(levered_cash_flows=levered_cash_flows)
-    unlevered_irr = calculate_irr(unlevered_cash_flows)
-    levered_irr = calculate_irr(levered_cash_flows)
+    unlevered_irr, unlevered_irr_status = evaluate_irr(unlevered_cash_flows)
+    levered_irr, levered_irr_status = evaluate_irr(levered_cash_flows)
+    total_cash_returned, total_equity_invested, total_profit = (
+        calculate_project_return_totals(levered_cash_flows=levered_cash_flows)
+    )
+    net_additional_equity_requirement_by_year = (
+        calculate_net_additional_equity_requirement_by_year(
+            levered_cash_flows=levered_cash_flows
+        )
+    )
 
     return ReturnMetrics(
         dscr_by_year=dscr_by_year,
@@ -278,6 +430,14 @@ def calculate_return_metrics(
         equity_multiple=equity_multiple,
         unlevered_irr=unlevered_irr,
         levered_irr=levered_irr,
+        net_additional_equity_requirement_by_year=(
+            net_additional_equity_requirement_by_year
+        ),
+        total_equity_invested=total_equity_invested,
+        total_cash_returned=total_cash_returned,
+        total_profit=total_profit,
+        unlevered_irr_status=unlevered_irr_status,
+        levered_irr_status=levered_irr_status,
     )
 
 

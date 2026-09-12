@@ -11,6 +11,7 @@ actually produce.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from math import isfinite
 from typing import Protocol
 
@@ -319,12 +320,72 @@ class AcquisitionCashFlows:
     levered_cash_flows: tuple[float, ...]
 
 
+class IrrStatus(StrEnum):
+    """Why an IRR is -- or is not -- reported under the frozen IRR convention
+    (``docs/financial_conventions.md`` "IRR validity" and "IRR numerical
+    solution"; ``docs/architecture/D6_BUSINESS_PLAN_CONVENTIONS.md`` Section 9,
+    decision D10; Gate D6.3).
+
+    One member per outcome of ``anchor.engine.returns.evaluate_irr``, which *is*
+    the ``calculate_irr`` procedure: the status explains a result and never
+    changes one. No status selects, or certifies, a root the convention
+    rejects. The checks run in this order and the first that fails is the
+    status:
+
+    - ``NO_NONZERO_CASH_FLOW`` -- every cash flow is zero (or there are none),
+      so there is no first nonzero cash flow to anchor the series.
+    - ``FIRST_NONZERO_NOT_NEGATIVE`` -- the first nonzero cash flow is
+      positive: the series does not begin with an investment. A series with no
+      negative cash flow at all reports here, because this is the rule it
+      fails first.
+    - ``NO_POSITIVE_CASH_FLOW`` -- it begins with an investment and nothing is
+      ever returned.
+    - ``MULTIPLE_SIGN_CHANGES`` -- the nonzero sequence changes sign more than
+      once, so more than one IRR may exist and none is selected.
+    - ``ROOT_OUTSIDE_SEARCH_DOMAIN`` -- the series is valid, but its root needs
+      ``x > 1e12``, beyond the supported search domain (an IRR within about
+      ``1e-12`` of -100%).
+    - ``NUMERICAL_FAILURE`` -- the series is valid, but a required polynomial
+      evaluation was not finite. The solver's defensive guards on the root and
+      its conversion to a rate report here too; with finite inputs the frozen
+      procedure does not reach them.
+    - ``DEFINED`` -- an IRR is reported.
+
+    The two numerical members are the convention's numerical-support limits,
+    not financial-validity rules.
+    """
+
+    DEFINED = "defined"
+    NO_NONZERO_CASH_FLOW = "no_nonzero_cash_flow"
+    FIRST_NONZERO_NOT_NEGATIVE = "first_nonzero_not_negative"
+    NO_POSITIVE_CASH_FLOW = "no_positive_cash_flow"
+    MULTIPLE_SIGN_CHANGES = "multiple_sign_changes"
+    ROOT_OUTSIDE_SEARCH_DOMAIN = "root_outside_search_domain"
+    NUMERICAL_FAILURE = "numerical_failure"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ReturnMetrics:
     """Underwriting V2 Gate 4 adds ``min_dscr`` -- the minimum of the
     non-``None`` entries in ``dscr_by_year``, or ``None`` if every entry is
     ``None``. It supplements ``headline_dscr`` (``DSCR_1``); it does not
-    replace it."""
+    replace it.
+
+    Phase 6 Gate D6.3 (D6 conventions Sections 7-9) adds the project-return
+    summary and the IRR statuses. Every summary figure is read off
+    ``levered_cash_flows`` -- the Equity Cash Flow -- by sign alone, whatever
+    made a period negative:
+
+    - ``net_additional_equity_requirement_by_year`` -- ``max(-ECF_y, 0)`` for
+      hold years ``1..H``; there is no ``T0`` entry. An annual *net* figure:
+      not a capital call and not a peak intra-year requirement.
+    - ``total_equity_invested`` and ``total_cash_returned`` -- the absolute sum
+      of the negative periods and the sum of the positive periods, ``T0``
+      included: exactly the Equity Multiple's denominator and numerator.
+    - ``total_profit`` -- ``total_cash_returned - total_equity_invested``.
+    - ``unlevered_irr_status`` and ``levered_irr_status`` -- why each IRR is or
+      is not reported (``IrrStatus``).
+    """
 
     dscr_by_year: tuple[float | None, ...]
     headline_dscr: float | None
@@ -332,6 +393,12 @@ class ReturnMetrics:
     equity_multiple: float | None
     unlevered_irr: float | None
     levered_irr: float | None
+    net_additional_equity_requirement_by_year: tuple[float, ...]
+    total_equity_invested: float
+    total_cash_returned: float
+    total_profit: float
+    unlevered_irr_status: IrrStatus
+    levered_irr_status: IrrStatus
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -409,6 +476,13 @@ class AcquisitionResults:
     authority -- project capital is never merged into any of them. No field
     here is defaulted: an older stored result lacks them and must decode as
     absent, never with fabricated zeros (Section 14).
+
+    Phase 6 Gate D6.3 (Sections 7-9) appends the project-return summary and the
+    IRR statuses, threaded unchanged from ``ReturnMetrics``, their one
+    authority: ``net_additional_equity_requirement_by_year``,
+    ``total_equity_invested``, ``total_cash_returned``, ``total_profit``,
+    ``unlevered_irr_status`` and ``levered_irr_status``. ``initial_equity``
+    remains the Initial Equity Requirement; there is no synonym for it.
     """
 
     going_in_cap_rate: float
@@ -448,6 +522,12 @@ class AcquisitionResults:
     levered_owner_cash_flow_by_year: tuple[float, ...]
     total_closing_uses: float
     total_closing_sources: float
+    net_additional_equity_requirement_by_year: tuple[float, ...]
+    total_equity_invested: float
+    total_cash_returned: float
+    total_profit: float
+    unlevered_irr_status: IrrStatus
+    levered_irr_status: IrrStatus
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

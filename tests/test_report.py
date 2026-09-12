@@ -144,6 +144,14 @@ def test_build_report_only_formats_precomputed_engine_values() -> None:
         levered_owner_cash_flow_by_year=results.levered_owner_cash_flow_by_year,
         total_closing_uses=results.total_closing_uses,
         total_closing_sources=results.total_closing_sources,
+        net_additional_equity_requirement_by_year=(
+            results.net_additional_equity_requirement_by_year
+        ),
+        total_equity_invested=results.total_equity_invested,
+        total_cash_returned=results.total_cash_returned,
+        total_profit=results.total_profit,
+        unlevered_irr_status=results.unlevered_irr_status,
+        levered_irr_status=results.levered_irr_status,
     )
 
     report = build_report(inputs, mutated)

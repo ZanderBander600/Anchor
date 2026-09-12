@@ -144,16 +144,6 @@ def _git_bytes(arguments: list[str]) -> bytes:
     return completed.stdout
 
 
-def _files_changed_since(commit: str, repo_relative: str) -> list[str]:
-    tracked = _git_bytes(["diff", "--name-only", commit, "--", repo_relative]).decode()
-    untracked = _git_bytes(
-        ["ls-files", "--others", "--exclude-standard", "--", repo_relative]
-    ).decode()
-    return sorted(
-        {line.strip() for line in (*tracked.splitlines(), *untracked.splitlines()) if line.strip()}
-    )
-
-
 def _lf(text: str) -> str:
     return text.replace("\r\n", "\n")
 
@@ -415,7 +405,18 @@ def test_the_result_contract_changed_only_by_initial_equity_and_the_d6_2_fields(
     base_kw = _keywords(_the_call(baseline[name], "AcquisitionResults"))
     cur_kw = _keywords(_the_call(current[name], "AcquisitionResults"))
 
-    assert set(cur_kw) == set(base_kw) | set(_D6_2_RESULT_FIELDS)
+    # D6.3 threads its six project-return fields from ReturnMetrics, verbatim.
+    d6_3_threaded = {
+        "net_additional_equity_requirement_by_year",
+        "total_equity_invested",
+        "total_cash_returned",
+        "total_profit",
+        "unlevered_irr_status",
+        "levered_irr_status",
+    }
+    assert set(cur_kw) == set(base_kw) | set(_D6_2_RESULT_FIELDS) | d6_3_threaded
+    for field in d6_3_threaded:
+        assert cur_kw[field] == f"return_metrics.{field}", field
     for field, value in base_kw.items():
         if field == "initial_equity":
             # The Initial Equity Requirement: the capital stack's figure plus
@@ -754,8 +755,12 @@ def test_d6_2_changed_exactly_its_authorized_production_files() -> None:
     """No debt, returns, NOI, leasing, sensitivity, break-even, API,
     persistence, fingerprint, prompt or frontend file moved since D6.1."""
 
-    changed = set(_files_changed_since(_D6_1_MERGE, "src")) | set(
-        _files_changed_since(_D6_1_MERGE, "web")
+    # Pinned at D6.3 to D6.2's own committed range, 7e67cde..b828956, so the
+    # ledger keeps proving exactly what D6.2 changed however later gates move
+    # the tree (``tests/test_d6_3_project_returns_architecture.py`` keeps
+    # D6.3's ledger).
+    changed = set(_files_changed_between(_D6_1_MERGE, _D6_2_MERGE, "src")) | set(
+        _files_changed_between(_D6_1_MERGE, _D6_2_MERGE, "web")
     )
     assert changed == _D6_2_PRODUCTION_FILES, (
         f"unexpected: {sorted(changed - _D6_2_PRODUCTION_FILES)}; "
@@ -763,10 +768,19 @@ def test_d6_2_changed_exactly_its_authorized_production_files() -> None:
     )
 
 
+#: D6.2 as merged to ``main``.
+_D6_2_MERGE = "b828956"
+
+
+def _files_changed_between(start: str, end: str, repo_relative: str) -> list[str]:
+    changed = _git_bytes(["diff", "--name-only", start, end, "--", repo_relative]).decode()
+    return sorted(line.strip() for line in changed.splitlines() if line.strip())
+
+
 def test_the_ledger_detects_a_real_difference() -> None:
     """The helper reports a file that genuinely changed and omits siblings that
     did not -- so the ledger above cannot pass vacuously."""
 
-    engine = _files_changed_since(_D6_1_MERGE, "src/anchor/engine")
+    engine = _files_changed_between(_D6_1_MERGE, _D6_2_MERGE, "src/anchor/engine")
     assert engine == ["src/anchor/engine/acquisition.py", "src/anchor/engine/contracts.py"]
     assert collections.Counter(engine)["src/anchor/engine/debt.py"] == 0

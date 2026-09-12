@@ -926,13 +926,25 @@ def test_g33_the_whole_engine_package_is_unchanged_since_d4_5a() -> None:
     the pre-D6.2 module), and ``contracts.py`` to the D6.1 + D6.2 additive
     claim. ``debt.py``, ``returns.py``, ``noi.py``, ``operating_projection.py``
     and ``__init__.py`` remain byte-identical to D4.5A.
+
+    **Narrowed at D6.3 -- by exactly one more file.** D6.3 adds the IRR status
+    and the project-return summary to ``engine/returns.py``. It is held to a
+    source-region claim against b828956 by
+    ``tests/test_d6_3_project_returns_architecture.py`` -- every function
+    outside D6.3's enumerated surface unchanged, and the IRR solver's
+    arithmetic identical. ``debt.py``, ``noi.py``, ``operating_projection.py``
+    and ``__init__.py`` remain byte-identical to D4.5A.
     """
 
     changed = [
         path
         for path in _files_changed_since(_D4_5A_COMMIT, "src/anchor/engine")
         if path
-        not in ("src/anchor/engine/contracts.py", "src/anchor/engine/acquisition.py")
+        not in (
+            "src/anchor/engine/contracts.py",
+            "src/anchor/engine/acquisition.py",
+            "src/anchor/engine/returns.py",
+        )
     ]
 
     assert changed == [], (
@@ -993,16 +1005,16 @@ def test_g34_the_ai_surface_changed_only_to_make_mode_dispatch_total() -> None:
 
     # D6.2 re-uses the allowlist for its own nine owner cash-flow fields
     # (deferred to D6.8). TI and LC are not among them, and never return.
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == _D6_2_DEFERRED_RESULT_FIELDS
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == _D6_DEFERRED_RESULT_FIELDS
     assert "tenant_improvements_by_year" not in INTENTIONALLY_EXCLUDED_RESULT_FIELDS
     assert "leasing_commissions_by_year" not in INTENTIONALLY_EXCLUDED_RESULT_FIELDS
     assert "LEASING-CAPITAL RULE" in build_system_prompt()
 
 
 #: The only result fields withheld from the AI Analyst: D6.2's owner cash-flow
-#: fields, deferred to the D6.8 grounding gate. Stated exactly, never as a
-#: containment check.
-_D6_2_DEFERRED_RESULT_FIELDS = frozenset(
+#: fields and D6.3's project-return summary and IRR statuses, all deferred to
+#: the D6.8 grounding gate. Stated exactly, never as a containment check.
+_D6_DEFERRED_RESULT_FIELDS = frozenset(
     {
         "closing_project_capital",
         "project_capital_by_year",
@@ -1013,6 +1025,12 @@ _D6_2_DEFERRED_RESULT_FIELDS = frozenset(
         "levered_owner_cash_flow_by_year",
         "total_closing_uses",
         "total_closing_sources",
+        "net_additional_equity_requirement_by_year",
+        "total_equity_invested",
+        "total_cash_returned",
+        "total_profit",
+        "unlevered_irr_status",
+        "levered_irr_status",
     }
 )
 
@@ -1040,7 +1058,7 @@ def test_g35_the_ai_exclusion_decision_was_succeeded_not_abandoned() -> None:
 
     # Empty of TI/LC for good; D6.2's deferred owner cash-flow fields are the
     # only entries (see G34).
-    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == _D6_2_DEFERRED_RESULT_FIELDS
+    assert INTENTIONALLY_EXCLUDED_RESULT_FIELDS == _D6_DEFERRED_RESULT_FIELDS
 
     # The AI layer legitimately consumes ``anchor.analysis`` for sensitivity,
     # break-even and -- from D5.8 -- the Lease-Level input and result

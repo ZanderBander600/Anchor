@@ -65,9 +65,12 @@ _D4_6A_COMMIT = "15e910d"
 #: ``tests/test_d6_2_owner_cash_flow_architecture.py``, whose ledger pins the
 #: complete D6.2 file set. Every path still listed is byte-identical to the D6
 #: base, including sensitivity, break-even, persistence, the API and the web.
+#:
+#: **Narrowed at D6.3** by exactly ``engine/returns.py``, held to the D6.3
+#: source-region and solver-identity claims in
+#: ``tests/test_d6_3_project_returns_architecture.py``.
 _UNCHANGED_FINANCIAL_PATHS = (
     "src/anchor/engine/__init__.py",
-    "src/anchor/engine/returns.py",
     "src/anchor/engine/debt.py",
     "src/anchor/engine/noi.py",
     "src/anchor/engine/operating_projection.py",
@@ -81,7 +84,14 @@ _UNCHANGED_FINANCIAL_PATHS = (
     "src/anchor/ai/contracts.py",
     "src/anchor/ai/prompts.py",
     "src/anchor/ai/provider.py",
-    "src/anchor/deals",
+    # ``deals`` as a whole until the D6.3 closeout, which authorised exactly one
+    # decoder branch in ``deals/store.py`` (IrrStatus rehydration), held to its
+    # own source-region claim in
+    # ``tests/test_d6_3_project_returns_architecture.py``. The rest of the
+    # persistence package is byte-identical to the D6 base.
+    "src/anchor/deals/__init__.py",
+    "src/anchor/deals/contracts.py",
+    "src/anchor/deals/fingerprint.py",
     "src/anchor/api.py",
     "src/anchor/contracts.py",
     "src/anchor/validation.py",
@@ -640,12 +650,87 @@ def _with_baseline_acquisition_results(source: str, baseline: str) -> str:
     return "\n".join(lines[:first] + baseline_class + lines[end:])
 
 
-def _without_authorized_additions(source: str, baseline: str) -> str:
-    """``source`` minus D6.1's ``OwnerCapitalSchedule`` and with D6.2's
-    ``AcquisitionResults`` additions reverted -- each only after it is proved
-    to be exactly the authorized addition."""
+#: D6.3's additions, exactly as they must read: appended to ``ReturnMetrics``
+#: (their one authority) and threaded onto ``AcquisitionResults`` after D6.2's
+#: nine. Anything further -- a D6.4+ field included -- is not authorized.
+_D6_3_RESULT_FIELD_LINES = [
+    "    net_additional_equity_requirement_by_year: tuple[float, ...]",
+    "    total_equity_invested: float",
+    "    total_cash_returned: float",
+    "    total_profit: float",
+    "    unlevered_irr_status: IrrStatus",
+    "    levered_irr_status: IrrStatus",
+]
 
-    return _with_baseline_acquisition_results(_without_owner_capital_schedule(source), baseline)
+
+def _with_baseline_class(
+    source: str, baseline: str, class_name: str, appended: list[str]
+) -> str:
+    """The generalised form of ``_with_baseline_acquisition_results`` (D6.3):
+    ``source`` with ``class_name`` put back to the baseline's text, after
+    proving, as text, that its decorator and ``class`` line are unchanged, its
+    docstring was only *extended* (the baseline docstring is a prefix of
+    today's -- which also covers a docstring whose closing quotes shared its
+    last line), and exactly ``appended`` field lines follow its existing
+    fields."""
+
+    lines, baseline_lines = source.split("\n"), baseline.split("\n")
+    node, base_node = _class_node(source, class_name), _class_node(baseline, class_name)
+    first, close, end = _class_lines(source, class_name)
+    base_first, base_close, base_end = _class_lines(baseline, class_name)
+    docstring_start = node.body[0].lineno - 1
+    base_docstring_start = base_node.body[0].lineno - 1
+
+    assert lines[first:docstring_start] == baseline_lines[base_first:base_docstring_start], (
+        f"{_CONTRACTS_GUARDRAIL_FAILURE}: {class_name}'s header changed"
+    )
+    current_docstring = ast.get_docstring(node, clean=False) or ""
+    baseline_docstring = ast.get_docstring(base_node, clean=False) or ""
+    assert current_docstring.startswith(baseline_docstring.rstrip()), (
+        f"{_CONTRACTS_GUARDRAIL_FAILURE}: an existing line of {class_name}'s docstring "
+        "changed"
+    )
+    assert lines[close + 1 : end] == baseline_lines[base_close + 1 : base_end] + appended, (
+        f"{_CONTRACTS_GUARDRAIL_FAILURE}: {class_name}'s fields changed by more than "
+        "the authorized appended fields"
+    )
+    return "\n".join(lines[:first] + baseline_lines[base_first:base_end] + lines[end:])
+
+
+def _without_irr_status(source: str) -> str:
+    """``source`` without D6.3's ``IrrStatus`` enum and its one import line --
+    the class's exact span plus its two blank separator lines, both of which
+    must be empty. The import must appear exactly once."""
+
+    lines = source.split("\n")
+    assert lines.count("from enum import StrEnum") == 1, (
+        f"{_CONTRACTS_GUARDRAIL_FAILURE}: the D6.3 enum import"
+    )
+    lines.remove("from enum import StrEnum")
+    source = "\n".join(lines)
+    node = _class_node(source, "IrrStatus")
+    assert not node.decorator_list and node.end_lineno is not None
+    lines = source.split("\n")
+    assert lines[node.end_lineno : node.end_lineno + 2] == ["", ""], (
+        f"{_CONTRACTS_GUARDRAIL_FAILURE}: IrrStatus must be followed by exactly its "
+        "two blank separator lines"
+    )
+    return "\n".join(lines[: node.lineno - 1] + lines[node.end_lineno + 2 :])
+
+
+def _without_authorized_additions(source: str, baseline: str) -> str:
+    """``source`` minus D6.1's ``OwnerCapitalSchedule`` and D6.3's
+    ``IrrStatus``, with D6.2's and D6.3's appended result fields reverted --
+    each only after it is proved to be exactly the authorized addition."""
+
+    source = _without_owner_capital_schedule(_without_irr_status(source))
+    source = _with_baseline_class(source, baseline, "ReturnMetrics", _D6_3_RESULT_FIELD_LINES)
+    return _with_baseline_class(
+        source,
+        baseline,
+        "AcquisitionResults",
+        _D6_2_RESULT_FIELD_LINES + _D6_3_RESULT_FIELD_LINES,
+    )
 
 
 def _assert_only_authorized_additions(baseline: str, current: str) -> None:
@@ -700,7 +785,10 @@ def test_since_d6_1_contracts_changed_only_in_acquisition_results_and_a_docstrin
     are unchanged since D6.1."""
 
     baseline = _baseline_engine_contracts(_D6_1_MERGE)
-    current = _current_engine_contracts()
+    # Pinned at D6.3 to D6.2 *as merged* (b828956), so this stays the exact
+    # proof of D6.2's own change set; the live file carries D6.3 additions too,
+    # which the cumulative guard above and the D6.3 architecture tests cover.
+    current = _baseline_engine_contracts("b828956")
 
     remainder = _with_baseline_acquisition_results(
         _without_owner_capital_schedule(current), _without_owner_capital_schedule(baseline)
@@ -729,9 +817,14 @@ def test_the_line_ending_normalisation_rewrites_crlf_and_nothing_else() -> None:
 
 
 def test_the_contracts_guardrail_accepts_the_authorized_additions() -> None:
-    """Self-test A. The committed D6.1 and D6.2 additions pass -- whether the
-    working tree checks the file out with LF or CRLF -- and they account for
-    every added line."""
+    """Self-test A. The committed D6.1, D6.2 and D6.3 additions pass -- whether
+    the working tree checks the file out with LF or CRLF -- and each is really
+    present, so the guardrail is not passing by cutting nothing.
+
+    Revised at D6.3: the D6.1/D6.2 line-count proof is superseded. Every added
+    line is now accounted for by construction -- the remainder must ``==`` the
+    baseline text after exactly the authorized pieces are removed -- and the
+    rejection self-tests below cover each way of adding one line too many."""
 
     baseline = _baseline_engine_contracts(_D6_BASE_COMMIT)
     current = _current_engine_contracts()
@@ -739,17 +832,15 @@ def test_the_contracts_guardrail_accepts_the_authorized_additions() -> None:
     _assert_only_authorized_additions(baseline, current)
     _assert_only_authorized_additions(baseline, _lf(current.replace("\n", "\r\n")))
 
-    added_lines = len(current.split("\n")) - len(baseline.split("\n"))
-    class_source = ast.get_source_segment(current, _class_node(current, "OwnerCapitalSchedule"))
-    assert class_source is not None
-    first, close, _ = _class_lines(current, "AcquisitionResults")
-    base_first, base_close, _ = _class_lines(baseline, "AcquisitionResults")
-    appended_prose = (close - first) - (base_close - base_first)
-    # D6.1: the ``class`` statement, its one decorator line and its two
-    # separator lines. D6.2: the docstring prose and the nine fields. No more.
-    assert added_lines == (
-        len(class_source.split("\n")) + 1 + 2 + appended_prose + len(_D6_2_RESULT_FIELD_LINES)
-    )
+    for piece in (
+        "class OwnerCapitalSchedule:",
+        "class IrrStatus(StrEnum):",
+        "from enum import StrEnum",
+        *_D6_2_RESULT_FIELD_LINES,
+        *_D6_3_RESULT_FIELD_LINES,
+    ):
+        assert piece in current, piece
+        assert piece not in baseline, piece
 
 
 #: Edits to pre-D6.1 source outside the class: ``(old, new, ast_visible)``.
@@ -916,6 +1007,24 @@ _UNAUTHORIZED_RESULT_CHANGES = [
         "    closing_project_capital: float\n    project_capital_by_year: tuple[float | None, ...]\n"
         "    post_hold_project_capital",
         id="d6-2-field-retyped",
+    ),
+    # D6.3: premature D6.4+ fields, on either result contract, are rejected.
+    pytest.param(
+        "    levered_irr_status: IrrStatus\n\n\n@dataclass(frozen=True, slots=True, kw_only=True)\n"
+        "class DetailedAcquisitionResults",
+        "    levered_irr_status: IrrStatus\n    peak_funding_requirement: float\n\n\n"
+        "@dataclass(frozen=True, slots=True, kw_only=True)\nclass DetailedAcquisitionResults",
+        id="premature-d6-4-result-field",
+    ),
+    pytest.param(
+        "    levered_irr_status: IrrStatus\n\n\n@dataclass(frozen=True, slots=True, kw_only=True)\n"
+        "class OwnerReturnMetrics",
+        "    levered_irr_status: IrrStatus\n    business_plan_fingerprint: str\n\n\n"
+        "@dataclass(frozen=True, slots=True, kw_only=True)\nclass OwnerReturnMetrics",
+        id="premature-return-metrics-field",
+    ),
+    pytest.param(
+        "    replace it.\n", "    replaces it.\n", id="existing-return-metrics-docstring"
     ),
 ]
 

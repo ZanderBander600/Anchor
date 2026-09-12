@@ -823,6 +823,14 @@ def analyze_acquisition_from_operating_projection(
         levered_owner_cash_flow_by_year=levered_owner_cash_flow_by_year,
         total_closing_uses=total_closing_uses,
         total_closing_sources=total_closing_sources,
+        net_additional_equity_requirement_by_year=(
+            return_metrics.net_additional_equity_requirement_by_year
+        ),
+        total_equity_invested=return_metrics.total_equity_invested,
+        total_cash_returned=return_metrics.total_cash_returned,
+        total_profit=return_metrics.total_profit,
+        unlevered_irr_status=return_metrics.unlevered_irr_status,
+        levered_irr_status=return_metrics.levered_irr_status,
     )
 
 

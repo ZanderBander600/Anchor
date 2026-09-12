@@ -1347,11 +1347,19 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     # the pre-D6.2 module -- and ``contracts.py`` to the D6.1 + D6.2 additive
     # claim. ``debt.py``, ``returns.py``, ``noi.py``, ``operating_projection.py``
     # and ``__init__.py`` stay byte-identical to D4.6A.
+    #
+    # Narrowed at D6.3 by exactly ``engine/returns.py`` (the IRR status and
+    # the project-return summary), held to a source-region claim against
+    # b828956 by ``tests/test_d6_3_project_returns_architecture.py``.
     engine_changed = [
         path
         for path in _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine")
         if path
-        not in ("src/anchor/engine/contracts.py", "src/anchor/engine/acquisition.py")
+        not in (
+            "src/anchor/engine/contracts.py",
+            "src/anchor/engine/acquisition.py",
+            "src/anchor/engine/returns.py",
+        )
     ]
     assert engine_changed == [], f"src/anchor/engine changed: {engine_changed}"
 
@@ -1664,15 +1672,16 @@ def test_g37_detects_a_real_difference_rather_than_reporting_none() -> None:
     ], "G37's change detection is not reporting a difference that exists"
 
     # And the helper is discriminating rather than merely always non-empty:
-    # unchanged paths are not reported. Since D6.2 the engine tree differs from
-    # D4.6A in exactly two files -- the D6.1/D6.2 contracts and the D6.2
-    # acquisition wiring, see G37 above -- so the helper must name those two
-    # and none of their unchanged siblings (debt, returns, NOI, the Detailed
-    # projection): discrimination inside a single directory, which is a sharper
-    # proof than an empty result.
+    # unchanged paths are not reported. Since D6.3 the engine tree differs from
+    # D4.6A in exactly three files -- the D6.1-D6.3 contracts, the D6.2
+    # acquisition wiring and the D6.3 returns additions, see G37 above -- so the
+    # helper must name those three and none of their unchanged siblings (debt,
+    # NOI, the Detailed projection): discrimination inside a single directory,
+    # which is a sharper proof than an empty result.
     assert _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine") == [
         "src/anchor/engine/acquisition.py",
         "src/anchor/engine/contracts.py",
+        "src/anchor/engine/returns.py",
     ]
 
 

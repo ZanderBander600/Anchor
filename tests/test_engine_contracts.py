@@ -13,6 +13,7 @@ from anchor.engine.contracts import (
     CapitalStack,
     DebtSchedule,
     NoiForecast,
+    IrrStatus,
     NonFiniteResultError,
     ReturnMetrics,
     ensure_finite,
@@ -54,6 +55,24 @@ RETURN_METRICS_FIELDS = (
     ("equity_multiple", float | None),
     ("unlevered_irr", float | None),
     ("levered_irr", float | None),
+    # Phase 6 Gate D6.3 -- the project-return summary and the IRR statuses,
+    # appended after every pre-existing field.
+    ("net_additional_equity_requirement_by_year", tuple[float, ...]),
+    ("total_equity_invested", float),
+    ("total_cash_returned", float),
+    ("total_profit", float),
+    ("unlevered_irr_status", IrrStatus),
+    ("levered_irr_status", IrrStatus),
+)
+
+#: The D6.3 fields a hand-built ``ReturnMetrics`` needs; values are arbitrary.
+D6_3_RETURN_FIELDS = dict(
+    net_additional_equity_requirement_by_year=(0.0,),
+    total_equity_invested=17_500_000.0,
+    total_cash_returned=25_250_000.0,
+    total_profit=7_750_000.0,
+    unlevered_irr_status=IrrStatus.DEFINED,
+    levered_irr_status=IrrStatus.DEFINED,
 )
 
 
@@ -284,6 +303,7 @@ def test_return_metrics_is_frozen_and_slotted() -> None:
         equity_multiple=1.44288913123241,
         unlevered_irr=0.062414943980353854,
         levered_irr=0.07913030056780745,
+        **D6_3_RETURN_FIELDS,
     )
 
     assert not hasattr(return_metrics, "__dict__")
@@ -299,6 +319,7 @@ def test_return_metrics_dscr_by_year_is_immutable_tuple() -> None:
         equity_multiple=1.44288913123241,
         unlevered_irr=0.062414943980353854,
         levered_irr=0.07913030056780745,
+        **D6_3_RETURN_FIELDS,
     )
 
     assert isinstance(return_metrics.dscr_by_year, tuple)
@@ -312,6 +333,7 @@ def test_return_metrics_has_no_excel_or_source_metadata() -> None:
         equity_multiple=1.44288913123241,
         unlevered_irr=0.062414943980353854,
         levered_irr=0.07913030056780745,
+        **D6_3_RETURN_FIELDS,
     )
 
     assert not hasattr(return_metrics, "source")

@@ -48,6 +48,22 @@ _D6_2_FIELDS = frozenset(
 )
 
 
+#: D6.3 appends six more result fields after D6.2's nine. They did not exist at
+#: 7e67cde either, so they too are exempt from the comparison and checked for
+#: the value an empty plan must give instead (see the D6.3 oracle for their
+#: bit identity against b828956's Equity Cash Flow).
+_D6_3_FIELDS = frozenset(
+    {
+        "net_additional_equity_requirement_by_year",
+        "total_equity_invested",
+        "total_cash_returned",
+        "total_profit",
+        "unlevered_irr_status",
+        "levered_irr_status",
+    }
+)
+
+
 def _run(root: Path, out: Path) -> dict:
     completed = subprocess.run(
         [sys.executable, str(_RUNNER), str(root), str(out)],
@@ -130,7 +146,8 @@ def test_the_only_new_fields_are_the_d6_2_fields_and_they_are_neutral(
         for variant in (case, f"{case}#bp"):
             for section, fields in sections.items():
                 new = set(current[variant][section]) - set(fields)
-                assert new == (_D6_2_FIELDS if section == "results" else set()), (variant, section)
+                expected_new = _D6_2_FIELDS | _D6_3_FIELDS if section == "results" else set()
+                assert new == expected_new, (variant, section)
             results = current[variant]["results"]
             hold = len(results["noi_by_year"])
             assert results["closing_project_capital"] == zero
