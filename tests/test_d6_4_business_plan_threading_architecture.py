@@ -86,9 +86,11 @@ _PLAN_ENTRY_POINTS = frozenset(
     }
 )
 
-#: The outermost compatibility boundary -- the public functions an existing
-#: caller (the API, until D6.5) still calls with no plan. Exactly these may
-#: default ``business_plan``, and only to ``BusinessPlan()``.
+#: The outermost compatibility boundary -- the public functions a plan-free
+#: caller may still call with no plan. Exactly these may default
+#: ``business_plan``, and only to ``BusinessPlan()``. D6.5 keeps every default
+#: and stops the API relying on them: each API call passes the request's plan
+#: by name (``tests/test_d6_5_business_plan_persistence_architecture.py``).
 _PUBLIC_BOUNDARY = {
     "sensitivity": frozenset(
         {
@@ -963,6 +965,22 @@ _BUSINESS_PLAN_IMPORTS = {
     "anchor/analysis/break_even.py": {"BusinessPlan", "resolve_business_plan"},
     "anchor/analysis/lease_level_sensitivity.py": {"BusinessPlan", "resolve_business_plan"},
     "anchor/ai/analyst.py": {"BusinessPlan"},
+    # Widened at D6.5 by exactly the state/API layer. None of them resolves a
+    # plan: the API parses one and passes it on, the Deal contract and the
+    # fingerprint name the contract, and the store rebuilds items and hands
+    # them to the validation authority.
+    "anchor/api.py": {"BusinessPlan", "BusinessPlanValidationError", "parse_business_plan"},
+    "anchor/deals/contracts.py": {"BusinessPlan"},
+    "anchor/deals/fingerprint.py": {"BusinessPlan"},
+    "anchor/deals/store.py": {
+        "BusinessPlan",
+        "CapitalItemCategory",
+        "CapitalPlanItem",
+        "OwnerExpenseCategory",
+        "OwnerExpenseItem",
+        "require_valid_business_plan",
+        "validate_business_plan",
+    },
 }
 
 #: What a plan item is made of. The plan-aware modules hold the plan opaquely.
@@ -1051,9 +1069,21 @@ _PROTECTED = (
 )
 
 
+#: ``main`` after D6.4 -- the end of D6.4's committed range.
+_D6_4_MERGE = "93636ee"
+
+
+def _files_changed_between(start: str, end: str, repo_relative: str) -> list[str]:
+    changed = _git_bytes(["diff", "--name-only", start, end, "--", repo_relative]).decode()
+    return sorted({line.strip() for line in changed.splitlines() if line.strip()})
+
+
+# Pinned at D6.5 to D6.4's own committed range, ba804ca..93636ee, so the ledger
+# keeps proving exactly what D6.4 changed however later gates move the tree.
+# D6.5's own ledger is ``tests/test_d6_5_business_plan_persistence_architecture.py``.
 def test_d6_4_changed_exactly_its_authorized_production_files() -> None:
-    changed = set(_files_changed_since(_D6_3_MERGE, "src")) | set(
-        _files_changed_since(_D6_3_MERGE, "web")
+    changed = set(_files_changed_between(_D6_3_MERGE, _D6_4_MERGE, "src")) | set(
+        _files_changed_between(_D6_3_MERGE, _D6_4_MERGE, "web")
     )
     assert changed == _D6_4_PRODUCTION_FILES, (
         f"unexpected: {sorted(changed - _D6_4_PRODUCTION_FILES)}; "
@@ -1063,4 +1093,6 @@ def test_d6_4_changed_exactly_its_authorized_production_files() -> None:
 
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged_since_d6_3(path: str) -> None:
-    assert _files_changed_since(_D6_3_MERGE, path) == [], f"{path} changed at D6.4"
+    assert _files_changed_between(_D6_3_MERGE, _D6_4_MERGE, path) == [], (
+        f"{path} changed at D6.4"
+    )

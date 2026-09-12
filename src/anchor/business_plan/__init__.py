@@ -21,6 +21,10 @@ boundary is enforced by ``tests/test_business_plan_architecture.py``.
 
 ``OwnerCapitalSchedule`` is deliberately **not** re-exported here: it is an
 engine contract and is imported from ``anchor.engine.contracts``.
+
+**Wire parsing (D6.5).** ``parse_business_plan`` turns a request's JSON into
+the contract and hands it to the same validation authority; it restates no
+domain rule.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from .contracts import (
     OwnerExpenseHoldTreatment,
     OwnerExpenseItem,
 )
+from .parsing import parse_business_plan
 from .resolver import owner_expense_hold_treatments, resolve_business_plan
 from .validation import (
     BusinessPlanIssueCode,
@@ -51,6 +56,8 @@ __all__ = [
     "OwnerExpenseCategory",
     "OwnerExpenseHoldTreatment",
     "OwnerExpenseItem",
+    # wire parsing
+    "parse_business_plan",
     # resolver
     "resolve_business_plan",
     "owner_expense_hold_treatments",

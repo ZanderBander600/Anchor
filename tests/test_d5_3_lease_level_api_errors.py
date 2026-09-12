@@ -669,8 +669,9 @@ def test_m2_m3_lease_level_never_reaches_the_quick_or_detailed_runner(
     """The oracles above prove the *right* runner ran; this proves the wrong
     ones did not, which a value comparison alone cannot."""
 
-    with patch("anchor.api.analyze_acquisition") as quick_runner, patch(
-        "anchor.api.analyze_detailed_acquisition_with_projection"
+    # D6.5: each mode reaches the engine through its Business Plan entry point.
+    with patch("anchor.api.analyze_quick_acquisition_with_business_plan") as quick_runner, patch(
+        "anchor.api.analyze_detailed_acquisition_with_business_plan"
     ) as detailed_runner:
         response = client.post("/analyze", json=body())
 
@@ -682,14 +683,17 @@ def test_m2_m3_lease_level_never_reaches_the_quick_or_detailed_runner(
 def test_m4_the_api_calls_the_approved_entry_point_exactly_once(
     client: TestClient,
 ) -> None:
-    """M4: no hand-rolled pipeline. One call to the D4.5B bridge per request."""
+    """M4: no hand-rolled pipeline. One call to the D4.5B bridge per request.
+
+    D6.5: the API reaches that bridge through the D6.2 Business Plan entry
+    point, which calls it exactly once, so the spy sits on the entry point."""
 
     import anchor.api as api_module
 
     with patch.object(
         api_module,
-        "analyze_lease_level_acquisition_with_projection",
-        wraps=api_module.analyze_lease_level_acquisition_with_projection,
+        "analyze_lease_level_acquisition_with_business_plan",
+        wraps=api_module.analyze_lease_level_acquisition_with_business_plan,
     ) as spy:
         assert client.post("/analyze", json=body()).status_code == 200
 

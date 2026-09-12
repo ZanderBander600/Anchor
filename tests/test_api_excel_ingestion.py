@@ -296,7 +296,8 @@ def test_malformed_workbook_returns_422_with_issue_list_and_never_reaches_the_en
     values = dict(VALUES)
     values["purchase_price"] = None  # blank required value
 
-    with patch("anchor.api.analyze_acquisition") as mock_analyze:
+    # D6.5: /analyze reaches the engine through the Business Plan entry point.
+    with patch("anchor.api.analyze_quick_acquisition_with_business_plan") as mock_analyze:
         response = client.post(
             "/ingestion/excel", files=_upload_files(_build_workbook_bytes(values=values))
         )
@@ -357,7 +358,8 @@ def test_422_response_shape_matches_the_analyze_endpoint(client: TestClient) -> 
 
 
 def test_excel_upload_never_calls_the_deterministic_engine(client: TestClient) -> None:
-    with patch("anchor.api.analyze_acquisition") as mock_analyze:
+    # D6.5: /analyze reaches the engine through the Business Plan entry point.
+    with patch("anchor.api.analyze_quick_acquisition_with_business_plan") as mock_analyze:
         response = client.post("/ingestion/excel", files=_upload_files(VALID_WORKBOOK_BYTES))
 
     assert response.status_code == 200

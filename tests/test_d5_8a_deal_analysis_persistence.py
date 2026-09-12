@@ -1071,7 +1071,7 @@ def test_a_pre_gate_database_opens_and_starts_empty(tmp_path: Path) -> None:
         "SELECT COUNT(*) FROM deal_sensitivity_snapshots"
     ).fetchone()[0]
     connection.close()
-    assert version == 6
+    assert version == 7  # D6.5 adds the two Business Plan tables on top of D5.8A's
     assert empty == 0
 
 

@@ -326,7 +326,8 @@ def test_malformed_workbook_returns_422_and_never_reaches_the_engine(
     values = dict(ALL_VALUES)
     values["gross_potential_rent"] = None  # blank required value
 
-    with patch("anchor.api.analyze_detailed_acquisition_with_projection") as mock_analyze:
+    # D6.5: /analyze reaches the engine through the Business Plan entry point.
+    with patch("anchor.api.analyze_detailed_acquisition_with_business_plan") as mock_analyze:
         response = client.post(
             "/ingestion/excel/detailed",
             files=_upload_files(_build_workbook_bytes(values=values)),

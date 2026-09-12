@@ -537,14 +537,17 @@ def test_the_migration_reaches_the_current_schema_version(migrated) -> None:
     exactly as the six Lease-Level tables were, with no ALTER and no existing row
     read or rewritten. The pin stays a literal rather than a read of
     ``_SCHEMA_VERSION``: a test that imported the number it is checking would
-    pass for any value the production module happened to hold."""
+    pass for any value the production module happened to hold.
+
+    D6.5 moves it to 7 -- the two Business Plan tables, added the same purely
+    additive way (``tests/test_d6_5_business_plan_migration.py``)."""
 
     path, _ = migrated
     connection = sqlite3.connect(path)
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     connection.close()
 
-    assert version == 6
+    assert version == 7
 
 
 def test_the_migration_adds_all_six_lease_level_tables(migrated) -> None:
@@ -638,7 +641,7 @@ def test_the_migration_is_idempotent(migrated) -> None:
     suites = connection.execute("SELECT COUNT(*) FROM lease_level_suites").fetchone()[0]
     connection.close()
 
-    assert version == 6
+    assert version == 7  # D6.5; see test_the_migration_reaches_the_current_schema_version
     assert suites == 0
     assert len(deals_store.list_deals(db_path=path)) == 2
 

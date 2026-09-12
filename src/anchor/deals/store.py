@@ -154,6 +154,15 @@ from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from ..ai.contracts import AIAnalysis
+from ..business_plan import (
+    BusinessPlan,
+    CapitalItemCategory,
+    CapitalPlanItem,
+    OwnerExpenseCategory,
+    OwnerExpenseItem,
+    require_valid_business_plan,
+    validate_business_plan,
+)
 from ..analysis import (
     EscalationBasis,
     InitialVacancyAssumptions,
@@ -227,7 +236,12 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # the Lease-Level family at version 5. No ALTER, no existing row read or
 # rewritten, and the new table simply starts empty for every deal that already
 # exists.
-_SCHEMA_VERSION = 6
+# Phase 6 Gate D6.5: schema version 7 adds the two mode-blind Business Plan
+# child tables, ``deal_capital_plan_items`` and ``deal_owner_expense_items``,
+# created unconditionally by ``_connect`` exactly as version 6's table was. No
+# ALTER and no existing row read or rewritten; a legacy deal simply has no plan
+# rows, which is exactly the empty ``BusinessPlan()`` -- nothing is fabricated.
+_SCHEMA_VERSION = 7
 
 
 class PersistedDealDataError(RuntimeError):
@@ -535,6 +549,69 @@ CREATE TABLE IF NOT EXISTS deal_sensitivity_snapshots (
     PRIMARY KEY (deal_id, analysis_kind)
 )
 """
+
+
+# =============================================================================
+# Phase 6 Gate D6.5 -- the Business Plan, schema version 7.
+#
+# Two MODE-BLIND relational child tables, one per item type, keyed by the deal
+# id alone. The Business Plan is the same contract in all three modes (D6
+# conventions Section 13), so it is stored once, the same way, whichever parent
+# table holds the deal -- never as Quick, Detailed and Lease-Level copies, and
+# never folded into a mode's own columns. Like ``deal_sensitivity_snapshots``,
+# no mode is stored here: the mode is which parent table holds the id.
+#
+# Relational rather than one JSON document, following the rent roll: a plan is
+# variable-arity *input* state, and each field gets a typed column so SQLite
+# stores a float as a REAL and returns it bit-identical.
+#
+# ``ordinal`` is presentation state -- the analyst's row order, restored on
+# load -- and nothing else: no calculation reads it and the fingerprint sorts
+# by ``item_id`` instead (``anchor.deals.fingerprint``). ``last_year`` is
+# nullable because ``None`` ("through the current hold") is a value the resolver
+# owns; it is stored as ``NULL`` and never replaced by the hold period.
+#
+# The composite primary key is the per-collection identity rule and nothing
+# more. The one shared item-ID namespace across *both* tables (decision D17) is
+# the validation authority's rule and is not restated in SQL: every write is
+# validated before it reaches a table, and every read is validated again, so a
+# stored cross-type duplicate is refused on load rather than silently loaded.
+# No CHECK constraint restates a financial domain, for the same reason.
+#
+# No FOREIGN KEY / ON DELETE CASCADE, for the reason stated above
+# ``lease_level_suites``: this module never enables ``PRAGMA foreign_keys``, so a
+# declared cascade would be decorative. ``delete_deal`` removes these rows
+# explicitly, for every mode, in the same transaction as the parent.
+# =============================================================================
+
+_CREATE_DEAL_CAPITAL_PLAN_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS deal_capital_plan_items (
+    deal_id      TEXT NOT NULL,
+    item_id      TEXT NOT NULL,
+    ordinal      INTEGER NOT NULL,
+    description  TEXT NOT NULL,
+    category     TEXT NOT NULL,
+    month        INTEGER NOT NULL,
+    amount       REAL NOT NULL,
+    PRIMARY KEY (deal_id, item_id)
+)
+"""
+
+_CREATE_DEAL_OWNER_EXPENSE_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS deal_owner_expense_items (
+    deal_id        TEXT NOT NULL,
+    item_id        TEXT NOT NULL,
+    ordinal        INTEGER NOT NULL,
+    description    TEXT NOT NULL,
+    category       TEXT NOT NULL,
+    annual_amount  REAL NOT NULL,
+    first_year     INTEGER NOT NULL,
+    last_year      INTEGER,
+    PRIMARY KEY (deal_id, item_id)
+)
+"""
+
+_BUSINESS_PLAN_TABLES = ("deal_capital_plan_items", "deal_owner_expense_items")
 
 
 _LEASE_LEVEL_CHILD_TABLES = (
@@ -974,6 +1051,10 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # created unconditionally by ``_connect`` via CREATE TABLE IF NOT EXISTS, so
     # a v5 (or v1) database gains it without a single existing row being read or
     # rewritten, and every pre-existing deal simply has no rows in it yet.
+    # D6.5 -- schema version 7 adds the two Business Plan tables, again with
+    # nothing to do here: ``_connect`` creates them via CREATE TABLE IF NOT
+    # EXISTS, and a legacy deal with no plan rows loads as ``BusinessPlan()``
+    # without any row being written for it.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -1016,6 +1097,8 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_LEASE_LEVEL_SUITES_TABLE_SQL)
     connection.execute(_CREATE_LEASE_LEVEL_LEASES_TABLE_SQL)
     connection.execute(_CREATE_DEAL_SENSITIVITY_SNAPSHOTS_TABLE_SQL)
+    connection.execute(_CREATE_DEAL_CAPITAL_PLAN_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_DEAL_OWNER_EXPENSE_ITEMS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -1387,6 +1470,170 @@ def _delete_lease_level_children(connection: sqlite3.Connection, deal_id: str) -
         connection.execute(f"DELETE FROM {table} WHERE deal_id = ?", (deal_id,))
 
 
+# =============================================================================
+# Phase 6 Gate D6.5 -- Business Plan storage codec.
+#
+# A trusted boundary in the rent roll's sense: it restores the contract this
+# store wrote, and does not route rows through the wire parser. It is not a
+# second validation authority either -- both directions hand the whole plan to
+# ``anchor.business_plan.validation`` and refuse what it refuses.
+# =============================================================================
+
+
+def _write_business_plan(
+    connection: sqlite3.Connection, deal_id: str, business_plan: BusinessPlan
+) -> None:
+    """Write every Business Plan row for one deal, in the analyst's order.
+
+    Called inside the caller's transaction, after any existing plan rows have
+    been removed: a plan is submitted whole and replaced whole, exactly like the
+    rent roll, so an update can never leave a mixture of old and new items.
+    """
+
+    connection.executemany(
+        """
+        INSERT INTO deal_capital_plan_items
+            (deal_id, item_id, ordinal, description, category, month, amount)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                deal_id,
+                item.item_id,
+                ordinal,
+                item.description,
+                _encode_enum(item.category),
+                item.month,
+                item.amount,
+            )
+            for ordinal, item in enumerate(business_plan.capital_items)
+        ],
+    )
+    connection.executemany(
+        """
+        INSERT INTO deal_owner_expense_items
+            (deal_id, item_id, ordinal, description, category, annual_amount,
+             first_year, last_year)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                deal_id,
+                item.item_id,
+                ordinal,
+                item.description,
+                _encode_enum(item.category),
+                item.annual_amount,
+                item.first_year,
+                item.last_year,
+            )
+            for ordinal, item in enumerate(business_plan.owner_expense_items)
+        ],
+    )
+
+
+def _delete_business_plan(connection: sqlite3.Connection, deal_id: str) -> None:
+    """Remove every Business Plan row for one deal, whichever mode it is."""
+
+    for table in _BUSINESS_PLAN_TABLES:
+        connection.execute(f"DELETE FROM {table} WHERE deal_id = ?", (deal_id,))
+
+
+def _business_plan_from_rows(
+    deal_id: str,
+    capital_rows: Iterable[sqlite3.Row],
+    owner_expense_rows: Iterable[sqlite3.Row],
+) -> BusinessPlan:
+    """Rebuild one deal's ``BusinessPlan`` from its rows, already in ordinal
+    order, and refuse it if the validation authority does.
+
+    No rows is the empty plan -- the state every legacy deal is in -- reached
+    without constructing anything special for it. A row the enum no longer
+    recognises, a value of the wrong type or a cross-type duplicate ID is a
+    ``PersistedDealDataError``: silently dropping or repairing an item would
+    hand the engine a plan nobody wrote, and its numbers would look ordinary.
+    """
+
+    capital_items = tuple(
+        CapitalPlanItem(
+            item_id=row["item_id"],
+            description=row["description"],
+            category=_decode_enum(  # type: ignore[arg-type]
+                row["category"],
+                CapitalItemCategory,
+                path=f"capital plan item {row['item_id']!r} category",
+            ),
+            month=row["month"],
+            amount=row["amount"],
+        )
+        for row in capital_rows
+    )
+    owner_expense_items = tuple(
+        OwnerExpenseItem(
+            item_id=row["item_id"],
+            description=row["description"],
+            category=_decode_enum(  # type: ignore[arg-type]
+                row["category"],
+                OwnerExpenseCategory,
+                path=f"owner expense item {row['item_id']!r} category",
+            ),
+            annual_amount=row["annual_amount"],
+            first_year=row["first_year"],
+            last_year=row["last_year"],
+        )
+        for row in owner_expense_rows
+    )
+    business_plan = BusinessPlan(
+        capital_items=capital_items, owner_expense_items=owner_expense_items
+    )
+    result = validate_business_plan(business_plan)
+    if not result.is_valid:
+        raise PersistedDealDataError(
+            f"Deal {deal_id!r} holds a Business Plan that does not validate: "
+            + "; ".join(f"{issue.path}: {issue.message}" for issue in result.issues)
+        )
+    return business_plan
+
+
+def _read_business_plan(connection: sqlite3.Connection, deal_id: str) -> BusinessPlan:
+    """The Business Plan currently stored for ``deal_id`` -- two bounded
+    queries, ordered by the display ordinal the analyst's submission set."""
+
+    capital_rows = connection.execute(
+        "SELECT * FROM deal_capital_plan_items WHERE deal_id = ? ORDER BY ordinal",
+        (deal_id,),
+    ).fetchall()
+    owner_expense_rows = connection.execute(
+        "SELECT * FROM deal_owner_expense_items WHERE deal_id = ? ORDER BY ordinal",
+        (deal_id,),
+    ).fetchall()
+    return _business_plan_from_rows(deal_id, capital_rows, owner_expense_rows)
+
+
+def _read_all_business_plans(
+    connection: sqlite3.Connection, deal_ids: Iterable[str]
+) -> dict[str, BusinessPlan]:
+    """Every listed deal's Business Plan in two queries for the whole library,
+    rather than two per deal."""
+
+    capital_rows: dict[str, list[sqlite3.Row]] = {}
+    for row in connection.execute(
+        "SELECT * FROM deal_capital_plan_items ORDER BY deal_id, ordinal"
+    ):
+        capital_rows.setdefault(row["deal_id"], []).append(row)
+    owner_expense_rows: dict[str, list[sqlite3.Row]] = {}
+    for row in connection.execute(
+        "SELECT * FROM deal_owner_expense_items ORDER BY deal_id, ordinal"
+    ):
+        owner_expense_rows.setdefault(row["deal_id"], []).append(row)
+    return {
+        deal_id: _business_plan_from_rows(
+            deal_id, capital_rows.get(deal_id, ()), owner_expense_rows.get(deal_id, ())
+        )
+        for deal_id in deal_ids
+    }
+
+
 def _lease_level_input_fingerprint(
     connection: sqlite3.Connection, row: sqlite3.Row
 ) -> str:
@@ -1406,7 +1653,12 @@ def _lease_level_input_fingerprint(
     nobody could read back.
     """
 
-    deal = _row_to_lease_level_deal(connection, row, include_snapshots=False)
+    deal = _row_to_lease_level_deal(
+        connection,
+        row,
+        business_plan=_read_business_plan(connection, row["id"]),
+        include_snapshots=False,
+    )
     assert deal.terms is not None
     assert deal.property_inputs is not None
     assert deal.operating_inputs is not None
@@ -1420,13 +1672,22 @@ def _lease_level_input_fingerprint(
         deal.leases,
         market_leasing=deal.market_leasing,
         operating_inputs=deal.operating_inputs,
+        business_plan=deal.business_plan,
     )
 
 
 def _row_to_lease_level_deal(
-    connection: sqlite3.Connection, row: sqlite3.Row, *, include_snapshots: bool = True
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    business_plan: BusinessPlan,
+    include_snapshots: bool = True,
 ) -> Deal:
-    """Reassemble one Lease-Level deal from its parent row and children."""
+    """Reassemble one Lease-Level deal from its parent row and children.
+
+    ``business_plan`` is the deal's stored plan, read by the caller (D6.5).
+    Required: a reassembled deal with its plan silently replaced by an empty
+    one would fingerprint as a different deal and serve stale snapshots."""
 
     deal_id = row["id"]
 
@@ -1473,6 +1734,7 @@ def _row_to_lease_level_deal(
             leases,
             market_leasing=market_leasing,
             operating_inputs=operating_inputs,
+            business_plan=business_plan,
         )
         ai_snapshot = _decode_snapshot(
             raw_json=row["ai_snapshot"],
@@ -1508,6 +1770,7 @@ def _row_to_lease_level_deal(
         market_leasing=market_leasing,
         suites=suites,
         leases=leases,
+        business_plan=business_plan,
         deal_context=deal_context,
         # D5 decision A: never restored from persistence, and there is no column
         # it could be restored from. D5.8A does not reverse this -- the AI report
@@ -1573,14 +1836,19 @@ def _detailed_operating_inputs_from_row(row: sqlite3.Row) -> DetailedOperatingIn
     )
 
 
-def _row_to_deal(row: sqlite3.Row, *, include_snapshots: bool = True) -> Deal:
+def _row_to_deal(
+    row: sqlite3.Row, *, business_plan: BusinessPlan, include_snapshots: bool = True
+) -> Deal:
     """``include_snapshots=False`` (used by ``list_deals``) skips decoding
     the cached snapshot columns entirely, always returning
     ``analysis_snapshot=None``/``ai_snapshot=None`` regardless of what is
     stored -- the Deal Library list is a lightweight per-deal summary
     (name, mode, timestamps); it must never balloon with every saved
     deal's full cached result/AI JSON. ``get_deal`` (single-deal fetch)
-    always decodes them (the default)."""
+    always decodes them (the default).
+
+    ``business_plan`` (D6.5) is the deal's stored plan, read by the caller;
+    required for the reason ``_row_to_lease_level_deal`` gives."""
 
     inputs = _inputs_from_row(row)
     deal_context = row["deal_context"]
@@ -1588,7 +1856,9 @@ def _row_to_deal(row: sqlite3.Row, *, include_snapshots: bool = True) -> Deal:
         analysis_snapshot = None
         ai_snapshot = None
     else:
-        analysis_fingerprint = fingerprint_quick_inputs(inputs)
+        analysis_fingerprint = fingerprint_quick_inputs(
+            inputs, business_plan=business_plan
+        )
         analysis_snapshot = _decode_snapshot(
             raw_json=row["analysis_snapshot"],
             stored_schema_version=row["analysis_snapshot_schema_version"],
@@ -1614,6 +1884,7 @@ def _row_to_deal(row: sqlite3.Row, *, include_snapshots: bool = True) -> Deal:
         inputs=inputs,
         terms=None,
         detailed_operating_inputs=None,
+        business_plan=business_plan,
         deal_context=deal_context,
         analysis_snapshot=analysis_snapshot,
         ai_snapshot=ai_snapshot,
@@ -1623,9 +1894,14 @@ def _row_to_deal(row: sqlite3.Row, *, include_snapshots: bool = True) -> Deal:
 
 
 def _row_to_detailed_deal(
-    deal_row: sqlite3.Row, operating_row: sqlite3.Row, *, include_snapshots: bool = True
+    deal_row: sqlite3.Row,
+    operating_row: sqlite3.Row,
+    *,
+    business_plan: BusinessPlan,
+    include_snapshots: bool = True,
 ) -> Deal:
-    """``include_snapshots`` mirrors ``_row_to_deal``'s parameter exactly."""
+    """``include_snapshots`` and ``business_plan`` mirror ``_row_to_deal``'s
+    parameters exactly."""
 
     terms = _terms_from_row(deal_row)
     detailed_operating_inputs = _detailed_operating_inputs_from_row(operating_row)
@@ -1634,7 +1910,9 @@ def _row_to_detailed_deal(
         analysis_snapshot = None
         ai_snapshot = None
     else:
-        analysis_fingerprint = fingerprint_detailed_inputs(terms, detailed_operating_inputs)
+        analysis_fingerprint = fingerprint_detailed_inputs(
+            terms, detailed_operating_inputs, business_plan=business_plan
+        )
         analysis_snapshot = _decode_snapshot(
             raw_json=deal_row["analysis_snapshot"],
             stored_schema_version=deal_row["analysis_snapshot_schema_version"],
@@ -1660,6 +1938,7 @@ def _row_to_detailed_deal(
         inputs=None,
         terms=terms,
         detailed_operating_inputs=detailed_operating_inputs,
+        business_plan=business_plan,
         deal_context=deal_context,
         analysis_snapshot=analysis_snapshot,
         ai_snapshot=ai_snapshot,
@@ -1695,6 +1974,7 @@ def create_deal(
     inputs: AcquisitionInputs,
     *,
     deal_context: str | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
     db_path: Path | None = None,
 ) -> Deal:
     """Insert a new Quick deal and return it as stored. ``inputs`` must
@@ -1719,8 +1999,16 @@ def create_deal(
     ``update_ai_snapshot`` against the id this function returns -- both are
     independently provenance-validated against this row's own just-stored
     ``inputs``, so a mismatched snapshot is rejected exactly as it would be
-    on any other deal."""
+    on any other deal.
 
+    Phase 6 Gate D6.5: ``business_plan`` is written in the same transaction
+    as the parent row, so a deal can never exist with half a plan. It is
+    handed to the validation authority first, and an invalid plan is refused
+    (``BusinessPlanValidationError``) before anything is written. The empty
+    default is a compatibility boundary for plan-free callers; the API always
+    passes the request's plan."""
+
+    require_valid_business_plan(business_plan)
     deal_id = uuid.uuid4().hex
     now = _utc_now_iso()
 
@@ -1733,6 +2021,7 @@ def create_deal(
             """,
             (deal_id, name, *_input_values(inputs), deal_context, now, now),
         )
+        _write_business_plan(connection, deal_id, business_plan)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -1743,6 +2032,7 @@ def update_deal(
     inputs: AcquisitionInputs,
     *,
     deal_context: str | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
     db_path: Path | None = None,
 ) -> Deal:
     """Overwrite ``deal_id``'s name, inputs, and Deal Context (Gate A4),
@@ -1767,8 +2057,16 @@ def update_deal(
     fingerprint (which never depends on Deal Context) still matches and is
     preserved, while the AI snapshot's fingerprint (which does depend on
     Deal Context) no longer matches and is treated as absent -- exactly the
-    Gate A4 invalidation rules, with zero explicit clearing logic here."""
+    Gate A4 invalidation rules, with zero explicit clearing logic here.
 
+    Phase 6 Gate D6.5: the stored Business Plan is replaced whole by
+    ``business_plan`` -- every prior row removed, the new ones written -- in the
+    same transaction as the inputs, so an empty plan leaves no ghost rows and a
+    failure part-way leaves the previous inputs *and* plan intact. A plan
+    change moves the fingerprint, so the same read-time check invalidates
+    every snapshot computed under the old plan."""
+
+    require_valid_business_plan(business_plan)
     now = _utc_now_iso()
 
     with _connect(db_path) as connection:
@@ -1785,6 +2083,9 @@ def update_deal(
         if cursor.rowcount == 0:
             raise DealNotFoundError(deal_id)
 
+        _delete_business_plan(connection, deal_id)
+        _write_business_plan(connection, deal_id, business_plan)
+
     return get_deal(deal_id, db_path=db_path)
 
 
@@ -1799,6 +2100,7 @@ def create_detailed_deal(
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
     deal_context: str | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
     db_path: Path | None = None,
 ) -> Deal:
     """Insert a new Detailed deal and return it as stored. ``terms`` and
@@ -1812,8 +2114,12 @@ def create_detailed_deal(
     -- optional, user-authored, never validated as a financial input.
 
     Owner Return Metrics V3 Gate A7: mirrors ``create_deal``'s
-    no-snapshot-parameter contract exactly -- see its docstring."""
+    no-snapshot-parameter contract exactly -- see its docstring.
 
+    Phase 6 Gate D6.5: ``business_plan`` mirrors ``create_deal``'s parameter
+    exactly -- validated first, written in the same transaction."""
+
+    require_valid_business_plan(business_plan)
     deal_id = uuid.uuid4().hex
     now = _utc_now_iso()
 
@@ -1834,6 +2140,7 @@ def create_detailed_deal(
             """,
             (deal_id, *_detailed_operating_values(detailed_operating_inputs)),
         )
+        _write_business_plan(connection, deal_id, business_plan)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -1845,6 +2152,7 @@ def update_detailed_deal(
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
     deal_context: str | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
     db_path: Path | None = None,
 ) -> Deal:
     """Overwrite ``deal_id``'s name, terms, detailed operating inputs, and
@@ -1853,8 +2161,12 @@ def update_detailed_deal(
     ``detailed_deals``.
 
     Owner Return Metrics V3 Gate A7: mirrors ``update_deal``'s
-    never-touches-snapshot-columns contract exactly -- see its docstring."""
+    never-touches-snapshot-columns contract exactly -- see its docstring.
 
+    Phase 6 Gate D6.5: mirrors ``update_deal``'s whole-plan replacement, in
+    the same transaction."""
+
+    require_valid_business_plan(business_plan)
     now = _utc_now_iso()
 
     with _connect(db_path) as connection:
@@ -1879,6 +2191,8 @@ def update_detailed_deal(
             """,
             (*_detailed_operating_values(detailed_operating_inputs), deal_id),
         )
+        _delete_business_plan(connection, deal_id)
+        _write_business_plan(connection, deal_id, business_plan)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -1899,9 +2213,14 @@ def create_lease_level_deal(
     leases: tuple[Lease, ...],
     *,
     deal_context: str | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
     db_path: Path | None = None,
 ) -> Deal:
     """Persist one Lease-Level deal: parent row plus every child row.
+
+    Phase 6 Gate D6.5: the Business Plan is written in the same transaction
+    and into the same two mode-blind tables every mode uses -- the rent roll's
+    tables never carry it.
 
     Takes **typed contracts**, never a mapping. The API layer has already turned
     the request body into these through the D5.2 parser; handing this function
@@ -1915,6 +2234,7 @@ def create_lease_level_deal(
     design (D5 decision A) -- opening the deal re-runs the engine.
     """
 
+    require_valid_business_plan(business_plan)
     deal_id = uuid.uuid4().hex
     now = _utc_now_iso()
 
@@ -1937,6 +2257,7 @@ def create_lease_level_deal(
             suites,
             leases,
         )
+        _write_business_plan(connection, deal_id, business_plan)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -1952,9 +2273,13 @@ def update_lease_level_deal(
     leases: tuple[Lease, ...],
     *,
     deal_context: str | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
     db_path: Path | None = None,
 ) -> Deal:
     """Replace one Lease-Level deal's approved input state.
+
+    Phase 6 Gate D6.5: the Business Plan is replaced whole in the same
+    transaction as the rent roll, exactly as ``update_deal`` replaces it.
 
     The rent roll is replaced wholesale -- children deleted, then rewritten --
     rather than diffed row by row. A rent roll is submitted whole, ``suite_id``
@@ -1966,6 +2291,7 @@ def update_lease_level_deal(
     roll intact rather than a half-replaced one.
     """
 
+    require_valid_business_plan(business_plan)
     with _connect(db_path) as connection:
         cursor = connection.execute(
             f"""
@@ -1991,6 +2317,8 @@ def update_lease_level_deal(
             suites,
             leases,
         )
+        _delete_business_plan(connection, deal_id)
+        _write_business_plan(connection, deal_id, business_plan)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -1998,14 +2326,19 @@ def get_deal(deal_id: str, *, db_path: Path | None = None) -> Deal:
     """Return the deal with ``deal_id``, dispatching by which table
     actually holds it: ``deals`` (Quick) first, then ``detailed_deals`` +
     ``detailed_operating_inputs`` (Detailed). Raises ``DealNotFoundError``
-    if ``deal_id`` is in neither."""
+    if ``deal_id`` is in neither.
+
+    Phase 6 Gate D6.5: every mode's deal carries its stored Business Plan,
+    read from the same two tables inside the same connection."""
 
     with _connect(db_path) as connection:
         quick_row = connection.execute(
             "SELECT * FROM deals WHERE id = ?", (deal_id,)
         ).fetchone()
         if quick_row is not None:
-            return _row_to_deal(quick_row)
+            return _row_to_deal(
+                quick_row, business_plan=_read_business_plan(connection, deal_id)
+            )
 
         detailed_row = connection.execute(
             "SELECT * FROM detailed_deals WHERE id = ?", (deal_id,)
@@ -2019,7 +2352,11 @@ def get_deal(deal_id: str, *, db_path: Path | None = None) -> Deal:
             ).fetchone()
             if lease_level_row is None:
                 raise DealNotFoundError(deal_id)
-            return _row_to_lease_level_deal(connection, lease_level_row)
+            return _row_to_lease_level_deal(
+                connection,
+                lease_level_row,
+                business_plan=_read_business_plan(connection, deal_id),
+            )
 
         operating_row = connection.execute(
             "SELECT * FROM detailed_operating_inputs WHERE deal_id = ?", (deal_id,)
@@ -2031,7 +2368,11 @@ def get_deal(deal_id: str, *, db_path: Path | None = None) -> Deal:
             # somehow does (e.g. a hand-edited database).
             raise DealNotFoundError(deal_id)
 
-        return _row_to_detailed_deal(detailed_row, operating_row)
+        return _row_to_detailed_deal(
+            detailed_row,
+            operating_row,
+            business_plan=_read_business_plan(connection, deal_id),
+        )
 
 
 def list_deals(*, db_path: Path | None = None) -> list[Deal]:
@@ -2051,11 +2392,23 @@ def list_deals(*, db_path: Path | None = None) -> list[Deal]:
         lease_level_rows = connection.execute(
             "SELECT * FROM lease_level_deals"
         ).fetchall()
+        # D6.5: every listed deal's Business Plan, in two queries for the whole
+        # library. A plan is input state, like the rent roll, so a listed deal
+        # carries its real plan rather than a placeholder.
+        business_plans = _read_all_business_plans(
+            connection,
+            [row["id"] for row in (*quick_rows, *detailed_rows, *lease_level_rows)],
+        )
         # Built inside the connection block: a Lease-Level deal is assembled
         # from five child tables, so its reader needs the live connection --
         # unlike the flat Quick/Detailed rows, which are complete on their own.
         lease_level_deals = [
-            _row_to_lease_level_deal(connection, row, include_snapshots=False)
+            _row_to_lease_level_deal(
+                connection,
+                row,
+                business_plan=business_plans[row["id"]],
+                include_snapshots=False,
+            )
             for row in lease_level_rows
         ]
         operating_rows_by_deal_id = {
@@ -2063,10 +2416,18 @@ def list_deals(*, db_path: Path | None = None) -> list[Deal]:
             for row in connection.execute("SELECT * FROM detailed_operating_inputs")
         }
 
-    quick_deals = [_row_to_deal(row, include_snapshots=False) for row in quick_rows]
+    quick_deals = [
+        _row_to_deal(
+            row, business_plan=business_plans[row["id"]], include_snapshots=False
+        )
+        for row in quick_rows
+    ]
     detailed_deals = [
         _row_to_detailed_deal(
-            row, operating_rows_by_deal_id[row["id"]], include_snapshots=False
+            row,
+            operating_rows_by_deal_id[row["id"]],
+            business_plan=business_plans[row["id"]],
+            include_snapshots=False,
         )
         for row in detailed_rows
     ]
@@ -2100,6 +2461,11 @@ def delete_deal(deal_id: str, *, db_path: Path | None = None) -> None:
         connection.execute(
             "DELETE FROM deal_sensitivity_snapshots WHERE deal_id = ?", (deal_id,)
         )
+        # D6.5: the Business Plan tables are mode-blind, so their rows go the
+        # same way and for the same reason -- unconditionally, first, for every
+        # mode. A deal id that turns out to exist nowhere raises below, and the
+        # raise rolls this delete back with everything else.
+        _delete_business_plan(connection, deal_id)
 
         cursor = connection.execute("DELETE FROM deals WHERE id = ?", (deal_id,))
         if cursor.rowcount > 0:
@@ -2159,7 +2525,14 @@ def duplicate_deal(
     this recomputed fingerprint is guaranteed to match the new row too -- the
     copy always succeeds, never spuriously rejected. The very first edit to
     the copy's assumptions or Deal Context invalidates its (independent)
-    copy exactly like any other change -- see ``update_deal``."""
+    copy exactly like any other change -- see ``update_deal``.
+
+    Phase 6 Gate D6.5: the Business Plan is underwriting, not an analytical
+    output, so it is always copied -- every item, in order, with the same item
+    IDs (unique only within one plan) -- in the same transaction that creates
+    the copy. The copy's rows are its own: editing or deleting either deal's
+    plan never touches the other's. Both fingerprints include the plan, so a
+    copied snapshot stays valid exactly when the copied plan is unchanged."""
 
     original = get_deal(deal_id, db_path=db_path)
     new_name = name if name else f"{original.name} (Copy)"
@@ -2177,9 +2550,12 @@ def duplicate_deal(
                 new_name,
                 original.inputs,
                 deal_context=original.deal_context,
+                business_plan=original.business_plan,
                 db_path=db_path,
             )
-            analysis_fingerprint = fingerprint_quick_inputs(original.inputs)
+            analysis_fingerprint = fingerprint_quick_inputs(
+                original.inputs, business_plan=original.business_plan
+            )
         case OperatingMode.DETAILED:
             assert original.terms is not None
             assert original.detailed_operating_inputs is not None
@@ -2188,10 +2564,13 @@ def duplicate_deal(
                 original.terms,
                 original.detailed_operating_inputs,
                 deal_context=original.deal_context,
+                business_plan=original.business_plan,
                 db_path=db_path,
             )
             analysis_fingerprint = fingerprint_detailed_inputs(
-                original.terms, original.detailed_operating_inputs
+                original.terms,
+                original.detailed_operating_inputs,
+                business_plan=original.business_plan,
             )
         case OperatingMode.LEASE_LEVEL:
             # D5.4 implements what D5.1A made safe. The copy keeps its own mode
@@ -2213,6 +2592,7 @@ def duplicate_deal(
                 original.suites,
                 original.leases,
                 deal_context=original.deal_context,
+                business_plan=original.business_plan,
                 db_path=db_path,
             )
             analysis_fingerprint = fingerprint_lease_level_inputs(
@@ -2222,6 +2602,7 @@ def duplicate_deal(
                 original.leases,
                 market_leasing=original.market_leasing,
                 operating_inputs=original.operating_inputs,
+                business_plan=original.business_plan,
             )
         case _:
             raise UnsupportedOperatingModeError(
@@ -2328,7 +2709,10 @@ def update_analysis_snapshot(
     with _connect(db_path) as connection:
         quick_row = connection.execute("SELECT * FROM deals WHERE id = ?", (deal_id,)).fetchone()
         if quick_row is not None:
-            expected_fingerprint = fingerprint_quick_inputs(_inputs_from_row(quick_row))
+            expected_fingerprint = fingerprint_quick_inputs(
+                _inputs_from_row(quick_row),
+                business_plan=_read_business_plan(connection, deal_id),
+            )
             _validate_provenance(
                 provided_fingerprint=financial_input_fingerprint,
                 expected_fingerprint=expected_fingerprint,
@@ -2357,7 +2741,9 @@ def update_analysis_snapshot(
                 raise DealNotFoundError(deal_id)
 
             expected_fingerprint = fingerprint_detailed_inputs(
-                _terms_from_row(detailed_row), _detailed_operating_inputs_from_row(operating_row)
+                _terms_from_row(detailed_row),
+                _detailed_operating_inputs_from_row(operating_row),
+                business_plan=_read_business_plan(connection, deal_id),
             )
             _validate_provenance(
                 provided_fingerprint=financial_input_fingerprint,
@@ -2402,7 +2788,10 @@ def update_ai_snapshot(
     with _connect(db_path) as connection:
         quick_row = connection.execute("SELECT * FROM deals WHERE id = ?", (deal_id,)).fetchone()
         if quick_row is not None:
-            analysis_fingerprint = fingerprint_quick_inputs(_inputs_from_row(quick_row))
+            analysis_fingerprint = fingerprint_quick_inputs(
+                _inputs_from_row(quick_row),
+                business_plan=_read_business_plan(connection, deal_id),
+            )
             expected_fingerprint = fingerprint_ai(
                 analysis_fingerprint=analysis_fingerprint, deal_context=quick_row["deal_context"]
             )
@@ -2433,6 +2822,7 @@ def update_ai_snapshot(
                 analysis_fingerprint = fingerprint_detailed_inputs(
                     _terms_from_row(detailed_row),
                     _detailed_operating_inputs_from_row(operating_row),
+                    business_plan=_read_business_plan(connection, deal_id),
                 )
                 expected_fingerprint = fingerprint_ai(
                     analysis_fingerprint=analysis_fingerprint,

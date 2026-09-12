@@ -34,6 +34,11 @@ from ..analysis import (
     MarketLeasingAssumptions,
     Suite,
 )
+from ..business_plan import BusinessPlan
+
+#: The top-level fingerprint key a non-empty Business Plan is recorded under.
+#: No economic contract has a field of this name, so it cannot collide with one.
+_BUSINESS_PLAN_KEY = "business_plan"
 
 
 class UnfingerprintableValueError(TypeError):
@@ -101,29 +106,90 @@ def _fingerprint_json(value: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def fingerprint_quick_inputs(inputs: AcquisitionInputs) -> str:
-    """The authoritative financial-input fingerprint for a Quick deal --
-    every ``AcquisitionInputs`` field, nothing else. Deliberately excludes
-    ``deal_context`` (Gate A4): Deal Context never affects deterministic
-    calculation, so it never affects analysis-snapshot validity."""
+def _with_business_plan(
+    payload: dict[str, Any], business_plan: BusinessPlan
+) -> dict[str, Any]:
+    """Phase 6 Gate D6.5 -- ``payload`` with the deal's Business Plan in it.
 
-    return _fingerprint_json(dataclasses.asdict(inputs))
+    **The empty plan adds nothing** (decision D11). A deal with no Business
+    Plan hashes exactly the payload it hashed before D6.5, so every legacy
+    digest -- and every snapshot stored against one -- is preserved byte for
+    byte. A non-empty plan always adds the key, so no non-empty plan can share a
+    digest with the empty one.
+
+    **Every field of every item participates**, through ``dataclasses.asdict``
+    exactly as the Lease-Level rent roll does: amounts and timing because they
+    move owner cash flow; descriptions and categories because the AI Analyst,
+    audit and reporting read them, so an analysis must be re-run when they
+    change; ``item_id`` because it is the item's identity.
+
+    **Canonical over economics, not over presentation.** Each collection is
+    sorted by ``item_id`` -- the same rule the rent roll follows -- so the
+    analyst's row order, and the storage ``ordinal`` that preserves it, never
+    reach the digest: reordering rows changes no number, and must not make a
+    still-valid snapshot stale. Sorting is not deduplication; a duplicated ID is
+    refused by the validation authority, never collapsed here.
+    """
+
+    if not isinstance(business_plan, BusinessPlan):
+        raise UnfingerprintableValueError(business_plan)
+    if not business_plan.capital_items and not business_plan.owner_expense_items:
+        return payload
+    return {
+        **payload,
+        _BUSINESS_PLAN_KEY: {
+            "capital_items": [
+                dataclasses.asdict(item)
+                for item in sorted(business_plan.capital_items, key=lambda item: item.item_id)
+            ],
+            "owner_expense_items": [
+                dataclasses.asdict(item)
+                for item in sorted(
+                    business_plan.owner_expense_items, key=lambda item: item.item_id
+                )
+            ],
+        },
+    }
+
+
+def fingerprint_quick_inputs(
+    inputs: AcquisitionInputs, *, business_plan: BusinessPlan = BusinessPlan()
+) -> str:
+    """The authoritative financial-input fingerprint for a Quick deal --
+    every ``AcquisitionInputs`` field and the deal's Business Plan (D6.5),
+    nothing else. Deliberately excludes ``deal_context`` (Gate A4): Deal
+    Context never affects deterministic calculation, so it never affects
+    analysis-snapshot validity.
+
+    ``business_plan`` defaults to the empty plan only as a compatibility
+    boundary for plan-free callers; every production caller passes the deal's
+    own plan explicitly (``tests/test_d6_5_business_plan_persistence_architecture.py``)."""
+
+    return _fingerprint_json(
+        _with_business_plan(dataclasses.asdict(inputs), business_plan)
+    )
 
 
 def fingerprint_detailed_inputs(
-    terms: AcquisitionTerms, detailed_operating_inputs: DetailedOperatingInputs
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> str:
     """The authoritative financial-input fingerprint for a Detailed deal --
     every ``AcquisitionTerms`` and ``DetailedOperatingInputs`` field (the
-    complete deterministic-engine input set for Detailed Underwrite),
-    nothing else. Excludes ``deal_context`` for the same reason as the
-    Quick fingerprint above."""
+    complete deterministic-engine input set for Detailed Underwrite) and the
+    deal's Business Plan (D6.5), nothing else. Excludes ``deal_context`` for
+    the same reason as the Quick fingerprint above."""
 
     return _fingerprint_json(
-        {
-            "terms": dataclasses.asdict(terms),
-            "detailed_operating_inputs": dataclasses.asdict(detailed_operating_inputs),
-        }
+        _with_business_plan(
+            {
+                "terms": dataclasses.asdict(terms),
+                "detailed_operating_inputs": dataclasses.asdict(detailed_operating_inputs),
+            },
+            business_plan,
+        )
     )
 
 
@@ -148,8 +214,13 @@ def fingerprint_lease_level_inputs(
     *,
     market_leasing: MarketLeasingAssumptions,
     operating_inputs: LeaseLevelOperatingInputs,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> str:
     """The authoritative financial-input fingerprint for a Lease-Level deal.
+
+    D6.5: the deal's Business Plan joins it under its own top-level key, beside
+    ``"lease_level"`` rather than inside it -- the plan is mode-agnostic deal
+    state, not part of the rent roll -- and only when it is non-empty.
 
     Every field of every contract the deterministic pipeline reads -- the same
     six arguments ``analyze_lease_level_acquisition_with_projection`` takes,
@@ -178,20 +249,23 @@ def fingerprint_lease_level_inputs(
     """
 
     return _fingerprint_json(
-        {
-            "lease_level": {
-                "terms": dataclasses.asdict(terms),
-                "property_inputs": dataclasses.asdict(property_inputs),
-                "operating_inputs": dataclasses.asdict(operating_inputs),
-                "market_leasing": dataclasses.asdict(market_leasing),
-                "suites": [
-                    dataclasses.asdict(suite)
-                    for suite in sorted(suites, key=lambda suite: suite.suite_id)
-                ],
-                "leases": [
-                    dataclasses.asdict(lease)
-                    for lease in sorted(leases, key=lambda lease: lease.lease_id)
-                ],
-            }
-        }
+        _with_business_plan(
+            {
+                "lease_level": {
+                    "terms": dataclasses.asdict(terms),
+                    "property_inputs": dataclasses.asdict(property_inputs),
+                    "operating_inputs": dataclasses.asdict(operating_inputs),
+                    "market_leasing": dataclasses.asdict(market_leasing),
+                    "suites": [
+                        dataclasses.asdict(suite)
+                        for suite in sorted(suites, key=lambda suite: suite.suite_id)
+                    ],
+                    "leases": [
+                        dataclasses.asdict(lease)
+                        for lease in sorted(leases, key=lambda lease: lease.lease_id)
+                    ],
+                }
+            },
+            business_plan,
+        )
     )

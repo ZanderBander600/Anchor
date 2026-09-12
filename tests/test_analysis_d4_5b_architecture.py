@@ -281,11 +281,13 @@ def test_g6_the_bridge_is_the_only_lease_level_orchestrator() -> None:
     # resolves a plan and calls this exact bridge once -- no builder, no engine
     # call of its own -- so the consumer list widens by one named file and the
     # ban on a second orchestrator is again untouched.
+    # D6.5 narrows it by one: ``api.py`` now reaches the bridge only through
+    # the D6.2 Lease-Level Business Plan entry point (so every request's plan is
+    # resolved on the way), and no longer imports the bridge itself.
     assert importers == [
         "anchor/analysis/__init__.py",
         "anchor/analysis/business_plan_analysis.py",
         "anchor/analysis/lease_level_sensitivity.py",
-        "anchor/api.py",
     ]
 
 
@@ -1307,17 +1309,24 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     # by name, and D5.8A stores none -- a sensitivity snapshot is the response to
     # an analyst-directed question, restored as-is and never recomputed, and the
     # base Lease-Level analysis is still re-run from approved inputs on open.
-    assert "_SCHEMA_VERSION = 6" in store
+    # D6.5 moves it to 7: two mode-blind Business Plan *input* tables, added the
+    # same purely additive way. Still no Lease-Level financial result is stored.
+    assert "_SCHEMA_VERSION = 7" in store
     assert "deal_sensitivity_snapshots" in store, (
         "D5.8A should persist the latest Lease-Level sensitivity runs"
+    )
+    assert "deal_capital_plan_items" in store and "deal_owner_expense_items" in store, (
+        "D6.5 should persist the Business Plan"
     )
 
     # D5.3 ledger: the API reaches exactly the approved entry points.
     api_text = (_ANCHOR_DIR / "api.py").read_text(encoding="utf-8")
     assert "case OperatingMode.LEASE_LEVEL:" in api_text
     assert "_unsupported_operating_mode" in api_text
+    # D6.5: the base analysis is wired through the D6.2 Lease-Level Business
+    # Plan entry point, which calls the D4.5B bridge exactly once.
     for wired in (
-        "analyze_lease_level_acquisition_with_projection",
+        "analyze_lease_level_acquisition_with_business_plan",
         "run_lease_level_one_way_sensitivity",
         "run_lease_level_two_way_sensitivity",
         "parse_lease_level_inputs",
