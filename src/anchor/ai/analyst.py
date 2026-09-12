@@ -27,6 +27,13 @@ flow produced, so the AI Analyst always interprets the exact analysis the
 analyst approved rather than a second run of its own. It calls no sensitivity
 preset builder and no break-even search either -- Lease-Level has neither, and
 inventing one at AI time is precisely what this module exists not to do.
+
+Phase 6 Gate D6.4 threads the deal's Business Plan, mechanically, through the
+Quick and Detailed arms: the base analysis runs through the mode's D6 Business
+Plan entry point, and the same plan reaches the preset bundle and the
+break-even bundle, so every number in the context carries the same plan.
+``BusinessPlan()`` is the default for callers that supply none. What the AI is
+told about the plan is D6.8's; nothing here changes the prompt.
 """
 
 from __future__ import annotations
@@ -35,18 +42,20 @@ from ..analysis import (
     LeaseLevelAcquisitionResults,
     ParsedLeaseLevelInputs,
     ReturnHurdleMetric,
+    analyze_detailed_acquisition_with_business_plan,
+    analyze_quick_acquisition_with_business_plan,
     build_standard_break_even_analysis,
     build_standard_detailed_break_even_analysis,
     build_standard_detailed_presets,
     build_standard_presets,
 )
+from ..business_plan import BusinessPlan
 from ..contracts import (
     AcquisitionInputs,
     AcquisitionTerms,
     DetailedOperatingInputs,
     OperatingMode,
 )
-from ..engine import analyze_acquisition, analyze_detailed_acquisition_with_projection
 from .contracts import AIAnalysis, AnalysisContext
 from .prompts import build_system_prompt, build_user_prompt
 from .provider import OpenAIAnalystProvider
@@ -60,28 +69,33 @@ def build_analysis_context(
     target_headline_dscr: float,
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
     deal_context: str | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> AnalysisContext:
     """Assemble one deterministic ``AnalysisContext`` for ``inputs`` (Quick
     Underwrite) -- unchanged behavior since Phase 9A, now explicitly
     ``operating_mode=QUICK`` with ``terms``/``detailed_operating_inputs``/
     ``operating_projection`` all ``None``.
 
-    Calls ``analyze_acquisition``, ``build_standard_presets``, and
-    ``build_standard_break_even_analysis`` -- the same authoritative Phase
-    2/7/8 entry points the ``/analyze``, ``/sensitivity/presets``, and
-    ``/break-even`` endpoints use -- exactly once each, and reads their
+    Calls ``analyze_quick_acquisition_with_business_plan``,
+    ``build_standard_presets``, and ``build_standard_break_even_analysis``
+    -- the same authoritative analysis entry points the ``/analyze``,
+    ``/sensitivity/presets``, and ``/break-even`` endpoints use -- exactly
+    once each, each with the same ``business_plan`` (D6.4), and reads their
     results directly into the context. No financial formula, sensitivity
     scenario, or break-even search is reproduced here.
     """
 
-    results = analyze_acquisition(inputs)
-    sensitivities = build_standard_presets(inputs)
+    results = analyze_quick_acquisition_with_business_plan(
+        inputs, business_plan=business_plan
+    )
+    sensitivities = build_standard_presets(inputs, business_plan=business_plan)
     break_even = build_standard_break_even_analysis(
         inputs,
         target_levered_irr=target_levered_irr,
         target_headline_dscr=target_headline_dscr,
         target_equity_multiple=target_equity_multiple,
         return_hurdle_metric=return_hurdle_metric,
+        business_plan=business_plan,
     )
 
     return AnalysisContext(
@@ -110,6 +124,7 @@ def build_detailed_analysis_context(
     target_headline_dscr: float,
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
     deal_context: str | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> AnalysisContext:
     """Assemble one deterministic ``AnalysisContext`` for ``terms`` +
     ``detailed_operating_inputs`` (Detailed Underwrite), Detailed Operating
@@ -118,18 +133,22 @@ def build_detailed_analysis_context(
     No ``AcquisitionInputs`` is constructed, read, or required anywhere in
     this call -- ``current_noi``/``noi_growth``/``occupancy`` simply do not
     exist in this path, matching the engine-layer Gate 3/4 resolution.
-    Calls ``analyze_detailed_acquisition_with_projection`` (which builds
+    Calls ``analyze_detailed_acquisition_with_business_plan`` (which builds
     the Detailed operating projection exactly once and reuses it for both
     the ``operating_projection`` context field and the ``results``
     calculation), ``build_standard_detailed_presets``, and
     ``build_standard_detailed_break_even_analysis`` -- the Detailed
-    counterparts of the Quick entry points above -- exactly once each. No
-    financial formula, sensitivity scenario, or break-even search is
-    reproduced here.
+    counterparts of the Quick entry points above -- exactly once each, each
+    with the same ``business_plan`` (D6.4). No financial formula,
+    sensitivity scenario, or break-even search is reproduced here.
     """
 
-    envelope = analyze_detailed_acquisition_with_projection(terms, detailed_operating_inputs)
-    sensitivities = build_standard_detailed_presets(terms, detailed_operating_inputs)
+    envelope = analyze_detailed_acquisition_with_business_plan(
+        terms, detailed_operating_inputs, business_plan=business_plan
+    )
+    sensitivities = build_standard_detailed_presets(
+        terms, detailed_operating_inputs, business_plan=business_plan
+    )
     break_even = build_standard_detailed_break_even_analysis(
         terms,
         detailed_operating_inputs,
@@ -137,6 +156,7 @@ def build_detailed_analysis_context(
         target_headline_dscr=target_headline_dscr,
         target_equity_multiple=target_equity_multiple,
         return_hurdle_metric=return_hurdle_metric,
+        business_plan=business_plan,
     )
 
     return AnalysisContext(
@@ -235,10 +255,12 @@ def generate_ai_analysis(
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
     deal_context: str | None = None,
     provider: OpenAIAnalystProvider | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> AIAnalysis:
     """Build the deterministic Quick context for ``inputs`` and return one
     AI Analyst interpretation of it -- unchanged public signature/behavior
-    since Phase 9A, plus the optional Gate A4 ``deal_context`` passthrough."""
+    since Phase 9A, plus the optional Gate A4 ``deal_context`` passthrough
+    and the D6.4 ``business_plan`` passthrough."""
 
     context = build_analysis_context(
         inputs,
@@ -247,6 +269,7 @@ def generate_ai_analysis(
         target_headline_dscr=target_headline_dscr,
         return_hurdle_metric=return_hurdle_metric,
         deal_context=deal_context,
+        business_plan=business_plan,
     )
     return _generate_from_context(context, provider=provider)
 
@@ -261,11 +284,13 @@ def generate_detailed_ai_analysis(
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
     deal_context: str | None = None,
     provider: OpenAIAnalystProvider | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> AIAnalysis:
     """Build the deterministic Detailed context for ``terms`` +
     ``detailed_operating_inputs`` and return one AI Analyst interpretation
     of it (Detailed Operating Model V2.1 Gate 9), plus the optional Gate A4
-    ``deal_context`` passthrough."""
+    ``deal_context`` passthrough and the D6.4 ``business_plan``
+    passthrough."""
 
     context = build_detailed_analysis_context(
         terms,
@@ -275,6 +300,7 @@ def generate_detailed_ai_analysis(
         target_headline_dscr=target_headline_dscr,
         return_hurdle_metric=return_hurdle_metric,
         deal_context=deal_context,
+        business_plan=business_plan,
     )
     return _generate_from_context(context, provider=provider)
 

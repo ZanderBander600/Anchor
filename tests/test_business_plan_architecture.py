@@ -69,6 +69,12 @@ _D4_6A_COMMIT = "15e910d"
 #: **Narrowed at D6.3** by exactly ``engine/returns.py``, held to the D6.3
 #: source-region and solver-identity claims in
 #: ``tests/test_d6_3_project_returns_architecture.py``.
+#:
+#: **Narrowed at D6.4** by exactly the four plan-aware secondary-analysis
+#: modules -- ``analysis/sensitivity.py``, ``analysis/break_even.py``,
+#: ``analysis/lease_level_sensitivity.py`` and ``ai/analyst.py`` -- held to the
+#: omission guard and the threading-only AST claim against ba804ca in
+#: ``tests/test_d6_4_business_plan_threading_architecture.py``.
 _UNCHANGED_FINANCIAL_PATHS = (
     "src/anchor/engine/__init__.py",
     "src/anchor/engine/debt.py",
@@ -76,11 +82,7 @@ _UNCHANGED_FINANCIAL_PATHS = (
     "src/anchor/engine/operating_projection.py",
     "src/anchor/leasing",
     "src/anchor/analysis/contracts.py",
-    "src/anchor/analysis/sensitivity.py",
-    "src/anchor/analysis/break_even.py",
-    "src/anchor/analysis/lease_level_sensitivity.py",
     "src/anchor/ai/__init__.py",
-    "src/anchor/ai/analyst.py",
     "src/anchor/ai/contracts.py",
     "src/anchor/ai/prompts.py",
     "src/anchor/ai/provider.py",
@@ -259,7 +261,16 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
     generic ``OwnerCapitalSchedule`` to a mode's entry point. The engine, the
     Lease-Level bridge, leasing, sensitivity, break-even, deals, AI and the API
     still import nothing from ``anchor.business_plan`` (D6.4 and D6.5 own the
-    next consumers)."""
+    next consumers).
+
+    **Narrowed at D6.4 -- by exactly four named files.** Sensitivity,
+    break-even and Lease-Level sensitivity take the plan as a keyword and
+    resolve it once per invocation; the AI Analyst names the contract to pass it
+    on. What each of them may import (``BusinessPlan``, plus the one resolver
+    for the three analysis modules) is pinned by
+    ``tests/test_d6_4_business_plan_threading_architecture.py``. The engine,
+    the Lease-Level bridge, leasing, deals and the API still import nothing
+    from ``anchor.business_plan`` (D6.5 owns the next consumers)."""
 
     importers = sorted(
         str(source_file.relative_to(_SRC_DIR)).replace("\\", "/")
@@ -271,9 +282,13 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
         )
     )
 
-    assert importers == ["anchor/analysis/business_plan_analysis.py"], (
-        f"anchor.business_plan is imported by {importers}"
-    )
+    assert importers == [
+        "anchor/ai/analyst.py",
+        "anchor/analysis/break_even.py",
+        "anchor/analysis/business_plan_analysis.py",
+        "anchor/analysis/lease_level_sensitivity.py",
+        "anchor/analysis/sensitivity.py",
+    ], f"anchor.business_plan is imported by {importers}"
 
 
 def test_importing_the_engine_and_leasing_does_not_pull_in_the_business_plan() -> None:
@@ -373,7 +388,14 @@ def test_owner_capital_schedule_is_referenced_only_by_its_producer_and_consumers
     """**Narrowed at D6.2 -- by exactly two named files.** The contract is
     produced by the resolver and consumed by the engine's acquisition module;
     the Lease-Level bridge names it only to pass it through. No debt, returns,
-    NOI, sensitivity, break-even, API, AI or persistence module names it."""
+    NOI, sensitivity, break-even, API, AI or persistence module names it.
+
+    **Narrowed at D6.4 -- by exactly three more named files.** Sensitivity,
+    break-even and Lease-Level sensitivity resolve the plan once per invocation
+    and hand the one schedule to every candidate, so their required keyword-only
+    ``owner_capital`` parameters name the type. They never construct or read
+    one (``tests/test_d6_4_business_plan_threading_architecture.py``). Debt,
+    returns, NOI, API, AI and persistence still do not name it."""
 
     def mentions(source_file: Path) -> bool:
         tree = ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
@@ -392,7 +414,10 @@ def test_owner_capital_schedule_is_referenced_only_by_its_producer_and_consumers
     )
 
     assert referencing == [
+        "anchor/analysis/break_even.py",
         "anchor/analysis/lease_level.py",
+        "anchor/analysis/lease_level_sensitivity.py",
+        "anchor/analysis/sensitivity.py",
         "anchor/business_plan/resolver.py",
         "anchor/engine/acquisition.py",
         "anchor/engine/contracts.py",

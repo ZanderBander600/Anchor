@@ -700,6 +700,15 @@ def test_each_business_plan_entry_point_resolves_once_and_delegates_once() -> No
 
 
 def test_a_business_plan_is_resolved_in_exactly_one_module() -> None:
+    """**Narrowed at D6.4 -- by exactly the three secondary-analysis modules.**
+    Sensitivity and break-even hold one plan fixed across many candidates, so
+    each resolves it once per invocation, for the base hold, rather than
+    routing every candidate through the per-call D6.2 entry points. Each
+    resolution site is enumerated, and pinned to ``owner_capital =
+    resolve_business_plan(business_plan, hold_period=<base>.hold_period)``, by
+    ``tests/test_d6_4_business_plan_threading_architecture.py``. The engine,
+    the Lease-Level bridge, AI, the API and persistence still resolve nothing."""
+
     resolvers = sorted(
         str(path.relative_to(_SRC_DIR)).replace("\\", "/")
         for path in _ANCHOR_DIR.rglob("*.py")
@@ -709,7 +718,12 @@ def test_a_business_plan_is_resolved_in_exactly_one_module() -> None:
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
         )
     )
-    assert resolvers == ["anchor/analysis/business_plan_analysis.py"]
+    assert resolvers == [
+        "anchor/analysis/break_even.py",
+        "anchor/analysis/business_plan_analysis.py",
+        "anchor/analysis/lease_level_sensitivity.py",
+        "anchor/analysis/sensitivity.py",
+    ]
 
 
 def test_the_lease_level_bridge_only_passes_owner_capital_through() -> None:

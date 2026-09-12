@@ -11,6 +11,16 @@ off the returned ``AcquisitionResults`` and compares it to a user-supplied
 hurdle. The search itself is a plain bounded bisection over the assumption
 value -- no ``scipy``, no numerical optimizer, no symbolic algebra.
 
+**Phase 6 Gate D6.4 -- the Business Plan is held fixed.** Every public
+function takes a keyword-only ``business_plan``, resolved once per question for
+the base deal's hold period (no break-even assumption is the hold period). The
+baseline and every candidate the search evaluates run with that one
+``OwnerCapitalSchedule``. The search itself is unchanged: the same bounds,
+tolerances and bisection, and ``_meets_hurdle``'s rule that an undefined metric
+never meets a hurdle -- including a levered IRR that a Business Plan's
+multiple sign changes leave undefined. ``BusinessPlan()`` is the default only
+for callers that supply no plan.
+
 Architecture (mirrors ``sensitivity.py``):
 
     financial engine
@@ -29,12 +39,14 @@ from collections.abc import Callable, Mapping
 from enum import StrEnum
 from math import isfinite
 
+from ..business_plan import BusinessPlan, resolve_business_plan
 from ..contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs
 from ..engine import (
     AcquisitionResults,
     analyze_acquisition,
     analyze_detailed_acquisition_with_projection,
 )
+from ..engine.contracts import OwnerCapitalSchedule
 from ..validation import (
     InputValidationError,
     validate_acquisition_inputs,
@@ -93,17 +105,26 @@ def _build_scenario_inputs(
 
 
 def _evaluate_candidate(
-    inputs: AcquisitionInputs, *, assumption: str, metric: str, candidate_value: float
+    inputs: AcquisitionInputs,
+    *,
+    owner_capital: OwnerCapitalSchedule,
+    assumption: str,
+    metric: str,
+    candidate_value: float,
 ) -> float | None:
     """Build one validated candidate scenario, call the authoritative
     ``analyze_acquisition`` exactly once, and read off ``metric``.
+
+    ``owner_capital`` is the resolved Business Plan the whole search holds
+    fixed (D6.4); it is required, so a candidate cannot be evaluated without
+    it.
 
     Never converts a legitimately ``None`` metric (e.g. ``headline_dscr``
     under zero leverage) to zero, infinity, or any fabricated value.
     """
 
     scenario_inputs = _build_scenario_inputs(inputs, {assumption: candidate_value})
-    scenario_results = analyze_acquisition(scenario_inputs)
+    scenario_results = analyze_acquisition(scenario_inputs, owner_capital=owner_capital)
     return _extract_metric(scenario_results, metric)
 
 
@@ -117,6 +138,7 @@ def _meets_hurdle(metric_value: float | None, target: float) -> bool:
 def _resolve_undefined_favorable_endpoint(
     inputs: AcquisitionInputs,
     *,
+    owner_capital: OwnerCapitalSchedule,
     assumption: str,
     metric: str,
     undefined_value: float,
@@ -160,7 +182,11 @@ def _resolve_undefined_favorable_endpoint(
             break
         midpoint = (still_undefined_value + defined_value) / 2
         midpoint_metric = _evaluate_candidate(
-            inputs, assumption=assumption, metric=metric, candidate_value=midpoint
+            inputs,
+            owner_capital=owner_capital,
+            assumption=assumption,
+            metric=metric,
+            candidate_value=midpoint,
         )
         if midpoint_metric is None:
             still_undefined_value = midpoint
@@ -244,6 +270,7 @@ def solve_break_even_threshold(
     direction: BreakEvenDirection,
     lower_bound: float,
     upper_bound: float,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> tuple[float | None, float | None, BreakEvenStatus]:
     """Bounded bisection-style threshold search between ``lower_bound`` and
     ``upper_bound``.
@@ -253,10 +280,42 @@ def solve_break_even_threshold(
     calls ``analyze_acquisition`` -- ``inputs`` itself is never mutated and
     no financial formula is reproduced here.
 
+    ``business_plan`` is resolved once, for ``inputs.hold_period``, and every
+    candidate the search evaluates carries that one schedule (D6.4).
+
     Raises ``InvalidBreakEvenBoundsError`` if ``lower_bound`` is not strictly
     less than ``upper_bound``, or if either bound is outside the shared input
     domain for ``assumption``.
     """
+
+    owner_capital = resolve_business_plan(business_plan, hold_period=inputs.hold_period)
+    return _solve_break_even_threshold(
+        inputs,
+        owner_capital=owner_capital,
+        assumption=assumption,
+        metric=metric,
+        target=target,
+        direction=direction,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+    )
+
+
+def _solve_break_even_threshold(
+    inputs: AcquisitionInputs,
+    *,
+    owner_capital: OwnerCapitalSchedule,
+    assumption: str,
+    metric: str,
+    target: float,
+    direction: BreakEvenDirection,
+    lower_bound: float,
+    upper_bound: float,
+) -> tuple[float | None, float | None, BreakEvenStatus]:
+    """The search behind ``solve_break_even_threshold``, for one resolved
+    Business Plan: every candidate it evaluates -- both bounds, the
+    undefined-endpoint probe and each bisection midpoint -- carries
+    ``owner_capital``."""
 
     if not (lower_bound < upper_bound):
         raise InvalidBreakEvenBoundsError(
@@ -266,7 +325,11 @@ def solve_break_even_threshold(
 
     try:
         metric_at_lower = _evaluate_candidate(
-            inputs, assumption=assumption, metric=metric, candidate_value=lower_bound
+            inputs,
+            owner_capital=owner_capital,
+            assumption=assumption,
+            metric=metric,
+            candidate_value=lower_bound,
         )
     except InputValidationError as error:
         raise InvalidBreakEvenBoundsError(
@@ -275,7 +338,11 @@ def solve_break_even_threshold(
 
     try:
         metric_at_upper = _evaluate_candidate(
-            inputs, assumption=assumption, metric=metric, candidate_value=upper_bound
+            inputs,
+            owner_capital=owner_capital,
+            assumption=assumption,
+            metric=metric,
+            candidate_value=upper_bound,
         )
     except InputValidationError as error:
         raise InvalidBreakEvenBoundsError(
@@ -301,6 +368,7 @@ def solve_break_even_threshold(
     if favorable_metric is None:
         favorable_value, favorable_metric = _resolve_undefined_favorable_endpoint(
             inputs,
+            owner_capital=owner_capital,
             assumption=assumption,
             metric=metric,
             undefined_value=favorable_value,
@@ -331,7 +399,11 @@ def solve_break_even_threshold(
             break
         midpoint = (qualifying_value + failing_value) / 2
         midpoint_metric = _evaluate_candidate(
-            inputs, assumption=assumption, metric=metric, candidate_value=midpoint
+            inputs,
+            owner_capital=owner_capital,
+            assumption=assumption,
+            metric=metric,
+            candidate_value=midpoint,
         )
         if _meets_hurdle(midpoint_metric, target):
             qualifying_value, qualifying_metric = midpoint, midpoint_metric
@@ -449,6 +521,7 @@ def _resolve_bounds(
 def _build_break_even_result(
     inputs: AcquisitionInputs,
     *,
+    business_plan: BusinessPlan,
     break_even_type: BreakEvenType,
     assumption: str,
     metric: str,
@@ -457,11 +530,16 @@ def _build_break_even_result(
     lower_bound: float,
     upper_bound: float,
 ) -> BreakEvenResult:
-    baseline_assumption_value = getattr(inputs, assumption)
-    baseline_metric_value = _extract_metric(analyze_acquisition(inputs), metric)
+    owner_capital = resolve_business_plan(business_plan, hold_period=inputs.hold_period)
 
-    solved_assumption_value, solved_metric_value, status = solve_break_even_threshold(
+    baseline_assumption_value = getattr(inputs, assumption)
+    baseline_metric_value = _extract_metric(
+        analyze_acquisition(inputs, owner_capital=owner_capital), metric
+    )
+
+    solved_assumption_value, solved_metric_value, status = _solve_break_even_threshold(
         inputs,
+        owner_capital=owner_capital,
         assumption=assumption,
         metric=metric,
         target=target,
@@ -492,6 +570,7 @@ def solve_max_purchase_price(
     target_equity_multiple: float | None = None,
     lower_bound: float | None = None,
     upper_bound: float | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> BreakEvenResult:
     """Highest Purchase Price at which the selected return hurdle still
     meets its target, searched over ``[lower_bound, upper_bound]`` (default:
@@ -499,7 +578,11 @@ def solve_max_purchase_price(
 
     Exactly one of ``target_levered_irr`` or ``target_equity_multiple`` must
     be provided; that choice selects which trusted ``AcquisitionResults``
-    metric is used, unchanged from ``analyze_acquisition``."""
+    metric is used, unchanged from ``analyze_acquisition``.
+
+    ``business_plan`` is held fixed at every candidate price: its project
+    capital stays the same absolute dollars, never scaled with the price
+    (D6.4)."""
 
     metric, target = _resolve_return_hurdle(
         target_levered_irr=target_levered_irr, target_equity_multiple=target_equity_multiple
@@ -509,6 +592,7 @@ def solve_max_purchase_price(
     )
     return _build_break_even_result(
         inputs,
+        business_plan=business_plan,
         break_even_type=BreakEvenType.MAX_PURCHASE_PRICE,
         assumption="purchase_price",
         metric=metric,
@@ -526,6 +610,7 @@ def solve_max_exit_cap_rate(
     target_equity_multiple: float | None = None,
     lower_bound: float | None = None,
     upper_bound: float | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> BreakEvenResult:
     """Highest Exit Cap Rate at which the selected return hurdle still
     meets its target, searched over ``[lower_bound, upper_bound]`` (default:
@@ -533,7 +618,9 @@ def solve_max_exit_cap_rate(
 
     Exactly one of ``target_levered_irr`` or ``target_equity_multiple`` must
     be provided; that choice selects which trusted ``AcquisitionResults``
-    metric is used, unchanged from ``analyze_acquisition``."""
+    metric is used, unchanged from ``analyze_acquisition``.
+
+    ``business_plan`` is held fixed at every candidate (D6.4)."""
 
     metric, target = _resolve_return_hurdle(
         target_levered_irr=target_levered_irr, target_equity_multiple=target_equity_multiple
@@ -543,6 +630,7 @@ def solve_max_exit_cap_rate(
     )
     return _build_break_even_result(
         inputs,
+        business_plan=business_plan,
         break_even_type=BreakEvenType.MAX_EXIT_CAP_RATE,
         assumption="exit_cap_rate",
         metric=metric,
@@ -560,6 +648,7 @@ def solve_min_noi_growth(
     target_equity_multiple: float | None = None,
     lower_bound: float | None = None,
     upper_bound: float | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> BreakEvenResult:
     """Lowest NOI Growth at which the selected return hurdle still meets
     its target, searched over ``[lower_bound, upper_bound]`` (default:
@@ -567,7 +656,9 @@ def solve_min_noi_growth(
 
     Exactly one of ``target_levered_irr`` or ``target_equity_multiple`` must
     be provided; that choice selects which trusted ``AcquisitionResults``
-    metric is used, unchanged from ``analyze_acquisition``."""
+    metric is used, unchanged from ``analyze_acquisition``.
+
+    ``business_plan`` is held fixed at every candidate (D6.4)."""
 
     metric, target = _resolve_return_hurdle(
         target_levered_irr=target_levered_irr, target_equity_multiple=target_equity_multiple
@@ -577,6 +668,7 @@ def solve_min_noi_growth(
     )
     return _build_break_even_result(
         inputs,
+        business_plan=business_plan,
         break_even_type=BreakEvenType.MIN_NOI_GROWTH,
         assumption="noi_growth",
         metric=metric,
@@ -593,10 +685,14 @@ def solve_max_interest_rate(
     target_headline_dscr: float,
     lower_bound: float | None = None,
     upper_bound: float | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> BreakEvenResult:
     """Highest Interest Rate at which Year 1 (headline) DSCR still meets
     ``target_headline_dscr``, searched over ``[lower_bound, upper_bound]``
-    (default: ``0.0`` through ``max(0.20, baseline + 10pp)``)."""
+    (default: ``0.0`` through ``max(0.20, baseline + 10pp)``).
+
+    ``business_plan`` is held fixed at every candidate (D6.4); it sits below
+    NOI and never moves DSCR."""
 
     _validate_target_headline_dscr(target_headline_dscr)
     lo, hi = _resolve_bounds(
@@ -604,6 +700,7 @@ def solve_max_interest_rate(
     )
     return _build_break_even_result(
         inputs,
+        business_plan=business_plan,
         break_even_type=BreakEvenType.MAX_INTEREST_RATE,
         assumption="interest_rate",
         metric="headline_dscr",
@@ -620,10 +717,14 @@ def solve_min_current_noi(
     target_headline_dscr: float,
     lower_bound: float | None = None,
     upper_bound: float | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> BreakEvenResult:
     """Lowest Current NOI at which Year 1 (headline) DSCR still meets
     ``target_headline_dscr``, searched over ``[lower_bound, upper_bound]``
-    (default: 50%-150% of the baseline Current NOI)."""
+    (default: 50%-150% of the baseline Current NOI).
+
+    ``business_plan`` is held fixed at every candidate (D6.4); it sits below
+    NOI and never moves DSCR."""
 
     _validate_target_headline_dscr(target_headline_dscr)
     lo, hi = _resolve_bounds(
@@ -631,6 +732,7 @@ def solve_min_current_noi(
     )
     return _build_break_even_result(
         inputs,
+        business_plan=business_plan,
         break_even_type=BreakEvenType.MIN_CURRENT_NOI,
         assumption="current_noi",
         metric="headline_dscr",
@@ -648,6 +750,7 @@ def build_standard_break_even_analysis(
     target_headline_dscr: float,
     target_equity_multiple: float | None = None,
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> StandardBreakEvenAnalysis:
     """Run all five standard POC break-even questions for one base
     ``AcquisitionInputs``, each using its documented default search range.
@@ -658,7 +761,9 @@ def build_standard_break_even_analysis(
     the default) or Equity Multiple (``target_equity_multiple``, required
     when selected). The two DSCR-driven questions (Maximum Interest Rate,
     Minimum Current NOI) always use ``target_headline_dscr`` and are
-    unaffected by ``return_hurdle_metric``."""
+    unaffected by ``return_hurdle_metric``.
+
+    Every question receives the same ``business_plan`` (D6.4)."""
 
     if return_hurdle_metric is ReturnHurdleMetric.EQUITY_MULTIPLE:
         if target_equity_multiple is None:
@@ -673,14 +778,24 @@ def build_standard_break_even_analysis(
         return_hurdle_kwargs = {"target_levered_irr": target_levered_irr}
 
     return StandardBreakEvenAnalysis(
-        max_purchase_price=solve_max_purchase_price(inputs, **return_hurdle_kwargs),
-        max_exit_cap_rate=solve_max_exit_cap_rate(inputs, **return_hurdle_kwargs),
-        min_noi_growth=solve_min_noi_growth(inputs, **return_hurdle_kwargs),
+        max_purchase_price=solve_max_purchase_price(
+            inputs, **return_hurdle_kwargs, business_plan=business_plan
+        ),
+        max_exit_cap_rate=solve_max_exit_cap_rate(
+            inputs, **return_hurdle_kwargs, business_plan=business_plan
+        ),
+        min_noi_growth=solve_min_noi_growth(
+            inputs, **return_hurdle_kwargs, business_plan=business_plan
+        ),
         max_interest_rate=solve_max_interest_rate(
-            inputs, target_headline_dscr=target_headline_dscr
+            inputs,
+            target_headline_dscr=target_headline_dscr,
+            business_plan=business_plan,
         ),
         min_current_noi=solve_min_current_noi(
-            inputs, target_headline_dscr=target_headline_dscr
+            inputs,
+            target_headline_dscr=target_headline_dscr,
+            business_plan=business_plan,
         ),
     )
 
@@ -717,6 +832,7 @@ def _evaluate_detailed_candidate(
     terms: AcquisitionTerms,
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
+    owner_capital: OwnerCapitalSchedule,
     assumption: str,
     metric: str,
     candidate_value: float,
@@ -724,12 +840,14 @@ def _evaluate_detailed_candidate(
     """Build one validated candidate ``AcquisitionTerms`` scenario, call
     ``analyze_detailed_acquisition_with_projection`` exactly once, and read
     off ``metric``. ``detailed_operating_inputs`` is passed through
-    unchanged -- never varied, never dropped. Never converts a legitimately
-    ``None`` metric to zero, infinity, or any fabricated value."""
+    unchanged -- never varied, never dropped -- and so is ``owner_capital``,
+    the resolved Business Plan the search holds fixed (D6.4). Never converts
+    a legitimately ``None`` metric to zero, infinity, or any fabricated
+    value."""
 
     scenario_terms = _build_detailed_scenario_terms(terms, {assumption: candidate_value})
     scenario_results = analyze_detailed_acquisition_with_projection(
-        scenario_terms, detailed_operating_inputs
+        scenario_terms, detailed_operating_inputs, owner_capital=owner_capital
     ).results
     return _extract_metric(scenario_results, metric)
 
@@ -738,6 +856,7 @@ def _resolve_undefined_favorable_endpoint_detailed(
     terms: AcquisitionTerms,
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
+    owner_capital: OwnerCapitalSchedule,
     assumption: str,
     metric: str,
     undefined_value: float,
@@ -763,6 +882,7 @@ def _resolve_undefined_favorable_endpoint_detailed(
         midpoint_metric = _evaluate_detailed_candidate(
             terms,
             detailed_operating_inputs,
+            owner_capital=owner_capital,
             assumption=assumption,
             metric=metric,
             candidate_value=midpoint,
@@ -785,6 +905,7 @@ def solve_detailed_break_even_threshold(
     direction: BreakEvenDirection,
     lower_bound: float,
     upper_bound: float,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> tuple[float | None, float | None, BreakEvenStatus]:
     """Detailed counterpart to ``solve_break_even_threshold`` -- the
     identical bounded bisection-style threshold search, evaluated via
@@ -792,10 +913,43 @@ def solve_detailed_break_even_threshold(
     instead. ``detailed_operating_inputs`` is passed through unchanged to
     every evaluation.
 
+    ``business_plan`` is resolved once, for ``terms.hold_period``, and every
+    candidate the search evaluates carries that one schedule (D6.4).
+
     Raises ``InvalidBreakEvenBoundsError`` if ``lower_bound`` is not
     strictly less than ``upper_bound``, or if either bound is outside the
     shared ``AcquisitionTerms`` domain for ``assumption``.
     """
+
+    owner_capital = resolve_business_plan(business_plan, hold_period=terms.hold_period)
+    return _solve_detailed_break_even_threshold(
+        terms,
+        detailed_operating_inputs,
+        owner_capital=owner_capital,
+        assumption=assumption,
+        metric=metric,
+        target=target,
+        direction=direction,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+    )
+
+
+def _solve_detailed_break_even_threshold(
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    owner_capital: OwnerCapitalSchedule,
+    assumption: str,
+    metric: str,
+    target: float,
+    direction: BreakEvenDirection,
+    lower_bound: float,
+    upper_bound: float,
+) -> tuple[float | None, float | None, BreakEvenStatus]:
+    """The search behind ``solve_detailed_break_even_threshold``, for one
+    resolved Business Plan: every candidate it evaluates carries
+    ``owner_capital``."""
 
     if not (lower_bound < upper_bound):
         raise InvalidBreakEvenBoundsError(
@@ -807,6 +961,7 @@ def solve_detailed_break_even_threshold(
         metric_at_lower = _evaluate_detailed_candidate(
             terms,
             detailed_operating_inputs,
+            owner_capital=owner_capital,
             assumption=assumption,
             metric=metric,
             candidate_value=lower_bound,
@@ -820,6 +975,7 @@ def solve_detailed_break_even_threshold(
         metric_at_upper = _evaluate_detailed_candidate(
             terms,
             detailed_operating_inputs,
+            owner_capital=owner_capital,
             assumption=assumption,
             metric=metric,
             candidate_value=upper_bound,
@@ -842,6 +998,7 @@ def solve_detailed_break_even_threshold(
         favorable_value, favorable_metric = _resolve_undefined_favorable_endpoint_detailed(
             terms,
             detailed_operating_inputs,
+            owner_capital=owner_capital,
             assumption=assumption,
             metric=metric,
             undefined_value=favorable_value,
@@ -867,6 +1024,7 @@ def solve_detailed_break_even_threshold(
         midpoint_metric = _evaluate_detailed_candidate(
             terms,
             detailed_operating_inputs,
+            owner_capital=owner_capital,
             assumption=assumption,
             metric=metric,
             candidate_value=midpoint,
@@ -883,6 +1041,7 @@ def _build_detailed_break_even_result(
     terms: AcquisitionTerms,
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
+    business_plan: BusinessPlan,
     break_even_type: BreakEvenType,
     assumption: str,
     metric: str,
@@ -891,17 +1050,20 @@ def _build_detailed_break_even_result(
     lower_bound: float,
     upper_bound: float,
 ) -> BreakEvenResult:
+    owner_capital = resolve_business_plan(business_plan, hold_period=terms.hold_period)
+
     baseline_assumption_value = getattr(terms, assumption)
     baseline_metric_value = _extract_metric(
         analyze_detailed_acquisition_with_projection(
-            terms, detailed_operating_inputs
+            terms, detailed_operating_inputs, owner_capital=owner_capital
         ).results,
         metric,
     )
 
-    solved_assumption_value, solved_metric_value, status = solve_detailed_break_even_threshold(
+    solved_assumption_value, solved_metric_value, status = _solve_detailed_break_even_threshold(
         terms,
         detailed_operating_inputs,
+        owner_capital=owner_capital,
         assumption=assumption,
         metric=metric,
         target=target,
@@ -933,10 +1095,12 @@ def solve_detailed_max_purchase_price(
     target_equity_multiple: float | None = None,
     lower_bound: float | None = None,
     upper_bound: float | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> BreakEvenResult:
     """Detailed counterpart to ``solve_max_purchase_price`` -- default
     search bounds (50%-150% of the baseline purchase price) computed the
-    same way, over ``terms.purchase_price``."""
+    same way, over ``terms.purchase_price``. ``business_plan`` is held fixed
+    at every candidate price, in absolute dollars (D6.4)."""
 
     metric, target = _resolve_return_hurdle(
         target_levered_irr=target_levered_irr, target_equity_multiple=target_equity_multiple
@@ -946,6 +1110,7 @@ def solve_detailed_max_purchase_price(
     return _build_detailed_break_even_result(
         terms,
         detailed_operating_inputs,
+        business_plan=business_plan,
         break_even_type=BreakEvenType.MAX_PURCHASE_PRICE,
         assumption="purchase_price",
         metric=metric,
@@ -964,10 +1129,12 @@ def solve_detailed_max_exit_cap_rate(
     target_equity_multiple: float | None = None,
     lower_bound: float | None = None,
     upper_bound: float | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> BreakEvenResult:
     """Detailed counterpart to ``solve_max_exit_cap_rate`` -- default
     search bounds (``max(0.005, baseline - 3pp)`` through ``baseline +
-    5pp``) computed the same way, over ``terms.exit_cap_rate``."""
+    5pp``) computed the same way, over ``terms.exit_cap_rate``.
+    ``business_plan`` is held fixed at every candidate (D6.4)."""
 
     metric, target = _resolve_return_hurdle(
         target_levered_irr=target_levered_irr, target_equity_multiple=target_equity_multiple
@@ -978,6 +1145,7 @@ def solve_detailed_max_exit_cap_rate(
     return _build_detailed_break_even_result(
         terms,
         detailed_operating_inputs,
+        business_plan=business_plan,
         break_even_type=BreakEvenType.MAX_EXIT_CAP_RATE,
         assumption="exit_cap_rate",
         metric=metric,
@@ -995,10 +1163,12 @@ def solve_detailed_max_interest_rate(
     target_headline_dscr: float,
     lower_bound: float | None = None,
     upper_bound: float | None = None,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> BreakEvenResult:
     """Detailed counterpart to ``solve_max_interest_rate`` -- default
     search bounds (``0.0`` through ``max(0.20, baseline + 10pp)``) computed
-    the same way, over ``terms.interest_rate``."""
+    the same way, over ``terms.interest_rate``. ``business_plan`` is held
+    fixed at every candidate (D6.4); it never moves DSCR."""
 
     _validate_target_headline_dscr(target_headline_dscr)
     default_lower, default_upper = 0.0, max(0.20, terms.interest_rate + 0.10)
@@ -1006,6 +1176,7 @@ def solve_detailed_max_interest_rate(
     return _build_detailed_break_even_result(
         terms,
         detailed_operating_inputs,
+        business_plan=business_plan,
         break_even_type=BreakEvenType.MAX_INTEREST_RATE,
         assumption="interest_rate",
         metric="headline_dscr",
@@ -1034,6 +1205,7 @@ def build_standard_detailed_break_even_analysis(
     target_headline_dscr: float,
     target_equity_multiple: float | None = None,
     return_hurdle_metric: ReturnHurdleMetric = ReturnHurdleMetric.LEVERED_IRR,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> StandardDetailedBreakEvenAnalysis:
     """Run the three standard Detailed break-even questions for one base
     ``AcquisitionTerms``/``DetailedOperatingInputs`` pair, each using its
@@ -1041,7 +1213,8 @@ def build_standard_detailed_break_even_analysis(
     ``build_standard_break_even_analysis``. ``min_noi_growth``/
     ``min_current_noi`` have no Detailed equivalent (see
     ``StandardDetailedBreakEvenAnalysis``), so this bundle has three members
-    instead of five."""
+    instead of five. Every question receives the same ``business_plan``
+    (D6.4)."""
 
     if return_hurdle_metric is ReturnHurdleMetric.EQUITY_MULTIPLE:
         if target_equity_multiple is None:
@@ -1057,12 +1230,21 @@ def build_standard_detailed_break_even_analysis(
 
     return StandardDetailedBreakEvenAnalysis(
         max_purchase_price=solve_detailed_max_purchase_price(
-            terms, detailed_operating_inputs, **return_hurdle_kwargs
+            terms,
+            detailed_operating_inputs,
+            **return_hurdle_kwargs,
+            business_plan=business_plan,
         ),
         max_exit_cap_rate=solve_detailed_max_exit_cap_rate(
-            terms, detailed_operating_inputs, **return_hurdle_kwargs
+            terms,
+            detailed_operating_inputs,
+            **return_hurdle_kwargs,
+            business_plan=business_plan,
         ),
         max_interest_rate=solve_detailed_max_interest_rate(
-            terms, detailed_operating_inputs, target_headline_dscr=target_headline_dscr
+            terms,
+            detailed_operating_inputs,
+            target_headline_dscr=target_headline_dscr,
+            business_plan=business_plan,
         ),
     )

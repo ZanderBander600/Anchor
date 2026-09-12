@@ -55,6 +55,13 @@ is never caught, floored, capitalised or skipped.
 
 No caching, no memoization, no parallelism, no grid-size limit, and no
 per-cell retention of a ``LeaseLevelAcquisitionResults`` (Sections 38.7-38.8).
+
+**Phase 6 Gate D6.4 -- the Business Plan is held fixed.** Both runners take a
+keyword-only ``business_plan``, resolved once per run for the base hold period
+(none of the eight targets is the hold period). The one resulting
+``OwnerCapitalSchedule`` is handed to the bridge for the baseline and every
+cell, beside -- never merged into -- the rent roll's own TI and LC. The
+default, ``BusinessPlan()``, is the empty plan for callers that supply none.
 """
 
 from __future__ import annotations
@@ -64,7 +71,9 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from ..business_plan import BusinessPlan, resolve_business_plan
 from ..contracts import AcquisitionTerms
+from ..engine.contracts import OwnerCapitalSchedule
 from ..leasing import (
     Lease,
     LeaseLevelOperatingInputs,
@@ -395,6 +404,7 @@ def _scenario_metric(
     leases: tuple[Lease, ...],
     market_leasing: MarketLeasingAssumptions,
     operating_inputs: LeaseLevelOperatingInputs,
+    owner_capital: OwnerCapitalSchedule,
     changes: Mapping[str, float],
     metric: str,
 ) -> float | None:
@@ -403,6 +413,9 @@ def _scenario_metric(
 
     An empty ``changes`` is the baseline call: the caller's own contracts reach
     the entry point untouched.
+
+    ``owner_capital`` is the resolved Business Plan the run holds fixed (D6.4).
+    It is required, and the bridge receives it unchanged for every cell.
 
     The completed ``LeaseLevelAcquisitionResults`` -- with its
     ``MonthlyPropertyProjection``, its ``AnnualOperatingProjection`` and the
@@ -431,6 +444,7 @@ def _scenario_metric(
             leases,
             market_leasing=scenario_market,
             operating_inputs=scenario_operating,
+            owner_capital=owner_capital,
         ).results,
         metric,
     )
@@ -452,6 +466,7 @@ def run_lease_level_one_way_sensitivity(
     assumption: str,
     values: Sequence[float],
     metric: str,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> OneWaySensitivityResult:
     """Vary one approved Lease-Level assumption across ``values``, calling
     ``analyze_lease_level_acquisition_with_projection`` once per scenario, and
@@ -471,6 +486,10 @@ def run_lease_level_one_way_sensitivity(
     target, then an unsupported metric, then a suite-shadowed target -- all
     before the baseline analysis, so a structurally unanswerable question never
     costs a single re-underwrite, and never returns a misleading table.
+
+    ``business_plan`` is resolved once, after those structural checks and
+    before the baseline, for ``terms.hold_period``; the baseline and every
+    scenario carry that one schedule (D6.4).
     """
 
     suite_tuple = tuple(suites)
@@ -479,6 +498,8 @@ def run_lease_level_one_way_sensitivity(
     _require_supported_assumption(assumption)
     _require_supported_metric(metric)
     _require_unshadowed_target(assumption, suite_tuple)
+
+    owner_capital = resolve_business_plan(business_plan, hold_period=terms.hold_period)
 
     baseline_assumption_value = _TARGETS[assumption].read_baseline(
         terms, market_leasing, operating_inputs
@@ -490,6 +511,7 @@ def run_lease_level_one_way_sensitivity(
         leases=lease_tuple,
         market_leasing=market_leasing,
         operating_inputs=operating_inputs,
+        owner_capital=owner_capital,
         changes={},
         metric=metric,
     )
@@ -505,6 +527,7 @@ def run_lease_level_one_way_sensitivity(
                 leases=lease_tuple,
                 market_leasing=market_leasing,
                 operating_inputs=operating_inputs,
+                owner_capital=owner_capital,
                 changes={assumption: value},
                 metric=metric,
             )
@@ -538,6 +561,7 @@ def run_lease_level_two_way_sensitivity(
     column_assumption: str,
     column_values: Sequence[float],
     metric: str,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> TwoWaySensitivityResult:
     """Vary two approved Lease-Level assumptions independently over a grid,
     calling ``analyze_lease_level_acquisition_with_projection`` once per cell.
@@ -551,6 +575,10 @@ def run_lease_level_two_way_sensitivity(
 
     ``row_assumption == column_assumption`` raises, mirroring the shipped
     framework's rule for both existing modes.
+
+    ``business_plan`` is resolved once, after the structural checks, for
+    ``terms.hold_period``; the baseline and every cell carry that one schedule
+    (D6.4).
     """
 
     suite_tuple = tuple(suites)
@@ -567,6 +595,8 @@ def run_lease_level_two_way_sensitivity(
     _require_unshadowed_target(row_assumption, suite_tuple)
     _require_unshadowed_target(column_assumption, suite_tuple)
 
+    owner_capital = resolve_business_plan(business_plan, hold_period=terms.hold_period)
+
     baseline_row_value = _TARGETS[row_assumption].read_baseline(
         terms, market_leasing, operating_inputs
     )
@@ -580,6 +610,7 @@ def run_lease_level_two_way_sensitivity(
         leases=lease_tuple,
         market_leasing=market_leasing,
         operating_inputs=operating_inputs,
+        owner_capital=owner_capital,
         changes={},
         metric=metric,
     )
@@ -599,6 +630,7 @@ def run_lease_level_two_way_sensitivity(
                     leases=lease_tuple,
                     market_leasing=market_leasing,
                     operating_inputs=operating_inputs,
+                    owner_capital=owner_capital,
                     changes={
                         row_assumption: row_value,
                         column_assumption: column_value,

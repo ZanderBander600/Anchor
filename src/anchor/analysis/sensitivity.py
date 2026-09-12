@@ -9,6 +9,16 @@ validation is never reimplemented here either -- every scenario is built
 through ``validate_acquisition_inputs``, the same shared rules the base
 engine and API already use, so an out-of-domain scenario value fails exactly
 as it would on the base analysis, never silently clamped.
+
+**Phase 6 Gate D6.4 -- the Business Plan is held fixed.** Every public
+function here takes a keyword-only ``business_plan``. A run resolves it once,
+for the base deal's hold period -- no sensitivity assumption is the hold
+period -- and the one resulting ``OwnerCapitalSchedule`` reaches the baseline
+and every scenario's engine call. Project capital and owner expenses are
+absolute scheduled dollars and never scale with a candidate. The default,
+``BusinessPlan()``, is the empty plan, kept only for callers that supply none;
+inside a run the plan is always passed on explicitly and never re-defaulted
+(``tests/test_d6_4_business_plan_threading_architecture.py``).
 """
 
 from __future__ import annotations
@@ -16,12 +26,14 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Callable, Iterable, Mapping, Sequence
 
+from ..business_plan import BusinessPlan, resolve_business_plan
 from ..contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs
 from ..engine import (
     AcquisitionResults,
     analyze_acquisition,
     analyze_detailed_acquisition_with_projection,
 )
+from ..engine.contracts import OwnerCapitalSchedule
 from ..validation import (
     InputValidationError,
     validate_acquisition_inputs,
@@ -138,23 +150,31 @@ def run_one_way_sensitivity(
     assumption: str,
     values: Sequence[float],
     metric: str,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> OneWaySensitivityResult:
     """Vary one assumption across ``values``, calling ``analyze_acquisition``
-    once per scenario, and return the requested ``metric`` for each."""
+    once per scenario, and return the requested ``metric`` for each.
+
+    ``business_plan`` is resolved once, for ``inputs.hold_period``, and the
+    baseline and every scenario run with that one schedule (D6.4)."""
 
     if assumption not in SUPPORTED_ASSUMPTIONS:
         raise UnknownAssumptionError(assumption)
     if metric not in SUPPORTED_METRICS:
         raise UnknownMetricError(metric)
 
+    owner_capital = resolve_business_plan(business_plan, hold_period=inputs.hold_period)
+
     baseline_assumption_value = getattr(inputs, assumption)
-    baseline_metric_value = _extract_metric(analyze_acquisition(inputs), metric)
+    baseline_metric_value = _extract_metric(
+        analyze_acquisition(inputs, owner_capital=owner_capital), metric
+    )
 
     assumption_values = tuple(values)
     metric_values: list[float | None] = []
     for value in assumption_values:
         scenario_inputs = _build_scenario_inputs(inputs, {assumption: value})
-        scenario_results = analyze_acquisition(scenario_inputs)
+        scenario_results = analyze_acquisition(scenario_inputs, owner_capital=owner_capital)
         metric_values.append(_extract_metric(scenario_results, metric))
 
     return OneWaySensitivityResult(
@@ -180,10 +200,14 @@ def run_two_way_sensitivity(
     column_assumption: str,
     column_values: Sequence[float],
     metric: str,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> TwoWaySensitivityResult:
     """Vary two assumptions independently over a grid, calling
     ``analyze_acquisition`` once per cell, and return the requested
-    ``metric`` for each cell."""
+    ``metric`` for each cell.
+
+    ``business_plan`` is resolved once, for ``inputs.hold_period``, and the
+    baseline and every cell run with that one schedule (D6.4)."""
 
     if row_assumption not in SUPPORTED_ASSUMPTIONS:
         raise UnknownAssumptionError(row_assumption)
@@ -197,9 +221,13 @@ def run_two_way_sensitivity(
             f"{row_assumption!r} for both."
         )
 
+    owner_capital = resolve_business_plan(business_plan, hold_period=inputs.hold_period)
+
     baseline_row_value = getattr(inputs, row_assumption)
     baseline_column_value = getattr(inputs, column_assumption)
-    baseline_metric_value = _extract_metric(analyze_acquisition(inputs), metric)
+    baseline_metric_value = _extract_metric(
+        analyze_acquisition(inputs, owner_capital=owner_capital), metric
+    )
 
     row_values_tuple = tuple(row_values)
     column_values_tuple = tuple(column_values)
@@ -211,7 +239,7 @@ def run_two_way_sensitivity(
             scenario_inputs = _build_scenario_inputs(
                 inputs, {row_assumption: row_value, column_assumption: column_value}
             )
-            scenario_results = analyze_acquisition(scenario_inputs)
+            scenario_results = analyze_acquisition(scenario_inputs, owner_capital=owner_capital)
             row_cells.append(_extract_metric(scenario_results, metric))
         matrix.append(tuple(row_cells))
 
@@ -272,9 +300,10 @@ def _valid_scenario_values(
 
 
 def build_exit_cap_noi_growth_preset(
-    inputs: AcquisitionInputs,
+    inputs: AcquisitionInputs, *, business_plan: BusinessPlan = BusinessPlan()
 ) -> TwoWaySensitivityResult:
-    """NOI Growth (rows) x Exit Cap Rate (columns), Levered IRR."""
+    """NOI Growth (rows) x Exit Cap Rate (columns), Levered IRR, with
+    ``business_plan`` held fixed in every cell."""
 
     noi_growth_values = _valid_scenario_values(
         inputs,
@@ -293,13 +322,16 @@ def build_exit_cap_noi_growth_preset(
         column_assumption="exit_cap_rate",
         column_values=exit_cap_values,
         metric="levered_irr",
+        business_plan=business_plan,
     )
 
 
 def build_purchase_price_exit_cap_preset(
-    inputs: AcquisitionInputs,
+    inputs: AcquisitionInputs, *, business_plan: BusinessPlan = BusinessPlan()
 ) -> TwoWaySensitivityResult:
-    """Purchase Price (rows) x Exit Cap Rate (columns), Levered IRR."""
+    """Purchase Price (rows) x Exit Cap Rate (columns), Levered IRR, with
+    ``business_plan`` held fixed in every cell -- its project capital stays
+    the same absolute dollars at every purchase price."""
 
     purchase_price_values = _valid_scenario_values(
         inputs,
@@ -321,14 +353,19 @@ def build_purchase_price_exit_cap_preset(
         column_assumption="exit_cap_rate",
         column_values=exit_cap_values,
         metric="levered_irr",
+        business_plan=business_plan,
     )
 
 
 def build_interest_rate_ltv_preset(
-    inputs: AcquisitionInputs, *, metric: str = "levered_irr"
+    inputs: AcquisitionInputs,
+    *,
+    metric: str = "levered_irr",
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> TwoWaySensitivityResult:
     """Interest Rate (rows) x LTV (columns), for ``metric`` (default Levered
-    IRR; ``headline_dscr`` is also supported, reusing this same grid)."""
+    IRR; ``headline_dscr`` is also supported, reusing this same grid), with
+    ``business_plan`` held fixed in every cell."""
 
     interest_rate_values = _valid_scenario_values(
         inputs,
@@ -345,19 +382,29 @@ def build_interest_rate_ltv_preset(
         column_assumption="ltv",
         column_values=ltv_values,
         metric=metric,
+        business_plan=business_plan,
     )
 
 
-def build_standard_presets(inputs: AcquisitionInputs) -> StandardSensitivityPresets:
+def build_standard_presets(
+    inputs: AcquisitionInputs, *, business_plan: BusinessPlan = BusinessPlan()
+) -> StandardSensitivityPresets:
     """Return all three standard POC sensitivity matrices, plus the optional
-    DSCR variant of the Interest Rate x LTV matrix."""
+    DSCR variant of the Interest Rate x LTV matrix -- every one of them with
+    the same ``business_plan`` (D6.4)."""
 
     return StandardSensitivityPresets(
-        exit_cap_noi_growth=build_exit_cap_noi_growth_preset(inputs),
-        purchase_price_exit_cap=build_purchase_price_exit_cap_preset(inputs),
-        interest_rate_ltv=build_interest_rate_ltv_preset(inputs, metric="levered_irr"),
+        exit_cap_noi_growth=build_exit_cap_noi_growth_preset(
+            inputs, business_plan=business_plan
+        ),
+        purchase_price_exit_cap=build_purchase_price_exit_cap_preset(
+            inputs, business_plan=business_plan
+        ),
+        interest_rate_ltv=build_interest_rate_ltv_preset(
+            inputs, metric="levered_irr", business_plan=business_plan
+        ),
         interest_rate_ltv_dscr=build_interest_rate_ltv_preset(
-            inputs, metric="headline_dscr"
+            inputs, metric="headline_dscr", business_plan=business_plan
         ),
     )
 
@@ -388,10 +435,13 @@ def _build_detailed_scenario_terms(
 
 
 def _analyze_detailed_scenario(
-    terms: AcquisitionTerms, detailed_operating_inputs: DetailedOperatingInputs
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    owner_capital: OwnerCapitalSchedule,
 ) -> AcquisitionResults:
     return analyze_detailed_acquisition_with_projection(
-        terms, detailed_operating_inputs
+        terms, detailed_operating_inputs, owner_capital=owner_capital
     ).results
 
 
@@ -402,21 +452,28 @@ def run_detailed_one_way_sensitivity(
     assumption: str,
     values: Sequence[float],
     metric: str,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> OneWaySensitivityResult:
     """Detailed counterpart to ``run_one_way_sensitivity``: vary one
     ``AcquisitionTerms`` assumption across ``values``, calling
     ``analyze_detailed_acquisition_with_projection`` once per scenario --
     ``detailed_operating_inputs`` is passed through unchanged to every
-    scenario, never varied and never dropped."""
+    scenario, never varied and never dropped. ``business_plan`` is resolved
+    once, for ``terms.hold_period``, and held fixed the same way (D6.4)."""
 
     if assumption not in DETAILED_SUPPORTED_ASSUMPTIONS:
         raise UnknownAssumptionError(assumption)
     if metric not in SUPPORTED_METRICS:
         raise UnknownMetricError(metric)
 
+    owner_capital = resolve_business_plan(business_plan, hold_period=terms.hold_period)
+
     baseline_assumption_value = getattr(terms, assumption)
     baseline_metric_value = _extract_metric(
-        _analyze_detailed_scenario(terms, detailed_operating_inputs), metric
+        _analyze_detailed_scenario(
+            terms, detailed_operating_inputs, owner_capital=owner_capital
+        ),
+        metric,
     )
 
     assumption_values = tuple(values)
@@ -424,7 +481,7 @@ def run_detailed_one_way_sensitivity(
     for value in assumption_values:
         scenario_terms = _build_detailed_scenario_terms(terms, {assumption: value})
         scenario_results = _analyze_detailed_scenario(
-            scenario_terms, detailed_operating_inputs
+            scenario_terms, detailed_operating_inputs, owner_capital=owner_capital
         )
         metric_values.append(_extract_metric(scenario_results, metric))
 
@@ -447,12 +504,14 @@ def run_detailed_two_way_sensitivity(
     column_assumption: str,
     column_values: Sequence[float],
     metric: str,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> TwoWaySensitivityResult:
     """Detailed counterpart to ``run_two_way_sensitivity``: vary two
     ``AcquisitionTerms`` assumptions independently over a grid, calling
     ``analyze_detailed_acquisition_with_projection`` once per cell --
     ``detailed_operating_inputs`` is passed through unchanged to every
-    cell."""
+    cell. ``business_plan`` is resolved once, for ``terms.hold_period``, and
+    held fixed the same way (D6.4)."""
 
     if row_assumption not in DETAILED_SUPPORTED_ASSUMPTIONS:
         raise UnknownAssumptionError(row_assumption)
@@ -466,10 +525,15 @@ def run_detailed_two_way_sensitivity(
             f"{row_assumption!r} for both."
         )
 
+    owner_capital = resolve_business_plan(business_plan, hold_period=terms.hold_period)
+
     baseline_row_value = getattr(terms, row_assumption)
     baseline_column_value = getattr(terms, column_assumption)
     baseline_metric_value = _extract_metric(
-        _analyze_detailed_scenario(terms, detailed_operating_inputs), metric
+        _analyze_detailed_scenario(
+            terms, detailed_operating_inputs, owner_capital=owner_capital
+        ),
+        metric,
     )
 
     row_values_tuple = tuple(row_values)
@@ -483,7 +547,7 @@ def run_detailed_two_way_sensitivity(
                 terms, {row_assumption: row_value, column_assumption: column_value}
             )
             scenario_results = _analyze_detailed_scenario(
-                scenario_terms, detailed_operating_inputs
+                scenario_terms, detailed_operating_inputs, owner_capital=owner_capital
             )
             row_cells.append(_extract_metric(scenario_results, metric))
         matrix.append(tuple(row_cells))
@@ -531,10 +595,14 @@ def _valid_detailed_scenario_values(
 
 
 def build_detailed_purchase_price_exit_cap_preset(
-    terms: AcquisitionTerms, detailed_operating_inputs: DetailedOperatingInputs
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> TwoWaySensitivityResult:
     """Purchase Price (rows) x Exit Cap Rate (columns), Levered IRR --
-    Detailed counterpart of ``build_purchase_price_exit_cap_preset``."""
+    Detailed counterpart of ``build_purchase_price_exit_cap_preset``, with
+    ``business_plan`` held fixed in every cell."""
 
     purchase_price_values = _valid_detailed_scenario_values(
         terms,
@@ -552,6 +620,7 @@ def build_detailed_purchase_price_exit_cap_preset(
         column_assumption="exit_cap_rate",
         column_values=exit_cap_values,
         metric="levered_irr",
+        business_plan=business_plan,
     )
 
 
@@ -560,9 +629,11 @@ def build_detailed_interest_rate_ltv_preset(
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
     metric: str = "levered_irr",
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> TwoWaySensitivityResult:
     """Interest Rate (rows) x LTV (columns), for ``metric`` -- Detailed
-    counterpart of ``build_interest_rate_ltv_preset``."""
+    counterpart of ``build_interest_rate_ltv_preset``, with
+    ``business_plan`` held fixed in every cell."""
 
     interest_rate_values = _valid_detailed_scenario_values(
         terms,
@@ -580,26 +651,37 @@ def build_detailed_interest_rate_ltv_preset(
         column_assumption="ltv",
         column_values=ltv_values,
         metric=metric,
+        business_plan=business_plan,
     )
 
 
 def build_standard_detailed_presets(
-    terms: AcquisitionTerms, detailed_operating_inputs: DetailedOperatingInputs
+    terms: AcquisitionTerms,
+    detailed_operating_inputs: DetailedOperatingInputs,
+    *,
+    business_plan: BusinessPlan = BusinessPlan(),
 ) -> StandardDetailedSensitivityPresets:
     """Return the standard Detailed sensitivity bundle: Purchase Price x
     Exit Cap Rate, Interest Rate x LTV, and its DSCR variant -- exactly the
     ``StandardSensitivityPresets`` members that exist for
     ``DETAILED_SUPPORTED_ASSUMPTIONS`` (no ``exit_cap_noi_growth`` member;
-    see ``StandardDetailedSensitivityPresets``)."""
+    see ``StandardDetailedSensitivityPresets``) -- every one of them with the
+    same ``business_plan`` (D6.4)."""
 
     return StandardDetailedSensitivityPresets(
         purchase_price_exit_cap=build_detailed_purchase_price_exit_cap_preset(
-            terms, detailed_operating_inputs
+            terms, detailed_operating_inputs, business_plan=business_plan
         ),
         interest_rate_ltv=build_detailed_interest_rate_ltv_preset(
-            terms, detailed_operating_inputs, metric="levered_irr"
+            terms,
+            detailed_operating_inputs,
+            metric="levered_irr",
+            business_plan=business_plan,
         ),
         interest_rate_ltv_dscr=build_detailed_interest_rate_ltv_preset(
-            terms, detailed_operating_inputs, metric="headline_dscr"
+            terms,
+            detailed_operating_inputs,
+            metric="headline_dscr",
+            business_plan=business_plan,
         ),
     )
