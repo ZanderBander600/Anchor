@@ -30,6 +30,16 @@ import type {
   LeaseLevelTwoWaySensitivityResult,
   LeaseLevelTwoWaySensitivitySnapshot,
 } from './leaseLevelSensitivityTypes';
+import { isBusinessPlanApiIssue } from './businessPlan';
+import type { BusinessPlanApiIssue, BusinessPlanInput } from './businessPlan';
+
+// Phase 6 Gate D6.6 -- every request that carries deal state carries the deal's
+// Business Plan as a top-level `business_plan`, taken from a required
+// `businessPlan` parameter placed right after the mode's own deal inputs.
+// Required, never optional or defaulted: an absent plan means an EMPTY plan to
+// the backend (D6.5), so a request that silently dropped it would clear a
+// saved plan on the next write. Omitting it is therefore a compile error here,
+// and `businessPlanRequests.test.ts` pins every body.
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
 
@@ -41,11 +51,17 @@ const NETWORK_ERROR_MESSAGE =
 
 export class ApiError extends Error {
   issues: ValidationIssue[];
+  /** D6.6: the Business Plan entries of a structured 422, each carrying the
+   * `business_plan.capital_items[2].month`-style path the backend rooted at the
+   * request, so the editor can place it on its row. Empty for every other
+   * refusal. Read structurally off whatever detail array the caller passed. */
+  businessPlanIssues: BusinessPlanApiIssue[];
 
   constructor(message: string, issues: ValidationIssue[] = []) {
     super(message);
     this.name = 'ApiError';
     this.issues = issues;
+    this.businessPlanIssues = (issues as readonly unknown[]).filter(isBusinessPlanApiIssue);
   }
 }
 
@@ -79,13 +95,14 @@ export class LeaseLevelApiError extends ApiError {
  */
 export async function analyzeAcquisition(
   request: AcquisitionRequest,
+  businessPlan: BusinessPlanInput,
 ): Promise<AcquisitionResults> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ ...request, business_plan: businessPlan }),
     });
   } catch {
     throw new ApiError(
@@ -123,6 +140,7 @@ export async function analyzeAcquisition(
 export async function analyzeDetailedAcquisition(
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
+  businessPlan: BusinessPlanInput,
 ): Promise<DetailedAcquisitionResults> {
   let response: Response;
   try {
@@ -133,6 +151,7 @@ export async function analyzeDetailedAcquisition(
         operating_mode: 'detailed',
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
+        business_plan: businessPlan,
       }),
     });
   } catch {
@@ -167,13 +186,14 @@ export async function analyzeDetailedAcquisition(
  */
 export async function fetchSensitivityPresets(
   inputs: AcquisitionRequest,
+  businessPlan: BusinessPlanInput,
 ): Promise<StandardSensitivityPresets> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/sensitivity/presets`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ inputs }),
+      body: JSON.stringify({ inputs, business_plan: businessPlan }),
     });
   } catch {
     throw new ApiError(
@@ -210,6 +230,7 @@ export async function fetchSensitivityPresets(
 export async function fetchDetailedSensitivityPresets(
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
+  businessPlan: BusinessPlanInput,
 ): Promise<StandardDetailedSensitivityPresets> {
   let response: Response;
   try {
@@ -220,6 +241,7 @@ export async function fetchDetailedSensitivityPresets(
         operating_mode: 'detailed',
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
+        business_plan: businessPlan,
       }),
     });
   } catch {
@@ -254,6 +276,7 @@ export async function fetchDetailedSensitivityPresets(
  */
 export async function fetchBreakEvenAnalysis(
   inputs: AcquisitionRequest,
+  businessPlan: BusinessPlanInput,
   targetLeveredIrr: number,
   targetEquityMultiple: number,
   targetHeadlineDscr: number,
@@ -266,6 +289,7 @@ export async function fetchBreakEvenAnalysis(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         inputs,
+        business_plan: businessPlan,
         target_levered_irr: targetLeveredIrr,
         target_equity_multiple: targetEquityMultiple,
         target_headline_dscr: targetHeadlineDscr,
@@ -308,6 +332,7 @@ export async function fetchBreakEvenAnalysis(
 export async function fetchDetailedBreakEvenAnalysis(
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
+  businessPlan: BusinessPlanInput,
   targetLeveredIrr: number,
   targetEquityMultiple: number,
   targetHeadlineDscr: number,
@@ -322,6 +347,7 @@ export async function fetchDetailedBreakEvenAnalysis(
         operating_mode: 'detailed',
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
+        business_plan: businessPlan,
         target_levered_irr: targetLeveredIrr,
         target_equity_multiple: targetEquityMultiple,
         target_headline_dscr: targetHeadlineDscr,
@@ -362,6 +388,7 @@ export async function fetchDetailedBreakEvenAnalysis(
  */
 export async function fetchAIAnalysis(
   inputs: AcquisitionRequest,
+  businessPlan: BusinessPlanInput,
   targetLeveredIrr: number,
   targetEquityMultiple: number,
   targetHeadlineDscr: number,
@@ -375,6 +402,7 @@ export async function fetchAIAnalysis(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         inputs,
+        business_plan: businessPlan,
         target_levered_irr: targetLeveredIrr,
         target_equity_multiple: targetEquityMultiple,
         target_headline_dscr: targetHeadlineDscr,
@@ -433,6 +461,7 @@ export async function fetchAIAnalysis(
 export async function fetchDetailedAIAnalysis(
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
+  businessPlan: BusinessPlanInput,
   targetLeveredIrr: number,
   targetEquityMultiple: number,
   targetHeadlineDscr: number,
@@ -448,6 +477,7 @@ export async function fetchDetailedAIAnalysis(
         operating_mode: 'detailed',
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
+        business_plan: businessPlan,
         target_levered_irr: targetLeveredIrr,
         target_equity_multiple: targetEquityMultiple,
         target_headline_dscr: targetHeadlineDscr,
@@ -747,6 +777,7 @@ async function _handleDealResponse(response: Response, failureMessage: string): 
 export async function createDeal(
   name: string,
   inputs: AcquisitionRequest,
+  businessPlan: BusinessPlanInput,
   dealContext?: string | null,
 ): Promise<Deal> {
   let response: Response;
@@ -757,6 +788,7 @@ export async function createDeal(
       body: JSON.stringify({
         name,
         inputs,
+        business_plan: businessPlan,
         deal_context: dealContext ?? null,
       }),
     });
@@ -783,6 +815,7 @@ export async function updateDeal(
   dealId: string,
   name: string,
   inputs: AcquisitionRequest,
+  businessPlan: BusinessPlanInput,
   dealContext?: string | null,
 ): Promise<Deal> {
   let response: Response;
@@ -793,6 +826,7 @@ export async function updateDeal(
       body: JSON.stringify({
         name,
         inputs,
+        business_plan: businessPlan,
         deal_context: dealContext ?? null,
       }),
     });
@@ -819,6 +853,7 @@ export async function createDetailedDeal(
   name: string,
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
+  businessPlan: BusinessPlanInput,
   dealContext?: string | null,
 ): Promise<Deal> {
   let response: Response;
@@ -831,6 +866,7 @@ export async function createDetailedDeal(
         operating_mode: 'detailed',
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
+        business_plan: businessPlan,
         deal_context: dealContext ?? null,
       }),
     });
@@ -851,6 +887,7 @@ export async function updateDetailedDeal(
   name: string,
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
+  businessPlan: BusinessPlanInput,
   dealContext?: string | null,
 ): Promise<Deal> {
   let response: Response;
@@ -863,6 +900,7 @@ export async function updateDetailedDeal(
         operating_mode: 'detailed',
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
+        business_plan: businessPlan,
         deal_context: dealContext ?? null,
       }),
     });
@@ -893,6 +931,7 @@ export interface DealFingerprint {
 
 export async function fetchDealFingerprint(
   inputs: AcquisitionRequest,
+  businessPlan: BusinessPlanInput,
   dealContext?: string | null,
 ): Promise<DealFingerprint> {
   let response: Response;
@@ -903,6 +942,7 @@ export async function fetchDealFingerprint(
       body: JSON.stringify({
         operating_mode: 'quick',
         inputs,
+        business_plan: businessPlan,
         deal_context: dealContext ?? null,
       }),
     });
@@ -923,6 +963,7 @@ export async function fetchDealFingerprint(
 export async function fetchDetailedDealFingerprint(
   terms: AcquisitionTermsRequest,
   detailedOperatingInputs: DetailedOperatingInputsRequest,
+  businessPlan: BusinessPlanInput,
   dealContext?: string | null,
 ): Promise<DealFingerprint> {
   let response: Response;
@@ -934,6 +975,7 @@ export async function fetchDetailedDealFingerprint(
         operating_mode: 'detailed',
         terms,
         detailed_operating_inputs: detailedOperatingInputs,
+        business_plan: businessPlan,
         deal_context: dealContext ?? null,
       }),
     });
@@ -1220,7 +1262,12 @@ function leaseLevelValidationError(payload: unknown): ApiError {
     messages.length > 0
       ? messages.join(' ')
       : (stringDetail ?? 'The submitted assumptions failed validation.');
-  return new LeaseLevelApiError(message, issues, leaseIssues);
+  const error = new LeaseLevelApiError(message, issues, leaseIssues);
+  // D6.6: a Business Plan issue has neither Lease-Level shape -- no severity, no
+  // field_id -- so both filters above drop it. It is carried separately, in the
+  // one field every mode's editor reads.
+  error.businessPlanIssues = entries.filter(isBusinessPlanApiIssue);
+  return error;
 }
 
 async function postJson(path: string, body: unknown): Promise<Response> {
@@ -1249,11 +1296,13 @@ async function postJson(path: string, body: unknown): Promise<Response> {
 export async function analyzeLeaseLevelAcquisition(
   terms: AcquisitionTermsRequest,
   inputs: LeaseLevelInputsRequest,
+  businessPlan: BusinessPlanInput,
 ): Promise<LeaseLevelAcquisitionResults> {
   const response = await postJson('/analyze', {
     operating_mode: 'lease_level',
     terms,
     ...inputs,
+    business_plan: businessPlan,
   });
   return (await response.json()) as LeaseLevelAcquisitionResults;
 }
@@ -1263,6 +1312,7 @@ export async function createLeaseLevelDeal(
   name: string,
   terms: AcquisitionTermsRequest,
   inputs: LeaseLevelInputsRequest,
+  businessPlan: BusinessPlanInput,
   dealContext: string | null,
 ): Promise<Deal> {
   const response = await postJson('/deals', {
@@ -1270,6 +1320,7 @@ export async function createLeaseLevelDeal(
     name,
     terms,
     ...inputs,
+    business_plan: businessPlan,
     ...(dealContext === null ? {} : { deal_context: dealContext }),
   });
   return (await response.json()) as Deal;
@@ -1285,6 +1336,7 @@ export async function updateLeaseLevelDeal(
   name: string,
   terms: AcquisitionTermsRequest,
   inputs: LeaseLevelInputsRequest,
+  businessPlan: BusinessPlanInput,
   dealContext: string | null,
 ): Promise<Deal> {
   const response = await sendJson('PUT', `/deals/${dealId}`, {
@@ -1292,6 +1344,7 @@ export async function updateLeaseLevelDeal(
     name,
     terms,
     ...inputs,
+    business_plan: businessPlan,
     ...(dealContext === null ? {} : { deal_context: dealContext }),
   });
   return (await response.json()) as Deal;
@@ -1316,6 +1369,7 @@ export async function updateLeaseLevelDeal(
 export async function fetchLeaseLevelAIAnalysis(
   terms: AcquisitionTermsRequest,
   inputs: LeaseLevelInputsRequest,
+  businessPlan: BusinessPlanInput,
   targetLeveredIrr: number,
   targetEquityMultiple: number,
   targetHeadlineDscr: number,
@@ -1331,6 +1385,7 @@ export async function fetchLeaseLevelAIAnalysis(
         operating_mode: 'lease_level',
         terms,
         ...inputs,
+        business_plan: businessPlan,
         target_levered_irr: targetLeveredIrr,
         target_equity_multiple: targetEquityMultiple,
         target_headline_dscr: targetHeadlineDscr,
@@ -1392,12 +1447,14 @@ export async function fetchLeaseLevelAIAnalysis(
 export async function runLeaseLevelOneWaySensitivity(
   terms: AcquisitionTermsRequest,
   inputs: LeaseLevelInputsRequest,
+  businessPlan: BusinessPlanInput,
   controls: LeaseLevelOneWaySensitivityControls,
 ): Promise<LeaseLevelOneWaySensitivityResult> {
   const response = await postJson('/sensitivity/one-way', {
     operating_mode: 'lease_level',
     terms,
     ...inputs,
+    business_plan: businessPlan,
     ...controls,
   });
   return (await response.json()) as LeaseLevelOneWaySensitivityResult;
@@ -1411,12 +1468,14 @@ export async function runLeaseLevelOneWaySensitivity(
 export async function runLeaseLevelTwoWaySensitivity(
   terms: AcquisitionTermsRequest,
   inputs: LeaseLevelInputsRequest,
+  businessPlan: BusinessPlanInput,
   controls: LeaseLevelTwoWaySensitivityControls,
 ): Promise<LeaseLevelTwoWaySensitivityResult> {
   const response = await postJson('/sensitivity', {
     operating_mode: 'lease_level',
     terms,
     ...inputs,
+    business_plan: businessPlan,
     ...controls,
   });
   return (await response.json()) as LeaseLevelTwoWaySensitivityResult;
@@ -1442,6 +1501,7 @@ export async function runLeaseLevelTwoWaySensitivity(
 export async function fetchLeaseLevelDealFingerprint(
   terms: AcquisitionTermsRequest,
   inputs: LeaseLevelInputsRequest,
+  businessPlan: BusinessPlanInput,
   dealContext?: string | null,
 ): Promise<DealFingerprint> {
   let response: Response;
@@ -1453,6 +1513,7 @@ export async function fetchLeaseLevelDealFingerprint(
         operating_mode: 'lease_level',
         terms,
         ...inputs,
+        business_plan: businessPlan,
         deal_context: dealContext ?? null,
       }),
     });

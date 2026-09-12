@@ -4279,3 +4279,347 @@ body {
 .ai-analyst-blocked-reason {
   margin: 0 0 0.75rem;
 }
+
+/* ==========================================================================
+   Phase 6 Gate D6.6 -- the Business Plan editor.
+
+   One card on the Acquisition tab of every mode, beneath the acquisition
+   terms. Two ledgers -- Project Capital and Owner Expenses -- sized by the
+   card's own width rather than the viewport's: a container query switches a
+   ledger to one labelled card per row when the card is too narrow for its
+   columns, so neither a phone nor a narrow editor column ever clips the
+   Remove action or scrolls the page sideways. Additive only.
+   ========================================================================== */
+
+.business-plan {
+  container: business-plan / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.business-plan-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.business-plan .business-plan-title {
+  margin: 0;
+}
+
+.business-plan-optional {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.business-plan-lede {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+
+.business-plan-issues ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.business-plan-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--color-divider);
+}
+
+.business-plan-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+}
+
+.business-plan-group-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 620;
+  color: var(--color-text);
+}
+
+.business-plan-count {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.business-plan-hint,
+.business-plan-empty,
+.business-plan-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.business-plan-hint {
+  max-width: 80ch;
+}
+
+.business-plan-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.business-plan-table th[scope='col'] {
+  padding: 0.4rem 0.4rem;
+  border-bottom: 2px solid var(--color-border);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  vertical-align: bottom;
+}
+
+.business-plan-table td {
+  padding: 0.35rem 0.4rem;
+  border-bottom: 1px solid var(--color-divider);
+  vertical-align: top;
+}
+
+.business-plan-table th.business-plan-num,
+.business-plan-table td.business-plan-num {
+  text-align: right;
+}
+
+.business-plan-col-hint {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Description takes whatever the fixed columns leave; every other column is
+   sized to its longest legitimate content ("Exterior / Common Area",
+   "30,000,000", "Through Hold", the Remove action). */
+.business-plan-col-category {
+  width: 11.75rem;
+}
+
+.business-plan-col-month {
+  width: 6.5rem;
+}
+
+.business-plan-col-amount {
+  width: 9.5rem;
+}
+
+.business-plan-col-first-year {
+  width: 5.75rem;
+}
+
+/* Wide enough for its "Through Hold" placeholder to read whole. */
+.business-plan-col-last-year {
+  width: 8rem;
+}
+
+.business-plan-col-actions {
+  width: 5.25rem;
+}
+
+.business-plan-input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.business-plan-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(22, 50, 79, 0.12);
+}
+
+.business-plan-input[aria-invalid='true'] {
+  border-color: var(--color-negative);
+}
+
+.business-plan-input:disabled {
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+}
+
+.business-plan-input-numeric {
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.business-plan-input-numeric::-webkit-inner-spin-button,
+.business-plan-input-numeric::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.business-plan-money {
+  position: relative;
+}
+
+.business-plan-affix {
+  position: absolute;
+  top: 50%;
+  left: 0.5rem;
+  transform: translateY(-50%);
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+.business-plan-money .business-plan-input {
+  padding-left: 1.3rem;
+}
+
+.business-plan-timing {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+.business-plan-table .field-error {
+  display: block;
+  margin-top: 0.2rem;
+  text-align: left;
+}
+
+.business-plan-row-error td:first-child {
+  box-shadow: inset 3px 0 0 var(--color-negative);
+}
+
+.business-plan-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Centred on the 32px inputs beside it rather than riding their top edge. */
+.business-plan-actions .btn {
+  margin-top: 5px;
+}
+
+.business-plan-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* Too narrow for a ledger: one labelled, two-line entry per row. Description
+   and Category share the first line; the numbers and the Remove action share
+   the second, so a mid-width editor column (the 1280px desktop, where the Live
+   Case rail takes its share) stays dense rather than stacking every field. */
+@container business-plan (max-width: 760px) {
+  .business-plan-table,
+  .business-plan-table tbody,
+  .business-plan-table tr,
+  .business-plan-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .business-plan-table colgroup,
+  .business-plan-table thead {
+    display: none;
+  }
+
+  .business-plan-table tr {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--sp-2) var(--sp-3);
+    margin-bottom: var(--sp-2);
+    padding: var(--sp-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-control);
+    background: var(--color-surface);
+  }
+
+  .business-plan-table td {
+    padding: 0;
+    border: 0;
+  }
+
+  .business-plan-table td.business-plan-num {
+    text-align: left;
+  }
+
+  .business-plan-table td[data-label='Description'],
+  .business-plan-table td[data-label='Category'] {
+    grid-column: span 2;
+  }
+
+  /* Remove always ends the second line, at the card's right edge. */
+  .business-plan-table td.business-plan-actions {
+    grid-column: 4;
+    align-self: end;
+    padding-bottom: 5px;
+  }
+
+  .business-plan-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.2rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+
+  .business-plan-row-error td:first-child {
+    box-shadow: none;
+  }
+
+  .business-plan-table tr.business-plan-row-error {
+    border-color: var(--color-negative);
+  }
+}
+
+/* Phone width: every text field takes the whole card, and the numbers pair up
+   beneath them. No sideways scrolling, and Remove is never pushed off-card. */
+@container business-plan (max-width: 480px) {
+  .business-plan-table tr {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .business-plan-table td[data-label='Description'],
+  .business-plan-table td[data-label='Category'],
+  .business-plan-table td[data-label='Last Year'],
+  .business-plan-table td.business-plan-actions {
+    grid-column: 1 / -1;
+  }
+
+  .business-plan-table td.business-plan-actions {
+    padding-bottom: 0;
+  }
+
+  /* One line per label, so paired fields keep their inputs level. */
+  .business-plan-table td[data-label]::before {
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+  }
+}

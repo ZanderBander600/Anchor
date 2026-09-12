@@ -319,12 +319,23 @@ describe('the Lease-Level AI Analyst workspace', () => {
     await generate(user);
 
     await waitFor(() => expect(mockAi).toHaveBeenCalledTimes(1));
-    const [terms, inputs, leveredIrr, equityMultiple, headlineDscr, metric, dealContext] =
-      mockAi.mock.calls[0];
+    const [
+      terms,
+      inputs,
+      businessPlan,
+      leveredIrr,
+      equityMultiple,
+      headlineDscr,
+      metric,
+      dealContext,
+    ] = mockAi.mock.calls[0];
 
     expect(terms.purchase_price).toBe(30_000_000);
     expect(inputs.suites).toHaveLength(2);
     expect(inputs.leases).toHaveLength(2);
+    // D6.6: the deal's Business Plan -- empty here -- is sent explicitly, never
+    // omitted, so the backend grounds the report in the plan the deal holds.
+    expect(businessPlan).toEqual({ capital_items: [], owner_expense_items: [] });
     expect(typeof leveredIrr).toBe('number');
     expect(typeof equityMultiple).toBe('number');
     expect(typeof headlineDscr).toBe('number');

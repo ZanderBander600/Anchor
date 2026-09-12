@@ -27,6 +27,12 @@ import type {
   ExcelIntakeReport,
   ExtractionResult,
 } from './types';
+import type { BusinessPlanInput } from './businessPlan';
+
+/** D6.6: every deal-state client function now takes the Business Plan. The
+ * shipped tests below send the empty plan and pin that it is sent; the
+ * plan-bearing bodies are pinned by `businessPlanRequests.test.ts`. */
+const EMPTY_PLAN: BusinessPlanInput = { capital_items: [], owner_expense_items: [] };
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -284,6 +290,7 @@ function dealFixture(overrides: Partial<Deal> = {}): Deal {
     suites: null,
     leases: null,
     deal_context: null,
+    business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,
     ai_snapshot: null,
     one_way_sensitivity_snapshot: null,
@@ -329,6 +336,7 @@ function detailedDealFixture(overrides: Partial<Deal> = {}): Deal {
       expense_growth: 0.03,
     },
     deal_context: null,
+    business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,
     ai_snapshot: null,
     one_way_sensitivity_snapshot: null,
@@ -350,7 +358,7 @@ describe('createDeal', () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await createDeal('111 Main St', GOLDEN_INPUTS);
+    const result = await createDeal('111 Main St', GOLDEN_INPUTS, EMPTY_PLAN);
 
     expect(result).toEqual(deal);
     const [url, init] = fetchMock.mock.calls[0];
@@ -359,6 +367,7 @@ describe('createDeal', () => {
     expect(JSON.parse(init.body)).toEqual({
       name: '111 Main St',
       inputs: GOLDEN_INPUTS,
+      business_plan: EMPTY_PLAN,
       deal_context: null,
     });
   });
@@ -373,7 +382,7 @@ describe('createDeal', () => {
 
     let caught: ApiError | undefined;
     try {
-      await createDeal('Bad Deal', { ...GOLDEN_INPUTS, purchase_price: -1 });
+      await createDeal('Bad Deal', { ...GOLDEN_INPUTS, purchase_price: -1 }, EMPTY_PLAN);
     } catch (error) {
       caught = error as ApiError;
     }
@@ -386,7 +395,7 @@ describe('createDeal', () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(createDeal('Deal', GOLDEN_INPUTS)).rejects.toBeInstanceOf(ApiError);
+    await expect(createDeal('Deal', GOLDEN_INPUTS, EMPTY_PLAN)).rejects.toBeInstanceOf(ApiError);
   });
 });
 
@@ -396,7 +405,7 @@ describe('updateDeal', () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, deal));
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await updateDeal('deal-1', 'Renamed Deal', GOLDEN_INPUTS);
+    const result = await updateDeal('deal-1', 'Renamed Deal', GOLDEN_INPUTS, EMPTY_PLAN);
 
     expect(result).toEqual(deal);
     const [url, init] = fetchMock.mock.calls[0];
@@ -405,6 +414,7 @@ describe('updateDeal', () => {
     expect(JSON.parse(init.body)).toEqual({
       name: 'Renamed Deal',
       inputs: GOLDEN_INPUTS,
+      business_plan: EMPTY_PLAN,
       deal_context: null,
     });
   });
@@ -413,7 +423,7 @@ describe('updateDeal', () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(404, { detail: 'not found' }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(updateDeal('missing', 'Deal', GOLDEN_INPUTS)).rejects.toThrow(/could not be found/);
+    await expect(updateDeal('missing', 'Deal', GOLDEN_INPUTS, EMPTY_PLAN)).rejects.toThrow(/could not be found/);
   });
 });
 
@@ -431,6 +441,7 @@ describe('createDetailedDeal', () => {
       'Golden Detailed Deal',
       GOLDEN_TERMS,
       GOLDEN_DETAILED_OPERATING_INPUTS,
+      EMPTY_PLAN,
     );
 
     expect(result).toEqual(deal);
@@ -442,6 +453,7 @@ describe('createDetailedDeal', () => {
       operating_mode: 'detailed',
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      business_plan: EMPTY_PLAN,
       deal_context: null,
     });
   });
@@ -460,6 +472,7 @@ describe('createDetailedDeal', () => {
         'Bad Deal',
         { ...GOLDEN_TERMS, ltv: 1.5 },
         GOLDEN_DETAILED_OPERATING_INPUTS,
+        EMPTY_PLAN,
       );
     } catch (error) {
       caught = error as ApiError;
@@ -474,7 +487,7 @@ describe('createDetailedDeal', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      createDetailedDeal('Deal', GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
+      createDetailedDeal('Deal', GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS, EMPTY_PLAN),
     ).rejects.toBeInstanceOf(ApiError);
   });
 });
@@ -490,6 +503,7 @@ describe('updateDetailedDeal', () => {
       'Renamed Detailed Deal',
       GOLDEN_TERMS,
       GOLDEN_DETAILED_OPERATING_INPUTS,
+      EMPTY_PLAN,
     );
 
     expect(result).toEqual(deal);
@@ -501,6 +515,7 @@ describe('updateDetailedDeal', () => {
       operating_mode: 'detailed',
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      business_plan: EMPTY_PLAN,
       deal_context: null,
     });
   });
@@ -510,7 +525,13 @@ describe('updateDetailedDeal', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      updateDetailedDeal('missing', 'Deal', GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
+      updateDetailedDeal(
+        'missing',
+        'Deal',
+        GOLDEN_TERMS,
+        GOLDEN_DETAILED_OPERATING_INPUTS,
+        EMPTY_PLAN,
+      ),
     ).rejects.toThrow(/could not be found/);
   });
 });
@@ -528,7 +549,7 @@ describe('fetchDealFingerprint', () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, fingerprints));
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await fetchDealFingerprint(GOLDEN_INPUTS, 'Strategy.');
+    const result = await fetchDealFingerprint(GOLDEN_INPUTS, EMPTY_PLAN, 'Strategy.');
 
     expect(result).toEqual(fingerprints);
     const [url, init] = fetchMock.mock.calls[0];
@@ -537,6 +558,7 @@ describe('fetchDealFingerprint', () => {
     expect(JSON.parse(init.body)).toEqual({
       operating_mode: 'quick',
       inputs: GOLDEN_INPUTS,
+      business_plan: EMPTY_PLAN,
       deal_context: 'Strategy.',
     });
   });
@@ -547,7 +569,7 @@ describe('fetchDealFingerprint', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await fetchDealFingerprint(GOLDEN_INPUTS);
+    await fetchDealFingerprint(GOLDEN_INPUTS, EMPTY_PLAN);
 
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(init.body).deal_context).toBeNull();
@@ -557,7 +579,7 @@ describe('fetchDealFingerprint', () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(fetchDealFingerprint(GOLDEN_INPUTS)).rejects.toBeInstanceOf(ApiError);
+    await expect(fetchDealFingerprint(GOLDEN_INPUTS, EMPTY_PLAN)).rejects.toBeInstanceOf(ApiError);
   });
 });
 
@@ -573,6 +595,7 @@ describe('fetchDetailedDealFingerprint', () => {
     const result = await fetchDetailedDealFingerprint(
       GOLDEN_TERMS,
       GOLDEN_DETAILED_OPERATING_INPUTS,
+      EMPTY_PLAN,
       'Strategy.',
     );
 
@@ -583,6 +606,7 @@ describe('fetchDetailedDealFingerprint', () => {
       operating_mode: 'detailed',
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      business_plan: EMPTY_PLAN,
       deal_context: 'Strategy.',
     });
   });
@@ -836,6 +860,7 @@ describe('analyzeDetailedAcquisition', () => {
     const result = await analyzeDetailedAcquisition(
       GOLDEN_TERMS,
       GOLDEN_DETAILED_OPERATING_INPUTS,
+      EMPTY_PLAN,
     );
 
     expect(result).toEqual(detailedResults);
@@ -846,6 +871,7 @@ describe('analyzeDetailedAcquisition', () => {
       operating_mode: 'detailed',
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      business_plan: EMPTY_PLAN,
     });
   });
 
@@ -862,6 +888,7 @@ describe('analyzeDetailedAcquisition', () => {
       await analyzeDetailedAcquisition(
         { ...GOLDEN_TERMS, ltv: 1.5 },
         GOLDEN_DETAILED_OPERATING_INPUTS,
+        EMPTY_PLAN,
       );
     } catch (error) {
       caught = error as ApiError;
@@ -876,7 +903,7 @@ describe('analyzeDetailedAcquisition', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      analyzeDetailedAcquisition(GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
+      analyzeDetailedAcquisition(GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS, EMPTY_PLAN),
     ).rejects.toBeInstanceOf(ApiError);
   });
 
@@ -885,7 +912,7 @@ describe('analyzeDetailedAcquisition', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      analyzeDetailedAcquisition(GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS),
+      analyzeDetailedAcquisition(GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS, EMPTY_PLAN),
     ).rejects.toBeInstanceOf(ApiError);
   });
 });
@@ -916,6 +943,7 @@ describe('fetchDetailedAIAnalysis', () => {
     const result = await fetchDetailedAIAnalysis(
       GOLDEN_TERMS,
       GOLDEN_DETAILED_OPERATING_INPUTS,
+      EMPTY_PLAN,
       0.1,
       1.5,
       1.2,
@@ -930,6 +958,7 @@ describe('fetchDetailedAIAnalysis', () => {
       operating_mode: 'detailed',
       terms: GOLDEN_TERMS,
       detailed_operating_inputs: GOLDEN_DETAILED_OPERATING_INPUTS,
+      business_plan: EMPTY_PLAN,
       target_levered_irr: 0.1,
       target_equity_multiple: 1.5,
       target_headline_dscr: 1.2,
@@ -948,6 +977,7 @@ describe('fetchDetailedAIAnalysis', () => {
       fetchDetailedAIAnalysis(
         GOLDEN_TERMS,
         GOLDEN_DETAILED_OPERATING_INPUTS,
+        EMPTY_PLAN,
         0.1,
         1.5,
         1.2,
@@ -966,6 +996,7 @@ describe('fetchDetailedAIAnalysis', () => {
       fetchDetailedAIAnalysis(
         GOLDEN_TERMS,
         GOLDEN_DETAILED_OPERATING_INPUTS,
+        EMPTY_PLAN,
         0.1,
         1.5,
         1.2,
@@ -987,6 +1018,7 @@ describe('fetchDetailedAIAnalysis', () => {
       await fetchDetailedAIAnalysis(
         { ...GOLDEN_TERMS, ltv: 1.5 },
         GOLDEN_DETAILED_OPERATING_INPUTS,
+        EMPTY_PLAN,
         0.1,
         1.5,
         1.2,
@@ -1008,6 +1040,7 @@ describe('fetchDetailedAIAnalysis', () => {
       fetchDetailedAIAnalysis(
         GOLDEN_TERMS,
         GOLDEN_DETAILED_OPERATING_INPUTS,
+        EMPTY_PLAN,
         0.1,
         1.5,
         1.2,
@@ -1023,6 +1056,7 @@ describe('fetchDetailedAIAnalysis', () => {
     await fetchDetailedAIAnalysis(
       GOLDEN_TERMS,
       GOLDEN_DETAILED_OPERATING_INPUTS,
+      EMPTY_PLAN,
       0.1,
       1.5,
       1.2,

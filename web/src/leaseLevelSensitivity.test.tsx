@@ -214,6 +214,7 @@ function savedDeal(suites: SuiteRequest[] = PLAIN_SUITES): Deal {
     suites,
     leases: LEASES,
     deal_context: null,
+    business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,
     ai_snapshot: null,
     one_way_sensitivity_snapshot: null,
@@ -517,7 +518,7 @@ describe('one-way candidate values are absolute', () => {
     await runIn(user, panel('one-way'));
 
     await waitFor(() => expect(mockOneWay).toHaveBeenCalledTimes(1));
-    const controls = mockOneWay.mock.calls[0][2];
+    const controls = mockOneWay.mock.calls[0][3];
     // 6.25 means an exit cap of 6.25%, not 6.25 basis points of movement and
     // not a shift from the baseline 6.25%.
     expect(controls.values).toEqual([0.0575, 0.0625, 0.0675]);
@@ -537,7 +538,7 @@ describe('one-way candidate values are absolute', () => {
     await runIn(user, panel('one-way'));
 
     await waitFor(() => expect(mockOneWay).toHaveBeenCalledTimes(1));
-    expect(mockOneWay.mock.calls[0][2].values).toEqual([28_000_000, 30_000_000]);
+    expect(mockOneWay.mock.calls[0][3].values).toEqual([28_000_000, 30_000_000]);
   });
 
   it('sends a $/SF target at its own scale, never as a percentage', async () => {
@@ -552,7 +553,7 @@ describe('one-way candidate values are absolute', () => {
     await runIn(user, panel('one-way'));
 
     await waitFor(() => expect(mockOneWay).toHaveBeenCalledTimes(1));
-    expect(mockOneWay.mock.calls[0][2].values).toEqual([35, 38.5]);
+    expect(mockOneWay.mock.calls[0][3].values).toEqual([35, 38.5]);
   });
 
   it('sends the deal on screen, through the same mapper Analyze uses', async () => {
@@ -884,7 +885,7 @@ describe('two-way sensitivity', () => {
     await runGrid(user);
 
     await waitFor(() => expect(mockTwoWay).toHaveBeenCalledTimes(1));
-    const controls = mockTwoWay.mock.calls[0][2];
+    const controls = mockTwoWay.mock.calls[0][3];
     expect(controls.row_assumption).toBe('exit_cap_rate');
     expect(controls.row_values).toEqual([0.06, 0.065]);
     expect(controls.column_assumption).toBe('purchase_price');
@@ -1048,7 +1049,7 @@ describe('the candidate ladder', () => {
 
     await waitFor(() => expect(mockOneWay).toHaveBeenCalledTimes(1));
     // The edit and the deletion both survive; the ladder is not re-derived.
-    expect(mockOneWay.mock.calls[0][2].values).toEqual([0.0525, 0.0625, 0.065, 0.0675]);
+    expect(mockOneWay.mock.calls[0][3].values).toEqual([0.0525, 0.0625, 0.065, 0.0675]);
   });
 
   it('M4: generates absolute values, never a shock around the baseline', () => {
@@ -1253,8 +1254,8 @@ describe('what this workspace deliberately does not do', () => {
 
     await waitFor(() => expect(mockTwoWay).toHaveBeenCalledTimes(1));
     // 9 x 7 = 63 cells. Nothing capped, truncated or warned about.
-    expect(mockTwoWay.mock.calls[0][2].row_values).toHaveLength(9);
-    expect(mockTwoWay.mock.calls[0][2].column_values).toHaveLength(7);
+    expect(mockTwoWay.mock.calls[0][3].row_values).toHaveLength(9);
+    expect(mockTwoWay.mock.calls[0][3].column_values).toHaveLength(7);
   }, 30_000);
 
   it('M17/M18: leaves Quick and Detailed Risk exactly as they were', async () => {
@@ -1489,7 +1490,7 @@ describe('D5.7A: the one-way baseline is stated once', () => {
     await waitFor(() => expect(mockOneWay).toHaveBeenCalledTimes(1));
     // Nothing about the new presentation reached the wire: no baseline flag, no
     // request for a baseline scenario, no extra candidate.
-    expect(mockOneWay.mock.calls[0][2]).toEqual({
+    expect(mockOneWay.mock.calls[0][3]).toEqual({
       assumption: 'exit_cap_rate',
       metric: 'levered_irr',
       values: [0.0575, 0.0625, 0.0675],

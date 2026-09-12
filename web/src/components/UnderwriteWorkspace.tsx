@@ -31,6 +31,10 @@ export interface UnderwriteWorkspaceProps {
    * component never needs to know about the individual result components or
    * about Detailed's operating projection. */
   resultsViews: Partial<Record<ResultsViewId, ReactNode>>;
+  /** Phase 6 Gate D6.6: the shared Business Plan editor, already bound to this
+   * mode's own plan by the caller. Rendered on Acquisition, beneath the
+   * acquisition terms -- a distinct section, never inside Operations or Debt. */
+  businessPlan: ReactNode;
 }
 
 function panelId(prefix: string, id: string): string {
@@ -81,6 +85,7 @@ export function UnderwriteWorkspace({
   onResultsViewChange,
   results,
   resultsViews,
+  businessPlan,
 }: UnderwriteWorkspaceProps) {
   // Detailed Operations carries 12 assumptions across three distinct concerns
   // and earns sub-navigation; Quick Operations carries four and does not.
@@ -200,6 +205,7 @@ export function UnderwriteWorkspace({
                 className="underwrite-tab-panel"
               >
                 <AssumptionFieldGrid sections={sections[tab.id]} disabled={isSubmitting} />
+                {tab.id === 'acquisition' && businessPlan}
               </div>
             );
           })}

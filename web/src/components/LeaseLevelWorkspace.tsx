@@ -150,6 +150,13 @@ export interface LeaseLevelWorkspaceProps {
   onResultsViewChange: (view: ResultsViewId) => void;
   periodView: OperatingPeriodView;
   onPeriodViewChange: (view: OperatingPeriodView) => void;
+
+  // --- D6.6: the Business Plan ----------------------------------------------
+  /** The shared Business Plan editor, bound to this deal's plan by the shell.
+   * Rendered on Acquisition & Debt, apart from the rent roll and the market
+   * leasing assumptions that drive TI / LC -- Project Capital is not leasing
+   * capital, and is never placed beside it. */
+  businessPlan: ReactNode;
 }
 
 export type AreaReconciliationValues = ReturnType<typeof reconcileArea>;
@@ -391,6 +398,7 @@ export function LeaseLevelWorkspace({
   onResultsViewChange,
   periodView,
   onPeriodViewChange,
+  businessPlan,
 }: LeaseLevelWorkspaceProps) {
   const editorRow = values.rentRoll.find((row) => row.rowId === editorRowId);
   const anchorable = anchorablePaths(values);
@@ -523,7 +531,10 @@ export function LeaseLevelWorkspace({
         <div className="underwrite-editor">
           {panel(
             'acquisition',
-            <AssumptionFieldGrid sections={termsSections} disabled={isSubmitting} />,
+            <>
+              <AssumptionFieldGrid sections={termsSections} disabled={isSubmitting} />
+              {businessPlan}
+            </>,
           )}
 
           {panel(

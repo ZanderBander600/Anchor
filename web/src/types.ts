@@ -11,6 +11,7 @@ import type {
   LeaseLevelOneWaySensitivitySnapshot,
   LeaseLevelTwoWaySensitivitySnapshot,
 } from './leaseLevelSensitivityTypes';
+import type { BusinessPlanInput } from './businessPlan';
 
 export interface AcquisitionFormValues {
   purchasePrice: string;
@@ -417,6 +418,12 @@ export interface Deal {
   market_leasing: MarketLeasingAssumptionsRequest | null;
   suites: SuiteRequest[] | null;
   leases: LeaseRequest[] | null;
+  /** Phase 6 Gate D6.5/D6.6: the deal's Business Plan, exactly as persisted --
+   * item IDs, values and row order. Mode-agnostic: present on Quick, Detailed
+   * and Lease-Level deals alike, and two empty arrays when the deal has none.
+   * The client hydrates it into the editor and sends it back on every write,
+   * because an absent plan on a write means an EMPTY plan to the backend. */
+  business_plan: BusinessPlanInput;
   /** Owner Return Metrics V3 Gate A4: optional, user-authored free text
    * describing the investment strategy/business plan -- never an
    * underwriting input, `null` when no context was supplied (including

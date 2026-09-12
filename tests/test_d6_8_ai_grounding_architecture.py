@@ -438,9 +438,22 @@ _PROTECTED = (
 )
 
 
+#: ``main`` after D6.8 -- the end of D6.8's committed range.
+_D6_8_MERGE = "3d4dfcf"
+
+
+def _files_changed_between(start: str, end: str, repo_relative: str) -> list[str]:
+    changed = _git_bytes(["diff", "--name-only", start, end, "--", repo_relative]).decode()
+    return sorted({line.strip() for line in changed.splitlines() if line.strip()})
+
+
+# Pinned at D6.6 to D6.8's own committed range, 7f52b9e..3d4dfcf, so the ledger
+# keeps proving exactly what D6.8 changed however later gates move the tree.
+# D6.6 is the web gate that follows it: its frontend changes are held by the
+# D4.6B G37 web allowlist and ``web/src/businessPlanRequests.test.ts``.
 def test_d6_8_changed_exactly_its_authorized_production_files() -> None:
-    changed = set(_files_changed_since(_D6_5_MERGE, "src")) | set(
-        _files_changed_since(_D6_5_MERGE, "web")
+    changed = set(_files_changed_between(_D6_5_MERGE, _D6_8_MERGE, "src")) | set(
+        _files_changed_between(_D6_5_MERGE, _D6_8_MERGE, "web")
     )
     assert changed == _D6_8_PRODUCTION_FILES, (
         f"unexpected: {sorted(changed - _D6_8_PRODUCTION_FILES)}; "
@@ -450,7 +463,9 @@ def test_d6_8_changed_exactly_its_authorized_production_files() -> None:
 
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged_since_d6_5(path: str) -> None:
-    assert _files_changed_since(_D6_5_MERGE, path) == [], f"{path} changed at D6.8"
+    assert _files_changed_between(_D6_5_MERGE, _D6_8_MERGE, path) == [], (
+        f"{path} changed at D6.8"
+    )
 
 
 def _without_the_ai_version(source: str) -> tuple[str, list[int]]:

@@ -215,6 +215,7 @@ function savedLeaseLevelDeal(overrides: Partial<Deal> = {}): Deal {
     suites: SUITES,
     leases: LEASES,
     deal_context: 'Value-add reposition of a 1990s suburban office park.',
+    business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,
     ai_snapshot: null,
     one_way_sensitivity_snapshot: null,
