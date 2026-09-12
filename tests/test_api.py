@@ -15,7 +15,9 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from anchor.analysis import analyze_quick_acquisition_with_business_plan
 from anchor.api import app
+from anchor.business_plan import BusinessPlan
 from anchor.contracts import AcquisitionInputs
 from anchor.engine import AcquisitionResults, analyze_acquisition
 
@@ -177,15 +179,24 @@ def test_analyze_repeated_identical_request_returns_identical_response(
 def test_analyze_calls_analyze_acquisition_exactly_once(client: TestClient) -> None:
     """The API must call the frozen engine's ``analyze_acquisition`` exactly
     once with the inputs validated from the request body, and return exactly
-    what it produces -- never compute a financial value itself."""
+    what it produces -- never compute a financial value itself.
+
+    D6.5: the API reaches ``analyze_acquisition`` through the D6.2 Quick
+    Business Plan entry point, passing the request's plan explicitly -- the
+    empty plan for a request that carries none."""
 
     with patch(
-        "anchor.api.analyze_acquisition", wraps=analyze_acquisition
+        "anchor.api.analyze_quick_acquisition_with_business_plan",
+        wraps=analyze_quick_acquisition_with_business_plan,
     ) as mock_analyze:
         response = client.post("/analyze", json=GOLDEN_PAYLOAD)
 
     assert response.status_code == 200
-    mock_analyze.assert_called_once_with(GOLDEN_INPUTS)
+    mock_analyze.assert_called_once_with(GOLDEN_INPUTS, business_plan=BusinessPlan())
+    assert response.json() == client.post("/analyze", json=GOLDEN_PAYLOAD).json()
+    assert analyze_quick_acquisition_with_business_plan(
+        GOLDEN_INPUTS, business_plan=BusinessPlan()
+    ) == analyze_acquisition(GOLDEN_INPUTS)
 
 
 def test_analyze_engine_failure_returns_500(client: TestClient) -> None:
@@ -194,7 +205,8 @@ def test_analyze_engine_failure_returns_500(client: TestClient) -> None:
 
     no_raise_client = TestClient(app, raise_server_exceptions=False)
     with patch(
-        "anchor.api.analyze_acquisition", side_effect=RuntimeError("engine boom")
+        "anchor.api.analyze_quick_acquisition_with_business_plan",
+        side_effect=RuntimeError("engine boom"),
     ):
         response = no_raise_client.post("/analyze", json=GOLDEN_PAYLOAD)
 

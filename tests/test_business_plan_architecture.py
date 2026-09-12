@@ -89,12 +89,15 @@ _UNCHANGED_FINANCIAL_PATHS = (
     # ``deals`` as a whole until the D6.3 closeout, which authorised exactly one
     # decoder branch in ``deals/store.py`` (IrrStatus rehydration), held to its
     # own source-region claim in
-    # ``tests/test_d6_3_project_returns_architecture.py``. The rest of the
-    # persistence package is byte-identical to the D6 base.
+    # ``tests/test_d6_3_project_returns_architecture.py``.
+    #
+    # **Narrowed at D6.5** by exactly its authorized state/API files --
+    # ``deals/contracts.py``, ``deals/fingerprint.py`` and ``api.py`` (with
+    # ``deals/store.py`` and the new ``business_plan/parsing.py``) -- held to the
+    # omission guards, ledger and pinned legacy digests in
+    # ``tests/test_d6_5_business_plan_persistence_architecture.py``. The rest of
+    # the persistence package is byte-identical to the D6 base.
     "src/anchor/deals/__init__.py",
-    "src/anchor/deals/contracts.py",
-    "src/anchor/deals/fingerprint.py",
-    "src/anchor/api.py",
     "src/anchor/contracts.py",
     "src/anchor/validation.py",
     "web",
@@ -201,9 +204,12 @@ def _fresh_interpreter(statement: str) -> subprocess.CompletedProcess[bytes]:
 
 
 def test_business_plan_package_has_the_expected_modules() -> None:
+    # D6.5 adds the wire parser, which imports only this package's own
+    # contracts and validation (asserted below).
     assert [path.name for path in _python_files(_BUSINESS_PLAN_DIR)] == [
         "__init__.py",
         "contracts.py",
+        "parsing.py",
         "resolver.py",
         "validation.py",
     ]
@@ -270,7 +276,13 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
     for the three analysis modules) is pinned by
     ``tests/test_d6_4_business_plan_threading_architecture.py``. The engine,
     the Lease-Level bridge, leasing, deals and the API still import nothing
-    from ``anchor.business_plan`` (D6.5 owns the next consumers)."""
+    from ``anchor.business_plan`` (D6.5 owns the next consumers).
+
+    **Narrowed at D6.5 -- by exactly four named files.** The API parses a
+    request's plan; the Deal contract carries it; the fingerprint hashes it; the
+    store persists and re-validates it. What each may import is pinned by
+    ``tests/test_d6_5_business_plan_persistence_architecture.py``. The engine,
+    the Lease-Level bridge and leasing still import nothing from it."""
 
     importers = sorted(
         str(source_file.relative_to(_SRC_DIR)).replace("\\", "/")
@@ -288,6 +300,10 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
         "anchor/analysis/business_plan_analysis.py",
         "anchor/analysis/lease_level_sensitivity.py",
         "anchor/analysis/sensitivity.py",
+        "anchor/api.py",
+        "anchor/deals/contracts.py",
+        "anchor/deals/fingerprint.py",
+        "anchor/deals/store.py",
     ], f"anchor.business_plan is imported by {importers}"
 
 

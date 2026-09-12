@@ -61,6 +61,7 @@ from ..analysis import (
     Suite,
 )
 from ..analysis.contracts import OneWaySensitivityResult, TwoWaySensitivityResult
+from ..business_plan import BusinessPlan
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 
 
@@ -199,6 +200,21 @@ class Deal:
     suites: tuple[Suite, ...] | None = None
     leases: tuple[Lease, ...] | None = None
 
+    # --- Business Plan (Phase 6 Gate D6.5) ----------------------------
+    #
+    # Mode-agnostic deal state: one plan per deal, the same contract in all
+    # three modes, and never folded into ``inputs``, ``terms``, the Detailed
+    # operating inputs or the rent roll (D6 conventions Section 1). Always a
+    # ``BusinessPlan`` -- a deal with no plan, including every legacy deal,
+    # carries the empty ``BusinessPlan()``, never ``None``, so no analysis can
+    # be handed an absent plan. Tuple order is the analyst's row order:
+    # presentation, preserved for display, and excluded from the fingerprint.
+    #
+    # Defaulted so every existing construction site keeps working unchanged,
+    # exactly as the D5.8A snapshot fields are; the store always passes the
+    # plan it read.
+    business_plan: BusinessPlan = BusinessPlan()
+
     deal_context: str | None
     analysis_snapshot: AcquisitionResults | DetailedAcquisitionResults | None
     ai_snapshot: AIAnalysis | None
@@ -248,6 +264,11 @@ class Deal:
         # wording. Each mode now states its own invariants, and a mode with no
         # persisted representation is refused by name rather than by falling
         # into another mode's branch.
+        if not isinstance(self.business_plan, BusinessPlan):
+            raise ValueError(
+                "A Deal's 'business_plan' must be a BusinessPlan instance; a deal "
+                "with no plan carries BusinessPlan(), never None."
+            )
         if self.operating_mode is OperatingMode.QUICK:
             if self._lease_level_fields_populated():
                 raise ValueError(

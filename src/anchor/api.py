@@ -40,7 +40,9 @@ from .analysis import (
     OneWaySensitivityResult,
     ParsedLeaseLevelInputs,
     SensitivityTargetShadowedBySuiteOverrideError,
-    analyze_lease_level_acquisition_with_projection,
+    analyze_detailed_acquisition_with_business_plan,
+    analyze_lease_level_acquisition_with_business_plan,
+    analyze_quick_acquisition_with_business_plan,
     parse_lease_level_inputs,
     run_detailed_one_way_sensitivity,
     run_lease_level_one_way_sensitivity,
@@ -61,6 +63,7 @@ from .analysis import (
     run_detailed_two_way_sensitivity,
     run_two_way_sensitivity,
 )
+from .business_plan import BusinessPlan, BusinessPlanValidationError, parse_business_plan
 from .contracts import (
     AcquisitionInputs,
     AcquisitionTerms,
@@ -76,12 +79,7 @@ from .deals.fingerprint import (
     fingerprint_lease_level_inputs,
     fingerprint_quick_inputs,
 )
-from .engine import (
-    AcquisitionResults,
-    DetailedAcquisitionResults,
-    analyze_acquisition,
-    analyze_detailed_acquisition_with_projection,
-)
+from .engine import AcquisitionResults, DetailedAcquisitionResults
 from .detailed_excel_reader import (
     DetailedExcelIntakeReport,
     read_detailed_excel_intake_from_bytes,
@@ -260,6 +258,62 @@ def _lease_validation_error_response(error: LeaseValidationError) -> HTTPExcepti
     )
 
 
+# =============================================================================
+# Phase 6 Gate D6.5 -- the Business Plan on the request surface
+#
+# Every endpoint that analyzes, fingerprints or saves a deal accepts one
+# optional, mode-agnostic top-level ``business_plan`` object beside the mode's
+# own inputs -- never inside ``inputs``/``terms``/the rent roll. Absent (or
+# ``null``, or ``{}``) is ``BusinessPlan()``, so every pre-D6 request is
+# unchanged. The value is parsed by ``anchor.business_plan.parse_business_plan``
+# and validated by the D6.1 validation authority; this module restates no rule.
+#
+# Each endpoint reads the plan exactly once, through ``_optional_business_plan``,
+# and passes that one value by name to every plan-aware call it makes, so the
+# neutral ``BusinessPlan()`` defaults the analysis layer keeps for plan-free
+# callers are never relied on here
+# (``tests/test_d6_5_business_plan_persistence_architecture.py``).
+# =============================================================================
+
+_BUSINESS_PLAN_KEY = "business_plan"
+
+
+def _business_plan_validation_error_response(
+    error: BusinessPlanValidationError,
+) -> HTTPException:
+    """A refused Business Plan as a structured 422, in the same
+    ``code``/``path``/``message`` shape the Lease-Level issue stream uses --
+    there is no second D6 error envelope. Paths are rooted at the request, so a
+    UI can anchor ``business_plan.capital_items[2].month`` to its row. The D6.1
+    issue contract has no severity: every Business Plan issue is an error."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "path": (
+                    issue.path
+                    if issue.path == _BUSINESS_PLAN_KEY
+                    else f"{_BUSINESS_PLAN_KEY}.{issue.path}"
+                ),
+                "message": issue.message,
+            }
+            for issue in error.result.issues
+        ],
+    )
+
+
+def _optional_business_plan(payload: dict[str, Any]) -> BusinessPlan:
+    """The request's validated Business Plan -- ``BusinessPlan()`` when the key
+    is absent -- or a structured 422."""
+
+    try:
+        return parse_business_plan(payload.get(_BUSINESS_PLAN_KEY))
+    except BusinessPlanValidationError as error:
+        raise _business_plan_validation_error_response(error) from None
+
+
 def _unsupported_operating_mode(
     operating_mode: OperatingMode, *, endpoint: str
 ) -> HTTPException:
@@ -295,9 +349,10 @@ def _analyze_detailed(payload: dict[str, Any]) -> DetailedAcquisitionResults:
     """Detailed Operating Model V2.1 Gate 5 (mode routing) / Gate 4
     (response shape): the 'detailed' operating_mode branch of ``/analyze``.
     Validates 'terms' and 'detailed_operating_inputs' with the same shared
-    validators every other consumer uses, then delegates to
-    ``analyze_detailed_acquisition_with_projection`` -- no financial math or
-    validation rule of its own. Returns the richer
+    validators every other consumer uses, then delegates -- with the request's
+    Business Plan (D6.5) -- to ``analyze_detailed_acquisition_with_business_plan``,
+    which runs ``analyze_detailed_acquisition_with_projection`` -- no financial
+    math or validation rule of its own. Returns the richer
     ``DetailedAcquisitionResults`` envelope (operating projection +
     acquisition results) so a Detailed-mode frontend can render the
     institutional operating statement without a second round trip."""
@@ -334,7 +389,10 @@ def _analyze_detailed(payload: dict[str, Any]) -> DetailedAcquisitionResults:
             detail=_validation_error_detail(error),
         ) from None
 
-    return analyze_detailed_acquisition_with_projection(terms, detailed_inputs)
+    business_plan = _optional_business_plan(payload)
+    return analyze_detailed_acquisition_with_business_plan(
+        terms, detailed_inputs, business_plan=business_plan
+    )
 
 
 def _analyze_quick(payload: dict[str, Any]) -> AcquisitionResults:
@@ -343,17 +401,27 @@ def _analyze_quick(payload: dict[str, Any]) -> AcquisitionResults:
     explicit arm per mode -- rather than a Detailed test with an implicit
     Quick fallthrough. Behavior is unchanged: the same validator, the same
     engine call, the same bare ``AcquisitionResults`` response.
-    Named symmetrically with ``_analyze_detailed``."""
+    Named symmetrically with ``_analyze_detailed``.
+
+    D6.5: a Quick ``/analyze`` body *is* the flat inputs object, so the
+    ``business_plan`` key is set aside before the inputs validator sees it --
+    exactly as ``operating_mode`` is -- rather than being reported as an
+    unknown Field ID."""
 
     try:
-        inputs = validate_acquisition_inputs(payload)
+        inputs = validate_acquisition_inputs(
+            {key: value for key, value in payload.items() if key != _BUSINESS_PLAN_KEY}
+        )
     except InputValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=_validation_error_detail(error),
         ) from None
 
-    return analyze_acquisition(inputs)
+    business_plan = _optional_business_plan(payload)
+    return analyze_quick_acquisition_with_business_plan(
+        inputs, business_plan=business_plan
+    )
 
 
 def _require_lease_level_inputs(
@@ -375,10 +443,16 @@ def _require_lease_level_inputs(
     Lease-Level inputs -- the row/column/metric controls a sensitivity body
     carries. Declaring them keeps the unknown-key check live for everything
     else, so ``row_assumtion`` is still reported rather than silently ignored.
+
+    D6.5: ``business_plan`` is owned by every Lease-Level endpoint -- it is
+    mode-agnostic deal state, parsed by ``_optional_business_plan`` -- so it is
+    declared here once rather than in each endpoint's list.
     """
 
     try:
-        return parse_lease_level_inputs(payload, externally_owned_keys=also_owned)
+        return parse_lease_level_inputs(
+            payload, externally_owned_keys=(*also_owned, _BUSINESS_PLAN_KEY)
+        )
     except LeaseValidationError as error:
         raise _lease_validation_error_response(error) from None
 
@@ -405,15 +479,17 @@ def _analyze_lease_level(payload: dict[str, Any]) -> LeaseLevelAcquisitionResult
 
     terms = _require_deal_terms(payload, mode_label="lease_level")
     inputs = _require_lease_level_inputs(payload)
+    business_plan = _optional_business_plan(payload)
 
     try:
-        return analyze_lease_level_acquisition_with_projection(
+        return analyze_lease_level_acquisition_with_business_plan(
             terms,
             inputs.property_inputs,
             inputs.suites,
             inputs.leases,
             market_leasing=inputs.market_leasing,
             operating_inputs=inputs.operating_inputs,
+            business_plan=business_plan,
         )
     except LeaseValidationError as error:
         raise _lease_validation_error_response(error) from None
@@ -491,6 +567,7 @@ def analyze(
 def _sensitivity_detailed(payload: dict[str, Any]) -> TwoWaySensitivityResult:
     terms = _require_deal_terms(payload)
     detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    business_plan = _optional_business_plan(payload)
 
     missing_fields = [
         field
@@ -518,6 +595,7 @@ def _sensitivity_detailed(payload: dict[str, Any]) -> TwoWaySensitivityResult:
             column_assumption=payload["column_assumption"],
             column_values=payload["column_values"],
             metric=payload["metric"],
+            business_plan=business_plan,
         )
     except (UnknownAssumptionError, UnknownMetricError) as error:
         raise HTTPException(
@@ -556,6 +634,7 @@ def _sensitivity_quick(payload: dict[str, Any]) -> TwoWaySensitivityResult:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=_validation_error_detail(error),
         ) from None
+    business_plan = _optional_business_plan(payload)
 
     missing_fields = [
         field
@@ -582,6 +661,7 @@ def _sensitivity_quick(payload: dict[str, Any]) -> TwoWaySensitivityResult:
             column_assumption=payload["column_assumption"],
             column_values=payload["column_values"],
             metric=payload["metric"],
+            business_plan=business_plan,
         )
     except (UnknownAssumptionError, UnknownMetricError) as error:
         raise HTTPException(
@@ -640,6 +720,7 @@ def _sensitivity_lease_level(payload: dict[str, Any]) -> TwoWaySensitivityResult
 
     terms = _require_deal_terms(payload, mode_label="lease_level")
     inputs = _require_lease_level_inputs(payload, also_owned=_TWO_WAY_FIELDS)
+    business_plan = _optional_business_plan(payload)
     _require_fields(payload, _TWO_WAY_FIELDS)
 
     try:
@@ -655,6 +736,7 @@ def _sensitivity_lease_level(payload: dict[str, Any]) -> TwoWaySensitivityResult
             column_assumption=payload["column_assumption"],
             column_values=payload["column_values"],
             metric=payload["metric"],
+            business_plan=business_plan,
         )
     except LeaseValidationError as error:
         raise _lease_validation_error_response(error) from None
@@ -710,18 +792,21 @@ def sensitivity(payload: dict[str, Any] = Body(...)) -> TwoWaySensitivityResult:
 
 def _one_way_quick(payload: dict[str, Any]) -> OneWaySensitivityResult:
     inputs = _require_deal_inputs(payload)
+    business_plan = _optional_business_plan(payload)
     _require_fields(payload, _ONE_WAY_FIELDS)
     return run_one_way_sensitivity(
         inputs,
         assumption=payload["assumption"],
         values=payload["values"],
         metric=payload["metric"],
+        business_plan=business_plan,
     )
 
 
 def _one_way_detailed(payload: dict[str, Any]) -> OneWaySensitivityResult:
     terms = _require_deal_terms(payload)
     detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    business_plan = _optional_business_plan(payload)
     _require_fields(payload, _ONE_WAY_FIELDS)
     return run_detailed_one_way_sensitivity(
         terms,
@@ -729,12 +814,14 @@ def _one_way_detailed(payload: dict[str, Any]) -> OneWaySensitivityResult:
         assumption=payload["assumption"],
         values=payload["values"],
         metric=payload["metric"],
+        business_plan=business_plan,
     )
 
 
 def _one_way_lease_level(payload: dict[str, Any]) -> OneWaySensitivityResult:
     terms = _require_deal_terms(payload, mode_label="lease_level")
     inputs = _require_lease_level_inputs(payload, also_owned=_ONE_WAY_FIELDS)
+    business_plan = _optional_business_plan(payload)
     _require_fields(payload, _ONE_WAY_FIELDS)
     try:
         return run_lease_level_one_way_sensitivity(
@@ -747,6 +834,7 @@ def _one_way_lease_level(payload: dict[str, Any]) -> OneWaySensitivityResult:
             assumption=payload["assumption"],
             values=payload["values"],
             metric=payload["metric"],
+            business_plan=business_plan,
         )
     except LeaseValidationError as error:
         raise _lease_validation_error_response(error) from None
@@ -799,7 +887,10 @@ def _sensitivity_presets_detailed(
 ) -> StandardDetailedSensitivityPresets:
     terms = _require_deal_terms(payload)
     detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
-    return build_standard_detailed_presets(terms, detailed_operating_inputs)
+    business_plan = _optional_business_plan(payload)
+    return build_standard_detailed_presets(
+        terms, detailed_operating_inputs, business_plan=business_plan
+    )
 
 
 def _sensitivity_presets_quick(payload: dict[str, Any]) -> StandardSensitivityPresets:
@@ -825,7 +916,8 @@ def _sensitivity_presets_quick(payload: dict[str, Any]) -> StandardSensitivityPr
             detail=_validation_error_detail(error),
         ) from None
 
-    return build_standard_presets(inputs)
+    business_plan = _optional_business_plan(payload)
+    return build_standard_presets(inputs, business_plan=business_plan)
 
 
 @app.post(
@@ -883,6 +975,7 @@ def _numeric_target(payload: dict[str, Any], field: str) -> float:
 def _break_even_detailed(payload: dict[str, Any]) -> StandardDetailedBreakEvenAnalysis:
     terms = _require_deal_terms(payload)
     detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    business_plan = _optional_business_plan(payload)
     (
         target_levered_irr,
         target_headline_dscr,
@@ -898,6 +991,7 @@ def _break_even_detailed(payload: dict[str, Any]) -> StandardDetailedBreakEvenAn
             target_headline_dscr=target_headline_dscr,
             target_equity_multiple=target_equity_multiple,
             return_hurdle_metric=return_hurdle_metric,
+            business_plan=business_plan,
         )
     except InvalidBreakEvenTargetError as error:
         raise HTTPException(
@@ -928,6 +1022,7 @@ def _break_even_quick(payload: dict[str, Any]) -> StandardBreakEvenAnalysis:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=_validation_error_detail(error),
         ) from None
+    business_plan = _optional_business_plan(payload)
 
     missing_fields = [
         field
@@ -964,6 +1059,7 @@ def _break_even_quick(payload: dict[str, Any]) -> StandardBreakEvenAnalysis:
             target_headline_dscr=target_headline_dscr,
             target_equity_multiple=target_equity_multiple,
             return_hurdle_metric=return_hurdle_metric,
+            business_plan=business_plan,
         )
     except InvalidBreakEvenTargetError as error:
         raise HTTPException(
@@ -1019,6 +1115,12 @@ def break_even(
 #: threads it to the model as the analyst's own stated strategy. Omitting it
 #: would make every real request from the app fail its unknown-key check --
 #: the client always sends the field, ``null`` included.
+#:
+#: D6.5: the Business Plan reaches the AI Analyst only mechanically -- the plan
+#: the request carries is the plan its deterministic analysis uses -- with no
+#: grounding prose and no D6 result field exposed to the model. D6.8 owns that;
+#: until it lands, a submitted plan moves the headline returns the model reads
+#: without the model being told why (accepted D6.4/D6.5 sequencing debt).
 _AI_HURDLE_FIELDS: tuple[str, ...] = (
     "target_levered_irr",
     "target_headline_dscr",
@@ -1070,6 +1172,7 @@ def _ai_analysis_detailed(payload: dict[str, Any]) -> AIAnalysis:
 
     terms = _require_deal_terms(payload)
     detailed_operating_inputs = _require_deal_detailed_operating_inputs(payload)
+    business_plan = _optional_business_plan(payload)
     deal_context = _optional_deal_context(payload)
     (
         target_levered_irr,
@@ -1087,6 +1190,7 @@ def _ai_analysis_detailed(payload: dict[str, Any]) -> AIAnalysis:
             target_headline_dscr=target_headline_dscr,
             return_hurdle_metric=return_hurdle_metric,
             deal_context=deal_context,
+            business_plan=business_plan,
         )
     except InvalidBreakEvenTargetError as error:
         raise HTTPException(
@@ -1125,6 +1229,7 @@ def _ai_analysis_quick(payload: dict[str, Any]) -> AIAnalysis:
             detail=_validation_error_detail(error),
         ) from None
 
+    business_plan = _optional_business_plan(payload)
     deal_context = _optional_deal_context(payload)
     (
         target_levered_irr,
@@ -1141,6 +1246,7 @@ def _ai_analysis_quick(payload: dict[str, Any]) -> AIAnalysis:
             target_headline_dscr=target_headline_dscr,
             return_hurdle_metric=return_hurdle_metric,
             deal_context=deal_context,
+            business_plan=business_plan,
         )
     except InvalidBreakEvenTargetError as error:
         raise HTTPException(
@@ -1164,8 +1270,9 @@ def _ai_analysis_lease_level(payload: dict[str, Any]) -> AIAnalysis:
     shared validators every other Lease-Level endpoint uses
     (``_require_deal_terms`` and ``_require_lease_level_inputs``), runs the one
     authoritative analysis exactly once through
-    ``analyze_lease_level_acquisition_with_projection``, and hands the result
-    to ``generate_lease_level_ai_analysis``.
+    ``analyze_lease_level_acquisition_with_business_plan`` -- with the
+    request's Business Plan (D6.5) -- and hands the result to
+    ``generate_lease_level_ai_analysis``.
 
     That single analysis call is the only financial work here, and it is the
     same call ``POST /analyze`` makes for this mode -- so the AI Analyst
@@ -1182,6 +1289,7 @@ def _ai_analysis_lease_level(payload: dict[str, Any]) -> AIAnalysis:
 
     terms = _require_deal_terms(payload, mode_label="lease_level")
     lease_level_inputs = _require_lease_level_inputs(payload, also_owned=_AI_HURDLE_FIELDS)
+    business_plan = _optional_business_plan(payload)
     deal_context = _optional_deal_context(payload)
     (
         target_levered_irr,
@@ -1191,13 +1299,14 @@ def _ai_analysis_lease_level(payload: dict[str, Any]) -> AIAnalysis:
     ) = _require_ai_hurdle_targets(payload)
 
     try:
-        lease_level_results = analyze_lease_level_acquisition_with_projection(
+        lease_level_results = analyze_lease_level_acquisition_with_business_plan(
             terms,
             lease_level_inputs.property_inputs,
             lease_level_inputs.suites,
             lease_level_inputs.leases,
             market_leasing=lease_level_inputs.market_leasing,
             operating_inputs=lease_level_inputs.operating_inputs,
+            business_plan=business_plan,
         )
     except LeaseValidationError as error:
         raise _lease_validation_error_response(error) from None
@@ -1668,16 +1777,25 @@ def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
     match operating_mode:
         case OperatingMode.QUICK:
             inputs = _require_deal_inputs(payload)
-            return deals_store.create_deal(name, inputs, deal_context=deal_context)
+            business_plan = _optional_business_plan(payload)
+            return deals_store.create_deal(
+                name, inputs, deal_context=deal_context, business_plan=business_plan
+            )
         case OperatingMode.DETAILED:
             terms = _require_deal_terms(payload)
             detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+            business_plan = _optional_business_plan(payload)
             return deals_store.create_detailed_deal(
-                name, terms, detailed_inputs, deal_context=deal_context
+                name,
+                terms,
+                detailed_inputs,
+                deal_context=deal_context,
+                business_plan=business_plan,
             )
         case OperatingMode.LEASE_LEVEL:
             terms = _require_deal_terms(payload, mode_label="lease_level")
             inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+            business_plan = _optional_business_plan(payload)
             return deals_store.create_lease_level_deal(
                 name,
                 terms,
@@ -1687,6 +1805,7 @@ def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
                 inputs.suites,
                 inputs.leases,
                 deal_context=deal_context,
+                business_plan=business_plan,
             )
         case _:
             raise _unsupported_operating_mode(operating_mode, endpoint="POST /deals")
@@ -1727,18 +1846,30 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
         match operating_mode:
             case OperatingMode.QUICK:
                 inputs = _require_deal_inputs(payload)
+                business_plan = _optional_business_plan(payload)
                 return deals_store.update_deal(
-                    deal_id, name, inputs, deal_context=deal_context
+                    deal_id,
+                    name,
+                    inputs,
+                    deal_context=deal_context,
+                    business_plan=business_plan,
                 )
             case OperatingMode.DETAILED:
                 terms = _require_deal_terms(payload)
                 detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+                business_plan = _optional_business_plan(payload)
                 return deals_store.update_detailed_deal(
-                    deal_id, name, terms, detailed_inputs, deal_context=deal_context
+                    deal_id,
+                    name,
+                    terms,
+                    detailed_inputs,
+                    deal_context=deal_context,
+                    business_plan=business_plan,
                 )
             case OperatingMode.LEASE_LEVEL:
                 terms = _require_deal_terms(payload, mode_label="lease_level")
                 inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+                business_plan = _optional_business_plan(payload)
                 return deals_store.update_lease_level_deal(
                     deal_id,
                     name,
@@ -1749,6 +1880,7 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
                     inputs.suites,
                     inputs.leases,
                     deal_context=deal_context,
+                    business_plan=business_plan,
                 )
             case _:
                 raise _unsupported_operating_mode(
@@ -1819,16 +1951,21 @@ def deal_fingerprint(payload: dict[str, Any] = Body(...)) -> _FingerprintRespons
     match operating_mode:
         case OperatingMode.QUICK:
             inputs = _require_deal_inputs(payload)
-            financial_input_fingerprint = fingerprint_quick_inputs(inputs)
+            business_plan = _optional_business_plan(payload)
+            financial_input_fingerprint = fingerprint_quick_inputs(
+                inputs, business_plan=business_plan
+            )
         case OperatingMode.DETAILED:
             terms = _require_deal_terms(payload)
             detailed_inputs = _require_deal_detailed_operating_inputs(payload)
+            business_plan = _optional_business_plan(payload)
             financial_input_fingerprint = fingerprint_detailed_inputs(
-                terms, detailed_inputs
+                terms, detailed_inputs, business_plan=business_plan
             )
         case OperatingMode.LEASE_LEVEL:
             terms = _require_deal_terms(payload, mode_label="lease_level")
             inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+            business_plan = _optional_business_plan(payload)
             financial_input_fingerprint = fingerprint_lease_level_inputs(
                 terms,
                 inputs.property_inputs,
@@ -1836,6 +1973,7 @@ def deal_fingerprint(payload: dict[str, Any] = Body(...)) -> _FingerprintRespons
                 inputs.leases,
                 market_leasing=inputs.market_leasing,
                 operating_inputs=inputs.operating_inputs,
+                business_plan=business_plan,
             )
         case _:
             raise _unsupported_operating_mode(

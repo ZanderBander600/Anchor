@@ -658,8 +658,10 @@ def test_d6_3_changed_exactly_its_authorized_production_files() -> None:
 
 
 def test_the_d6_3_ledger_detects_a_real_difference() -> None:
-    assert "src/anchor/deals/store.py" in _files_changed_since(_D6_2_MERGE, "src/anchor/deals")
-    assert _files_changed_since(_D6_2_MERGE, "src/anchor/deals") == ["src/anchor/deals/store.py"]
+    # Pinned at D6.5 to D6.3's committed range: D6.5 changes the persistence
+    # package on purpose (``tests/test_d6_5_business_plan_persistence_architecture.py``).
+    changed = _files_changed_between(_D6_2_MERGE, _D6_3_MERGE, "src/anchor/deals")
+    assert changed == ["src/anchor/deals/store.py"]
     _assert_engine_ledger()
 
 
@@ -759,8 +761,20 @@ def _assert_store_changed_only_by_irr_status_rehydration(baseline: str, current:
     )
 
 
+def _store_at_d6_3_merge() -> str:
+    """``deals/store.py`` as D6.3 left it.
+
+    Pinned at D6.5, which changes the store on purpose to persist the Business
+    Plan. This claim keeps proving exactly what D6.3 changed; the D6.5 guard
+    separately proves the IrrStatus branch is still byte-identical today."""
+
+    return _lf(_git_bytes(["show", f"{_D6_3_MERGE}:{_STORE}"]).decode("utf-8"))
+
+
 def test_store_changed_only_by_the_irr_status_rehydration_branch() -> None:
-    _assert_store_changed_only_by_irr_status_rehydration(_baseline(_STORE), _current(_STORE))
+    _assert_store_changed_only_by_irr_status_rehydration(
+        _baseline(_STORE), _store_at_d6_3_merge()
+    )
 
 
 _STORE_TAMPERS = [
@@ -789,7 +803,7 @@ _STORE_TAMPERS = [
 
 @pytest.mark.parametrize(("old", "new"), _STORE_TAMPERS)
 def test_the_store_guardrail_rejects_an_unauthorized_change(old: str, new: str) -> None:
-    current = _current(_STORE)
+    current = _store_at_d6_3_merge()
     assert current.count(old) == 1, old
 
     with pytest.raises(AssertionError, match=_STORE_FAILURE):
