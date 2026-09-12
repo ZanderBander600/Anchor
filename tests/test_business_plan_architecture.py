@@ -84,7 +84,14 @@ _UNCHANGED_FINANCIAL_PATHS = (
     "src/anchor/ai/contracts.py",
     "src/anchor/ai/prompts.py",
     "src/anchor/ai/provider.py",
-    "src/anchor/deals",
+    # ``deals`` as a whole until the D6.3 closeout, which authorised exactly one
+    # decoder branch in ``deals/store.py`` (IrrStatus rehydration), held to its
+    # own source-region claim in
+    # ``tests/test_d6_3_project_returns_architecture.py``. The rest of the
+    # persistence package is byte-identical to the D6 base.
+    "src/anchor/deals/__init__.py",
+    "src/anchor/deals/contracts.py",
+    "src/anchor/deals/fingerprint.py",
     "src/anchor/api.py",
     "src/anchor/contracts.py",
     "src/anchor/validation.py",

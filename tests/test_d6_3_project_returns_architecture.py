@@ -623,6 +623,9 @@ _D6_3_PRODUCTION_FILES = frozenset(
         "src/anchor/engine/contracts.py",
         "src/anchor/engine/acquisition.py",
         "src/anchor/ai/presentation.py",
+        # D6.3 closeout: the one authorised decoder branch that rehydrates
+        # IrrStatus in stored snapshots (see test 7 below).
+        "src/anchor/deals/store.py",
     }
 )
 
@@ -642,6 +645,147 @@ def test_d6_3_changed_exactly_its_authorized_production_files() -> None:
 
 
 def test_the_d6_3_ledger_detects_a_real_difference() -> None:
+    assert "src/anchor/deals/store.py" in _files_changed_since(_D6_2_MERGE, "src/anchor/deals")
+    assert _files_changed_since(_D6_2_MERGE, "src/anchor/deals") == ["src/anchor/deals/store.py"]
+    _assert_engine_ledger()
+
+
+# =============================================================================
+# 7. deals/store.py -- exactly the IrrStatus rehydration branch (D6.3 closeout)
+# =============================================================================
+
+_STORE = "src/anchor/deals/store.py"
+_STORE_FAILURE = "deals/store.py changed beyond the authorized IrrStatus rehydration"
+
+
+def _store_spans(source: str) -> dict[str, tuple[int, int]]:
+    spans: dict[str, tuple[int, int]] = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name == "_coerce_snapshot_value":
+            key = "def _coerce_snapshot_value"
+        elif isinstance(node, ast.ImportFrom) and node.level == 2 and node.module == "engine.contracts":
+            key = "from ..engine.contracts"
+        else:
+            continue
+        assert key not in spans, f"{_STORE_FAILURE}: {key} appears twice"
+        assert node.end_lineno is not None
+        spans[key] = (node.lineno - 1, node.end_lineno)
+    assert set(spans) == {"def _coerce_snapshot_value", "from ..engine.contracts"}, (
+        f"{_STORE_FAILURE}: a region is missing"
+    )
+    return spans
+
+
+def _store_collapsed(source: str) -> str:
+    lines = source.split("\n")
+    for key, (start, stop) in sorted(_store_spans(source).items(), key=lambda i: -i[1][0]):
+        lines[start:stop] = [f"<<{key}>>"]
+    return "\n".join(lines)
+
+
+def _assert_store_changed_only_by_irr_status_rehydration(baseline: str, current: str) -> None:
+    """Everything outside two regions is b828956's text; inside them, the
+    engine-contracts import gained exactly ``IrrStatus`` and
+    ``_coerce_snapshot_value`` gained exactly one ``if hint is IrrStatus``
+    statement -- its other statements unchanged, in order."""
+
+    assert _store_collapsed(current) == _store_collapsed(baseline), (
+        f"{_STORE_FAILURE}: text outside the decoder surface changed"
+    )
+
+    def regions(source: str) -> tuple[ast.ImportFrom, ast.FunctionDef]:
+        tree = ast.parse(source)
+        imports = [
+            n for n in tree.body
+            if isinstance(n, ast.ImportFrom) and n.level == 2 and n.module == "engine.contracts"
+        ]
+        coerce = [
+            n for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name == "_coerce_snapshot_value"
+        ]
+        return imports[0], coerce[0]
+
+    base_import, base_coerce = regions(baseline)
+    cur_import, cur_coerce = regions(current)
+    assert sorted(a.name for a in cur_import.names) == sorted(
+        [a.name for a in base_import.names] + ["IrrStatus"]
+    ), f"{_STORE_FAILURE}: the engine-contracts import"
+
+    base_body = _body_without_docstring(base_coerce)
+    cur_body = _body_without_docstring(cur_coerce)
+    inserted = [
+        s for s in cur_body if isinstance(s, ast.If) and ast.unparse(s.test) == "hint is IrrStatus"
+    ]
+    assert len(inserted) == 1, f"{_STORE_FAILURE}: expected one IrrStatus branch"
+    remaining = [s for s in cur_body if s is not inserted[0]]
+    assert _dump(remaining) == _dump(base_body), (
+        f"{_STORE_FAILURE}: _coerce_snapshot_value changed beyond the IrrStatus branch"
+    )
+    # The branch rehydrates strictly -- exactly the member, or
+    # SnapshotValidationError -- pinned structurally, so a default, a fallback
+    # member or a pass-through cannot hide inside it.
+    branch = inserted[0]
+    assert not branch.orelse, f"{_STORE_FAILURE}: the IrrStatus branch has an else"
+    assert len(branch.body) == 1 and isinstance(branch.body[0], ast.Try), (
+        f"{_STORE_FAILURE}: the IrrStatus branch is not a single try"
+    )
+    attempt = branch.body[0]
+    assert [ast.unparse(s) for s in attempt.body] == ["return IrrStatus(value)"], (
+        f"{_STORE_FAILURE}: the IrrStatus branch returns something other than the member"
+    )
+    assert not attempt.orelse and not attempt.finalbody
+    assert len(attempt.handlers) == 1, f"{_STORE_FAILURE}: one handler expected"
+    handler = attempt.handlers[0]
+    assert handler.type is not None and ast.unparse(handler.type) == "(ValueError, TypeError)"
+    assert len(handler.body) == 1 and isinstance(handler.body[0], ast.Raise), (
+        f"{_STORE_FAILURE}: an unknown token must be refused"
+    )
+    raised = handler.body[0].exc
+    assert isinstance(raised, ast.Call) and _callee(raised) == "SnapshotValidationError", (
+        f"{_STORE_FAILURE}: an unknown token must raise SnapshotValidationError"
+    )
+
+
+def test_store_changed_only_by_the_irr_status_rehydration_branch() -> None:
+    _assert_store_changed_only_by_irr_status_rehydration(_baseline(_STORE), _current(_STORE))
+
+
+_STORE_TAMPERS = [
+    pytest.param(
+        "_ANALYSIS_SNAPSHOT_SCHEMA_VERSION = 1\n",
+        "_ANALYSIS_SNAPSHOT_SCHEMA_VERSION = 2\n",
+        id="snapshot-schema-version",
+    ),
+    pytest.param(
+        "            return IrrStatus(value)\n",
+        "            return IrrStatus(value) if value else IrrStatus.DEFINED\n",
+        id="defaulting-branch",
+    ),
+    pytest.param(
+        "    if get_origin(hint) is tuple:\n",
+        "    if hint is str:\n        return str(value)\n    if get_origin(hint) is tuple:\n",
+        id="second-coercion-branch",
+    ),
+    pytest.param(
+        "    IrrStatus,\n    OperatingProjection,\n",
+        "    IrrStatus,\n    OperatingProjection,\n    ReturnMetrics,\n",
+        id="wider-engine-import",
+    ),
+]
+
+
+@pytest.mark.parametrize(("old", "new"), _STORE_TAMPERS)
+def test_the_store_guardrail_rejects_an_unauthorized_change(old: str, new: str) -> None:
+    current = _current(_STORE)
+    assert current.count(old) == 1, old
+
+    with pytest.raises(AssertionError, match=_STORE_FAILURE):
+        _assert_store_changed_only_by_irr_status_rehydration(
+            _baseline(_STORE), current.replace(old, new)
+        )
+
+
+def _assert_engine_ledger() -> None:
     assert _files_changed_since(_D6_2_MERGE, "src/anchor/engine") == [
         "src/anchor/engine/acquisition.py",
         "src/anchor/engine/contracts.py",
