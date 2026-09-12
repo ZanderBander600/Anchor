@@ -171,10 +171,13 @@ def test_context_respects_explicit_equity_multiple_return_hurdle() -> None:
 
 
 def test_build_analysis_context_delegates_to_engine_and_analysis_layers() -> None:
-    from anchor.engine import analyze_acquisition
+    # D6.4: the Quick base analysis runs through the D6 Business Plan entry
+    # point, which resolves the plan and calls ``analyze_acquisition``.
+    from anchor.analysis import analyze_quick_acquisition_with_business_plan
 
     with patch(
-        "anchor.ai.analyst.analyze_acquisition", wraps=analyze_acquisition
+        "anchor.ai.analyst.analyze_quick_acquisition_with_business_plan",
+        wraps=analyze_quick_acquisition_with_business_plan,
     ) as mock_analyze:
         _build()
 

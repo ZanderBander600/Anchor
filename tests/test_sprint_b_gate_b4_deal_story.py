@@ -574,16 +574,23 @@ def test_deal_story_generation_calls_no_extra_engine_entry_point() -> None:
     """Adding the Deal Story did not introduce a second analyze /
     sensitivity / break-even run -- one context assembly, as before."""
 
-    from anchor.engine import analyze_acquisition as engine_analyze
+    # D6.4: the Quick base analysis runs through the D6 Business Plan entry
+    # point, so that is the one call to count.
+    from anchor.analysis import (
+        analyze_quick_acquisition_with_business_plan as engine_analyze,
+    )
 
     calls: list[str] = []
 
-    def _counting_analyze(inputs: AcquisitionInputs) -> Any:
+    def _counting_analyze(inputs: AcquisitionInputs, *, business_plan: Any) -> Any:
         calls.append("analyze")
-        return engine_analyze(inputs)
+        return engine_analyze(inputs, business_plan=business_plan)
 
     with pytest.MonkeyPatch.context() as monkeypatch:
-        monkeypatch.setattr("anchor.ai.analyst.analyze_acquisition", _counting_analyze)
+        monkeypatch.setattr(
+            "anchor.ai.analyst.analyze_quick_acquisition_with_business_plan",
+            _counting_analyze,
+        )
         generate_ai_analysis(QUICK_INPUTS, provider=_FakeProvider(), **TARGETS)
 
     assert calls == ["analyze"]

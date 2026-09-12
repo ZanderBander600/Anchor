@@ -630,13 +630,26 @@ _D6_3_PRODUCTION_FILES = frozenset(
 )
 
 
+#: ``main`` after D6.3 -- the end of D6.3's committed range.
+_D6_3_MERGE = "ba804ca"
+
+
+def _files_changed_between(start: str, end: str, repo_relative: str) -> list[str]:
+    changed = _git_bytes(["diff", "--name-only", start, end, "--", repo_relative]).decode()
+    return sorted({line.strip() for line in changed.splitlines() if line.strip()})
+
+
 def test_d6_3_changed_exactly_its_authorized_production_files() -> None:
     """No debt, NOI, operating projection, leasing, Business Plan resolver,
     sensitivity, break-even, API, persistence, fingerprint, prompt or frontend
     file moved since D6.2."""
 
-    changed = set(_files_changed_since(_D6_2_MERGE, "src")) | set(
-        _files_changed_since(_D6_2_MERGE, "web")
+    # Pinned at D6.4 to D6.3's own committed range, b828956..ba804ca, so the
+    # ledger keeps proving exactly what D6.3 changed however later gates move
+    # the tree (``tests/test_d6_4_business_plan_threading_architecture.py``
+    # keeps D6.4's ledger).
+    changed = set(_files_changed_between(_D6_2_MERGE, _D6_3_MERGE, "src")) | set(
+        _files_changed_between(_D6_2_MERGE, _D6_3_MERGE, "web")
     )
     assert changed == _D6_3_PRODUCTION_FILES, (
         f"unexpected: {sorted(changed - _D6_3_PRODUCTION_FILES)}; "

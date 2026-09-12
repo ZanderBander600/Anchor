@@ -22,13 +22,15 @@ from unittest.mock import patch
 from anchor.ai import analyst as ai_analyst_module
 from anchor.ai import provider as ai_provider_module
 from anchor.analysis import (
+    analyze_detailed_acquisition_with_business_plan,
+    analyze_quick_acquisition_with_business_plan,
     build_standard_break_even_analysis,
     build_standard_detailed_break_even_analysis,
     build_standard_detailed_presets,
     build_standard_presets,
 )
+from anchor.business_plan import BusinessPlan
 from anchor.contracts import AcquisitionInputs, AcquisitionTerms, DetailedOperatingInputs
-from anchor.engine import analyze_acquisition, analyze_detailed_acquisition_with_projection
 
 GOLDEN_INPUTS = AcquisitionInputs(
     purchase_price=50_000_000.0,
@@ -185,9 +187,17 @@ def test_engine_import_does_not_pull_in_openai() -> None:
 # =============================================================================
 
 
+#: D6.4: a caller that supplies no Business Plan gets the empty plan, and the
+#: AI Analyst hands that same plan, explicitly, to every analysis it runs. The
+#: base analysis goes through the D6 Business Plan entry point, which resolves
+#: the plan and calls the mode's engine entry point.
+_NO_PLAN = BusinessPlan()
+
+
 def test_ai_analyst_delegates_to_the_authoritative_engine_entry_point() -> None:
     with patch(
-        "anchor.ai.analyst.analyze_acquisition", wraps=analyze_acquisition
+        "anchor.ai.analyst.analyze_quick_acquisition_with_business_plan",
+        wraps=analyze_quick_acquisition_with_business_plan,
     ) as mock_analyze:
         ai_analyst_module.build_analysis_context(
             GOLDEN_INPUTS,
@@ -196,7 +206,7 @@ def test_ai_analyst_delegates_to_the_authoritative_engine_entry_point() -> None:
             target_headline_dscr=1.20,
         )
 
-    mock_analyze.assert_called_once_with(GOLDEN_INPUTS)
+    mock_analyze.assert_called_once_with(GOLDEN_INPUTS, business_plan=_NO_PLAN)
 
 
 def test_ai_analyst_delegates_to_the_authoritative_analysis_entry_points() -> None:
@@ -216,8 +226,9 @@ def test_ai_analyst_delegates_to_the_authoritative_analysis_entry_points() -> No
             target_headline_dscr=1.20,
         )
 
-    mock_presets.assert_called_once_with(GOLDEN_INPUTS)
+    mock_presets.assert_called_once_with(GOLDEN_INPUTS, business_plan=_NO_PLAN)
     mock_break_even.assert_called_once()
+    assert mock_break_even.call_args.kwargs["business_plan"] == _NO_PLAN
 
 
 # Detailed Operating Model V2.1 Gate 9 -- Detailed counterparts of the two
@@ -256,8 +267,8 @@ GOLDEN_DETAILED_OPERATING_INPUTS = DetailedOperatingInputs(
 
 def test_ai_analyst_delegates_to_the_authoritative_detailed_engine_entry_point() -> None:
     with patch(
-        "anchor.ai.analyst.analyze_detailed_acquisition_with_projection",
-        wraps=analyze_detailed_acquisition_with_projection,
+        "anchor.ai.analyst.analyze_detailed_acquisition_with_business_plan",
+        wraps=analyze_detailed_acquisition_with_business_plan,
     ) as mock_analyze:
         ai_analyst_module.build_detailed_analysis_context(
             GOLDEN_TERMS,
@@ -267,7 +278,9 @@ def test_ai_analyst_delegates_to_the_authoritative_detailed_engine_entry_point()
             target_headline_dscr=1.20,
         )
 
-    mock_analyze.assert_called_once_with(GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS)
+    mock_analyze.assert_called_once_with(
+        GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS, business_plan=_NO_PLAN
+    )
 
 
 def test_ai_analyst_delegates_to_the_authoritative_detailed_analysis_entry_points() -> None:
@@ -289,8 +302,11 @@ def test_ai_analyst_delegates_to_the_authoritative_detailed_analysis_entry_point
             target_headline_dscr=1.20,
         )
 
-    mock_presets.assert_called_once_with(GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS)
+    mock_presets.assert_called_once_with(
+        GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS, business_plan=_NO_PLAN
+    )
     mock_break_even.assert_called_once()
+    assert mock_break_even.call_args.kwargs["business_plan"] == _NO_PLAN
 
 
 def _assert_schema_is_prose_only(schema: dict) -> None:

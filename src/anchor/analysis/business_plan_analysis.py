@@ -36,8 +36,12 @@ model months stop at the resolver; ``anchor.engine`` and ``anchor.leasing`` do
 not import ``anchor.business_plan``. Callers with no Business Plan keep calling
 the mode entry points directly, which is exactly the empty plan.
 
-Sensitivity, break-even, the API and persistence are deliberately not wired to
-these functions yet (D6.4 and D6.5).
+**Secondary analysis (D6.4).** Sensitivity and break-even evaluate many
+candidates of one deal and hold its plan fixed across all of them. They call
+the same resolver once per run, for the base hold period, and hand that one
+schedule to every candidate's engine call -- so they do not route each
+candidate through these functions, which resolve per call. The API and
+persistence are deliberately not wired yet (D6.5).
 """
 
 from __future__ import annotations

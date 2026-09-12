@@ -906,13 +906,16 @@ def test_generating_an_analysis_triggers_no_extra_financial_run(
     def _forbidden(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("the AI Analyst triggered an extra financial run")
 
+    # D6.4: the Quick and Detailed arms now run their base analysis through the
+    # D6 Business Plan entry points, so those are the underwriting passes the
+    # analyst module can reach -- and every one of them must stay untouched.
     for name in (
         "build_standard_presets",
         "build_standard_detailed_presets",
         "build_standard_break_even_analysis",
         "build_standard_detailed_break_even_analysis",
-        "analyze_acquisition",
-        "analyze_detailed_acquisition_with_projection",
+        "analyze_quick_acquisition_with_business_plan",
+        "analyze_detailed_acquisition_with_business_plan",
     ):
         monkeypatch.setattr(analyst_module, name, _forbidden)
 

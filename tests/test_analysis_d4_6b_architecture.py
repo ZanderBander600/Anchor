@@ -447,10 +447,18 @@ def test_g3_no_engine_function_is_called_directly() -> None:
     ``engine.returns``, ``engine.debt``, ``engine.acquisition`` or
     ``engine.noi`` -- the bridge does that, once, on its behalf."""
 
+    # **Narrowed at D6.4 -- by exactly one symbol.** The Business Plan is held
+    # fixed across every cell as one resolved ``OwnerCapitalSchedule`` handed to
+    # the bridge, so the seam names that calculation-free engine *contract* in
+    # its signature. No engine module that computes anything is imported, and
+    # the call ban below is unchanged.
     names = _imported_module_names(_SENSITIVITY)
-    assert not any(
-        name == "anchor.engine" or name.startswith("anchor.engine.") for name in names
-    ), "lease_level_sensitivity reaches the engine directly"
+    assert [
+        name for name in names if name == "anchor.engine" or name.startswith("anchor.engine.")
+    ] == [
+        "anchor.engine.contracts",
+        "anchor.engine.contracts.OwnerCapitalSchedule",
+    ], "lease_level_sensitivity reaches the engine directly"
 
     called = _called_names(_tree(_SENSITIVITY))
     for forbidden in (
@@ -1234,21 +1242,49 @@ def test_g35_no_lease_level_break_even_exists() -> None:
     }
 
 
+#: ``main`` after D6.3, immediately before D6.4 -- the first gate authorised to
+#: edit the Quick/Detailed sensitivity and break-even sources since D4.6A.
+_D6_3_MERGE = "ba804ca"
+
+
+def _files_changed_between(start: str, end: str, repo_relative: str) -> list[str]:
+    """Paths under ``repo_relative`` that differ between two commits."""
+
+    changed = _git(["diff", "--name-only", start, end, "--", repo_relative])
+    return sorted({line.strip() for line in changed.splitlines() if line.strip()})
+
+
 def test_g36_analysis_sensitivity_is_byte_identical_since_d4_6a() -> None:
     """**Guardrail 36.** The strongest Quick/Detailed preservation proof there
     is: the file that produces every shipped Quick and Detailed sensitivity
-    number was not edited."""
+    number was not edited.
 
-    changed = _files_changed_since(_D4_6A_COMMIT, "src/anchor/analysis/sensitivity.py")
+    **Pinned at D6.4 to D4.6A..ba804ca -- and not weakened.** The file stayed
+    byte-identical through D6.3. D6.4 threads the Business Plan through it, and
+    that change is held to a stronger claim by
+    ``tests/test_d6_4_business_plan_threading_architecture.py``: with the
+    threading undone the module is AST-identical to ba804ca, and
+    ``tests/test_d6_4_neutral_secondary_analysis_oracle.py`` proves every
+    plan-less number bit-identical to the ba804ca tree."""
+
+    changed = _files_changed_between(
+        _D4_6A_COMMIT, _D6_3_MERGE, "src/anchor/analysis/sensitivity.py"
+    )
     assert changed == [], f"analysis/sensitivity.py changed: {changed}"
 
 
 def test_g37_analysis_break_even_is_byte_identical_since_d4_6a() -> None:
     """**Guardrail 37.** Section 38.5: ``break_even.py`` must not be modified
     during D4 at all -- not to fix its monotonicity language, not to add
-    tolerances, not at all."""
+    tolerances, not at all.
 
-    changed = _files_changed_since(_D4_6A_COMMIT, "src/anchor/analysis/break_even.py")
+    **Pinned at D6.4 to D4.6A..ba804ca -- and not weakened**, exactly as G36:
+    D6.4's threading is held to the threading-only AST claim, which also proves
+    the tolerances, bounds, bisection and ``_meets_hurdle`` unchanged."""
+
+    changed = _files_changed_between(
+        _D4_6A_COMMIT, _D6_3_MERGE, "src/anchor/analysis/break_even.py"
+    )
     assert changed == [], f"analysis/break_even.py changed: {changed}"
 
 
@@ -1383,8 +1419,6 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "src/anchor/leasing/rent.py",
         "src/anchor/leasing/rollover.py",
         "src/anchor/analysis/contracts.py",
-        "src/anchor/analysis/sensitivity.py",
-        "src/anchor/analysis/break_even.py",
         "src/anchor/validation.py",
         "src/anchor/ingestion",
         # The frontend's financial and transport modules. `web` as a whole was
@@ -1534,12 +1568,21 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
 
     # ``lease_level_sensitivity.py`` did not exist at D4.6A -- D4.6B created it
     # -- so its baseline is the Sprint-D merge this gate branched from.
+    #
+    # Pinned at D6.4 to that merge..ba804ca, exactly as ``sensitivity.py`` and
+    # ``break_even.py`` are below: D6.4 threads the Business Plan through the
+    # runners, held to the threading-only AST claim in
+    # ``tests/test_d6_4_business_plan_threading_architecture.py``.
     assert (
-        _files_changed_since(
-            _D5_BASE_COMMIT, "src/anchor/analysis/lease_level_sensitivity.py"
+        _files_changed_between(
+            _D5_BASE_COMMIT, _D6_3_MERGE, "src/anchor/analysis/lease_level_sensitivity.py"
         )
         == []
     )
+    # Quick/Detailed sensitivity and break-even: byte-identical from D4.6A
+    # through D6.3 (see G36/G37 for the D6.4 threading claim).
+    for area in ("src/anchor/analysis/sensitivity.py", "src/anchor/analysis/break_even.py"):
+        assert _files_changed_between(_D4_6A_COMMIT, _D6_3_MERGE, area) == [], f"{area} changed"
 
     # Delivery layers: only the mode-dispatch consumers moved.
     # D5.3 added ``analysis/__init__.py`` (the parser facade) and D5.4 extended
