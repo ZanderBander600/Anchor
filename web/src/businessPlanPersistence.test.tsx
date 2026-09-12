@@ -460,7 +460,7 @@ describe('removing every row intentionally clears the plan (PART AP)', () => {
     const again = await launch();
     await open(again, name);
     expect(screen.getByText('No project capital scheduled.')).toBeTruthy();
-    expect(screen.getByText('No owner expenses.')).toBeTruthy();
+    expect(screen.getByText('No owner expenses scheduled.')).toBeTruthy();
   });
 });
 
@@ -766,9 +766,7 @@ describe('one editor, the same in every mode (PART AQ, AR)', () => {
     expect(editor.closest('#lease-level-panel-acquisition')).not.toBeNull();
     expect(document.querySelector('#lease-level-panel-rent-roll .business-plan')).toBeNull();
     expect(document.querySelector('#lease-level-panel-market .business-plan')).toBeNull();
-    expect(editor.textContent).toContain(
-      'Separate from the recurring CapEx Reserve and from tenant improvements and leasing commissions.',
-    );
+    expect(editor.textContent).toContain('Excludes recurring CapEx Reserve and TI / LC.');
     void user;
   });
 });

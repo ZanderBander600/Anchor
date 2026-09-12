@@ -9,9 +9,8 @@
  *
  * **Two authorities, kept apart.** Project Capital (one-time, model-month
  * timing) and Owner Expenses (fixed annual dollars over a year range) are
- * separate subsections with separate tables. Neither is labelled "Expenses"
- * alone, and neither is folded into operating expenses, the rent roll or the
- * debt terms.
+ * separate parts of one ledger. Neither is labelled "Expenses" alone, and
+ * neither is folded into operating expenses, the rent roll or the debt terms.
  *
  * **It computes nothing.** Every figure is a string the analyst typed or a row
  * loaded from the deal. The one derived thing on screen -- the Closing / Year N
@@ -20,8 +19,7 @@
  * belongs to the backend's results.
  *
  * **Identity is invisible and stable.** Rows are keyed by their item ID, which
- * the analyst never sees or types. Typing, reordering renders, analysis and
- * saving never change it.
+ * the analyst never sees or types. Typing, analysis and saving never change it.
  */
 
 import { useEffect, useRef } from 'react';
@@ -61,8 +59,21 @@ export interface BusinessPlanEditorProps {
 const ADD_CAPITAL_ID = 'business-plan-add-capital';
 const ADD_OWNER_EXPENSE_ID = 'business-plan-add-owner-expense';
 
+/** The one meaning a blank Last Year has, shown as a state rather than as a
+ * missing value. */
+const THROUGH_HOLD = 'Through Hold';
+
 function countLabel(count: number): string {
   return count === 1 ? '1 item' : `${count} items`;
+}
+
+/** Which of the three timing states a tag shows -- read off the label the
+ * display-only classifier already produced, so this adds no timing rule. */
+function timingKind(label: string): 'closing' | 'hold' | 'post-hold' {
+  if (label === 'Closing') {
+    return 'closing';
+  }
+  return label === 'Post-Hold' ? 'post-hold' : 'hold';
 }
 
 function fieldMessage(
@@ -175,36 +186,119 @@ function MoneyCell({ id, label, value, onChange, disabled, error }: CellProps) {
   );
 }
 
-/** A month or a year: an ungrouped number. */
-function IndexCell({
+function describedBy(...ids: (string | null)[]): string | undefined {
+  const joined = ids.filter((part) => part !== null).join(' ');
+  return joined === '' ? undefined : joined;
+}
+
+/** The model month -- the authoritative input -- with its display-only timing
+ * tag beside it. The tag is text, not a control: it cannot be focused or
+ * edited, and the input names it through `aria-describedby`, so the month
+ * itself is always what is read first. */
+function MonthCell({
   id,
   label,
   value,
   onChange,
   disabled,
   error,
-  placeholder,
-  describedBy,
-}: CellProps & { placeholder?: string; describedBy?: string }) {
-  const described = [error ? `${id}-error` : null, describedBy ?? null]
-    .filter((part) => part !== null)
-    .join(' ');
+  timing,
+}: CellProps & { timing: string | null }) {
+  const timingId = `${id}-timing`;
   return (
     <>
-      <NumericInput
-        id={id}
-        className="business-plan-input business-plan-input-numeric"
-        value={value}
-        onChange={onChange}
-        disabled={disabled}
-        group={false}
-        placeholder={placeholder}
-        aria-label={label}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={described === '' ? undefined : described}
-      />
+      <div className="business-plan-month">
+        <NumericInput
+          id={id}
+          className="business-plan-input business-plan-input-numeric"
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          group={false}
+          aria-label={label}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy(error ? `${id}-error` : null, timing === null ? null : timingId)}
+        />
+        {timing !== null && (
+          <span
+            className={`business-plan-timing business-plan-timing-${timingKind(timing)}`}
+            id={timingId}
+          >
+            {timing}
+          </span>
+        )}
+      </div>
       <CellError id={id} error={error} />
     </>
+  );
+}
+
+/** A year: an ungrouped number. `emptyState` names what a blank means -- for
+ * Last Year, Through Hold -- and shows it as that state while the field is
+ * blank and unfocused. The value itself stays blank (and is sent as `null`);
+ * the words are presentation, and the placeholder carries the same meaning to
+ * assistive technology. */
+function YearCell({
+  id,
+  label,
+  value,
+  onChange,
+  disabled,
+  error,
+  emptyState,
+}: CellProps & { emptyState?: string }) {
+  const showsEmptyState = emptyState !== undefined && value.trim() === '';
+  return (
+    <>
+      <div
+        className={
+          emptyState === undefined
+            ? 'business-plan-year'
+            : 'business-plan-year business-plan-has-empty-state'
+        }
+      >
+        <NumericInput
+          id={id}
+          className="business-plan-input business-plan-input-numeric"
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          group={false}
+          placeholder={emptyState}
+          aria-label={label}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
+        />
+        {showsEmptyState && (
+          <span className="business-plan-empty-state" aria-hidden="true">
+            {emptyState}
+          </span>
+        )}
+      </div>
+      <CellError id={id} error={error} />
+    </>
+  );
+}
+
+function RemoveButton({
+  label,
+  disabled,
+  onRemove,
+}: {
+  label: string;
+  disabled: boolean;
+  onRemove: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="business-plan-remove"
+      disabled={disabled}
+      aria-label={label}
+      onClick={onRemove}
+    >
+      Remove
+    </button>
   );
 }
 
@@ -243,6 +337,37 @@ export function BusinessPlanEditor({
     const added = addOwnerExpenseItem(plan);
     pendingFocus.current = `business-plan-owner-${plan.ownerExpenseItems.length}-description`;
     onChange(added.plan);
+  }
+
+  function rowClass(collection: 'capital' | 'owner_expense', itemId: string): string {
+    return issues.some((issue) => issue.collection === collection && issue.itemId === itemId)
+      ? 'business-plan-row business-plan-row-error'
+      : 'business-plan-row';
+  }
+
+  function rowMessage(collection: 'capital' | 'owner_expense', itemId: string) {
+    const message = issues.find(
+      (issue) =>
+        issue.collection === collection && issue.itemId === itemId && issue.field === null,
+    )?.message;
+    return message === undefined ? null : (
+      <span className="field-error" role="alert">
+        {message}
+      </span>
+    );
+  }
+
+  function orphanIssues(collection: 'capital' | 'owner_expense', rowIds: Set<string>) {
+    return issues
+      .filter(
+        (issue) =>
+          issue.collection === collection && issue.itemId !== null && !rowIds.has(issue.itemId),
+      )
+      .map((issue, position) => (
+        <p className="field-error" role="alert" key={`${issue.message}-${position}`}>
+          {issue.message}
+        </p>
+      ));
   }
 
   return (
@@ -284,12 +409,17 @@ export function BusinessPlanEditor({
           )}
         </div>
         <p className="business-plan-hint">
-          One-time owner capital at closing, during the hold or after it. Separate from the
-          recurring CapEx Reserve and from tenant improvements and leasing commissions.
+          One-time owner capital at closing, during the hold, or post-hold. Excludes recurring
+          CapEx Reserve and <span className="business-plan-nowrap">TI / LC</span>.
         </p>
 
         {plan.capitalItems.length === 0 ? (
-          <p className="business-plan-empty">No project capital scheduled.</p>
+          <div className="business-plan-empty">
+            <p className="business-plan-empty-title">No project capital scheduled.</p>
+            <p className="business-plan-empty-example">
+              Examples: closing improvements, renovations, major building systems.
+            </p>
+          </div>
         ) : (
           <div className="business-plan-table-wrap">
             <table className="business-plan-table business-plan-table-capital">
@@ -307,7 +437,7 @@ export function BusinessPlanEditor({
                 <tr>
                   <th scope="col">Description</th>
                   <th scope="col">Category</th>
-                  <th scope="col" className="business-plan-num">
+                  <th scope="col">
                     Model Month
                     <span className="business-plan-col-hint">0 = Closing</span>
                   </th>
@@ -323,27 +453,12 @@ export function BusinessPlanEditor({
                 {plan.capitalItems.map((item, index) => {
                   const row = item.description.trim() || 'new Project Capital item';
                   const base = `business-plan-capital-${index}`;
-                  const timing = capitalTimingLabel(item.month, holdPeriod);
-                  const hasError = issues.some(
-                    (issue) => issue.collection === 'capital' && issue.itemId === item.itemId,
-                  );
-                  const rowMessage = issues.find(
-                    (issue) =>
-                      issue.collection === 'capital' &&
-                      issue.itemId === item.itemId &&
-                      issue.field === null,
-                  )?.message;
                   const set = (field: CapitalItemField) => (value: string) =>
                     onChange(updateCapitalItem(plan, item.itemId, field, value));
                   const message = (field: CapitalItemField) =>
                     fieldMessage(issues, 'capital', item.itemId, field);
                   return (
-                    <tr
-                      key={item.itemId}
-                      className={
-                        hasError ? 'business-plan-row business-plan-row-error' : 'business-plan-row'
-                      }
-                    >
+                    <tr key={item.itemId} className={rowClass('capital', item.itemId)}>
                       <td data-label="Description">
                         <TextCell
                           id={`${base}-description`}
@@ -353,11 +468,7 @@ export function BusinessPlanEditor({
                           disabled={disabled}
                           error={message('description')}
                         />
-                        {rowMessage && (
-                          <span className="field-error" role="alert">
-                            {rowMessage}
-                          </span>
-                        )}
+                        {rowMessage('capital', item.itemId)}
                       </td>
                       <td data-label="Category">
                         <SelectCell
@@ -370,21 +481,16 @@ export function BusinessPlanEditor({
                           options={CAPITAL_ITEM_CATEGORY_OPTIONS}
                         />
                       </td>
-                      <td data-label="Model Month" className="business-plan-num">
-                        <IndexCell
+                      <td data-label="Model Month">
+                        <MonthCell
                           id={`${base}-month`}
                           label={`Model Month, ${row}`}
                           value={item.month}
                           onChange={set('month')}
                           disabled={disabled}
                           error={message('month')}
-                          describedBy={timing === null ? undefined : `${base}-timing`}
+                          timing={capitalTimingLabel(item.month, holdPeriod)}
                         />
-                        {timing !== null && (
-                          <span className="business-plan-timing" id={`${base}-timing`}>
-                            {timing}
-                          </span>
-                        )}
                       </td>
                       <td data-label="Amount" className="business-plan-num">
                         <MoneyCell
@@ -397,18 +503,14 @@ export function BusinessPlanEditor({
                         />
                       </td>
                       <td className="business-plan-actions">
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-xs"
+                        <RemoveButton
+                          label={`Remove ${row}`}
                           disabled={disabled}
-                          aria-label={`Remove ${row}`}
-                          onClick={() => {
+                          onRemove={() => {
                             pendingFocus.current = ADD_CAPITAL_ID;
                             onChange(removeCapitalItem(plan, item.itemId));
                           }}
-                        >
-                          Remove
-                        </button>
+                        />
                       </td>
                     </tr>
                   );
@@ -418,24 +520,13 @@ export function BusinessPlanEditor({
           </div>
         )}
 
-        {issues
-          .filter(
-            (issue) =>
-              issue.collection === 'capital' &&
-              issue.itemId !== null &&
-              !capitalRowIds.has(issue.itemId),
-          )
-          .map((issue, position) => (
-            <p className="field-error" role="alert" key={`${issue.message}-${position}`}>
-              {issue.message}
-            </p>
-          ))}
+        {orphanIssues('capital', capitalRowIds)}
 
         <div className="business-plan-toolbar">
           <button
             id={ADD_CAPITAL_ID}
             type="button"
-            className="btn btn-secondary btn-sm"
+            className="btn btn-secondary btn-sm business-plan-add"
             disabled={disabled}
             onClick={handleAddCapital}
           >
@@ -443,8 +534,7 @@ export function BusinessPlanEditor({
           </button>
           {plan.capitalItems.length > 0 && (
             <p className="business-plan-note">
-              Model Month counts from closing: 0 = Closing, 1&ndash;12 = Year 1, 13&ndash;24 =
-              Year 2, and so on.
+              0 = Closing &middot; 1&ndash;12 = Year 1 &middot; 13&ndash;24 = Year 2 &middot; etc.
             </p>
           )}
         </div>
@@ -469,12 +559,17 @@ export function BusinessPlanEditor({
           )}
         </div>
         <p className="business-plan-hint">
-          Owner-level annual costs below NOI. Property management fees and property operating
-          expenses belong in the operating assumptions.
+          Owner-level annual costs below NOI. Excludes property operating expenses and property
+          management fees.
         </p>
 
         {plan.ownerExpenseItems.length === 0 ? (
-          <p className="business-plan-empty">No owner expenses.</p>
+          <div className="business-plan-empty">
+            <p className="business-plan-empty-title">No owner expenses scheduled.</p>
+            <p className="business-plan-empty-example">
+              Examples: asset management, partnership legal costs.
+            </p>
+          </div>
         ) : (
           <div className="business-plan-table-wrap">
             <table className="business-plan-table business-plan-table-owner">
@@ -511,27 +606,12 @@ export function BusinessPlanEditor({
                 {plan.ownerExpenseItems.map((item, index) => {
                   const row = item.description.trim() || 'new Owner Expense item';
                   const base = `business-plan-owner-${index}`;
-                  const hasError = issues.some(
-                    (issue) =>
-                      issue.collection === 'owner_expense' && issue.itemId === item.itemId,
-                  );
-                  const rowMessage = issues.find(
-                    (issue) =>
-                      issue.collection === 'owner_expense' &&
-                      issue.itemId === item.itemId &&
-                      issue.field === null,
-                  )?.message;
                   const set = (field: OwnerExpenseItemField) => (value: string) =>
                     onChange(updateOwnerExpenseItem(plan, item.itemId, field, value));
                   const message = (field: OwnerExpenseItemField) =>
                     fieldMessage(issues, 'owner_expense', item.itemId, field);
                   return (
-                    <tr
-                      key={item.itemId}
-                      className={
-                        hasError ? 'business-plan-row business-plan-row-error' : 'business-plan-row'
-                      }
-                    >
+                    <tr key={item.itemId} className={rowClass('owner_expense', item.itemId)}>
                       <td data-label="Description">
                         <TextCell
                           id={`${base}-description`}
@@ -541,11 +621,7 @@ export function BusinessPlanEditor({
                           disabled={disabled}
                           error={message('description')}
                         />
-                        {rowMessage && (
-                          <span className="field-error" role="alert">
-                            {rowMessage}
-                          </span>
-                        )}
+                        {rowMessage('owner_expense', item.itemId)}
                       </td>
                       <td data-label="Category">
                         <SelectCell
@@ -569,7 +645,7 @@ export function BusinessPlanEditor({
                         />
                       </td>
                       <td data-label="First Year" className="business-plan-num">
-                        <IndexCell
+                        <YearCell
                           id={`${base}-first-year`}
                           label={`First Year, ${row}`}
                           value={item.firstYear}
@@ -579,29 +655,25 @@ export function BusinessPlanEditor({
                         />
                       </td>
                       <td data-label="Last Year" className="business-plan-num">
-                        <IndexCell
+                        <YearCell
                           id={`${base}-last-year`}
                           label={`Last Year, ${row}`}
                           value={item.lastYear}
                           onChange={set('lastYear')}
                           disabled={disabled}
                           error={message('lastYear')}
-                          placeholder="Through Hold"
+                          emptyState={THROUGH_HOLD}
                         />
                       </td>
                       <td className="business-plan-actions">
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-xs"
+                        <RemoveButton
+                          label={`Remove ${row}`}
                           disabled={disabled}
-                          aria-label={`Remove ${row}`}
-                          onClick={() => {
+                          onRemove={() => {
                             pendingFocus.current = ADD_OWNER_EXPENSE_ID;
                             onChange(removeOwnerExpenseItem(plan, item.itemId));
                           }}
-                        >
-                          Remove
-                        </button>
+                        />
                       </td>
                     </tr>
                   );
@@ -611,31 +683,20 @@ export function BusinessPlanEditor({
           </div>
         )}
 
-        {issues
-          .filter(
-            (issue) =>
-              issue.collection === 'owner_expense' &&
-              issue.itemId !== null &&
-              !ownerRowIds.has(issue.itemId),
-          )
-          .map((issue, position) => (
-            <p className="field-error" role="alert" key={`${issue.message}-${position}`}>
-              {issue.message}
-            </p>
-          ))}
+        {orphanIssues('owner_expense', ownerRowIds)}
 
         <div className="business-plan-toolbar">
           <button
             id={ADD_OWNER_EXPENSE_ID}
             type="button"
-            className="btn btn-secondary btn-sm"
+            className="btn btn-secondary btn-sm business-plan-add"
             disabled={disabled}
             onClick={handleAddOwnerExpense}
           >
             Add Owner Expense
           </button>
           {plan.ownerExpenseItems.length > 0 && (
-            <p className="business-plan-note">Leave Last Year blank for through hold.</p>
+            <p className="business-plan-note">Leave blank for Through Hold.</p>
           )}
         </div>
       </div>

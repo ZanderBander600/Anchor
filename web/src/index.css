@@ -4284,19 +4284,23 @@ body {
    Phase 6 Gate D6.6 -- the Business Plan editor.
 
    One card on the Acquisition tab of every mode, beneath the acquisition
-   terms. Two ledgers -- Project Capital and Owner Expenses -- sized by the
-   card's own width rather than the viewport's: a container query switches a
-   ledger to one labelled card per row when the card is too narrow for its
-   columns, so neither a phone nor a narrow editor column ever clips the
-   Remove action or scrolls the page sideways. Additive only.
+   terms: one Business Plan ledger in two parts, Project Capital and Owner
+   Expenses. Dense where the data is and roomier at the section transitions,
+   in the same navy / white language as the rest of Underwrite -- no badges,
+   no colour-coding, no animation. The card is sized by its own width rather
+   than the viewport's: a container query turns each ledger row into a
+   compact two-line record when the editor column is too narrow for the
+   columns (the 1280px desktop, where the Live Case rail takes its share),
+   and into a stacked record on a phone. Additive only.
    ========================================================================== */
 
 .business-plan {
   container: business-plan / inline-size;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
 }
+
+/* --- Card head ------------------------------------------------------------ */
 
 .business-plan-head {
   display: flex;
@@ -4307,21 +4311,27 @@ body {
 
 .business-plan .business-plan-title {
   margin: 0;
+  color: var(--color-accent);
+  font-weight: 650;
 }
 
 .business-plan-optional {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--color-text-muted);
 }
 
 .business-plan-lede {
-  margin: 0;
+  margin: var(--sp-1) 0 0;
   font-size: 13px;
   line-height: 1.5;
   color: var(--color-text);
+}
+
+.business-plan-issues {
+  margin: var(--sp-3) 0 0;
 }
 
 .business-plan-issues ul {
@@ -4329,44 +4339,96 @@ body {
   padding-left: 1.1rem;
 }
 
+/* --- Two parts of one ledger ---------------------------------------------- */
+
 .business-plan-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
+  margin-top: var(--sp-5);
   padding-top: var(--sp-4);
-  border-top: 1px solid var(--color-divider);
+  border-top: 1px solid var(--color-border);
 }
 
 .business-plan-group-head {
   display: flex;
   align-items: baseline;
-  gap: var(--sp-3);
+  gap: 10px;
 }
 
 .business-plan-group-title {
   margin: 0;
   font-size: 13.5px;
-  font-weight: 620;
+  font-weight: 650;
+  letter-spacing: -0.005em;
   color: var(--color-text);
 }
 
+/* The item count is metadata beside the title -- never a badge. */
 .business-plan-count {
-  font-size: 12px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
 
-.business-plan-hint,
-.business-plan-empty,
-.business-plan-note {
-  margin: 0;
+.business-plan-hint {
+  margin: 3px 0 0;
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--color-text-muted);
 }
 
-.business-plan-hint {
-  max-width: 80ch;
+/* A term that must never break across lines ("TI / LC"). */
+.business-plan-nowrap {
+  white-space: nowrap;
+}
+
+/* Empty: say so, suggest what belongs here, and stay quiet. */
+.business-plan-empty {
+  margin-top: var(--sp-3);
+  padding: 10px 12px;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-muted);
+}
+
+.business-plan-empty-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.business-plan-empty-example {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.business-plan-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  margin-top: var(--sp-3);
+}
+
+.business-plan-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.business-plan-group > .field-error {
+  display: block;
+  margin: var(--sp-2) 0 0;
+}
+
+/* --- The ledger ----------------------------------------------------------- */
+
+.business-plan-table-wrap {
+  margin-top: var(--sp-3);
 }
 
 .business-plan-table {
@@ -4376,22 +4438,29 @@ body {
   font-size: 0.85rem;
 }
 
+/* Header text sits over the text inside the inputs below it: the cell
+   padding plus the input's own inset. */
 .business-plan-table th[scope='col'] {
-  padding: 0.4rem 0.4rem;
-  border-bottom: 2px solid var(--color-border);
-  font-size: 0.7rem;
+  padding: 0 17px 6px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-align: left;
   text-transform: uppercase;
   color: var(--color-text-muted);
   vertical-align: bottom;
+  white-space: nowrap;
 }
 
 .business-plan-table td {
-  padding: 0.35rem 0.4rem;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--color-divider);
   vertical-align: top;
+}
+
+.business-plan-table tbody tr:hover td {
+  background: var(--color-surface-muted);
 }
 
 .business-plan-table th.business-plan-num,
@@ -4401,21 +4470,26 @@ body {
 
 .business-plan-col-hint {
   display: block;
-  font-size: 0.68rem;
+  margin-top: 1px;
+  font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
 }
 
-/* Description takes whatever the fixed columns leave; every other column is
-   sized to its longest legitimate content ("Exterior / Common Area",
-   "30,000,000", "Through Hold", the Remove action). */
+/* Description takes what the fixed columns leave, and stays the widest. The
+   rest are sized to their longest legitimate content: "Exterior / Common
+   Area", a month beside its Post-Hold tag, "30,000,000", "Through Hold". */
 .business-plan-col-category {
-  width: 11.75rem;
+  width: 12rem;
+}
+
+.business-plan-table-owner .business-plan-col-category {
+  width: 10.5rem;
 }
 
 .business-plan-col-month {
-  width: 6.5rem;
+  width: 11rem;
 }
 
 .business-plan-col-amount {
@@ -4426,20 +4500,21 @@ body {
   width: 5.75rem;
 }
 
-/* Wide enough for its "Through Hold" placeholder to read whole. */
 .business-plan-col-last-year {
   width: 8rem;
 }
 
 .business-plan-col-actions {
-  width: 5.25rem;
+  width: 5rem;
 }
+
+/* --- Inputs --------------------------------------------------------------- */
 
 .business-plan-input {
   width: 100%;
   min-width: 0;
   height: 32px;
-  padding: 0 0.5rem;
+  padding: 0 8px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
   background: var(--color-surface);
@@ -4452,11 +4527,7 @@ body {
 .business-plan-input:focus {
   outline: none;
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px rgba(22, 50, 79, 0.12);
-}
-
-.business-plan-input[aria-invalid='true'] {
-  border-color: var(--color-negative);
+  box-shadow: 0 0 0 3px rgba(15, 44, 76, 0.12);
 }
 
 .business-plan-input:disabled {
@@ -4494,45 +4565,155 @@ body {
   padding-left: 1.3rem;
 }
 
+/* Model Month: the authoritative number, with its timing state beside it. */
+.business-plan-month {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.business-plan-month .business-plan-input {
+  flex: none;
+  width: 4.25rem;
+}
+
+/* Display-only timing state. A quiet tonal label: text, not a control, and
+   never colour-coded -- Closing is the one tinted state, Post-Hold the one
+   outlined in a dashed rule, because it sits outside the hold. */
 .business-plan-timing {
-  display: block;
-  margin-top: 0.2rem;
-  font-size: 0.72rem;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  background: var(--color-surface-muted);
+  color: var(--color-accent);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.business-plan-timing-closing {
+  border-color: rgba(15, 44, 76, 0.3);
+  background: var(--color-accent-soft-strong);
+}
+
+.business-plan-timing-post-hold {
+  border-style: dashed;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+/* Last Year: a blank value IS a state -- Through Hold -- so it reads as one
+   while the field is blank and unfocused. The value stays blank; focusing the
+   field hands the words back to the ordinary placeholder. */
+.business-plan-year {
+  position: relative;
+}
+
+.business-plan-empty-state {
+  position: absolute;
+  top: 0;
+  right: 9px;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--color-accent);
+  pointer-events: none;
 }
 
-.business-plan-table .field-error {
-  display: block;
-  margin-top: 0.2rem;
-  text-align: left;
+.business-plan-has-empty-state .business-plan-input::placeholder {
+  color: transparent;
 }
 
-.business-plan-row-error td:first-child {
-  box-shadow: inset 3px 0 0 var(--color-negative);
+.business-plan-has-empty-state .business-plan-input:focus::placeholder {
+  color: var(--color-text-muted);
 }
+
+.business-plan-has-empty-state:focus-within .business-plan-empty-state {
+  visibility: hidden;
+}
+
+/* --- Actions -------------------------------------------------------------- */
 
 .business-plan-actions {
   text-align: right;
   white-space: nowrap;
 }
 
-/* Centred on the 32px inputs beside it rather than riding their top edge. */
-.business-plan-actions .btn {
-  margin-top: 5px;
+/* Remove: always visible, always reachable, and quieter than Add. It turns
+   destructive only on hover and focus. */
+.business-plan-remove {
+  appearance: none;
+  margin-top: 2px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  cursor: pointer;
 }
 
-.business-plan-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-3);
+.business-plan-remove:hover:not(:disabled) {
+  color: var(--color-negative);
+  background: var(--color-negative-bg);
 }
 
-/* Too narrow for a ledger: one labelled, two-line entry per row. Description
-   and Category share the first line; the numbers and the Remove action share
-   the second, so a mid-width editor column (the 1280px desktop, where the Live
-   Case rail takes its share) stays dense rather than stacking every field. */
+.business-plan-remove:focus-visible {
+  outline: none;
+  color: var(--color-negative);
+  border-color: var(--color-negative);
+  box-shadow: 0 0 0 3px rgba(160, 43, 43, 0.12);
+}
+
+.business-plan-remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- Validation: the row and the field, nothing more ---------------------- */
+
+.business-plan-input[aria-invalid='true'] {
+  border-color: var(--color-negative);
+}
+
+.business-plan-input[aria-invalid='true']:focus {
+  border-color: var(--color-negative);
+  box-shadow: 0 0 0 3px rgba(160, 43, 43, 0.14);
+}
+
+.business-plan-table .field-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+}
+
+.business-plan-table tbody tr.business-plan-row-error td {
+  background: rgba(160, 43, 43, 0.035);
+}
+
+.business-plan-table tr.business-plan-row-error td:first-child {
+  box-shadow: inset 2px 0 0 var(--color-negative);
+}
+
+/* --- Mid width: one two-line record per row -------------------------------
+   Line one pairs Description with Category; line two pairs the timing with
+   the dollars, and ends in Remove at the record's right edge. Each record is
+   its own quiet tile, so no number can be read against the wrong row. */
 @container business-plan (max-width: 760px) {
   .business-plan-table,
   .business-plan-table tbody,
@@ -4550,17 +4731,23 @@ body {
   .business-plan-table tr {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: var(--sp-2) var(--sp-3);
-    margin-bottom: var(--sp-2);
-    padding: var(--sp-3);
+    gap: 8px 12px;
+    margin-bottom: 10px;
+    padding: 10px 12px 12px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-control);
-    background: var(--color-surface);
+    background: var(--color-surface-muted);
   }
 
-  .business-plan-table td {
+  .business-plan-table tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .business-plan-table td,
+  .business-plan-table tbody tr:hover td {
     padding: 0;
     border: 0;
+    background: transparent;
   }
 
   .business-plan-table td.business-plan-num {
@@ -4568,39 +4755,51 @@ body {
   }
 
   .business-plan-table td[data-label='Description'],
-  .business-plan-table td[data-label='Category'] {
+  .business-plan-table td[data-label='Category'],
+  .business-plan-table-capital td[data-label='Model Month'] {
     grid-column: span 2;
   }
 
-  /* Remove always ends the second line, at the card's right edge. */
   .business-plan-table td.business-plan-actions {
     grid-column: 4;
     align-self: end;
-    padding-bottom: 5px;
+    justify-self: end;
+    width: auto;
+  }
+
+  .business-plan-remove {
+    margin: 0 0 2px;
   }
 
   .business-plan-table td[data-label]::before {
     content: attr(data-label);
     display: block;
-    margin-bottom: 0.2rem;
-    font-size: 0.68rem;
+    margin-bottom: 3px;
+    font-size: 10px;
     font-weight: 600;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
+    white-space: nowrap;
     color: var(--color-text-muted);
-  }
-
-  .business-plan-row-error td:first-child {
-    box-shadow: none;
   }
 
   .business-plan-table tr.business-plan-row-error {
     border-color: var(--color-negative);
+    background: #fdf8f8;
+  }
+
+  .business-plan-table tbody tr.business-plan-row-error td {
+    background: transparent;
+  }
+
+  .business-plan-table tr.business-plan-row-error td:first-child {
+    box-shadow: none;
   }
 }
 
-/* Phone width: every text field takes the whole card, and the numbers pair up
-   beneath them. No sideways scrolling, and Remove is never pushed off-card. */
+/* --- Phone width: stacked records ------------------------------------------
+   Description, Category and Last Year take the full record; the month and
+   the dollars pair up, with the timing tag directly under its month. */
 @container business-plan (max-width: 480px) {
   .business-plan-table tr {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4608,18 +4807,28 @@ body {
 
   .business-plan-table td[data-label='Description'],
   .business-plan-table td[data-label='Category'],
-  .business-plan-table td[data-label='Last Year'],
+  .business-plan-table td[data-label='Last Year'] {
+    grid-column: 1 / -1;
+  }
+
+  .business-plan-table-capital td[data-label='Model Month'] {
+    grid-column: auto;
+  }
+
   .business-plan-table td.business-plan-actions {
     grid-column: 1 / -1;
   }
 
-  .business-plan-table td.business-plan-actions {
-    padding-bottom: 0;
+  .business-plan-month {
+    flex-wrap: wrap;
+    row-gap: 5px;
   }
 
-  /* One line per label, so paired fields keep their inputs level. */
+  .business-plan-month .business-plan-input {
+    width: 100%;
+  }
+
   .business-plan-table td[data-label]::before {
-    white-space: nowrap;
     letter-spacing: 0.02em;
   }
 }

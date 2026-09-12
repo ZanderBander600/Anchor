@@ -57,7 +57,7 @@ describe('the empty state (U1)', () => {
     expect(screen.getByRole('heading', { name: 'Project Capital' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Owner Expenses' })).toBeTruthy();
     expect(screen.getByText('No project capital scheduled.')).toBeTruthy();
-    expect(screen.getByText('No owner expenses.')).toBeTruthy();
+    expect(screen.getByText('No owner expenses scheduled.')).toBeTruthy();
     expect(container.querySelectorAll('input, select, table')).toHaveLength(0);
     expect(container.textContent).not.toMatch(/\d{2},\d{3}/);
     expect(screen.getByRole('button', { name: 'Add Project Capital' })).toBeTruthy();
@@ -65,13 +65,30 @@ describe('the empty state (U1)', () => {
   });
 
   it('separates Project Capital from the recurring reserve and TI / LC in its own words', () => {
-    render(<Harness initial={blankBusinessPlanDraft()} />);
-    expect(
-      screen.getByText(/Separate from the recurring CapEx Reserve and from tenant improvements and leasing commissions\./),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(/Property management fees and property operating expenses belong in the operating assumptions\./),
-    ).toBeTruthy();
+    const { container } = render(<Harness initial={blankBusinessPlanDraft()} />);
+    // Read as whole sentences: "TI / LC" sits in its own no-wrap span.
+    const hints = [...container.querySelectorAll('.business-plan-hint')].map((hint) =>
+      hint.textContent?.replace(/\s+/g, ' ').trim(),
+    );
+    expect(hints).toEqual([
+      'One-time owner capital at closing, during the hold, or post-hold. Excludes recurring CapEx Reserve and TI / LC.',
+      'Owner-level annual costs below NOI. Excludes property operating expenses and property management fees.',
+    ]);
+    expect(container.querySelector('.business-plan-nowrap')?.textContent).toBe('TI / LC');
+  });
+
+  it('teaches with one subordinate example line per empty part, and fabricates nothing', () => {
+    const { container } = render(<Harness initial={blankBusinessPlanDraft()} />);
+    const examples = [...container.querySelectorAll('.business-plan-empty-example')].map(
+      (element) => element.textContent,
+    );
+    expect(examples).toEqual([
+      'Examples: closing improvements, renovations, major building systems.',
+      'Examples: asset management, partnership legal costs.',
+    ]);
+    // An empty part carries no item count and no row.
+    expect(container.querySelectorAll('.business-plan-count')).toHaveLength(0);
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(0);
   });
 });
 
@@ -100,7 +117,7 @@ describe('adding rows (PART AI)', () => {
     const lastYear = input('Last Year, new Owner Expense item');
     expect(lastYear.value).toBe('');
     expect(lastYear.placeholder).toBe('Through Hold');
-    expect(screen.getByText('Leave Last Year blank for through hold.')).toBeTruthy();
+    expect(screen.getByText('Leave blank for Through Hold.')).toBeTruthy();
   });
 
   it('keeps an ID minted once, and never shows it, through typing', async () => {
@@ -227,7 +244,7 @@ describe('removing rows (PART M)', () => {
       await user.click(button);
     }
     expect(screen.getByText('No project capital scheduled.')).toBeTruthy();
-    expect(screen.getByText('No owner expenses.')).toBeTruthy();
+    expect(screen.getByText('No owner expenses scheduled.')).toBeTruthy();
   });
 });
 
@@ -316,6 +333,76 @@ describe('issues (U10, PART P)', () => {
       'Bad month.',
       'Post-Hold',
     ]);
+  });
+});
+
+describe('presentation (D6.6 polish)', () => {
+  it('shows each timing state as a tag beside its month, never as a control', () => {
+    const { container } = render(<Harness initial={loaded()} />);
+    const tags = [...container.querySelectorAll('.business-plan-timing')];
+    expect(tags.map((tag) => [tag.textContent, tag.className])).toEqual([
+      ['Closing', 'business-plan-timing business-plan-timing-closing'],
+      ['Year 2', 'business-plan-timing business-plan-timing-hold'],
+      ['Post-Hold', 'business-plan-timing business-plan-timing-post-hold'],
+    ]);
+    for (const tag of tags) {
+      // Text beside the authoritative input: same cell, not focusable, not a field.
+      expect(tag.closest('.business-plan-month')?.querySelector('input')).toBeTruthy();
+      expect(tag.tagName).toBe('SPAN');
+      expect(tag.getAttribute('tabindex')).toBeNull();
+    }
+    expect(input('Model Month, Future Roof').value).toBe('61');
+  });
+
+  it('presents a blank Last Year as the Through Hold state while keeping the value blank', async () => {
+    const user = userEvent.setup();
+    const seen: BusinessPlanDraft[] = [];
+    const { container } = render(<Harness initial={loaded()} onPlan={(plan) => seen.push(plan)} />);
+    const states = () =>
+      [...container.querySelectorAll('.business-plan-empty-state')].map((state) => [
+        state.textContent,
+        state.getAttribute('aria-hidden'),
+      ]);
+    // Asset Management runs through the hold; Legal ends in Year 3.
+    expect(states()).toEqual([['Through Hold', 'true']]);
+    expect(input('Last Year, Asset Management').value).toBe('');
+    expect(input('Last Year, Asset Management').placeholder).toBe('Through Hold');
+
+    // Typing a year replaces the state; clearing it brings the state back.
+    await user.type(input('Last Year, Asset Management'), '4');
+    expect(states()).toEqual([]);
+    await user.clear(input('Last Year, Asset Management'));
+    expect(states()).toEqual([['Through Hold', 'true']]);
+    expect(seen.at(-1)?.ownerExpenseItems[0].lastYear).toBe('');
+  });
+
+  it('renders item counts as metadata beside the subsection title', () => {
+    const { container } = render(<Harness initial={loaded()} />);
+    const counts = [...container.querySelectorAll('.business-plan-group-head .business-plan-count')];
+    expect(counts.map((count) => count.textContent)).toEqual(['3 items', '2 items']);
+  });
+
+  it('keeps Remove a quiet text action and Add a secondary action', () => {
+    render(<Harness initial={loaded()} />);
+    for (const remove of screen.getAllByRole('button', { name: /^Remove / })) {
+      expect(remove.className).toBe('business-plan-remove');
+      expect(remove.textContent).toBe('Remove');
+    }
+    for (const name of ['Add Project Capital', 'Add Owner Expense']) {
+      const add = screen.getByRole('button', { name });
+      expect(add.className).toContain('btn-secondary');
+      expect(add.className).not.toContain('btn-primary');
+    }
+  });
+
+  it('shows the model-month key and the Last Year key only beside rows that use them', () => {
+    render(<Harness initial={loaded()} />);
+    expect(screen.getByText('0 = Closing · 1–12 = Year 1 · 13–24 = Year 2 · etc.')).toBeTruthy();
+    expect(screen.getByText('Leave blank for Through Hold.')).toBeTruthy();
+    cleanup();
+    render(<Harness initial={blankBusinessPlanDraft()} />);
+    expect(screen.queryByText('0 = Closing · 1–12 = Year 1 · 13–24 = Year 2 · etc.')).toBeNull();
+    expect(screen.queryByText('Leave blank for Through Hold.')).toBeNull();
   });
 });
 
