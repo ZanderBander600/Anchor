@@ -151,6 +151,8 @@ _API_PLAN_TAKERS = frozenset(
         "build_standard_detailed_break_even_analysis",
         "generate_ai_analysis",
         "generate_detailed_ai_analysis",
+        # D6.8: the Lease-Level AI arm now takes the request's plan as well.
+        "generate_lease_level_ai_analysis",
         "fingerprint_quick_inputs",
         "fingerprint_detailed_inputs",
         "fingerprint_lease_level_inputs",
@@ -203,6 +205,7 @@ _API_PLAN_CALLS = sorted(
         ("_ai_analysis_detailed", "generate_detailed_ai_analysis"),
         ("_ai_analysis_quick", "generate_ai_analysis"),
         ("_ai_analysis_lease_level", "analyze_lease_level_acquisition_with_business_plan"),
+        ("_ai_analysis_lease_level", "generate_lease_level_ai_analysis"),
         ("create_deal", "create_deal"),
         ("create_deal", "create_detailed_deal"),
         ("create_deal", "create_lease_level_deal"),
@@ -901,9 +904,21 @@ _PROTECTED = (
 )
 
 
+#: ``main`` after D6.5 -- the end of D6.5's committed range.
+_D6_5_MERGE = "7f52b9e"
+
+
+def _files_changed_between(start: str, end: str, repo_relative: str) -> list[str]:
+    changed = _git_bytes(["diff", "--name-only", start, end, "--", repo_relative]).decode()
+    return sorted({line.strip() for line in changed.splitlines() if line.strip()})
+
+
+# Pinned at D6.8 to D6.5's own committed range, 93636ee..7f52b9e, so the ledger
+# keeps proving exactly what D6.5 changed however later gates move the tree.
+# D6.8's own ledger is ``tests/test_d6_8_ai_grounding_architecture.py``.
 def test_d6_5_changed_exactly_its_authorized_production_files() -> None:
-    changed = set(_files_changed_since(_D6_4_MERGE, "src")) | set(
-        _files_changed_since(_D6_4_MERGE, "web")
+    changed = set(_files_changed_between(_D6_4_MERGE, _D6_5_MERGE, "src")) | set(
+        _files_changed_between(_D6_4_MERGE, _D6_5_MERGE, "web")
     )
     assert changed == _D6_5_PRODUCTION_FILES, (
         f"unexpected: {sorted(changed - _D6_5_PRODUCTION_FILES)}; "
@@ -913,7 +928,9 @@ def test_d6_5_changed_exactly_its_authorized_production_files() -> None:
 
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged_since_d6_4(path: str) -> None:
-    assert _files_changed_since(_D6_4_MERGE, path) == [], f"{path} changed at D6.5"
+    assert _files_changed_between(_D6_4_MERGE, _D6_5_MERGE, path) == [], (
+        f"{path} changed at D6.5"
+    )
 
 
 def test_the_parser_restates_no_domain_rule() -> None:

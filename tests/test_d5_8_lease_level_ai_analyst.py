@@ -47,6 +47,7 @@ from anchor.analysis import (
     ParsedLeaseLevelInputs,
     analyze_lease_level_acquisition_with_projection,
 )
+from anchor.business_plan import BusinessPlan
 from anchor.contracts import AcquisitionTerms, OperatingMode
 from anchor.leasing import Lease, Suite
 from anchor.leasing.contracts import (
@@ -218,6 +219,9 @@ def _context(
         _INPUTS,
         _analysis(resolved_terms),
         deal_context=deal_context,
+        # D6.8: required. ``_analysis`` runs the plan-free entry point, which is
+        # exactly the empty plan.
+        business_plan=BusinessPlan(),
         **_HURDLES,
     )
 
@@ -336,6 +340,7 @@ def test_3_an_unknown_mode_fails_explicitly() -> None:
             target_headline_dscr=1.2,
             return_hurdle_metric=None,  # type: ignore[arg-type]
             deal_context=None,
+            business_plan=BusinessPlan(),
         )
 
 
@@ -356,6 +361,7 @@ def test_6_a_lease_level_context_needs_its_own_two_fields() -> None:
             _terms(),
             None,  # type: ignore[arg-type]
             _analysis(),
+            business_plan=BusinessPlan(),
             **_HURDLES,
         )
 
@@ -387,6 +393,7 @@ def test_7_to_10_quick_and_detailed_still_require_both_bundles(missing: str) -> 
             "target_headline_dscr": built.target_headline_dscr,
             "return_hurdle_metric": built.return_hurdle_metric,
             "deal_context": built.deal_context,
+            "business_plan": built.business_plan,
         }
         fields[missing] = None
         with pytest.raises(ValueError, match=mode_label):
@@ -858,7 +865,7 @@ def test_an_adversarial_label_stays_inside_its_json_string(
         leases=_LEASES,
     )
     built = build_lease_level_analysis_context(
-        _terms(), inputs, results, **_HURDLES
+        _terms(), inputs, results, business_plan=BusinessPlan(), **_HURDLES
     )
 
     user_prompt = build_user_prompt(built)
@@ -921,7 +928,7 @@ def test_generating_an_analysis_triggers_no_extra_financial_run(
 
     provider = _RecordingProvider()
     analysis = generate_lease_level_ai_analysis(
-        _terms(), _INPUTS, results, provider=provider, **_HURDLES
+        _terms(), _INPUTS, results, provider=provider, business_plan=BusinessPlan(), **_HURDLES
     )
 
     assert isinstance(analysis, AIAnalysis)
@@ -933,7 +940,9 @@ def test_the_context_describes_the_supplied_analysis_not_a_new_one() -> None:
     result -- so the AI Analyst and the analyst's screen cannot disagree."""
 
     supplied = _analysis()
-    built = build_lease_level_analysis_context(_terms(), _INPUTS, supplied, **_HURDLES)
+    built = build_lease_level_analysis_context(
+        _terms(), _INPUTS, supplied, business_plan=BusinessPlan(), **_HURDLES
+    )
 
     assert built.lease_level_results is supplied
     assert built.results is supplied.results

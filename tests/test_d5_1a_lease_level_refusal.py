@@ -36,6 +36,7 @@ from fastapi.testclient import TestClient
 from anchor.ai.contracts import AnalysisContext
 from anchor.ai.presentation import build_presentation_payload
 from anchor.api import app
+from anchor.business_plan import BusinessPlan
 from anchor.contracts import OperatingMode, UnsupportedOperatingModeError
 from anchor.deals import store as deals_store
 from anchor.deals.contracts import Deal
@@ -567,6 +568,7 @@ def test_a_lease_level_ai_context_is_representable_but_still_validated() -> None
             target_headline_dscr=1.2,
             return_hurdle_metric=None,
             deal_context=None,
+            business_plan=BusinessPlan(),
         )
 
     assert "LEASE_LEVEL" in str(excinfo.value)
@@ -587,6 +589,7 @@ def test_a_lease_level_ai_context_is_representable_but_still_validated() -> None
             target_headline_dscr=1.2,
             return_hurdle_metric=None,
             deal_context=None,
+            business_plan=BusinessPlan(),
         )
 
     assert unsupported.value.operation == "AnalysisContext"

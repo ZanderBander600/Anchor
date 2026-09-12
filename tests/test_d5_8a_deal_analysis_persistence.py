@@ -300,7 +300,9 @@ def test_4_the_source_fingerprint_is_persisted_beside_every_artifact(db: Path) -
     connection.close()
 
     assert stored_fingerprint == ai_fingerprint()
-    assert version == 1
+    # D6.8 bumped the AI snapshot version to 2 (the AI grounding changed); the
+    # stored column is whatever the current build writes.
+    assert version == deals_store._AI_SNAPSHOT_SCHEMA_VERSION == 2
     assert [row[0] for row in rows] == ["one_way", "two_way"]
     assert all(row[1] == input_fingerprint() for row in rows)
     assert all(row[2] == 1 for row in rows)

@@ -26,6 +26,7 @@ from ..analysis.contracts import (
     StandardDetailedSensitivityPresets,
     StandardSensitivityPresets,
 )
+from ..business_plan import BusinessPlan
 from ..contracts import (
     AcquisitionInputs,
     AcquisitionTerms,
@@ -105,6 +106,22 @@ class AnalysisContext:
     analysis layers that produced ``results``/``sensitivities``/
     ``break_even``. ``None`` when no context was supplied, identical in
     shape for both modes.
+
+    **``business_plan`` (Phase 6 Gate D6.8)** is the deal's Business Plan --
+    the exact plan ``results`` (and, for Quick and Detailed, ``sensitivities``
+    and ``break_even``) were computed with. It is carried so the presentation
+    layer can show the model the plan's own items (what each capital item and
+    owner expense is, and when it falls) beside the deterministic totals the
+    engine produced from them. Every dollar total the model is shown is still
+    read off ``results``; the plan's items are inputs, never a second source of
+    a total. Mode-agnostic, like the plan itself: all three modes carry it, and
+    ``BusinessPlan()`` is the deal with no plan.
+
+    It is **required, with no default**, for the reason ``sensitivities`` and
+    ``break_even`` have none: a default would let a caller silently present a
+    plan-bearing analysis as a deal with no plan. The Lease-Level arm is where
+    that matters most, because its ``results`` arrive already computed --
+    whoever computed them must say which plan they used.
     """
 
     operating_mode: OperatingMode
@@ -127,8 +144,16 @@ class AnalysisContext:
     target_headline_dscr: float
     return_hurdle_metric: ReturnHurdleMetric
     deal_context: str | None
+    business_plan: BusinessPlan
 
     def __post_init__(self) -> None:
+        # D6.8: the plan is never absent. A deal with no plan carries
+        # ``BusinessPlan()``, exactly as ``anchor.deals.contracts.Deal`` does.
+        if not isinstance(self.business_plan, BusinessPlan):
+            raise ValueError(
+                "An AnalysisContext's 'business_plan' must be a BusinessPlan "
+                "instance; a deal with no plan carries BusinessPlan(), never None."
+            )
         # D5.1A: total dispatch. Previously ``if QUICK: ... else: <DETAILED
         # invariants>``, so a third mode would have been validated against
         # Detailed's required-field rules and, on passing them, presented to the

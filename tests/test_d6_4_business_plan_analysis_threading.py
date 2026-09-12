@@ -21,6 +21,7 @@ oracle against the ba804ca tree is
 
 from __future__ import annotations
 
+import ast
 import copy
 import dataclasses
 import inspect
@@ -1561,12 +1562,27 @@ def test_ai_generate_hands_its_plan_to_the_context(generate, build, args) -> Non
     assert produced == build(*args, **AI_TARGETS, business_plan=MATERIAL)
 
 
-def test_ai_the_lease_level_arm_still_runs_no_analysis_and_takes_no_plan() -> None:
+def test_ai_the_lease_level_arm_still_runs_no_analysis_and_names_its_plan() -> None:
     """Lease-Level AI interprets the already-computed result the analyst
-    approved, so there is nothing to thread there (D5.8)."""
+    approved, so there is no analysis to thread a plan through (D5.8, D6.4).
+
+    **D6.8** grounds the model in that result's Business Plan, so the arm now
+    takes the plan -- required and keyword-only, because only the caller knows
+    which plan produced the results it hands over. It still runs no analysis:
+    the plan is carried to the context, never used to compute anything here."""
 
     for function in (
         analyst.build_lease_level_analysis_context,
         analyst.generate_lease_level_ai_analysis,
     ):
-        assert "business_plan" not in inspect.signature(function).parameters
+        parameter = inspect.signature(function).parameters["business_plan"]
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameter.default is inspect.Parameter.empty
+
+    tree = ast.parse(inspect.getsource(analyst.build_lease_level_analysis_context))
+    called = {
+        node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    }
+    assert called == {"AnalysisContext"}

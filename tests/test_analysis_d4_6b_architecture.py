@@ -1502,8 +1502,15 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     # nothing was actually dropped. Anything else is a rule that went missing,
     # which is what byte-identity was really protecting.
     two_mode_phrases = ("either", "both modes", "quick", "Quick", "detailed", "Detailed")
+    # Phase 6 Gate D6.8 amended rule 2b so a year-over-year change may also be
+    # attributed to leasing capital or to the Business Plan's Project Capital and
+    # Owner Expenses -- a claim the plan would otherwise make false. This is the
+    # one D4.6A-era line that amendment rewrote. The complete, exact set of lines
+    # D6.8 removed from the prompt is pinned by
+    # ``tests/test_d6_8_empty_plan_oracle.py`` (``_REMOVED_LINES``).
+    d6_8_amended = ("supplied NOI/CapEx/debt-service schedule already shown to you (for",)
     for line in removed:
-        if line == "" or line not in baseline_model_facing:
+        if line == "" or line not in baseline_model_facing or line in d6_8_amended:
             continue
         assert any(phrase in line for phrase in two_mode_phrases) or (
             line.strip('"') in shipped_prompt
