@@ -305,6 +305,10 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
     # contract carries the plan, and the presentation layer shows its items;
     # what each may import is pinned by
     # ``tests/test_d6_4_business_plan_threading_architecture.py``.
+    #
+    # **Narrowed at P7.1 -- by exactly one named file.** The Scenario engine
+    # names ``BusinessPlan`` so it can carry the caller's plan, unopened and
+    # unresolved, to the D6.2 entry points (P7.1 changes no plan).
     assert importers == [
         "anchor/ai/analyst.py",
         "anchor/ai/contracts.py",
@@ -312,6 +316,7 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
         "anchor/analysis/break_even.py",
         "anchor/analysis/business_plan_analysis.py",
         "anchor/analysis/lease_level_sensitivity.py",
+        "anchor/analysis/scenario.py",
         "anchor/analysis/sensitivity.py",
         "anchor/api.py",
         "anchor/deals/contracts.py",
