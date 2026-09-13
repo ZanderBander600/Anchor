@@ -12,11 +12,11 @@ here can reach them.
 
 **Resolve, then run (P-2).** A Scenario changes *inputs*, never outputs::
 
-    ScenarioDefinition + base inputs
+    ScenarioDefinition + base inputs of one Unit
             |
-    stage 1       the scenario contract: identity, targets, operations and
-            |     values, and whether each target applies to this mode and to
-            |     these inputs
+    stage 1       the scenario contract: identity, unit addressing, targets,
+            |     operations and values, and whether each target applies to
+            |     this mode and to these inputs
     resolution    one explicit, typed resolver per (target, mode)
             |
     stage 2       the existing validators, on every contract a target changed
@@ -32,6 +32,14 @@ learns that a scenario exists, and nothing here computes NOI, debt service, an
 exit value, a return or any other financial result. The only arithmetic in
 this module is the ratified operations themselves (``_apply_operation``).
 
+**Unit-addressed from P7.1 (Section 7.2, SC-1, SC-5).** Every override names
+the Unit (Deal) it applies to, explicitly, even when there is one unit, and a
+scenario holds at most one override per ``(unit_id, target)``. P7.1 analyses
+one Unit at a time: each resolver is told that Unit's ``unit_id``. An override
+addressing any other unit makes the scenario invalid (``UNIT_NOT_IN_VARIANT``).
+It is never ignored, filtered out, or applied to the unit being analysed.
+Multi-unit resolution later reuses this contract unchanged.
+
 **Absence is Base (P-11).** Ordinary analyses never pass through this module:
 a caller with no scenario keeps calling the existing entry points exactly as
 before. A scenario with no overrides, resolved deliberately, hands the caller's
@@ -42,16 +50,19 @@ is invalid. It is reported with the existing validator's own reason, and it is
 never clipped, skipped, or answered with a fabricated result.
 
 **Order never matters (SC-1, P-7).** A scenario holds at most one override per
-target, so no two operations ever compose. Overrides are resolved in the
-registry's declaration order, whatever order they were stored in.
+``(unit_id, target)``, so no two operations ever compose. Overrides are
+resolved in the registry's declaration order, whatever order they were stored
+in.
 
 **Names are not financial (FP-1).** ``scenario_id``, ``name`` and
 ``description`` are read by stage-1 validation only. No resolver reads them.
 
-**Deliberately not here**, because later gates own it: persistence,
-fingerprints, API routes, UI, Strategy, the Investment parent, per-unit
-addressing (a P7.1 definition is the override set for the one analysis root its
-caller supplies), probabilities, Business Plan targets and per-suite targets.
+**Deliberately not here**, because later gates own it:
+- Scenario and Investment persistence, fingerprints, API routes and UI;
+- Strategy;
+- multi-unit variant orchestration and consolidation;
+- probabilities;
+- Business Plan targets and per-suite targets.
 """
 
 from __future__ import annotations
@@ -374,13 +385,17 @@ _CANONICAL_ORDER: Mapping[ScenarioTarget, int] = MappingProxyType(
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ScenarioOverride:
-    """One approved assumption override: a registry ``target``, one of that
-    target's whitelisted ``operation``s, and a finite numeric ``value`` in the
-    target's internal units.
+    """One approved assumption override on one Unit (Section 7.2):
+    - ``unit_id`` is the Unit (Deal) it applies to. It is required, has no
+      default, and is explicit even when there is one unit;
+    - ``target`` is a registry target;
+    - ``operation`` is one of that target's whitelisted operations;
+    - ``value`` is a finite number in the target's internal units.
 
     Shape only. ``validate_scenario`` holds the rules, following the
     repository's contract/validator split."""
 
+    unit_id: str
     target: ScenarioTarget
     operation: ScenarioOperation
     value: float
@@ -394,7 +409,8 @@ class ScenarioDefinition:
     meaning. ``name`` is arbitrary analyst text ("Base", "Recession 2027", ...).
     Nothing branches on it, and no count or set of scenarios is assumed.
     ``description`` is optional context. ``overrides`` holds at most one
-    ``ScenarioOverride`` per target, and its order is irrelevant."""
+    ``ScenarioOverride`` per ``(unit_id, target)``, and its order is
+    irrelevant."""
 
     scenario_id: str
     name: str
@@ -417,17 +433,20 @@ class ScenarioIssueStage(StrEnum):
 class ScenarioIssueCode(StrEnum):
     """Stable, machine-readable reasons a scenario is invalid.
 
-    ``RESOLVED_INPUT_INVALID`` wraps an existing validator's finding. That
-    issue's ``source_code`` holds the validator's own category or code, and
-    its ``message`` holds the validator's own wording, so the business rule
-    keeps one authority."""
+    ``UNIT_NOT_IN_VARIANT`` is SC-5: an override addresses a Unit that is not
+    in the analysis. ``RESOLVED_INPUT_INVALID`` wraps an existing validator's
+    finding. That issue's ``source_code`` holds the validator's own category
+    or code, and its ``message`` holds the validator's own wording, so the
+    business rule keeps one authority."""
 
     INVALID_SCENARIO_ID = "invalid_scenario_id"
     INVALID_SCENARIO_NAME = "invalid_scenario_name"
     INVALID_DESCRIPTION = "invalid_description"
     INVALID_OVERRIDES = "invalid_overrides"
     UNKNOWN_TARGET = "unknown_target"
+    INVALID_UNIT_ID = "invalid_unit_id"
     DUPLICATE_TARGET = "duplicate_target"
+    UNIT_NOT_IN_VARIANT = "unit_not_in_variant"
     TARGET_NOT_SUPPORTED_FOR_MODE = "target_not_supported_for_mode"
     UNKNOWN_OPERATION = "unknown_operation"
     OPERATION_NOT_ALLOWED = "operation_not_allowed"
@@ -444,6 +463,8 @@ class ScenarioIssue:
     This is the engine-layer invalid reason a future Strategy x Scenario cell
     displays as "invalid, with reason" (DC-2).
     - ``target`` names the override responsible, where one is.
+    - ``unit_id`` names the Unit the finding concerns, where one is. For
+      ``UNIT_NOT_IN_VARIANT`` that is the offending unit.
     - ``field`` locates a stage-2 finding in the resolved contracts, on the
       existing validator's own path.
     """
@@ -452,6 +473,7 @@ class ScenarioIssue:
     code: ScenarioIssueCode
     message: str
     target: ScenarioTarget | None = None
+    unit_id: str | None = None
     field: str | None = None
     source_code: str | None = None
 
@@ -491,10 +513,18 @@ def _safe_repr(value: object) -> str:
 
 
 def _scenario_issue(
-    code: ScenarioIssueCode, message: str, *, target: ScenarioTarget | None = None
+    code: ScenarioIssueCode,
+    message: str,
+    *,
+    target: ScenarioTarget | None = None,
+    unit_id: str | None = None,
 ) -> ScenarioIssue:
     return ScenarioIssue(
-        stage=ScenarioIssueStage.SCENARIO, code=code, message=message, target=target
+        stage=ScenarioIssueStage.SCENARIO,
+        code=code,
+        message=message,
+        target=target,
+        unit_id=unit_id,
     )
 
 
@@ -536,7 +566,7 @@ def _header_issues(scenario: ScenarioDefinition) -> list[ScenarioIssue]:
     return issues
 
 
-def _value_issue(override: ScenarioOverride) -> ScenarioIssue | None:
+def _value_issue(override: ScenarioOverride, unit_id: str) -> ScenarioIssue | None:
     value = override.value
     target = override.target
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -545,6 +575,7 @@ def _value_issue(override: ScenarioOverride) -> ScenarioIssue | None:
             f"{target.value}: value {_safe_repr(value)} must be a numeric value; "
             "Booleans and text are not accepted.",
             target=target,
+            unit_id=unit_id,
         )
     try:
         normalized = float(value)
@@ -554,19 +585,24 @@ def _value_issue(override: ScenarioOverride) -> ScenarioIssue | None:
             f"{target.value}: value {_safe_repr(value)} cannot be normalized to a "
             "finite built-in float.",
             target=target,
+            unit_id=unit_id,
         )
     if not isfinite(normalized):
         return _scenario_issue(
             ScenarioIssueCode.NON_FINITE_VALUE,
             f"{target.value}: value {_safe_repr(value)} must be finite.",
             target=target,
+            unit_id=unit_id,
         )
     return None
 
 
 def _override_issues(
-    override: ScenarioOverride, operating_mode: OperatingMode
+    override: ScenarioOverride, operating_mode: OperatingMode, unit_id: str
 ) -> list[ScenarioIssue]:
+    """The per-override rules, for an override stage 1 has already proven to
+    address ``unit_id`` exactly once."""
+
     target = override.target
     spec = SCENARIO_TARGET_REGISTRY[target]
     issues: list[ScenarioIssue] = []
@@ -579,6 +615,7 @@ def _override_issues(
                 f"{target.value}: not a scenario target for {operating_mode.value} "
                 f"underwriting; it applies to: {supported}.",
                 target=target,
+                unit_id=unit_id,
             )
         )
 
@@ -589,6 +626,7 @@ def _override_issues(
                 ScenarioIssueCode.UNKNOWN_OPERATION,
                 f"{target.value}: unknown scenario operation {_safe_repr(operation)}.",
                 target=target,
+                unit_id=unit_id,
             )
         )
     elif operation not in spec.allowed_operations:
@@ -603,28 +641,55 @@ def _override_issues(
                 f"{target.value}: operation {operation.value!r} is not allowed; "
                 f"allowed operations: {allowed}.",
                 target=target,
+                unit_id=unit_id,
             )
         )
 
-    value_issue = _value_issue(override)
+    value_issue = _value_issue(override, unit_id)
     if value_issue is not None:
         issues.append(value_issue)
     return issues
 
 
+def _require_unit_identity(unit_id: object) -> None:
+    """The analysed Unit's identity is the caller's fact, not scenario
+    content, so a malformed one is a programming error rather than an issue."""
+
+    if not isinstance(unit_id, str):
+        raise TypeError(f"unit_id must be a str; got {type(unit_id).__qualname__}.")
+    if not unit_id.strip():
+        raise ValueError("unit_id must be a nonblank string naming the Unit (Deal) analysed.")
+
+
+def _address_order(address: tuple[str, ScenarioTarget]) -> tuple[str, int]:
+    unit, target = address
+    return unit, _CANONICAL_ORDER[target]
+
+
 def validate_scenario(
-    scenario: ScenarioDefinition, *, operating_mode: OperatingMode
+    scenario: ScenarioDefinition, *, operating_mode: OperatingMode, unit_id: str
 ) -> tuple[ScenarioIssue, ...]:
-    """Stage 1: every issue in ``scenario`` as a contract for
-    ``operating_mode``, in a deterministic order that does not depend on how
-    the overrides were stored:
+    """Stage 1: every issue in ``scenario`` as a contract for the one Unit
+    ``unit_id``, analysed in ``operating_mode``. The order is deterministic
+    and does not depend on how the overrides were stored:
 
     1. identity and naming;
     2. a malformed override collection, or malformed members of it;
     3. overrides whose target is not a ``ScenarioTarget``;
-    4. per target, in registry order: a duplicate target (reported once; its
-       rows are never composed or judged individually), or else the target's
-       mode applicability, then its operation, then its value.
+    4. overrides whose ``unit_id`` is not a nonblank string;
+    5. per ``(unit_id, target)`` address, with units in sorted order and targets
+       in registry order:
+       - a duplicate address, reported once; its rows are never composed or
+         judged individually;
+       - else, an address on any unit other than ``unit_id``:
+         ``UNIT_NOT_IN_VARIANT`` (SC-5). It is never ignored, filtered out or
+         applied to ``unit_id``;
+       - else, the target's mode applicability, then its operation, then its
+         value.
+
+    The same target on two different units is two addresses, never a
+    duplicate. In P7.1, the address that is not ``unit_id`` fails
+    addressability.
 
     Returns ``()`` for a valid scenario. Business rules on the *resolved*
     values stay with the existing validators (stage 2).
@@ -639,6 +704,7 @@ def validate_scenario(
             "operating_mode must be an OperatingMode; got "
             f"{type(operating_mode).__qualname__}."
         )
+    _require_unit_identity(unit_id)
 
     issues = _header_issues(scenario)
 
@@ -666,7 +732,7 @@ def validate_scenario(
     typed = [override for override in overrides if isinstance(override, ScenarioOverride)]
     unknown = sorted(
         (override for override in typed if not isinstance(override.target, ScenarioTarget)),
-        key=lambda override: _safe_repr(override.target),
+        key=lambda override: (_safe_repr(override.target), _safe_repr(override.unit_id)),
     )
     for override in unknown:
         issues.append(
@@ -674,39 +740,71 @@ def validate_scenario(
                 ScenarioIssueCode.UNKNOWN_TARGET,
                 f"Unknown scenario target {_safe_repr(override.target)}; a target must "
                 "be a ScenarioTarget from the approved registry.",
+                unit_id=override.unit_id if _is_nonblank_text(override.unit_id) else None,
             )
         )
 
-    by_target: dict[ScenarioTarget, list[ScenarioOverride]] = {}
-    for override in typed:
-        if isinstance(override.target, ScenarioTarget):
-            by_target.setdefault(override.target, []).append(override)
+    targeted = [override for override in typed if isinstance(override.target, ScenarioTarget)]
+    unaddressed = sorted(
+        (override for override in targeted if not _is_nonblank_text(override.unit_id)),
+        key=lambda override: (_CANONICAL_ORDER[override.target], _safe_repr(override.unit_id)),
+    )
+    for override in unaddressed:
+        issues.append(
+            _scenario_issue(
+                ScenarioIssueCode.INVALID_UNIT_ID,
+                f"{override.target.value}: unit_id {_safe_repr(override.unit_id)} must be a "
+                "nonblank string naming the Unit (Deal) the override applies to.",
+                target=override.target,
+            )
+        )
 
-    for target in ScenarioTarget:
-        occurrences = by_target.get(target, [])
+    by_address: dict[tuple[str, ScenarioTarget], list[ScenarioOverride]] = {}
+    for override in targeted:
+        if _is_nonblank_text(override.unit_id):
+            by_address.setdefault((override.unit_id, override.target), []).append(override)
+
+    for address in sorted(by_address, key=_address_order):
+        override_unit, target = address
+        occurrences = by_address[address]
         if len(occurrences) > 1:
             issues.append(
                 _scenario_issue(
                     ScenarioIssueCode.DUPLICATE_TARGET,
-                    f"{target.value}: {len(occurrences)} overrides target it; a scenario "
-                    "holds at most one override per target, and overrides are never "
-                    "composed.",
+                    f"{target.value}: {len(occurrences)} overrides target it on unit "
+                    f"{_safe_repr(override_unit)}; a scenario holds at most one override "
+                    "per (unit_id, target), and overrides are never composed.",
                     target=target,
+                    unit_id=override_unit,
                 )
             )
-        elif occurrences:
-            issues.extend(_override_issues(occurrences[0], operating_mode))
+        elif override_unit != unit_id:
+            issues.append(
+                _scenario_issue(
+                    ScenarioIssueCode.UNIT_NOT_IN_VARIANT,
+                    f"{target.value}: the override addresses unit "
+                    f"{_safe_repr(override_unit)}, which is not in this analysis; it "
+                    f"resolves unit {_safe_repr(unit_id)} only. The override is refused, "
+                    "never ignored and never applied to another unit.",
+                    target=target,
+                    unit_id=override_unit,
+                )
+            )
+        else:
+            issues.extend(_override_issues(occurrences[0], operating_mode, unit_id))
 
     return tuple(issues)
 
 
 def _require_resolvable(
-    scenario: ScenarioDefinition, operating_mode: OperatingMode
+    scenario: ScenarioDefinition, operating_mode: OperatingMode, unit_id: str
 ) -> tuple[ScenarioOverride, ...]:
-    """Raise on any stage-1 issue; otherwise return the overrides in canonical
-    registry order."""
+    """Raise on any stage-1 issue; otherwise return **every** override, in
+    canonical registry order. Stage 1 has proven that each one addresses
+    ``unit_id`` exactly once per target, so nothing is filtered here and
+    nothing can be dropped."""
 
-    issues = validate_scenario(scenario, operating_mode=operating_mode)
+    issues = validate_scenario(scenario, operating_mode=operating_mode, unit_id=unit_id)
     if issues:
         raise ScenarioValidationError(issues)
     return tuple(
@@ -715,7 +813,7 @@ def _require_resolvable(
 
 
 def _lease_level_applicability_issues(
-    overrides: tuple[ScenarioOverride, ...], suites: tuple[Suite, ...]
+    overrides: tuple[ScenarioOverride, ...], suites: tuple[Suite, ...], unit_id: str
 ) -> tuple[ScenarioIssue, ...]:
     """Stage 1, against the inputs: a target these suites shadow is refused.
 
@@ -743,6 +841,7 @@ def _lease_level_applicability_issues(
             "the property-default renewal probability, so this scenario would not "
             "reach them. It is refused rather than partly applied.",
             target=ScenarioTarget.RENEWAL_PROBABILITY,
+            unit_id=unit_id,
         ),
     )
 
@@ -993,11 +1092,13 @@ def _resolved_input_issue(
     field: str | None,
     source_code: str,
     applied: Mapping[str, ScenarioTarget],
+    unit_id: str,
 ) -> ScenarioIssue:
-    """Wrap one existing finding, unchanged. Each target token is its field's
-    own name, so a finding on a field a target wrote is attributed to that
-    target. Any other finding (a pre-existing defect in the base inputs) is
-    reported with no target."""
+    """Wrap one existing finding, unchanged. Every stage-2 finding concerns
+    the one Unit being resolved. Each target token is its field's own name, so
+    a finding on a field a target wrote is attributed to that target. Any
+    other finding (a pre-existing defect in the base inputs) is reported with
+    no target."""
 
     leaf = None if field is None else field.rpartition(".")[2]
     return ScenarioIssue(
@@ -1005,13 +1106,14 @@ def _resolved_input_issue(
         code=ScenarioIssueCode.RESOLVED_INPUT_INVALID,
         message=message,
         target=None if leaf is None else applied.get(leaf),
+        unit_id=unit_id,
         field=field,
         source_code=source_code,
     )
 
 
 def _input_error_issues(
-    error: InputValidationError, applied: Mapping[str, ScenarioTarget]
+    error: InputValidationError, applied: Mapping[str, ScenarioTarget], unit_id: str
 ) -> list[ScenarioIssue]:
     return [
         _resolved_input_issue(
@@ -1019,13 +1121,16 @@ def _input_error_issues(
             field=issue.field_id,
             source_code=issue.category.value,
             applied=applied,
+            unit_id=unit_id,
         )
         for issue in error.issues
     ]
 
 
 def _lease_error_issues(
-    errors: Iterable[LeaseValidationIssue], applied: Mapping[str, ScenarioTarget]
+    errors: Iterable[LeaseValidationIssue],
+    applied: Mapping[str, ScenarioTarget],
+    unit_id: str,
 ) -> list[ScenarioIssue]:
     return [
         _resolved_input_issue(
@@ -1033,38 +1138,39 @@ def _lease_error_issues(
             field=issue.path,
             source_code=issue.code.value,
             applied=applied,
+            unit_id=unit_id,
         )
         for issue in errors
     ]
 
 
 def _quick_input_issues(
-    inputs: AcquisitionInputs, applied: Mapping[str, ScenarioTarget]
+    inputs: AcquisitionInputs, applied: Mapping[str, ScenarioTarget], unit_id: str
 ) -> list[ScenarioIssue]:
     try:
         validate_acquisition_inputs(asdict(inputs))
     except InputValidationError as error:
-        return _input_error_issues(error, applied)
+        return _input_error_issues(error, applied, unit_id)
     return []
 
 
 def _terms_issues(
-    terms: AcquisitionTerms, applied: Mapping[str, ScenarioTarget]
+    terms: AcquisitionTerms, applied: Mapping[str, ScenarioTarget], unit_id: str
 ) -> list[ScenarioIssue]:
     try:
         validate_acquisition_terms(asdict(terms))
     except InputValidationError as error:
-        return _input_error_issues(error, applied)
+        return _input_error_issues(error, applied, unit_id)
     return []
 
 
 def _detailed_operating_issues(
-    operating: DetailedOperatingInputs, applied: Mapping[str, ScenarioTarget]
+    operating: DetailedOperatingInputs, applied: Mapping[str, ScenarioTarget], unit_id: str
 ) -> list[ScenarioIssue]:
     try:
         validate_detailed_operating_inputs(asdict(operating))
     except InputValidationError as error:
-        return _input_error_issues(error, applied)
+        return _input_error_issues(error, applied, unit_id)
     return []
 
 
@@ -1081,17 +1187,21 @@ def _require_instance(value: object, expected: type, name: str) -> None:
 
 
 # =============================================================================
-# Public resolvers
+# Public resolvers -- one Unit per call
 # =============================================================================
 
 
 def resolve_quick_scenario(
     inputs: AcquisitionInputs,
     *,
+    unit_id: str,
     scenario: ScenarioDefinition,
     business_plan: BusinessPlan,
 ) -> ResolvedQuickInputs:
-    """Resolve ``scenario`` over a Quick deal's inputs.
+    """Resolve ``scenario`` over the Quick inputs of the Unit ``unit_id``.
+
+    Every override must address ``unit_id``. Any other unit makes the
+    scenario invalid rather than being ignored.
 
     Raises ``ScenarioValidationError`` with stage-1 issues, or else with the
     existing validator's stage-2 findings on the resolved ``AcquisitionInputs``.
@@ -1102,13 +1212,15 @@ def resolve_quick_scenario(
 
     _require_instance(inputs, AcquisitionInputs, "inputs")
     _require_instance(business_plan, BusinessPlan, "business_plan")
-    overrides = _require_resolvable(scenario, OperatingMode.QUICK)
+    overrides = _require_resolvable(scenario, OperatingMode.QUICK, unit_id)
 
     resolved = inputs
     for override in overrides:
         resolved = _resolve_quick_target(resolved, override)
     if overrides:
-        _require_no_issues(_quick_input_issues(resolved, _applied_targets(overrides)))
+        _require_no_issues(
+            _quick_input_issues(resolved, _applied_targets(overrides), unit_id)
+        )
 
     return ResolvedQuickInputs(inputs=resolved, business_plan=business_plan)
 
@@ -1117,10 +1229,12 @@ def resolve_detailed_scenario(
     terms: AcquisitionTerms,
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
+    unit_id: str,
     scenario: ScenarioDefinition,
     business_plan: BusinessPlan,
 ) -> ResolvedDetailedInputs:
-    """Resolve ``scenario`` over a Detailed deal's terms and operating inputs.
+    """Resolve ``scenario`` over the Detailed terms and operating inputs of
+    the Unit ``unit_id``.
 
     Stage 2 validates each contract a target changed, terms first, with the
     same validators the Detailed API path uses. A contract no target changed
@@ -1131,7 +1245,7 @@ def resolve_detailed_scenario(
         detailed_operating_inputs, DetailedOperatingInputs, "detailed_operating_inputs"
     )
     _require_instance(business_plan, BusinessPlan, "business_plan")
-    overrides = _require_resolvable(scenario, OperatingMode.DETAILED)
+    overrides = _require_resolvable(scenario, OperatingMode.DETAILED, unit_id)
 
     base = ResolvedDetailedInputs(
         terms=terms,
@@ -1145,9 +1259,11 @@ def resolve_detailed_scenario(
     applied = _applied_targets(overrides)
     issues: list[ScenarioIssue] = []
     if resolved.terms is not base.terms:
-        issues.extend(_terms_issues(resolved.terms, applied))
+        issues.extend(_terms_issues(resolved.terms, applied, unit_id))
     if resolved.detailed_operating_inputs is not base.detailed_operating_inputs:
-        issues.extend(_detailed_operating_issues(resolved.detailed_operating_inputs, applied))
+        issues.extend(
+            _detailed_operating_issues(resolved.detailed_operating_inputs, applied, unit_id)
+        )
     _require_no_issues(issues)
     return resolved
 
@@ -1160,10 +1276,12 @@ def resolve_lease_level_scenario(
     *,
     market_leasing: MarketLeasingAssumptions,
     operating_inputs: LeaseLevelOperatingInputs,
+    unit_id: str,
     scenario: ScenarioDefinition,
     business_plan: BusinessPlan,
 ) -> ResolvedLeaseLevelInputs:
-    """Resolve ``scenario`` over a Lease-Level deal's inputs.
+    """Resolve ``scenario`` over the Lease-Level inputs of the Unit
+    ``unit_id``.
 
     The suites and the property-default market record come back as a **new**
     resolved configuration, and the caller's records are never mutated. Stage 2
@@ -1189,8 +1307,8 @@ def resolve_lease_level_scenario(
     suite_tuple = tuple(suites)
     lease_tuple = tuple(leases)
 
-    overrides = _require_resolvable(scenario, OperatingMode.LEASE_LEVEL)
-    shadowed = _lease_level_applicability_issues(overrides, suite_tuple)
+    overrides = _require_resolvable(scenario, OperatingMode.LEASE_LEVEL, unit_id)
+    shadowed = _lease_level_applicability_issues(overrides, suite_tuple, unit_id)
     if shadowed:
         raise ScenarioValidationError(shadowed)
 
@@ -1210,7 +1328,7 @@ def resolve_lease_level_scenario(
     applied = _applied_targets(overrides)
     issues: list[ScenarioIssue] = []
     if resolved.terms is not base.terms:
-        issues.extend(_terms_issues(resolved.terms, applied))
+        issues.extend(_terms_issues(resolved.terms, applied, unit_id))
     if resolved.market_leasing is not base.market_leasing or resolved.suites is not base.suites:
         issues.extend(
             _lease_error_issues(
@@ -1222,6 +1340,7 @@ def resolve_lease_level_scenario(
                     market_leasing=resolved.market_leasing,
                 ).errors,
                 applied,
+                unit_id,
             )
         )
     if resolved.operating_inputs is not base.operating_inputs:
@@ -1229,6 +1348,7 @@ def resolve_lease_level_scenario(
             _lease_error_issues(
                 validate_lease_level_operating_inputs(resolved.operating_inputs).errors,
                 applied,
+                unit_id,
             )
         )
     _require_no_issues(issues)
@@ -1243,16 +1363,17 @@ def resolve_lease_level_scenario(
 def analyze_quick_acquisition_with_scenario(
     inputs: AcquisitionInputs,
     *,
+    unit_id: str,
     scenario: ScenarioDefinition,
     business_plan: BusinessPlan,
 ) -> AcquisitionResults:
-    """Resolve ``scenario``, then run the existing Quick Business Plan entry
-    point on the resolved contracts. There is no scenario-specific financial
-    code path (SC-7). The result is identical to entering the resolved
-    assumptions by hand."""
+    """Resolve ``scenario`` for the Unit ``unit_id``, then run the existing
+    Quick Business Plan entry point on the resolved contracts. There is no
+    scenario-specific financial code path (SC-7). The result is identical to
+    entering the resolved assumptions by hand."""
 
     resolved = resolve_quick_scenario(
-        inputs, scenario=scenario, business_plan=business_plan
+        inputs, unit_id=unit_id, scenario=scenario, business_plan=business_plan
     )
     return analyze_quick_acquisition_with_business_plan(
         resolved.inputs, business_plan=resolved.business_plan
@@ -1263,15 +1384,17 @@ def analyze_detailed_acquisition_with_scenario(
     terms: AcquisitionTerms,
     detailed_operating_inputs: DetailedOperatingInputs,
     *,
+    unit_id: str,
     scenario: ScenarioDefinition,
     business_plan: BusinessPlan,
 ) -> DetailedAcquisitionResults:
-    """Resolve ``scenario``, then run the existing Detailed Business Plan entry
-    point on the resolved contracts."""
+    """Resolve ``scenario`` for the Unit ``unit_id``, then run the existing
+    Detailed Business Plan entry point on the resolved contracts."""
 
     resolved = resolve_detailed_scenario(
         terms,
         detailed_operating_inputs,
+        unit_id=unit_id,
         scenario=scenario,
         business_plan=business_plan,
     )
@@ -1290,11 +1413,12 @@ def analyze_lease_level_acquisition_with_scenario(
     *,
     market_leasing: MarketLeasingAssumptions,
     operating_inputs: LeaseLevelOperatingInputs,
+    unit_id: str,
     scenario: ScenarioDefinition,
     business_plan: BusinessPlan,
 ) -> LeaseLevelAcquisitionResults:
-    """Resolve ``scenario``, then run the existing Lease-Level Business Plan
-    entry point on the resolved contracts."""
+    """Resolve ``scenario`` for the Unit ``unit_id``, then run the existing
+    Lease-Level Business Plan entry point on the resolved contracts."""
 
     resolved = resolve_lease_level_scenario(
         terms,
@@ -1303,6 +1427,7 @@ def analyze_lease_level_acquisition_with_scenario(
         leases,
         market_leasing=market_leasing,
         operating_inputs=operating_inputs,
+        unit_id=unit_id,
         scenario=scenario,
         business_plan=business_plan,
     )

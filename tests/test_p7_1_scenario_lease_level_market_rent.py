@@ -42,6 +42,7 @@ from anchor.leasing import MarketLeasingAssumptions, Suite
 from anchor.leasing.market import resolve_market_leasing
 
 from _p7_1_scenario_fixtures import (
+    UNIT,
     business_plan,
     lease_level_operating,
     lease_level_property,
@@ -77,7 +78,7 @@ def market_rent_scenario(operation: ScenarioOperation, value: float) -> Scenario
     return ScenarioDefinition(
         scenario_id="mkt",
         name="Market",
-        overrides=(ScenarioOverride(target=MARKET_RENT, operation=operation, value=value),),
+        overrides=(ScenarioOverride(unit_id=UNIT, target=MARKET_RENT, operation=operation, value=value),),
     )
 
 
@@ -91,7 +92,7 @@ def resolve(operation: ScenarioOperation, value: float, suites=None, leases=None
         leases,
         market_leasing=default_market(),
         operating_inputs=lease_level_operating(),
-        scenario=market_rent_scenario(operation, value),
+        unit_id=UNIT, scenario=market_rent_scenario(operation, value),
         business_plan=business_plan(),
     )
 
@@ -201,7 +202,7 @@ def test_the_stored_configuration_is_never_mutated() -> None:
     resolve_lease_level_scenario(
         lease_level_terms(), lease_level_property(), suites, leases,
         market_leasing=defaults, operating_inputs=lease_level_operating(),
-        scenario=market_rent_scenario(Op.SCALE, 0.8), business_plan=business_plan(),
+        unit_id=UNIT, scenario=market_rent_scenario(Op.SCALE, 0.8), business_plan=business_plan(),
     )
     assert (suites, leases) == before
     assert defaults == defaults_before
@@ -219,7 +220,7 @@ def test_a_scaled_market_equals_the_same_market_entered_suite_by_suite() -> None
     scenario_results = analyze_lease_level_acquisition_with_scenario(
         lease_level_terms(), lease_level_property(), suites, leases,
         market_leasing=default_market(), operating_inputs=lease_level_operating(),
-        scenario=market_rent_scenario(Op.SCALE, 0.9), business_plan=business_plan(),
+        unit_id=UNIT, scenario=market_rent_scenario(Op.SCALE, 0.9), business_plan=business_plan(),
     )
     manual_suites, manual_leases = rent_roll(
         b_market_rent_psf=B_SCALAR * 0.9,
@@ -280,7 +281,7 @@ def renewal_scenario() -> ScenarioDefinition:
         scenario_id="r",
         name="Renewals",
         overrides=(
-            ScenarioOverride(target=ScenarioTarget.RENEWAL_PROBABILITY, operation=Op.ADD, value=-0.1),
+            ScenarioOverride(unit_id=UNIT, target=ScenarioTarget.RENEWAL_PROBABILITY, operation=Op.ADD, value=-0.1),
         ),
     )
 
@@ -295,7 +296,7 @@ def test_a_full_suite_override_shadows_renewal_probability_and_the_scenario_is_r
         resolve_lease_level_scenario(
             lease_level_terms(), lease_level_property(), suites, leases,
             market_leasing=default_market(), operating_inputs=lease_level_operating(),
-            scenario=renewal_scenario(), business_plan=business_plan(),
+            unit_id=UNIT, scenario=renewal_scenario(), business_plan=business_plan(),
         )
     (issue,) = excinfo.value.issues
     assert issue.code is ScenarioIssueCode.TARGET_SHADOWED_BY_SUITE_OVERRIDE
@@ -309,7 +310,7 @@ def test_a_scalar_rent_override_does_not_shadow_renewal_probability() -> None:
     resolved = resolve_lease_level_scenario(
         lease_level_terms(), lease_level_property(), suites, leases,
         market_leasing=default_market(), operating_inputs=lease_level_operating(),
-        scenario=renewal_scenario(), business_plan=business_plan(),
+        unit_id=UNIT, scenario=renewal_scenario(), business_plan=business_plan(),
     )
     assert resolved.market_leasing.renewal_probability == 0.65 + -0.1
     assert isinstance(resolved.suites[1], Suite)

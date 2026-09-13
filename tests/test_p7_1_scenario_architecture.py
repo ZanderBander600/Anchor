@@ -493,6 +493,74 @@ def test_the_operation_match_fails_closed() -> None:
 
 
 # =============================================================================
+# Unit addressing (Section 7.2, SC-1, SC-5) -- the P7.1 review correction
+# =============================================================================
+
+
+def test_every_override_is_unit_addressed_and_unit_id_is_required() -> None:
+    fields = dataclasses.fields(scenario_module.ScenarioOverride)
+    assert [field.name for field in fields] == ["unit_id", "target", "operation", "value"]
+    assert fields[0].default is dataclasses.MISSING
+    assert fields[0].default_factory is dataclasses.MISSING
+    assert "unit_id" not in {f.name for f in dataclasses.fields(scenario_module.ScenarioDefinition)}
+
+
+def test_duplicate_identity_is_the_unit_and_target_address() -> None:
+    """SC-1: overrides are grouped by ``(unit_id, target)``, never by target
+    alone, so the same target on two units is two addresses."""
+
+    validate = _functions(_tree())["validate_scenario"]
+    keys = [
+        ast.unparse(node.args[0])
+        for node in ast.walk(validate)
+        if isinstance(node, ast.Call) and _callee(node) == "setdefault"
+    ]
+    assert keys == ["(override.unit_id, override.target)"]
+
+
+def test_no_resolver_can_discard_or_reassign_a_foreign_unit_override() -> None:
+    """Only stage 1 reads an override's unit. Resolution receives every
+    override stage 1 accepted, unfiltered. A foreign-unit override can
+    therefore only ever surface as an issue; it can never be dropped or
+    quietly applied to the analysed unit."""
+
+    tree = _tree()
+    owner = _enclosing_function_of(tree)
+    readers = {
+        owner.get(node, "<module>")
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "unit_id"
+    }
+    assert readers == {"validate_scenario"}
+
+    functions = _functions(tree)
+    (ordering,) = [
+        node for node in ast.walk(functions["_require_resolvable"])
+        if isinstance(node, ast.Call) and _callee(node) == "sorted"
+    ]
+    assert ast.unparse(ordering.args[0]) == "scenario.overrides"
+    for name, function in functions.items():
+        if name.startswith(("resolve_", "analyze_", "_resolve_")) or name == "_require_resolvable":
+            filtered = [n for n in ast.walk(function) if isinstance(n, ast.comprehension) and n.ifs]
+            assert filtered == [], name
+
+
+def test_every_public_entry_point_takes_a_required_keyword_unit_id() -> None:
+    functions = _functions(_tree())
+    for name in (
+        "validate_scenario",
+        "resolve_quick_scenario", "resolve_detailed_scenario", "resolve_lease_level_scenario",
+        "analyze_quick_acquisition_with_scenario", "analyze_detailed_acquisition_with_scenario",
+        "analyze_lease_level_acquisition_with_scenario",
+    ):
+        arguments = functions[name].args
+        keyword_only = [argument.arg for argument in arguments.kwonlyargs]
+        assert "unit_id" in keyword_only, name
+        assert arguments.kw_defaults[keyword_only.index("unit_id")] is None, name
+        assert "unit_id" not in [argument.arg for argument in arguments.args], name
+
+
+# =============================================================================
 # 9. No reflection, no path patching
 # =============================================================================
 

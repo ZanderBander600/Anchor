@@ -39,6 +39,10 @@ from anchor.leasing import (
 ANALYSIS_START = date(2027, 1, 1)
 RENTABLE_AREA = 100_000.0
 
+#: The one Unit (Deal) every P7.1 fixture analysis resolves. It is opaque and
+#: carries no financial meaning; every scenario override names it explicitly.
+UNIT = "deal-a1"
+
 
 # =============================================================================
 # Quick

@@ -40,6 +40,7 @@ from anchor.contracts import (
 from anchor.leasing import LeaseLevelOperatingInputs, MarketLeasingAssumptions
 
 from _p7_1_scenario_fixtures import (
+    UNIT,
     business_plan,
     detailed_operating,
     detailed_terms,
@@ -131,7 +132,7 @@ def _one(target: ScenarioTarget, operation: ScenarioOperation, value: float) -> 
     return ScenarioDefinition(
         scenario_id="probe",
         name="probe",
-        overrides=(ScenarioOverride(target=target, operation=operation, value=value),),
+        overrides=(ScenarioOverride(unit_id=UNIT, target=target, operation=operation, value=value),),
     )
 
 
@@ -139,9 +140,9 @@ def _bases() -> dict[OperatingMode, Any]:
     suites, leases = rent_roll()
     plan = business_plan()
     return {
-        Q: lambda s: resolve_quick_scenario(quick_inputs(), scenario=s, business_plan=plan),
+        Q: lambda s: resolve_quick_scenario(quick_inputs(), unit_id=UNIT, scenario=s, business_plan=plan),
         D: lambda s: resolve_detailed_scenario(
-            detailed_terms(), detailed_operating(), scenario=s, business_plan=plan
+            detailed_terms(), detailed_operating(), unit_id=UNIT, scenario=s, business_plan=plan
         ),
         L: lambda s: resolve_lease_level_scenario(
             lease_level_terms(),
@@ -150,7 +151,7 @@ def _bases() -> dict[OperatingMode, Any]:
             leases,
             market_leasing=market(),
             operating_inputs=lease_level_operating(),
-            scenario=s,
+            unit_id=UNIT, scenario=s,
             business_plan=plan,
         ),
     }
@@ -235,14 +236,14 @@ _ALLOWED = [
 def test_every_allowed_operation_is_valid_in_every_applicable_mode(
     target: ScenarioTarget, mode: OperatingMode, operation: ScenarioOperation
 ) -> None:
-    assert validate_scenario(_one(target, operation, 0.5), operating_mode=mode) == ()
+    assert validate_scenario(_one(target, operation, 0.5), unit_id=UNIT, operating_mode=mode) == ()
 
 
 @pytest.mark.parametrize(("target", "mode", "operation"), _REJECTED)
 def test_every_other_operation_is_rejected(
     target: ScenarioTarget, mode: OperatingMode, operation: ScenarioOperation
 ) -> None:
-    issues = validate_scenario(_one(target, operation, 0.5), operating_mode=mode)
+    issues = validate_scenario(_one(target, operation, 0.5), unit_id=UNIT, operating_mode=mode)
     assert [issue.code for issue in issues] == [ScenarioIssueCode.OPERATION_NOT_ALLOWED]
 
 
@@ -251,7 +252,7 @@ def test_every_target_is_refused_outside_its_modes(
     target: ScenarioTarget, mode: OperatingMode
 ) -> None:
     operation, value = _PROBE[target]
-    issues = validate_scenario(_one(target, operation, value), operating_mode=mode)
+    issues = validate_scenario(_one(target, operation, value), unit_id=UNIT, operating_mode=mode)
     assert [issue.code for issue in issues] == [ScenarioIssueCode.TARGET_NOT_SUPPORTED_FOR_MODE]
 
 
@@ -349,7 +350,7 @@ def test_decisions_and_structure_are_not_scenario_targets(name: str) -> None:
     assert name not in {target.value for target in ScenarioTarget}
     assert name.upper() not in ScenarioTarget.__members__
     for mode in OperatingMode:
-        issues = validate_scenario(_one(name, Op.SET, 1.0), operating_mode=mode)  # type: ignore[arg-type]
+        issues = validate_scenario(_one(name, Op.SET, 1.0), unit_id=UNIT, operating_mode=mode)  # type: ignore[arg-type]
         assert [issue.code for issue in issues] == [ScenarioIssueCode.UNKNOWN_TARGET]
 
 

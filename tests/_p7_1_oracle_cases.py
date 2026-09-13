@@ -129,14 +129,14 @@ cases["D_plain"] = (
 def scenario_call(kind: str, plan: BusinessPlan):  # type: ignore[no-untyped-def]
     empty = ScenarioDefinition(scenario_id="zero", name="Zero overrides")
     if kind == "quick":
-        return analyze_quick_acquisition_with_scenario(fx.quick_inputs(), scenario=empty, business_plan=plan)
+        return analyze_quick_acquisition_with_scenario(fx.quick_inputs(), unit_id=fx.UNIT, scenario=empty, business_plan=plan)
     if kind == "detailed":
         return analyze_detailed_acquisition_with_scenario(
-            fx.detailed_terms(), fx.detailed_operating(), scenario=empty, business_plan=plan
+            fx.detailed_terms(), fx.detailed_operating(), unit_id=fx.UNIT, scenario=empty, business_plan=plan
         )
     roll = overridden_roll if kind == "lease_level_overrides" else {}
     args, kwargs = lease_level_args(**roll)
-    return analyze_lease_level_acquisition_with_scenario(*args, **kwargs, scenario=empty, business_plan=plan)
+    return analyze_lease_level_acquisition_with_scenario(*args, **kwargs, unit_id=fx.UNIT, scenario=empty, business_plan=plan)
 
 
 output: dict[str, object] = {"_has_scenario": HAS_SCENARIO}

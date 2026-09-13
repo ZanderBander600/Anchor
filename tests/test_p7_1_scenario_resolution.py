@@ -47,6 +47,7 @@ from anchor.engine import analyze_acquisition, analyze_detailed_acquisition_with
 from anchor.leasing import LeaseIssueCode, Suite
 
 from _p7_1_scenario_fixtures import (
+    UNIT,
     business_plan,
     detailed_operating,
     detailed_terms,
@@ -63,7 +64,7 @@ Op = ScenarioOperation
 
 
 def ov(target: ScenarioTarget, operation: ScenarioOperation, value: float) -> ScenarioOverride:
-    return ScenarioOverride(target=target, operation=operation, value=value)
+    return ScenarioOverride(unit_id=UNIT, target=target, operation=operation, value=value)
 
 
 def scenario(*overrides: ScenarioOverride, scenario_id: str = "scn", name: str = "View",
@@ -85,13 +86,13 @@ def identical(left: object, right: object) -> bool:
 
 def run_quick(definition: ScenarioDefinition, plan: BusinessPlan | None = None):  # type: ignore[no-untyped-def]
     return analyze_quick_acquisition_with_scenario(
-        quick_inputs(), scenario=definition, business_plan=plan or business_plan()
+        quick_inputs(), unit_id=UNIT, scenario=definition, business_plan=plan or business_plan()
     )
 
 
 def run_detailed(definition: ScenarioDefinition, plan: BusinessPlan | None = None):  # type: ignore[no-untyped-def]
     return analyze_detailed_acquisition_with_scenario(
-        detailed_terms(), detailed_operating(), scenario=definition,
+        detailed_terms(), detailed_operating(), unit_id=UNIT, scenario=definition,
         business_plan=plan or business_plan(),
     )
 
@@ -105,7 +106,7 @@ def resolve_lease_level(definition: ScenarioDefinition, suites=None, leases=None
         leases if leases is not None else default_leases,
         market_leasing=mkt or market(),
         operating_inputs=lease_level_operating(),
-        scenario=definition,
+        unit_id=UNIT, scenario=definition,
         business_plan=business_plan(),
     )
 
@@ -119,7 +120,7 @@ def run_lease_level(definition: ScenarioDefinition):  # type: ignore[no-untyped-
         leases,
         market_leasing=market(),
         operating_inputs=lease_level_operating(),
-        scenario=definition,
+        unit_id=UNIT, scenario=definition,
         business_plan=business_plan(),
     )
 
@@ -150,12 +151,12 @@ def test_set_add_and_scale_resolve_through_the_public_resolver() -> None:
         (Op.SCALE, 1.10, base.exit_cap_rate * 1.10),
     ):
         resolved = resolve_quick_scenario(
-            base, scenario=scenario(ov(T.EXIT_CAP_RATE, operation, value)),
+            base, unit_id=UNIT, scenario=scenario(ov(T.EXIT_CAP_RATE, operation, value)),
             business_plan=BusinessPlan(),
         )
         assert resolved.inputs.exit_cap_rate == expected
     resolved = resolve_quick_scenario(
-        base, scenario=scenario(ov(T.INTEREST_RATE, Op.ADD, 0.005)), business_plan=BusinessPlan()
+        base, unit_id=UNIT, scenario=scenario(ov(T.INTEREST_RATE, Op.ADD, 0.005)), business_plan=BusinessPlan()
     )
     assert resolved.inputs.interest_rate == 0.0575 + 0.005  # +50 bps, in internal units
 
@@ -176,17 +177,17 @@ def test_an_integer_value_resolves_to_the_same_float_assumption() -> None:
 def test_ltv_cap_at_never_raises_the_current_value_in_any_mode(base_ltv: float, expected: float) -> None:
     capped = scenario(ov(T.LTV, Op.CAP_AT, 0.55))
     quick = resolve_quick_scenario(
-        quick_inputs(ltv=base_ltv), scenario=capped, business_plan=BusinessPlan()
+        quick_inputs(ltv=base_ltv), unit_id=UNIT, scenario=capped, business_plan=BusinessPlan()
     )
     detailed = resolve_detailed_scenario(
-        detailed_terms(ltv=base_ltv), detailed_operating(), scenario=capped,
+        detailed_terms(ltv=base_ltv), detailed_operating(), unit_id=UNIT, scenario=capped,
         business_plan=BusinessPlan(),
     )
     suites, leases = rent_roll()
     lease_level = resolve_lease_level_scenario(
         lease_level_terms(ltv=base_ltv), lease_level_property(), suites, leases,
         market_leasing=market(), operating_inputs=lease_level_operating(),
-        scenario=capped, business_plan=BusinessPlan(),
+        unit_id=UNIT, scenario=capped, business_plan=BusinessPlan(),
     )
     assert quick.inputs.ltv == expected
     assert detailed.terms.ltv == expected
@@ -220,7 +221,7 @@ def test_quick_downside_equals_manual_entry_bit_for_bit() -> None:
         interest_rate=0.0575 + 0.01, ltv=0.55,
     )
 
-    resolved = resolve_quick_scenario(quick_inputs(), scenario=downside, business_plan=business_plan())
+    resolved = resolve_quick_scenario(quick_inputs(), unit_id=UNIT, scenario=downside, business_plan=business_plan())
     scenario_results = run_quick(downside)
     manual_results = analyze_quick_acquisition_with_business_plan(manual, business_plan=business_plan())
 
@@ -263,7 +264,7 @@ def test_detailed_downside_equals_manual_entry_bit_for_bit() -> None:
     )
 
     resolved = resolve_detailed_scenario(
-        detailed_terms(), detailed_operating(), scenario=downside, business_plan=business_plan()
+        detailed_terms(), detailed_operating(), unit_id=UNIT, scenario=downside, business_plan=business_plan()
     )
     assert identical(resolved.terms, manual_terms)
     assert identical(resolved.detailed_operating_inputs, manual_operating)
@@ -345,7 +346,7 @@ def test_quick_override_order_never_changes_resolved_inputs_or_results() -> None
     )
     outcomes = [
         (
-            resolve_quick_scenario(quick_inputs(), scenario=scenario(*p), business_plan=business_plan()),
+            resolve_quick_scenario(quick_inputs(), unit_id=UNIT, scenario=scenario(*p), business_plan=business_plan()),
             run_quick(scenario(*p)),
         )
         for p in itertools.permutations(rows)
@@ -396,7 +397,7 @@ def test_resolving_twice_gives_equivalent_results_and_mutates_nothing() -> None:
     def resolve():  # type: ignore[no-untyped-def]
         return resolve_lease_level_scenario(
             terms, lease_level_property(), suites, leases, market_leasing=mkt,
-            operating_inputs=ops, scenario=definition, business_plan=plan,
+            operating_inputs=ops, unit_id=UNIT, scenario=definition, business_plan=plan,
         )
 
     assert identical(resolve(), resolve())
@@ -412,18 +413,18 @@ def test_resolving_twice_gives_equivalent_results_and_mutates_nothing() -> None:
 def test_a_zero_override_scenario_hands_back_the_callers_own_objects() -> None:
     empty = scenario()
     inputs, plan = quick_inputs(), business_plan()
-    quick = resolve_quick_scenario(inputs, scenario=empty, business_plan=plan)
+    quick = resolve_quick_scenario(inputs, unit_id=UNIT, scenario=empty, business_plan=plan)
     assert quick.inputs is inputs and quick.business_plan is plan
 
     terms, operating = detailed_terms(), detailed_operating()
-    detailed = resolve_detailed_scenario(terms, operating, scenario=empty, business_plan=plan)
+    detailed = resolve_detailed_scenario(terms, operating, unit_id=UNIT, scenario=empty, business_plan=plan)
     assert detailed.terms is terms and detailed.detailed_operating_inputs is operating
 
     suites, leases = rent_roll()
     ll_terms, mkt, ops = lease_level_terms(), market(), lease_level_operating()
     lease_level = resolve_lease_level_scenario(
         ll_terms, lease_level_property(), suites, leases, market_leasing=mkt,
-        operating_inputs=ops, scenario=empty, business_plan=plan,
+        operating_inputs=ops, unit_id=UNIT, scenario=empty, business_plan=plan,
     )
     assert lease_level.terms is ll_terms and lease_level.market_leasing is mkt
     assert lease_level.operating_inputs is ops and lease_level.business_plan is plan
@@ -457,7 +458,7 @@ def test_a_zero_override_scenario_reproduces_every_ordinary_analysis_bit_for_bit
         analyze_lease_level_acquisition_with_scenario(
             lease_level_terms(), lease_level_property(), suites, leases,
             market_leasing=market(), operating_inputs=lease_level_operating(),
-            scenario=empty, business_plan=BusinessPlan(),
+            unit_id=UNIT, scenario=empty, business_plan=BusinessPlan(),
         ),
         analyze_lease_level_acquisition_with_projection(
             lease_level_terms(), lease_level_property(), suites, leases,
@@ -479,16 +480,16 @@ def test_no_target_touches_the_business_plan(target: ScenarioTarget) -> None:
     spec = module.SCENARIO_TARGET_REGISTRY[target]
     resolved = []
     if module.OperatingMode.QUICK in spec.modes:
-        resolved.append(resolve_quick_scenario(quick_inputs(), scenario=definition, business_plan=plan))
+        resolved.append(resolve_quick_scenario(quick_inputs(), unit_id=UNIT, scenario=definition, business_plan=plan))
     if module.OperatingMode.DETAILED in spec.modes:
         resolved.append(resolve_detailed_scenario(
-            detailed_terms(), detailed_operating(), scenario=definition, business_plan=plan))
+            detailed_terms(), detailed_operating(), unit_id=UNIT, scenario=definition, business_plan=plan))
     if module.OperatingMode.LEASE_LEVEL in spec.modes:
         suites, leases = rent_roll()
         resolved.append(resolve_lease_level_scenario(
             lease_level_terms(), lease_level_property(), suites, leases,
             market_leasing=market(), operating_inputs=lease_level_operating(),
-            scenario=definition, business_plan=plan))
+            unit_id=UNIT, scenario=definition, business_plan=plan))
     assert resolved
     for bundle in resolved:
         assert bundle.business_plan is plan
@@ -606,7 +607,7 @@ def test_a_pre_existing_base_defect_is_reported_without_blaming_a_target() -> No
     with pytest.raises(ScenarioValidationError) as excinfo:
         resolve_quick_scenario(
             quick_inputs(purchase_price=-1.0),
-            scenario=scenario(ov(T.EXIT_CAP_RATE, Op.ADD, 0.005)),
+            unit_id=UNIT, scenario=scenario(ov(T.EXIT_CAP_RATE, Op.ADD, 0.005)),
             business_plan=BusinessPlan(),
         )
     issue = _only_issue(excinfo)
@@ -629,7 +630,7 @@ def test_the_invalid_reason_is_the_existing_validators_wording() -> None:
         validate_acquisition_inputs(dataclasses.asdict(quick_inputs(interest_rate=0.0575 + -0.07)))
     with pytest.raises(ScenarioValidationError) as via_scenario:
         resolve_quick_scenario(
-            quick_inputs(), scenario=scenario(ov(T.INTEREST_RATE, Op.ADD, -0.07)),
+            quick_inputs(), unit_id=UNIT, scenario=scenario(ov(T.INTEREST_RATE, Op.ADD, -0.07)),
             business_plan=BusinessPlan(),
         )
     assert [i.message for i in via_scenario.value.issues] == [i.message for i in direct.value.issues]

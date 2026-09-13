@@ -38,6 +38,7 @@ from anchor.business_plan import BusinessPlan
 from anchor.contracts import OperatingMode
 
 from _p7_1_scenario_fixtures import (
+    UNIT,
     detailed_operating,
     detailed_terms,
     lease_level_operating,
@@ -54,7 +55,7 @@ Q, D, L = OperatingMode.QUICK, OperatingMode.DETAILED, OperatingMode.LEASE_LEVEL
 
 
 def ov(target: object, operation: object, value: object) -> ScenarioOverride:
-    return ScenarioOverride(target=target, operation=operation, value=value)  # type: ignore[arg-type]
+    return ScenarioOverride(unit_id=UNIT, target=target, operation=operation, value=value)  # type: ignore[arg-type]
 
 
 def scenario(
@@ -84,8 +85,8 @@ def codes(issues: tuple[ScenarioIssue, ...]) -> list[ScenarioIssueCode]:
     ("cls", "fields"),
     [
         (ScenarioDefinition, ["scenario_id", "name", "description", "overrides"]),
-        (ScenarioOverride, ["target", "operation", "value"]),
-        (ScenarioIssue, ["stage", "code", "message", "target", "field", "source_code"]),
+        (ScenarioOverride, ["unit_id", "target", "operation", "value"]),
+        (ScenarioIssue, ["stage", "code", "message", "target", "unit_id", "field", "source_code"]),
         (ScenarioTargetSpec, ["target", "allowed_operations", "owner_fields", "units"]),
         (ResolvedQuickInputs, ["inputs", "business_plan"]),
         (ResolvedDetailedInputs, ["terms", "detailed_operating_inputs", "business_plan"]),
@@ -152,12 +153,12 @@ def test_only_description_and_overrides_default() -> None:
     ],
 )
 def test_a_valid_scenario_has_no_issues(mode: OperatingMode, definition: ScenarioDefinition) -> None:
-    assert validate_scenario(definition, operating_mode=mode) == ()
+    assert validate_scenario(definition, unit_id=UNIT, operating_mode=mode) == ()
 
 
 def test_an_empty_description_is_allowed_context() -> None:
-    assert validate_scenario(scenario(description=""), operating_mode=Q) == ()
-    assert validate_scenario(scenario(description="Analyst notes"), operating_mode=Q) == ()
+    assert validate_scenario(scenario(description=""), unit_id=UNIT, operating_mode=Q) == ()
+    assert validate_scenario(scenario(description="Analyst notes"), unit_id=UNIT, operating_mode=Q) == ()
 
 
 # =============================================================================
@@ -167,27 +168,27 @@ def test_an_empty_description_is_allowed_context() -> None:
 
 @pytest.mark.parametrize("bad", ["", "   ", "\t\n", None, 7, b"id"])
 def test_a_blank_or_non_string_scenario_id_is_invalid(bad: object) -> None:
-    issues = validate_scenario(scenario(scenario_id=bad), operating_mode=Q)
+    issues = validate_scenario(scenario(scenario_id=bad), unit_id=UNIT, operating_mode=Q)
     assert codes(issues) == [ScenarioIssueCode.INVALID_SCENARIO_ID]
     assert issues[0].stage is ScenarioIssueStage.SCENARIO
 
 
 @pytest.mark.parametrize("bad", ["", "  ", None, 3.5])
 def test_a_blank_or_non_string_name_is_invalid(bad: object) -> None:
-    assert codes(validate_scenario(scenario(name=bad), operating_mode=Q)) == [
+    assert codes(validate_scenario(scenario(name=bad), unit_id=UNIT, operating_mode=Q)) == [
         ScenarioIssueCode.INVALID_SCENARIO_NAME
     ]
 
 
 def test_a_non_string_description_is_invalid() -> None:
-    assert codes(validate_scenario(scenario(description=5), operating_mode=Q)) == [
+    assert codes(validate_scenario(scenario(description=5), unit_id=UNIT, operating_mode=Q)) == [
         ScenarioIssueCode.INVALID_DESCRIPTION
     ]
 
 
 def test_names_are_arbitrary_text_with_no_reserved_values() -> None:
     for name in ("Base", "Downside", "Upside", "Recession 2027", "x", "BASE"):
-        assert validate_scenario(scenario(name=name), operating_mode=Q) == ()
+        assert validate_scenario(scenario(name=name), unit_id=UNIT, operating_mode=Q) == ()
 
 
 # =============================================================================
@@ -201,7 +202,7 @@ def test_overrides_must_be_a_tuple() -> None:
         name="n",
         overrides=[ov(T.LTV, Op.CAP_AT, 0.55)],  # type: ignore[arg-type]
     )
-    assert codes(validate_scenario(definition, operating_mode=Q)) == [
+    assert codes(validate_scenario(definition, unit_id=UNIT, operating_mode=Q)) == [
         ScenarioIssueCode.INVALID_OVERRIDES
     ]
 
@@ -212,7 +213,7 @@ def test_every_override_must_be_a_scenario_override() -> None:
         name="n",
         overrides=({"target": "ltv", "operation": "cap_at", "value": 0.5},),  # type: ignore[arg-type]
     )
-    assert codes(validate_scenario(definition, operating_mode=Q)) == [
+    assert codes(validate_scenario(definition, unit_id=UNIT, operating_mode=Q)) == [
         ScenarioIssueCode.INVALID_OVERRIDES
     ]
 
@@ -222,7 +223,7 @@ def test_a_target_outside_the_registry_enum_is_refused(target: object) -> None:
     """A plain string is not a target, even when it spells a real one: there is
     no string-path or field-name route into resolution."""
 
-    issues = validate_scenario(scenario(ov(target, Op.SET, 0.07)), operating_mode=Q)
+    issues = validate_scenario(scenario(ov(target, Op.SET, 0.07)), unit_id=UNIT, operating_mode=Q)
     assert codes(issues) == [ScenarioIssueCode.UNKNOWN_TARGET]
     assert issues[0].target is None
 
@@ -233,7 +234,7 @@ def test_a_duplicate_target_is_refused_once_and_never_composed() -> None:
 
     issues = validate_scenario(
         scenario(ov(T.EXIT_CAP_RATE, Op.ADD, 0.005), ov(T.EXIT_CAP_RATE, Op.SCALE, 1.1)),
-        operating_mode=Q,
+        unit_id=UNIT, operating_mode=Q,
     )
     assert codes(issues) == [ScenarioIssueCode.DUPLICATE_TARGET]
     assert issues[0].target is T.EXIT_CAP_RATE
@@ -241,7 +242,7 @@ def test_a_duplicate_target_is_refused_once_and_never_composed() -> None:
 
 def test_a_duplicate_is_refused_even_when_both_rows_agree() -> None:
     issues = validate_scenario(
-        scenario(ov(T.LTV, Op.CAP_AT, 0.55), ov(T.LTV, Op.CAP_AT, 0.55)), operating_mode=D
+        scenario(ov(T.LTV, Op.CAP_AT, 0.55), ov(T.LTV, Op.CAP_AT, 0.55)), unit_id=UNIT, operating_mode=D
     )
     assert codes(issues) == [ScenarioIssueCode.DUPLICATE_TARGET]
 
@@ -249,9 +250,9 @@ def test_a_duplicate_is_refused_even_when_both_rows_agree() -> None:
 @pytest.mark.parametrize(
     "resolve",
     [
-        lambda s: resolve_quick_scenario(quick_inputs(), scenario=s, business_plan=BusinessPlan()),
+        lambda s: resolve_quick_scenario(quick_inputs(), unit_id=UNIT, scenario=s, business_plan=BusinessPlan()),
         lambda s: resolve_detailed_scenario(
-            detailed_terms(), detailed_operating(), scenario=s, business_plan=BusinessPlan()
+            detailed_terms(), detailed_operating(), unit_id=UNIT, scenario=s, business_plan=BusinessPlan()
         ),
         lambda s: resolve_lease_level_scenario(
             lease_level_terms(),
@@ -259,7 +260,7 @@ def test_a_duplicate_is_refused_even_when_both_rows_agree() -> None:
             *rent_roll(),
             market_leasing=market(),
             operating_inputs=lease_level_operating(),
-            scenario=s,
+            unit_id=UNIT, scenario=s,
             business_plan=BusinessPlan(),
         ),
     ],
@@ -293,7 +294,7 @@ def test_a_duplicate_never_silently_resolves_to_either_row(resolve) -> None:  # 
 def test_an_operation_outside_the_targets_whitelist_is_refused(
     mode: OperatingMode, target: ScenarioTarget, operation: ScenarioOperation
 ) -> None:
-    issues = validate_scenario(scenario(ov(target, operation, 0.05)), operating_mode=mode)
+    issues = validate_scenario(scenario(ov(target, operation, 0.05)), unit_id=UNIT, operating_mode=mode)
     assert codes(issues) == [ScenarioIssueCode.OPERATION_NOT_ALLOWED]
     assert issues[0].target is target
     assert operation.value in issues[0].message
@@ -302,14 +303,14 @@ def test_an_operation_outside_the_targets_whitelist_is_refused(
 def test_a_disallowed_operation_never_falls_back_to_set() -> None:
     with pytest.raises(ScenarioValidationError) as excinfo:
         resolve_quick_scenario(
-            quick_inputs(), scenario=scenario(ov(T.LTV, Op.SET, 0.5)), business_plan=BusinessPlan()
+            quick_inputs(), unit_id=UNIT, scenario=scenario(ov(T.LTV, Op.SET, 0.5)), business_plan=BusinessPlan()
         )
     assert codes(excinfo.value.issues) == [ScenarioIssueCode.OPERATION_NOT_ALLOWED]
 
 
 @pytest.mark.parametrize("operation", ["set", "SET", "min", None, 1])
 def test_an_operation_outside_the_enum_is_refused(operation: object) -> None:
-    issues = validate_scenario(scenario(ov(T.EXIT_CAP_RATE, operation, 0.07)), operating_mode=Q)
+    issues = validate_scenario(scenario(ov(T.EXIT_CAP_RATE, operation, 0.07)), unit_id=UNIT, operating_mode=Q)
     assert codes(issues) == [ScenarioIssueCode.UNKNOWN_OPERATION]
 
 
@@ -337,7 +338,7 @@ def test_an_operation_outside_the_enum_is_refused(operation: object) -> None:
 def test_a_target_the_mode_does_not_have_is_refused_never_ignored(
     mode: OperatingMode, target: ScenarioTarget, operation: ScenarioOperation
 ) -> None:
-    issues = validate_scenario(scenario(ov(target, operation, 0.02)), operating_mode=mode)
+    issues = validate_scenario(scenario(ov(target, operation, 0.02)), unit_id=UNIT, operating_mode=mode)
     assert codes(issues) == [ScenarioIssueCode.TARGET_NOT_SUPPORTED_FOR_MODE]
     assert issues[0].target is target
     assert mode.value in issues[0].message
@@ -363,23 +364,23 @@ def test_a_target_the_mode_does_not_have_is_refused_never_ignored(
     ],
 )
 def test_a_non_finite_or_non_numeric_value_is_refused(value: object, code: ScenarioIssueCode) -> None:
-    issues = validate_scenario(scenario(ov(T.EXIT_CAP_RATE, Op.SET, value)), operating_mode=Q)
+    issues = validate_scenario(scenario(ov(T.EXIT_CAP_RATE, Op.SET, value)), unit_id=UNIT, operating_mode=Q)
     assert codes(issues) == [code]
     assert issues[0].target is T.EXIT_CAP_RATE
 
 
 @pytest.mark.parametrize("value", [0, 1, 40, -3, 0.0, 1e-9])
 def test_finite_ints_and_floats_are_numeric(value: float) -> None:
-    assert validate_scenario(scenario(ov(T.MARKET_RENT_PSF, Op.ADD, value)), operating_mode=L) == ()
+    assert validate_scenario(scenario(ov(T.MARKET_RENT_PSF, Op.ADD, value)), unit_id=UNIT, operating_mode=L) == ()
 
 
 def test_one_override_reports_every_defect_it_has_in_a_fixed_order() -> None:
-    issues = validate_scenario(scenario(ov(T.MARKET_RENT_PSF, Op.SET, math.nan)), operating_mode=Q)
+    issues = validate_scenario(scenario(ov(T.MARKET_RENT_PSF, Op.SET, math.nan)), unit_id=UNIT, operating_mode=Q)
     assert codes(issues) == [
         ScenarioIssueCode.TARGET_NOT_SUPPORTED_FOR_MODE,
         ScenarioIssueCode.NON_FINITE_VALUE,
     ]
-    issues = validate_scenario(scenario(ov(T.LTV, Op.ADD, True)), operating_mode=Q)
+    issues = validate_scenario(scenario(ov(T.LTV, Op.ADD, True)), unit_id=UNIT, operating_mode=Q)
     assert codes(issues) == [
         ScenarioIssueCode.OPERATION_NOT_ALLOWED,
         ScenarioIssueCode.NON_NUMERIC_VALUE,
@@ -402,7 +403,7 @@ def test_issue_order_does_not_depend_on_override_row_order() -> None:
         ov("hold_period", Op.SET, 7),
     ]
     results = {
-        validate_scenario(scenario(*permutation), operating_mode=D)
+        validate_scenario(scenario(*permutation), unit_id=UNIT, operating_mode=D)
         for permutation in itertools.permutations(rows)
     }
     assert len(results) == 1
@@ -429,7 +430,7 @@ def test_issue_order_does_not_depend_on_override_row_order() -> None:
 
 def test_header_issues_come_before_override_issues() -> None:
     issues = validate_scenario(
-        scenario(ov(T.LTV, Op.SET, 0.5), scenario_id="", name=""), operating_mode=Q
+        scenario(ov(T.LTV, Op.SET, 0.5), scenario_id="", name=""), unit_id=UNIT, operating_mode=Q
     )
     assert codes(issues) == [
         ScenarioIssueCode.INVALID_SCENARIO_ID,
@@ -462,15 +463,15 @@ def test_the_validation_error_requires_issues() -> None:
 
 def test_validation_refuses_a_non_scenario_or_a_non_mode_argument() -> None:
     with pytest.raises(TypeError):
-        validate_scenario({"scenario_id": "s"}, operating_mode=Q)  # type: ignore[arg-type]
+        validate_scenario({"scenario_id": "s"}, unit_id=UNIT, operating_mode=Q)  # type: ignore[arg-type]
     with pytest.raises(TypeError):
-        validate_scenario(scenario(), operating_mode="quick")  # type: ignore[arg-type]
+        validate_scenario(scenario(), unit_id=UNIT, operating_mode="quick")  # type: ignore[arg-type]
 
 
 def test_resolvers_refuse_a_wrong_input_contract() -> None:
     with pytest.raises(TypeError):
         resolve_quick_scenario(
-            detailed_terms(), scenario=scenario(), business_plan=BusinessPlan()  # type: ignore[arg-type]
+            detailed_terms(), unit_id=UNIT, scenario=scenario(), business_plan=BusinessPlan()  # type: ignore[arg-type]
         )
     with pytest.raises(TypeError):
-        resolve_quick_scenario(quick_inputs(), scenario=scenario(), business_plan=None)  # type: ignore[arg-type]
+        resolve_quick_scenario(quick_inputs(), unit_id=UNIT, scenario=scenario(), business_plan=None)  # type: ignore[arg-type]
