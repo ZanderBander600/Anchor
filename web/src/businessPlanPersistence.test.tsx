@@ -23,6 +23,7 @@ import userEvent from '@testing-library/user-event';
 import App from './App';
 import { referencePlan } from './businessPlanFixture';
 import fixture from './leaseLevelResultsFixture.json';
+import capitalEconomicsFixture from './capitalEconomicsFixture.json';
 import { ANALYSIS, clone, makeDeal as makeLeaseLevelDeal } from './leaseLevelDealFixture';
 import {
   DEFAULT_FORM_VALUES,
@@ -34,7 +35,7 @@ import {
 import { BUSINESS_PLAN_INCOMPLETE_MESSAGE } from './useBusinessPlan';
 import { STALE_LABEL } from './components/StaleAnalysisNotice';
 import type { BusinessPlanInput } from './businessPlan';
-import type { Deal } from './types';
+import type { AcquisitionResults, Deal } from './types';
 import type { LeaseLevelAcquisitionResults } from './leaseLevelTypes';
 
 /**
@@ -46,7 +47,14 @@ import type { LeaseLevelAcquisitionResults } from './leaseLevelTypes';
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
 const HEALTHY = fixture.healthy as unknown as LeaseLevelAcquisitionResults;
-const QUICK_RESULTS = HEALTHY.results;
+/** D6.7: a captured D6 Quick `/analyze` response -- the reference plan on a
+ * Quick deal -- because Quick and Detailed Results now render Capital Economics,
+ * which reads the D6 result fields every live response carries. The Lease-Level
+ * fixture's `results` predate D6 and carry none of them. No assertion here reads
+ * a value from this response; it answers the analysis requests these tests
+ * inspect. */
+const QUICK_RESULTS = capitalEconomicsFixture.quick.v5_mixed
+  .response as unknown as AcquisitionResults;
 
 function five(value: number): number[] {
   return [value, value, value, value, value];

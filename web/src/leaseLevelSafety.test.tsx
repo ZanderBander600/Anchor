@@ -267,10 +267,16 @@ describe('the Lease-Level safe-behaviour matrix', () => {
     const detailedViews = resultsViewsFor('detailed').map((view) => view.id);
     const leaseLevelViews = resultsViewsFor('lease_level').map((view) => view.id);
 
-    expect(quickViews).toEqual(['summary', 'cash-flow', 'owner-returns']);
+    // D6.7: every mode gains the one shared Capital Economics view, second.
+    expect(quickViews).toEqual(['summary', 'capital-economics', 'cash-flow', 'owner-returns']);
     expect(detailedViews).toContain('operating-statement');
 
-    expect(leaseLevelViews).toEqual(['summary', 'operating-statement', 'cash-flow']);
+    expect(leaseLevelViews).toEqual([
+      'summary',
+      'capital-economics',
+      'operating-statement',
+      'cash-flow',
+    ]);
     // Not Quick's list, and not Detailed's -- a fallthrough to either would be
     // the exact hazard this file exists for.
     expect(leaseLevelViews).not.toEqual(quickViews);

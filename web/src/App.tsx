@@ -29,6 +29,7 @@ import {
 import { AiAnalystPanel } from './components/AiAnalystPanel';
 import { AppSidebar } from './components/AppSidebar';
 import { BreakEvenPanel } from './components/BreakEvenPanel';
+import { CapitalEconomicsSection } from './components/CapitalEconomicsSection';
 import { CashFlowTable } from './components/CashFlowTable';
 import { DealHeader } from './components/DealHeader';
 import type { SaveStatus } from './components/DealHeader';
@@ -2307,6 +2308,13 @@ export default function App() {
             detailedResults
               ? {
                   summary: <ResultsSummaryPanel results={detailedResults.results} />,
+                  'capital-economics': (
+                    <CapitalEconomicsSection
+                      results={detailedResults.results}
+                      purchasePrice={lastDetailedRequest?.terms.purchase_price ?? null}
+                      showLeasingCapital={false}
+                    />
+                  ),
                   'cash-flow': <CashFlowTable results={detailedResults.results} />,
                   'owner-returns': <OwnerReturnSchedule results={detailedResults.results} />,
                   'operating-statement': (
@@ -2560,6 +2568,13 @@ export default function App() {
             results
               ? {
                   summary: <ResultsSummaryPanel results={results} />,
+                  'capital-economics': (
+                    <CapitalEconomicsSection
+                      results={results}
+                      purchasePrice={lastRequest?.inputs.purchase_price ?? null}
+                      showLeasingCapital={false}
+                    />
+                  ),
                   'cash-flow': <CashFlowTable results={results} />,
                   'owner-returns': <OwnerReturnSchedule results={results} />,
                 }
@@ -2807,6 +2822,7 @@ export default function App() {
           onToggleOccupancy={leaseLevel.toggleOccupancy}
           onUseSuiteArea={leaseLevel.useSuiteArea}
           analysis={leaseLevel.results}
+          analyzedPurchasePrice={leaseLevel.analyzedPurchasePrice}
           isAnalyzing={leaseLevel.isAnalyzing}
           resultsView={leaseLevel.resultsView}
           onResultsViewChange={leaseLevel.setResultsView}

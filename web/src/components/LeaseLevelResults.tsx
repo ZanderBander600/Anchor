@@ -15,6 +15,7 @@
 import { LeaseLevelMetricSummary } from './LeaseLevelMetricSummary';
 import { LeaseLevelOperatingStatement } from './LeaseLevelOperatingStatement';
 import type { OperatingPeriodView } from './LeaseLevelOperatingStatement';
+import { CapitalEconomicsSection } from './CapitalEconomicsSection';
 import { CashFlowTable } from './CashFlowTable';
 import { SubNav } from './SubNav';
 import { resultsViewsFor } from '../underwrite';
@@ -25,6 +26,9 @@ export interface LeaseLevelResultsProps {
   /** The last successful analysis, or `null` when none describes the current
    * inputs -- a deal just reopened, or an assumption edited since. */
   analysis: LeaseLevelAcquisitionResults | null;
+  /** D6.7: the Purchase Price of the request `analysis` came from, for the
+   * Capital Economics Sources & Uses. An input, not a result field. */
+  analyzedPurchasePrice: number | null;
   /** True while an analysis is in flight, so the empty state can say so
    * instead of implying the analyst has not asked yet. */
   isAnalyzing: boolean;
@@ -36,6 +40,7 @@ export interface LeaseLevelResultsProps {
 
 export function LeaseLevelResults({
   analysis,
+  analyzedPurchasePrice,
   isAnalyzing,
   view,
   onViewChange,
@@ -82,6 +87,16 @@ export function LeaseLevelResults({
         className="underwrite-results"
       >
         {view === 'summary' && <LeaseLevelMetricSummary analysis={analysis} />}
+        {/* D6.7: the one Capital Economics section every mode renders, over the
+            same generic `AcquisitionResults`. Lease-Level is the one mode with
+            TI / LC, so it alone asks for those columns. */}
+        {view === 'capital-economics' && (
+          <CapitalEconomicsSection
+            results={analysis.results}
+            purchasePrice={analyzedPurchasePrice}
+            showLeasingCapital
+          />
+        )}
         {view === 'operating-statement' && (
           <LeaseLevelOperatingStatement
             analysis={analysis}

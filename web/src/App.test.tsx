@@ -483,6 +483,26 @@ function makeResults(overrides: Partial<AcquisitionResults> = {}): AcquisitionRe
       346405.56, 767811.12, 1266466.68, 1844689.75, 2504867.33,
     ],
     year_1_debt_yield: 0.0769231,
+    // D6.7: the widened result contract, for this same deal under an empty
+    // Business Plan -- derived offline from the mock's own figures above, so the
+    // hidden Capital Economics view renders a case that reconciles.
+    tenant_improvements_by_year: [0, 0, 0, 0, 0],
+    leasing_commissions_by_year: [0, 0, 0, 0, 0],
+    closing_project_capital: 0,
+    project_capital_by_year: [0, 0, 0, 0, 0],
+    post_hold_project_capital: 0,
+    owner_expenses_by_year: [0, 0, 0, 0, 0],
+    property_cash_flow_by_year: [2500000, 2575000, 2652250, 2731817.5, 2813772.03],
+    unlevered_owner_cash_flow_by_year: [2500000, 2575000, 2652250, 2731817.5, 2813772.03],
+    levered_owner_cash_flow_by_year: [346405.56, 421405.56, 498655.56, 578223.06, 660177.59],
+    total_closing_uses: 50_000_000,
+    total_closing_sources: 50_000_000,
+    net_additional_equity_requirement_by_year: [0, 0, 0, 0, 0],
+    total_equity_invested: 17_500_000,
+    total_cash_returned: 25250559.79,
+    total_profit: 7750559.79,
+    unlevered_irr_status: 'defined',
+    levered_irr_status: 'defined',
     ...overrides,
   };
 }
@@ -526,6 +546,16 @@ function makeV2GoldenResults(overrides: Partial<AcquisitionResults> = {}): Acqui
       250000, 518000, 718028.4314312598, 937153.0628625196, 1175946.7802937794,
     ],
     year_1_debt_yield: 0.1,
+    // D6.7: this golden case under an empty Business Plan, derived offline from
+    // the figures above.
+    property_cash_flow_by_year: [550000, 568000, 586540, 605636.2, 625305.29],
+    unlevered_owner_cash_flow_by_year: [550000, 568000, 586540, 605636.2, 625305.29],
+    levered_owner_cash_flow_by_year: [250000, 268000, 200028.43, 219124.63, 238793.72],
+    total_closing_uses: 10_260_000,
+    total_closing_sources: 10_260_000,
+    total_equity_invested: 4_260_000,
+    total_cash_returned: 5888797.77,
+    total_profit: 1628797.77,
     ...overrides,
   });
 }

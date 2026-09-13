@@ -247,6 +247,22 @@ _PERMITTED_WEB = frozenset(
         # D6.6 -- the reference plan three D6.6 test files import. Test-only
         # data, named without `.test.` for the same reason as the fixtures above.
         "web/src/businessPlanFixture.ts",
+        # Phase 6 D6.7 -- Capital Economics results. Two new production modules,
+        # both shared by all three modes: the section every Results tab renders
+        # (`CapitalEconomicsSection.tsx`) and its vocabulary -- the one
+        # IrrStatus-to-words mapping and the year label (`capitalEconomics.ts`).
+        # Neither computes economics: `web/src/capitalEconomics.test.tsx` parses
+        # both and allows exactly one arithmetic expression, the display-only
+        # `index + 1` of a "Year 1" label, and forbids every aggregate. Every
+        # shipped file D6.7 edits -- App.tsx, types.ts, underwrite.ts, index.css,
+        # useLeaseLevelDeal.ts, LeaseLevelWorkspace.tsx and LeaseLevelResults.tsx
+        # -- is already listed above; `format.ts` stays untouched.
+        "web/src/capitalEconomics.ts",
+        "web/src/components/CapitalEconomicsSection.tsx",
+        # D6.7 -- captured `/analyze` responses, each beside its request, for the
+        # D6.7 suites. Test-only data, listed for the same reason
+        # `leaseLevelResultsFixture.json` is.
+        "web/src/capitalEconomicsFixture.json",
     }
 )
 

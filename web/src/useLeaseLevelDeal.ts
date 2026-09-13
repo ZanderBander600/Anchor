@@ -132,6 +132,11 @@ export interface LeaseLevelDealState {
    * are why no staleness indicator is needed: a result that is visible is a
    * result that is current. */
   results: LeaseLevelAcquisitionResults | null;
+  /** D6.7: the Purchase Price of the request that produced `results`, for the
+   * Capital Economics Sources & Uses -- Purchase Price is an input, not a result
+   * field. `null` exactly when `results` is: both are set by the one successful
+   * analysis, so they can never describe different requests. */
+  analyzedPurchasePrice: number | null;
   isAnalyzing: boolean;
   /** D5.8: the AI Analyst's interpretation of `results`, or `null`.
    *
@@ -697,6 +702,10 @@ export function useLeaseLevelDeal(options: {
   const [periodView, setPeriodView] = useState<OperatingPeriodView>('annual');
 
   const [results, setResults] = useState<LeaseLevelAcquisitionResults | null>(null);
+  // D6.7: the terms `results` was produced from. Written only beside the one
+  // `setResults(analysis)` below and read only while `results` is non-null, so
+  // it never needs clearing with it: a null `results` hides whatever this holds.
+  const [analyzedTerms, setAnalyzedTerms] = useState<AcquisitionTermsRequest | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   // D5.8A -- two sources, one presented value.
   //
@@ -1080,6 +1089,7 @@ export function useLeaseLevelDeal(options: {
         request.inputs,
         request.businessPlan,
       );
+      setAnalyzedTerms(request.terms);
       setResults(analysis);
       // D5.6: Analyze must visibly do something. Landing on Results is what
       // makes a successful run self-evident rather than something the analyst
@@ -1863,6 +1873,8 @@ export function useLeaseLevelDeal(options: {
     periodView,
     setPeriodView,
     results,
+    analyzedPurchasePrice:
+      results === null || analyzedTerms === null ? null : analyzedTerms.purchase_price,
     isAnalyzing,
     aiAnalysis,
     isGeneratingAiAnalysis,

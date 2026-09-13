@@ -21,6 +21,7 @@ import App from './App';
 import { analyzeLeaseLevelAcquisition, getDeal, listDeals, updateLeaseLevelDeal } from './api';
 import { resultsViewsFor } from './underwrite';
 import { formatMonthLabel } from './leaseLevelFormat';
+import { irrNotReportedExplanation } from './capitalEconomics';
 import type { LeaseLevelAcquisitionResults } from './leaseLevelTypes';
 import { savedDeal } from './hiddenIssuesFixture';
 import fixture from './leaseLevelResultsFixture.json';
@@ -153,9 +154,10 @@ describe('a successful analysis', () => {
     const tabs = within(resultsPanel())
       .getAllByRole('tab')
       .map((tab) => tab.textContent);
-    expect(tabs).toEqual(['Summary', 'Operating Statement', 'Cash Flow']);
+    expect(tabs).toEqual(['Summary', 'Capital Economics', 'Operating Statement', 'Cash Flow']);
     expect(resultsViewsFor('lease_level').map((view) => view.id)).toEqual([
       'summary',
+      'capital-economics',
       'operating-statement',
       'cash-flow',
     ]);
@@ -172,19 +174,31 @@ describe('an IRR the engine could not define', () => {
     const panel = within(resultsPanel());
 
     expect(UNDEFINED_IRR.results.levered_irr).toBeNull();
-    expect(panel.getByText('Not uniquely defined')).toBeTruthy();
+    const term = Array.from(resultsPanel().querySelectorAll('dt')).find(
+      (dt) => dt.textContent === 'Levered IRR',
+    );
+    expect(term?.nextElementSibling?.textContent).toBe('N/A');
     // The specific wrong answer: a null IRR rendered as zero turns a healthy
     // deal into a broken-looking one.
     expect(panel.queryByText('0.00%')).toBeNull();
   });
 
-  it('is not an error state', async () => {
+  it('is not an error state, and gives the engine’s own reason (D6.7)', async () => {
     await analyze(UNDEFINED_IRR);
     // The rest of the analysis is present and readable.
     const panel = within(resultsPanel());
     expect(panel.getByText('Unlevered IRR')).toBeTruthy();
-    expect(panel.getByText(/changes sign more than once/)).toBeTruthy();
     expect(panel.queryByRole('alert')).toBeNull();
+    // Every levered cash flow in this captured deal is negative, so the
+    // engine's status is NO_POSITIVE_CASH_FLOW. Before D6.7 this card said the
+    // pattern "changes sign more than once" for every missing IRR -- untrue
+    // here. It now says what the engine says, in the shared words.
+    expect(UNDEFINED_IRR.results.levered_irr_status).toBe('no_positive_cash_flow');
+    expect(
+      panel.getByText(irrNotReportedExplanation('Levered IRR', 'no_positive_cash_flow')!),
+    ).toBeTruthy();
+    expect(panel.queryByText(/changes sign more than once/)).toBeNull();
+    expect(panel.queryByText('Not uniquely defined')).toBeNull();
   });
 
   it('keeps zero distinct from undefined', async () => {

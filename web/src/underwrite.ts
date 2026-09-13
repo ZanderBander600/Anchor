@@ -32,7 +32,12 @@ export const UNDERWRITE_TABS: { id: UnderwriteTabId; label: string }[] = [
   { id: 'results', label: 'Results' },
 ];
 
-export type ResultsViewId = 'summary' | 'cash-flow' | 'owner-returns' | 'operating-statement';
+export type ResultsViewId =
+  | 'summary'
+  | 'capital-economics'
+  | 'cash-flow'
+  | 'owner-returns'
+  | 'operating-statement';
 
 /** Detailed adds the Operating Statement; Quick has no operating projection,
  * so it has no such view -- the sub-nav is derived from what the mode
@@ -47,10 +52,16 @@ export type ResultsViewId = 'summary' | 'cash-flow' | 'owner-returns' | 'operati
  * Results tab with no sub-navigation and a selected view that does not exist --
  * a broken surface that looks like a loading state.
  *
- * Every mode names its own views explicitly. None inherits another's. */
+ * Every mode names its own views explicitly. None inherits another's.
+ *
+ * Phase 6 Gate D6.7: every mode gains Capital Economics, second -- after the
+ * headline Summary and before the mode's own operating and cash-flow detail --
+ * so an analyst reads closing and equity economics before annual detail. It is
+ * one view rendered by one shared component in all three modes. */
 export function resultsViewsFor(mode: OperatingMode): { id: ResultsViewId; label: string }[] {
   const views: { id: ResultsViewId; label: string }[] = [
     { id: 'summary', label: 'Summary' },
+    { id: 'capital-economics', label: 'Capital Economics' },
     { id: 'cash-flow', label: 'Cash Flow' },
     { id: 'owner-returns', label: 'Owner Returns' },
   ];
@@ -71,6 +82,7 @@ export function resultsViewsFor(mode: OperatingMode): { id: ResultsViewId; label
       // escalation and rollover rather than from any one assumption.
       return [
         { id: 'summary', label: 'Summary' },
+        { id: 'capital-economics', label: 'Capital Economics' },
         { id: 'operating-statement', label: 'Operating Statement' },
         { id: 'cash-flow', label: 'Cash Flow' },
       ];

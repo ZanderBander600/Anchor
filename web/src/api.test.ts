@@ -847,6 +847,25 @@ function detailedResultsFixture(): DetailedAcquisitionResults {
         250_000, 518_000, 718_028.43, 937_153.06, 1_175_946.78,
       ],
       year_1_debt_yield: 0.1,
+      // D6.7: the widened result contract, for this same golden case under an
+      // empty Business Plan (derived offline from the figures above).
+      tenant_improvements_by_year: [0, 0, 0, 0, 0],
+      leasing_commissions_by_year: [0, 0, 0, 0, 0],
+      closing_project_capital: 0,
+      project_capital_by_year: [0, 0, 0, 0, 0],
+      post_hold_project_capital: 0,
+      owner_expenses_by_year: [0, 0, 0, 0, 0],
+      property_cash_flow_by_year: [550_000, 568_000, 586_540, 605_636.2, 625_305.29],
+      unlevered_owner_cash_flow_by_year: [550_000, 568_000, 586_540, 605_636.2, 625_305.29],
+      levered_owner_cash_flow_by_year: [250_000, 268_000, 200_028.43, 219_124.63, 238_793.72],
+      total_closing_uses: 10_260_000,
+      total_closing_sources: 10_260_000,
+      net_additional_equity_requirement_by_year: [0, 0, 0, 0, 0],
+      total_equity_invested: 4_260_000,
+      total_cash_returned: 5_888_797.77,
+      total_profit: 1_628_797.77,
+      unlevered_irr_status: 'defined',
+      levered_irr_status: 'defined',
     },
   };
 }

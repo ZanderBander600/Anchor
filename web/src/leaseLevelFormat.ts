@@ -73,13 +73,6 @@ export function formatRatio(value: number | null | undefined): string {
   return `${value.toFixed(2)}x`;
 }
 
-/**
- * The label for an IRR the engine could not define.
- *
- * `levered_irr` is `null` when the levered cash flows change sign more than
- * once -- typically a mid-hold leasing-capital year. That is a real, defensible
- * outcome of a real deal, not a failure and emphatically not zero: showing
- * `0.0%` would turn a healthy deal into a broken-looking one, and showing an
- * error would say Anchor could not answer when in fact it did.
- */
-export const UNDEFINED_IRR_LABEL = 'Not uniquely defined';
+// D6.7 closeout: `UNDEFINED_IRR_LABEL` ("Not uniquely defined") was removed. It
+// assumed every missing IRR was a sign-change case; an unreported IRR now reads
+// N/A with the engine's own IrrStatus reason, from `capitalEconomics.ts`.

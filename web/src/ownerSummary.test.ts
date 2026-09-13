@@ -68,6 +68,25 @@ const QUICK_RESULTS: AcquisitionResults = {
     213_488.43, 444_976.86, 695_005.29, 964_129.93, 1_252_923.64,
   ],
   year_1_debt_yield: 0.1,
+  // D6.7 widened the result contract. The Owner Summary reads none of these
+  // fields: type-complete placeholders, not a case.
+  tenant_improvements_by_year: [0, 0, 0, 0, 0],
+  leasing_commissions_by_year: [0, 0, 0, 0, 0],
+  closing_project_capital: 0,
+  project_capital_by_year: [0, 0, 0, 0, 0],
+  post_hold_project_capital: 0,
+  owner_expenses_by_year: [0, 0, 0, 0, 0],
+  property_cash_flow_by_year: [0, 0, 0, 0, 0],
+  unlevered_owner_cash_flow_by_year: [0, 0, 0, 0, 0],
+  levered_owner_cash_flow_by_year: [0, 0, 0, 0, 0],
+  total_closing_uses: 0,
+  total_closing_sources: 0,
+  net_additional_equity_requirement_by_year: [0, 0, 0, 0, 0],
+  total_equity_invested: 0,
+  total_cash_returned: 0,
+  total_profit: 0,
+  unlevered_irr_status: 'defined',
+  levered_irr_status: 'defined',
 };
 
 const DETAILED_TERMS: AcquisitionTermsRequest = {
@@ -139,6 +158,25 @@ const DETAILED_RESULTS: AcquisitionResults = {
     431_234, 889_968, 1_376_890, 1_892_704, 2_438_133, 2_983_562, 3_559_346,
   ],
   year_1_debt_yield: 0.1,
+  // D6.7 widened the result contract. The Owner Summary reads none of these
+  // fields: type-complete placeholders, not a case.
+  tenant_improvements_by_year: [0, 0, 0, 0, 0, 0, 0],
+  leasing_commissions_by_year: [0, 0, 0, 0, 0, 0, 0],
+  closing_project_capital: 0,
+  project_capital_by_year: [0, 0, 0, 0, 0, 0, 0],
+  post_hold_project_capital: 0,
+  owner_expenses_by_year: [0, 0, 0, 0, 0, 0, 0],
+  property_cash_flow_by_year: [0, 0, 0, 0, 0, 0, 0],
+  unlevered_owner_cash_flow_by_year: [0, 0, 0, 0, 0, 0, 0],
+  levered_owner_cash_flow_by_year: [0, 0, 0, 0, 0, 0, 0],
+  total_closing_uses: 0,
+  total_closing_sources: 0,
+  net_additional_equity_requirement_by_year: [0, 0, 0, 0, 0, 0, 0],
+  total_equity_invested: 0,
+  total_cash_returned: 0,
+  total_profit: 0,
+  unlevered_irr_status: 'defined',
+  levered_irr_status: 'defined',
 };
 
 const QUICK_BREAK_EVEN: StandardBreakEvenAnalysis = {
