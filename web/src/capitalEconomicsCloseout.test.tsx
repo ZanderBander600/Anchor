@@ -243,3 +243,55 @@ describe('the pinned Year column', () => {
     }
   });
 });
+
+// =============================================================================
+// 3. The Closing row's "Not applicable" text stays inside its table (D6.9)
+// =============================================================================
+
+describe('the Closing row "Not applicable" text', () => {
+  it('is positioned by its own cell, so it cannot escape the scroll container', async () => {
+    // `.visually-hidden` is absolutely positioned. With no positioned ancestor it
+    // resolved against the page, ignored the table's scroll container and
+    // widened the page at narrow widths (D6.9: 508px to 665px at 390px on the
+    // Lease-Level Capital Schedule). Its own cell is its containing block.
+    const cellRules = blocks(D6_7_CSS, '.capital-economics-na {');
+    expect(cellRules, 'one Not applicable cell rule').toHaveLength(1);
+    expect(cellRules[0]).toContain('position: relative;');
+    // Local, not global: the shared screen-reader rule is untouched and is not
+    // redefined in the D6.7 section.
+    expect(D6_7_CSS).not.toMatch(/\.visually-hidden\s*\{/);
+    const [screenReaderOnly] = blocks(await readCss(), '.visually-hidden {');
+    expect(screenReaderOnly).toContain('position: absolute;');
+    expect(screenReaderOnly).toContain('clip-path: inset(50%);');
+  });
+
+  it('clips the scroll edge while narrow, so no scrolled figure shows beside the pinned column', () => {
+    const pinned = blocks(D6_7_CSS, NARROW).find((block) => block.includes('position: sticky'));
+    expect(pinned).toContain('.capital-economics .table-scroll {\n    clip-path: inset(0 0 0 1px);');
+    // Paint only: the pinned column keeps its offset.
+    expect(pinned).toContain('left: 0;');
+  });
+
+  it('keeps "Not applicable" available to assistive technology in every no-amount cell', () => {
+    const { container } = render(
+      <CapitalEconomicsSection results={LEASE_LEVEL.results} purchasePrice={9_000_000} showLeasingCapital />,
+    );
+    const schedule = within(container).getByRole('region', { name: 'Capital Schedule' });
+    const closing = schedule.querySelector('tr.capital-economics-closing-row');
+    if (closing === null) {
+      throw new Error('No Closing (T0) row in the Capital Schedule');
+    }
+    const cells = Array.from(closing.querySelectorAll('td.capital-economics-na'));
+    // Recurring CapEx Reserve, Tenant Improvements, Leasing Commissions, Owner Expenses.
+    expect(cells).toHaveLength(4);
+    for (const cell of cells) {
+      const spoken = cell.querySelector('.visually-hidden');
+      expect(spoken?.textContent).toBe('Not applicable');
+      expect(spoken?.closest('[aria-hidden="true"]')).toBeNull();
+      // The dash is the visual stand-in, hidden from assistive technology.
+      expect(cell.querySelector('[aria-hidden="true"]')?.textContent).toBe('—');
+      // Contained: the cell sits inside the table's own scroll container.
+      expect(cell.closest('.table-scroll')).not.toBeNull();
+    }
+  });
+});

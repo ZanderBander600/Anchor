@@ -5057,7 +5057,11 @@ body {
   background: var(--color-surface-muted);
 }
 
+/* D6.9: the cell is the containing block for its absolutely positioned
+   screen-reader text, which otherwise resolved against the page, escaped the
+   table's scroll container and widened narrow layouts. */
 .capital-economics-na {
+  position: relative;
   color: var(--color-text-muted);
 }
 
@@ -5105,5 +5109,12 @@ body {
 
   .capital-economics-table .capital-economics-closing-row > th[scope='row'] {
     background: var(--color-surface-muted);
+  }
+
+  /* D6.9: the scroll container's left edge can fall on a fractional pixel,
+     leaving a one-pixel sliver of scrolled figures beside the pinned column.
+     Clip that edge; layout and pinning are unchanged. */
+  .capital-economics .table-scroll {
+    clip-path: inset(0 0 0 1px);
   }
 }
