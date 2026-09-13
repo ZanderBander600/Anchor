@@ -2,6 +2,6 @@
 
 This file exists only to validate the Level 1 correction loop.
 
-AUTOPILOT_TEST_VALUE=WRONG
+AUTOPILOT_TEST_VALUE=CORRECT
 
 This branch and pull request must never be merged.
