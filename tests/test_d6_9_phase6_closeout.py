@@ -1389,9 +1389,15 @@ def test_x_the_guard_inventory_detects_a_missing_guard() -> None:
 
 _D6_7_MERGE = "9ba3383"
 
+#: The one production file D6.9 changes: the authorized final-acceptance patch
+#: that keeps the narrow Lease-Level Capital Schedule inside its own scroll
+#: container (CSS only; no financial, request or state change).
+_D6_9_PRODUCTION_FILES = ["web/src/index.css"]
 
-def test_x_d6_9_changed_no_production_file() -> None:
-    """D6.9 is a closeout: it adds tests, fixtures and documentation only.
+
+def test_x_d6_9_changes_only_authorized_production_files() -> None:
+    """D6.9 is a closeout: it adds tests, fixtures and documentation, plus the
+    one authorized CSS containment patch above.
 
     Pinned to ``HEAD`` on purpose while D6.9 is the latest gate. The first Phase 7
     gate must pin it to ``9ba3383..<D6.9 merge>`` (the D6 ledger precedent)."""
@@ -1404,7 +1410,7 @@ def test_x_d6_9_changed_no_production_file() -> None:
         cwd=_PROJECT_ROOT,
     ).stdout.split()
     production = [path for path in changed if not re.search(r"\.test\.tsx?$", path)]
-    assert production == []
+    assert production == _D6_9_PRODUCTION_FILES
 
 
 #: Part Y: every Phase 6 contract has exactly one production authority.

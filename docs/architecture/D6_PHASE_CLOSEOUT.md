@@ -204,7 +204,29 @@ production change):
   204s.
 - Typecheck and production build (`tsc -b && vite build`): clean. Lint
   (`oxlint`): clean.
-- Production diff against `9ba3383`: none.
+- Production diff against `9ba3383` after Session B: none.
+
+**Final acceptance patch** (the one authorized production change in D6.9, CSS
+only):
+
+- Cause: the Capital Schedule's Closing-row "Not applicable" screen-reader
+  spans (`.visually-hidden`, absolutely positioned) had no positioned
+  ancestor, so they resolved against the page instead of the table's scroll
+  container. At 390px they widened the page from the shell's 508px to 665px;
+  at desktop they stretched the document height and added a spurious outer
+  scrollbar.
+- Fix (`web/src/index.css`): `.capital-economics-na { position: relative; }`
+  makes each cell its span's containing block. Inside the narrow (620px)
+  container query, the Capital Economics scroll container clips its
+  fractional left edge (`clip-path: inset(0 0 0 1px)`), so no scrolled figure
+  shows beside the pinned Period column.
+- Proof: at 390px the page stays 508px wide with the schedule shown and
+  scrolled fully right and back; Period stays pinned; the one-pixel bleed
+  column reads zero; the four "Not applicable" cells stay in the
+  accessibility tree and visually hidden. At 1280 and 1440 no table cell
+  moves at equal available width, and the spurious outer scrollbar is gone.
+- Regression tests in `web/src/capitalEconomicsCloseout.test.tsx`. The D6.9
+  production ledger now admits exactly `web/src/index.css`.
 
 ## 11. Accepted Debt
 
@@ -218,17 +240,15 @@ Non-blocking, carried forward:
 4. A direct Python call with a huge integer amount raises `OverflowError`.
 5. Optional micro-copy: the Owner Cash Flow note says "Lease-Level TI / LC"
    in every mode; "where applicable" would read better in Quick and Detailed.
-6. (Session B, P4) At 390px the Lease-Level Capital Schedule adds page-level
-   overflow (document width 508 -> 665). The "Not applicable" screen-reader
-   spans in the Closing (T0) row are absolutely positioned with no positioned
-   ancestor, so they escape the table's local scroller. No content is hidden
-   or misstated. Also cosmetic: a few pixels of scrolled text show beside the
-   pinned Period column at that width.
-7. (Session B, optional) Summary shows IRR "N/A" without the reason; the
-   deterministic reason is shown in Capital Economics.
+6. (Session B, optional) Summary shows IRR "N/A" without the reason; the
+   deterministic reason is shown in Capital Economics. Accepted as is.
+
+Resolved before acceptance: the Session B P4 (the 390px Lease-Level Capital
+Schedule overflow and the pinned-column sliver), by the final acceptance patch
+in §10.
 
 Follow-up for the first Phase 7 gate: re-pin
-`test_x_d6_9_changed_no_production_file` from `HEAD` to
+`test_x_d6_9_changes_only_authorized_production_files` from `HEAD` to
 `9ba3383..<D6.9 merge>`.
 
 ## 12. Explicitly Deferred
