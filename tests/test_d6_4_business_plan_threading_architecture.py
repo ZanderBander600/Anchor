@@ -971,6 +971,11 @@ _BUSINESS_PLAN_IMPORTS = {
     "anchor/analysis/sensitivity.py": {"BusinessPlan", "resolve_business_plan"},
     "anchor/analysis/break_even.py": {"BusinessPlan", "resolve_business_plan"},
     "anchor/analysis/lease_level_sensitivity.py": {"BusinessPlan", "resolve_business_plan"},
+    # Widened at P7.1 by exactly the Scenario engine, which names the contract
+    # only. It carries the caller's plan, unopened, into the resolved inputs
+    # and on to the D6.2 entry points, which do the resolving
+    # (``tests/test_p7_1_scenario_architecture.py``).
+    "anchor/analysis/scenario.py": {"BusinessPlan"},
     "anchor/ai/analyst.py": {"BusinessPlan"},
     # Widened at D6.8 by exactly the two AI files that ground the plan. The
     # context contract names it; the presentation layer reads its items for

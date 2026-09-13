@@ -874,12 +874,21 @@ def test_g32_the_public_operating_mode_enum_is_published_behind_total_dispatch()
     # and must therefore stamp the member on it. It is a context assembler, not
     # a financial layer: the engine, leasing and analysis packages still name
     # the member nowhere, which is what "mode-blind" was protecting.
+    #
+    # P7.1 adds ``scenario.py``, the Scenario engine, whose target registry
+    # records which modes each target applies to. It names the members as that
+    # registry data and as each resolver's constant argument. It never branches
+    # on a mode: each mode has its own resolver, selected by function identity,
+    # and a target outside a mode is refused, never routed to another mode.
+    # ``tests/test_p7_1_scenario_architecture.py`` holds that shape. The engine,
+    # leasing and every other analysis module still name the member nowhere.
     permitted = {
         "api.py",
         "contracts.py",
         "store.py",
         "presentation.py",
         "analyst.py",
+        "scenario.py",
     }
     for source_file in _python_files_under(_ANCHOR_DIR):
         if "OperatingMode.LEASE_LEVEL" not in source_file.read_text(encoding="utf-8"):

@@ -171,6 +171,14 @@ def test_leasing_package_imports_only_stdlib_its_own_modules_and_contracts() -> 
 #: does, so it must name their **types**. It imports ``anchor.leasing.contracts``
 #: and nothing else from the leasing package -- no builder, no validator --
 #: which ``test_the_business_plan_entry_points_import_leasing_types_only`` pins.
+#:
+#: Extended at P7.1 with ``scenario.py``: the Scenario engine resolves a
+#: scenario over the Lease-Level input contracts, so it names their types. It
+#: validates the resolved rent roll and operating inputs with the two existing
+#: leasing validators rather than restating a domain rule. It imports no
+#: builder and never calls the bridge: the analysis runs through the D6.2
+#: Business Plan entry point. ``tests/test_p7_1_scenario_architecture.py`` pins
+#: its leasing imports name by name.
 _PERMITTED_LEASING_IMPORTERS = frozenset(
     {
         "lease_level.py",
@@ -178,6 +186,7 @@ _PERMITTED_LEASING_IMPORTERS = frozenset(
         "contracts.py",
         "__init__.py",
         "business_plan_analysis.py",
+        "scenario.py",
     }
 )
 
@@ -242,12 +251,14 @@ def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
         )
     )
 
+    # P7.1 adds the Scenario engine (see ``_PERMITTED_LEASING_IMPORTERS``).
     assert importers == [
         "anchor/analysis/__init__.py",
         "anchor/analysis/business_plan_analysis.py",
         "anchor/analysis/contracts.py",
         "anchor/analysis/lease_level.py",
         "anchor/analysis/lease_level_sensitivity.py",
+        "anchor/analysis/scenario.py",
     ]
 
     # The facade re-exports; it does not parse. Anything more than imports and

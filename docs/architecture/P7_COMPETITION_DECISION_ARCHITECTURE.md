@@ -1069,6 +1069,25 @@ CapitalPosition
   acquisition loan's existing equity-funded treatment of negative owner cash
   flow as that loan's explicit shortfall resolution (FR-5). It creates no
   global cure rule for any new position.
+- **Pre-capital-structure cash-flow authority (P7.7 handoff invariant).** Set
+  by the human review at the P7.0 merge and recorded here at P7.1, as
+  documentation only; it reopens no ratified decision.
+  - The generalized Capital Structure engine must consume the correct
+    **pre-new-capital-structure** cash-flow authority: the Property / Business
+    Plan economics as they stand before any position that the new layer itself
+    models.
+  - It must never blindly finance an already-levered equity cash flow. Treating
+    `AcquisitionResults.levered_cash_flows` as the cash available to a
+    structure that also carries the acquisition loan through the adapter would
+    count the legacy acquisition debt twice. Each position's contractual
+    payments are subtracted exactly once. A position junior to the acquisition
+    loan may read the cash remaining after that loan (CS-6) only where the
+    loan's payments are not subtracted again.
+  - The existing single-loan path stays bit-identical through its compatibility
+    adapter (the parity oracle above).
+  - P7.7 must explicitly identify, and test, the interface between Property /
+    Business Plan economics and generalized Capital Structure economics,
+    without rewriting mature D6 debt behavior.
 
 ### 12.5 Refinance and recapitalization (SHOULD HAVE)
 
