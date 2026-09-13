@@ -1389,28 +1389,46 @@ def test_x_the_guard_inventory_detects_a_missing_guard() -> None:
 
 _D6_7_MERGE = "9ba3383"
 
+#: The D6.9 merge that completed Phase 6: a no-ff merge whose first parent is the
+#: D6.7 merge and whose second is the D6.9 acceptance patch.
+_D6_9_MERGE = "0593baa"
+_D6_9_FEATURE_TIP = "00824ba"
+
 #: The one production file D6.9 changes: the authorized final-acceptance patch
 #: that keeps the narrow Lease-Level Capital Schedule inside its own scroll
 #: container (CSS only; no financial, request or state change).
 _D6_9_PRODUCTION_FILES = ["web/src/index.css"]
 
 
+def _git_stdout(*args: str) -> str:
+    return subprocess.run(
+        ["git", *args], capture_output=True, text=True, check=True, cwd=_PROJECT_ROOT
+    ).stdout
+
+
 def test_x_d6_9_changes_only_authorized_production_files() -> None:
     """D6.9 is a closeout: it adds tests, fixtures and documentation, plus the
     one authorized CSS containment patch above.
 
-    Pinned to ``HEAD`` on purpose while D6.9 is the latest gate. The first Phase 7
-    gate must pin it to ``9ba3383..<D6.9 merge>`` (the D6 ledger precedent)."""
+    Pinned at P7.0 to D6.9's own committed range, ``9ba3383..0593baa`` (the D6
+    ledger precedent), so the ledger keeps proving exactly what D6.9 changed
+    however Phase 7 gates move the tree. Phase 7 production changes are held by
+    Phase 7's own guards, never by widening this list."""
 
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", _D6_7_MERGE, "HEAD", "--", "src", "web"],
-        capture_output=True,
-        text=True,
-        check=True,
-        cwd=_PROJECT_ROOT,
-    ).stdout.split()
+    changed = _git_stdout(
+        "diff", "--name-only", _D6_7_MERGE, _D6_9_MERGE, "--", "src", "web"
+    ).split()
     production = [path for path in changed if not re.search(r"\.test\.tsx?$", path)]
     assert production == _D6_9_PRODUCTION_FILES
+
+
+def test_x_the_d6_9_ledger_boundary_is_the_phase_6_merge() -> None:
+    """The pin cannot drift to an arbitrary commit: its end is the genuine no-ff
+    Phase 6 merge, whose parents are the D6.7 merge and the D6.9 feature tip."""
+
+    parents = _git_stdout("rev-list", "--parents", "-n", "1", _D6_9_MERGE).split()[1:]
+    expected = [_git_stdout("rev-parse", ref).strip() for ref in (_D6_7_MERGE, _D6_9_FEATURE_TIP)]
+    assert parents == expected
 
 
 #: Part Y: every Phase 6 contract has exactly one production authority.
