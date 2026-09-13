@@ -145,7 +145,16 @@ export interface ExtractionResult {
  * any of it. The four Owner Return Metrics fields already exclude sale/
  * refinance proceeds at every year (including the final hold year) and use
  * ``null`` (never ``0``) wherever their denominator is exactly zero -- both
- * are backend-authoritative, never a frontend concern. */
+ * are backend-authoritative, never a frontend concern.
+ *
+ * Phase 6 Gate D6.7 types the fields D6.2 and D6.3 appended on the wire --
+ * the Lease-Level leasing-capital series (zero in Quick and Detailed), the
+ * owner cash-flow chain, Sources & Uses at closing, the project-return summary
+ * and the two IRR statuses -- in the backend's own order and names. They are
+ * required, never optional: an older stored result lacking them decodes as
+ * absent on the backend (D6 conventions Section 14), so a result that reaches
+ * the browser always carries every one. `initial_equity` stays the Initial
+ * Equity Requirement and has no synonym. */
 export interface AcquisitionResults {
   going_in_cap_rate: number;
   loan_amount: number;
@@ -157,6 +166,8 @@ export interface AcquisitionResults {
   remaining_loan_balance: number;
   noi_by_year: number[];
   capex_by_year: number[];
+  tenant_improvements_by_year: number[];
+  leasing_commissions_by_year: number[];
   exit_noi: number;
   exit_value: number;
   disposition_costs: number;
@@ -173,7 +184,40 @@ export interface AcquisitionResults {
   unlevered_cash_yield_by_year: (number | null)[];
   cumulative_operating_distributions_by_year: number[];
   year_1_debt_yield: number | null;
+  closing_project_capital: number;
+  project_capital_by_year: number[];
+  post_hold_project_capital: number;
+  owner_expenses_by_year: number[];
+  property_cash_flow_by_year: number[];
+  unlevered_owner_cash_flow_by_year: number[];
+  levered_owner_cash_flow_by_year: number[];
+  total_closing_uses: number;
+  total_closing_sources: number;
+  net_additional_equity_requirement_by_year: number[];
+  total_equity_invested: number;
+  total_cash_returned: number;
+  total_profit: number;
+  unlevered_irr_status: IrrStatus;
+  levered_irr_status: IrrStatus;
 }
+
+/** Mirrors ``IrrStatus`` in ``src/anchor/engine/contracts.py`` (Gate D6.3):
+ * why an IRR is -- or is not -- reported under the frozen IRR convention. The
+ * wire values, in the backend's order. This is the frontend's one list of
+ * them, so no component can hold a status vocabulary of its own; the words an
+ * analyst reads for each live beside the Capital Economics section, in
+ * `capitalEconomics.ts`. */
+export const IRR_STATUSES = [
+  'defined',
+  'no_nonzero_cash_flow',
+  'first_nonzero_not_negative',
+  'no_positive_cash_flow',
+  'multiple_sign_changes',
+  'root_outside_search_domain',
+  'numerical_failure',
+] as const;
+
+export type IrrStatus = (typeof IRR_STATUSES)[number];
 
 // =============================================================================
 // Detailed Operating Model V2.1 Gate 6 -- Detailed Underwrite mode.

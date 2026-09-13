@@ -4832,3 +4832,256 @@ body {
     letter-spacing: 0.02em;
   }
 }
+
+/* ==========================================================================
+   Phase 6 Gate D6.7 -- Capital Economics results.
+
+   One Results view, shared by all three modes: Sources & Uses and Project
+   Returns side by side, then the annual Owner Cash Flow and the Capital
+   Schedule. The same navy / white workbook language as the rest of Results and
+   the D6.6 editor -- ledgers with a clear subtotal rule, right-aligned tabular
+   figures, restrained dividers and no tiles. Colour carries only one meaning, a
+   negative figure, and never alone: the minus sign is always written. The view
+   is sized by its own width, so the two ledgers stack when the editor column is
+   narrow, and each table scrolls inside its own card rather than the page.
+   Additive only.
+   ========================================================================== */
+
+.capital-economics {
+  container: capital-economics / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.capital-economics-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.capital-economics-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  color: var(--color-accent);
+}
+
+.capital-economics-lede {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.capital-economics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+@container capital-economics (max-width: 620px) {
+  .capital-economics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.capital-economics-card {
+  padding: var(--sp-5);
+}
+
+.capital-economics-card > .card-title {
+  margin-bottom: var(--sp-3);
+}
+
+.capital-economics-helper {
+  margin: 0 0 var(--sp-3);
+  max-width: 78ch;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.capital-economics-note {
+  margin: var(--sp-3) 0 0;
+  max-width: 78ch;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.capital-economics-empty {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+/* A negative figure: colour in addition to the written minus sign. */
+.capital-economics-negative {
+  color: var(--color-negative);
+}
+
+/* --- Ledgers: Sources & Uses, Project Returns ---------------------------- */
+
+.capital-economics-ledger {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.capital-economics-ledger th[scope='row'] {
+  padding: 5px var(--sp-3) 5px 0;
+  text-align: left;
+  font-weight: 400;
+  color: var(--color-text);
+}
+
+.capital-economics-ledger td {
+  padding: 5px 0;
+  text-align: right;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.capital-economics-ledger-group th {
+  padding: var(--sp-4) 0 5px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.capital-economics-ledger tbody:first-child .capital-economics-ledger-group th {
+  padding-top: 0;
+}
+
+.capital-economics-ledger-total th[scope='row'],
+.capital-economics-ledger-total td {
+  padding-top: 7px;
+  border-top: 1px solid var(--color-text-muted);
+  font-weight: 700;
+}
+
+.capital-economics-ledger-note td {
+  padding: 0 0 6px;
+  text-align: left;
+  white-space: normal;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+/* --- Annual tables: Owner Cash Flow, Capital Schedule --------------------- */
+
+.capital-economics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.capital-economics-table th[scope='col'],
+.capital-economics-table th[scope='colgroup'] {
+  padding: 0.5rem 0.75rem;
+  text-align: right;
+  vertical-align: bottom;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.capital-economics-table thead tr:last-child th {
+  border-bottom: 2px solid var(--color-border);
+}
+
+.capital-economics-table th[scope='col']:first-child {
+  text-align: left;
+}
+
+.capital-economics-table th[scope='row'] {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-divider);
+  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.capital-economics-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-divider);
+  text-align: right;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.capital-economics-table tbody tr:last-child > * {
+  border-bottom: none;
+}
+
+/* Column groups name which cash flow each channel is reflected in. */
+.capital-economics-colgroups th[scope='colgroup'] {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: center;
+  color: var(--color-text);
+}
+
+.capital-economics-colgroups th[scope='colgroup'] + th[scope='colgroup'] {
+  border-left: 12px solid var(--color-surface);
+}
+
+.capital-economics-colgroup-hint {
+  display: block;
+  margin-top: 1px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-text-muted);
+}
+
+/* Closing is not a hold year: set apart as its own period. */
+.capital-economics-closing-row > * {
+  background: var(--color-surface-muted);
+}
+
+.capital-economics-na {
+  color: var(--color-text-muted);
+}
+
+/* --- Post-hold disclosure ------------------------------------------------- */
+
+.capital-economics-disclosure {
+  margin-top: var(--sp-4);
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-muted);
+}
+
+.capital-economics-disclosure-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--color-text);
+}
+
+.capital-economics-disclosure-text {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text);
+}

@@ -145,6 +145,8 @@ export interface LeaseLevelWorkspaceProps {
   /** The analysis describing the *current* inputs, or `null`. Never a stored
    * snapshot: Lease-Level persists none, and any edit clears this. */
   analysis: LeaseLevelAcquisitionResults | null;
+  /** D6.7: the Purchase Price of the request `analysis` came from. */
+  analyzedPurchasePrice: number | null;
   isAnalyzing: boolean;
   resultsView: ResultsViewId;
   onResultsViewChange: (view: ResultsViewId) => void;
@@ -393,6 +395,7 @@ export function LeaseLevelWorkspace({
   onToggleOccupancy,
   onUseSuiteArea,
   analysis,
+  analyzedPurchasePrice,
   isAnalyzing,
   resultsView,
   onResultsViewChange,
@@ -704,6 +707,7 @@ export function LeaseLevelWorkspace({
             'results',
             <LeaseLevelResults
               analysis={analysis}
+              analyzedPurchasePrice={analyzedPurchasePrice}
               isAnalyzing={isAnalyzing}
               view={resultsView}
               onViewChange={onResultsViewChange}

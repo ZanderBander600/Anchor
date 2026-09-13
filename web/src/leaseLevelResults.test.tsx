@@ -153,9 +153,10 @@ describe('a successful analysis', () => {
     const tabs = within(resultsPanel())
       .getAllByRole('tab')
       .map((tab) => tab.textContent);
-    expect(tabs).toEqual(['Summary', 'Operating Statement', 'Cash Flow']);
+    expect(tabs).toEqual(['Summary', 'Capital Economics', 'Operating Statement', 'Cash Flow']);
     expect(resultsViewsFor('lease_level').map((view) => view.id)).toEqual([
       'summary',
+      'capital-economics',
       'operating-statement',
       'cash-flow',
     ]);

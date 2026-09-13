@@ -131,13 +131,16 @@ describe('Underwrite tab layout', () => {
   });
 
   it('offers the Operating Statement view only for Detailed', () => {
+    // D6.7: Capital Economics is second in every mode, after the Summary.
     expect(resultsViewsFor('quick').map((v) => v.id)).toEqual([
       'summary',
+      'capital-economics',
       'cash-flow',
       'owner-returns',
     ]);
     expect(resultsViewsFor('detailed').map((v) => v.id)).toEqual([
       'summary',
+      'capital-economics',
       'cash-flow',
       'owner-returns',
       'operating-statement',
