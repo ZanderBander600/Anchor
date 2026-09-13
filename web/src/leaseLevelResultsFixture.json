@@ -2214,7 +2214,9 @@
         4685566.694482064
       ],
       "unlevered_irr": 0.09440443367807094,
+      "unlevered_irr_status": "defined",
       "levered_irr": 0.12592031990009156,
+      "levered_irr_status": "defined",
       "equity_multiple": 1.7113999991324877,
       "dscr_by_year": [
         1.6781046362285779,
@@ -4464,7 +4466,9 @@
         -4249099.74146765
       ],
       "unlevered_irr": -0.15206321779239929,
+      "unlevered_irr_status": "defined",
       "levered_irr": null,
+      "levered_irr_status": "no_positive_cash_flow",
       "equity_multiple": 0.0,
       "dscr_by_year": [
         0.41952615905714447,

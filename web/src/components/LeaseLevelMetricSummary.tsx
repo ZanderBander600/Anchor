@@ -17,8 +17,10 @@
  */
 
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
-import { UNDEFINED_IRR_LABEL, formatRatio, formatSquareFeet } from '../leaseLevelFormat';
+import { irrNotReportedExplanation } from '../capitalEconomics';
+import { formatRatio, formatSquareFeet } from '../leaseLevelFormat';
 import type { LeaseLevelAcquisitionResults } from '../leaseLevelTypes';
+import type { IrrStatus } from '../types';
 
 export interface LeaseLevelMetricSummaryProps {
   analysis: LeaseLevelAcquisitionResults;
@@ -33,31 +35,35 @@ interface Metric {
 }
 
 /**
- * The levered IRR, or an honest statement that it has none.
+ * An IRR, or N/A with the engine's own reason.
  *
- * `null` here means the levered cash flows do not have a unique internal rate
- * of return -- the frozen sign rule in the returns engine -- which for a
- * Lease-Level deal is common enough to be unremarkable: one heavy leasing
- * capital year mid-hold is all it takes.
+ * D6.7 closeout: the reason is the engine's `IrrStatus`, put into words by the
+ * one frontend mapping (`irrNotReportedExplanation` in `capitalEconomics.ts`) --
+ * the same sentence the Capital Economics view shows, so the two views can
+ * never disagree about why an IRR is unavailable. This card predates the
+ * status and used to give the sign-pattern reason for every missing IRR, which
+ * is only one of six reasons the engine can have. A reported IRR carries no
+ * status note at all. `null` is still never shown as zero.
  */
-function leveredIrr(value: number | null): Metric {
-  if (value === null) {
-    return {
-      label: 'Levered IRR',
-      value: UNDEFINED_IRR_LABEL,
-      note: 'This cash-flow pattern changes sign more than once, so no single IRR solves it. Read Equity Multiple and Unlevered IRR instead.',
-      emphasis: true,
-    };
-  }
-  return { label: 'Levered IRR', value: formatPercent(value), emphasis: true };
+function irrMetric(
+  label: 'Levered IRR' | 'Unlevered IRR',
+  value: number | null,
+  status: IrrStatus,
+): Metric {
+  return {
+    label,
+    value: formatPercent(value),
+    note: value === null ? (irrNotReportedExplanation(label, status) ?? undefined) : undefined,
+    emphasis: true,
+  };
 }
 
 export function LeaseLevelMetricSummary({ analysis }: LeaseLevelMetricSummaryProps) {
   const { results, annual_projection: annual, monthly_projection: monthly } = analysis;
 
   const returns: Metric[] = [
-    leveredIrr(results.levered_irr),
-    { label: 'Unlevered IRR', value: formatPercent(results.unlevered_irr), emphasis: true },
+    irrMetric('Levered IRR', results.levered_irr, results.levered_irr_status),
+    irrMetric('Unlevered IRR', results.unlevered_irr, results.unlevered_irr_status),
     { label: 'Equity Multiple', value: formatMultiple(results.equity_multiple), emphasis: true },
     { label: 'Going-In Cap Rate', value: formatPercent(results.going_in_cap_rate) },
   ];
