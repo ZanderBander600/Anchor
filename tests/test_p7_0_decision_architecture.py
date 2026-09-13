@@ -103,7 +103,7 @@ _REQUIRED_SECTIONS = (
     "18. Competition-Ready Definition",
     "19. Recommended Gate Sequence",
     "20. Deferred Scope",
-    "21. Open Questions Requiring Human Ratification",
+    "21. Human Ratification Record",
     "22. Architecture Options Considered",
     "23. Decision Record",
     "24. P7.0 Gate Record",
@@ -118,6 +118,45 @@ def test_the_architecture_document_keeps_its_numbered_sections_in_order() -> Non
     ]
     assert None not in found, [s for s, h in zip(_REQUIRED_SECTIONS, found) if h is None]
     assert [headings.index(heading) for heading in found] == sorted(headings.index(h) for h in found)
+
+
+#: The statuses a Section 21 row may carry. Each is a human decision; there is
+#: no "open" or "recommended" state.
+_RATIFIED_STATUSES = (
+    "RATIFIED",
+    "MODIFIED AND RATIFIED",
+    "RECOMMENDATION REJECTED - CONVENTION RATIFIED",
+)
+_P7_0_QUESTIONS = list(range(1, 25))
+
+
+def _ratification_record_issues(section: str) -> list[str]:
+    """Everything wrong with a ratification record: a question missing or
+    recorded twice, or a row without exactly one decided status."""
+
+    rows = [line for line in section.splitlines() if re.match(r"^\| Q\d+ \|", line)]
+    numbers = sorted(int(number) for number in re.findall(r"^\| Q(\d+) \|", section, re.MULTILINE))
+    issues = [] if numbers == _P7_0_QUESTIONS else [f"questions recorded: {numbers}"]
+    for row in rows:
+        cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+        if len(cells) != 5 or not cells[3].startswith(_RATIFIED_STATUSES):
+            issues.append(row)
+    return issues
+
+
+def test_the_ratification_record_decides_every_p7_0_question() -> None:
+    text = _ARCHITECTURE_DOC.read_text(encoding="utf-8")
+    section = text.split("\n## 21. ", 1)[1].split("\n## 22. ", 1)[0]
+    assert _ratification_record_issues(section) == []
+
+
+def test_the_ratification_check_rejects_a_missing_duplicated_or_undecided_question() -> None:
+    rows = [f"| Q{n} | question | decision | RATIFIED | §1 |" for n in _P7_0_QUESTIONS]
+    assert _ratification_record_issues("\n".join(rows)) == []
+    assert _ratification_record_issues("\n".join(rows[:6] + rows[7:]))
+    assert _ratification_record_issues("\n".join([*rows, rows[0]]))
+    undecided = [*rows[:4], "| Q5 | question | decision | OPEN | §7 |", *rows[5:]]
+    assert _ratification_record_issues("\n".join(undecided))
 
 
 def test_every_repository_path_the_architecture_document_names_exists() -> None:
