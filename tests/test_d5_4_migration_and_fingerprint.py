@@ -540,14 +540,16 @@ def test_the_migration_reaches_the_current_schema_version(migrated) -> None:
     pass for any value the production module happened to hold.
 
     D6.5 moves it to 7 -- the two Business Plan tables, added the same purely
-    additive way (``tests/test_d6_5_business_plan_migration.py``)."""
+    additive way (``tests/test_d6_5_business_plan_migration.py``). P7.2 moves
+    it to 8 -- the five P7 tables, again purely additive
+    (``tests/test_p7_2_compatibility_oracle.py``)."""
 
     path, _ = migrated
     connection = sqlite3.connect(path)
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     connection.close()
 
-    assert version == 7
+    assert version == 8
 
 
 def test_the_migration_adds_all_six_lease_level_tables(migrated) -> None:
@@ -641,7 +643,7 @@ def test_the_migration_is_idempotent(migrated) -> None:
     suites = connection.execute("SELECT COUNT(*) FROM lease_level_suites").fetchone()[0]
     connection.close()
 
-    assert version == 7  # D6.5; see test_the_migration_reaches_the_current_schema_version
+    assert version == 8  # P7.2; see test_the_migration_reaches_the_current_schema_version
     assert suites == 0
     assert len(deals_store.list_deals(db_path=path)) == 2
 

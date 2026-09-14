@@ -61,6 +61,7 @@ from ..analysis import (
     Suite,
 )
 from ..analysis.contracts import OneWaySensitivityResult, TwoWaySensitivityResult
+from ..analysis.scenario import ScenarioDefinition
 from ..business_plan import BusinessPlan
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 
@@ -351,3 +352,111 @@ class DealNotFoundError(LookupError):
     def __init__(self, deal_id: str) -> None:
         self.deal_id = deal_id
         super().__init__(f"No deal found with id {deal_id!r}.")
+
+
+# =============================================================================
+# Phase 7 Gate P7.2 -- the Investment shell and persisted Scenarios
+#
+# ``docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md`` Sections 6, 8.2
+# and 15.1-15.2 govern.
+#
+# **Opt-in only (Q4, P-11).** An ordinary standalone Deal has no Investment.
+# The first Scenario created for it materializes one *hidden* one-unit
+# Investment, and the UI keeps saying "Deal". Nothing on ``Deal`` changes: an
+# Investment is a separate parent record, never a field of the deal, so every
+# legacy deal, fingerprint and snapshot is untouched (Option A, Q2).
+#
+# **Membership (Q3).** An existing Deal *is* the Underwriting Unit, and its id
+# is the ``unit_id``. A Deal belongs to at most one Investment. Deleting the
+# Investment releases the Deal; it is never deleted with it.
+#
+# **Minimum permanent contract.** P7.2 materializes only the hidden one-unit
+# wrapper. There is no name, transaction price, memo, investment-level plan,
+# capital structure or partnership here: those are later gates' contracts
+# (P7.6+), added when a gate needs them. ``hidden`` is explicit so that a
+# future visible Investment is a different, representable state that every
+# P7.2 mutation refuses (fails closed) rather than mistakes for a wrapper.
+#
+# **No Analysis Variant record (Section 7.5, Section 21.3).** Nothing is
+# authored on a variant. Its identity is ``(investment, strategy, scenario)``,
+# with the Strategy implicitly Base in P7.2, and only fingerprint-guarded cache
+# rows are keyed by it (``store.py``'s ``variant_snapshots``).
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InvestmentUnit:
+    """One Underwriting Unit's membership. ``unit_id`` is the existing Deal's
+    id; the Deal itself is unchanged and is read through ``get_deal``."""
+
+    unit_id: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Investment:
+    """The optional parent of one or more Deals (Section 6).
+
+    ``id`` is a server-generated opaque identifier, like a deal id. ``hidden``
+    is ``True`` for the one-unit wrapper materialized on Scenario opt-in -- the
+    only kind of Investment P7.2 creates -- and ``units`` then holds exactly
+    one ``InvestmentUnit``. Units are listed in ``unit_id`` order: membership
+    is a set, and its order carries no meaning (Section 15.5)."""
+
+    id: str
+    hidden: bool
+    units: tuple[InvestmentUnit, ...]
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InvestmentScenario:
+    """One persisted Scenario and the Investment that owns it.
+
+    ``scenario`` is the exact P7.1 ``ScenarioDefinition`` -- its id, name,
+    description and unit-addressed overrides -- never a parallel shape. It has
+    already passed the P7.1 stage-1 contract validation for the owning
+    Investment's unit. The overrides are in canonical order (unit, then target
+    registry order): storage order is never economic meaning (SC-1, P-7).
+
+    Whether the scenario *resolves* over the unit's current inputs is a
+    property of the variant, decided when it is fingerprinted or analysed
+    (SC-4): the base inputs can change after the scenario is saved."""
+
+    investment_id: str
+    scenario: ScenarioDefinition
+    created_at: datetime
+    updated_at: datetime
+
+
+class InvestmentNotFoundError(LookupError):
+    """No Investment has this id."""
+
+    def __init__(self, investment_id: str) -> None:
+        self.investment_id = investment_id
+        super().__init__(f"No investment found with id {investment_id!r}.")
+
+
+class ScenarioNotFoundError(LookupError):
+    """No Scenario with this id belongs to this Investment.
+
+    Raised identically whether the scenario does not exist or belongs to
+    another Investment: an id supplied by a caller never proves ownership, and
+    a foreign scenario's existence is not disclosed."""
+
+    def __init__(self, investment_id: str, scenario_id: str) -> None:
+        self.investment_id = investment_id
+        self.scenario_id = scenario_id
+        super().__init__(
+            f"No scenario {scenario_id!r} belongs to investment {investment_id!r}."
+        )
+
+
+class InvestmentStructureError(RuntimeError):
+    """The request needs Investment structure P7.2 does not manage, so it is
+    refused rather than guessed at.
+
+    P7.2 creates and edits only the hidden one-unit wrapper. A visible
+    Investment (a later gate's state) is never silently edited, collapsed,
+    orphaned or deleted by P7.2 code (Section 15.2: a unit of a visible
+    Investment must be removed from it before the Deal is deleted)."""

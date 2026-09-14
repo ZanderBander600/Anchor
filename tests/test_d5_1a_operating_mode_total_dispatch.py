@@ -47,6 +47,9 @@ _AUDITED = (
     _ANCHOR_DIR / "api.py",
     _ANCHOR_DIR / "deals" / "contracts.py",
     _ANCHOR_DIR / "deals" / "store.py",
+    # P7.2 -- the variant service dispatches on a Deal's mode to pick its P7.1
+    # resolver, and on the mode again to keep Lease-Level out of the cache.
+    _ANCHOR_DIR / "deals" / "variants.py",
     _ANCHOR_DIR / "ai" / "contracts.py",
     _ANCHOR_DIR / "ai" / "presentation.py",
 )

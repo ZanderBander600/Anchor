@@ -882,6 +882,13 @@ def test_g32_the_public_operating_mode_enum_is_published_behind_total_dispatch()
     # and a target outside a mode is refused, never routed to another mode.
     # ``tests/test_p7_1_scenario_architecture.py`` holds that shape. The engine,
     # leasing and every other analysis module still name the member nowhere.
+    #
+    # P7.2 adds ``deals/variants.py``, the variant service: a mode dispatch
+    # consumer that selects the P7.1 resolver and the D6 entry point for a
+    # Deal's own mode, with a raising wildcard, and keeps Lease-Level variants
+    # out of the cache. It computes nothing
+    # (``tests/test_p7_2_investment_scenario_architecture.py``;
+    # ``tests/test_d5_1a_operating_mode_total_dispatch.py`` audits it).
     permitted = {
         "api.py",
         "contracts.py",
@@ -889,6 +896,7 @@ def test_g32_the_public_operating_mode_enum_is_published_behind_total_dispatch()
         "presentation.py",
         "analyst.py",
         "scenario.py",
+        "variants.py",
     }
     for source_file in _python_files_under(_ANCHOR_DIR):
         if "OperatingMode.LEASE_LEVEL" not in source_file.read_text(encoding="utf-8"):
@@ -1320,7 +1328,10 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     # base Lease-Level analysis is still re-run from approved inputs on open.
     # D6.5 moves it to 7: two mode-blind Business Plan *input* tables, added the
     # same purely additive way. Still no Lease-Level financial result is stored.
-    assert "_SCHEMA_VERSION = 7" in store
+    # P7.2 moves it to 8: five additive P7 tables. Its variant cache holds Quick
+    # and Detailed results only; a Lease-Level variant is recomputed, never
+    # stored, and the assertion above still forbids naming its result here.
+    assert "_SCHEMA_VERSION = 8" in store
     assert "deal_sensitivity_snapshots" in store, (
         "D5.8A should persist the latest Lease-Level sensitivity runs"
     )

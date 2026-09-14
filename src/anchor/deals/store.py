@@ -184,6 +184,15 @@ from ..contracts import (
     OperatingMode,
     UnsupportedOperatingModeError,
 )
+from ..analysis.scenario import (
+    ScenarioDefinition,
+    ScenarioIssue,
+    ScenarioOperation,
+    ScenarioOverride,
+    ScenarioTarget,
+    ScenarioValidationError,
+    validate_scenario,
+)
 from ..engine.contracts import (
     AcquisitionResults,
     DetailedAcquisitionResults,
@@ -193,7 +202,13 @@ from ..engine.contracts import (
 from .contracts import (
     Deal,
     DealNotFoundError,
+    Investment,
+    InvestmentNotFoundError,
+    InvestmentScenario,
+    InvestmentStructureError,
+    InvestmentUnit,
     OneWaySensitivitySnapshot,
+    ScenarioNotFoundError,
     TwoWaySensitivitySnapshot,
 )
 from .fingerprint import (
@@ -241,7 +256,12 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # created unconditionally by ``_connect`` exactly as version 6's table was. No
 # ALTER and no existing row read or rewritten; a legacy deal simply has no plan
 # rows, which is exactly the empty ``BusinessPlan()`` -- nothing is fabricated.
-_SCHEMA_VERSION = 7
+# Phase 7 Gate P7.2: schema version 8 adds five purely additive P7 tables --
+# ``investments``, ``investment_units``, ``scenarios``, ``scenario_overrides``
+# and ``variant_snapshots`` -- created unconditionally by ``_connect`` exactly
+# as version 7's were. No ALTER and no existing row read or rewritten; every
+# legacy deal simply belongs to no Investment until the analyst opts in (Q4).
+_SCHEMA_VERSION = 8
 
 
 class PersistedDealDataError(RuntimeError):
@@ -256,6 +276,23 @@ class PersistedDealDataError(RuntimeError):
     an unreadable ``lease_type`` would hand the engine a rent roll nobody
     authored, and the resulting numbers would look entirely ordinary.
     """
+
+
+class PersistedScenarioDataError(PersistedDealDataError):
+    """A stored Scenario no longer passes the P7.1 contract validation.
+
+    ``issues`` is the P7.1 validator's own ordered list -- identity first, then
+    unit, then target registry order -- so which problem is reported first
+    never depends on the order SQLite returns rows in."""
+
+    def __init__(self, scenario_id: str, issues: Iterable[ScenarioIssue]) -> None:
+        self.scenario_id = scenario_id
+        self.issues = tuple(issues)
+        super().__init__(
+            f"Stored scenario {scenario_id!r} does not validate: "
+            + "; ".join(issue.message for issue in self.issues)
+        )
+
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS deals (
@@ -612,6 +649,112 @@ CREATE TABLE IF NOT EXISTS deal_owner_expense_items (
 """
 
 _BUSINESS_PLAN_TABLES = ("deal_capital_plan_items", "deal_owner_expense_items")
+
+
+# =============================================================================
+# Phase 7 Gate P7.2 -- the Investment shell, persisted Scenarios and the variant
+# cache, schema version 8.
+#
+# Five purely additive tables, created by ``_connect`` via CREATE TABLE IF NOT
+# EXISTS exactly as every table since version 2. No ALTER, and no existing row is
+# read or rewritten: a v7 database gains five empty tables, and every legacy deal
+# stays outside them until the analyst opts in (Q4).
+#
+# ``investments`` -- one row per Investment. ``is_hidden`` is 1 for the one-unit
+# wrapper materialized by a Deal's first Scenario, the only kind P7.2 writes.
+# There is no name, price or memo yet: those belong to the gates that need them.
+#
+# ``investment_units`` -- membership. ``deal_id`` is UNIQUE: a Deal belongs to at
+# most one Investment (Q3), enforced by SQLite as well as by the lifecycle below,
+# so no code path can quietly add a second one.
+#
+# ``scenarios`` / ``scenario_overrides`` -- the P7.1 contract, relational. The
+# override primary key ``(scenario_id, unit_id, target)`` is SC-1's uniqueness
+# rule in the schema. Targets and operations are stored as their wire tokens and
+# decoded strictly; ``value`` is a REAL, so a float round-trips bit-identically.
+# There is no ordinal, because override order has no meaning (SC-1, P-7).
+#
+# ``variant_snapshots`` -- a mode-blind cache of Quick and Detailed variant
+# results, following ``deal_sensitivity_snapshots``. It is keyed by the variant
+# identity ``(root_id, strategy_id, scenario_id)`` (Section 7.5), where
+# ``strategy_id`` is ``_BASE_STRATEGY_ID`` until the Strategy gate adds real
+# strategies. A row is served only while its ``source_fingerprint`` equals a
+# freshly computed resolved-input fingerprint and its ``schema_version`` is
+# current, so it is an optimization and never financial authority (Q14).
+# Lease-Level variants are recomputed and never written here (Q14, D5 decision
+# A). Base x Base is never written here either: it is the deal's own analysis.
+#
+# No FOREIGN KEY / ON DELETE CASCADE, for the reason stated above
+# ``lease_level_suites``. Every lifecycle function below deletes child rows
+# explicitly, in one transaction with their parent.
+# =============================================================================
+
+_CREATE_INVESTMENTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS investments (
+    id          TEXT PRIMARY KEY,
+    is_hidden   INTEGER NOT NULL CHECK (is_hidden IN (0, 1)),
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+)
+"""
+
+_CREATE_INVESTMENT_UNITS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS investment_units (
+    investment_id  TEXT NOT NULL,
+    deal_id        TEXT NOT NULL UNIQUE,
+    PRIMARY KEY (investment_id, deal_id)
+)
+"""
+
+_CREATE_SCENARIOS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS scenarios (
+    id             TEXT PRIMARY KEY,
+    investment_id  TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    description    TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+)
+"""
+
+_CREATE_SCENARIO_OVERRIDES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS scenario_overrides (
+    scenario_id  TEXT NOT NULL,
+    unit_id      TEXT NOT NULL,
+    target       TEXT NOT NULL,
+    operation    TEXT NOT NULL,
+    value        REAL NOT NULL,
+    PRIMARY KEY (scenario_id, unit_id, target)
+)
+"""
+
+_CREATE_VARIANT_SNAPSHOTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS variant_snapshots (
+    root_id            TEXT NOT NULL,
+    strategy_id        TEXT NOT NULL,
+    scenario_id        TEXT NOT NULL,
+    snapshot           TEXT NOT NULL,
+    schema_version     INTEGER NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    generated_at       TEXT NOT NULL,
+    PRIMARY KEY (root_id, strategy_id, scenario_id)
+)
+"""
+
+_P7_2_TABLES = (
+    "investments",
+    "investment_units",
+    "scenarios",
+    "scenario_overrides",
+    "variant_snapshots",
+)
+
+#: The Strategy dimension of every P7.2 variant identity: the implicit Base
+#: strategy. It is a reserved cache key, never an authored Strategy row, and it
+#: cannot collide with a real id -- every id this store mints is
+#: ``uuid4().hex``, 32 lowercase hexadecimal characters, and this is neither
+#: that long nor hexadecimal.
+_BASE_STRATEGY_ID = "base"
 
 
 _LEASE_LEVEL_CHILD_TABLES = (
@@ -1066,6 +1209,9 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # nothing to do here: ``_connect`` creates them via CREATE TABLE IF NOT
     # EXISTS, and a legacy deal with no plan rows loads as ``BusinessPlan()``
     # without any row being written for it.
+    # P7.2 -- schema version 8 adds the five P7 tables with nothing to do here
+    # either: ``_connect`` creates them via CREATE TABLE IF NOT EXISTS, and no
+    # Investment, membership or Scenario row is written for any existing deal.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -1110,6 +1256,11 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_DEAL_SENSITIVITY_SNAPSHOTS_TABLE_SQL)
     connection.execute(_CREATE_DEAL_CAPITAL_PLAN_ITEMS_TABLE_SQL)
     connection.execute(_CREATE_DEAL_OWNER_EXPENSE_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_INVESTMENTS_TABLE_SQL)
+    connection.execute(_CREATE_INVESTMENT_UNITS_TABLE_SQL)
+    connection.execute(_CREATE_SCENARIOS_TABLE_SQL)
+    connection.execute(_CREATE_SCENARIO_OVERRIDES_TABLE_SQL)
+    connection.execute(_CREATE_VARIANT_SNAPSHOTS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -2462,6 +2613,12 @@ def delete_deal(deal_id: str, *, db_path: Path | None = None) -> None:
     together with its ``detailed_deals`` row."""
 
     with _connect(db_path) as connection:
+        # P7.2: a Deal inside the hidden Scenario wrapper takes the wrapper with
+        # it -- cached variants, overrides, Scenarios, membership and the hidden
+        # Investment -- in this same transaction, so nothing is orphaned. A Deal
+        # in a visible Investment is refused instead (Section 15.2), and a
+        # standalone Deal has nothing to remove. A failure below rolls this back.
+        _remove_hidden_wrapper_of_deal(connection, deal_id)
         # D5.8A: derived analytical state is removed first, for every mode,
         # before any parent row is looked at -- so a deal that turns out to live
         # in the Quick table leaves no sensitivity row behind either. Explicit
@@ -3058,3 +3215,699 @@ def update_two_way_sensitivity_snapshot(
         financial_input_fingerprint=financial_input_fingerprint,
         db_path=db_path,
     )
+
+
+# =============================================================================
+# Phase 7 Gate P7.2 -- the Investment shell and persisted Scenarios
+#
+# Every function below manages only the **hidden one-unit Investment**, the
+# wrapper a standalone Deal gains with its first Scenario (Q4, Section 15.1):
+#
+#   * **Opt-in only.** ``_materialize_hidden_investment`` is the one place an
+#     Investment row is ever written, and ``create_scenario_for_deal`` is its
+#     one caller -- inside the same transaction as that first Scenario, after
+#     the Scenario has passed validation. Creating, saving, opening, listing,
+#     analysing or fingerprinting a Deal never reaches it, and neither does any
+#     read below. A failure anywhere rolls the whole write back: no empty
+#     Investment, no membership and no partial Scenario survives.
+#   * **One authority for the contract.** Every Scenario is validated by the
+#     P7.1 stage-1 validator for the wrapper's one unit, on the way in and
+#     again on the way out, so a stored Scenario that no longer validates fails
+#     closed (``PersistedScenarioDataError``) rather than being repaired.
+#   * **Fail closed outside the wrapper.** A visible Investment is a later
+#     gate's structure. Every function here refuses it
+#     (``InvestmentStructureError``) rather than editing, collapsing, orphaning
+#     or deleting it, and a hidden wrapper that does not hold exactly one saved
+#     Deal is refused as corrupt (``PersistedDealDataError``).
+#   * **Ownership is proven, never assumed.** A Scenario is found only through
+#     the Investment that owns it; a foreign id is simply not found.
+#
+# Nothing here computes anything. Resolution, fingerprints and analysis live in
+# ``anchor.deals.variants``, over the P7.1 resolvers and the D6 entry points.
+# =============================================================================
+
+#: The serialized-result contract of one cached Quick or Detailed variant: the
+#: same ``AcquisitionResults`` / ``DetailedAcquisitionResults`` shape the deal
+#: analysis snapshot stores. Bump it with any change that stops a stored result
+#: from decoding, exactly as ``_ANALYSIS_SNAPSHOT_SCHEMA_VERSION`` is bumped: a
+#: row of another version then reads as absent and is recomputed.
+_VARIANT_SNAPSHOT_SCHEMA_VERSION = 1
+
+
+def _decode_hidden_flag(row: sqlite3.Row) -> bool:
+    value = row["is_hidden"]
+    if value == 1:
+        return True
+    if value == 0:
+        return False
+    raise PersistedDealDataError(
+        f"Investment {row['id']!r} holds is_hidden={value!r}; it must be 0 or 1."
+    )
+
+
+def _investment_row(connection: sqlite3.Connection, investment_id: str) -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT * FROM investments WHERE id = ?", (investment_id,)
+    ).fetchone()
+    if row is None:
+        raise InvestmentNotFoundError(investment_id)
+    return row
+
+
+def _unit_rows(connection: sqlite3.Connection, investment_id: str) -> list[sqlite3.Row]:
+    """The Investment's membership rows, in ``deal_id`` order: membership is a
+    set, and its order means nothing (Section 15.5)."""
+
+    return connection.execute(
+        "SELECT deal_id FROM investment_units WHERE investment_id = ? ORDER BY deal_id",
+        (investment_id,),
+    ).fetchall()
+
+
+def _investment_of_deal(connection: sqlite3.Connection, deal_id: str) -> str | None:
+    """The one Investment ``deal_id`` belongs to, or ``None``.
+
+    A Deal belongs to at most one Investment (Q3). The ``UNIQUE`` column makes
+    a second membership unwritable; a database that holds one anyway (a table
+    built without the constraint) is corrupt and is refused, never resolved by
+    picking one."""
+
+    rows = connection.execute(
+        "SELECT investment_id FROM investment_units WHERE deal_id = ? ORDER BY investment_id",
+        (deal_id,),
+    ).fetchall()
+    if len(rows) > 1:
+        raise PersistedDealDataError(
+            f"Deal {deal_id!r} belongs to {len(rows)} investments; a deal belongs "
+            "to at most one."
+        )
+    return rows[0]["investment_id"] if rows else None
+
+
+def _require_hidden_wrapper(
+    connection: sqlite3.Connection, investment_id: str
+) -> tuple[str, OperatingMode]:
+    """The one unit of the hidden wrapper ``investment_id``, and that Deal's
+    operating mode -- or a refusal.
+
+    - an unknown id: ``InvestmentNotFoundError``;
+    - a visible Investment: ``InvestmentStructureError`` (a later gate's
+      structure, which P7.2 never changes);
+    - a hidden wrapper without exactly one member, or whose member is no saved
+      Deal: ``PersistedDealDataError``.
+    """
+
+    row = _investment_row(connection, investment_id)
+    if not _decode_hidden_flag(row):
+        raise InvestmentStructureError(
+            f"Investment {investment_id!r} is a visible Investment. P7.2 manages only "
+            "the hidden one-unit Scenario wrapper and does not change a visible one."
+        )
+    units = _unit_rows(connection, investment_id)
+    if len(units) != 1:
+        raise PersistedDealDataError(
+            f"Hidden investment {investment_id!r} has {len(units)} units; the Scenario "
+            "wrapper has exactly one."
+        )
+    unit_id = units[0]["deal_id"]
+    operating_mode = _operating_mode_of(connection, unit_id)
+    if operating_mode is None:
+        raise PersistedDealDataError(
+            f"Hidden investment {investment_id!r} names unit {unit_id!r}, which is not "
+            "a saved deal."
+        )
+    return unit_id, operating_mode
+
+
+def _require_owned_scenario(
+    connection: sqlite3.Connection, investment_id: str, scenario_id: str
+) -> None:
+    found = connection.execute(
+        "SELECT 1 FROM scenarios WHERE id = ? AND investment_id = ?",
+        (scenario_id, investment_id),
+    ).fetchone()
+    if found is None:
+        raise ScenarioNotFoundError(investment_id, scenario_id)
+
+
+def _require_valid_scenario(
+    scenario: ScenarioDefinition, *, operating_mode: OperatingMode, unit_id: str
+) -> None:
+    """The P7.1 stage-1 contract, for the wrapper's one unit: identity, naming,
+    unit addressing (SC-5), ``(unit_id, target)`` uniqueness (SC-1), targets,
+    each target's operation whitelist (Q5) and finite values. This store adds
+    no rule of its own."""
+
+    issues = validate_scenario(scenario, operating_mode=operating_mode, unit_id=unit_id)
+    if issues:
+        raise ScenarioValidationError(issues)
+
+
+def _stored_token(value: object, token_type: type[ScenarioTarget] | type[ScenarioOperation]) -> Any:
+    """A stored token as its member -- or, when no member has it, the raw value,
+    so that the P7.1 validator reports it in its own deterministic order rather
+    than this codec reporting it first."""
+
+    if isinstance(value, str):
+        try:
+            return token_type(value)
+        except ValueError:
+            return value
+    return value
+
+
+_TARGET_RANK = {target: rank for rank, target in enumerate(ScenarioTarget)}
+
+
+def _override_order(override: ScenarioOverride) -> tuple[str, int, str]:
+    """Canonical override order: unit, then the P7.1 target registry's
+    declaration order. An unrecognised target sorts after every real one."""
+
+    target = override.target
+    rank = _TARGET_RANK[target] if isinstance(target, ScenarioTarget) else len(_TARGET_RANK)
+    return str(override.unit_id), rank, str(target)
+
+
+def _scenario_from_rows(
+    scenario_row: sqlite3.Row,
+    override_rows: Iterable[sqlite3.Row],
+    *,
+    unit_id: str,
+    operating_mode: OperatingMode,
+) -> ScenarioDefinition:
+    """Rebuild one stored Scenario as the exact P7.1 contract and refuse it if
+    the P7.1 validator does. Nothing is repaired, defaulted or dropped."""
+
+    overrides = tuple(
+        sorted(
+            (
+                ScenarioOverride(
+                    unit_id=row["unit_id"],
+                    target=_stored_token(row["target"], ScenarioTarget),
+                    operation=_stored_token(row["operation"], ScenarioOperation),
+                    value=row["value"],
+                )
+                for row in override_rows
+            ),
+            key=_override_order,
+        )
+    )
+    scenario = ScenarioDefinition(
+        scenario_id=scenario_row["id"],
+        name=scenario_row["name"],
+        description=scenario_row["description"],
+        overrides=overrides,
+    )
+    issues = validate_scenario(scenario, operating_mode=operating_mode, unit_id=unit_id)
+    if issues:
+        raise PersistedScenarioDataError(scenario_row["id"], issues)
+    return scenario
+
+
+def _read_scenarios(
+    connection: sqlite3.Connection,
+    investment_id: str,
+    *,
+    unit_id: str,
+    operating_mode: OperatingMode,
+    scenario_id: str | None = None,
+) -> list[InvestmentScenario]:
+    """The wrapper's Scenarios -- or the one ``scenario_id`` it owns -- in
+    creation order. That order is presentation only; the insertion ``rowid``
+    breaks a timestamp tie, so it never depends on a random id."""
+
+    if scenario_id is None:
+        rows = connection.execute(
+            "SELECT * FROM scenarios WHERE investment_id = ? ORDER BY created_at, rowid",
+            (investment_id,),
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            "SELECT * FROM scenarios WHERE investment_id = ? AND id = ?",
+            (investment_id, scenario_id),
+        ).fetchall()
+    scenarios: list[InvestmentScenario] = []
+    for row in rows:
+        override_rows = connection.execute(
+            "SELECT * FROM scenario_overrides WHERE scenario_id = ? ORDER BY unit_id, target",
+            (row["id"],),
+        ).fetchall()
+        scenarios.append(
+            InvestmentScenario(
+                investment_id=investment_id,
+                scenario=_scenario_from_rows(
+                    row, override_rows, unit_id=unit_id, operating_mode=operating_mode
+                ),
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+            )
+        )
+    return scenarios
+
+
+def _write_scenario_overrides(
+    connection: sqlite3.Connection, scenario_id: str, overrides: Iterable[ScenarioOverride]
+) -> None:
+    """Every override of one Scenario. Called inside the caller's transaction,
+    after validation, and after any previous overrides were removed: an
+    override set is replaced whole, never diffed."""
+
+    connection.executemany(
+        """
+        INSERT INTO scenario_overrides (scenario_id, unit_id, target, operation, value)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                scenario_id,
+                override.unit_id,
+                _encode_enum(override.target),
+                _encode_enum(override.operation),
+                float(override.value),
+            )
+            for override in overrides
+        ],
+    )
+
+
+def _touch_investment(connection: sqlite3.Connection, investment_id: str, *, now: str) -> None:
+    connection.execute(
+        "UPDATE investments SET updated_at = ? WHERE id = ?", (now, investment_id)
+    )
+
+
+def _insert_scenario(
+    connection: sqlite3.Connection,
+    investment_id: str,
+    scenario: ScenarioDefinition,
+    *,
+    now: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO scenarios (id, investment_id, name, description, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (scenario.scenario_id, investment_id, scenario.name, scenario.description, now, now),
+    )
+    _write_scenario_overrides(connection, scenario.scenario_id, scenario.overrides)
+    _touch_investment(connection, investment_id, now=now)
+
+
+def _materialize_hidden_investment(
+    connection: sqlite3.Connection, deal_id: str, *, now: str
+) -> str:
+    """Create the hidden one-unit Investment for the standalone ``deal_id``.
+
+    The only code that writes an Investment or a membership. Its one caller,
+    ``create_scenario_for_deal``, reaches it only for a Deal with no
+    Investment, only after the first Scenario has validated, and only inside
+    the transaction that then writes that Scenario."""
+
+    investment_id = uuid.uuid4().hex
+    connection.execute(
+        "INSERT INTO investments (id, is_hidden, created_at, updated_at) VALUES (?, 1, ?, ?)",
+        (investment_id, now, now),
+    )
+    connection.execute(
+        "INSERT INTO investment_units (investment_id, deal_id) VALUES (?, ?)",
+        (investment_id, deal_id),
+    )
+    return investment_id
+
+
+def _delete_scenario_rows(
+    connection: sqlite3.Connection, investment_id: str, scenario_id: str
+) -> None:
+    """One Scenario and everything it owns: its cached variants and overrides."""
+
+    connection.execute(
+        "DELETE FROM variant_snapshots WHERE root_id = ? AND scenario_id = ?",
+        (investment_id, scenario_id),
+    )
+    connection.execute("DELETE FROM scenario_overrides WHERE scenario_id = ?", (scenario_id,))
+    connection.execute(
+        "DELETE FROM scenarios WHERE id = ? AND investment_id = ?", (scenario_id, investment_id)
+    )
+
+
+def _delete_investment_rows(connection: sqlite3.Connection, investment_id: str) -> None:
+    """Every row the Investment owns -- cached variants, overrides, Scenarios,
+    membership and the Investment itself -- and never a Deal row. Deleting an
+    Investment releases its Deal (Q3)."""
+
+    connection.execute("DELETE FROM variant_snapshots WHERE root_id = ?", (investment_id,))
+    connection.execute(
+        "DELETE FROM scenario_overrides WHERE scenario_id IN "
+        "(SELECT id FROM scenarios WHERE investment_id = ?)",
+        (investment_id,),
+    )
+    connection.execute("DELETE FROM scenarios WHERE investment_id = ?", (investment_id,))
+    connection.execute("DELETE FROM investment_units WHERE investment_id = ?", (investment_id,))
+    connection.execute("DELETE FROM investments WHERE id = ?", (investment_id,))
+
+
+def _wrapper_holds_no_structure(connection: sqlite3.Connection, investment_id: str) -> bool:
+    """Whether the hidden wrapper has no P7 structure left. In P7.2 its only
+    structure is Scenarios; the Strategy gate adds Strategies to this test, so
+    a wrapper that still holds one never collapses."""
+
+    remaining = connection.execute(
+        "SELECT 1 FROM scenarios WHERE investment_id = ? LIMIT 1", (investment_id,)
+    ).fetchone()
+    return remaining is None
+
+
+def _remove_hidden_wrapper_of_deal(connection: sqlite3.Connection, deal_id: str) -> None:
+    """Called by ``delete_deal``, inside its transaction: remove the hidden
+    wrapper ``deal_id`` belongs to, if any, before the Deal itself goes.
+
+    Only the hidden one-unit wrapper is removed this way (Section 21.3). A Deal
+    in a visible Investment is refused, because Section 15.2 requires removing
+    it from the Investment first."""
+
+    investment_id = _investment_of_deal(connection, deal_id)
+    if investment_id is None:
+        return
+    _require_hidden_wrapper(connection, investment_id)
+    _delete_investment_rows(connection, investment_id)
+
+
+def create_scenario_for_deal(
+    deal_id: str,
+    *,
+    name: str,
+    description: str | None = None,
+    overrides: Iterable[ScenarioOverride] = (),
+    db_path: Path | None = None,
+) -> InvestmentScenario:
+    """Persist a new Scenario for the Deal ``deal_id``, materializing its hidden
+    one-unit Investment first if it has none (Q4).
+
+    One transaction: the Deal must exist; any Investment it already belongs to
+    must be its hidden wrapper, which is reused (never one Investment per
+    Scenario); the Scenario must pass the P7.1 contract for this unit; then the
+    Investment and membership (first Scenario only), the Scenario and its
+    overrides are written. Any failure leaves no row behind.
+
+    Raises ``DealNotFoundError``, ``InvestmentStructureError``,
+    ``ScenarioValidationError`` or ``PersistedDealDataError``."""
+
+    scenario = ScenarioDefinition(
+        scenario_id=uuid.uuid4().hex,
+        name=name,
+        description=description,
+        overrides=tuple(overrides),
+    )
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        operating_mode = _operating_mode_of(connection, deal_id)
+        if operating_mode is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _investment_of_deal(connection, deal_id)
+        if investment_id is not None:
+            _require_hidden_wrapper(connection, investment_id)
+        _require_valid_scenario(scenario, operating_mode=operating_mode, unit_id=deal_id)
+        if investment_id is None:
+            investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
+        _insert_scenario(connection, investment_id, scenario, now=now)
+
+    return get_scenario(investment_id, scenario.scenario_id, db_path=db_path)
+
+
+def create_scenario(
+    investment_id: str,
+    *,
+    name: str,
+    description: str | None = None,
+    overrides: Iterable[ScenarioOverride] = (),
+    db_path: Path | None = None,
+) -> InvestmentScenario:
+    """Persist another Scenario in the existing hidden wrapper
+    ``investment_id``, validated for its one unit."""
+
+    scenario = ScenarioDefinition(
+        scenario_id=uuid.uuid4().hex,
+        name=name,
+        description=description,
+        overrides=tuple(overrides),
+    )
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        _require_valid_scenario(scenario, operating_mode=operating_mode, unit_id=unit_id)
+        _insert_scenario(connection, investment_id, scenario, now=now)
+
+    return get_scenario(investment_id, scenario.scenario_id, db_path=db_path)
+
+
+def update_scenario(
+    investment_id: str,
+    scenario_id: str,
+    *,
+    name: str,
+    description: str | None = None,
+    overrides: Iterable[ScenarioOverride] = (),
+    db_path: Path | None = None,
+) -> InvestmentScenario:
+    """Replace one Scenario's name, description and whole override set,
+    keeping its id.
+
+    Validated before anything is written; the old overrides are removed and
+    the new ones written in the same transaction, so a failure leaves the
+    previous Scenario exactly as it was. Cached variants are left alone: each
+    is served only while its source fingerprint still matches the resolved
+    inputs, so a recipe that resolves to the same inputs keeps its cache and
+    any other change makes the old row stale."""
+
+    scenario = ScenarioDefinition(
+        scenario_id=scenario_id,
+        name=name,
+        description=description,
+        overrides=tuple(overrides),
+    )
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        _require_owned_scenario(connection, investment_id, scenario_id)
+        _require_valid_scenario(scenario, operating_mode=operating_mode, unit_id=unit_id)
+        connection.execute(
+            "UPDATE scenarios SET name = ?, description = ?, updated_at = ? "
+            "WHERE id = ? AND investment_id = ?",
+            (scenario.name, scenario.description, now, scenario_id, investment_id),
+        )
+        connection.execute("DELETE FROM scenario_overrides WHERE scenario_id = ?", (scenario_id,))
+        _write_scenario_overrides(connection, scenario_id, scenario.overrides)
+        _touch_investment(connection, investment_id, now=now)
+
+    return get_scenario(investment_id, scenario_id, db_path=db_path)
+
+
+def delete_scenario(
+    investment_id: str, scenario_id: str, *, db_path: Path | None = None
+) -> None:
+    """Delete one Scenario with its overrides and cached variants.
+
+    When that leaves the hidden wrapper holding no structure, the wrapper is
+    removed too, in the same transaction, and the Deal is a plain standalone
+    Deal again (P-11: empty advanced structure leaves no state behind)."""
+
+    with _connect(db_path) as connection:
+        _require_hidden_wrapper(connection, investment_id)
+        _require_owned_scenario(connection, investment_id, scenario_id)
+        _delete_scenario_rows(connection, investment_id, scenario_id)
+        if _wrapper_holds_no_structure(connection, investment_id):
+            _delete_investment_rows(connection, investment_id)
+        else:
+            _touch_investment(connection, investment_id, now=_utc_now_iso())
+
+
+def delete_investment(investment_id: str, *, db_path: Path | None = None) -> None:
+    """Delete the hidden wrapper ``investment_id`` and everything it owns, and
+    release its Deal, which stays exactly as it was (Q3). Never deletes a Deal
+    row; refuses a visible Investment."""
+
+    with _connect(db_path) as connection:
+        _require_hidden_wrapper(connection, investment_id)
+        _delete_investment_rows(connection, investment_id)
+
+
+def get_investment(investment_id: str, *, db_path: Path | None = None) -> Investment:
+    """Read one Investment and its membership. A hidden wrapper that does not
+    hold exactly one saved Deal is refused as corrupt."""
+
+    with _connect(db_path) as connection:
+        row = _investment_row(connection, investment_id)
+        hidden = _decode_hidden_flag(row)
+        if hidden:
+            _require_hidden_wrapper(connection, investment_id)
+        return Investment(
+            id=investment_id,
+            hidden=hidden,
+            units=tuple(
+                InvestmentUnit(unit_id=unit["deal_id"])
+                for unit in _unit_rows(connection, investment_id)
+            ),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+
+def list_scenarios(
+    investment_id: str, *, db_path: Path | None = None
+) -> list[InvestmentScenario]:
+    with _connect(db_path) as connection:
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        return _read_scenarios(
+            connection, investment_id, unit_id=unit_id, operating_mode=operating_mode
+        )
+
+
+def get_scenario(
+    investment_id: str, scenario_id: str, *, db_path: Path | None = None
+) -> InvestmentScenario:
+    with _connect(db_path) as connection:
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        found = _read_scenarios(
+            connection,
+            investment_id,
+            unit_id=unit_id,
+            operating_mode=operating_mode,
+            scenario_id=scenario_id,
+        )
+    if not found:
+        raise ScenarioNotFoundError(investment_id, scenario_id)
+    return found[0]
+
+
+def list_deal_scenarios(
+    deal_id: str, *, db_path: Path | None = None
+) -> tuple[str | None, list[InvestmentScenario]]:
+    """The Investment ``deal_id`` belongs to and its Scenarios -- or
+    ``(None, [])`` for a standalone Deal. Read-only: it never materializes an
+    Investment."""
+
+    with _connect(db_path) as connection:
+        if _operating_mode_of(connection, deal_id) is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _investment_of_deal(connection, deal_id)
+        if investment_id is None:
+            return None, []
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        return investment_id, _read_scenarios(
+            connection, investment_id, unit_id=unit_id, operating_mode=operating_mode
+        )
+
+
+# -----------------------------------------------------------------------------
+# The variant cache -- fingerprint-guarded, Quick and Detailed only
+# -----------------------------------------------------------------------------
+
+
+def get_variant_snapshot(
+    investment_id: str,
+    scenario_id: str,
+    *,
+    operating_mode: OperatingMode,
+    expected_fingerprint: str,
+    db_path: Path | None = None,
+) -> AcquisitionResults | DetailedAcquisitionResults | None:
+    """The cached result of the Base-strategy variant of ``scenario_id``, only
+    if it is current.
+
+    ``expected_fingerprint`` is the resolved-input fingerprint the caller has
+    just recomputed from the Scenario and the unit's current inputs. Exactly as
+    for every other snapshot (``_decode_snapshot``), a missing row, another
+    schema version, a different fingerprint and an undecodable or malformed
+    payload all read as ``None``: a cache miss, recomputed by the caller, never
+    repaired and never an error.
+
+    Lease-Level variants have no cache (Q14, D5 decision A), so asking for one
+    is a caller error and is refused."""
+
+    match operating_mode:
+        case OperatingMode.QUICK:
+            decoder: Any = _quick_analysis_snapshot_from_dict
+        case OperatingMode.DETAILED:
+            decoder = _detailed_analysis_snapshot_from_dict
+        case OperatingMode.LEASE_LEVEL:
+            raise UnsupportedOperatingModeError(operating_mode, operation="get_variant_snapshot")
+        case _:
+            raise UnsupportedOperatingModeError(operating_mode, operation="get_variant_snapshot")
+
+    with _connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT * FROM variant_snapshots "
+            "WHERE root_id = ? AND strategy_id = ? AND scenario_id = ?",
+            (investment_id, _BASE_STRATEGY_ID, scenario_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return _decode_snapshot(
+        raw_json=row["snapshot"],
+        stored_schema_version=row["schema_version"],
+        current_schema_version=_VARIANT_SNAPSHOT_SCHEMA_VERSION,
+        stored_fingerprint=row["source_fingerprint"],
+        expected_fingerprint=expected_fingerprint,
+        decoder=decoder,
+    )
+
+
+def put_variant_snapshot(
+    investment_id: str,
+    scenario_id: str,
+    results: AcquisitionResults | DetailedAcquisitionResults,
+    *,
+    source_fingerprint: str,
+    db_path: Path | None = None,
+) -> None:
+    """Cache the result of the Base-strategy variant of ``scenario_id``.
+
+    Written only by ``anchor.deals.variants``, which passes the result of the
+    D6 entry point and the fingerprint of the very resolved inputs it ran --
+    the pair is truthful by construction, and the read side re-proves it
+    against the current inputs before serving anything. The Scenario must
+    belong to the wrapper, and the result must be its unit's own mode's
+    contract. A Lease-Level variant is refused (Q14, D5 decision A)."""
+
+    if not isinstance(source_fingerprint, str) or not source_fingerprint:
+        raise SnapshotValidationError("A variant snapshot needs a non-empty source fingerprint.")
+    with _connect(db_path) as connection:
+        _, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        _require_owned_scenario(connection, investment_id, scenario_id)
+        match operating_mode:
+            case OperatingMode.QUICK:
+                expected_type: type = AcquisitionResults
+            case OperatingMode.DETAILED:
+                expected_type = DetailedAcquisitionResults
+            case OperatingMode.LEASE_LEVEL:
+                raise UnsupportedOperatingModeError(operating_mode, operation="put_variant_snapshot")
+            case _:
+                raise UnsupportedOperatingModeError(operating_mode, operation="put_variant_snapshot")
+        if type(results) is not expected_type:
+            raise SnapshotValidationError(
+                f"A {operating_mode.value} variant caches {expected_type.__name__}, "
+                f"not {type(results).__name__}."
+            )
+        connection.execute(
+            """
+            INSERT INTO variant_snapshots
+                (root_id, strategy_id, scenario_id, snapshot, schema_version,
+                 source_fingerprint, generated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (root_id, strategy_id, scenario_id) DO UPDATE SET
+                snapshot = excluded.snapshot,
+                schema_version = excluded.schema_version,
+                source_fingerprint = excluded.source_fingerprint,
+                generated_at = excluded.generated_at
+            """,
+            (
+                investment_id,
+                _BASE_STRATEGY_ID,
+                scenario_id,
+                _encode_snapshot(results),
+                _VARIANT_SNAPSHOT_SCHEMA_VERSION,
+                source_fingerprint,
+                _utc_now_iso(),
+            ),
+        )

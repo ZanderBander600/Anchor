@@ -482,15 +482,19 @@ def _without_the_ai_version(source: str) -> tuple[str, list[int]]:
     return ast.dump(tree), values
 
 
+# The two claims below are pinned at P7.2 to D6.8's own committed tree
+# (``_D6_8_MERGE``), so they keep proving exactly what D6.8 changed however later
+# gates move the tree. P7.2 changes the store and the API on purpose; its own
+# claims are ``tests/test_p7_2_investment_scenario_architecture.py``.
 def test_the_store_changed_only_its_ai_snapshot_version() -> None:
-    current, (current_version,) = _without_the_ai_version(_current(_STORE))
+    current, (current_version,) = _without_the_ai_version(_at(_D6_8_MERGE, _STORE))
     baseline, (baseline_version,) = _without_the_ai_version(_at(_D6_5_MERGE, _STORE))
     assert current == baseline
     assert current_version == baseline_version + 1
 
 
 def test_the_api_changed_only_by_handing_the_lease_level_ai_arm_its_plan() -> None:
-    tree = ast.parse(_current(_API))
+    tree = ast.parse(_at(_D6_8_MERGE, _API))
     (call,) = _calls(_functions(tree)["_ai_analysis_lease_level"], "generate_lease_level_ai_analysis")
     assert _passes_the_plan(call)
     call.keywords = [keyword for keyword in call.keywords if keyword.arg != "business_plan"]
