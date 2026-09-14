@@ -1102,3 +1102,144 @@ describe('every operating mode', () => {
     expect(screen.queryByText(/bypassed|cache/i)).toBeNull();
   });
 });
+
+describe('a dirty base locks an editor that is already open', () => {
+  /** Every control that could change the draft, plus Cancel. */
+  function editorControls() {
+    return {
+      name: screen.getByLabelText('Scenario Name') as HTMLInputElement,
+      description: screen.getByLabelText('Description (optional)') as HTMLInputElement,
+      targets: screen.getAllByLabelText('Assumption') as HTMLSelectElement[],
+      operations: screen.getAllByLabelText(/^Operation for /) as HTMLSelectElement[],
+      values: screen.getAllByLabelText(/^Value for /) as HTMLInputElement[],
+      removes: screen.getAllByRole('button', { name: /^Remove .* override$/ }) as HTMLButtonElement[],
+      addOverride: button('Add Override'),
+      save: button('Save Scenario'),
+      cancel: button('Cancel'),
+    };
+  }
+
+  function expectEditable(editable: boolean) {
+    const controls = editorControls();
+    const mutating = [
+      controls.name,
+      controls.description,
+      ...controls.targets,
+      ...controls.operations,
+      ...controls.values,
+      ...controls.removes,
+      controls.addOverride,
+      controls.save,
+    ];
+    // Name, description, Add Override, Save, and four controls per row.
+    expect(mutating.length).toBeGreaterThanOrEqual(8);
+    for (const control of mutating) {
+      expect(control.disabled, control.id || control.getAttribute('aria-label') || control.textContent).toBe(
+        !editable,
+      );
+    }
+    // Leaving the editor is always possible.
+    expect(controls.cancel.disabled).toBe(false);
+  }
+
+  function draftOnScreen() {
+    const controls = editorControls();
+    return {
+      name: controls.name.value,
+      description: controls.description.value,
+      targets: controls.targets.map((select) => select.value),
+      operations: controls.operations.map((select) => select.value),
+      values: controls.values.map((input) => input.value),
+    };
+  }
+
+  it('keeps an open Scenario’s draft on screen and locked, then editable again once the Deal is clean', async () => {
+    mockList.mockResolvedValue(listed([DOWNSIDE]));
+    mockUpdate.mockResolvedValue({
+      ...DOWNSIDE,
+      scenario: { ...DOWNSIDE.scenario, name: 'Downside revised' },
+    });
+    const { user, rerenderWith } = renderWorkspace();
+    await readyToEdit();
+
+    // 1. Open an existing Scenario while the Deal is clean, and change it.
+    await user.click(button('Edit Downside'));
+    await waitFor(() => expect(assumption().options.length).toBeGreaterThan(2));
+    await user.clear(screen.getByLabelText('Scenario Name'));
+    await user.type(screen.getByLabelText('Scenario Name'), 'Downside revised');
+    await user.clear(screen.getByLabelText('Value for Interest Rate'));
+    await user.type(screen.getByLabelText('Value for Interest Rate'), '1.5');
+    expectEditable(true);
+    const draft = {
+      name: 'Downside revised',
+      description: 'Higher exit cap and debt cost',
+      targets: ['exit_cap_rate', 'interest_rate'],
+      operations: ['add', 'add'],
+      values: ['0.5', '1.5'],
+    };
+    expect(draftOnScreen()).toEqual(draft);
+
+    // 2-12. The base becomes dirty while the editor stays mounted.
+    rerenderWith({ isDirty: true });
+    expect(screen.getByRole('heading', { name: 'Edit Scenario' })).toBeTruthy();
+    expect(screen.getByText(SAVE_BEFORE_SCENARIOS_MESSAGE)).toBeTruthy();
+    expectEditable(false);
+
+    // 13. The draft is kept exactly as typed, and cannot be changed.
+    expect(draftOnScreen()).toEqual(draft);
+    await user.type(screen.getByLabelText('Scenario Name'), ' again');
+    await user.type(screen.getByLabelText('Value for Exit Cap Rate'), '9');
+    expect(draftOnScreen()).toEqual(draft);
+    expect(mockUpdate).not.toHaveBeenCalled();
+
+    // 14. Clean again: editable, with nothing lost.
+    rerenderWith({ isDirty: false });
+    expectEditable(true);
+    expect(draftOnScreen()).toEqual(draft);
+    await user.clear(screen.getByLabelText('Value for Interest Rate'));
+    await user.type(screen.getByLabelText('Value for Interest Rate'), '2');
+    await user.click(button('Save Scenario'));
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    expect(mockUpdate).toHaveBeenCalledWith('inv-1', 'sc-down', {
+      name: 'Downside revised',
+      description: 'Higher exit cap and debt cost',
+      overrides: [
+        { unit_id: 'deal-1', target: 'exit_cap_rate', operation: 'add', value: 0.005 },
+        { unit_id: 'deal-1', target: 'interest_rate', operation: 'add', value: 0.02 },
+      ],
+    });
+  });
+
+  it('locks a new Scenario’s draft the same way, and Cancel still leaves', async () => {
+    const { user, rerenderWith } = renderWorkspace();
+    await readyToEdit();
+    await user.click(button('Add Scenario'));
+    await waitFor(() => expect(assumption().options.length).toBeGreaterThan(1));
+    await user.type(screen.getByLabelText('Scenario Name'), 'Rate shock');
+    await user.type(screen.getByLabelText('Description (optional)'), 'Debt reprices');
+    await user.selectOptions(assumption(), 'interest_rate');
+    await user.selectOptions(screen.getByLabelText('Operation for Interest Rate'), 'add');
+    await user.type(screen.getByLabelText('Value for Interest Rate'), '2');
+    const draft = {
+      name: 'Rate shock',
+      description: 'Debt reprices',
+      targets: ['interest_rate'],
+      operations: ['add'],
+      values: ['2'],
+    };
+
+    rerenderWith({ isDirty: true });
+    expect(screen.getByRole('heading', { name: 'New Scenario' })).toBeTruthy();
+    expectEditable(false);
+    expect(draftOnScreen()).toEqual(draft);
+
+    rerenderWith({ isDirty: false });
+    expectEditable(true);
+    expect(draftOnScreen()).toEqual(draft);
+
+    rerenderWith({ isDirty: true });
+    await user.click(button('Cancel'));
+    expect(screen.queryByRole('heading', { name: 'New Scenario' })).toBeNull();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+});

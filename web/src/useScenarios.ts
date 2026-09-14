@@ -441,12 +441,21 @@ export function useScenarios({
   const isComparisonCurrent = comparison !== null && comparison.token === token && !isDirty;
   const canRun = canEdit && scenarios.length > 0 && !isRunning;
 
+  /** Every draft edit goes through here. While the base has unsaved changes
+   * the draft is kept exactly as typed, but it cannot change: Scenario edits
+   * wait for the base to be saved, like running does. */
+  function editDraft(update: (draft: ScenarioEditorDraft) => ScenarioEditorDraft) {
+    if (!canEdit) {
+      return;
+    }
+    setEditor((current) => (current === null ? current : update(current)));
+  }
+
   function updateRow(key: string, update: (row: ScenarioEditorRow) => ScenarioEditorRow) {
-    setEditor((current) =>
-      current === null
-        ? current
-        : { ...current, rows: current.rows.map((row) => (row.key === key ? update(row) : row)) },
-    );
+    editDraft((draft) => ({
+      ...draft,
+      rows: draft.rows.map((row) => (row.key === key ? update(row) : row)),
+    }));
   }
 
   function allowedOperations(target: string): ScenarioOperation[] {
@@ -661,17 +670,11 @@ export function useScenarios({
       setEditor(null);
       setFeedback(null);
     },
-    setEditorName: (name) => setEditor((current) => (current === null ? current : { ...current, name })),
-    setEditorDescription: (description) =>
-      setEditor((current) => (current === null ? current : { ...current, description })),
-    addRow: () =>
-      setEditor((current) =>
-        current === null ? current : { ...current, rows: [...current.rows, blankRow()] },
-      ),
+    setEditorName: (name) => editDraft((draft) => ({ ...draft, name })),
+    setEditorDescription: (description) => editDraft((draft) => ({ ...draft, description })),
+    addRow: () => editDraft((draft) => ({ ...draft, rows: [...draft.rows, blankRow()] })),
     removeRow: (key) =>
-      setEditor((current) =>
-        current === null ? current : { ...current, rows: current.rows.filter((row) => row.key !== key) },
-      ),
+      editDraft((draft) => ({ ...draft, rows: draft.rows.filter((row) => row.key !== key) })),
     setRowTarget: (key, target) =>
       updateRow(key, (row) => {
         if (row.target === target) {

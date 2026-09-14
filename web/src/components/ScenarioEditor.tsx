@@ -16,6 +16,12 @@
  * **Refusals are shown as the backend worded them.** Each issue appears on the
  * row it names, or above the table if no row owns it. A failed save keeps every
  * value the analyst typed.
+ *
+ * **Locked while the base underwriting is dirty.** An editor that is already
+ * open when the analyst edits the base stays on screen with its draft intact,
+ * but every control that could change it is disabled until the Deal is saved
+ * or its edits are reverted. Cancel stays available. The workspace states the
+ * reason.
  */
 
 import { Fragment, useEffect, useRef } from 'react';
@@ -52,6 +58,7 @@ interface OverrideRowProps {
 }
 
 function OverrideRow({ row, entries, taken, issues, state }: OverrideRowProps) {
+  const locked = !state.canEdit;
   const entry = entries.find((candidate) => candidate.target === row.target);
   const label = row.target === '' ? 'this override' : scenarioTargetLabel(row.target);
   const offered = entries.filter(
@@ -85,6 +92,7 @@ function OverrideRow({ row, entries, taken, issues, state }: OverrideRowProps) {
             className="field-input scenario-select"
             value={row.target}
             onChange={(event) => state.setRowTarget(row.key, event.target.value)}
+            disabled={locked}
             aria-invalid={hasIssues ? true : undefined}
             aria-describedby={hasIssues ? issuesId : undefined}
           >
@@ -108,7 +116,7 @@ function OverrideRow({ row, entries, taken, issues, state }: OverrideRowProps) {
             onChange={(event) =>
               state.setRowOperation(row.key, event.target.value as ScenarioOperation | '')
             }
-            disabled={row.target === ''}
+            disabled={locked || row.target === ''}
           >
             <option value="">Choose…</option>
             {operations.map((operation) => (
@@ -130,7 +138,7 @@ function OverrideRow({ row, entries, taken, issues, state }: OverrideRowProps) {
               value={row.value}
               onChange={(value) => state.setRowValue(row.key, value)}
               group={false}
-              disabled={format === null}
+              disabled={locked || format === null}
               aria-invalid={hasIssues ? true : undefined}
               aria-describedby={describedBy === '' ? undefined : describedBy}
               style={{
@@ -151,6 +159,7 @@ function OverrideRow({ row, entries, taken, issues, state }: OverrideRowProps) {
             type="button"
             className="btn btn-ghost btn-xs"
             onClick={() => state.removeRow(row.key)}
+            disabled={locked}
             aria-label={`Remove ${label} override`}
           >
             Remove
@@ -175,6 +184,7 @@ function OverrideRow({ row, entries, taken, issues, state }: OverrideRowProps) {
 export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
   const nameInput = useRef<HTMLInputElement>(null);
   const feedback = state.feedback;
+  const locked = !state.canEdit;
   const taken = new Set(editor.rows.map((row) => row.target).filter((target) => target !== ''));
   const canAddRow =
     state.catalogStatus === 'ready' && state.targets.some((entry) => !taken.has(entry.target));
@@ -221,6 +231,7 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
             type="text"
             value={editor.name}
             onChange={(event) => state.setEditorName(event.target.value)}
+            disabled={locked}
             autoComplete="off"
           />
         </label>
@@ -232,6 +243,7 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
             type="text"
             value={editor.description}
             onChange={(event) => state.setEditorDescription(event.target.value)}
+            disabled={locked}
             autoComplete="off"
           />
         </label>
@@ -274,7 +286,7 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
           </p>
         )}
         <div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={state.addRow} disabled={!canAddRow}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={state.addRow} disabled={locked || !canAddRow}>
             Add Override
           </button>
         </div>
