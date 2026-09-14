@@ -105,9 +105,13 @@ def _is_production(path: str) -> bool:
 
 def _changes_since(base: str, *paths: str) -> set[str]:
     """Committed, staged, unstaged and untracked changes since ``base``. Reads
-    Git only; it never touches the index (protocol 11.2)."""
+    Git only; it never touches the index (protocol 11.2).
 
-    tracked = _git("diff", "--name-only", base, "--", *paths).split()
+    ``--no-renames``: P7.3 renames ``StrategyStrip.tsx`` to
+    ``DealContextStrip.tsx``. Rename detection would report the new path alone
+    and hide that the old production file was removed, so both are listed."""
+
+    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
     untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
     return {path for path in (*tracked, *untracked) if path}
 
