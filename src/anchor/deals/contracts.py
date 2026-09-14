@@ -62,6 +62,7 @@ from ..analysis import (
 )
 from ..analysis.contracts import OneWaySensitivityResult, TwoWaySensitivityResult
 from ..analysis.scenario import ScenarioDefinition
+from ..analysis.strategy import StrategyDefinition
 from ..business_plan import BusinessPlan
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 
@@ -449,6 +450,51 @@ class ScenarioNotFoundError(LookupError):
         self.scenario_id = scenario_id
         super().__init__(
             f"No scenario {scenario_id!r} belongs to investment {investment_id!r}."
+        )
+
+
+# =============================================================================
+# Phase 7 Gate P7.4 -- persisted Strategies
+#
+# A Strategy is owned by the same Investment as the Scenarios (Section 15.1:
+# one owner type for all P7 structure). The first Strategy of a standalone Deal
+# materializes the hidden one-unit wrapper exactly as a first Scenario does, and
+# a Deal that already has one reuses it. The Base Strategy is implicit and is
+# never a stored row.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InvestmentStrategy:
+    """One persisted Strategy and the Investment that owns it.
+
+    ``strategy`` is the exact P7.4 ``StrategyDefinition`` -- its id, name,
+    description and unit-addressed overlays -- never a parallel shape. It has
+    passed the P7.4 stage-1 contract validation for the owning Investment's
+    unit, and its overlays are in canonical order (domain, then unit).
+
+    Whether its variants *resolve* to valid inputs is decided when they are
+    fingerprinted or analysed (SC-4): the Base inputs and the Scenarios can
+    change after the strategy is saved."""
+
+    investment_id: str
+    strategy: StrategyDefinition
+    created_at: datetime
+    updated_at: datetime
+
+
+class StrategyNotFoundError(LookupError):
+    """No Strategy with this id belongs to this Investment.
+
+    Raised identically whether the strategy does not exist or belongs to
+    another Investment, so a foreign strategy's existence is not disclosed.
+    The reserved Base key is never a stored Strategy, so it is never found."""
+
+    def __init__(self, investment_id: str, strategy_id: str) -> None:
+        self.investment_id = investment_id
+        self.strategy_id = strategy_id
+        super().__init__(
+            f"No strategy {strategy_id!r} belongs to investment {investment_id!r}."
         )
 
 

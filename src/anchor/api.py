@@ -78,21 +78,40 @@ from .analysis.scenario import (
     ScenarioTarget,
     ScenarioValidationError,
 )
+from .analysis.strategy import (
+    STRATEGY_DOMAIN_FIELDS,
+    AcquisitionChoice,
+    DispositionChoice,
+    FinancingChoice,
+    OperatingOutcome,
+    OperatingOutcomeSet,
+    StrategyDomain,
+    StrategyOverlay,
+    StrategyValidationError,
+)
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError, SnapshotValidationError
 from .deals import store as investment_store
 from .deals.variants import (
     ScenarioVariantAnalysis,
     ScenarioVariantFingerprint,
+    VariantAnalysis,
+    VariantFingerprint,
+    VariantInputs,
     analyze_scenario_variant,
+    analyze_variant,
+    inspect_variant_inputs,
     scenario_variant_fingerprint,
+    variant_fingerprint,
 )
 from .deals.contracts import (
     Investment,
     InvestmentNotFoundError,
     InvestmentScenario,
+    InvestmentStrategy,
     InvestmentStructureError,
     ScenarioNotFoundError,
+    StrategyNotFoundError,
 )
 from .deals.fingerprint import (
     fingerprint_ai,
@@ -2493,3 +2512,427 @@ def scenario_target_catalog() -> dict[str, list[_ScenarioTargetEntry]]:
         ]
         for mode in OperatingMode
     }
+
+
+# =============================================================================
+# Phase 7 Gate P7.4 -- persisted Strategies and every variant of an Investment
+#
+# The backend P7.5 builds the Strategy x Scenario matrix on. Every route
+# delegates: storage and the lifecycle to ``anchor.deals.store``, and variant
+# inspection, fingerprints and analysis to ``anchor.deals.variants``, which
+# resolve Base -> Strategy -> Scenario through ``anchor.analysis.strategy`` and
+# the P7.1 Scenario engine and run the existing D6 entry points. This module
+# computes nothing and adds no second analysis pathway.
+#
+# **Opt-in only (Q4).** ``POST /deals/{deal_id}/strategies`` materializes the
+# hidden one-unit wrapper with a Deal's first Strategy -- or reuses the one its
+# Scenarios already created. Every GET is read-only and never creates a row.
+#
+# **A variant is addressed by its identity (Section 7.5):**
+# ``/investments/{investment_id}/variants/{strategy_id}/{scenario_id}``, where
+# either key may be the reserved ``base``. Ownership is proven, never assumed:
+# a Strategy or Scenario id from another Investment is a 404.
+#
+# **The request parser is structural only.** A known domain's content becomes
+# its contract, with a missing field passed on as ``None``; an unknown domain
+# carries no content. The P7.4 validator -- the one authority -- then reports
+# every contract problem, incomplete domains included, as a structured 422. A
+# Business Plan overlay is parsed by the D6 parser, as a Deal's plan is.
+# =============================================================================
+
+#: The keys a Strategy body may carry, one overlay, and one operating outcome.
+#: Literal tuples, so an unknown key is always refused rather than ignored. A
+#: whole-domain overlay's content keys are its contract's own fields
+#: (``STRATEGY_DOMAIN_FIELDS``), never restated here.
+_STRATEGY_FIELDS = ("name", "description", "overlays")
+_STRATEGY_OVERLAY_FIELDS = ("unit_id", "domain", "content")
+_OPERATING_OUTCOME_CONTENT_FIELDS = ("outcomes",)
+_OPERATING_OUTCOME_FIELDS = ("target", "operation", "value")
+
+
+def _structural_error(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+
+
+def _strategy_domain_token(raw: Any) -> Any:
+    """The ``StrategyDomain`` member ``raw`` names, or ``raw`` itself for the
+    P7.4 validator to refuse by name -- a plain lookup, never a caught enum
+    error (``tests/test_d5_5c_recovery_validation_mutations.py``)."""
+
+    if isinstance(raw, str):
+        for member in StrategyDomain:
+            if member.value == raw:
+                return member
+    return raw
+
+
+def _content_object(raw: Any, allowed: tuple[str, ...], where: str) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise _structural_error(f"{where} must be an object.")
+    unknown = sorted(key for key in raw if key not in allowed)
+    if unknown:
+        raise _structural_error(
+            f"{where} holds unknown field(s): {', '.join(unknown)}. It holds only "
+            f"{', '.join(allowed)}."
+        )
+    return raw
+
+
+def _strategy_business_plan_error(
+    error: BusinessPlanValidationError, where: str
+) -> HTTPException:
+    """A refused Business Plan overlay, in the D6 ``code``/``path``/``message``
+    shape, with each path rooted at the overlay's content."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "path": where if issue.path == _BUSINESS_PLAN_KEY else f"{where}.{issue.path}",
+                "message": issue.message,
+            }
+            for issue in error.result.issues
+        ],
+    )
+
+
+def _operating_outcome_content(raw: Any, where: str) -> OperatingOutcomeSet:
+    body = _content_object(raw, _OPERATING_OUTCOME_CONTENT_FIELDS, where)
+    raw_outcomes = body.get("outcomes", [])
+    if not isinstance(raw_outcomes, list):
+        raise _structural_error(f"{where}.outcomes must be an array of outcome objects.")
+    outcomes: list[OperatingOutcome] = []
+    for index, raw_outcome in enumerate(raw_outcomes):
+        item = f"{where}.outcomes[{index}]"
+        if not isinstance(raw_outcome, dict):
+            raise _structural_error(f"{item} must be an object.")
+        missing = [key for key in _OPERATING_OUTCOME_FIELDS if key not in raw_outcome]
+        extra = sorted(key for key in raw_outcome if key not in _OPERATING_OUTCOME_FIELDS)
+        if missing or extra:
+            raise _structural_error(
+                f"{item} must hold exactly 'target', 'operation' and 'value' "
+                f"(missing: {missing}; unknown: {extra})."
+            )
+        outcomes.append(
+            OperatingOutcome(
+                target=_scenario_token(ScenarioTarget, raw_outcome["target"]),
+                operation=_scenario_token(ScenarioOperation, raw_outcome["operation"]),
+                value=raw_outcome["value"],
+            )
+        )
+    return OperatingOutcomeSet(outcomes=tuple(outcomes))
+
+
+def _stated(body: dict[str, Any], field: str) -> Any:
+    """A whole-domain field exactly as sent, or ``None`` when it was not sent --
+    passed on untouched for the P7.4 validator to judge (an absent field is an
+    incomplete domain), never filled from anywhere else."""
+
+    return body.get(field)
+
+
+def _strategy_content(domain: Any, raw: Any, where: str) -> Any:
+    """``domain``'s content contract from its wire object, structurally. A
+    whole-domain field that is absent arrives as ``None``, which the validator
+    refuses as an incomplete domain; nothing is taken from Base."""
+
+    match domain:
+        case StrategyDomain.ACQUISITION:
+            body = _content_object(raw, STRATEGY_DOMAIN_FIELDS[domain], where)
+            return AcquisitionChoice(
+                purchase_price=_stated(body, "purchase_price"),
+                acquisition_cost_pct=_stated(body, "acquisition_cost_pct"),
+            )
+        case StrategyDomain.FINANCING:
+            body = _content_object(raw, STRATEGY_DOMAIN_FIELDS[domain], where)
+            return FinancingChoice(
+                ltv=_stated(body, "ltv"),
+                interest_rate=_stated(body, "interest_rate"),
+                amortization=_stated(body, "amortization"),
+                io_period=_stated(body, "io_period"),
+                financing_fee_pct=_stated(body, "financing_fee_pct"),
+            )
+        case StrategyDomain.BUSINESS_PLAN:
+            try:
+                return parse_business_plan(raw)
+            except BusinessPlanValidationError as error:
+                raise _strategy_business_plan_error(error, where) from None
+        case StrategyDomain.OPERATING_OUTCOME:
+            return _operating_outcome_content(raw, where)
+        case StrategyDomain.DISPOSITION:
+            body = _content_object(raw, STRATEGY_DOMAIN_FIELDS[domain], where)
+            return DispositionChoice(hold_period=_stated(body, "hold_period"))
+        case _:
+            return None
+
+
+def _strategy_request(
+    payload: dict[str, Any],
+) -> tuple[Any, Any, tuple[StrategyOverlay, ...]]:
+    """``(name, description, overlays)`` from a Strategy body, or a structural
+    422. No contract rule is applied here."""
+
+    unknown = sorted(key for key in payload if key not in _STRATEGY_FIELDS)
+    if unknown:
+        raise _structural_error(
+            f"Unknown strategy field(s): {', '.join(unknown)}. A strategy body holds "
+            "only 'name', 'description' and 'overlays'."
+        )
+    raw_overlays = payload.get("overlays", [])
+    if not isinstance(raw_overlays, list):
+        raise _structural_error("'overlays' must be an array of overlay objects.")
+    overlays: list[StrategyOverlay] = []
+    for index, raw in enumerate(raw_overlays):
+        where = f"overlays[{index}]"
+        if not isinstance(raw, dict):
+            raise _structural_error(f"{where} must be an object.")
+        missing = [key for key in _STRATEGY_OVERLAY_FIELDS if key not in raw]
+        extra = sorted(key for key in raw if key not in _STRATEGY_OVERLAY_FIELDS)
+        if missing or extra:
+            raise _structural_error(
+                f"{where} must hold exactly 'unit_id', 'domain' and 'content' "
+                f"(missing: {missing}; unknown: {extra})."
+            )
+        domain = _strategy_domain_token(raw["domain"])
+        overlays.append(
+            StrategyOverlay(
+                unit_id=raw["unit_id"],
+                domain=domain,
+                content=_strategy_content(domain, raw["content"], f"{where}.content"),
+            )
+        )
+    return payload.get("name"), payload.get("description"), tuple(overlays)
+
+
+def _strategy_validation_error_response(error: StrategyValidationError) -> HTTPException:
+    """An invalid Strategy or Strategy variant as a structured 422: the P7.4
+    issues, in the P7.4 validator's own order, each with its stage and stable
+    code."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "stage": issue.stage.value,
+                "code": issue.code.value,
+                "message": issue.message,
+                "domain": None if issue.domain is None else issue.domain.value,
+                "unit_id": issue.unit_id,
+                "field": issue.field,
+                "target": None if issue.target is None else issue.target.value,
+                "source_code": issue.source_code,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class _DealStrategies:
+    """A Deal's Strategies and the Investment that owns them -- ``None`` and no
+    Strategies for a standalone Deal."""
+
+    deal_id: str
+    investment_id: str | None
+    strategies: tuple[InvestmentStrategy, ...]
+
+
+@app.post("/deals/{deal_id}/strategies", response_model=InvestmentStrategy)
+def create_deal_strategy(deal_id: str, payload: dict[str, Any] = Body(...)) -> InvestmentStrategy:
+    """Create a Strategy for the Deal ``deal_id``. A Deal with no Investment
+    gains the hidden one-unit wrapper in the same transaction; a Deal whose
+    Scenarios already created one reuses it. An invalid Strategy leaves nothing
+    behind."""
+
+    name, description, overlays = _strategy_request(payload)
+    try:
+        return investment_store.create_strategy_for_deal(
+            deal_id, name=name, description=description, overlays=overlays
+        )
+    except DealNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+
+
+@app.get("/deals/{deal_id}/strategies", response_model=_DealStrategies)
+def list_strategies_of_deal(deal_id: str) -> _DealStrategies:
+    """Read-only: a standalone Deal reports no Investment and no Strategies,
+    and gains neither."""
+
+    try:
+        investment_id, strategies = investment_store.list_deal_strategies(deal_id)
+    except DealNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return _DealStrategies(
+        deal_id=deal_id, investment_id=investment_id, strategies=tuple(strategies)
+    )
+
+
+@app.get("/investments/{investment_id}/strategies", response_model=list[InvestmentStrategy])
+def list_investment_strategies(investment_id: str) -> list[InvestmentStrategy]:
+    try:
+        return investment_store.list_strategies(investment_id)
+    except InvestmentNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+@app.post("/investments/{investment_id}/strategies", response_model=InvestmentStrategy)
+def create_investment_strategy(
+    investment_id: str, payload: dict[str, Any] = Body(...)
+) -> InvestmentStrategy:
+    name, description, overlays = _strategy_request(payload)
+    try:
+        return investment_store.create_strategy(
+            investment_id, name=name, description=description, overlays=overlays
+        )
+    except InvestmentNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+
+
+@app.get(
+    "/investments/{investment_id}/strategies/{strategy_id}", response_model=InvestmentStrategy
+)
+def read_investment_strategy(investment_id: str, strategy_id: str) -> InvestmentStrategy:
+    try:
+        return investment_store.get_strategy(investment_id, strategy_id)
+    except (InvestmentNotFoundError, StrategyNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+@app.put(
+    "/investments/{investment_id}/strategies/{strategy_id}", response_model=InvestmentStrategy
+)
+def update_investment_strategy(
+    investment_id: str, strategy_id: str, payload: dict[str, Any] = Body(...)
+) -> InvestmentStrategy:
+    """Replace the Strategy's name, description and whole overlay set; its id
+    is kept."""
+
+    name, description, overlays = _strategy_request(payload)
+    try:
+        return investment_store.update_strategy(
+            investment_id, strategy_id, name=name, description=description, overlays=overlays
+        )
+    except (InvestmentNotFoundError, StrategyNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+
+
+@app.delete(
+    "/investments/{investment_id}/strategies/{strategy_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_investment_strategy(investment_id: str, strategy_id: str) -> None:
+    """Delete the Strategy with its overlays and cached variants. When no
+    Strategy and no Scenario is left, the wrapper is removed too and the Deal
+    is a plain standalone Deal again."""
+
+    try:
+        investment_store.delete_strategy(investment_id, strategy_id)
+    except (InvestmentNotFoundError, StrategyNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+@app.get(
+    "/investments/{investment_id}/variants/{strategy_id}/{scenario_id}/inputs",
+    response_model=VariantInputs,
+)
+def investment_variant_inputs(
+    investment_id: str, strategy_id: str, scenario_id: str
+) -> VariantInputs:
+    """What exactly the variant runs: the resolved existing contracts, before
+    any calculation, with their fingerprint. Read-only."""
+
+    try:
+        return inspect_variant_inputs(investment_id, strategy_id, scenario_id)
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+
+
+@app.get(
+    "/investments/{investment_id}/variants/{strategy_id}/{scenario_id}/fingerprint",
+    response_model=VariantFingerprint,
+)
+def investment_variant_fingerprint(
+    investment_id: str, strategy_id: str, scenario_id: str
+) -> VariantFingerprint:
+    """The variant's resolved-input financial fingerprint, from the one
+    authority in ``anchor.deals.variants``. Read-only."""
+
+    try:
+        return variant_fingerprint(investment_id, strategy_id, scenario_id)
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+
+
+@app.post(
+    "/investments/{investment_id}/variants/{strategy_id}/{scenario_id}/analysis",
+    response_model=VariantAnalysis,
+)
+def analyze_investment_variant(
+    investment_id: str, strategy_id: str, scenario_id: str
+) -> VariantAnalysis:
+    """Analyse the variant through the existing deterministic pipeline.
+    ``cache_status`` reports a current Quick or Detailed cached result served
+    (``hit``), a result computed and cached (``miss``), or a result recomputed
+    without any cache (``bypassed``): every Lease-Level variant, and Base x
+    Base, which is the Deal's own analysis."""
+
+    try:
+        return analyze_variant(investment_id, strategy_id, scenario_id)
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None

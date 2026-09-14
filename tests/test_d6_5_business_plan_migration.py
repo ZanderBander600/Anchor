@@ -76,8 +76,21 @@ _P7_2_TABLES = {
     "scenario_overrides",
     "variant_snapshots",
 }
+#: P7.4 (schema 9) adds eight more, the Strategy tables, on the same path and
+#: all empty for a legacy deal; ``tests/test_p7_4_compatibility_oracle.py``
+#: holds the v8 -> v9 step on its own.
+_P7_4_TABLES = {
+    "strategies",
+    "strategy_acquisition_overlays",
+    "strategy_financing_overlays",
+    "strategy_business_plan_overlays",
+    "strategy_capital_plan_items",
+    "strategy_owner_expense_items",
+    "strategy_operating_outcomes",
+    "strategy_disposition_overlays",
+}
 #: The schema version the current store migrates a v6 database to.
-_CURRENT_VERSION = 8
+_CURRENT_VERSION = 9
 
 
 @pytest.fixture(scope="module")
@@ -218,10 +231,10 @@ def test_the_version_advances_to_7_exactly_once_and_only_the_plan_tables_appear(
     migrated = _raw(db)
 
     assert _version(db) == _CURRENT_VERSION
-    assert set(migrated) == set(before) | _PLAN_TABLES | _P7_2_TABLES
+    assert set(migrated) == set(before) | _PLAN_TABLES | _P7_2_TABLES | _P7_4_TABLES
     assert migrated["deal_capital_plan_items"] == []
     assert migrated["deal_owner_expense_items"] == []
-    assert all(migrated[table] == [] for table in _P7_2_TABLES)
+    assert all(migrated[table] == [] for table in _P7_2_TABLES | _P7_4_TABLES)
 
     for _ in range(3):
         deals_store.list_deals(db_path=db)

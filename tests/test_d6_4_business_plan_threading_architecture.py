@@ -976,6 +976,11 @@ _BUSINESS_PLAN_IMPORTS = {
     # and on to the D6.2 entry points, which do the resolving
     # (``tests/test_p7_1_scenario_architecture.py``).
     "anchor/analysis/scenario.py": {"BusinessPlan"},
+    # Widened at P7.4 by exactly the Strategy engine. A BUSINESS_PLAN overlay
+    # carries a whole replacement plan, which the engine hands to the D6
+    # validation authority and then carries, unopened, to the D6.2 entry points
+    # (``tests/test_p7_4_strategy_architecture.py``).
+    "anchor/analysis/strategy.py": {"BusinessPlan", "validate_business_plan"},
     "anchor/ai/analyst.py": {"BusinessPlan"},
     # Widened at D6.8 by exactly the two AI files that ground the plan. The
     # context contract names it; the presentation layer reads its items for

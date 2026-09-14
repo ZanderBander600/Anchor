@@ -228,12 +228,26 @@ def rows(db: Path, table: str) -> list[tuple[Any, ...]]:
         connection.close()
 
 
+#: The eight Strategy tables schema v9 adds (P7.4). They are P7 structure, never
+#: legacy rows, exactly like the five above.
+P7_4_TABLES = (
+    "strategies",
+    "strategy_acquisition_overlays",
+    "strategy_financing_overlays",
+    "strategy_business_plan_overlays",
+    "strategy_capital_plan_items",
+    "strategy_owner_expense_items",
+    "strategy_operating_outcomes",
+    "strategy_disposition_overlays",
+)
+
+
 def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
-    """Every row of every table that is not a P7.2 table, in rowid order."""
+    """Every row of every table that is not a P7 table, in rowid order."""
 
     return {
         table: rows(db, table)
-        for table in sorted(table_names(db) - set(P7_2_TABLES))
+        for table in sorted(table_names(db) - set(P7_2_TABLES) - set(P7_4_TABLES))
         if not table.startswith("sqlite_")
     }
 

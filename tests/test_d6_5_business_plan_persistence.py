@@ -451,9 +451,14 @@ def test_the_plan_tables_are_mode_blind_and_carry_every_contract_field(db: Path)
 
     # One representation for every mode: no per-mode plan table, and no plan
     # field folded into any mode's own columns.
+    #
+    # P7.4 adds exactly two more item tables, and neither is a Deal's plan: a
+    # Strategy's BUSINESS_PLAN overlay stores its replacement plan in the same D6
+    # row shape, keyed by strategy and unit, and reads it back through the same
+    # D6 codec (``tests/test_p7_4_strategy_architecture.py``).
     assert {table for table in tables if "capital" in table or "expense" in table} == set(
         _PLAN_TABLES
-    )
+    ) | {"strategy_capital_plan_items", "strategy_owner_expense_items"}
     assert not parent_columns & {"business_plan", "capital_items", "owner_expense_items"}
 
 

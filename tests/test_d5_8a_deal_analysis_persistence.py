@@ -1074,8 +1074,9 @@ def test_a_pre_gate_database_opens_and_starts_empty(tmp_path: Path) -> None:
     ).fetchone()[0]
     connection.close()
     # D6.5 adds the two Business Plan tables on top of D5.8A's, and P7.2 the
-    # five additive P7 tables on top of those.
-    assert version == 8
+    # five additive P7 tables on top of those, and P7.4 the eight Strategy
+    # tables on top of those.
+    assert version == 9
     assert empty == 0
 
 

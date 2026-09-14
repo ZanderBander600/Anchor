@@ -179,6 +179,12 @@ def test_leasing_package_imports_only_stdlib_its_own_modules_and_contracts() -> 
 #: builder and never calls the bridge: the analysis runs through the D6.2
 #: Business Plan entry point. ``tests/test_p7_1_scenario_architecture.py`` pins
 #: its leasing imports name by name.
+#:
+#: Extended at P7.4 with ``strategy.py``: the Strategy engine resolves a
+#: strategy over the same Lease-Level contracts, so it names their types, and it
+#: validates a variant's final rent roll and operating inputs with the same two
+#: existing leasing validators. It imports no builder and never calls the
+#: bridge. ``tests/test_p7_4_strategy_architecture.py`` pins its imports.
 _PERMITTED_LEASING_IMPORTERS = frozenset(
     {
         "lease_level.py",
@@ -187,6 +193,7 @@ _PERMITTED_LEASING_IMPORTERS = frozenset(
         "__init__.py",
         "business_plan_analysis.py",
         "scenario.py",
+        "strategy.py",
     }
 )
 
@@ -251,7 +258,8 @@ def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
         )
     )
 
-    # P7.1 adds the Scenario engine (see ``_PERMITTED_LEASING_IMPORTERS``).
+    # P7.1 adds the Scenario engine and P7.4 the Strategy engine (see
+    # ``_PERMITTED_LEASING_IMPORTERS``).
     assert importers == [
         "anchor/analysis/__init__.py",
         "anchor/analysis/business_plan_analysis.py",
@@ -259,6 +267,7 @@ def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
         "anchor/analysis/lease_level.py",
         "anchor/analysis/lease_level_sensitivity.py",
         "anchor/analysis/scenario.py",
+        "anchor/analysis/strategy.py",
     ]
 
     # The facade re-exports; it does not parse. Anything more than imports and
