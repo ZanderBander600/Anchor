@@ -5421,6 +5421,21 @@ body {
   margin: 0;
 }
 
+/* A locked draft reads as locked. While the base underwriting has unsaved
+   changes, the fields the analyst cannot change take the Business Plan
+   editor's disabled treatment (muted text, not-allowed cursor) on the app's
+   muted ground, so they stand apart from editable white fields yet stay
+   legible, and nothing moves. Remove, Add Override and Save already use the
+   shared `.btn:disabled`; Cancel is never disabled here. The workspace banner
+   remains the explanation. */
+.scenario-editor .field-input:disabled {
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  -webkit-text-fill-color: var(--color-text-muted);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
 .scenario-editor-actions {
   display: flex;
   justify-content: flex-end;
