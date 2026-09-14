@@ -570,7 +570,7 @@ describe('opening a saved Lease-Level deal', () => {
       );
     });
     expect(
-      document.querySelector('.strategy-strip-text')?.textContent,
+      document.querySelector('.deal-context-strip-text')?.textContent,
     ).toBe('Value-add reposition of a 1990s suburban office park.');
   });
 

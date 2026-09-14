@@ -54,6 +54,14 @@ vi.mock('./api', async () => {
     listDeals: vi.fn(),
     runLeaseLevelOneWaySensitivity: vi.fn(),
     runLeaseLevelTwoWaySensitivity: vi.fn(),
+    // P7.3: Risk opens on Scenarios, which reads the deal's Scenarios and the
+    // target catalog. Answered here so no test ever reaches a real backend.
+    listDealScenarios: vi.fn(async (dealId: string) => ({
+      deal_id: dealId,
+      investment_id: null,
+      scenarios: [],
+    })),
+    fetchScenarioTargetCatalog: vi.fn(async () => ({ quick: [], detailed: [], lease_level: [] })),
   };
 });
 
@@ -240,6 +248,8 @@ async function openRisk(suites: SuiteRequest[] = PLAIN_SUITES) {
     expect(mockGetDeal).toHaveBeenCalledWith('deal-ll-1');
   });
   await user.click(screen.getByRole('tab', { name: 'Risk' }));
+  // P7.3: Risk opens on Scenarios; sensitivity is its own view beside it.
+  await user.click(screen.getByRole('tab', { name: 'Sensitivity' }));
   return user;
 }
 

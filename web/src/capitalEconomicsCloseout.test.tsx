@@ -166,13 +166,22 @@ async function readCss(): Promise<string> {
 const D6_7_BANNER = 'Phase 6 Gate D6.7 -- Capital Economics results.';
 const NARROW = '@container capital-economics (max-width: 620px)';
 
+/** The banner of the section that follows D6.7's. D6.7 was the stylesheet's
+ * last section until P7.3 appended its own, so the slice below ends where that
+ * one begins: "the D6.7 part" is D6.7's rules and no later gate's. Every claim
+ * below about those rules is unchanged. */
+const NEXT_SECTION_BANNER = 'Phase 7 Gate P7.3 -- Scenarios and the Scenario Comparison (Risk).';
+
 /** The D6.7 part of the stylesheet, read once. */
 let D6_7_CSS = '';
 
 beforeAll(async () => {
   const css = await readCss();
-  expect(css.indexOf(D6_7_BANNER), 'the D6.7 stylesheet section is missing').toBeGreaterThan(-1);
-  D6_7_CSS = css.slice(css.indexOf(D6_7_BANNER));
+  const start = css.indexOf(D6_7_BANNER);
+  expect(start, 'the D6.7 stylesheet section is missing').toBeGreaterThan(-1);
+  const end = css.indexOf(NEXT_SECTION_BANNER, start);
+  expect(end, 'the section after D6.7 is missing').toBeGreaterThan(start);
+  D6_7_CSS = css.slice(start, end);
 });
 
 /** The bodies of every block opened by `header` in `text`. */

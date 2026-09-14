@@ -170,7 +170,7 @@ never replace them.
 | Web state | `web/src/App.tsx` | Quick and Detailed state live as parallel `useState` families (~80 hooks) in one ~124 KB component. Lease-Level state is `useLeaseLevelDeal`; Business Plan state is `useBusinessPlan`. New P7 state should follow those dedicated hooks rather than add to `App.tsx`. |
 | Web IA | `workspaces.ts`, `underwrite.ts` | Workspaces: Overview / Underwrite / Risk / AI Analyst / Documents. Underwrite tabs: Acquisition / Operations / Debt / Exit / Results. `resultsViewsFor(mode)` includes the shared `CapitalEconomicsSection`. |
 | Frontend arithmetic | guarded (`capitalEconomics.test.tsx`, `businessPlan.test.ts`) | The frontend performs no financial summation. |
-| **UI vocabulary** | `web/src/components/StrategyStrip.tsx` | **"Strategy" is today the visible label for the `deal_context` free text.** It collides with the P7 Strategy concept (§7.6). |
+| **UI vocabulary** | `web/src/components/DealContextStrip.tsx` (the `StrategyStrip` component at this audit) | **"Strategy" was, at this audit, the visible label for the `deal_context` free text.** It collided with the P7 Strategy concept (§7.6). P7.3 renamed the component and relabelled the field "Deal Context". |
 
 ### 4.5 Audit answers
 

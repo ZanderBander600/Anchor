@@ -113,13 +113,34 @@ def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
 # =============================================================================
 
 
-def test_p7_2_changed_exactly_its_authorized_production_files() -> None:
-    """The P7.2 production ledger. The next gate must re-pin this to P7.2's
-    committed range, ``58f862d..<the P7.2 merge>``, before adding its own
-    scope, exactly as P7.2 re-pinned P7.1's. Never widen this set to admit
-    another gate's files."""
+#: ``main`` after P7.2 -- the no-ff merge of
+#: ``feature/p7-2-investment-scenario-persistence``, and the end of P7.2's
+#: committed range.
+_P7_2_MERGE = "c6ddde074cbd7fd4f3f4cf10e29d4f44eed6cf83"
 
-    assert _ledger_violations(_production_changes_since(_P7_2_BASE)) == ([], [])
+
+def _changes_between(start: str, end: str, *paths: str) -> set[str]:
+    """Files that differ between two commits. Reads Git only; it never touches
+    the index (protocol 11.2)."""
+
+    return {path for path in _git("diff", "--name-only", start, end, "--", *paths).split() if path}
+
+
+def test_p7_2_changed_exactly_its_authorized_production_files() -> None:
+    """The P7.2 production ledger.
+
+    Pinned at P7.3 to P7.2's own committed range, ``58f862d..c6ddde0``, so it
+    keeps proving exactly what P7.2 changed however later gates move the tree.
+    That is the P7.1 / D6 ledger precedent. P7.3's own ledger is
+    ``tests/test_p7_3_scenario_ui_architecture.py``. Never widen this set to
+    admit another gate's files."""
+
+    changed = {
+        path
+        for path in _changes_between(_P7_2_BASE, _P7_2_MERGE, "src", "web")
+        if _is_production(path)
+    }
+    assert _ledger_violations(changed) == ([], [])
 
 
 def test_the_p7_2_ledger_base_is_the_p7_1_merge() -> None:
@@ -127,9 +148,20 @@ def test_the_p7_2_ledger_base_is_the_p7_1_merge() -> None:
     assert parents == [_git("rev-parse", ref).strip() for ref in ("f234e4c", "5aa7bd6")]
 
 
+def test_the_p7_2_ledger_end_is_the_p7_2_merge() -> None:
+    """``c6ddde0`` is the P7.2 merge: its first parent is the P7.1 merge this
+    ledger starts from, and its second is the reviewed P7.2 head."""
+
+    parents = _git("rev-list", "--parents", "-n", "1", _P7_2_MERGE).split()[1:]
+    assert parents == [_git("rev-parse", ref).strip() for ref in (_P7_2_BASE, "8e589c8")]
+
+
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged_since_p7_1(path: str) -> None:
-    assert _changes_since(_P7_2_BASE, path) == set(), f"{path} changed at P7.2"
+    """Within P7.2's own committed range. What later gates may change is their
+    own ledgers' business."""
+
+    assert _changes_between(_P7_2_BASE, _P7_2_MERGE, path) == set(), f"{path} changed at P7.2"
 
 
 def test_the_ledger_rejects_any_unexpected_production_change() -> None:
@@ -458,8 +490,26 @@ def test_no_p7_2_file_defines_a_scenario_contract_or_names_a_target_member(path:
         and node.value.id in {"ScenarioTarget", "ScenarioOperation"}
     ]
     assert members == []
-    assert "SCENARIO_TARGET_REGISTRY" not in _current(path)
+    assert "SCENARIO_TARGET_REGISTRY" not in _without_the_p7_3_catalog(_current(path))
     assert "_apply_operation" not in _current(path)
+
+
+def _without_the_p7_3_catalog(text: str) -> str:
+    """The file minus the P7.3 read-only ``GET /scenario-targets`` route and the
+    one name it imports.
+
+    P7.3 was authorized to add that route to ``api.py``: it projects the
+    registry for the Scenario editor, so the UI holds no target list of its
+    own. ``tests/test_p7_3_scenario_ui_architecture.py`` proves it is the only
+    code that names the registry, and that it computes and stores nothing.
+    Everything else in every P7.2 file still never names the registry."""
+
+    for node in ast.parse(text).body:
+        if isinstance(node, ast.FunctionDef) and node.name == "scenario_target_catalog":
+            segment = ast.get_source_segment(text, node)
+            assert segment is not None
+            text = text.replace(segment, "")
+    return re.sub(r"^\s*SCENARIO_TARGET_REGISTRY,\r?\n", "", text, count=1, flags=re.MULTILINE)
 
 
 def test_resolution_is_the_p7_1_resolvers_and_validation_the_p7_1_validator() -> None:

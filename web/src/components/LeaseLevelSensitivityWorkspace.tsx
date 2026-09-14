@@ -112,6 +112,9 @@ export function LeaseLevelSensitivityWorkspace({
         active={view}
         onSelect={(id) => setView(id as LeaseLevelSensitivityViewId)}
         label="Lease-Level sensitivity views"
+        // P7.3: nested under Risk's own Scenarios / Sensitivity navigation, so
+        // it takes the lighter inline style and never reads as its peer.
+        variant="inline"
         idFor={(id) => `lease-level-sensitivity-tab-${id}`}
         controlsFor={(id) => `lease-level-sensitivity-panel-${id}`}
       />
