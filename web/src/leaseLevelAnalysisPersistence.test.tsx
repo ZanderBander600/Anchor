@@ -85,6 +85,14 @@ vi.mock('./api', async () => {
       scenarios: [],
     })),
     fetchScenarioTargetCatalog: vi.fn(async () => ({ quick: [], detailed: [], lease_level: [] })),
+    // P7.5: Risk also reads the deal's Strategies and the Strategy target
+    // catalog; the Decision Matrix runs only on an explicit Run.
+    listDealStrategies: vi.fn(async (dealId: string) => ({
+      deal_id: dealId,
+      investment_id: null,
+      strategies: [],
+    })),
+    fetchStrategyTargetCatalog: vi.fn(async () => ({ quick: [], detailed: [], lease_level: [] })),
   };
 });
 

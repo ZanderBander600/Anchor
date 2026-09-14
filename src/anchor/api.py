@@ -80,6 +80,7 @@ from .analysis.scenario import (
 )
 from .analysis.strategy import (
     STRATEGY_DOMAIN_FIELDS,
+    STRATEGY_OUTCOME_TARGETS,
     AcquisitionChoice,
     DispositionChoice,
     FinancingChoice,
@@ -103,6 +104,11 @@ from .deals.variants import (
     inspect_variant_inputs,
     scenario_variant_fingerprint,
     variant_fingerprint,
+)
+from .deals.decision_matrix import (
+    DecisionMatrixConflictError,
+    DecisionMatrixReport,
+    analyze_decision_matrix,
 )
 from .deals.contracts import (
     Investment,
@@ -2936,3 +2942,63 @@ def analyze_investment_variant(
         raise _scenario_validation_error_response(error) from None
     except LeaseValidationError as error:
         raise _lease_validation_error_response(error) from None
+
+# =============================================================================
+# Phase 7 Gate P7.5 -- the Strategy target catalog and the Decision Matrix
+#
+# ``GET /strategy-targets`` projects the operating-outcome whitelist
+# (``STRATEGY_OUTCOME_TARGETS``) with each target's units taken from the P7.1
+# registry, so the Strategy editor never holds a target list or a unit of its
+# own. A Strategy outcome is always ``SET``, so no operation is listed. Nothing
+# is added, computed, persisted or re-decided, and the route opens no database.
+#
+# ``POST /investments/{investment_id}/decision-matrix`` is the one matrix
+# capability: every Strategy x Scenario variant of the hidden Investment
+# through the P7.4 variant authority, and the read-only cross-cell figures
+# from ``anchor.decision``. It delegates entirely to
+# ``anchor.deals.decision_matrix`` and persists nothing. An invalid variant is
+# one cell of a successful response; only a missing row, a structural refusal
+# or a concurrent change fails the request.
+# =============================================================================
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class _StrategyTargetEntry:
+    """One operating-outcome target, as one operating mode offers it."""
+
+    target: str
+    units: str
+
+
+@app.get("/strategy-targets", response_model=dict[str, list[_StrategyTargetEntry]])
+def strategy_target_catalog() -> dict[str, list[_StrategyTargetEntry]]:
+    """Each operating mode's Strategy operating-outcome targets, in whitelist
+    order, each with the registry's own units. Read-only."""
+
+    return {
+        mode.value: [
+            _StrategyTargetEntry(target=target.value, units=SCENARIO_TARGET_REGISTRY[target].units)
+            for target in STRATEGY_OUTCOME_TARGETS[mode]
+        ]
+        for mode in OperatingMode
+    }
+
+
+@app.post("/investments/{investment_id}/decision-matrix", response_model=DecisionMatrixReport)
+def analyze_investment_decision_matrix(investment_id: str) -> DecisionMatrixReport:
+    """The Strategy x Scenario Decision Matrix of the hidden Investment, derived
+    on request and never stored."""
+
+    try:
+        return analyze_decision_matrix(investment_id)
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except DecisionMatrixConflictError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from None

@@ -41,6 +41,14 @@ import type {
   ScenarioVariantAnalysis,
   ScenarioVariantFingerprint,
 } from './scenarioTypes';
+import type {
+  DealStrategies,
+  InvestmentStrategy,
+  StrategyDraft,
+  StrategyIssue,
+  StrategyTargetCatalog,
+} from './strategyTypes';
+import type { DecisionMatrixReport } from './decisionTypes';
 
 // Phase 6 Gate D6.6 -- every request that carries deal state carries the deal's
 // Business Plan as a top-level `business_plan`, taken from a required
@@ -1833,4 +1841,244 @@ export async function analyzeInvestmentScenario(
     'The scenario analysis could not be completed',
   );
   return (await response.json()) as ScenarioVariantAnalysis;
+}
+
+// =============================================================================
+// Phase 7 Gate P7.5 -- the Strategy client and the Decision Matrix.
+//
+// The P7.4 Strategy routes, the P7.5 read-only Strategy target catalog, and the
+// one Decision Matrix request. Each function sends a typed body and returns
+// what the backend returned. None resolves a Strategy, validates one beyond its
+// shape, or computes a figure: the backend decides what a Strategy may say, and
+// produces every number of the matrix, cross-cell figures included.
+//
+// **One refusal shape.** A Strategy 422 carries the P7.4 issues, each with its
+// stage, stable code, domain and the validator's own message. A Business Plan
+// overlay is refused in the D6 vocabulary, with a path rooted at the overlay;
+// `StrategyApiError` re-roots that path at `business_plan` so the one Business
+// Plan placement (`placeBusinessPlanApiIssues`) puts each issue on its row.
+// =============================================================================
+
+/** A refused Strategy or Decision Matrix request. `status` 422 means the
+ * backend judged the Strategy invalid; `reasons` holds the validators' words. */
+export class StrategyApiError extends ApiError {
+  status: number;
+  strategyIssues: StrategyIssue[];
+  /** Business Plan overlay refusals, each path re-rooted at `business_plan`. */
+  planIssues: BusinessPlanApiIssue[];
+  /** Every reason the backend gave, in its order and in its own words. */
+  reasons: string[];
+
+  constructor(
+    message: string,
+    status: number,
+    detail: {
+      issues: ValidationIssue[];
+      strategyIssues: StrategyIssue[];
+      planIssues: BusinessPlanApiIssue[];
+      reasons: string[];
+    },
+  ) {
+    super(message, detail.issues);
+    this.name = 'StrategyApiError';
+    this.status = status;
+    this.strategyIssues = detail.strategyIssues;
+    this.planIssues = detail.planIssues;
+    this.reasons = detail.reasons;
+  }
+}
+
+/** Narrows one 422 detail entry to the P7.4 issue shape `api.py` serializes.
+ * The `domain` key tells it apart from a Scenario issue. */
+function isStrategyIssue(entry: unknown): entry is StrategyIssue {
+  if (typeof entry !== 'object' || entry === null) {
+    return false;
+  }
+  const candidate = entry as Record<string, unknown>;
+  return (
+    (candidate.stage === 'strategy' || candidate.stage === 'resolved_inputs') &&
+    typeof candidate.code === 'string' &&
+    typeof candidate.message === 'string' &&
+    'domain' in candidate
+  );
+}
+
+const OVERLAY_CONTENT_PATH = /^overlays\[\d+\]\.content(?=\.|$)/;
+
+/** A Business Plan overlay refusal (`overlays[2].content.capital_items[0].month`)
+ * as the D6 shape rooted at `business_plan`, or `null` for any other entry. */
+function strategyPlanIssue(entry: unknown): BusinessPlanApiIssue | null {
+  if (typeof entry !== 'object' || entry === null) {
+    return null;
+  }
+  const candidate = entry as Record<string, unknown>;
+  if (
+    typeof candidate.code !== 'string' ||
+    typeof candidate.message !== 'string' ||
+    typeof candidate.path !== 'string' ||
+    !OVERLAY_CONTENT_PATH.test(candidate.path)
+  ) {
+    return null;
+  }
+  const rerooted = {
+    code: candidate.code,
+    message: candidate.message,
+    path: candidate.path.replace(OVERLAY_CONTENT_PATH, 'business_plan'),
+  };
+  return isBusinessPlanApiIssue(rerooted) ? rerooted : null;
+}
+
+/** A 404's backend detail names internal ids, so it is said in the analyst's
+ * words instead. */
+const STRATEGY_NOT_FOUND_MESSAGE =
+  'That strategy or deal could not be found. It may have been deleted.';
+
+async function strategyRequestError(
+  response: Response,
+  failureMessage: string,
+): Promise<StrategyApiError> {
+  const payload: unknown = await response.json().catch(() => null);
+  const detail: unknown =
+    typeof payload === 'object' && payload !== null
+      ? (payload as Record<string, unknown>).detail
+      : null;
+  const entries: unknown[] = Array.isArray(detail) ? detail : [];
+  const messages = entries
+    .map((entry) =>
+      typeof entry === 'object' && entry !== null
+        ? (entry as Record<string, unknown>).message
+        : null,
+    )
+    .filter((message): message is string => typeof message === 'string');
+  const stringDetail = typeof detail === 'string' && detail.trim() !== '' ? detail : null;
+  const reasons =
+    messages.length > 0
+      ? messages
+      : response.status === 404
+        ? [STRATEGY_NOT_FOUND_MESSAGE]
+        : stringDetail === null
+          ? []
+          : [stringDetail];
+  const message =
+    reasons.length > 0 ? reasons.join(' ') : `${failureMessage} (HTTP ${response.status}).`;
+  return new StrategyApiError(message, response.status, {
+    issues: entries.filter(isValidationIssue),
+    strategyIssues: entries.filter(isStrategyIssue),
+    planIssues: entries
+      .map(strategyPlanIssue)
+      .filter((issue): issue is BusinessPlanApiIssue => issue !== null),
+    reasons,
+  });
+}
+
+async function strategyFetch(
+  path: string,
+  init: RequestInit,
+  failureMessage: string,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, init);
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE);
+  }
+  if (!response.ok) {
+    throw await strategyRequestError(response, failureMessage);
+  }
+  return response;
+}
+
+/** Exactly the three keys a Strategy body may carry. */
+function strategyBody(method: 'POST' | 'PUT', draft: StrategyDraft): RequestInit {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: draft.name,
+      description: draft.description,
+      overlays: draft.overlays,
+    }),
+  };
+}
+
+function investmentStrategyPath(investmentId: string, strategyId: string): string {
+  return `/investments/${encodeURIComponent(investmentId)}/strategies/${encodeURIComponent(strategyId)}`;
+}
+
+/** `GET /strategy-targets` -- each operating mode's operating-outcome targets
+ * and their units, projected from the P7.4 whitelist and the P7.1 registry. */
+export async function fetchStrategyTargetCatalog(): Promise<StrategyTargetCatalog> {
+  const response = await strategyFetch(
+    '/strategy-targets',
+    { method: 'GET' },
+    'The strategy assumptions could not be loaded',
+  );
+  return (await response.json()) as StrategyTargetCatalog;
+}
+
+/** `GET /deals/{id}/strategies`. Read-only: a standalone Deal reports no
+ * Investment and no Strategies, and gains neither. */
+export async function listDealStrategies(dealId: string): Promise<DealStrategies> {
+  const response = await strategyFetch(
+    `/deals/${encodeURIComponent(dealId)}/strategies`,
+    { method: 'GET' },
+    'The strategies could not be loaded',
+  );
+  return (await response.json()) as DealStrategies;
+}
+
+/** `POST /deals/{id}/strategies`. A standalone Deal's first Strategy
+ * materializes its hidden Investment; a Deal whose Scenarios already created
+ * one reuses it. An invalid Strategy leaves nothing behind. */
+export async function createDealStrategy(
+  dealId: string,
+  draft: StrategyDraft,
+): Promise<InvestmentStrategy> {
+  const response = await strategyFetch(
+    `/deals/${encodeURIComponent(dealId)}/strategies`,
+    strategyBody('POST', draft),
+    'The strategy could not be saved',
+  );
+  return (await response.json()) as InvestmentStrategy;
+}
+
+/** `PUT /investments/{id}/strategies/{id}` -- replaces the name, description
+ * and whole overlay set; the Strategy keeps its id. */
+export async function updateInvestmentStrategy(
+  investmentId: string,
+  strategyId: string,
+  draft: StrategyDraft,
+): Promise<InvestmentStrategy> {
+  const response = await strategyFetch(
+    investmentStrategyPath(investmentId, strategyId),
+    strategyBody('PUT', draft),
+    'The strategy could not be saved',
+  );
+  return (await response.json()) as InvestmentStrategy;
+}
+
+/** `DELETE /investments/{id}/strategies/{id}`. When no Strategy and no
+ * Scenario remains, the hidden Investment is removed too. */
+export async function deleteInvestmentStrategy(
+  investmentId: string,
+  strategyId: string,
+): Promise<void> {
+  await strategyFetch(
+    investmentStrategyPath(investmentId, strategyId),
+    { method: 'DELETE' },
+    'The strategy could not be deleted',
+  );
+}
+
+/** `POST /investments/{id}/decision-matrix` -- every Strategy x Scenario
+ * variant of the Deal's hidden Investment, with the backend's cross-cell
+ * figures. An invalid variant is one cell of a successful response; a request
+ * failure refuses the whole package. */
+export async function analyzeDecisionMatrix(investmentId: string): Promise<DecisionMatrixReport> {
+  const response = await strategyFetch(
+    `/investments/${encodeURIComponent(investmentId)}/decision-matrix`,
+    { method: 'POST' },
+    'The decision matrix could not be completed',
+  );
+  return (await response.json()) as DecisionMatrixReport;
 }

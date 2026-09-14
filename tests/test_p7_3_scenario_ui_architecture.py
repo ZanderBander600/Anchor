@@ -270,8 +270,16 @@ def test_the_catalog_computes_nothing_and_touches_no_store() -> None:
 
 
 def test_the_registry_is_named_only_by_the_catalog() -> None:
-    text = _lf((_PROJECT_ROOT / _API).read_text(encoding="utf-8"))
-    catalog = ast.get_source_segment(text, _catalog_function())
+    """Pinned at P7.5 to ``api.py`` as P7.3 left it, at the P7.3 merge. P7.5's
+    ``GET /strategy-targets`` also names the registry (for its units); that is
+    P7.5's authorization, proved by ``tests/test_p7_5_decision_architecture.py``."""
+
+    text = _lf(_git("show", f"{_P7_3_MERGE}:{_API}"))
+    (function,) = [
+        node for node in ast.parse(text).body
+        if isinstance(node, ast.FunctionDef) and node.name == "scenario_target_catalog"
+    ]
+    catalog = ast.get_source_segment(text, function)
     assert catalog is not None
     outside = text.replace(catalog, "")
     assert re.findall(r"\bSCENARIO_TARGET_REGISTRY\b", outside) == ["SCENARIO_TARGET_REGISTRY"]

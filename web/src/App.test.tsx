@@ -20,6 +20,7 @@ import {
   fetchSensitivityPresets,
   getDeal,
   listDealScenarios,
+  listDealStrategies,
   listDeals,
   updateDeal,
   updateDealAiSnapshot,
@@ -31,7 +32,8 @@ import {
   uploadOm,
 } from './api';
 import { formatCurrency, formatMultiple, formatPercent } from './format';
-import { SAVE_BEFORE_SCENARIOS_MESSAGE } from './scenarioComparison';
+import { SAVE_BEFORE_SCENARIOS_MESSAGE } from './useScenarios';
+import { EMPTY_MATRIX_MESSAGE, UNSAVED_MATRIX_MESSAGE } from './decisionMatrix';
 import { groupDigits } from './numberFormat';
 import {
   BLANK_DETAILED_FORM_VALUES,
@@ -102,6 +104,16 @@ vi.mock('./api', async () => {
       scenarios: [],
     })),
     fetchScenarioTargetCatalog: vi.fn(async () => ({ quick: [], detailed: [], lease_level: [] })),
+    // P7.5: Risk also reads the deal's Strategies and the Strategy target
+    // catalog; the Decision Matrix runs only on an explicit Run. Answered here
+    // so no test reaches a real backend -- the behaviour itself is proven in
+    // `strategyWorkspace.test.tsx` and `decisionMatrix.test.tsx`.
+    listDealStrategies: vi.fn(async (dealId: string) => ({
+      deal_id: dealId,
+      investment_id: null,
+      strategies: [],
+    })),
+    fetchStrategyTargetCatalog: vi.fn(async () => ({ quick: [], detailed: [], lease_level: [] })),
   };
 });
 
@@ -3867,7 +3879,8 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     // the grid rendering "9.00%", rendered raw, never recomputed.
     expect(screen.getAllByText(/^9\.00%/).length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole('tab', { name: 'Debt Sensitivity' }));
+    // P7.5: Debt Sensitivity is a nested view of Risk's Sensitivity view.
+    await openRiskView(user, 'Debt Sensitivity');
     await user.click(screen.getByRole('tab', { name: 'Interest Rate × LTV' }));
     // The DSCR variant's mocked baseline (2.00x) renders once that tab/metric is selected.
     await user.click(screen.getByRole('button', { name: 'Year 1 DSCR' }));
@@ -7327,11 +7340,17 @@ function aiSectionPanel(id: string): HTMLElement {
 
 async function openRiskView(user: ReturnType<typeof userEvent.setup>, label: string) {
   await goTo(user, 'Risk');
-  await user.click(
-    within(document.querySelector('[aria-label="Risk views"]') as HTMLElement).getByRole('tab', {
-      name: label,
-    }),
-  );
+  const riskNav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
+  // P7.5: Return and Debt Sensitivity are the nested views of one Sensitivity
+  // view, one level below Risk's own navigation.
+  if (label === 'Return Sensitivity' || label === 'Debt Sensitivity') {
+    await user.click(riskNav.getByRole('tab', { name: 'Sensitivity' }));
+    await user.click(
+      within(screen.getByRole('tablist', { name: 'Sensitivity views' })).getByRole('tab', { name: label }),
+    );
+    return;
+  }
+  await user.click(riskNav.getByRole('tab', { name: label }));
 }
 
 describe('Sprint C Gate C4 -- Overview', () => {
@@ -7436,20 +7455,22 @@ describe('Sprint C Gate C4 -- Overview', () => {
 });
 
 describe('Sprint C Gate C4 -- Risk', () => {
-  it('splits Risk into three peer views, showing one at a time', async () => {
+  it('splits Risk into peer views, showing one at a time', async () => {
     const user = userEvent.setup();
     render(<App />);
     await analyzeQuickGoldenDeal(user);
     await goTo(user, 'Risk');
 
     const nav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
-    for (const label of ['Return Sensitivity', 'Debt Sensitivity', 'Break-Even']) {
+    for (const label of ['Decision Matrix', 'Strategies', 'Scenarios', 'Sensitivity', 'Break-Even']) {
       expect(nav.getByRole('tab', { name: label })).toBeTruthy();
     }
 
     const cases: [string, string][] = [
-      ['Return Sensitivity', 'returns'],
-      ['Debt Sensitivity', 'debt'],
+      ['Decision Matrix', 'matrix'],
+      ['Strategies', 'strategies'],
+      ['Scenarios', 'scenarios'],
+      ['Sensitivity', 'sensitivity'],
       ['Break-Even', 'break-even'],
     ];
     for (const [label, id] of cases) {
@@ -7526,7 +7547,7 @@ describe('Sprint C Gate C4 -- Risk', () => {
     // fabricate nothing.
     const riskNav = document.querySelector('[aria-label="Risk views"]') as HTMLElement;
     expect(riskNav).not.toBeNull();
-    await user.click(within(riskNav).getByRole('tab', { name: 'Return Sensitivity' }));
+    await user.click(within(riskNav).getByRole('tab', { name: 'Sensitivity' }));
     const pending = document.getElementById('risk-panel-pending') as HTMLElement;
     expect(pending.hasAttribute('hidden')).toBe(false);
     expect(pending.textContent).toBe('Run Analyze to refresh Risk outputs for this deal.');
@@ -7871,8 +7892,10 @@ describe('Sprint C Gate C5 -- speed tests', () => {
 
     const nav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
     for (const [label, id] of [
-      ['Return Sensitivity', 'returns'],
-      ['Debt Sensitivity', 'debt'],
+      ['Decision Matrix', 'matrix'],
+      ['Strategies', 'strategies'],
+      ['Scenarios', 'scenarios'],
+      ['Sensitivity', 'sensitivity'],
       ['Break-Even', 'break-even'],
     ] as [string, string][]) {
       await user.click(nav.getByRole('tab', { name: label }));
@@ -8029,7 +8052,14 @@ describe('Sprint C Gate C5 -- polish and accessibility', () => {
     expect(screen.getByRole('tablist', { name: 'Risk views' })).toBeTruthy();
 
     const riskNav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
-    const debtTab = riskNav.getByRole('tab', { name: 'Debt Sensitivity' });
+    const sensitivityTab = riskNav.getByRole('tab', { name: 'Sensitivity' });
+    expect(sensitivityTab.getAttribute('aria-controls')).toBe(riskViewPanel('sensitivity').id);
+    expect(riskViewPanel('sensitivity').getAttribute('aria-labelledby')).toBe(sensitivityTab.id);
+
+    // P7.5: Return and Debt Sensitivity are a named tablist one level down.
+    await user.click(sensitivityTab);
+    const sensitivityNav = within(screen.getByRole('tablist', { name: 'Sensitivity views' }));
+    const debtTab = sensitivityNav.getByRole('tab', { name: 'Debt Sensitivity' });
     expect(debtTab.getAttribute('aria-controls')).toBe(riskViewPanel('debt').id);
     expect(riskViewPanel('debt').getAttribute('aria-labelledby')).toBe(debtTab.id);
   });
@@ -8235,30 +8265,41 @@ describe('Sprint C acceptance -- break-even card layout', () => {
   });
 });
 
-describe('Phase 7 Gate P7.3 -- Scenarios in Risk', () => {
-  it('opens Risk on Scenarios, the first of its views, and an unsaved deal requests nothing', async () => {
+describe('Phase 7 Gates P7.3 / P7.5 -- the decision views in Risk', () => {
+  it('opens Risk on the Decision Matrix, the first of its views, and an unsaved deal requests nothing', async () => {
     vi.mocked(listDealScenarios).mockClear();
+    vi.mocked(listDealStrategies).mockClear();
     const user = userEvent.setup();
     render(<App />);
     await goTo(user, 'Risk');
 
     const nav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
     expect(nav.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Decision Matrix',
+      'Strategies',
       'Scenarios',
-      'Return Sensitivity',
-      'Debt Sensitivity',
+      'Sensitivity',
       'Break-Even',
     ]);
-    expect(nav.getByRole('tab', { name: 'Scenarios' }).getAttribute('aria-selected')).toBe('true');
-    expect(riskViewPanel('scenarios').hasAttribute('hidden')).toBe(false);
+    expect(nav.getByRole('tab', { name: 'Decision Matrix' }).getAttribute('aria-selected')).toBe('true');
+    expect(riskViewPanel('matrix').hasAttribute('hidden')).toBe(false);
+    expect(within(riskViewPanel('matrix')).getByText(UNSAVED_MATRIX_MESSAGE)).toBeTruthy();
+
+    await user.click(nav.getByRole('tab', { name: 'Scenarios' }));
     expect(
       within(riskViewPanel('scenarios')).getByText('Save this deal before adding scenarios.'),
     ).toBeTruthy();
+    await user.click(nav.getByRole('tab', { name: 'Strategies' }));
+    expect(
+      within(riskViewPanel('strategies')).getByText('Save this deal before adding strategies.'),
+    ).toBeTruthy();
     expect(vi.mocked(listDealScenarios)).not.toHaveBeenCalled();
+    expect(vi.mocked(listDealStrategies)).not.toHaveBeenCalled();
   });
 
-  it('reads a saved deal’s scenarios only once Risk is on screen, and creates nothing', async () => {
+  it('reads a saved deal’s scenarios and strategies only once Risk is on screen, and creates nothing', async () => {
     vi.mocked(listDealScenarios).mockClear();
+    vi.mocked(listDealStrategies).mockClear();
     const user = userEvent.setup();
     const deal = makeDeal();
     mockListDeals.mockResolvedValue([deal]);
@@ -8271,6 +8312,11 @@ describe('Phase 7 Gate P7.3 -- Scenarios in Risk', () => {
 
     await goTo(user, 'Risk');
     await waitFor(() => expect(vi.mocked(listDealScenarios)).toHaveBeenCalledWith(deal.id));
+    await waitFor(() => expect(vi.mocked(listDealStrategies)).toHaveBeenCalledWith(deal.id));
+    // With nothing saved to compare, the matrix stays simple.
+    expect(await within(riskViewPanel('matrix')).findByText(EMPTY_MATRIX_MESSAGE)).toBeTruthy();
+    expect(within(riskViewPanel('matrix')).queryByRole('button', { name: 'Run Decision Matrix' })).toBeNull();
+    await openRiskView(user, 'Scenarios');
     const add = await within(riskViewPanel('scenarios')).findByRole('button', { name: 'Add Scenario' });
     await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false));
     // The hidden Investment never appears as chrome.
@@ -8288,7 +8334,7 @@ describe('Phase 7 Gate P7.3 -- Scenarios in Risk', () => {
     await waitFor(() => expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '111 Main St'));
     await goTo(user, 'Underwrite');
     fireEvent.change(screen.getByLabelText(/^Exit Cap Rate/), { target: { value: '6.9' } });
-    await goTo(user, 'Risk');
+    await openRiskView(user, 'Scenarios');
 
     const scenarios = riskViewPanel('scenarios');
     expect(await within(scenarios).findByText(SAVE_BEFORE_SCENARIOS_MESSAGE)).toBeTruthy();

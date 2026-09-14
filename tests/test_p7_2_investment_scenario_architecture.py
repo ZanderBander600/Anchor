@@ -513,20 +513,28 @@ def test_no_p7_2_file_defines_a_scenario_contract_or_names_a_target_member(path:
 
 
 def _without_the_p7_3_catalog(text: str) -> str:
-    """The file minus the P7.3 read-only ``GET /scenario-targets`` route and the
-    one name it imports.
+    """The file minus the read-only target catalogs and the one name they
+    import.
 
-    P7.3 was authorized to add that route to ``api.py``: it projects the
-    registry for the Scenario editor, so the UI holds no target list of its
-    own. ``tests/test_p7_3_scenario_ui_architecture.py`` proves it is the only
-    code that names the registry, and that it computes and stores nothing.
+    P7.3 was authorized to add ``GET /scenario-targets`` to ``api.py``: it
+    projects the registry for the Scenario editor, so the UI holds no target
+    list of its own. P7.5 was authorized, the same way, to add
+    ``GET /strategy-targets``, which projects the Strategy whitelist with the
+    registry's units. ``tests/test_p7_3_scenario_ui_architecture.py`` and
+    ``tests/test_p7_5_decision_architecture.py`` prove they are the only code
+    that names the registry, and that they compute and store nothing.
     Everything else in every P7.2 file still never names the registry."""
 
-    for node in ast.parse(text).body:
-        if isinstance(node, ast.FunctionDef) and node.name == "scenario_target_catalog":
-            segment = ast.get_source_segment(text, node)
-            assert segment is not None
-            text = text.replace(segment, "")
+    # Every segment is read off the original text before any is removed: a
+    # removal shifts the offsets of every later function.
+    segments = [
+        ast.get_source_segment(text, node)
+        for node in ast.parse(text).body
+        if isinstance(node, ast.FunctionDef) and node.name in {"scenario_target_catalog", "strategy_target_catalog"}
+    ]
+    for segment in segments:
+        assert segment is not None
+        text = text.replace(segment, "")
     return re.sub(r"^\s*SCENARIO_TARGET_REGISTRY,\r?\n", "", text, count=1, flags=re.MULTILINE)
 
 

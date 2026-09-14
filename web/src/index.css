@@ -5444,152 +5444,6 @@ body {
   border-top: 1px solid var(--border);
 }
 
-/* --- Comparison ------------------------------------------------------------ */
-
-/* The matrix scrolls inside its own region on a narrow screen: the page never
-   grows wider because of it. */
-.scenario-matrix-scroll {
-  max-width: 100%;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-
-.scenario-matrix-scroll:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.scenario-matrix {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.scenario-matrix th,
-.scenario-matrix td {
-  padding: 6px var(--sp-4);
-  text-align: right;
-  border-bottom: 1px solid var(--border);
-}
-
-.scenario-matrix thead th {
-  background: var(--surface-muted);
-  border-bottom: 1px solid var(--border-strong);
-  font-size: 11.5px;
-  font-weight: 650;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.scenario-matrix thead th.scenario-matrix-base {
-  color: var(--accent);
-}
-
-.scenario-matrix-corner,
-.scenario-matrix th[scope='row'],
-.scenario-matrix-group th[scope='rowgroup'] {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  text-align: left;
-}
-
-.scenario-matrix th[scope='row'] {
-  min-width: 9.5rem;
-  background: var(--surface);
-  font-weight: 500;
-  color: var(--text);
-}
-
-.scenario-matrix-group th[scope='rowgroup'] {
-  padding-top: var(--sp-3);
-  background: var(--surface);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
-
-.scenario-matrix-group td {
-  background: var(--surface);
-}
-
-.scenario-matrix-figure {
-  font-weight: 600;
-  color: var(--text);
-}
-
-.scenario-matrix-na {
-  font-weight: 500;
-  color: var(--text-muted);
-  cursor: help;
-}
-
-.scenario-matrix tbody tr:last-child th,
-.scenario-matrix tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.scenario-matrix td.scenario-matrix-status {
-  min-width: 11rem;
-  max-width: 18rem;
-  vertical-align: top;
-  text-align: left;
-  white-space: normal;
-  background: var(--surface-muted);
-}
-
-.scenario-matrix-status-label {
-  display: block;
-  font-size: 11.5px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.scenario-matrix-invalid {
-  color: var(--danger);
-}
-
-.scenario-matrix-reasons {
-  margin: var(--sp-1) 0 0;
-  padding-left: 1rem;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text);
-}
-
-.scenario-matrix-message {
-  margin: var(--sp-1) 0 var(--sp-2);
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text);
-}
-
-.scenario-matrix-notes {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-muted);
-}
-
-.scenario-matrix-note-marker {
-  margin-right: var(--sp-1);
-  font-weight: 650;
-  color: var(--text-secondary);
-}
-
 @media (max-width: 767px) {
   .scenario-panel {
     padding: var(--sp-3);
@@ -5670,5 +5524,423 @@ body {
 
   .scenario-editor-actions .btn {
     flex: 1 1 auto;
+  }
+}
+
+/* ==========================================================================
+   Phase 7 Gate P7.5 -- Strategies and the Decision Matrix (Risk).
+
+   The Scenario panel treatment, extended: hairline rules, tabular figures,
+   pinned row identity, and no colour that ranks a strategy or a scenario. An
+   invalid variant and an N/A carry their own words; colour only reinforces
+   them.
+   ========================================================================== */
+
+/* --- Strategies -------------------------------------------------------------- */
+
+.strategy-list-base .scenario-list-name {
+  color: var(--accent);
+}
+
+.strategy-locked-tag {
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.strategy-overlay-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.strategy-domains-lede {
+  margin: 0;
+  max-width: 82ch;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.strategy-resolves-to-base {
+  margin: 0;
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--border-strong);
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+/* One decision domain: a hairline, a small uppercase label, what it replaces,
+   and the Inherit Base / Strategy-specific choice beside it. */
+.strategy-domain {
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-3) 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.strategy-domain > * + * {
+  margin-top: var(--sp-2);
+}
+
+.strategy-domain-legend {
+  float: left;
+  width: 100%;
+  margin: 0 0 var(--sp-1);
+  padding: 0;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.strategy-domain-error .strategy-domain-legend {
+  color: var(--danger);
+}
+
+.strategy-domain-head {
+  clear: both;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-4);
+}
+
+.strategy-domain-replaces {
+  flex: 1 1 16rem;
+  min-width: 0;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* A compact segmented radio group. The radios stay in the tab order and the
+   accessibility tree; the selected option carries its own label and weight,
+   not colour alone. */
+.strategy-mode {
+  display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.strategy-mode-option {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px var(--sp-3);
+  border-right: 1px solid var(--border-strong);
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.strategy-mode-option:last-child {
+  border-right: 0;
+}
+
+.strategy-mode-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.strategy-mode-option-active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 650;
+}
+
+.strategy-mode-option:has(input:focus-visible) {
+  z-index: 1;
+  box-shadow: var(--focus-ring);
+}
+
+.strategy-mode-option:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.strategy-domain-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: var(--sp-3);
+}
+
+.strategy-domain-inherit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.strategy-domain-inherit-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.strategy-domain-note {
+  margin: 0;
+  max-width: 82ch;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.strategy-editor .business-plan-embedded {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+/* --- Decision Matrix --------------------------------------------------------- */
+
+.decision-matrix-empty {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.decision-matrix-horizon {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--accent);
+  background: var(--surface-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+/* The matrix scrolls inside its own region on a narrow screen: the page never
+   grows wider because of it. */
+.decision-matrix-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.decision-matrix-scroll:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.decision-matrix {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.decision-matrix th,
+.decision-matrix td {
+  padding: 6px var(--sp-4);
+  vertical-align: top;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+
+.decision-matrix thead th {
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.decision-matrix thead th.decision-matrix-base {
+  color: var(--accent);
+}
+
+.decision-matrix th[data-column='worst'],
+.decision-matrix td[data-column='worst'] {
+  border-left: 1px solid var(--border-strong);
+}
+
+/* Row identity stays on screen while the figures scroll beneath it. */
+.decision-matrix-corner,
+.decision-matrix th[scope='row'],
+.decision-matrix th[scope='rowgroup'] {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+}
+
+.decision-matrix thead th.decision-matrix-corner {
+  z-index: 2;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.decision-matrix th[scope='row'] {
+  min-width: 10rem;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.decision-matrix-group th[scope='rowgroup'],
+.decision-matrix-group td {
+  padding-top: var(--sp-3);
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.decision-matrix-rowgroup + .decision-matrix-rowgroup .decision-matrix-group th,
+.decision-matrix-rowgroup + .decision-matrix-rowgroup .decision-matrix-group td {
+  border-top: 2px solid var(--border-strong);
+}
+
+.decision-matrix-group-name {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.decision-matrix-hold {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.decision-matrix-cell {
+  min-width: 7.5rem;
+}
+
+.decision-matrix-figure {
+  display: block;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.decision-matrix-delta {
+  display: block;
+  margin-top: 1px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.decision-matrix td.decision-matrix-summary {
+  background: var(--surface-muted);
+}
+
+.decision-matrix-na {
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.decision-matrix td.decision-matrix-status {
+  min-width: 11rem;
+  max-width: 18rem;
+  text-align: left;
+  white-space: normal;
+  background: var(--surface-muted);
+}
+
+.decision-matrix-invalid {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--danger);
+}
+
+.decision-matrix-reasons {
+  margin: var(--sp-1) 0 0;
+  padding-left: 1rem;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.decision-matrix-legend {
+  margin: 0;
+  max-width: 96ch;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.decision-matrix-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.decision-matrix-note-marker {
+  margin-right: var(--sp-1);
+  font-weight: 650;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 767px) {
+  .decision-matrix th,
+  .decision-matrix td {
+    padding: 6px var(--sp-3);
+  }
+
+  .decision-matrix th[scope='row'] {
+    min-width: 8rem;
+    max-width: 9.5rem;
+    white-space: normal;
+  }
+
+  .decision-matrix th[scope='rowgroup'] {
+    white-space: normal;
+  }
+
+  .strategy-domain-head {
+    align-items: flex-start;
   }
 }

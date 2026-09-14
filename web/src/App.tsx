@@ -43,7 +43,7 @@ import { OperatingStatementTable } from './components/OperatingStatementTable';
 import { OwnerReturnSchedule } from './components/OwnerReturnSchedule';
 import { OwnerSummaryPanel } from './components/OwnerSummaryPanel';
 import { ResultsSummaryPanel } from './components/ResultsSummaryPanel';
-import { ScenarioWorkspace } from './components/ScenarioWorkspace';
+import { RiskDecisionWorkspace } from './components/RiskDecisionWorkspace';
 import { SensitivityPanel } from './components/SensitivityPanel';
 import { SubNav } from './components/SubNav';
 import { UnderwriteWorkspace } from './components/UnderwriteWorkspace';
@@ -56,37 +56,54 @@ import type { WorkspaceId } from './workspaces';
 
 /** Sprint C Gate C4: the Risk workspace's internal views.
  *
- * Phase 7 Gate P7.3 puts Scenarios first: the analyst's named views of the
- * world are Risk's primary uncertainty surface. Sensitivity and break-even
- * keep their own views, state and vocabulary. */
-type RiskViewId = 'scenarios' | 'returns' | 'debt' | 'break-even';
+ * Phase 7 Gate P7.5 puts the decision surface first: the Decision Matrix, then
+ * the Strategies (what the analyst chooses) and the Scenarios (what may happen)
+ * it compares. Sensitivity and break-even keep their own views, state and
+ * vocabulary; Return and Debt Sensitivity are one Sensitivity view with its
+ * own nested navigation. */
+type RiskViewId = 'matrix' | 'strategies' | 'scenarios' | 'sensitivity' | 'break-even';
 const RISK_VIEWS: { id: RiskViewId; label: string }[] = [
+  { id: 'matrix', label: 'Decision Matrix' },
+  { id: 'strategies', label: 'Strategies' },
   { id: 'scenarios', label: 'Scenarios' },
-  { id: 'returns', label: 'Return Sensitivity' },
-  { id: 'debt', label: 'Debt Sensitivity' },
+  { id: 'sensitivity', label: 'Sensitivity' },
   { id: 'break-even', label: 'Break-Even' },
 ];
 
-/** P7.3: Lease-Level Risk has no break-even (D5.7), so its views are Scenarios
- * and the existing one-way / two-way sensitivity workspace. */
-type LeaseLevelRiskViewId = 'scenarios' | 'sensitivity';
+/** P7.5: the two sensitivity grids of Quick and Detailed, one level down. */
+type SensitivityViewId = 'returns' | 'debt';
+const SENSITIVITY_VIEWS: { id: SensitivityViewId; label: string }[] = [
+  { id: 'returns', label: 'Return Sensitivity' },
+  { id: 'debt', label: 'Debt Sensitivity' },
+];
+
+/** Lease-Level Risk has no break-even (D5.7), so its views are the decision
+ * views and the existing one-way / two-way sensitivity workspace. */
+type LeaseLevelRiskViewId = 'matrix' | 'strategies' | 'scenarios' | 'sensitivity';
 const LEASE_LEVEL_RISK_VIEWS: { id: LeaseLevelRiskViewId; label: string }[] = [
+  { id: 'matrix', label: 'Decision Matrix' },
+  { id: 'strategies', label: 'Strategies' },
   { id: 'scenarios', label: 'Scenarios' },
   { id: 'sensitivity', label: 'Sensitivity' },
 ];
 
-/** Whether the sensitivity and break-even views have outputs to show. Scenarios
- * never depend on this: they resolve against the saved Deal, not the last
- * Analyze. */
+/** The three views `RiskDecisionWorkspace` owns. They resolve against the saved
+ * Deal, never the last Analyze. */
+function isDecisionView(id: string): boolean {
+  return id === 'matrix' || id === 'strategies' || id === 'scenarios';
+}
+
+/** Whether the sensitivity and break-even views have outputs to show. The
+ * decision views never depend on this. */
 type RiskOutputsState = 'unanalyzed' | 'refresh' | 'ready';
 
 /** The one panel that says why the sensitivity and break-even views are empty. */
 const RISK_PENDING_PANEL_ID = 'risk-panel-pending';
 
-/** The panel a Risk tab controls. Scenarios always has its own. Until a deal
- * has Risk outputs, the other tabs point at the one message saying why. */
+/** The panel a Risk tab controls. Each decision view always has its own. Until
+ * a deal has Risk outputs, the other tabs point at the one message saying why. */
 function riskPanelIdFor(id: string, outputs: RiskOutputsState): string {
-  return id === 'scenarios' || outputs === 'ready' ? `risk-panel-${id}` : RISK_PENDING_PANEL_ID;
+  return isDecisionView(id) || outputs === 'ready' ? `risk-panel-${id}` : RISK_PENDING_PANEL_ID;
 }
 
 /** Documents is split by SOURCE TYPE rather than upload/review because
@@ -227,8 +244,9 @@ export default function App() {
   // Sprint C Gate C4: internal navigation for the Risk and Documents
   // workspaces. Navigation state only -- never persisted, never part of the
   // dirty snapshot, never touching financial, analysis or AI state.
-  const [riskView, setRiskView] = useState<RiskViewId>('scenarios');
-  const [leaseLevelRiskView, setLeaseLevelRiskView] = useState<LeaseLevelRiskViewId>('scenarios');
+  const [riskView, setRiskView] = useState<RiskViewId>('matrix');
+  const [sensitivityView, setSensitivityView] = useState<SensitivityViewId>('returns');
+  const [leaseLevelRiskView, setLeaseLevelRiskView] = useState<LeaseLevelRiskViewId>('matrix');
   const [documentsView, setDocumentsView] = useState<'om' | 'excel'>('om');
 
   const [detailedValues, setDetailedValues] = useState<DetailedFormValues>(
@@ -2389,7 +2407,7 @@ export default function App() {
         id="risk"
         active={workspace}
         title="Risk"
-        subtitle="Scenarios, sensitivity analysis and key break-evens."
+        subtitle="Decision matrix, strategies, scenarios, sensitivity analysis and key break-evens."
       >
         <div className="risk-workspace">
           <SubNav
@@ -2401,24 +2419,19 @@ export default function App() {
             controlsFor={(id) => riskPanelIdFor(id, detailedRiskOutputs)}
           />
 
-          {/* P7.3: Scenarios resolve against the saved Deal, so they are on
-           * offer before any Analyze. The workspace is keyed by the open deal,
-           * so no Scenario state can outlive the deal it belongs to. */}
-          <div
-            id="risk-panel-scenarios"
-            role="tabpanel"
-            aria-labelledby="risk-tab-scenarios"
-            hidden={riskView !== 'scenarios'}
-          >
-            <ScenarioWorkspace
-              key={`detailed:${currentDetailedDealId ?? 'unsaved'}`}
-              operatingMode="detailed"
-              dealId={currentDetailedDealId}
-              isDirty={isDetailedDirty}
-              savedAt={lastDetailedSavedAt}
-              isActive={isRiskVisible}
-            />
-          </div>
+          {/* P7.5: the Decision Matrix, Strategies and Scenarios resolve
+           * against the saved Deal, so they are on offer before any Analyze.
+           * The workspace is keyed by the open deal, so no Strategy, Scenario
+           * or matrix state can outlive the deal it belongs to. */}
+          <RiskDecisionWorkspace
+            key={`detailed:${currentDetailedDealId ?? 'unsaved'}`}
+            operatingMode="detailed"
+            dealId={currentDetailedDealId}
+            isDirty={isDetailedDirty}
+            savedAt={lastDetailedSavedAt}
+            isActive={isRiskVisible}
+            view={riskView}
+          />
 
           {detailedRiskOutputs === 'unanalyzed' ? (
             <div
@@ -2426,7 +2439,7 @@ export default function App() {
               role="tabpanel"
               aria-labelledby={`risk-tab-${riskView}`}
               className="empty-state"
-              hidden={riskView === 'scenarios'}
+              hidden={isDecisionView(riskView)}
             >
               Analyze the deal to view risk analysis.
             </div>
@@ -2436,7 +2449,7 @@ export default function App() {
               role="tabpanel"
               aria-labelledby={`risk-tab-${riskView}`}
               className="empty-state"
-              hidden={riskView === 'scenarios'}
+              hidden={isDecisionView(riskView)}
             >
               Run <strong>Analyze</strong> to refresh Risk outputs for this deal.
             </div>
@@ -2449,44 +2462,60 @@ export default function App() {
              * loading and error state lives here once rather than being
              * duplicated into each view. */}
             {detailedSensitivityError && (
-              <div className="error-banner" hidden={riskView === 'scenarios'}>
+              <div className="error-banner" hidden={isDecisionView(riskView)}>
                 {detailedSensitivityError}
               </div>
             )}
             {isDetailedSensitivityLoading && (
-              <div className="sensitivity-status" hidden={riskView === 'scenarios'}>
+              <div className="sensitivity-status" hidden={isDecisionView(riskView)}>
                 Calculating sensitivity…
               </div>
             )}
 
             <div
-              id="risk-panel-returns"
+              id="risk-panel-sensitivity"
               role="tabpanel"
-              aria-labelledby="risk-tab-returns"
-              hidden={riskView !== 'returns'}
+              aria-labelledby="risk-tab-sensitivity"
+              hidden={riskView !== 'sensitivity'}
             >
-              <SensitivityPanel
-                presets={detailedSensitivity}
-                isLoading={false}
-                error={null}
-                only={['exit_cap_noi_growth', 'purchase_price_exit_cap']}
-                title="Return Sensitivity"
+              <SubNav
+                items={SENSITIVITY_VIEWS}
+                active={sensitivityView}
+                onSelect={(id) => setSensitivityView(id as SensitivityViewId)}
+                label="Sensitivity views"
+                variant="inline"
+                idFor={(id) => `risk-sensitivity-tab-${id}`}
+                controlsFor={(id) => `risk-panel-${id}`}
               />
-            </div>
+              <div
+                id="risk-panel-returns"
+                role="tabpanel"
+                aria-labelledby="risk-sensitivity-tab-returns"
+                hidden={sensitivityView !== 'returns'}
+              >
+                <SensitivityPanel
+                  presets={detailedSensitivity}
+                  isLoading={false}
+                  error={null}
+                  only={['exit_cap_noi_growth', 'purchase_price_exit_cap']}
+                  title="Return Sensitivity"
+                />
+              </div>
 
-            <div
-              id="risk-panel-debt"
-              role="tabpanel"
-              aria-labelledby="risk-tab-debt"
-              hidden={riskView !== 'debt'}
-            >
-              <SensitivityPanel
-                presets={detailedSensitivity}
-                isLoading={false}
-                error={null}
-                only={['interest_rate_ltv']}
-                title="Debt Sensitivity"
-              />
+              <div
+                id="risk-panel-debt"
+                role="tabpanel"
+                aria-labelledby="risk-sensitivity-tab-debt"
+                hidden={sensitivityView !== 'debt'}
+              >
+                <SensitivityPanel
+                  presets={detailedSensitivity}
+                  isLoading={false}
+                  error={null}
+                  only={['interest_rate_ltv']}
+                  title="Debt Sensitivity"
+                />
+              </div>
             </div>
 
             <div
@@ -2680,7 +2709,7 @@ export default function App() {
         id="risk"
         active={workspace}
         title="Risk"
-        subtitle="Scenarios, sensitivity analysis and key break-evens."
+        subtitle="Decision matrix, strategies, scenarios, sensitivity analysis and key break-evens."
       >
         <div className="risk-workspace">
           <SubNav
@@ -2692,24 +2721,19 @@ export default function App() {
             controlsFor={(id) => riskPanelIdFor(id, quickRiskOutputs)}
           />
 
-          {/* P7.3: Scenarios resolve against the saved Deal, so they are on
-           * offer before any Analyze. The workspace is keyed by the open deal,
-           * so no Scenario state can outlive the deal it belongs to. */}
-          <div
-            id="risk-panel-scenarios"
-            role="tabpanel"
-            aria-labelledby="risk-tab-scenarios"
-            hidden={riskView !== 'scenarios'}
-          >
-            <ScenarioWorkspace
-              key={`quick:${currentDealId ?? 'unsaved'}`}
-              operatingMode="quick"
-              dealId={currentDealId}
-              isDirty={isDirty}
-              savedAt={lastSavedAt}
-              isActive={isRiskVisible}
-            />
-          </div>
+          {/* P7.5: the Decision Matrix, Strategies and Scenarios resolve
+           * against the saved Deal, so they are on offer before any Analyze.
+           * The workspace is keyed by the open deal, so no Strategy, Scenario
+           * or matrix state can outlive the deal it belongs to. */}
+          <RiskDecisionWorkspace
+            key={`quick:${currentDealId ?? 'unsaved'}`}
+            operatingMode="quick"
+            dealId={currentDealId}
+            isDirty={isDirty}
+            savedAt={lastSavedAt}
+            isActive={isRiskVisible}
+            view={riskView}
+          />
 
           {quickRiskOutputs === 'unanalyzed' ? (
             <div
@@ -2717,7 +2741,7 @@ export default function App() {
               role="tabpanel"
               aria-labelledby={`risk-tab-${riskView}`}
               className="empty-state"
-              hidden={riskView === 'scenarios'}
+              hidden={isDecisionView(riskView)}
             >
               Analyze the deal to view risk analysis.
             </div>
@@ -2727,7 +2751,7 @@ export default function App() {
               role="tabpanel"
               aria-labelledby={`risk-tab-${riskView}`}
               className="empty-state"
-              hidden={riskView === 'scenarios'}
+              hidden={isDecisionView(riskView)}
             >
               Run <strong>Analyze</strong> to refresh Risk outputs for this deal.
             </div>
@@ -2740,44 +2764,60 @@ export default function App() {
              * loading and error state lives here once rather than being
              * duplicated into each view. */}
             {sensitivityError && (
-              <div className="error-banner" hidden={riskView === 'scenarios'}>
+              <div className="error-banner" hidden={isDecisionView(riskView)}>
                 {sensitivityError}
               </div>
             )}
             {isSensitivityLoading && (
-              <div className="sensitivity-status" hidden={riskView === 'scenarios'}>
+              <div className="sensitivity-status" hidden={isDecisionView(riskView)}>
                 Calculating sensitivity…
               </div>
             )}
 
             <div
-              id="risk-panel-returns"
+              id="risk-panel-sensitivity"
               role="tabpanel"
-              aria-labelledby="risk-tab-returns"
-              hidden={riskView !== 'returns'}
+              aria-labelledby="risk-tab-sensitivity"
+              hidden={riskView !== 'sensitivity'}
             >
-              <SensitivityPanel
-                presets={sensitivity}
-                isLoading={false}
-                error={null}
-                only={['exit_cap_noi_growth', 'purchase_price_exit_cap']}
-                title="Return Sensitivity"
+              <SubNav
+                items={SENSITIVITY_VIEWS}
+                active={sensitivityView}
+                onSelect={(id) => setSensitivityView(id as SensitivityViewId)}
+                label="Sensitivity views"
+                variant="inline"
+                idFor={(id) => `risk-sensitivity-tab-${id}`}
+                controlsFor={(id) => `risk-panel-${id}`}
               />
-            </div>
+              <div
+                id="risk-panel-returns"
+                role="tabpanel"
+                aria-labelledby="risk-sensitivity-tab-returns"
+                hidden={sensitivityView !== 'returns'}
+              >
+                <SensitivityPanel
+                  presets={sensitivity}
+                  isLoading={false}
+                  error={null}
+                  only={['exit_cap_noi_growth', 'purchase_price_exit_cap']}
+                  title="Return Sensitivity"
+                />
+              </div>
 
-            <div
-              id="risk-panel-debt"
-              role="tabpanel"
-              aria-labelledby="risk-tab-debt"
-              hidden={riskView !== 'debt'}
-            >
-              <SensitivityPanel
-                presets={sensitivity}
-                isLoading={false}
-                error={null}
-                only={['interest_rate_ltv']}
-                title="Debt Sensitivity"
-              />
+              <div
+                id="risk-panel-debt"
+                role="tabpanel"
+                aria-labelledby="risk-sensitivity-tab-debt"
+                hidden={sensitivityView !== 'debt'}
+              >
+                <SensitivityPanel
+                  presets={sensitivity}
+                  isLoading={false}
+                  error={null}
+                  only={['interest_rate_ltv']}
+                  title="Debt Sensitivity"
+                />
+              </div>
             </div>
 
             <div
@@ -2983,7 +3023,7 @@ export default function App() {
         id="risk"
         active={workspace}
         title="Risk"
-        subtitle="Scenarios, and one-way and two-way sensitivity over the assumptions on Underwrite."
+        subtitle="Decision matrix, strategies, scenarios, and one-way and two-way sensitivity over the assumptions on Underwrite."
         className="workspace-panel-wide"
       >
         {/* P7.3: Scenarios first, beside the unchanged sensitivity workspace.
@@ -2999,21 +3039,15 @@ export default function App() {
             controlsFor={(id) => `risk-panel-${id}`}
           />
 
-          <div
-            id="risk-panel-scenarios"
-            role="tabpanel"
-            aria-labelledby="risk-tab-scenarios"
-            hidden={leaseLevelRiskView !== 'scenarios'}
-          >
-            <ScenarioWorkspace
-              key={`lease_level:${leaseLevel.currentDealId ?? 'unsaved'}`}
-              operatingMode="lease_level"
-              dealId={leaseLevel.currentDealId}
-              isDirty={leaseLevel.isDirty}
-              savedAt={leaseLevel.lastSavedAt}
-              isActive={isRiskVisible}
-            />
-          </div>
+          <RiskDecisionWorkspace
+            key={`lease_level:${leaseLevel.currentDealId ?? 'unsaved'}`}
+            operatingMode="lease_level"
+            dealId={leaseLevel.currentDealId}
+            isDirty={leaseLevel.isDirty}
+            savedAt={leaseLevel.lastSavedAt}
+            isActive={isRiskVisible}
+            view={leaseLevelRiskView}
+          />
 
           <div
             id="risk-panel-sensitivity"

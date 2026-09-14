@@ -100,15 +100,23 @@ const AUDITED = [
   // panels. It makes no mode decision and computes nothing -- it is audited so
   // that it never starts.
   'components/StaleAnalysisNotice.tsx',
-  // P7.3. The Scenario hook dispatches on the saved Deal's mode to run the
-  // Base column through that mode's `/analyze`, and the comparison reads each
-  // mode's result envelope. Both are total switches; the components are
-  // audited to prove they never start making a mode decision.
+  // P7.3. The Scenario hook and components. Since P7.5 none makes a mode
+  // decision (the Base column and the envelope switch moved to the backend
+  // Decision Matrix package); they are audited to prove they never start.
   'useScenarios.ts',
-  'scenarioComparison.ts',
   'components/ScenarioWorkspace.tsx',
   'components/ScenarioEditor.tsx',
-  'components/ScenarioComparisonMatrix.tsx',
+  // P7.5. The Strategy and Decision Matrix modules read the operating mode
+  // only as a catalog key and pass it through; audited to prove they never
+  // branch on it.
+  'useStrategies.ts',
+  'useDecisionMatrix.ts',
+  'strategyForm.ts',
+  'decisionMatrix.ts',
+  'components/RiskDecisionWorkspace.tsx',
+  'components/StrategyManager.tsx',
+  'components/StrategyEditor.tsx',
+  'components/DecisionMatrixPanel.tsx',
 ];
 
 const MODE_LITERALS = new Set(['quick', 'detailed', 'lease_level']);
