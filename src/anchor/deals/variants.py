@@ -71,10 +71,18 @@ from ..analysis.scenario import (
     resolve_lease_level_scenario,
     resolve_quick_scenario,
 )
+from ..analysis.strategy import (
+    BASE_SCENARIO_ID,
+    BASE_STRATEGY_ID,
+    StrategyDefinition,
+    resolve_detailed_variant,
+    resolve_lease_level_variant,
+    resolve_quick_variant,
+)
 from ..contracts import OperatingMode, UnsupportedOperatingModeError
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 from . import store
-from .contracts import Deal
+from .contracts import Deal, InvestmentStructureError
 from .fingerprint import (
     fingerprint_detailed_inputs,
     fingerprint_lease_level_inputs,
@@ -93,7 +101,9 @@ class VariantCacheStatus(StrEnum):
       matched the fingerprint just recomputed from the current inputs;
     - ``MISS``: no current cache, so the D6 entry point ran and the result was
       cached under its source fingerprint;
-    - ``BYPASSED``: a Lease-Level variant, recomputed and never cached.
+    - ``BYPASSED``: a Lease-Level variant, recomputed and never cached -- or,
+      from P7.4, the Base x Base variant, which is the Deal's own analysis and
+      is never duplicated into the variant cache.
     """
 
     HIT = "hit"
@@ -326,6 +336,324 @@ def analyze_scenario_variant(
 
     return ScenarioVariantAnalysis(
         investment_id=investment_id,
+        scenario_id=scenario_id,
+        unit_id=deal.id,
+        operating_mode=deal.operating_mode,
+        source_fingerprint=source_fingerprint,
+        cache_status=cache_status,
+        results=results,
+    )
+
+
+# =============================================================================
+# Phase 7 Gate P7.4 -- every variant of the hidden Investment
+#
+# A variant is ``(root, strategy, scenario)`` (Section 7.5), and either key may
+# be the reserved implicit Base key:
+#
+# - Base x Base is the Deal's own inputs: today's analysis, never cached here;
+# - Base x Scenario is exactly the P7.2 path above, unchanged;
+# - Strategy x Base and Strategy x Scenario resolve Base -> Strategy -> the
+#   P7.1 Scenario resolver -> validation, in ``anchor.analysis.strategy``.
+#
+# Financial identity is still ``fingerprint_resolved_inputs`` of the resolved
+# contracts and nothing else. A Strategy's id, name and description, overlay
+# order and storage rows never reach it; every recipe that resolves to the same
+# inputs shares a fingerprint; and a Strategy that resolves to Base carries the
+# Deal's own fingerprint. Quick and Detailed results are cached in
+# ``variant_snapshots`` under the variant identity and served only on a
+# matching fingerprint. Lease-Level is recomputed.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class VariantFingerprint:
+    """The resolved-input financial fingerprint of one variant, beside the
+    identity it belongs to."""
+
+    investment_id: str
+    strategy_id: str
+    scenario_id: str
+    unit_id: str
+    operating_mode: OperatingMode
+    source_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class VariantInputs:
+    """What exactly a variant runs (ST-4): the existing input contracts after
+    Base -> Strategy -> Scenario and before any calculation, with the
+    fingerprint of exactly those contracts. Nothing here is a result."""
+
+    investment_id: str
+    strategy_id: str
+    scenario_id: str
+    unit_id: str
+    operating_mode: OperatingMode
+    source_fingerprint: str
+    resolved: ResolvedScenarioInputs
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class VariantAnalysis:
+    """One analysed variant. ``results`` is the existing result contract of the
+    unit's mode, exactly as ``POST /analyze`` returns it for the same resolved
+    inputs entered by hand."""
+
+    investment_id: str
+    strategy_id: str
+    scenario_id: str
+    unit_id: str
+    operating_mode: OperatingMode
+    source_fingerprint: str
+    cache_status: VariantCacheStatus
+    results: VariantResults
+
+
+def _base_inputs(deal: Deal) -> ResolvedScenarioInputs:
+    """Base x Base: the Deal's own stored contracts, the very objects, in its
+    mode's resolved-input bundle."""
+
+    match deal.operating_mode:
+        case OperatingMode.QUICK:
+            assert deal.inputs is not None
+            return ResolvedQuickInputs(inputs=deal.inputs, business_plan=deal.business_plan)
+        case OperatingMode.DETAILED:
+            assert deal.terms is not None
+            assert deal.detailed_operating_inputs is not None
+            return ResolvedDetailedInputs(
+                terms=deal.terms,
+                detailed_operating_inputs=deal.detailed_operating_inputs,
+                business_plan=deal.business_plan,
+            )
+        case OperatingMode.LEASE_LEVEL:
+            assert deal.terms is not None
+            assert deal.property_inputs is not None
+            assert deal.market_leasing is not None
+            assert deal.operating_inputs is not None
+            assert deal.suites is not None
+            assert deal.leases is not None
+            return ResolvedLeaseLevelInputs(
+                terms=deal.terms,
+                property_inputs=deal.property_inputs,
+                suites=deal.suites,
+                leases=deal.leases,
+                market_leasing=deal.market_leasing,
+                operating_inputs=deal.operating_inputs,
+                business_plan=deal.business_plan,
+            )
+        case _:
+            raise UnsupportedOperatingModeError(deal.operating_mode, operation="_base_inputs")
+
+
+def resolve_variant_inputs(
+    deal: Deal, strategy: StrategyDefinition | None, scenario: ScenarioDefinition | None
+) -> ResolvedScenarioInputs:
+    """Resolve the variant ``(strategy, scenario)`` over ``deal``'s current
+    inputs, the Deal being the one Unit analysed. ``None`` is the implicit Base
+    on either axis.
+
+    Raises ``StrategyValidationError`` or ``ScenarioValidationError`` when the
+    variant is invalid: the existing validator's reason, never a clipped
+    value."""
+
+    if strategy is None:
+        if scenario is None:
+            return _base_inputs(deal)
+        return resolve_scenario_inputs(deal, scenario)
+
+    match deal.operating_mode:
+        case OperatingMode.QUICK:
+            assert deal.inputs is not None
+            return resolve_quick_variant(
+                deal.inputs,
+                unit_id=deal.id,
+                strategy=strategy,
+                scenario=scenario,
+                business_plan=deal.business_plan,
+            )
+        case OperatingMode.DETAILED:
+            assert deal.terms is not None
+            assert deal.detailed_operating_inputs is not None
+            return resolve_detailed_variant(
+                deal.terms,
+                deal.detailed_operating_inputs,
+                unit_id=deal.id,
+                strategy=strategy,
+                scenario=scenario,
+                business_plan=deal.business_plan,
+            )
+        case OperatingMode.LEASE_LEVEL:
+            assert deal.terms is not None
+            assert deal.property_inputs is not None
+            assert deal.market_leasing is not None
+            assert deal.operating_inputs is not None
+            assert deal.suites is not None
+            assert deal.leases is not None
+            return resolve_lease_level_variant(
+                deal.terms,
+                deal.property_inputs,
+                deal.suites,
+                deal.leases,
+                market_leasing=deal.market_leasing,
+                operating_inputs=deal.operating_inputs,
+                unit_id=deal.id,
+                strategy=strategy,
+                scenario=scenario,
+                business_plan=deal.business_plan,
+            )
+        case _:
+            raise UnsupportedOperatingModeError(
+                deal.operating_mode, operation="resolve_variant_inputs"
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _VariantRecipe:
+    deal: Deal
+    strategy: StrategyDefinition | None
+    scenario: ScenarioDefinition | None
+
+
+def _load_variant_recipe(
+    investment_id: str, strategy_id: str, scenario_id: str, db_path: Path | None
+) -> _VariantRecipe:
+    """The hidden wrapper's one Deal as currently stored, and the persisted
+    Strategy and Scenario the keys name -- each proven to belong to
+    ``investment_id`` -- or ``None`` for a reserved Base key. A key from
+    another Investment is simply not found."""
+
+    investment = store.get_investment(investment_id, db_path=db_path)
+    if not investment.hidden:
+        raise InvestmentStructureError(
+            f"Investment {investment_id!r} is a visible Investment. P7.4 analyses only "
+            "the hidden one-unit wrapper's variants."
+        )
+    strategy = (
+        None
+        if strategy_id == BASE_STRATEGY_ID
+        else store.get_strategy(investment_id, strategy_id, db_path=db_path).strategy
+    )
+    scenario = (
+        None
+        if scenario_id == BASE_SCENARIO_ID
+        else store.get_scenario(investment_id, scenario_id, db_path=db_path).scenario
+    )
+    if len(investment.units) != 1:
+        raise store.PersistedDealDataError(
+            f"Investment {investment_id!r} does not hold exactly one unit."
+        )
+    deal = store.get_deal(investment.units[0].unit_id, db_path=db_path)
+    return _VariantRecipe(deal=deal, strategy=strategy, scenario=scenario)
+
+
+def inspect_variant_inputs(
+    investment_id: str, strategy_id: str, scenario_id: str, *, db_path: Path | None = None
+) -> VariantInputs:
+    """Resolved-input inspection (ST-4): exactly what the variant runs, and the
+    fingerprint of it. Read-only, and it calculates nothing."""
+
+    recipe = _load_variant_recipe(investment_id, strategy_id, scenario_id, db_path)
+    resolved = resolve_variant_inputs(recipe.deal, recipe.strategy, recipe.scenario)
+    return VariantInputs(
+        investment_id=investment_id,
+        strategy_id=strategy_id,
+        scenario_id=scenario_id,
+        unit_id=recipe.deal.id,
+        operating_mode=recipe.deal.operating_mode,
+        source_fingerprint=fingerprint_resolved_inputs(resolved),
+        resolved=resolved,
+    )
+
+
+def variant_fingerprint(
+    investment_id: str, strategy_id: str, scenario_id: str, *, db_path: Path | None = None
+) -> VariantFingerprint:
+    """The current resolved-input fingerprint of the variant. Read-only."""
+
+    recipe = _load_variant_recipe(investment_id, strategy_id, scenario_id, db_path)
+    resolved = resolve_variant_inputs(recipe.deal, recipe.strategy, recipe.scenario)
+    return VariantFingerprint(
+        investment_id=investment_id,
+        strategy_id=strategy_id,
+        scenario_id=scenario_id,
+        unit_id=recipe.deal.id,
+        operating_mode=recipe.deal.operating_mode,
+        source_fingerprint=fingerprint_resolved_inputs(resolved),
+    )
+
+
+def analyze_variant(
+    investment_id: str, strategy_id: str, scenario_id: str, *, db_path: Path | None = None
+) -> VariantAnalysis:
+    """Analyse the variant through the existing deterministic pipeline.
+
+    Base x Scenario is ``analyze_scenario_variant``, unchanged. Base x Base is
+    the Deal's own analysis, recomputed and never written to the variant
+    cache. A Strategy variant serves a Quick or Detailed cached result only
+    when its source fingerprint equals the fingerprint just recomputed from
+    the current Strategy, Scenario and Deal; otherwise it runs the D6 entry
+    point on the resolved contracts and caches the result under that
+    fingerprint. A Lease-Level variant is always recomputed and never
+    cached."""
+
+    if strategy_id == BASE_STRATEGY_ID and scenario_id != BASE_SCENARIO_ID:
+        scenario_analysis = analyze_scenario_variant(investment_id, scenario_id, db_path=db_path)
+        return VariantAnalysis(
+            investment_id=investment_id,
+            strategy_id=strategy_id,
+            scenario_id=scenario_id,
+            unit_id=scenario_analysis.unit_id,
+            operating_mode=scenario_analysis.operating_mode,
+            source_fingerprint=scenario_analysis.source_fingerprint,
+            cache_status=scenario_analysis.cache_status,
+            results=scenario_analysis.results,
+        )
+
+    recipe = _load_variant_recipe(investment_id, strategy_id, scenario_id, db_path)
+    deal = recipe.deal
+    resolved = resolve_variant_inputs(deal, recipe.strategy, recipe.scenario)
+    source_fingerprint = fingerprint_resolved_inputs(resolved)
+
+    results: VariantResults
+    if recipe.strategy is None:
+        results, cache_status = _analyze_resolved(resolved), VariantCacheStatus.BYPASSED
+    else:
+        match deal.operating_mode:
+            case OperatingMode.QUICK | OperatingMode.DETAILED:
+                cached = store.get_strategy_variant_snapshot(
+                    investment_id,
+                    strategy_id,
+                    scenario_id,
+                    operating_mode=deal.operating_mode,
+                    expected_fingerprint=source_fingerprint,
+                    db_path=db_path,
+                )
+                if cached is not None:
+                    results, cache_status = cached, VariantCacheStatus.HIT
+                else:
+                    computed = _analyze_resolved(resolved)
+                    assert not isinstance(computed, LeaseLevelAcquisitionResults)
+                    store.put_strategy_variant_snapshot(
+                        investment_id,
+                        strategy_id,
+                        scenario_id,
+                        computed,
+                        source_fingerprint=source_fingerprint,
+                        db_path=db_path,
+                    )
+                    results, cache_status = computed, VariantCacheStatus.MISS
+            case OperatingMode.LEASE_LEVEL:
+                results = _analyze_resolved(resolved)
+                cache_status = VariantCacheStatus.BYPASSED
+            case _:
+                raise UnsupportedOperatingModeError(
+                    deal.operating_mode, operation="analyze_variant"
+                )
+
+    return VariantAnalysis(
+        investment_id=investment_id,
+        strategy_id=strategy_id,
         scenario_id=scenario_id,
         unit_id=deal.id,
         operating_mode=deal.operating_mode,

@@ -205,7 +205,13 @@ def test_no_production_module_imports_the_scenario_layer() -> None:
         for path in _ANCHOR.rglob("*.py")
         if path != _SCENARIO and _names_scenario(path)
     )
+    # **Widened at P7.4 -- by exactly one named file.** The Strategy engine
+    # applies an operating outcome through the P7.1 per-target resolvers with
+    # SET, then runs the P7.1 resolver on the Strategy-resolved contracts. It
+    # restates no target, operation or accessor
+    # (``tests/test_p7_4_strategy_architecture.py``).
     assert importers == [
+        "anchor/analysis/strategy.py",
         "anchor/api.py",
         "anchor/deals/contracts.py",
         "anchor/deals/store.py",
@@ -221,8 +227,9 @@ _SCENARIO_NAMES = (
 
 def test_no_other_production_file_defines_or_names_a_scenario_contract() -> None:
     """Widened at P7.2 by exactly the four files that import the Scenario
-    layer (see above). None of them *defines* a scenario contract: the P7.2
-    guard proves they define no class of these names."""
+    layer (see above), and at P7.4 by the Strategy engine. None of them
+    *defines* a scenario contract: the P7.2 and P7.4 guards prove they define
+    no class of these names."""
 
     offenders = sorted(
         path.relative_to(_SRC).as_posix()
@@ -231,6 +238,7 @@ def test_no_other_production_file_defines_or_names_a_scenario_contract() -> None
         and any(re.search(rf"\b{name}\b", path.read_text(encoding="utf-8")) for name in _SCENARIO_NAMES)
     )
     assert offenders == [
+        "anchor/analysis/strategy.py",
         "anchor/api.py",
         "anchor/deals/contracts.py",
         "anchor/deals/store.py",

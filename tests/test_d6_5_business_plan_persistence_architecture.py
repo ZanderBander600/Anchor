@@ -680,7 +680,12 @@ def test_only_the_store_codec_reads_plan_items() -> None:
         if {node.attr for node in ast.walk(function) if isinstance(node, ast.Attribute)}
         & {"capital_items", "owner_expense_items", "annual_amount", "first_year", "last_year"}
     }
-    assert reading == {"_write_business_plan"}
+    # Widened at P7.4 by exactly one writer: a Strategy's BUSINESS_PLAN overlay
+    # is written to its own item tables in the same D6 row shape. It reads back
+    # through the one D6 codec, ``_business_plan_from_rows``, so the store still
+    # builds a plan in exactly one place
+    # (``tests/test_p7_4_strategy_architecture.py``).
+    assert reading == {"_write_business_plan", "_write_strategy_business_plan"}
 
 
 # =============================================================================

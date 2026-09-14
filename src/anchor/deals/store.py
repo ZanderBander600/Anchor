@@ -193,6 +193,20 @@ from ..analysis.scenario import (
     ScenarioValidationError,
     validate_scenario,
 )
+from ..analysis.strategy import (
+    BASE_SCENARIO_ID,
+    AcquisitionChoice,
+    DispositionChoice,
+    FinancingChoice,
+    OperatingOutcome,
+    OperatingOutcomeSet,
+    StrategyDefinition,
+    StrategyDomain,
+    StrategyIssue,
+    StrategyOverlay,
+    StrategyValidationError,
+    validate_strategy,
+)
 from ..engine.contracts import (
     AcquisitionResults,
     DetailedAcquisitionResults,
@@ -205,10 +219,12 @@ from .contracts import (
     Investment,
     InvestmentNotFoundError,
     InvestmentScenario,
+    InvestmentStrategy,
     InvestmentStructureError,
     InvestmentUnit,
     OneWaySensitivitySnapshot,
     ScenarioNotFoundError,
+    StrategyNotFoundError,
     TwoWaySensitivitySnapshot,
 )
 from .fingerprint import (
@@ -261,7 +277,13 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # and ``variant_snapshots`` -- created unconditionally by ``_connect`` exactly
 # as version 7's were. No ALTER and no existing row read or rewritten; every
 # legacy deal simply belongs to no Investment until the analyst opts in (Q4).
-_SCHEMA_VERSION = 8
+# Phase 7 Gate P7.4: schema version 9 adds eight purely additive Strategy
+# tables -- ``strategies``, one typed table per overlay domain, and the Business
+# Plan overlay's two item tables -- created unconditionally by ``_connect``
+# exactly as version 8's were. No ALTER and no existing row read or rewritten:
+# no Deal, Scenario, override or cached variant changes, and a Deal gains a
+# Strategy only when the analyst opts in.
+_SCHEMA_VERSION = 9
 
 
 class PersistedDealDataError(RuntimeError):
@@ -290,6 +312,22 @@ class PersistedScenarioDataError(PersistedDealDataError):
         self.issues = tuple(issues)
         super().__init__(
             f"Stored scenario {scenario_id!r} does not validate: "
+            + "; ".join(issue.message for issue in self.issues)
+        )
+
+
+class PersistedStrategyDataError(PersistedDealDataError):
+    """A stored Strategy no longer passes the P7.4 contract validation.
+
+    ``issues`` is the P7.4 validator's own ordered list -- identity first, then
+    domain declaration order and unit -- so which problem is reported first
+    never depends on the order SQLite returns rows in."""
+
+    def __init__(self, strategy_id: str, issues: Iterable[StrategyIssue]) -> None:
+        self.strategy_id = strategy_id
+        self.issues = tuple(issues)
+        super().__init__(
+            f"Stored strategy {strategy_id!r} does not validate: "
             + "; ".join(issue.message for issue in self.issues)
         )
 
@@ -757,6 +795,144 @@ _P7_2_TABLES = (
 _BASE_STRATEGY_ID = "base"
 
 
+# =============================================================================
+# Phase 7 Gate P7.4 -- persisted Strategies, schema version 9.
+#
+# Eight purely additive tables, created by ``_connect`` via CREATE TABLE IF NOT
+# EXISTS exactly as every table since version 2. No ALTER, and no existing row
+# is read or rewritten.
+#
+# ``strategies`` -- one row per persisted Strategy, owned by an Investment like
+# a Scenario. The Base Strategy is implicit and is never a row.
+#
+# One typed table per overlay domain, never an opaque patch column. Every table
+# is keyed ``(strategy_id, unit_id)`` -- the P7.4 rule of at most one overlay
+# per ``(domain, unit_id)``, in the schema -- and carries exactly its domain's
+# fields as typed columns: REAL for rates and dollars, so a float round-trips
+# bit-identically, and INTEGER for whole numbers of years.
+#
+# ``strategy_business_plan_overlays`` is the explicit overlay marker. Its item
+# rows live in the two item tables beside it, in the D6 tables' own shape. The
+# marker is what separates "no BUSINESS_PLAN overlay" (no marker: the Deal's own
+# plan) from "BUSINESS_PLAN overlay = the empty plan" (a marker with no items):
+# absence of item rows never decides it. An item row without its marker is
+# corrupt and fails closed.
+#
+# ``strategy_operating_outcomes`` holds one row per ``(unit_id, target)``, the
+# SC-1-style uniqueness of an outcome, with its operation stored and decoded
+# strictly. An OPERATING_OUTCOME overlay states at least one outcome, so its
+# rows are its presence.
+#
+# Strategy x Scenario results reuse ``variant_snapshots`` under the variant
+# identity ``(root_id, strategy_id, scenario_id)``; no second cache exists.
+# =============================================================================
+
+_CREATE_STRATEGIES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategies (
+    id             TEXT PRIMARY KEY,
+    investment_id  TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    description    TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+)
+"""
+
+_CREATE_STRATEGY_ACQUISITION_OVERLAYS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_acquisition_overlays (
+    strategy_id           TEXT NOT NULL,
+    unit_id               TEXT NOT NULL,
+    purchase_price        REAL NOT NULL,
+    acquisition_cost_pct  REAL NOT NULL,
+    PRIMARY KEY (strategy_id, unit_id)
+)
+"""
+
+_CREATE_STRATEGY_FINANCING_OVERLAYS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_financing_overlays (
+    strategy_id        TEXT NOT NULL,
+    unit_id            TEXT NOT NULL,
+    ltv                REAL NOT NULL,
+    interest_rate      REAL NOT NULL,
+    amortization       INTEGER NOT NULL,
+    io_period          INTEGER NOT NULL,
+    financing_fee_pct  REAL NOT NULL,
+    PRIMARY KEY (strategy_id, unit_id)
+)
+"""
+
+_CREATE_STRATEGY_BUSINESS_PLAN_OVERLAYS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_business_plan_overlays (
+    strategy_id  TEXT NOT NULL,
+    unit_id      TEXT NOT NULL,
+    PRIMARY KEY (strategy_id, unit_id)
+)
+"""
+
+_CREATE_STRATEGY_CAPITAL_PLAN_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_capital_plan_items (
+    strategy_id  TEXT NOT NULL,
+    unit_id      TEXT NOT NULL,
+    item_id      TEXT NOT NULL,
+    ordinal      INTEGER NOT NULL,
+    description  TEXT NOT NULL,
+    category     TEXT NOT NULL,
+    month        INTEGER NOT NULL,
+    amount       REAL NOT NULL,
+    PRIMARY KEY (strategy_id, unit_id, item_id)
+)
+"""
+
+_CREATE_STRATEGY_OWNER_EXPENSE_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_owner_expense_items (
+    strategy_id    TEXT NOT NULL,
+    unit_id        TEXT NOT NULL,
+    item_id        TEXT NOT NULL,
+    ordinal        INTEGER NOT NULL,
+    description    TEXT NOT NULL,
+    category       TEXT NOT NULL,
+    annual_amount  REAL NOT NULL,
+    first_year     INTEGER NOT NULL,
+    last_year      INTEGER,
+    PRIMARY KEY (strategy_id, unit_id, item_id)
+)
+"""
+
+_CREATE_STRATEGY_OPERATING_OUTCOMES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_operating_outcomes (
+    strategy_id  TEXT NOT NULL,
+    unit_id      TEXT NOT NULL,
+    target       TEXT NOT NULL,
+    operation    TEXT NOT NULL,
+    value        REAL NOT NULL,
+    PRIMARY KEY (strategy_id, unit_id, target)
+)
+"""
+
+_CREATE_STRATEGY_DISPOSITION_OVERLAYS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_disposition_overlays (
+    strategy_id  TEXT NOT NULL,
+    unit_id      TEXT NOT NULL,
+    hold_period  INTEGER NOT NULL,
+    PRIMARY KEY (strategy_id, unit_id)
+)
+"""
+
+#: Every table a Strategy's overlays occupy. Deleting a Strategy deletes its
+#: rows from each of them, explicitly, in one transaction with the Strategy.
+_STRATEGY_OVERLAY_TABLES = (
+    "strategy_acquisition_overlays",
+    "strategy_financing_overlays",
+    "strategy_business_plan_overlays",
+    "strategy_capital_plan_items",
+    "strategy_owner_expense_items",
+    "strategy_operating_outcomes",
+    "strategy_disposition_overlays",
+)
+
+_P7_4_TABLES = ("strategies", *_STRATEGY_OVERLAY_TABLES)
+
+
 _LEASE_LEVEL_CHILD_TABLES = (
     "lease_level_property_inputs",
     "lease_level_operating_inputs",
@@ -1212,6 +1388,8 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # P7.2 -- schema version 8 adds the five P7 tables with nothing to do here
     # either: ``_connect`` creates them via CREATE TABLE IF NOT EXISTS, and no
     # Investment, membership or Scenario row is written for any existing deal.
+    # P7.4 -- schema version 9 adds the eight Strategy tables the same way: no
+    # row is written for any existing Deal, Scenario or cached variant.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -1261,6 +1439,14 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_SCENARIOS_TABLE_SQL)
     connection.execute(_CREATE_SCENARIO_OVERRIDES_TABLE_SQL)
     connection.execute(_CREATE_VARIANT_SNAPSHOTS_TABLE_SQL)
+    connection.execute(_CREATE_STRATEGIES_TABLE_SQL)
+    connection.execute(_CREATE_STRATEGY_ACQUISITION_OVERLAYS_TABLE_SQL)
+    connection.execute(_CREATE_STRATEGY_FINANCING_OVERLAYS_TABLE_SQL)
+    connection.execute(_CREATE_STRATEGY_BUSINESS_PLAN_OVERLAYS_TABLE_SQL)
+    connection.execute(_CREATE_STRATEGY_CAPITAL_PLAN_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_STRATEGY_OWNER_EXPENSE_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_STRATEGY_OPERATING_OUTCOMES_TABLE_SQL)
+    connection.execute(_CREATE_STRATEGY_DISPOSITION_OVERLAYS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -3519,10 +3705,11 @@ def _materialize_hidden_investment(
 ) -> str:
     """Create the hidden one-unit Investment for the standalone ``deal_id``.
 
-    The only code that writes an Investment or a membership. Its one caller,
-    ``create_scenario_for_deal``, reaches it only for a Deal with no
-    Investment, only after the first Scenario has validated, and only inside
-    the transaction that then writes that Scenario."""
+    The only code that writes an Investment or a membership. Its two callers,
+    ``create_scenario_for_deal`` and (from P7.4) ``create_strategy_for_deal``,
+    reach it only for a Deal with no Investment, only after the first Scenario
+    or Strategy has validated, and only inside the transaction that then writes
+    it."""
 
     investment_id = uuid.uuid4().hex
     connection.execute(
@@ -3552,11 +3739,19 @@ def _delete_scenario_rows(
 
 
 def _delete_investment_rows(connection: sqlite3.Connection, investment_id: str) -> None:
-    """Every row the Investment owns -- cached variants, overrides, Scenarios,
-    membership and the Investment itself -- and never a Deal row. Deleting an
-    Investment releases its Deal (Q3)."""
+    """Every row the Investment owns -- cached variants, Strategy overlays and
+    Strategies (P7.4), overrides, Scenarios, membership and the Investment
+    itself -- and never a Deal row. Deleting an Investment releases its Deal
+    (Q3)."""
 
     connection.execute("DELETE FROM variant_snapshots WHERE root_id = ?", (investment_id,))
+    for table in _STRATEGY_OVERLAY_TABLES:
+        connection.execute(
+            f"DELETE FROM {table} WHERE strategy_id IN "
+            "(SELECT id FROM strategies WHERE investment_id = ?)",
+            (investment_id,),
+        )
+    connection.execute("DELETE FROM strategies WHERE investment_id = ?", (investment_id,))
     connection.execute(
         "DELETE FROM scenario_overrides WHERE scenario_id IN "
         "(SELECT id FROM scenarios WHERE investment_id = ?)",
@@ -3568,14 +3763,17 @@ def _delete_investment_rows(connection: sqlite3.Connection, investment_id: str) 
 
 
 def _wrapper_holds_no_structure(connection: sqlite3.Connection, investment_id: str) -> bool:
-    """Whether the hidden wrapper has no P7 structure left. In P7.2 its only
-    structure is Scenarios; the Strategy gate adds Strategies to this test, so
-    a wrapper that still holds one never collapses."""
+    """Whether the hidden wrapper has no P7 structure left: no Scenario and,
+    from P7.4, no Strategy. A wrapper that still holds either never collapses,
+    whichever of the two was deleted last."""
 
-    remaining = connection.execute(
+    remaining_scenario = connection.execute(
         "SELECT 1 FROM scenarios WHERE investment_id = ? LIMIT 1", (investment_id,)
     ).fetchone()
-    return remaining is None
+    remaining_strategy = connection.execute(
+        "SELECT 1 FROM strategies WHERE investment_id = ? LIMIT 1", (investment_id,)
+    ).fetchone()
+    return remaining_scenario is None and remaining_strategy is None
 
 
 def _remove_hidden_wrapper_of_deal(connection: sqlite3.Connection, deal_id: str) -> None:
@@ -3904,6 +4102,725 @@ def put_variant_snapshot(
             (
                 investment_id,
                 _BASE_STRATEGY_ID,
+                scenario_id,
+                _encode_snapshot(results),
+                _VARIANT_SNAPSHOT_SCHEMA_VERSION,
+                source_fingerprint,
+                _utc_now_iso(),
+            ),
+        )
+
+
+# =============================================================================
+# Phase 7 Gate P7.4 -- persisted Strategies
+#
+# Every function below manages the Strategies of the **hidden one-unit
+# Investment**, on the lifecycle rules the P7.2 Scenarios follow:
+#
+#   * **Opt-in only.** A standalone Deal's first Strategy materializes the hidden
+#     wrapper through ``_materialize_hidden_investment``, inside the transaction
+#     that writes that Strategy and after it has validated; a Deal whose
+#     Scenarios already created the wrapper reuses it. No read below writes.
+#   * **One authority for the contract.** Every Strategy is validated by the
+#     P7.4 stage-1 validator for the wrapper's one unit, on the way in and again
+#     on the way out, so a stored Strategy that no longer validates fails closed
+#     (``PersistedStrategyDataError``) rather than being repaired.
+#   * **Typed and whole.** Each overlay lives in its own domain's typed table,
+#     and an update replaces the whole overlay set.
+#   * **The wrapper collapses only when it holds nothing.** Deleting the last
+#     Strategy removes the wrapper only when no Scenario remains, and deleting
+#     the last Scenario removes it only when no Strategy remains
+#     (``_wrapper_holds_no_structure``).
+#   * **Fail closed outside the wrapper**, and **ownership is proven**, never
+#     assumed, exactly as for Scenarios.
+#
+# Nothing here computes anything. Resolution, fingerprints and analysis live in
+# ``anchor.analysis.strategy`` and ``anchor.deals.variants``.
+# =============================================================================
+
+_STRATEGY_DOMAIN_RANK = {domain: rank for rank, domain in enumerate(StrategyDomain)}
+
+
+def _require_owned_strategy(
+    connection: sqlite3.Connection, investment_id: str, strategy_id: str
+) -> None:
+    found = connection.execute(
+        "SELECT 1 FROM strategies WHERE id = ? AND investment_id = ?",
+        (strategy_id, investment_id),
+    ).fetchone()
+    if found is None:
+        raise StrategyNotFoundError(investment_id, strategy_id)
+
+
+def _require_valid_strategy(
+    strategy: StrategyDefinition, *, operating_mode: OperatingMode, unit_id: str
+) -> None:
+    """The P7.4 stage-1 contract, for the wrapper's one unit: identity, naming,
+    unit addressing, one overlay per ``(domain, unit_id)``, whole-domain
+    completeness, finite numbers, the D6 plan rules and the operating-outcome
+    whitelist. This store adds no rule of its own."""
+
+    issues = validate_strategy(strategy, operating_mode=operating_mode, unit_id=unit_id)
+    if issues:
+        raise StrategyValidationError(issues)
+
+
+def _write_strategy_business_plan(
+    connection: sqlite3.Connection, strategy_id: str, unit_id: str, business_plan: BusinessPlan
+) -> None:
+    """One BUSINESS_PLAN overlay: its explicit marker, then every item in the
+    analyst's order, in the D6 item tables' own shape. The marker is written
+    even for the empty plan -- that is what an explicit empty replacement is."""
+
+    connection.execute(
+        "INSERT INTO strategy_business_plan_overlays (strategy_id, unit_id) VALUES (?, ?)",
+        (strategy_id, unit_id),
+    )
+    connection.executemany(
+        """
+        INSERT INTO strategy_capital_plan_items
+            (strategy_id, unit_id, item_id, ordinal, description, category, month, amount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                strategy_id,
+                unit_id,
+                item.item_id,
+                ordinal,
+                item.description,
+                _encode_enum(item.category),
+                item.month,
+                item.amount,
+            )
+            for ordinal, item in enumerate(business_plan.capital_items)
+        ],
+    )
+    connection.executemany(
+        """
+        INSERT INTO strategy_owner_expense_items
+            (strategy_id, unit_id, item_id, ordinal, description, category, annual_amount,
+             first_year, last_year)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                strategy_id,
+                unit_id,
+                item.item_id,
+                ordinal,
+                item.description,
+                _encode_enum(item.category),
+                item.annual_amount,
+                item.first_year,
+                item.last_year,
+            )
+            for ordinal, item in enumerate(business_plan.owner_expense_items)
+        ],
+    )
+
+
+def _write_strategy_overlays(
+    connection: sqlite3.Connection, strategy_id: str, overlays: Iterable[StrategyOverlay]
+) -> None:
+    """Every overlay of one Strategy, each into its own domain's table. Called
+    inside the caller's transaction, after validation, and after any previous
+    overlays were removed: an overlay set is replaced whole, never diffed.
+    Rates and dollars are written as REAL and whole years as INTEGER, exactly
+    as the resolver will read them."""
+
+    for overlay in overlays:
+        content = overlay.content
+        match content:
+            case AcquisitionChoice():
+                connection.execute(
+                    "INSERT INTO strategy_acquisition_overlays "
+                    "(strategy_id, unit_id, purchase_price, acquisition_cost_pct) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        strategy_id,
+                        overlay.unit_id,
+                        float(content.purchase_price),
+                        float(content.acquisition_cost_pct),
+                    ),
+                )
+            case FinancingChoice():
+                connection.execute(
+                    "INSERT INTO strategy_financing_overlays "
+                    "(strategy_id, unit_id, ltv, interest_rate, amortization, io_period, "
+                    "financing_fee_pct) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        strategy_id,
+                        overlay.unit_id,
+                        float(content.ltv),
+                        float(content.interest_rate),
+                        int(content.amortization),
+                        int(content.io_period),
+                        float(content.financing_fee_pct),
+                    ),
+                )
+            case BusinessPlan():
+                _write_strategy_business_plan(connection, strategy_id, overlay.unit_id, content)
+            case OperatingOutcomeSet():
+                connection.executemany(
+                    "INSERT INTO strategy_operating_outcomes "
+                    "(strategy_id, unit_id, target, operation, value) VALUES (?, ?, ?, ?, ?)",
+                    [
+                        (
+                            strategy_id,
+                            overlay.unit_id,
+                            _encode_enum(outcome.target),
+                            _encode_enum(outcome.operation),
+                            float(outcome.value),
+                        )
+                        for outcome in content.outcomes
+                    ],
+                )
+            case DispositionChoice():
+                connection.execute(
+                    "INSERT INTO strategy_disposition_overlays (strategy_id, unit_id, hold_period) "
+                    "VALUES (?, ?, ?)",
+                    (strategy_id, overlay.unit_id, int(content.hold_period)),
+                )
+            case _:
+                raise TypeError(f"No table holds strategy content {type(content).__qualname__}.")
+
+
+def _delete_strategy_overlay_rows(connection: sqlite3.Connection, strategy_id: str) -> None:
+    """Every overlay row of one Strategy, from every domain's table."""
+
+    for table in _STRATEGY_OVERLAY_TABLES:
+        connection.execute(f"DELETE FROM {table} WHERE strategy_id = ?", (strategy_id,))
+
+
+def _strategy_rows(
+    connection: sqlite3.Connection, table: str, strategy_id: str, *, order: str = "unit_id"
+) -> list[sqlite3.Row]:
+    return connection.execute(
+        f"SELECT * FROM {table} WHERE strategy_id = ? ORDER BY {order}", (strategy_id,)
+    ).fetchall()
+
+
+def _rows_by_unit(rows: Iterable[sqlite3.Row]) -> dict[str, list[sqlite3.Row]]:
+    grouped: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        grouped.setdefault(row["unit_id"], []).append(row)
+    return grouped
+
+
+def _stored_outcome_order(outcome: OperatingOutcome) -> tuple[int, str]:
+    """Registry declaration order; an unrecognised target sorts after every
+    real one, for the P7.4 validator to refuse by name."""
+
+    target = outcome.target
+    rank = _TARGET_RANK[target] if isinstance(target, ScenarioTarget) else len(_TARGET_RANK)
+    return rank, str(target)
+
+
+def _strategy_business_plan_from_rows(
+    strategy_id: str, capital_rows: Iterable[sqlite3.Row], owner_expense_rows: Iterable[sqlite3.Row]
+) -> BusinessPlan:
+    """A BUSINESS_PLAN overlay's plan, through the one D6 row codec and its
+    validation authority."""
+
+    try:
+        return _business_plan_from_rows(strategy_id, capital_rows, owner_expense_rows)
+    except PersistedDealDataError as error:
+        raise PersistedDealDataError(
+            f"Strategy {strategy_id!r} holds a Business Plan overlay that cannot be "
+            f"restored: {error}"
+        ) from error
+
+
+def _strategy_from_rows(
+    connection: sqlite3.Connection,
+    strategy_row: sqlite3.Row,
+    *,
+    unit_id: str,
+    operating_mode: OperatingMode,
+) -> StrategyDefinition:
+    """Rebuild one stored Strategy as the exact P7.4 contract, its overlays in
+    canonical order (domain, then unit), and refuse it if the P7.4 validator
+    does. Nothing is repaired, defaulted or dropped: a Business Plan item row
+    with no overlay marker is corrupt, never an implied overlay."""
+
+    strategy_id = strategy_row["id"]
+    overlays: list[StrategyOverlay] = []
+    for row in _strategy_rows(connection, "strategy_acquisition_overlays", strategy_id):
+        overlays.append(
+            StrategyOverlay(
+                unit_id=row["unit_id"],
+                domain=StrategyDomain.ACQUISITION,
+                content=AcquisitionChoice(
+                    purchase_price=row["purchase_price"],
+                    acquisition_cost_pct=row["acquisition_cost_pct"],
+                ),
+            )
+        )
+    for row in _strategy_rows(connection, "strategy_financing_overlays", strategy_id):
+        overlays.append(
+            StrategyOverlay(
+                unit_id=row["unit_id"],
+                domain=StrategyDomain.FINANCING,
+                content=FinancingChoice(
+                    ltv=row["ltv"],
+                    interest_rate=row["interest_rate"],
+                    amortization=row["amortization"],
+                    io_period=row["io_period"],
+                    financing_fee_pct=row["financing_fee_pct"],
+                ),
+            )
+        )
+
+    plan_units = [
+        row["unit_id"]
+        for row in _strategy_rows(connection, "strategy_business_plan_overlays", strategy_id)
+    ]
+    capital_rows = _rows_by_unit(
+        _strategy_rows(
+            connection, "strategy_capital_plan_items", strategy_id, order="unit_id, ordinal"
+        )
+    )
+    owner_expense_rows = _rows_by_unit(
+        _strategy_rows(
+            connection, "strategy_owner_expense_items", strategy_id, order="unit_id, ordinal"
+        )
+    )
+    orphaned = sorted(set(capital_rows).union(owner_expense_rows).difference(plan_units))
+    if orphaned:
+        raise PersistedDealDataError(
+            f"Strategy {strategy_id!r} holds Business Plan items for unit(s) "
+            f"{', '.join(orphaned)} with no Business Plan overlay; an item row never "
+            "implies an overlay."
+        )
+    for plan_unit in plan_units:
+        overlays.append(
+            StrategyOverlay(
+                unit_id=plan_unit,
+                domain=StrategyDomain.BUSINESS_PLAN,
+                content=_strategy_business_plan_from_rows(
+                    strategy_id,
+                    capital_rows.get(plan_unit, ()),
+                    owner_expense_rows.get(plan_unit, ()),
+                ),
+            )
+        )
+
+    outcome_rows = _rows_by_unit(
+        _strategy_rows(
+            connection, "strategy_operating_outcomes", strategy_id, order="unit_id, target"
+        )
+    )
+    for outcome_unit, rows_of_unit in outcome_rows.items():
+        outcomes = tuple(
+            sorted(
+                (
+                    OperatingOutcome(
+                        target=_stored_token(row["target"], ScenarioTarget),
+                        operation=_stored_token(row["operation"], ScenarioOperation),
+                        value=row["value"],
+                    )
+                    for row in rows_of_unit
+                ),
+                key=_stored_outcome_order,
+            )
+        )
+        overlays.append(
+            StrategyOverlay(
+                unit_id=outcome_unit,
+                domain=StrategyDomain.OPERATING_OUTCOME,
+                content=OperatingOutcomeSet(outcomes=outcomes),
+            )
+        )
+    for row in _strategy_rows(connection, "strategy_disposition_overlays", strategy_id):
+        overlays.append(
+            StrategyOverlay(
+                unit_id=row["unit_id"],
+                domain=StrategyDomain.DISPOSITION,
+                content=DispositionChoice(hold_period=row["hold_period"]),
+            )
+        )
+
+    strategy = StrategyDefinition(
+        strategy_id=strategy_id,
+        name=strategy_row["name"],
+        description=strategy_row["description"],
+        overlays=tuple(
+            sorted(
+                overlays,
+                key=lambda overlay: (_STRATEGY_DOMAIN_RANK[overlay.domain], overlay.unit_id),
+            )
+        ),
+    )
+    issues = validate_strategy(strategy, operating_mode=operating_mode, unit_id=unit_id)
+    if issues:
+        raise PersistedStrategyDataError(strategy_id, issues)
+    return strategy
+
+
+def _read_strategies(
+    connection: sqlite3.Connection,
+    investment_id: str,
+    *,
+    unit_id: str,
+    operating_mode: OperatingMode,
+    strategy_id: str | None = None,
+) -> list[InvestmentStrategy]:
+    """The wrapper's Strategies -- or the one ``strategy_id`` it owns -- in
+    creation order. That order is presentation only; the insertion ``rowid``
+    breaks a timestamp tie, so it never depends on a random id."""
+
+    if strategy_id is None:
+        rows = connection.execute(
+            "SELECT * FROM strategies WHERE investment_id = ? ORDER BY created_at, rowid",
+            (investment_id,),
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            "SELECT * FROM strategies WHERE investment_id = ? AND id = ?",
+            (investment_id, strategy_id),
+        ).fetchall()
+    return [
+        InvestmentStrategy(
+            investment_id=investment_id,
+            strategy=_strategy_from_rows(
+                connection, row, unit_id=unit_id, operating_mode=operating_mode
+            ),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+        for row in rows
+    ]
+
+
+def _insert_strategy(
+    connection: sqlite3.Connection,
+    investment_id: str,
+    strategy: StrategyDefinition,
+    *,
+    now: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO strategies (id, investment_id, name, description, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (strategy.strategy_id, investment_id, strategy.name, strategy.description, now, now),
+    )
+    _write_strategy_overlays(connection, strategy.strategy_id, strategy.overlays)
+    _touch_investment(connection, investment_id, now=now)
+
+
+def _delete_strategy_rows(
+    connection: sqlite3.Connection, investment_id: str, strategy_id: str
+) -> None:
+    """One Strategy and everything it owns: its cached variants, under every
+    Scenario key, and its overlays."""
+
+    connection.execute(
+        "DELETE FROM variant_snapshots WHERE root_id = ? AND strategy_id = ?",
+        (investment_id, strategy_id),
+    )
+    _delete_strategy_overlay_rows(connection, strategy_id)
+    connection.execute(
+        "DELETE FROM strategies WHERE id = ? AND investment_id = ?", (strategy_id, investment_id)
+    )
+
+
+def create_strategy_for_deal(
+    deal_id: str,
+    *,
+    name: str,
+    description: str | None = None,
+    overlays: Iterable[StrategyOverlay] = (),
+    db_path: Path | None = None,
+) -> InvestmentStrategy:
+    """Persist a new Strategy for the Deal ``deal_id``, materializing its hidden
+    one-unit Investment first if it has none (Q4).
+
+    One transaction: the Deal must exist; any Investment it already belongs to
+    must be its hidden wrapper, which is reused -- whether its Scenarios or an
+    earlier Strategy created it; the Strategy must pass the P7.4 contract for
+    this unit; then the Investment and membership (first opt-in only), the
+    Strategy and its overlays are written. Any failure leaves no row behind.
+
+    Raises ``DealNotFoundError``, ``InvestmentStructureError``,
+    ``StrategyValidationError`` or ``PersistedDealDataError``."""
+
+    strategy = StrategyDefinition(
+        strategy_id=uuid.uuid4().hex,
+        name=name,
+        description=description,
+        overlays=tuple(overlays),
+    )
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        operating_mode = _operating_mode_of(connection, deal_id)
+        if operating_mode is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _investment_of_deal(connection, deal_id)
+        if investment_id is not None:
+            _require_hidden_wrapper(connection, investment_id)
+        _require_valid_strategy(strategy, operating_mode=operating_mode, unit_id=deal_id)
+        if investment_id is None:
+            investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
+        _insert_strategy(connection, investment_id, strategy, now=now)
+
+    return get_strategy(investment_id, strategy.strategy_id, db_path=db_path)
+
+
+def create_strategy(
+    investment_id: str,
+    *,
+    name: str,
+    description: str | None = None,
+    overlays: Iterable[StrategyOverlay] = (),
+    db_path: Path | None = None,
+) -> InvestmentStrategy:
+    """Persist another Strategy in the existing hidden wrapper
+    ``investment_id``, validated for its one unit."""
+
+    strategy = StrategyDefinition(
+        strategy_id=uuid.uuid4().hex,
+        name=name,
+        description=description,
+        overlays=tuple(overlays),
+    )
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        _require_valid_strategy(strategy, operating_mode=operating_mode, unit_id=unit_id)
+        _insert_strategy(connection, investment_id, strategy, now=now)
+
+    return get_strategy(investment_id, strategy.strategy_id, db_path=db_path)
+
+
+def update_strategy(
+    investment_id: str,
+    strategy_id: str,
+    *,
+    name: str,
+    description: str | None = None,
+    overlays: Iterable[StrategyOverlay] = (),
+    db_path: Path | None = None,
+) -> InvestmentStrategy:
+    """Replace one Strategy's name, description and whole overlay set, keeping
+    its id.
+
+    Validated before anything is written; the old overlays are removed and the
+    new ones written in the same transaction, so a failure leaves the previous
+    Strategy exactly as it was. Cached variants are left alone: each is served
+    only while its source fingerprint still matches the resolved inputs, so a
+    rename, or a recipe that resolves to the same inputs, keeps its cache and
+    any other change makes the old row stale."""
+
+    strategy = StrategyDefinition(
+        strategy_id=strategy_id,
+        name=name,
+        description=description,
+        overlays=tuple(overlays),
+    )
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        _require_owned_strategy(connection, investment_id, strategy_id)
+        _require_valid_strategy(strategy, operating_mode=operating_mode, unit_id=unit_id)
+        connection.execute(
+            "UPDATE strategies SET name = ?, description = ?, updated_at = ? "
+            "WHERE id = ? AND investment_id = ?",
+            (strategy.name, strategy.description, now, strategy_id, investment_id),
+        )
+        _delete_strategy_overlay_rows(connection, strategy_id)
+        _write_strategy_overlays(connection, strategy_id, strategy.overlays)
+        _touch_investment(connection, investment_id, now=now)
+
+    return get_strategy(investment_id, strategy_id, db_path=db_path)
+
+
+def delete_strategy(
+    investment_id: str, strategy_id: str, *, db_path: Path | None = None
+) -> None:
+    """Delete one Strategy with its overlays and cached variants.
+
+    When that leaves the hidden wrapper holding no structure -- no Strategy and
+    no Scenario -- the wrapper is removed too, in the same transaction, and the
+    Deal is a plain standalone Deal again (P-11). A wrapper that still holds a
+    Scenario is kept."""
+
+    with _connect(db_path) as connection:
+        _require_hidden_wrapper(connection, investment_id)
+        _require_owned_strategy(connection, investment_id, strategy_id)
+        _delete_strategy_rows(connection, investment_id, strategy_id)
+        if _wrapper_holds_no_structure(connection, investment_id):
+            _delete_investment_rows(connection, investment_id)
+        else:
+            _touch_investment(connection, investment_id, now=_utc_now_iso())
+
+
+def list_strategies(
+    investment_id: str, *, db_path: Path | None = None
+) -> list[InvestmentStrategy]:
+    with _connect(db_path) as connection:
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        return _read_strategies(
+            connection, investment_id, unit_id=unit_id, operating_mode=operating_mode
+        )
+
+
+def get_strategy(
+    investment_id: str, strategy_id: str, *, db_path: Path | None = None
+) -> InvestmentStrategy:
+    with _connect(db_path) as connection:
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        found = _read_strategies(
+            connection,
+            investment_id,
+            unit_id=unit_id,
+            operating_mode=operating_mode,
+            strategy_id=strategy_id,
+        )
+    if not found:
+        raise StrategyNotFoundError(investment_id, strategy_id)
+    return found[0]
+
+
+def list_deal_strategies(
+    deal_id: str, *, db_path: Path | None = None
+) -> tuple[str | None, list[InvestmentStrategy]]:
+    """The Investment ``deal_id`` belongs to and its Strategies -- or
+    ``(None, [])`` for a standalone Deal. Read-only: it never materializes an
+    Investment."""
+
+    with _connect(db_path) as connection:
+        if _operating_mode_of(connection, deal_id) is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _investment_of_deal(connection, deal_id)
+        if investment_id is None:
+            return None, []
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        return investment_id, _read_strategies(
+            connection, investment_id, unit_id=unit_id, operating_mode=operating_mode
+        )
+
+
+# -----------------------------------------------------------------------------
+# The variant cache for Strategy variants -- the same table, the same rules
+# -----------------------------------------------------------------------------
+
+
+def _require_variant_scenario(
+    connection: sqlite3.Connection, investment_id: str, scenario_id: str
+) -> None:
+    """A variant's Scenario key: the reserved implicit Base, or a Scenario this
+    Investment owns."""
+
+    if scenario_id != BASE_SCENARIO_ID:
+        _require_owned_scenario(connection, investment_id, scenario_id)
+
+
+def get_strategy_variant_snapshot(
+    investment_id: str,
+    strategy_id: str,
+    scenario_id: str,
+    *,
+    operating_mode: OperatingMode,
+    expected_fingerprint: str,
+    db_path: Path | None = None,
+) -> AcquisitionResults | DetailedAcquisitionResults | None:
+    """The cached result of the variant ``(strategy_id, scenario_id)``, only if
+    it is current -- exactly the ``get_variant_snapshot`` rules under the full
+    variant identity. A missing row, another schema version, a different
+    fingerprint and an undecodable payload all read as ``None``, a miss.
+    Lease-Level variants have no cache, so asking for one is refused."""
+
+    match operating_mode:
+        case OperatingMode.QUICK:
+            decoder: Any = _quick_analysis_snapshot_from_dict
+        case OperatingMode.DETAILED:
+            decoder = _detailed_analysis_snapshot_from_dict
+        case OperatingMode.LEASE_LEVEL:
+            raise UnsupportedOperatingModeError(
+                operating_mode, operation="get_strategy_variant_snapshot"
+            )
+        case _:
+            raise UnsupportedOperatingModeError(
+                operating_mode, operation="get_strategy_variant_snapshot"
+            )
+
+    with _connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT * FROM variant_snapshots "
+            "WHERE root_id = ? AND strategy_id = ? AND scenario_id = ?",
+            (investment_id, strategy_id, scenario_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return _decode_snapshot(
+        raw_json=row["snapshot"],
+        stored_schema_version=row["schema_version"],
+        current_schema_version=_VARIANT_SNAPSHOT_SCHEMA_VERSION,
+        stored_fingerprint=row["source_fingerprint"],
+        expected_fingerprint=expected_fingerprint,
+        decoder=decoder,
+    )
+
+
+def put_strategy_variant_snapshot(
+    investment_id: str,
+    strategy_id: str,
+    scenario_id: str,
+    results: AcquisitionResults | DetailedAcquisitionResults,
+    *,
+    source_fingerprint: str,
+    db_path: Path | None = None,
+) -> None:
+    """Cache the result of the variant ``(strategy_id, scenario_id)``.
+
+    Written only by ``anchor.deals.variants``, with the result of the D6 entry
+    point and the fingerprint of the very resolved inputs it ran. The Strategy
+    must be one this wrapper owns -- never the Base key, so Base x Base can
+    never be written here -- and the Scenario key must be the Base key or a
+    Scenario this wrapper owns. A Lease-Level variant is refused."""
+
+    if not isinstance(source_fingerprint, str) or not source_fingerprint:
+        raise SnapshotValidationError("A variant snapshot needs a non-empty source fingerprint.")
+    with _connect(db_path) as connection:
+        _, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        _require_owned_strategy(connection, investment_id, strategy_id)
+        _require_variant_scenario(connection, investment_id, scenario_id)
+        match operating_mode:
+            case OperatingMode.QUICK:
+                expected_type: type = AcquisitionResults
+            case OperatingMode.DETAILED:
+                expected_type = DetailedAcquisitionResults
+            case OperatingMode.LEASE_LEVEL:
+                raise UnsupportedOperatingModeError(
+                    operating_mode, operation="put_strategy_variant_snapshot"
+                )
+            case _:
+                raise UnsupportedOperatingModeError(
+                    operating_mode, operation="put_strategy_variant_snapshot"
+                )
+        if type(results) is not expected_type:
+            raise SnapshotValidationError(
+                f"A {operating_mode.value} variant caches {expected_type.__name__}, "
+                f"not {type(results).__name__}."
+            )
+        connection.execute(
+            """
+            INSERT INTO variant_snapshots
+                (root_id, strategy_id, scenario_id, snapshot, schema_version,
+                 source_fingerprint, generated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (root_id, strategy_id, scenario_id) DO UPDATE SET
+                snapshot = excluded.snapshot,
+                schema_version = excluded.schema_version,
+                source_fingerprint = excluded.source_fingerprint,
+                generated_at = excluded.generated_at
+            """,
+            (
+                investment_id,
+                strategy_id,
                 scenario_id,
                 _encode_snapshot(results),
                 _VARIANT_SNAPSHOT_SCHEMA_VERSION,

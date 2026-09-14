@@ -309,6 +309,11 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
     # **Narrowed at P7.1 -- by exactly one named file.** The Scenario engine
     # names ``BusinessPlan`` so it can carry the caller's plan, unopened and
     # unresolved, to the D6.2 entry points (P7.1 changes no plan).
+    #
+    # **Narrowed at P7.4 -- by exactly one named file.** The Strategy engine
+    # names ``BusinessPlan`` so a BUSINESS_PLAN overlay can replace the Deal's
+    # plan whole, and hands a replacement to ``validate_business_plan``. It never
+    # opens a plan and never resolves one.
     assert importers == [
         "anchor/ai/analyst.py",
         "anchor/ai/contracts.py",
@@ -318,6 +323,7 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
         "anchor/analysis/lease_level_sensitivity.py",
         "anchor/analysis/scenario.py",
         "anchor/analysis/sensitivity.py",
+        "anchor/analysis/strategy.py",
         "anchor/api.py",
         "anchor/deals/contracts.py",
         "anchor/deals/fingerprint.py",

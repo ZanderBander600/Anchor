@@ -203,6 +203,20 @@ def _baseline(path: str) -> str:
     return _lf(_git("show", f"{_P7_2_BASE}:{path}"))
 
 
+def _merged(path: str) -> str:
+    """``path`` as P7.2 left it, at the P7.2 merge.
+
+    Re-pinned at P7.4: the guards that describe what P7.2 *added* read P7.2's
+    own committed code rather than the moving tree, exactly as its ledger does.
+    P7.4 extends the same store, variant service, contracts and API, and its own
+    guards pin those additions (``tests/test_p7_4_strategy_architecture.py``).
+    Every guard that states a standing rule -- read paths free of writes, one
+    fingerprint authority, no arithmetic, Lease-Level never cached -- still
+    reads the current tree."""
+
+    return _lf(_git("show", f"{_P7_2_MERGE}:{path}"))
+
+
 def _functions(tree: ast.Module) -> dict[str, ast.FunctionDef]:
     return {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
 
@@ -280,7 +294,7 @@ def test_p7_2_added_exactly_the_enumerated_store_functions() -> None:
     gains one call, proven below. Every other baseline function is ``58f862d``'s
     AST exactly."""
 
-    current = _functions(ast.parse(_current(_STORE)))
+    current = _functions(ast.parse(_merged(_STORE)))
     baseline = _functions(ast.parse(_baseline(_STORE)))
     assert set(current) - set(baseline) == _P7_2_STORE_FUNCTIONS
     assert set(baseline) <= set(current)
@@ -322,7 +336,7 @@ _P7_2_DDL = {
 
 
 def test_every_legacy_table_definition_is_unchanged_and_five_are_appended() -> None:
-    current = {k: v for k, v in _module_constants(ast.parse(_current(_STORE))).items() if k.startswith("_CREATE_")}
+    current = {k: v for k, v in _module_constants(ast.parse(_merged(_STORE))).items() if k.startswith("_CREATE_")}
     baseline = {k: v for k, v in _module_constants(ast.parse(_baseline(_STORE))).items() if k.startswith("_CREATE_")}
 
     assert {name: current[name] for name in baseline} == baseline
@@ -334,7 +348,7 @@ def test_every_legacy_table_definition_is_unchanged_and_five_are_appended() -> N
 
 
 def test_the_migration_body_is_unchanged_and_the_version_moves_by_one() -> None:
-    current, baseline = ast.parse(_current(_STORE)), ast.parse(_baseline(_STORE))
+    current, baseline = ast.parse(_merged(_STORE)), ast.parse(_baseline(_STORE))
     assert ast.dump(_functions(current)["_migrate"]) == ast.dump(_functions(baseline)["_migrate"])
 
     def version(tree: ast.Module) -> int:
@@ -357,7 +371,7 @@ def test_connect_only_appends_the_five_table_creations() -> None:
             if isinstance(node, ast.Call) and _callee(node) == "execute"
         ]
 
-    current, baseline = executes(ast.parse(_current(_STORE))), executes(ast.parse(_baseline(_STORE)))
+    current, baseline = executes(ast.parse(_merged(_STORE))), executes(ast.parse(_baseline(_STORE)))
     assert current == baseline + list(_P7_2_DDL)
 
 
@@ -383,7 +397,11 @@ def _writes_of(function: ast.FunctionDef) -> list[str]:
 
 
 def test_one_function_writes_an_investment_and_only_the_first_scenario_reaches_it() -> None:
-    tree = ast.parse(_current(_STORE))
+    """P7.2's own code, at the P7.2 merge. P7.4 adds the Deal's first Strategy
+    as the one other caller, validated first in the same way
+    (``tests/test_p7_4_strategy_architecture.py``)."""
+
+    tree = ast.parse(_merged(_STORE))
     functions = _functions(tree)
     writers = sorted(
         name for name, function in functions.items()
@@ -443,7 +461,7 @@ def _route_functions(tree: ast.Module, method: str) -> dict[str, ast.FunctionDef
 
 
 def test_every_p7_2_get_route_calls_only_read_functions() -> None:
-    routes = _route_functions(ast.parse(_current(_API)), "get")
+    routes = _route_functions(ast.parse(_merged(_API)), "get")
     p7_2 = {path: function for path, function in routes.items() if "/scenarios" in path or path.startswith("/investments")}
     assert sorted(p7_2) == [
         "/deals/{deal_id}/scenarios",
@@ -547,7 +565,7 @@ def test_the_variant_service_and_the_new_store_code_do_no_arithmetic() -> None:
 
 def test_the_variant_service_imports_exactly_these_names() -> None:
     names: dict[str, set[str]] = {}
-    for node in ast.parse(_current(_VARIANTS)).body:
+    for node in ast.parse(_merged(_VARIANTS)).body:
         if isinstance(node, ast.ImportFrom):
             names.setdefault("." * node.level + (node.module or ""), set()).update(a.name for a in node.names)
     assert names == {
@@ -679,7 +697,7 @@ def _added_code(path: str) -> ast.Module:
     """The current file's code, docstrings removed. For files P7.2 extends,
     only definitions absent from ``58f862d`` are kept."""
 
-    current = _without_docstrings(ast.parse(_current(path)))
+    current = _without_docstrings(ast.parse(_merged(path)))
     if path == _VARIANTS:
         return current
     baseline = {ast.dump(node) for node in _without_docstrings(ast.parse(_baseline(path))).body}

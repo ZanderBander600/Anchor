@@ -103,17 +103,21 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
-def _changes_since(base: str, *paths: str) -> set[str]:
-    """Committed, staged, unstaged and untracked changes since ``base``. Reads
-    Git only; it never touches the index (protocol 11.2).
+#: ``main`` after P7.3 -- the no-ff merge of
+#: ``feature/p7-3-scenario-ui-matrix-v0``, and the end of P7.3's committed range.
+_P7_3_MERGE = "aa96155c4c097a1b7dad3f4c791178cb26b619a5"
+
+
+def _changes_between(start: str, end: str, *paths: str) -> set[str]:
+    """Files that differ between two commits. Reads Git only; it never touches
+    the index (protocol 11.2).
 
     ``--no-renames``: P7.3 renames ``StrategyStrip.tsx`` to
     ``DealContextStrip.tsx``. Rename detection would report the new path alone
     and hide that the old production file was removed, so both are listed."""
 
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+    changed = _git("diff", "--name-only", "--no-renames", start, end, "--", *paths).split()
+    return {path for path in changed if path}
 
 
 def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
@@ -126,11 +130,19 @@ def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
 
 
 def test_p7_3_changed_exactly_its_authorized_production_files() -> None:
-    """The P7.3 production ledger. The next gate must re-pin this to P7.3's
-    committed range, ``c6ddde0..<the P7.3 merge>``, before adding its own
-    scope. Never widen this set to admit another gate's files."""
+    """The P7.3 production ledger.
 
-    changed = {path for path in _changes_since(_P7_3_BASE, "src", "web") if _is_production(path)}
+    Pinned at P7.4 to P7.3's own committed range, ``c6ddde0..aa96155``, so it
+    keeps proving exactly what P7.3 changed however later gates move the tree.
+    That is the P7.1 / P7.2 ledger precedent. P7.4's own ledger is
+    ``tests/test_p7_4_strategy_architecture.py``. Never widen this set to admit
+    another gate's files."""
+
+    changed = {
+        path
+        for path in _changes_between(_P7_3_BASE, _P7_3_MERGE, "src", "web")
+        if _is_production(path)
+    }
     assert _ledger_violations(changed) == ([], [])
 
 
@@ -139,9 +151,20 @@ def test_the_p7_3_ledger_base_is_the_p7_2_merge() -> None:
     assert parents == [_git("rev-parse", ref).strip() for ref in ("58f862d", "8e589c8")]
 
 
+def test_the_p7_3_ledger_end_is_the_p7_3_merge() -> None:
+    """``aa96155`` is the P7.3 merge: its first parent is the P7.2 merge this
+    ledger starts from, and its second is the reviewed P7.3 head."""
+
+    parents = _git("rev-list", "--parents", "-n", "1", _P7_3_MERGE).split()[1:]
+    assert parents == [_git("rev-parse", ref).strip() for ref in (_P7_3_BASE, "39d2ee1")]
+
+
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged_since_p7_2(path: str) -> None:
-    assert _changes_since(_P7_3_BASE, path) == set(), f"{path} changed at P7.3"
+    """Within P7.3's own committed range. What later gates may change is their
+    own ledgers' business."""
+
+    assert _changes_between(_P7_3_BASE, _P7_3_MERGE, path) == set(), f"{path} changed at P7.3"
 
 
 def test_the_ledger_rejects_any_unexpected_production_change() -> None:
@@ -180,6 +203,12 @@ def _baseline_api() -> ast.Module:
     return _module(_git("show", f"{_P7_3_BASE}:{_API}"))
 
 
+def _merged_api() -> ast.Module:
+    """``api.py`` as P7.3 left it, at the P7.3 merge."""
+
+    return _module(_git("show", f"{_P7_3_MERGE}:{_API}"))
+
+
 def _scenario_import(tree: ast.Module) -> ast.ImportFrom:
     for node in tree.body:
         if isinstance(node, ast.ImportFrom) and node.module == "analysis.scenario":
@@ -188,9 +217,12 @@ def _scenario_import(tree: ast.Module) -> ast.ImportFrom:
 
 
 def test_api_py_changed_only_by_the_catalog() -> None:
+    """Within P7.3's own committed range: ``api.py`` at the P7.3 merge against
+    the P7.2 merge. Later gates' additions are their own ledgers' business."""
+
     baseline = {ast.dump(node) for node in _baseline_api().body}
-    current = {ast.dump(node) for node in _current_api().body}
-    added = [node for node in _current_api().body if ast.dump(node) not in baseline]
+    current = {ast.dump(node) for node in _merged_api().body}
+    added = [node for node in _merged_api().body if ast.dump(node) not in baseline]
     removed = [node for node in _baseline_api().body if ast.dump(node) not in current]
 
     assert [type(node).__name__ for node in removed] == ["ImportFrom"]

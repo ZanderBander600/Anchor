@@ -889,6 +889,12 @@ def test_g32_the_public_operating_mode_enum_is_published_behind_total_dispatch()
     # out of the cache. It computes nothing
     # (``tests/test_p7_2_investment_scenario_architecture.py``;
     # ``tests/test_d5_1a_operating_mode_total_dispatch.py`` audits it).
+    #
+    # P7.4 adds ``analysis/strategy.py``, the Strategy engine, whose operating-
+    # outcome whitelist records which registry targets each mode's strategies
+    # may set. It names the members as that whitelist's keys and as each
+    # resolver's constant argument, exactly as ``scenario.py`` does, and never
+    # branches on a mode (``tests/test_p7_4_strategy_architecture.py``).
     permitted = {
         "api.py",
         "contracts.py",
@@ -897,6 +903,7 @@ def test_g32_the_public_operating_mode_enum_is_published_behind_total_dispatch()
         "analyst.py",
         "scenario.py",
         "variants.py",
+        "strategy.py",
     }
     for source_file in _python_files_under(_ANCHOR_DIR):
         if "OperatingMode.LEASE_LEVEL" not in source_file.read_text(encoding="utf-8"):
@@ -1331,7 +1338,10 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     # P7.2 moves it to 8: five additive P7 tables. Its variant cache holds Quick
     # and Detailed results only; a Lease-Level variant is recomputed, never
     # stored, and the assertion above still forbids naming its result here.
-    assert "_SCHEMA_VERSION = 8" in store
+    # P7.4 moves it to 9: eight additive Strategy tables. Strategy variants
+    # reuse the same variant cache under the same rule: Lease-Level is never
+    # stored.
+    assert "_SCHEMA_VERSION = 9" in store
     assert "deal_sensitivity_snapshots" in store, (
         "D5.8A should persist the latest Lease-Level sensitivity runs"
     )
