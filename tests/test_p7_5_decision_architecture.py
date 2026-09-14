@@ -337,6 +337,30 @@ def test_the_service_turns_only_the_typed_validation_errors_into_invalid_cells()
     assert "except Exception" not in _current(_SERVICE) and "except ValueError" not in _current(_SERVICE)
 
 
+def test_the_whole_matrix_is_bracketed_by_one_economic_state_token() -> None:
+    """DC-7: the source state is read before the first cell and after the
+    last, and a difference is a conflict. The token reads ids, overlays,
+    overrides, membership and the Base fingerprint through the existing
+    variant authority -- never a name, a description or a timestamp."""
+
+    functions = _functions(_tree(_SERVICE))
+    run = ast.unparse(functions["analyze_decision_matrix"])
+    assert _calls(functions["analyze_decision_matrix"]).count("_source_state") == 2
+    assert (
+        run.index("before = _source_state(")
+        < run.index("_cell(")
+        < run.index("after = _source_state(")
+        < run.index("if after.token != before.token:")
+        < run.index("raise DecisionMatrixConflictError(")
+    )
+    token = functions["economic_state_token"]
+    read = {node.attr for node in ast.walk(token) if isinstance(node, ast.Attribute)}
+    assert {"strategy_id", "overlays", "scenario_id", "overrides"} <= read
+    assert not read & {"name", "description", "created_at", "updated_at"}
+    assert "variant_fingerprint" in _calls(functions["_source_state"])
+    assert not {c for c in _calls(functions["_source_state"]) if "fingerprint_" in c and c != "variant_fingerprint"}
+
+
 def test_the_service_stores_nothing() -> None:
     calls = set(_calls(_tree(_SERVICE)))
     assert not {c for c in calls if c.startswith(("put_", "create_", "update_", "delete_", "_write", "_insert"))}

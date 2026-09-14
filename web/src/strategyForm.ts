@@ -249,6 +249,40 @@ export function draftHasEconomicContent(draft: StrategyEditorDraft): boolean {
   );
 }
 
+/** Whether making ``domain`` strategy-specific must first copy in the saved
+ * Base values: the domain is inherited now and holds nothing typed. A domain
+ * that already holds explicit values -- a reopened Strategy, or values kept from
+ * an earlier enable -- needs no Base. For the Business Plan this is the Inherit
+ * Base -> Custom transition, which starts from a copy of the Base plan; No
+ * Business Plan is an explicit empty plan and needs no Base. */
+export function domainNeedsBase(draft: StrategyEditorDraft, domain: StrategyDomain): boolean {
+  switch (domain) {
+    case 'acquisition':
+      return (
+        !draft.acquisition.enabled &&
+        draft.acquisition.purchasePrice === '' &&
+        draft.acquisition.acquisitionCostPct === ''
+      );
+    case 'financing': {
+      const loan = draft.financing;
+      return (
+        !loan.enabled &&
+        loan.ltv === '' &&
+        loan.interestRate === '' &&
+        loan.amortization === '' &&
+        loan.ioPeriod === '' &&
+        loan.financingFeePct === ''
+      );
+    }
+    case 'business_plan':
+      return draft.businessPlan.choice === 'inherit';
+    case 'operating_outcome':
+      return false;
+    case 'disposition':
+      return !draft.disposition.enabled && draft.disposition.holdPeriod === '';
+  }
+}
+
 /** Why a save did not happen. `general` holds what no domain owns;
  * `byDomain` what one domain owns; `byRow` what one outcome row owns;
  * `planIssues` the Business Plan rows, placed as the one Business Plan editor

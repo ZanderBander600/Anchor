@@ -40,6 +40,7 @@ import type { BusinessPlanDraft, BusinessPlanInput } from './businessPlan';
 import {
   blankStrategyDraft,
   buildStrategyRequest,
+  domainNeedsBase,
   draftFromStrategy,
   strategyBaseValues,
 } from './strategyForm';
@@ -78,11 +79,14 @@ type CatalogState =
   | { status: 'ready'; targets: StrategyTargetEntry[] }
   | { status: 'error'; message: string };
 
-/** The saved Deal's Base values, and the save they were read from. */
-interface BaseState {
-  savedAt: string | null;
-  values: StrategyBaseValues | null;
-}
+/** The saved Deal read for prefill, and the save it was read for. */
+type BaseState =
+  | { savedAt: string | null; status: 'ready'; values: StrategyBaseValues | null }
+  | { savedAt: string | null; status: 'error' };
+
+/** Whether the saved Base values a domain's first enable copies in are here:
+ * being read, read, or unavailable because the read failed. */
+export type StrategyBaseStatus = 'loading' | 'ready' | 'unavailable';
 
 export type StrategyListStatus = 'unsaved' | 'idle' | 'loading' | 'ready' | 'error';
 
@@ -102,6 +106,10 @@ export interface StrategiesState {
   canEdit: boolean;
   /** The saved Deal's Base values, once read for the current save. */
   base: StrategyBaseValues | null;
+  /** An inherited domain cannot become strategy-specific -- and Inherit Base
+   * cannot become a Custom Business Plan -- until this is `ready`. */
+  baseStatus: StrategyBaseStatus;
+  retryBase: () => void;
 
   editor: StrategyEditorDraft | null;
   feedback: StrategyEditorFeedback | null;
@@ -222,6 +230,8 @@ export function useStrategies({
   const [list, setList] = useState<ListState>({ status: 'idle' });
   const [catalog, setCatalog] = useState<CatalogState>({ status: 'idle' });
   const [base, setBase] = useState<BaseState | null>(null);
+  /** A new object asks for the saved Deal again after a failed read. */
+  const [baseRetry, setBaseRetry] = useState<object>({});
   const [editor, setEditor] = useState<StrategyEditorDraft | null>(null);
   const [feedback, setFeedback] = useState<StrategyEditorFeedback | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -259,23 +269,35 @@ export function useStrategies({
   const strategies = list.status === 'ready' ? list.strategies : NO_STRATEGIES;
   const targets = catalog.status === 'ready' ? catalog.targets : NO_TARGETS;
   const canEdit = dealId !== null && !isDirty && list.status === 'ready';
-  const baseValues = base !== null && base.savedAt === savedAt ? base.values : null;
+  const currentBase = base !== null && base.savedAt === savedAt ? base : null;
+  const baseValues = currentBase?.status === 'ready' ? currentBase.values : null;
+  const baseStatus: StrategyBaseStatus =
+    currentBase === null ? 'loading' : baseValues !== null ? 'ready' : 'unavailable';
+  const isEditorOpen = editor !== null;
 
-  /** Reads the saved Deal for prefill, once per save. */
-  function ensureBase() {
-    if (dealId === null || baseRequestedFor.current === savedAt) {
+  /** The saved Deal is read once per save while an editor is open: its Base
+   * values prefill a domain the first time it is made strategy-specific. State
+   * is set only when the read settles, and only for the save it was requested
+   * for, so a slower read of an older save can never land. */
+  useEffect(() => {
+    if (!isEditorOpen || dealId === null || baseRequestedFor.current === savedAt) {
       return;
     }
     const requestedFor = savedAt;
     baseRequestedFor.current = requestedFor;
     getDeal(dealId).then(
-      (deal) => setBase({ savedAt: requestedFor, values: strategyBaseValues(deal) }),
+      (deal) => {
+        if (baseRequestedFor.current === requestedFor) {
+          setBase({ savedAt: requestedFor, status: 'ready', values: strategyBaseValues(deal) });
+        }
+      },
       () => {
-        // Prefill is a convenience: without it the analyst types the values.
-        baseRequestedFor.current = undefined;
+        if (baseRequestedFor.current === requestedFor) {
+          setBase({ savedAt: requestedFor, status: 'error' });
+        }
       },
     );
-  }
+  }, [isEditorOpen, dealId, savedAt, baseRetry]);
 
   /** Every draft edit goes through here: while the base is dirty the draft is
    * kept exactly as typed but cannot change. */
@@ -394,6 +416,12 @@ export function useStrategies({
     },
     canEdit,
     base: baseValues,
+    baseStatus,
+    retryBase: () => {
+      baseRequestedFor.current = undefined;
+      setBase(null);
+      setBaseRetry({});
+    },
 
     editor,
     feedback,
@@ -402,7 +430,6 @@ export function useStrategies({
       if (!canEdit) {
         return;
       }
-      ensureBase();
       setPendingDeleteId(null);
       setFeedback(null);
       setEditor(blankStrategyDraft());
@@ -412,7 +439,6 @@ export function useStrategies({
       if (record === undefined || !canEdit) {
         return;
       }
-      ensureBase();
       setPendingDeleteId(null);
       setFeedback(null);
       setEditor(draftFromStrategy(record, nextRowKey));
@@ -423,37 +449,39 @@ export function useStrategies({
     },
     setName: (name) => editDraft((draft) => ({ ...draft, name })),
     setDescription: (description) => editDraft((draft) => ({ ...draft, description })),
+    // A first enable copies the whole domain from the saved Base -- or waits,
+    // unchanged, until the Base values are here. A domain that already holds
+    // explicit values keeps them and needs no Base. Nothing typed is replaced.
     setAcquisitionEnabled: (enabled) =>
       editDraft((draft) => {
-        const isBlank = draft.acquisition.purchasePrice === '' && draft.acquisition.acquisitionCostPct === '';
-        const prefill = enabled && isBlank && baseValues !== null ? baseValues.acquisition : null;
-        return { ...draft, acquisition: { ...draft.acquisition, ...prefill, enabled } };
+        if (!enabled || !domainNeedsBase(draft, 'acquisition')) {
+          return { ...draft, acquisition: { ...draft.acquisition, enabled } };
+        }
+        return baseValues === null ? draft : { ...draft, acquisition: { ...baseValues.acquisition, enabled } };
       }),
     setAcquisitionField: (field, value) =>
       editDraft((draft) => ({ ...draft, acquisition: { ...draft.acquisition, [field]: value } })),
     setFinancingEnabled: (enabled) =>
       editDraft((draft) => {
-        const loan = draft.financing;
-        const isBlank =
-          loan.ltv === '' &&
-          loan.interestRate === '' &&
-          loan.amortization === '' &&
-          loan.ioPeriod === '' &&
-          loan.financingFeePct === '';
-        const prefill = enabled && isBlank && baseValues !== null ? baseValues.financing : null;
-        return { ...draft, financing: { ...loan, ...prefill, enabled } };
+        if (!enabled || !domainNeedsBase(draft, 'financing')) {
+          return { ...draft, financing: { ...draft.financing, enabled } };
+        }
+        return baseValues === null ? draft : { ...draft, financing: { ...baseValues.financing, enabled } };
       }),
     setFinancingField: (field, value) =>
       editDraft((draft) => ({ ...draft, financing: { ...draft.financing, [field]: value } })),
     setBusinessPlanChoice: (choice) =>
       editDraft((draft) => {
-        // Inherit Base -> Custom starts from a copy of the Base plan, for
-        // convenience. Once saved it is the Strategy's own, independent plan.
-        const plan =
-          choice === 'custom' && draft.businessPlan.choice === 'inherit' && baseValues !== null
-            ? businessPlanDraftFromInput(baseValues.businessPlan)
-            : draft.businessPlan.plan;
-        return { ...draft, businessPlan: { choice, plan } };
+        // Inherit Base -> Custom starts from a copy of the current Base plan,
+        // for convenience, so it waits until that plan is here. Once saved it
+        // is the Strategy's own, independent plan. No Business Plan is an
+        // explicit empty plan and needs no Base.
+        if (choice === 'custom' && domainNeedsBase(draft, 'business_plan')) {
+          return baseValues === null
+            ? draft
+            : { ...draft, businessPlan: { choice, plan: businessPlanDraftFromInput(baseValues.businessPlan) } };
+        }
+        return { ...draft, businessPlan: { choice, plan: draft.businessPlan.plan } };
       }),
     setBusinessPlan: (plan) => {
       editDraft((draft) => ({ ...draft, businessPlan: { ...draft.businessPlan, plan } }));
@@ -489,9 +517,10 @@ export function useStrategies({
     setOutcomeValue: (key, value) => updateRow(key, (row) => ({ ...row, value })),
     setDispositionEnabled: (enabled) =>
       editDraft((draft) => {
-        const prefill =
-          enabled && draft.disposition.holdPeriod === '' && baseValues !== null ? baseValues.holdPeriod : null;
-        return { ...draft, disposition: { enabled, holdPeriod: prefill ?? draft.disposition.holdPeriod } };
+        if (!enabled || !domainNeedsBase(draft, 'disposition')) {
+          return { ...draft, disposition: { ...draft.disposition, enabled } };
+        }
+        return baseValues === null ? draft : { ...draft, disposition: { enabled, holdPeriod: baseValues.holdPeriod } };
       }),
     setHoldPeriod: (value) =>
       editDraft((draft) => ({ ...draft, disposition: { ...draft.disposition, holdPeriod: value } })),

@@ -25,7 +25,12 @@ import {
 } from './api';
 import { RiskDecisionWorkspace } from './components/RiskDecisionWorkspace';
 import type { RiskDecisionWorkspaceProps } from './components/RiskDecisionWorkspace';
-import { SAVE_BEFORE_STRATEGIES_MESSAGE, STRATEGY_RESOLVES_TO_BASE_MESSAGE } from './strategyCatalog';
+import {
+  BASE_PREFILL_LOADING_MESSAGE,
+  BASE_PREFILL_UNAVAILABLE_MESSAGE,
+  SAVE_BEFORE_STRATEGIES_MESSAGE,
+  STRATEGY_RESOLVES_TO_BASE_MESSAGE,
+} from './strategyCatalog';
 import type { InvestmentStrategy, StrategyDraft, StrategyIssue } from './strategyTypes';
 import type { AcquisitionRequest, Deal } from './types';
 
@@ -450,7 +455,7 @@ describe('the Strategy editor', () => {
     const { user } = renderStrategies();
     await readyToEdit();
     await user.click(button('Add Strategy'));
-    await waitFor(() => expect(mockGetDeal).toHaveBeenCalled());
+    await waitFor(() => expect(within(domain('Acquisition')).getByText('$12,500,000 · 2.00% acquisition costs')).toBeTruthy());
     await user.type(field('Strategy Name'), 'Bid');
     await choose(user, 'Acquisition', 'Strategy-specific');
     await user.clear(field('Purchase Price'));
@@ -494,6 +499,104 @@ describe('the Strategy editor', () => {
     await user.click(button('Save Strategy'));
     await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'New Strategy' })).toBeNull());
+  });
+});
+
+// =============================================================================
+// The saved Base arrives before a domain is prefilled
+// =============================================================================
+
+describe('the saved Base arrives before a domain is prefilled', () => {
+  function specific(domainName: string): HTMLInputElement {
+    return within(domain(domainName)).getByRole('radio', { name: 'Strategy-specific' }) as HTMLInputElement;
+  }
+
+  function planOption(name: string): HTMLInputElement {
+    return within(domain('Business Plan')).getByRole('radio', { name }) as HTMLInputElement;
+  }
+
+  it('holds every Base-dependent first enable until the saved Base is read, then prefills each domain whole', async () => {
+    let release: (deal: Deal) => void = () => undefined;
+    mockGetDeal.mockImplementation(
+      () =>
+        new Promise<Deal>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { user } = renderStrategies();
+    await readyToEdit();
+    await user.click(button('Add Strategy'));
+    await waitFor(() => expect(mockGetDeal).toHaveBeenCalledWith('deal-1'));
+
+    // 1-3. The Base is still in flight: no Base-dependent transition can happen.
+    expect(screen.getByText(BASE_PREFILL_LOADING_MESSAGE)).toBeTruthy();
+    for (const name of ['Acquisition', 'Financing', 'Disposition']) {
+      expect(specific(name).disabled, name).toBe(true);
+    }
+    expect(planOption('Custom Business Plan').disabled).toBe(true);
+    // Choices that copy nothing from Base stay open.
+    expect(specific('Operating Outcome').disabled).toBe(false);
+    expect(planOption('No Business Plan').disabled).toBe(false);
+    // The race the analyst could lose before: nothing becomes strategy-specific and blank.
+    await user.click(specific('Acquisition'));
+    expect(specific('Acquisition').checked).toBe(false);
+    expect(screen.queryByLabelText('Purchase Price')).toBeNull();
+
+    // 4. The Base arrives.
+    release(SAVED_DEAL);
+    await waitFor(() => expect(specific('Acquisition').disabled).toBe(false));
+    expect(screen.queryByText(BASE_PREFILL_LOADING_MESSAGE)).toBeNull();
+
+    // 5-6. Each domain's first enable copies the whole domain from Base.
+    await choose(user, 'Acquisition', 'Strategy-specific');
+    expect([field('Purchase Price').value, field('Acquisition Costs').value]).toEqual(['12,500,000', '2']);
+    await choose(user, 'Financing', 'Strategy-specific');
+    expect(['LTV', 'Interest Rate', 'Amortization', 'Interest-Only Period', 'Financing Fee'].map((l) => field(l).value)).toEqual([
+      '65', '5.75', '30', '2', '1',
+    ]);
+    await choose(user, 'Disposition', 'Strategy-specific');
+    expect(field('Hold Period').value).toBe('5');
+    await choose(user, 'Business Plan', 'Custom Business Plan');
+    expect((within(domain('Business Plan')).getByLabelText('Description, Roof replacement') as HTMLInputElement).value).toBe(
+      'Roof replacement',
+    );
+  });
+
+  it('keeps a reopened Strategy’s explicit domains editable while the Base is still loading', async () => {
+    mockList.mockResolvedValue(listed([RECAP]));
+    mockGetDeal.mockImplementation(() => new Promise<Deal>(() => undefined));
+    const { user } = renderStrategies();
+    await readyToEdit();
+    await user.click(button('Edit Recapitalize'));
+
+    expect(screen.getByText(BASE_PREFILL_LOADING_MESSAGE)).toBeTruthy();
+    expect(field('Purchase Price').disabled).toBe(false);
+    await retype(user, 'Purchase Price', '11500000');
+    // Explicit values need no Base: back to Inherit and out again keeps them.
+    await choose(user, 'Acquisition', 'Inherit Base');
+    expect(specific('Acquisition').disabled).toBe(false);
+    await choose(user, 'Acquisition', 'Strategy-specific');
+    expect(field('Purchase Price').value).toBe('11,500,000');
+    expect(specific('Financing').disabled).toBe(false);
+    expect(planOption('Custom Business Plan').disabled).toBe(false);
+  });
+
+  it('says when the Base could not be read, prefills nothing, and retries', async () => {
+    mockGetDeal.mockRejectedValueOnce(new ApiError('Could not reach the Anchor API.'));
+    const { user } = renderStrategies();
+    await readyToEdit();
+    await user.click(button('Add Strategy'));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain(BASE_PREFILL_UNAVAILABLE_MESSAGE);
+    expect(specific('Acquisition').disabled).toBe(true);
+    expect(planOption('Custom Business Plan').disabled).toBe(true);
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(specific('Acquisition').disabled).toBe(false));
+    expect(mockGetDeal).toHaveBeenCalledTimes(2);
+    await choose(user, 'Acquisition', 'Strategy-specific');
+    expect([field('Purchase Price').value, field('Acquisition Costs').value]).toEqual(['12,500,000', '2']);
   });
 });
 

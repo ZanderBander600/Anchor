@@ -111,6 +111,15 @@ export function describeStrategyOverlay(overlay: StrategyOverlay): string {
 export const STRATEGY_RESOLVES_TO_BASE_MESSAGE =
   'This Strategy currently resolves to the same economic assumptions as Base.';
 
+/** While the saved Base values are read. An inherited domain waits for them
+ * before it can become strategy-specific, so it is prefilled whole. */
+export const BASE_PREFILL_LOADING_MESSAGE =
+  'Loading the saved Base values that prefill a strategy-specific domain…';
+
+/** When that read failed: nothing is prefilled from a Base that is not here. */
+export const BASE_PREFILL_UNAVAILABLE_MESSAGE =
+  'The saved Base values could not be loaded, so an inherited domain cannot be made strategy-specific yet.';
+
 /** Why Strategies cannot be changed while the deal is unsaved or dirty. */
 export const SAVE_DEAL_BEFORE_STRATEGIES_MESSAGE = 'Save this deal before adding strategies.';
 

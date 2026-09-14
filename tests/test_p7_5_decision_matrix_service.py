@@ -8,6 +8,7 @@ for the same pair, and every row count is read from the database directly.
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -420,3 +421,211 @@ def test_reading_the_strategy_target_catalog_creates_nothing(client: TestClient,
     create_deal("quick", db)
     client.get("/strategy-targets")
     assert f4.p7_row_counts(db) == f4.P7_EMPTY
+
+
+# =============================================================================
+# One coherent package across the whole run (DC-7)
+#
+# The per-cell check only proves that one cell's analysis and its inspected
+# inputs belong to one state. These tests change the economic state *between*
+# cells: every earlier cell has already finished its analysis and its own
+# check, and every later cell is internally self-consistent in the new state.
+# Only the whole-run token can see that the package would mix two states.
+# =============================================================================
+
+_WHOLE_RUN_CONFLICT = "strategies or scenarios changed while the decision matrix was running"
+
+
+def _between_cells(monkeypatch: pytest.MonkeyPatch, before_call: int, change: Any) -> list[tuple[str, str]]:
+    """Runs ``change`` just before the ``before_call``-th cell (1-based) is
+    analysed, after every earlier cell completed."""
+
+    real = variants.analyze_variant
+    calls: list[tuple[str, str]] = []
+
+    def analyze(investment_id: str, strategy_id: str, scenario_id: str, **kwargs: Any) -> Any:
+        calls.append((strategy_id, scenario_id))
+        if len(calls) == before_call:
+            change()
+        return real(investment_id, strategy_id, scenario_id, **kwargs)
+
+    monkeypatch.setattr(service, "analyze_variant", analyze)
+    return calls
+
+
+def _rename_strategy(db: Path, investment_id: str, strategy_id: str, *, overlays: Any = None) -> None:
+    record = store.get_strategy(investment_id, strategy_id, db_path=db).strategy
+    store.update_strategy(
+        investment_id, strategy_id,
+        name=record.name if overlays is not None else "Renamed mid-run",
+        description=record.description if overlays is not None else "New words mid-run",
+        overlays=record.overlays if overlays is None else overlays,
+        db_path=db,
+    )
+
+
+def _rename_scenario(db: Path, investment_id: str, scenario_id: str, *, overrides: Any = None) -> None:
+    record = store.get_scenario(investment_id, scenario_id, db_path=db).scenario
+    store.update_scenario(
+        investment_id, scenario_id,
+        name=record.name if overrides is not None else "Renamed mid-run",
+        description=record.description if overrides is not None else "New words mid-run",
+        overrides=record.overrides if overrides is None else overrides,
+        db_path=db,
+    )
+
+
+#: Each economic change, and the cell it lands before. The full Quick matrix is
+#: 3 x 3, row-major: Base Strategy (cells 1-3), Strategy 1 (4-6), Strategy 2
+#: (7-9). A deletion lands after the deleted row or column has already run, so
+#: every remaining cell still resolves.
+_CHANGES: dict[str, tuple[int, Any]] = {
+    "base deal": (2, lambda db, deal, inv, s, c: update_deal(store.get_deal(deal.id, db_path=db), db, purchase_price=13_000_000.0)),
+    "base business plan": (2, lambda db, deal, inv, s, c: update_deal(store.get_deal(deal.id, db_path=db), db, business_plan=f4.renovation_plan())),
+    "strategy overlay": (2, lambda db, deal, inv, s, c: _rename_strategy(db, inv, s[2], overlays=(f4.financing(deal.id, ltv=0.5),))),
+    "strategy added": (2, lambda db, deal, inv, s, c: store.create_strategy(inv, name="Late", description=None, overlays=(f4.acquisition(deal.id),), db_path=db)),
+    "strategy deleted": (7, lambda db, deal, inv, s, c: store.delete_strategy(inv, s[1], db_path=db)),
+    "scenario override": (2, lambda db, deal, inv, s, c: _rename_scenario(db, inv, c[2], overrides=(override(deal.id, "noi_growth", "set", 0.05),))),
+    "scenario added": (2, lambda db, deal, inv, s, c: store.create_scenario(inv, name="Late", description=None, overrides=(override(deal.id, "exit_cap_rate", "add", 0.01),), db_path=db)),
+    "scenario deleted": (9, lambda db, deal, inv, s, c: store.delete_scenario(inv, c[1], db_path=db)),
+}
+
+
+@pytest.mark.parametrize("change", sorted(_CHANGES))
+def test_an_economic_change_between_cells_is_a_whole_matrix_conflict(
+    db: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    deal, investment_id, strategy_ids, scenario_ids = _full("quick", db)
+    before_call, mutate = _CHANGES[change]
+    calls = _between_cells(
+        monkeypatch, before_call, lambda: mutate(db, deal, investment_id, strategy_ids, scenario_ids)
+    )
+
+    with pytest.raises(service.DecisionMatrixConflictError, match=_WHOLE_RUN_CONFLICT):
+        service.analyze_decision_matrix(investment_id, db_path=db)
+    # Every cell ran and passed its own analysis-versus-inspection check: the
+    # conflict is the whole-run token's, raised only after the last cell.
+    assert len(calls) == 9
+
+
+def test_without_the_whole_run_token_the_mixed_package_would_be_returned(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The case the per-cell check misses, made visible: with the token
+    neutralized the request succeeds, and its Base x Base cell belongs to a
+    Deal that no longer exists while every later cell belongs to the new one."""
+
+    deal, investment_id, _, scenario_ids = _full("quick", db)
+    _between_cells(
+        monkeypatch, 2,
+        lambda: update_deal(store.get_deal(deal.id, db_path=db), db, purchase_price=13_000_000.0),
+    )
+    monkeypatch.setattr(service, "economic_state_token", lambda **kwargs: "unchanged")
+
+    matrix = service.analyze_decision_matrix(investment_id, db_path=db).matrix
+
+    def current(scenario_id: str) -> str:
+        return variants.variant_fingerprint(investment_id, BASE, scenario_id, db_path=db).source_fingerprint
+
+    # Cell 1 is the old Deal; cell 2 onwards the new one -- one package, two states.
+    assert _cell(matrix, BASE, BASE).source_fingerprint != current(BASE)
+    assert _cell(matrix, BASE, scenario_ids[1]).source_fingerprint == current(scenario_ids[1])
+    assert _cell(matrix, BASE, BASE).results.total_equity_invested != _cell(matrix, BASE, scenario_ids[1]).results.total_equity_invested
+    assert {c.status for c in matrix.cells} == {CellStatus.VALID}
+
+
+@pytest.mark.parametrize("rename", ["strategy", "scenario"])
+def test_a_rename_during_the_run_is_not_a_conflict(
+    db: Path, monkeypatch: pytest.MonkeyPatch, rename: str
+) -> None:
+    deal, investment_id, strategy_ids, scenario_ids = _full("quick", db)
+    before = service.analyze_decision_matrix(investment_id, db_path=db).matrix.matrix_fingerprint
+
+    def metadata_only() -> None:
+        if rename == "strategy":
+            _rename_strategy(db, investment_id, strategy_ids[1])
+        else:
+            _rename_scenario(db, investment_id, scenario_ids[1])
+
+    calls = _between_cells(monkeypatch, 5, metadata_only)
+    report = service.analyze_decision_matrix(investment_id, db_path=db)
+
+    assert len(calls) == 9
+    assert {c.status for c in report.matrix.cells} == {CellStatus.VALID}
+    assert report.matrix.matrix_fingerprint == before
+
+
+def test_the_economic_token_reads_economic_content_and_nothing_else(db: Path) -> None:
+    deal, investment_id, _, _ = _full("quick", db)
+    strategies = store.list_strategies(investment_id, db_path=db)
+    scenarios = store.list_scenarios(investment_id, db_path=db)
+
+    # A Strategy with several domains, several outcomes and several plan items,
+    # so the order of every inner list can be permuted.
+    rich = dataclasses.replace(
+        strategies[0],
+        strategy=dataclasses.replace(
+            strategies[0].strategy,
+            overlays=(
+                f4.acquisition(deal.id),
+                f4.plan_overlay(deal.id, f4.renovation_plan()),
+                f4.outcomes(deal.id, f4.outcome("exit_cap_rate", 0.06), f4.outcome("noi_growth", 0.04)),
+            ),
+        ),
+    )
+    plan = f4.renovation_plan()
+    permuted = dataclasses.replace(
+        rich,
+        strategy=dataclasses.replace(
+            rich.strategy,
+            overlays=(
+                f4.outcomes(deal.id, f4.outcome("noi_growth", 0.04), f4.outcome("exit_cap_rate", 0.06)),
+                f4.plan_overlay(deal.id, dataclasses.replace(plan, capital_items=tuple(reversed(plan.capital_items)))),
+                f4.acquisition(deal.id),
+            ),
+        ),
+    )
+    records = [rich, *strategies[1:]]
+
+    def token(**changes: Any) -> str:
+        arguments: dict[str, Any] = {
+            "hidden": True, "unit_ids": [deal.id], "base_fingerprint": "base-fp",
+            "strategies": records, "scenarios": scenarios, **changes,
+        }
+        return service.economic_state_token(**arguments)
+
+    reference = token()
+    later = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    renamed_strategies = [
+        dataclasses.replace(r, strategy=dataclasses.replace(r.strategy, name="Other", description="Other words"), updated_at=later)
+        for r in records
+    ]
+    renamed_scenarios = [
+        dataclasses.replace(r, scenario=dataclasses.replace(r.scenario, name="Other", description="Other words"), updated_at=later)
+        for r in scenarios
+    ]
+    # Metadata and order never move it.
+    assert token(strategies=renamed_strategies) == reference
+    assert token(scenarios=renamed_scenarios) == reference
+    assert token(strategies=list(reversed(records)), scenarios=list(reversed(scenarios))) == reference
+    assert token(strategies=[permuted, *records[1:]]) == reference
+    # Every economic input does.
+    moved_overlay = dataclasses.replace(
+        records[1], strategy=dataclasses.replace(records[1].strategy, overlays=(f4.financing(deal.id, ltv=0.5),))
+    )
+    moved_override = dataclasses.replace(
+        scenarios[0],
+        scenario=dataclasses.replace(scenarios[0].scenario, overrides=(override(deal.id, "exit_cap_rate", "add", 0.02),)),
+    )
+    added_strategy = dataclasses.replace(records[1], strategy=dataclasses.replace(records[1].strategy, strategy_id="another"))
+    economic = {
+        "base fingerprint": token(base_fingerprint="other-fp"),
+        "unit membership": token(unit_ids=["other-unit"]),
+        "visibility": token(hidden=False),
+        "strategy overlay": token(strategies=[records[0], moved_overlay, *records[2:]]),
+        "strategy removed": token(strategies=records[:-1]),
+        "strategy added": token(strategies=[*records, added_strategy]),
+        "scenario override": token(scenarios=[moved_override, *scenarios[1:]]),
+        "scenario removed": token(scenarios=scenarios[:-1]),
+    }
+    assert {name: moved for name, moved in economic.items() if moved == reference} == {}

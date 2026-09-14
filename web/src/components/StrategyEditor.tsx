@@ -23,9 +23,15 @@
 import { Fragment, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { scenarioTargetLabel, scenarioValueFormat } from '../scenarioCatalog';
-import { STRATEGY_DOMAINS, STRATEGY_RESOLVES_TO_BASE_MESSAGE } from '../strategyCatalog';
+import {
+  BASE_PREFILL_LOADING_MESSAGE,
+  BASE_PREFILL_UNAVAILABLE_MESSAGE,
+  STRATEGY_DOMAINS,
+  STRATEGY_RESOLVES_TO_BASE_MESSAGE,
+} from '../strategyCatalog';
 import {
   ACQUISITION_FIELDS,
+  domainNeedsBase,
   draftHasEconomicContent,
   FINANCING_FIELDS,
   HOLD_PERIOD_LABEL,
@@ -62,6 +68,7 @@ function ModeChoice<T extends string>({
   value,
   options,
   disabled,
+  unavailable,
   onChange,
 }: {
   name: string;
@@ -69,6 +76,8 @@ function ModeChoice<T extends string>({
   value: T;
   options: ModeOption<T>[];
   disabled: boolean;
+  /** Options that cannot be chosen yet: they need the saved Base values. */
+  unavailable?: ReadonlySet<T>;
   onChange: (value: T) => void;
 }) {
   return (
@@ -83,7 +92,7 @@ function ModeChoice<T extends string>({
             name={name}
             value={option.value}
             checked={option.value === value}
-            disabled={disabled}
+            disabled={disabled || (unavailable?.has(option.value) ?? false)}
             onChange={() => onChange(option.value)}
           />
           <span>{option.label}</span>
@@ -97,6 +106,9 @@ const INHERIT_OR_SPECIFIC: ModeOption<'inherit' | 'specific'>[] = [
   { value: 'inherit', label: 'Inherit Base' },
   { value: 'specific', label: 'Strategy-specific' },
 ];
+
+const SPECIFIC_ONLY: ReadonlySet<'inherit' | 'specific'> = new Set(['specific']);
+const CUSTOM_ONLY: ReadonlySet<BusinessPlanChoice> = new Set(['custom']);
 
 const BUSINESS_PLAN_OPTIONS: ModeOption<BusinessPlanChoice>[] = [
   { value: 'inherit', label: 'Inherit Base' },
@@ -299,6 +311,8 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
   const canAddOutcome =
     state.catalogStatus === 'ready' && state.targets.some((entry) => !taken.has(entry.target));
   const holdForTiming = editor.disposition.enabled ? editor.disposition.holdPeriod : (base?.holdPeriod ?? '');
+  /** A first enable that must copy the saved Base waits until Base is here. */
+  const waitsForBase = (domain: StrategyDomain) => state.baseStatus !== 'ready' && domainNeedsBase(editor, domain);
 
   useEffect(() => {
     nameInput.current?.focus();
@@ -369,6 +383,19 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
           {STRATEGY_RESOLVES_TO_BASE_MESSAGE}
         </p>
       )}
+      {state.baseStatus === 'loading' && (
+        <p className="scenario-muted" role="status">
+          {BASE_PREFILL_LOADING_MESSAGE}
+        </p>
+      )}
+      {state.baseStatus === 'unavailable' && (
+        <div className="error-banner scenario-error" role="alert">
+          <span>{BASE_PREFILL_UNAVAILABLE_MESSAGE}</span>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={state.retryBase}>
+            Retry
+          </button>
+        </div>
+      )}
 
       <DomainSection
         domain="acquisition"
@@ -380,6 +407,7 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
             value={editor.acquisition.enabled ? 'specific' : 'inherit'}
             options={INHERIT_OR_SPECIFIC}
             disabled={locked}
+            unavailable={waitsForBase('acquisition') ? SPECIFIC_ONLY : undefined}
             onChange={(value) => state.setAcquisitionEnabled(value === 'specific')}
           />
         }
@@ -415,6 +443,7 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
             value={editor.financing.enabled ? 'specific' : 'inherit'}
             options={INHERIT_OR_SPECIFIC}
             disabled={locked}
+            unavailable={waitsForBase('financing') ? SPECIFIC_ONLY : undefined}
             onChange={(value) => state.setFinancingEnabled(value === 'specific')}
           />
         }
@@ -448,6 +477,7 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
             value={editor.businessPlan.choice}
             options={BUSINESS_PLAN_OPTIONS}
             disabled={locked}
+            unavailable={waitsForBase('business_plan') ? CUSTOM_ONLY : undefined}
             onChange={state.setBusinessPlanChoice}
           />
         }
@@ -553,6 +583,7 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
             value={editor.disposition.enabled ? 'specific' : 'inherit'}
             options={INHERIT_OR_SPECIFIC}
             disabled={locked}
+            unavailable={waitsForBase('disposition') ? SPECIFIC_ONLY : undefined}
             onChange={(value) => state.setDispositionEnabled(value === 'specific')}
           />
         }
