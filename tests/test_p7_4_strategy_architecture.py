@@ -89,17 +89,22 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
-def _changes_since(base: str, *paths: str) -> set[str]:
-    """Committed, staged, unstaged and untracked changes since ``base``, with
-    renames split into their removal and addition."""
-
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
-
-
 def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
     return sorted(changed - _P7_4_PRODUCTION_FILES), sorted(_P7_4_PRODUCTION_FILES - changed)
+
+
+#: ``main`` after P7.4 -- the no-ff merge of
+#: ``feature/p7-4-strategy-engine-persistence``, and the end of P7.4's committed
+#: range.
+_P7_4_MERGE = "5f04d3775152494cd717c86ea7318161908494be"
+
+
+def _changes_between(start: str, end: str, *paths: str) -> set[str]:
+    """Files that differ between two commits, renames split into removal and
+    addition. Reads Git objects only; it never touches the index."""
+
+    changed = _git("diff", "--name-only", "--no-renames", start, end, "--", *paths).split()
+    return {path for path in changed if path}
 
 
 # =============================================================================
@@ -108,11 +113,17 @@ def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
 
 
 def test_p7_4_changed_exactly_its_authorized_production_files() -> None:
-    """The P7.4 production ledger. The next gate must re-pin this to P7.4's
-    committed range, ``aa96155..<the P7.4 merge>``, before adding its own
-    scope. Never widen this set to admit another gate's files."""
+    """The P7.4 production ledger.
 
-    changed = {path for path in _changes_since(_P7_4_BASE, "src", "web") if _is_production(path)}
+    Pinned at P7.5 to P7.4's own committed range, ``aa96155..5f04d37``, so it
+    keeps proving exactly what P7.4 changed however later gates move the tree
+    (the P7.1 - P7.3 ledger precedent). P7.5's own ledger is
+    ``tests/test_p7_5_decision_architecture.py``. Never widen this set to admit
+    another gate's files."""
+
+    changed = {
+        path for path in _changes_between(_P7_4_BASE, _P7_4_MERGE, "src", "web") if _is_production(path)
+    }
     assert _ledger_violations(changed) == ([], [])
 
 
@@ -121,9 +132,20 @@ def test_the_p7_4_ledger_base_is_the_p7_3_merge() -> None:
     assert parents == [_git("rev-parse", ref).strip() for ref in ("c6ddde0", "39d2ee1")]
 
 
+def test_the_p7_4_ledger_end_is_the_p7_4_merge() -> None:
+    """``5f04d37`` is the P7.4 merge: its first parent is the P7.3 merge this
+    ledger starts from, and its second is the reviewed P7.4 head."""
+
+    parents = _git("rev-list", "--parents", "-n", "1", _P7_4_MERGE).split()[1:]
+    assert parents == [_git("rev-parse", ref).strip() for ref in (_P7_4_BASE, "ecf1f71")]
+
+
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged_since_p7_3(path: str) -> None:
-    assert _changes_since(_P7_4_BASE, path) == set(), f"{path} changed at P7.4"
+    """Within P7.4's own committed range. What later gates may change is their
+    own ledgers' business."""
+
+    assert _changes_between(_P7_4_BASE, _P7_4_MERGE, path) == set(), f"{path} changed at P7.4"
 
 
 def test_the_ledger_rejects_any_unexpected_production_change() -> None:
@@ -870,7 +892,9 @@ def test_the_later_gate_guard_detects_a_unit_selection_domain() -> None:
 
 
 def test_no_frontend_file_changed() -> None:
-    assert _changes_since(_P7_4_BASE, "web") == set()
+    """Within P7.4's own committed range; P7.5 is the frontend gate."""
+
+    assert _changes_between(_P7_4_BASE, _P7_4_MERGE, "web") == set()
 
 
 @pytest.mark.parametrize("path", sorted(_P7_4_PRODUCTION_FILES))

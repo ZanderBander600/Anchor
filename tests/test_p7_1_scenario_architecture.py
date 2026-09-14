@@ -210,10 +210,17 @@ def test_no_production_module_imports_the_scenario_layer() -> None:
     # SET, then runs the P7.1 resolver on the Strategy-resolved contracts. It
     # restates no target, operation or accessor
     # (``tests/test_p7_4_strategy_architecture.py``).
+    #
+    # **Widened at P7.5 -- by exactly one named file.** The Decision Matrix
+    # service turns a ``ScenarioValidationError`` into one invalid cell, and
+    # reads the hold period off the resolved-input bundles the variant ran. It
+    # resolves and validates nothing itself
+    # (``tests/test_p7_5_decision_architecture.py``).
     assert importers == [
         "anchor/analysis/strategy.py",
         "anchor/api.py",
         "anchor/deals/contracts.py",
+        "anchor/deals/decision_matrix.py",
         "anchor/deals/store.py",
         "anchor/deals/variants.py",
     ]
@@ -227,9 +234,9 @@ _SCENARIO_NAMES = (
 
 def test_no_other_production_file_defines_or_names_a_scenario_contract() -> None:
     """Widened at P7.2 by exactly the four files that import the Scenario
-    layer (see above), and at P7.4 by the Strategy engine. None of them
-    *defines* a scenario contract: the P7.2 and P7.4 guards prove they define
-    no class of these names."""
+    layer (see above), at P7.4 by the Strategy engine, and at P7.5 by the
+    Decision Matrix service. None of them *defines* a scenario contract: the
+    P7.2, P7.4 and P7.5 guards prove they define no class of these names."""
 
     offenders = sorted(
         path.relative_to(_SRC).as_posix()
@@ -241,6 +248,7 @@ def test_no_other_production_file_defines_or_names_a_scenario_contract() -> None
         "anchor/analysis/strategy.py",
         "anchor/api.py",
         "anchor/deals/contracts.py",
+        "anchor/deals/decision_matrix.py",
         "anchor/deals/store.py",
         "anchor/deals/variants.py",
     ]

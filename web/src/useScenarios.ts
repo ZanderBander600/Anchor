@@ -6,66 +6,44 @@
  * - the Deal's saved Scenarios;
  * - the target catalog for the Deal's operating mode;
  * - the Scenario editor and its feedback;
- * - deletion;
- * - the Scenario Comparison.
+ * - deletion.
+ *
+ * P7.5 moved comparison out: the Strategy x Scenario Decision Matrix
+ * (`useDecisionMatrix`) is the one comparison surface, so this hook manages
+ * Scenarios and nothing else.
  *
  * **One Deal per mount.** The owner remounts the hook when the open Deal changes
- * (`ScenarioWorkspace` is keyed by mode and Deal id), so nothing from one Deal can
- * reach another by construction.
+ * (`RiskDecisionWorkspace` is keyed by mode and Deal id), so nothing from one
+ * Deal can reach another by construction.
  *
  * **Opt-in, and read-only until the analyst acts.** Nothing is requested until
  * the Risk workspace is on screen, and a read never creates anything. The first
- * Scenario the analyst saves is what materializes the Deal's hidden Investment,
- * through the P7.2 route that owns that. A Deal that has never been saved has no
- * Scenarios: it gets no request, no temporary id and no local stand-in.
+ * Scenario (or Strategy) the analyst saves is what materializes the Deal's
+ * hidden Investment, through the route that owns that. A Deal that has never
+ * been saved has no Scenarios: it gets no request, no temporary id and no local
+ * stand-in.
  *
  * **The saved Deal is the base.** Persisted Scenarios resolve against the
- * Deal's *saved* inputs. While the base underwriting has unsaved edits, nothing
- * here runs, and Scenario edits wait: running would compare persisted Scenario
- * results with a Base the analyst is no longer looking at.
- *
- * **Every number comes from the backend.**
- * - Base is the saved Deal's ordinary analysis: `GET /deals/{id}`, then the
- *   mode's existing `POST /analyze`.
- * - Each Scenario column is the P7.2 Scenario analysis.
- * - Each column settles on its own. One refusal never blanks another column,
- *   and the hook does no arithmetic on any result.
- *
- * **Out of date is deterministic.** A comparison records a token of what it ran
- * against:
- * - the Deal;
- * - the save it was run on;
- * - each Scenario's id and overrides.
- * It is current only while that token still matches and the base is not dirty.
- * A rename or a new description leaves the token unchanged, so the column label
- * updates without a re-run.
+ * Deal's *saved* inputs. While the base underwriting has unsaved edits,
+ * Scenario edits wait, and an open draft is kept exactly as typed.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  analyzeAcquisition,
-  analyzeDetailedAcquisition,
-  analyzeInvestmentScenario,
-  analyzeLeaseLevelAcquisition,
-  ApiError,
   createDealScenario,
   deleteInvestmentScenario,
   fetchScenarioTargetCatalog,
-  getDeal,
   listDealScenarios,
   ScenarioApiError,
   updateInvestmentScenario,
 } from './api';
 import { FormValidationError } from './convert';
-import { assertNeverMode } from './operatingMode';
 import {
   scenarioTargetLabel,
   scenarioValueToText,
   scenarioValueToWire,
   sharesValueScale,
 } from './scenarioCatalog';
-import { acquisitionResultsOf } from './scenarioComparison';
-import type { ComparisonCell, ScenarioComparison } from './scenarioComparison';
 import type {
   InvestmentScenario,
   ScenarioDraft,
@@ -73,7 +51,7 @@ import type {
   ScenarioOverride,
   ScenarioTargetEntry,
 } from './scenarioTypes';
-import type { AcquisitionResults, Deal, OperatingMode } from './types';
+import type { OperatingMode } from './types';
 
 export interface UseScenariosOptions {
   operatingMode: OperatingMode;
@@ -81,8 +59,6 @@ export interface UseScenariosOptions {
   dealId: string | null;
   /** Whether the base underwriting has unsaved edits. */
   isDirty: boolean;
-  /** The Deal's `updated_at` as of its last Save or Open. A new save moves it. */
-  savedAt: string | null;
   /** Whether the Risk workspace is on screen. Nothing is requested before it is. */
   isActive: boolean;
 }
@@ -117,7 +93,7 @@ export interface ScenarioEditorFeedback {
 type ListState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'ready'; investmentId: string | null; scenarios: InvestmentScenario[] }
+  | { status: 'ready'; scenarios: InvestmentScenario[] }
   | { status: 'error'; message: string };
 
 type CatalogState =
@@ -164,98 +140,17 @@ export interface ScenariosState {
   requestDelete: (scenarioId: string) => void;
   cancelDelete: () => void;
   confirmDelete: () => Promise<void>;
-
-  comparison: ScenarioComparison | null;
-  /** The comparison was run against exactly the saved state now on screen. */
-  isComparisonCurrent: boolean;
-  isRunning: boolean;
-  canRun: boolean;
-  runComparison: () => Promise<void>;
-  retryBase: () => Promise<void>;
-  retryScenario: (scenarioId: string) => Promise<void>;
 }
 
-const LOADING: ComparisonCell = { status: 'loading' };
+/** Why Scenario controls are locked while the deal is dirty. */
+export const SAVE_BEFORE_SCENARIOS_MESSAGE =
+  'Save base underwriting changes before editing or running scenarios.';
+
 const NO_SCENARIOS: InvestmentScenario[] = [];
 const NO_TARGETS: ScenarioTargetEntry[] = [];
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'The request could not be completed.';
-}
-
-/** The saved Deal's ordinary analysis, through the mode's existing `/analyze`
- * client function, on exactly the inputs and Business Plan the Deal holds. */
-async function analyzeSavedDeal(deal: Deal): Promise<AcquisitionResults> {
-  switch (deal.operating_mode) {
-    case 'quick':
-      if (deal.inputs === null) {
-        throw new ApiError('The saved deal has no Quick assumptions to analyze.');
-      }
-      return analyzeAcquisition(deal.inputs, deal.business_plan);
-    case 'detailed':
-      if (deal.terms === null || deal.detailed_operating_inputs === null) {
-        throw new ApiError('The saved deal has no Detailed assumptions to analyze.');
-      }
-      return (
-        await analyzeDetailedAcquisition(deal.terms, deal.detailed_operating_inputs, deal.business_plan)
-      ).results;
-    case 'lease_level':
-      if (
-        deal.terms === null ||
-        deal.property_inputs === null ||
-        deal.operating_inputs === null ||
-        deal.market_leasing === null ||
-        deal.suites === null ||
-        deal.leases === null
-      ) {
-        throw new ApiError('The saved deal has no Lease-Level assumptions to analyze.');
-      }
-      return (
-        await analyzeLeaseLevelAcquisition(
-          deal.terms,
-          {
-            property_inputs: deal.property_inputs,
-            operating_inputs: deal.operating_inputs,
-            market_leasing: deal.market_leasing,
-            suites: deal.suites,
-            leases: deal.leases,
-          },
-          deal.business_plan,
-        )
-      ).results;
-    default:
-      return assertNeverMode(deal.operating_mode);
-  }
-}
-
-async function analyzeBaseCell(dealId: string): Promise<ComparisonCell> {
-  try {
-    const deal = await getDeal(dealId);
-    return { status: 'result', results: await analyzeSavedDeal(deal), cacheStatus: null };
-  } catch (error) {
-    return { status: 'error', message: messageOf(error) };
-  }
-}
-
-/** A 422 is the backend judging the variant invalid, reported with its
- * reasons. Anything else is a request failure, reported as one. */
-async function analyzeScenarioCell(record: InvestmentScenario): Promise<ComparisonCell> {
-  try {
-    const analysis = await analyzeInvestmentScenario(
-      record.investment_id,
-      record.scenario.scenario_id,
-    );
-    return {
-      status: 'result',
-      results: acquisitionResultsOf(analysis),
-      cacheStatus: analysis.cache_status,
-    };
-  } catch (error) {
-    if (error instanceof ScenarioApiError && error.status === 422) {
-      return { status: 'invalid', reasons: error.reasons.length > 0 ? error.reasons : [error.message] };
-    }
-    return { status: 'error', message: messageOf(error) };
-  }
 }
 
 /** The editor's rows as a Scenario body, or the presence and parsing problems
@@ -350,12 +245,7 @@ function feedbackFor(error: unknown, editor: ScenarioEditorDraft): ScenarioEdito
  * never synchronously from an effect. */
 function loadList(dealId: string, setList: (state: ListState) => void): void {
   listDealScenarios(dealId).then(
-    (response) =>
-      setList({
-        status: 'ready',
-        investmentId: response.investment_id,
-        scenarios: response.scenarios,
-      }),
+    (response) => setList({ status: 'ready', scenarios: response.scenarios }),
     (error: unknown) => setList({ status: 'error', message: messageOf(error) }),
   );
 }
@@ -372,7 +262,6 @@ export function useScenarios({
   operatingMode,
   dealId,
   isDirty,
-  savedAt,
   isActive,
 }: UseScenariosOptions): ScenariosState {
   const [list, setList] = useState<ListState>({ status: 'idle' });
@@ -383,10 +272,6 @@ export function useScenarios({
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [comparison, setComparison] = useState<ScenarioComparison | null>(null);
-  /** Identifies the latest run, so a slower earlier run can never write into
-   * a later one. Compared by identity only. */
-  const activeRun = useRef<object | null>(null);
   /** Editor row keys: a per-mount sequence for React's reconciliation only.
    * Never an id, never sent: `businessPlan.ts` stays the one place the app
    * mints an identifier. */
@@ -425,25 +310,9 @@ export function useScenarios({
   const targets = catalog.status === 'ready' ? catalog.targets : NO_TARGETS;
   const canEdit = dealId !== null && !isDirty && list.status === 'ready';
 
-  const token = useMemo(
-    () =>
-      JSON.stringify([
-        dealId,
-        savedAt,
-        scenarios.map((record) => [record.scenario.scenario_id, record.scenario.overrides]),
-      ]),
-    [dealId, savedAt, scenarios],
-  );
-  const isRunning =
-    comparison !== null &&
-    (comparison.base.status === 'loading' ||
-      Object.values(comparison.scenarios).some((cell) => cell.status === 'loading'));
-  const isComparisonCurrent = comparison !== null && comparison.token === token && !isDirty;
-  const canRun = canEdit && scenarios.length > 0 && !isRunning;
-
   /** Every draft edit goes through here. While the base has unsaved changes
    * the draft is kept exactly as typed, but it cannot change: Scenario edits
-   * wait for the base to be saved, like running does. */
+   * wait for the base to be saved. */
   function editDraft(update: (draft: ScenarioEditorDraft) => ScenarioEditorDraft) {
     if (!canEdit) {
       return;
@@ -499,7 +368,6 @@ export function useScenarios({
           ? current
           : {
               status: 'ready',
-              investmentId: saved.investment_id,
               scenarios:
                 existing === null
                   ? [...current.scenarios, saved]
@@ -526,22 +394,16 @@ export function useScenarios({
     setDeleteError(null);
     try {
       await deleteInvestmentScenario(record.investment_id, record.scenario.scenario_id);
-      const remaining = scenarios.filter((candidate) => candidate !== record);
-      // The last Scenario's deletion also removed the hidden Investment
-      // (P7.2): the Deal is a plain Deal again, with nothing to compare.
+      // When no Scenario and no Strategy remains, the backend also removed
+      // the hidden Investment (P7.4): the Deal is a plain Deal again.
       setList((current) =>
         current.status !== 'ready'
           ? current
           : {
               status: 'ready',
-              investmentId: remaining.length === 0 ? null : current.investmentId,
               scenarios: current.scenarios.filter((candidate) => candidate !== record),
             },
       );
-      if (remaining.length === 0) {
-        activeRun.current = null;
-        setComparison(null);
-      }
       if (editor?.scenarioId === record.scenario.scenario_id) {
         setEditor(null);
         setFeedback(null);
@@ -551,66 +413,6 @@ export function useScenarios({
       setDeleteError(messageOf(error));
     } finally {
       setIsDeleting(false);
-    }
-  }
-
-  async function runComparison() {
-    if (!canRun || dealId === null) {
-      return;
-    }
-    const run = {};
-    activeRun.current = run;
-    const ran = scenarios;
-    setComparison({
-      token,
-      base: LOADING,
-      scenarios: Object.fromEntries(ran.map((record) => [record.scenario.scenario_id, LOADING])),
-    });
-    // One request at a time: each column is its own complete analysis, and a
-    // Lease-Level one is a full recomputation.
-    const base = await analyzeBaseCell(dealId);
-    if (activeRun.current === run) {
-      setComparison((current) => (current === null ? current : { ...current, base }));
-    }
-    for (const record of ran) {
-      const cell = await analyzeScenarioCell(record);
-      if (activeRun.current !== run) {
-        return;
-      }
-      setComparison((current) =>
-        current === null
-          ? current
-          : { ...current, scenarios: { ...current.scenarios, [record.scenario.scenario_id]: cell } },
-      );
-    }
-  }
-
-  async function retryBase() {
-    if (!isComparisonCurrent || dealId === null) {
-      return;
-    }
-    const run = activeRun.current;
-    setComparison((current) => (current === null ? current : { ...current, base: LOADING }));
-    const base = await analyzeBaseCell(dealId);
-    if (activeRun.current === run) {
-      setComparison((current) => (current === null ? current : { ...current, base }));
-    }
-  }
-
-  async function retryScenario(scenarioId: string) {
-    const record = scenarios.find((candidate) => candidate.scenario.scenario_id === scenarioId);
-    if (!isComparisonCurrent || record === undefined) {
-      return;
-    }
-    const run = activeRun.current;
-    const settle = (cell: ComparisonCell) =>
-      setComparison((current) =>
-        current === null ? current : { ...current, scenarios: { ...current.scenarios, [scenarioId]: cell } },
-      );
-    settle(LOADING);
-    const cell = await analyzeScenarioCell(record);
-    if (activeRun.current === run) {
-      settle(cell);
     }
   }
 
@@ -718,13 +520,5 @@ export function useScenarios({
       setDeleteError(null);
     },
     confirmDelete,
-
-    comparison,
-    isComparisonCurrent,
-    isRunning,
-    canRun,
-    runComparison,
-    retryBase,
-    retryScenario,
   };
 }

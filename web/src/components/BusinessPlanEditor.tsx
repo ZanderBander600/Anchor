@@ -54,10 +54,14 @@ export interface BusinessPlanEditorProps {
   holdPeriod: string;
   /** True while an analysis or save is in flight. */
   disabled: boolean;
+  /** Phase 7 Gate P7.5: the prefix of every element id, so a second instance --
+   * a Strategy's replacement plan in Risk, while the Deal's own plan stays
+   * mounted in Underwrite -- never duplicates an id. Defaults to the Deal's. */
+  idPrefix?: string;
+  /** P7.5: rendered inside a section that already names the Business Plan, so
+   * the editor's own heading, "Optional" tag and lede are left out. */
+  embedded?: boolean;
 }
-
-const ADD_CAPITAL_ID = 'business-plan-add-capital';
-const ADD_OWNER_EXPENSE_ID = 'business-plan-add-owner-expense';
 
 /** The one meaning a blank Last Year has, shown as a state rather than as a
  * missing value. */
@@ -308,7 +312,11 @@ export function BusinessPlanEditor({
   issues,
   holdPeriod,
   disabled,
+  idPrefix = 'business-plan',
+  embedded = false,
 }: BusinessPlanEditorProps) {
+  const ADD_CAPITAL_ID = `${idPrefix}-add-capital`;
+  const ADD_OWNER_EXPENSE_ID = `${idPrefix}-add-owner-expense`;
   // The control to focus once the plan it belongs to has rendered: the new
   // row's Description after an add, the section's Add action after a remove.
   const pendingFocus = useRef<string | null>(null);
@@ -329,13 +337,13 @@ export function BusinessPlanEditor({
     const added = addCapitalItem(plan);
     // The new row is appended, so it takes the position the collection's
     // current length names.
-    pendingFocus.current = `business-plan-capital-${plan.capitalItems.length}-description`;
+    pendingFocus.current = `${idPrefix}-capital-${plan.capitalItems.length}-description`;
     onChange(added.plan);
   }
 
   function handleAddOwnerExpense() {
     const added = addOwnerExpenseItem(plan);
-    pendingFocus.current = `business-plan-owner-${plan.ownerExpenseItems.length}-description`;
+    pendingFocus.current = `${idPrefix}-owner-${plan.ownerExpenseItems.length}-description`;
     onChange(added.plan);
   }
 
@@ -371,16 +379,24 @@ export function BusinessPlanEditor({
   }
 
   return (
-    <section className="assumption-section business-plan" aria-labelledby="business-plan-title">
-      <div className="business-plan-head">
-        <h3 className="assumption-section-title business-plan-title" id="business-plan-title">
-          Business Plan
-        </h3>
-        <span className="business-plan-optional">Optional</span>
-      </div>
-      <p className="business-plan-lede">
-        Model project capital and owner-level expenses below NOI.
-      </p>
+    <section
+      className={embedded ? 'business-plan business-plan-embedded' : 'assumption-section business-plan'}
+      aria-labelledby={embedded ? undefined : `${idPrefix}-title`}
+      aria-label={embedded ? 'Business Plan' : undefined}
+    >
+      {!embedded && (
+        <>
+          <div className="business-plan-head">
+            <h3 className="assumption-section-title business-plan-title" id={`${idPrefix}-title`}>
+              Business Plan
+            </h3>
+            <span className="business-plan-optional">Optional</span>
+          </div>
+          <p className="business-plan-lede">
+            Model project capital and owner-level expenses below NOI.
+          </p>
+        </>
+      )}
 
       {planLevel.length > 0 && (
         <div className="error-banner business-plan-issues" role="alert">
@@ -398,10 +414,10 @@ export function BusinessPlanEditor({
       <div
         className="business-plan-group"
         role="group"
-        aria-labelledby="business-plan-capital-title"
+        aria-labelledby={`${idPrefix}-capital-title`}
       >
         <div className="business-plan-group-head">
-          <h4 className="business-plan-group-title" id="business-plan-capital-title">
+          <h4 className="business-plan-group-title" id={`${idPrefix}-capital-title`}>
             Project Capital
           </h4>
           {plan.capitalItems.length > 0 && (
@@ -452,7 +468,7 @@ export function BusinessPlanEditor({
               <tbody>
                 {plan.capitalItems.map((item, index) => {
                   const row = item.description.trim() || 'new Project Capital item';
-                  const base = `business-plan-capital-${index}`;
+                  const base = `${idPrefix}-capital-${index}`;
                   const set = (field: CapitalItemField) => (value: string) =>
                     onChange(updateCapitalItem(plan, item.itemId, field, value));
                   const message = (field: CapitalItemField) =>
@@ -546,10 +562,10 @@ export function BusinessPlanEditor({
       <div
         className="business-plan-group"
         role="group"
-        aria-labelledby="business-plan-owner-title"
+        aria-labelledby={`${idPrefix}-owner-title`}
       >
         <div className="business-plan-group-head">
-          <h4 className="business-plan-group-title" id="business-plan-owner-title">
+          <h4 className="business-plan-group-title" id={`${idPrefix}-owner-title`}>
             Owner Expenses
           </h4>
           {plan.ownerExpenseItems.length > 0 && (
@@ -605,7 +621,7 @@ export function BusinessPlanEditor({
               <tbody>
                 {plan.ownerExpenseItems.map((item, index) => {
                   const row = item.description.trim() || 'new Owner Expense item';
-                  const base = `business-plan-owner-${index}`;
+                  const base = `${idPrefix}-owner-${index}`;
                   const set = (field: OwnerExpenseItemField) => (value: string) =>
                     onChange(updateOwnerExpenseItem(plan, item.itemId, field, value));
                   const message = (field: OwnerExpenseItemField) =>

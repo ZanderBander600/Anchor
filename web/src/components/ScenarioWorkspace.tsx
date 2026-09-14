@@ -2,30 +2,33 @@
  * Phase 7 Gate P7.3 -- Scenarios, inside the Risk workspace.
  *
  * A Scenario is a named, coherent view of the world: a set of overrides on
- * selected assumptions of the saved underwriting. It is compared column by
- * column in the Scenario Comparison below the list. Sensitivity stays separate:
+ * selected assumptions of the saved underwriting. Sensitivity stays separate:
  * a mechanical one- or two-variable perturbation, with its own tab, its own
  * state and its own words.
  *
- * **Simple until the analyst opts in.** A Deal with no Scenarios shows one
- * short sentence and the Add Scenario button, and no comparison table. A Deal
- * never saved says it must be saved first, and requests nothing. The hidden
- * Investment the first Scenario creates is never shown: the object is still
- * called a Deal.
+ * P7.5 made this the Scenario manager and editor only. Comparison moved to the
+ * Decision Matrix tab, the one comparison surface for Strategies and Scenarios
+ * alike, so there is no second comparison authority here.
  *
- * All state is `useScenarios`'. This component renders it and forwards the
- * analyst's actions; it computes nothing.
+ * **Simple until the analyst opts in.** A Deal with no Scenarios shows one
+ * short sentence and the Add Scenario button. A Deal never saved says it must
+ * be saved first, and requests nothing. The hidden Investment the first
+ * Scenario creates is never shown: the object is still called a Deal.
+ *
+ * All state is `useScenarios'`, owned by `RiskDecisionWorkspace`. This
+ * component renders it and forwards the analyst's actions; it computes
+ * nothing.
  */
 
 import { useEffect, useRef } from 'react';
 import { describeScenarioOverride } from '../scenarioCatalog';
-import { SAVE_BEFORE_SCENARIOS_MESSAGE } from '../scenarioComparison';
-import { useScenarios } from '../useScenarios';
-import type { ScenariosState, UseScenariosOptions } from '../useScenarios';
-import { ScenarioComparisonMatrix } from './ScenarioComparisonMatrix';
+import { SAVE_BEFORE_SCENARIOS_MESSAGE } from '../useScenarios';
+import type { ScenariosState } from '../useScenarios';
 import { ScenarioEditor } from './ScenarioEditor';
 
-export type ScenarioWorkspaceProps = UseScenariosOptions;
+export interface ScenarioWorkspaceProps {
+  state: ScenariosState;
+}
 
 const BLOCKED_REASON_ID = 'scenario-blocked-reason';
 const EDITOR_ID = 'scenario-editor';
@@ -34,7 +37,7 @@ function overrideCount(count: number): string {
   return count === 1 ? '1 override' : `${count} overrides`;
 }
 
-/** Why the analyst cannot change or run Scenarios right now, or `null`. */
+/** Why the analyst cannot change Scenarios right now, or `null`. */
 function blockedReason(state: ScenariosState): string | null {
   if (state.dealId === null) {
     return 'Save this deal before adding scenarios.';
@@ -42,8 +45,7 @@ function blockedReason(state: ScenariosState): string | null {
   return state.isDirty ? SAVE_BEFORE_SCENARIOS_MESSAGE : null;
 }
 
-export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
-  const state = useScenarios(props);
+export function ScenarioWorkspace({ state }: ScenarioWorkspaceProps) {
   const reason = blockedReason(state);
   const addButton = useRef<HTMLButtonElement>(null);
   const cancelDeleteButton = useRef<HTMLButtonElement>(null);
@@ -76,6 +78,7 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
             </h3>
             <p className="scenario-panel-subtitle">
               Create named Downside, Upside, or other views by overriding selected assumptions.
+              Compare them in the Decision Matrix.
             </p>
           </div>
           <button
@@ -111,6 +114,10 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
               Retry
             </button>
           </div>
+        )}
+
+        {state.listStatus === 'ready' && state.scenarios.length === 0 && state.editor === null && (
+          <p className="scenario-muted">No scenarios yet. Base is the saved underwriting.</p>
         )}
 
         {state.scenarios.length > 0 && (
@@ -201,13 +208,6 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
           <ScenarioEditor id={EDITOR_ID} state={state} editor={state.editor} />
         )}
       </section>
-
-      {state.listStatus === 'ready' && state.scenarios.length > 0 && (
-        <ScenarioComparisonMatrix
-          state={state}
-          blockedReasonId={reason === null ? null : BLOCKED_REASON_ID}
-        />
-      )}
     </div>
   );
 }

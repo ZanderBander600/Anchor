@@ -59,15 +59,16 @@ function sourceOf(relative: string): string {
 
 const PRODUCTION = Object.entries(SOURCES).filter(([path]) => !/\.test\.tsx?$/.test(path));
 
-/** Every P7.3 Scenario module. */
+/** Every Scenario module. P7.5 retired the P7.3 Scenario Comparison
+ * (`scenarioComparison.ts`, `ScenarioComparisonMatrix.tsx`): the Decision
+ * Matrix is the one comparison surface, guarded by
+ * `decisionArchitecture.test.ts`. */
 const SCENARIO_MODULES = [
   'scenarioTypes.ts',
   'scenarioCatalog.ts',
-  'scenarioComparison.ts',
   'useScenarios.ts',
   'components/ScenarioWorkspace.tsx',
   'components/ScenarioEditor.tsx',
-  'components/ScenarioComparisonMatrix.tsx',
 ];
 
 function parse(fileName: string, text: string): ts.SourceFile {
@@ -189,11 +190,9 @@ describe('the Scenario UI computes nothing', () => {
     expect(sites).toEqual({
       'scenarioTypes.ts': [],
       'scenarioCatalog.ts': ['value * 100'],
-      'scenarioComparison.ts': [],
       'useScenarios.ts': ['rowSequence.current += 1'],
       'components/ScenarioWorkspace.tsx': [],
       'components/ScenarioEditor.tsx': [],
-      'components/ScenarioComparisonMatrix.tsx': [],
     });
     const catalog = sourceOf('scenarioCatalog.ts');
     const conversion = catalog.slice(catalog.indexOf('export function scenarioValueToText'));
@@ -273,8 +272,10 @@ describe('Deal Context is never called a Strategy', () => {
     );
   });
 
-  it('introduces no Strategy entity, state or selector', () => {
-    for (const relative of [...SCENARIO_MODULES, 'App.tsx', 'components/DealContextStrip.tsx']) {
+  it('keeps the Scenario modules and the Deal Context strip free of Strategy', () => {
+    // P7.5 ships Strategy in its own modules; a Scenario stays independent of
+    // it, and the Deal Context field is still never a Strategy.
+    for (const relative of [...SCENARIO_MODULES, 'components/DealContextStrip.tsx']) {
       const named = [...identifiers(relative, sourceOf(relative))].filter((name) => /strateg/i.test(name));
       expect(named, relative).toEqual([]);
     }
@@ -282,16 +283,28 @@ describe('Deal Context is never called a Strategy', () => {
 });
 
 describe('the Risk workspace', () => {
-  it('puts Scenarios first and opens on it in every mode', () => {
+  it('leads with the Decision Matrix, Strategies and Scenarios, and opens on the matrix in every mode', () => {
     const app = sourceOf('App.tsx');
     expect(app).toContain(
-      "{ id: 'scenarios', label: 'Scenarios' },\n  { id: 'returns', label: 'Return Sensitivity' },",
+      [
+        "  { id: 'matrix', label: 'Decision Matrix' },",
+        "  { id: 'strategies', label: 'Strategies' },",
+        "  { id: 'scenarios', label: 'Scenarios' },",
+        "  { id: 'sensitivity', label: 'Sensitivity' },",
+        "  { id: 'break-even', label: 'Break-Even' },",
+      ].join('\n'),
     );
     expect(app).toContain(
-      "{ id: 'scenarios', label: 'Scenarios' },\n  { id: 'sensitivity', label: 'Sensitivity' },",
+      [
+        "  { id: 'matrix', label: 'Decision Matrix' },",
+        "  { id: 'strategies', label: 'Strategies' },",
+        "  { id: 'scenarios', label: 'Scenarios' },",
+        "  { id: 'sensitivity', label: 'Sensitivity' },",
+        '];',
+      ].join('\n'),
     );
-    expect(app).toContain("useState<RiskViewId>('scenarios')");
-    expect(app).toContain("useState<LeaseLevelRiskViewId>('scenarios')");
+    expect(app).toContain("useState<RiskViewId>('matrix')");
+    expect(app).toContain("useState<LeaseLevelRiskViewId>('matrix')");
   });
 
   it('keys each Scenario workspace by its mode and open deal', () => {
@@ -302,17 +315,15 @@ describe('the Risk workspace', () => {
   });
 });
 
-describe('the comparison never widens the page', () => {
+describe('the Scenario panels never widen the page', () => {
   function rule(selector: string): string {
     const start = CSS.indexOf(`\n${selector} {`);
     expect(start, selector).toBeGreaterThan(-1);
     return CSS.slice(start, CSS.indexOf('}', start));
   }
 
-  it('scrolls inside its own region', () => {
-    const scroll = rule('.scenario-matrix-scroll');
-    expect(scroll).toContain('overflow-x: auto;');
-    expect(scroll).toContain('max-width: 100%;');
+  it('retires the P7.3 comparison styles with the comparison', () => {
+    expect(CSS).not.toContain('.scenario-matrix');
   });
 
   it('lets its containers shrink rather than push the shell', () => {

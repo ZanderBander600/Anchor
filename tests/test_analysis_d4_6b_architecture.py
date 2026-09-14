@@ -287,6 +287,33 @@ _PERMITTED_WEB = frozenset(
         "web/src/components/ScenarioComparisonMatrix.tsx",
         "web/src/components/DealContextStrip.tsx",
         "web/src/components/StrategyStrip.tsx",
+        # Phase 7 P7.5 -- Strategies and the Strategy x Scenario Decision
+        # Matrix. New production modules: the Strategy and Decision Matrix wire
+        # contracts (`strategyTypes.ts`, `decisionTypes.ts`), Strategy
+        # presentation and the editor's draft boundary (`strategyCatalog.ts`,
+        # `strategyForm.ts`), matrix presentation (`decisionMatrix.ts`), two
+        # hooks and four components. None computes economics:
+        # `web/src/decisionArchitecture.test.ts` parses them, allows exactly one
+        # arithmetic expression (the percent display conversion in
+        # `strategyForm.ts`) plus the editor row-key sequence, and forbids every
+        # aggregate, sort, cross-cell figure and ranking. P7.5 retires the P7.3
+        # Scenario Comparison (`scenarioComparison.ts` and
+        # `ScenarioComparisonMatrix.tsx`, listed above, are removed). Every
+        # shipped file P7.5 edits -- App.tsx, api.ts (still addition-only),
+        # index.css, useScenarios.ts, ScenarioWorkspace.tsx and
+        # BusinessPlanEditor.tsx -- is already listed above. The P7.5 production
+        # ledger is `tests/test_p7_5_decision_architecture.py`.
+        "web/src/strategyTypes.ts",
+        "web/src/strategyCatalog.ts",
+        "web/src/strategyForm.ts",
+        "web/src/useStrategies.ts",
+        "web/src/decisionTypes.ts",
+        "web/src/decisionMatrix.ts",
+        "web/src/useDecisionMatrix.ts",
+        "web/src/components/RiskDecisionWorkspace.tsx",
+        "web/src/components/DecisionMatrixPanel.tsx",
+        "web/src/components/StrategyManager.tsx",
+        "web/src/components/StrategyEditor.tsx",
     }
 )
 
@@ -1692,6 +1719,11 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         # no financial logic of its own
         # (``tests/test_p7_2_investment_scenario_architecture.py``).
         "src/anchor/deals/variants.py",
+        # P7.5 -- the Decision Matrix service beside it: it runs every cell
+        # through the P7.4 variant authority and hands completed results to the
+        # read-only ``anchor.decision`` comparison, with no financial logic of
+        # its own (``tests/test_p7_5_decision_architecture.py``).
+        "src/anchor/deals/decision_matrix.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
                  "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):
