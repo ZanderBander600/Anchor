@@ -1663,6 +1663,11 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "src/anchor/ai/analyst.py",
         "src/anchor/ai/prompts.py",
         "src/anchor/ai/__init__.py",
+        # P7.2 -- the Scenario variant service beside the store: persistence
+        # orchestration over the P7.1 resolvers and the D6 entry points, with
+        # no financial logic of its own
+        # (``tests/test_p7_2_investment_scenario_architecture.py``).
+        "src/anchor/deals/variants.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
                  "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):

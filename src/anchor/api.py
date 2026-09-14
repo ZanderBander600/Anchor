@@ -71,8 +71,28 @@ from .contracts import (
     OperatingMode,
     UnsupportedOperatingModeError,
 )
+from .analysis.scenario import (
+    ScenarioOperation,
+    ScenarioOverride,
+    ScenarioTarget,
+    ScenarioValidationError,
+)
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError, SnapshotValidationError
+from .deals import store as investment_store
+from .deals.variants import (
+    ScenarioVariantAnalysis,
+    ScenarioVariantFingerprint,
+    analyze_scenario_variant,
+    scenario_variant_fingerprint,
+)
+from .deals.contracts import (
+    Investment,
+    InvestmentNotFoundError,
+    InvestmentScenario,
+    InvestmentStructureError,
+    ScenarioNotFoundError,
+)
 from .deals.fingerprint import (
     fingerprint_ai,
     fingerprint_detailed_inputs,
@@ -1894,12 +1914,18 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
 
 @app.delete("/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_deal(deal_id: str) -> None:
+    """P7.2: deleting a Deal inside the hidden Scenario wrapper removes the
+    wrapper with it (``anchor.deals.store.delete_deal``). A Deal in a visible
+    Investment is refused with 409 rather than orphaned (Section 15.2)."""
+
     try:
         deals_store.delete_deal(deal_id)
     except DealNotFoundError as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
         ) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
 
 
 @app.post("/deals/{deal_id}/duplicate", response_model=Deal)
@@ -2108,3 +2134,312 @@ def update_deal_two_way_sensitivity_snapshot(
         ) from None
     except SnapshotValidationError as error:
         raise _snapshot_validation_error_response(error) from None
+
+
+# =============================================================================
+# Phase 7 Gate P7.2 -- the Investment shell and persisted Scenarios
+#
+# The backend P7.3 builds the Scenario UI on. Every route delegates: storage and
+# the lifecycle to ``anchor.deals.store``, and the resolved-input fingerprint and
+# variant analysis to ``anchor.deals.variants``, which resolve through the P7.1
+# Scenario engine and run the existing D6 entry points. This module computes
+# nothing and adds no second analysis pathway.
+#
+# **Opt-in only (Q4).** ``POST /deals/{deal_id}/scenarios`` is the one route that
+# can materialize an Investment -- the hidden one-unit wrapper, created with the
+# Deal's first Scenario in one transaction. Every GET is read-only and never
+# creates a row, and no route here touches a Deal's own inputs or snapshots.
+#
+# **Ownership is proven, never assumed.** A Scenario is addressed through the
+# Investment that owns it; an id from another Investment is a 404. Every
+# override names its unit, and the P7.1 validator refuses any unit outside the
+# Investment (``unit_not_in_variant``).
+#
+# **The request parser is structural only.** It turns the body into the P7.1
+# contract without judging it: target and operation tokens become members when
+# they are members and stay raw otherwise, so the P7.1 validator -- the one
+# authority -- reports every contract problem, in its own deterministic order,
+# as a structured 422.
+# =============================================================================
+
+#: The keys a Scenario body may carry, and the keys of one override. Literal
+#: tuples, so an unknown key is always refused rather than silently ignored.
+_SCENARIO_FIELDS = ("name", "description", "overrides")
+_SCENARIO_OVERRIDE_FIELDS = ("unit_id", "target", "operation", "value")
+
+
+def _scenario_token(token_type: type[ScenarioTarget] | type[ScenarioOperation], raw: Any) -> Any:
+    """A member of ``token_type`` when ``raw`` is one of its tokens; otherwise
+    ``raw`` itself, left for the P7.1 validator to refuse by name. A plain
+    lookup rather than a caught enum error, so the API gains no blanket value
+    error handler (``tests/test_d5_5c_recovery_validation_mutations.py``)."""
+
+    if isinstance(raw, str):
+        for member in token_type:
+            if member.value == raw:
+                return member
+    return raw
+
+
+def _scenario_request(payload: dict[str, Any]) -> tuple[Any, Any, tuple[ScenarioOverride, ...]]:
+    """``(name, description, overrides)`` from a Scenario body, or a
+    structural 422. No contract rule is applied here."""
+
+    unknown = sorted(key for key in payload if key not in _SCENARIO_FIELDS)
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Unknown scenario field(s): {', '.join(unknown)}. A scenario body holds "
+                "only 'name', 'description' and 'overrides'."
+            ),
+        )
+    raw_overrides = payload.get("overrides", [])
+    if not isinstance(raw_overrides, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="'overrides' must be an array of override objects.",
+        )
+    overrides: list[ScenarioOverride] = []
+    for index, raw in enumerate(raw_overrides):
+        if not isinstance(raw, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"overrides[{index}] must be an object.",
+            )
+        missing = [key for key in _SCENARIO_OVERRIDE_FIELDS if key not in raw]
+        extra = sorted(key for key in raw if key not in _SCENARIO_OVERRIDE_FIELDS)
+        if missing or extra:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"overrides[{index}] must hold exactly 'unit_id', 'target', "
+                    f"'operation' and 'value' (missing: {missing}; unknown: {extra})."
+                ),
+            )
+        overrides.append(
+            ScenarioOverride(
+                unit_id=raw["unit_id"],
+                target=_scenario_token(ScenarioTarget, raw["target"]),
+                operation=_scenario_token(ScenarioOperation, raw["operation"]),
+                value=raw["value"],
+            )
+        )
+    return payload.get("name"), payload.get("description"), tuple(overrides)
+
+
+def _scenario_validation_error_response(error: ScenarioValidationError) -> HTTPException:
+    """An invalid Scenario or variant as a structured 422: the P7.1 issues, in
+    the P7.1 validator's own order, each with its stage and stable code."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "stage": issue.stage.value,
+                "code": issue.code.value,
+                "message": issue.message,
+                "target": None if issue.target is None else issue.target.value,
+                "unit_id": issue.unit_id,
+                "field": issue.field,
+                "source_code": issue.source_code,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _not_found(error: LookupError) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
+
+
+def _investment_structure_conflict(error: InvestmentStructureError) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class _DealScenarios:
+    """A Deal's Scenarios and the Investment that owns them -- ``None`` and no
+    Scenarios for a standalone Deal."""
+
+    deal_id: str
+    investment_id: str | None
+    scenarios: tuple[InvestmentScenario, ...]
+
+
+@app.post("/deals/{deal_id}/scenarios", response_model=InvestmentScenario)
+def create_deal_scenario(deal_id: str, payload: dict[str, Any] = Body(...)) -> InvestmentScenario:
+    """Create a Scenario for the Deal ``deal_id``. Its first Scenario
+    materializes the hidden one-unit Investment in the same transaction; later
+    ones reuse it. An invalid Scenario leaves nothing behind."""
+
+    name, description, overrides = _scenario_request(payload)
+    try:
+        return investment_store.create_scenario_for_deal(
+            deal_id, name=name, description=description, overrides=overrides
+        )
+    except DealNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+
+
+@app.get("/deals/{deal_id}/scenarios", response_model=_DealScenarios)
+def list_scenarios_of_deal(deal_id: str) -> _DealScenarios:
+    """Read-only: a standalone Deal reports no Investment and no Scenarios,
+    and gains neither."""
+
+    try:
+        investment_id, scenarios = investment_store.list_deal_scenarios(deal_id)
+    except DealNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return _DealScenarios(
+        deal_id=deal_id, investment_id=investment_id, scenarios=tuple(scenarios)
+    )
+
+
+@app.get("/investments/{investment_id}", response_model=Investment)
+def read_investment(investment_id: str) -> Investment:
+    try:
+        return investment_store.get_investment(investment_id)
+    except InvestmentNotFoundError as error:
+        raise _not_found(error) from None
+
+
+@app.delete("/investments/{investment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_investment(investment_id: str) -> None:
+    """Delete the hidden wrapper and everything it owns; its Deal is released,
+    unchanged (Q3)."""
+
+    try:
+        investment_store.delete_investment(investment_id)
+    except InvestmentNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+@app.get("/investments/{investment_id}/scenarios", response_model=list[InvestmentScenario])
+def list_investment_scenarios(investment_id: str) -> list[InvestmentScenario]:
+    try:
+        return investment_store.list_scenarios(investment_id)
+    except InvestmentNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+@app.post("/investments/{investment_id}/scenarios", response_model=InvestmentScenario)
+def create_investment_scenario(
+    investment_id: str, payload: dict[str, Any] = Body(...)
+) -> InvestmentScenario:
+    name, description, overrides = _scenario_request(payload)
+    try:
+        return investment_store.create_scenario(
+            investment_id, name=name, description=description, overrides=overrides
+        )
+    except InvestmentNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+
+
+@app.get(
+    "/investments/{investment_id}/scenarios/{scenario_id}", response_model=InvestmentScenario
+)
+def read_investment_scenario(investment_id: str, scenario_id: str) -> InvestmentScenario:
+    try:
+        return investment_store.get_scenario(investment_id, scenario_id)
+    except (InvestmentNotFoundError, ScenarioNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+@app.put(
+    "/investments/{investment_id}/scenarios/{scenario_id}", response_model=InvestmentScenario
+)
+def update_investment_scenario(
+    investment_id: str, scenario_id: str, payload: dict[str, Any] = Body(...)
+) -> InvestmentScenario:
+    """Replace the Scenario's name, description and whole override set; its
+    id is kept."""
+
+    name, description, overrides = _scenario_request(payload)
+    try:
+        return investment_store.update_scenario(
+            investment_id, scenario_id, name=name, description=description, overrides=overrides
+        )
+    except (InvestmentNotFoundError, ScenarioNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+
+
+@app.delete(
+    "/investments/{investment_id}/scenarios/{scenario_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_investment_scenario(investment_id: str, scenario_id: str) -> None:
+    """Delete the Scenario. Deleting the wrapper's last Scenario removes the
+    wrapper too, returning the Deal to a plain standalone Deal."""
+
+    try:
+        investment_store.delete_scenario(investment_id, scenario_id)
+    except (InvestmentNotFoundError, ScenarioNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+@app.get(
+    "/investments/{investment_id}/scenarios/{scenario_id}/fingerprint",
+    response_model=ScenarioVariantFingerprint,
+)
+def investment_scenario_fingerprint(
+    investment_id: str, scenario_id: str
+) -> ScenarioVariantFingerprint:
+    """The resolved-input financial fingerprint of the Scenario's variant, from
+    the one authority in ``anchor.deals.variants``. Read-only."""
+
+    try:
+        return scenario_variant_fingerprint(investment_id, scenario_id)
+    except (InvestmentNotFoundError, ScenarioNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+
+
+@app.post(
+    "/investments/{investment_id}/scenarios/{scenario_id}/analysis",
+    response_model=ScenarioVariantAnalysis,
+)
+def analyze_investment_scenario(
+    investment_id: str, scenario_id: str
+) -> ScenarioVariantAnalysis:
+    """Analyse the Scenario's variant through the existing deterministic
+    pipeline. ``cache_status`` reports whether a current Quick or Detailed
+    cached result was served (``hit``), the result was computed and cached
+    (``miss``), or a Lease-Level result was recomputed without any cache
+    (``bypassed``)."""
+
+    try:
+        return analyze_scenario_variant(investment_id, scenario_id)
+    except (InvestmentNotFoundError, ScenarioNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None

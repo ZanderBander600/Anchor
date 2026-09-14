@@ -188,16 +188,29 @@ def _names_scenario(path: Path) -> bool:
 
 
 def test_no_production_module_imports_the_scenario_layer() -> None:
-    """The engine, the leasing layer, sensitivity, persistence, the API and
-    the AI never learn a scenario exists (P-2). P7.2 widens this deliberately
-    when persistence and the API arrive."""
+    """The engine, the leasing layer, sensitivity and the AI never learn a
+    scenario exists (P-2).
+
+    **Widened at P7.2 -- by exactly four named files**, when persistence and
+    the API arrive: the persisted-Scenario contract names ``ScenarioDefinition``
+    (``deals/contracts.py``); the store validates Scenarios with the P7.1
+    validator (``deals/store.py``); the variant service resolves them with the
+    P7.1 resolvers (``deals/variants.py``); and the API parses a request into
+    the P7.1 contract and reports the P7.1 issues (``api.py``). None of them
+    resolves, validates or computes anything itself
+    (``tests/test_p7_2_investment_scenario_architecture.py``)."""
 
     importers = sorted(
         path.relative_to(_SRC).as_posix()
         for path in _ANCHOR.rglob("*.py")
         if path != _SCENARIO and _names_scenario(path)
     )
-    assert importers == []
+    assert importers == [
+        "anchor/api.py",
+        "anchor/deals/contracts.py",
+        "anchor/deals/store.py",
+        "anchor/deals/variants.py",
+    ]
 
 
 _SCENARIO_NAMES = (
@@ -207,13 +220,22 @@ _SCENARIO_NAMES = (
 
 
 def test_no_other_production_file_defines_or_names_a_scenario_contract() -> None:
+    """Widened at P7.2 by exactly the four files that import the Scenario
+    layer (see above). None of them *defines* a scenario contract: the P7.2
+    guard proves they define no class of these names."""
+
     offenders = sorted(
         path.relative_to(_SRC).as_posix()
         for path in _ANCHOR.rglob("*.py")
         if path != _SCENARIO
         and any(re.search(rf"\b{name}\b", path.read_text(encoding="utf-8")) for name in _SCENARIO_NAMES)
     )
-    assert offenders == []
+    assert offenders == [
+        "anchor/api.py",
+        "anchor/deals/contracts.py",
+        "anchor/deals/store.py",
+        "anchor/deals/variants.py",
+    ]
 
 
 # =============================================================================
@@ -626,28 +648,47 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
-def _production_changes_since(base: str) -> set[str]:
-    """Committed, staged, unstaged and untracked production changes since
-    ``base``. Reads Git only; it never touches the index (protocol 11.2)."""
-
-    tracked = _git("diff", "--name-only", base, "--", "src", "web").split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", "src", "web").split()
-    return {path for path in (*tracked, *untracked) if _is_production(path)}
-
-
 def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
     return sorted(changed - _P7_1_PRODUCTION_FILES), sorted(_P7_1_PRODUCTION_FILES - changed)
 
 
+#: ``main`` after P7.1 -- the no-ff merge of ``feature/p7-1-scenario-engine``,
+#: and the end of P7.1's committed range.
+_P7_1_MERGE = "58f862d"
+
+
+def _production_changes_between(start: str, end: str) -> set[str]:
+    """Production files that differ between two commits. Reads Git only; it
+    never touches the index (protocol 11.2)."""
+
+    changed = _git("diff", "--name-only", start, end, "--", "src", "web").split()
+    return {path for path in changed if _is_production(path)}
+
+
 def test_p7_1_changed_exactly_its_authorized_production_files() -> None:
-    """The Phase 7 production ledger. P7.2 must re-pin this deliberately to
-    P7.1's committed range, ``f234e4c..<the P7.1 merge>``, before adding its
-    own scope. That is the D6 ledger precedent: a ledger keeps proving exactly
-    what its gate changed, however later gates move the tree. Never widen this
+    """The Phase 7 production ledger for P7.1.
+
+    Pinned at P7.2 to P7.1's own committed range, ``f234e4c..58f862d``, so it
+    keeps proving exactly what P7.1 changed however later gates move the tree.
+    That is the D6 ledger precedent. P7.2's own ledger is
+    ``tests/test_p7_2_investment_scenario_architecture.py``. Never widen this
     set to admit another gate's files."""
 
-    unexpected, missing = _ledger_violations(_production_changes_since(_PHASE_7_LEDGER_BASE))
+    unexpected, missing = _ledger_violations(
+        _production_changes_between(_PHASE_7_LEDGER_BASE, _P7_1_MERGE)
+    )
     assert (unexpected, missing) == ([], [])
+
+
+def test_the_p7_1_ledger_end_is_the_p7_1_merge() -> None:
+    """``58f862d`` is the P7.1 merge: its second parent is the reviewed P7.1
+    head, and its first parent is the P7.0 merge this ledger starts from."""
+
+    parents = _git("rev-list", "--parents", "-n", "1", _P7_1_MERGE).split()[1:]
+    assert parents == [
+        _git("rev-parse", _PHASE_7_LEDGER_BASE).strip(),
+        _git("rev-parse", "5aa7bd6").strip(),
+    ]
 
 
 def test_the_phase_7_ledger_base_is_the_p7_0_merge() -> None:

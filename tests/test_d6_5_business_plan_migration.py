@@ -66,6 +66,18 @@ _BUILDER = Path(__file__).resolve().parent / "_d6_5_v6_database_builder.py"
 #: ``main`` after D6.4, immediately before D6.5 -- a schema-v6 tree.
 _BASELINE_COMMIT = "93636ee"
 _PLAN_TABLES = {"deal_capital_plan_items", "deal_owner_expense_items"}
+#: P7.2 (schema 8) adds five more purely additive tables on the same upgrade
+#: path, all empty for a legacy deal; ``tests/test_p7_2_compatibility_oracle.py``
+#: holds the v7 -> v8 step on its own.
+_P7_2_TABLES = {
+    "investments",
+    "investment_units",
+    "scenarios",
+    "scenario_overrides",
+    "variant_snapshots",
+}
+#: The schema version the current store migrates a v6 database to.
+_CURRENT_VERSION = 8
 
 
 @pytest.fixture(scope="module")
@@ -205,14 +217,15 @@ def test_the_version_advances_to_7_exactly_once_and_only_the_plan_tables_appear(
     after_first = _schema(db)
     migrated = _raw(db)
 
-    assert _version(db) == 7
-    assert set(migrated) == set(before) | _PLAN_TABLES
+    assert _version(db) == _CURRENT_VERSION
+    assert set(migrated) == set(before) | _PLAN_TABLES | _P7_2_TABLES
     assert migrated["deal_capital_plan_items"] == []
     assert migrated["deal_owner_expense_items"] == []
+    assert all(migrated[table] == [] for table in _P7_2_TABLES)
 
     for _ in range(3):
         deals_store.list_deals(db_path=db)
-        assert _version(db) == 7
+        assert _version(db) == _CURRENT_VERSION
         assert _schema(db) == after_first
         assert _raw(db) == migrated
 
@@ -239,7 +252,7 @@ def test_migrate_is_a_no_op_on_a_v7_database(legacy: tuple[Path, dict[str, Any]]
     connection.commit()
     connection.close()
 
-    assert _version(db) == 7
+    assert _version(db) == _CURRENT_VERSION
     assert _schema(db) == schema and _raw(db) == rows
 
 
