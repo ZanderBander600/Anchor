@@ -263,6 +263,30 @@ _PERMITTED_WEB = frozenset(
         # D6.7 suites. Test-only data, listed for the same reason
         # `leaseLevelResultsFixture.json` is.
         "web/src/capitalEconomicsFixture.json",
+        # Phase 7 P7.3 -- the Scenario UI and the Scenario Comparison v0. Seven
+        # new production modules: the Scenario wire contracts
+        # (`scenarioTypes.ts`), target labels and display units
+        # (`scenarioCatalog.ts`), the comparison's metric catalog and cell
+        # states (`scenarioComparison.ts`), the one state hook
+        # (`useScenarios.ts`) and three components. None computes economics:
+        # `web/src/scenarioArchitecture.test.ts` parses all seven, allows exactly
+        # one arithmetic expression (the percent display conversion) and
+        # forbids every aggregate and cross-cell figure. `DealContextStrip.tsx`
+        # replaces `StrategyStrip.tsx`, which is removed: its visible "Strategy"
+        # label on Deal Context collided with the P7 Strategy concept. Every
+        # shipped file P7.3 edits -- App.tsx, api.ts (still addition-only),
+        # index.css, UnderwriteWorkspace.tsx, LeaseLevelWorkspace.tsx and
+        # LeaseLevelSensitivityWorkspace.tsx -- is already listed above. The
+        # P7.3 production ledger is `tests/test_p7_3_scenario_ui_architecture.py`.
+        "web/src/scenarioTypes.ts",
+        "web/src/scenarioCatalog.ts",
+        "web/src/scenarioComparison.ts",
+        "web/src/useScenarios.ts",
+        "web/src/components/ScenarioWorkspace.tsx",
+        "web/src/components/ScenarioEditor.tsx",
+        "web/src/components/ScenarioComparisonMatrix.tsx",
+        "web/src/components/DealContextStrip.tsx",
+        "web/src/components/StrategyStrip.tsx",
     }
 )
 

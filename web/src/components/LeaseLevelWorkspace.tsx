@@ -8,7 +8,7 @@
  * component around a shape it was not built for, and would put Lease-Level's
  * future editors inside Quick's and Detailed's blast radius. It composes the
  * same primitives throughout -- `AssumptionFieldGrid`, `SubNav`,
- * `StrategyStrip` -- so nothing here is a new visual language.
+ * `DealContextStrip` -- so nothing here is a new visual language.
  *
  * **Scope.** Scalar entry only. The rent roll is *held*, described, and passed
  * through untouched; D5.5B supplies the Suite and Lease editors. No results are
@@ -25,7 +25,7 @@ import { AssumptionFieldGrid } from './AssumptionFieldGrid';
 import { LeaseLevelResults } from './LeaseLevelResults';
 import { RentRollTable } from './RentRollTable';
 import { SuiteLeaseEditor } from './SuiteLeaseEditor';
-import { StrategyStrip } from './StrategyStrip';
+import { DealContextStrip } from './DealContextStrip';
 import { SubNav } from './SubNav';
 import {
   LEASE_LEVEL_MARKET_FIELD_GROUPS,
@@ -501,7 +501,7 @@ export function LeaseLevelWorkspace({
 
   return (
     <div className="underwrite">
-      <StrategyStrip value={dealContext} onChange={onDealContextChange} />
+      <DealContextStrip value={dealContext} onChange={onDealContextChange} />
 
       <SubNav
         items={LEASE_LEVEL_SECTIONS}

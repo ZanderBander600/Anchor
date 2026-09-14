@@ -2253,23 +2253,23 @@ body {
   min-width: 0;
 }
 
-/* Strategy strip -------------------------------------------------------- */
+/* Deal Context strip (renamed from the Strategy strip at P7.3) ---------- */
 
-.strategy-strip {
+.deal-context-strip {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--sp-2) var(--sp-3);
 }
 
-.strategy-strip-row {
+.deal-context-strip-row {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
   min-width: 0;
 }
 
-.strategy-strip-label {
+.deal-context-strip-label {
   flex-shrink: 0;
   font-size: 11px;
   font-weight: 600;
@@ -2278,7 +2278,7 @@ body {
   color: var(--text-muted);
 }
 
-.strategy-strip-text {
+.deal-context-strip-text {
   flex: 1;
   margin: 0;
   min-width: 0;
@@ -2289,17 +2289,17 @@ body {
   white-space: nowrap;
 }
 
-.strategy-strip-text-empty {
+.deal-context-strip-text-empty {
   color: var(--text-muted);
 }
 
-.strategy-strip-editor {
+.deal-context-strip-editor {
   margin-top: var(--sp-3);
 }
 
 /* The shared Deal Context field loses its card chrome inside the strip --
    the strip is already the card. */
-.strategy-strip-editor .deal-context-field {
+.deal-context-strip-editor .deal-context-field {
   border: 0;
   box-shadow: none;
   padding: 0;
@@ -5116,5 +5116,544 @@ body {
      Clip that edge; layout and pinning are unchanged. */
   .capital-economics .table-scroll {
     clip-path: inset(0 0 0 1px);
+  }
+}
+
+/* ==========================================================================
+   Phase 7 Gate P7.3 -- Scenarios and the Scenario Comparison (Risk).
+
+   Institutional density: hairline rules, tabular figures, small uppercase
+   section labels, and no card nested inside a card. No state depends on
+   colour alone: every tinted cell or notice carries its own words.
+   ========================================================================== */
+
+.scenario-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+.scenario-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.scenario-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.scenario-panel-heading {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.scenario-panel-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.scenario-panel-subtitle {
+  margin: var(--sp-1) 0 0;
+  max-width: 68ch;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.scenario-blocked {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.scenario-muted {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.scenario-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(0.9);
+}
+
+/* --- Saved scenarios ------------------------------------------------------ */
+
+.scenario-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.scenario-list-item {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) minmax(0, 2.4fr) auto;
+  gap: var(--sp-1) var(--sp-4);
+  align-items: baseline;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.scenario-list-identity,
+.scenario-list-overrides {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.scenario-list-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.scenario-list-description {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.scenario-list-count {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.scenario-list-summary {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.scenario-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+}
+
+.scenario-delete-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.scenario-delete-question {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.scenario-inline-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+
+/* --- Editor --------------------------------------------------------------- */
+
+.scenario-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 2px solid var(--accent);
+}
+
+.scenario-editor-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.scenario-editor-feedback-message {
+  margin: 0;
+  font-weight: 600;
+}
+
+.scenario-editor-feedback-list {
+  margin: var(--sp-1) 0 0;
+  padding-left: 1.1rem;
+}
+
+.scenario-editor-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: var(--sp-3);
+}
+
+.scenario-override-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.scenario-override-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.scenario-override-caption {
+  caption-side: top;
+  padding-bottom: var(--sp-1);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.scenario-override-table thead th {
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) 0;
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.scenario-override-cell {
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) 0;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.scenario-override-row .scenario-override-cell:nth-child(1) {
+  width: 34%;
+}
+
+.scenario-override-row .scenario-override-cell:nth-child(2) {
+  width: 20%;
+}
+
+.scenario-override-remove {
+  width: 1%;
+  padding-right: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.scenario-override-row:has(+ .scenario-override-issue-row) .scenario-override-cell {
+  border-bottom: 0;
+}
+
+/* Each cell's own label: hidden where the column headers show, visible where
+   the table stacks. The label is always in the accessibility tree. */
+.scenario-override-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.scenario-override-hint {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.scenario-override-issue-row td {
+  padding: 0 0 var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.scenario-override-issues {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--danger);
+}
+
+.scenario-override-empty {
+  margin: 0;
+}
+
+.scenario-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+/* --- Comparison ------------------------------------------------------------ */
+
+/* The matrix scrolls inside its own region on a narrow screen: the page never
+   grows wider because of it. */
+.scenario-matrix-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.scenario-matrix-scroll:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.scenario-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.scenario-matrix th,
+.scenario-matrix td {
+  padding: 6px var(--sp-4);
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+
+.scenario-matrix thead th {
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.scenario-matrix thead th.scenario-matrix-base {
+  color: var(--accent);
+}
+
+.scenario-matrix-corner,
+.scenario-matrix th[scope='row'],
+.scenario-matrix-group th[scope='rowgroup'] {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+}
+
+.scenario-matrix th[scope='row'] {
+  min-width: 9.5rem;
+  background: var(--surface);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.scenario-matrix-group th[scope='rowgroup'] {
+  padding-top: var(--sp-3);
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.scenario-matrix-group td {
+  background: var(--surface);
+}
+
+.scenario-matrix-figure {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.scenario-matrix-na {
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.scenario-matrix tbody tr:last-child th,
+.scenario-matrix tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.scenario-matrix td.scenario-matrix-status {
+  min-width: 11rem;
+  max-width: 18rem;
+  vertical-align: top;
+  text-align: left;
+  white-space: normal;
+  background: var(--surface-muted);
+}
+
+.scenario-matrix-status-label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.scenario-matrix-invalid {
+  color: var(--danger);
+}
+
+.scenario-matrix-reasons {
+  margin: var(--sp-1) 0 0;
+  padding-left: 1rem;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.scenario-matrix-message {
+  margin: var(--sp-1) 0 var(--sp-2);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.scenario-matrix-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.scenario-matrix-note-marker {
+  margin-right: var(--sp-1);
+  font-weight: 650;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 767px) {
+  .scenario-panel {
+    padding: var(--sp-3);
+  }
+
+  .scenario-list-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .scenario-list-actions {
+    justify-content: flex-start;
+  }
+
+  .scenario-editor-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The override table stacks: one override per block, each field labelled. */
+  .scenario-override-table,
+  .scenario-override-table tbody,
+  .scenario-override-table caption {
+    display: block;
+  }
+
+  .scenario-override-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+  }
+
+  .scenario-override-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--sp-2);
+    padding: var(--sp-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .scenario-override-row .scenario-override-cell,
+  .scenario-override-row .scenario-override-cell:nth-child(1),
+  .scenario-override-row .scenario-override-cell:nth-child(2) {
+    display: block;
+    width: auto;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .scenario-override-row .scenario-override-cell:nth-child(1),
+  .scenario-override-row .scenario-override-remove {
+    grid-column: 1 / -1;
+  }
+
+  .scenario-override-label {
+    position: static;
+    display: block;
+    width: auto;
+    height: auto;
+    margin: 0 0 3px;
+    overflow: visible;
+    clip: auto;
+    clip-path: none;
+    white-space: normal;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .scenario-override-issue-row,
+  .scenario-override-issue-row td {
+    display: block;
+  }
+
+  .scenario-editor-actions {
+    flex-wrap: wrap;
+  }
+
+  .scenario-editor-actions .btn {
+    flex: 1 1 auto;
   }
 }

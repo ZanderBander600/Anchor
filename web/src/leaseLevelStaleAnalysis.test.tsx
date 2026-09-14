@@ -73,6 +73,14 @@ vi.mock('./api', async () => {
     updateDealOneWaySensitivitySnapshot: vi.fn(),
     updateDealTwoWaySensitivitySnapshot: vi.fn(),
     updateLeaseLevelDeal: vi.fn(),
+    // P7.3: Risk opens on Scenarios, which reads the deal's Scenarios and the
+    // target catalog. Answered here so no test ever reaches a real backend.
+    listDealScenarios: vi.fn(async (dealId: string) => ({
+      deal_id: dealId,
+      investment_id: null,
+      scenarios: [],
+    })),
+    fetchScenarioTargetCatalog: vi.fn(async () => ({ quick: [], detailed: [], lease_level: [] })),
   };
 });
 
@@ -189,6 +197,8 @@ async function goTo(user: User, tab: string): Promise<void> {
  * role query must select the view before it can see the table. */
 async function showSensitivity(user: User, view: 'One-Way' | 'Two-Way'): Promise<HTMLElement> {
   await goTo(user, 'Risk');
+  // P7.3: Risk opens on Scenarios; sensitivity is its own view beside it.
+  await user.click(screen.getByRole('tab', { name: 'Sensitivity' }));
   await user.click(screen.getByRole('tab', { name: view }));
   const element = document.getElementById(
     `lease-level-sensitivity-panel-${view === 'One-Way' ? 'one-way' : 'two-way'}`,

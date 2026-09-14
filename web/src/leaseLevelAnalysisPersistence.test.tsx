@@ -77,6 +77,14 @@ vi.mock('./api', async () => {
     updateDealOneWaySensitivitySnapshot: vi.fn(),
     updateDealTwoWaySensitivitySnapshot: vi.fn(),
     updateLeaseLevelDeal: vi.fn(),
+    // P7.3: Risk opens on Scenarios, which reads the deal's Scenarios and the
+    // target catalog. Answered here so no test ever reaches a real backend.
+    listDealScenarios: vi.fn(async (dealId: string) => ({
+      deal_id: dealId,
+      investment_id: null,
+      scenarios: [],
+    })),
+    fetchScenarioTargetCatalog: vi.fn(async () => ({ quick: [], detailed: [], lease_level: [] })),
   };
 });
 
@@ -226,6 +234,13 @@ async function goTo(user: User, tab: string): Promise<void> {
   await user.click(screen.getByRole('tab', { name: tab }));
 }
 
+/** P7.3: Risk opens on Scenarios. The sensitivity workspace is its own Risk
+ * view beside it, so every sensitivity check selects that view first. */
+async function openRiskSensitivity(user: User): Promise<void> {
+  await user.click(screen.getByRole('tab', { name: 'Risk' }));
+  await user.click(screen.getByRole('tab', { name: 'Sensitivity' }));
+}
+
 /** Opens the Risk workspace on one sensitivity view.
  *
  * Both panels stay mounted (the ARIA tab pattern), and the inactive one carries
@@ -233,7 +248,7 @@ async function goTo(user: User, tab: string): Promise<void> {
  * find its table even when the table is there. Selecting the view first is what
  * makes "the table is on screen" the thing actually being asserted. */
 async function showSensitivity(user: User, view: 'One-Way' | 'Two-Way'): Promise<HTMLElement> {
-  await goTo(user, 'Risk');
+  await openRiskSensitivity(user);
   await user.click(screen.getByRole('tab', { name: view }));
   return sensitivityPanel(view === 'One-Way' ? 'one-way' : 'two-way');
 }
@@ -272,7 +287,7 @@ async function enterCandidates(
 }
 
 async function runOneWay(user: User): Promise<void> {
-  await goTo(user, 'Risk');
+  await openRiskSensitivity(user);
   const scope = sensitivityPanel('one-way');
   await enterCandidates(user, scope, 'Exit Cap Rate candidate value', ['6', '6.5', '7']);
   await user.click(within(scope).getByRole('button', { name: 'Run Sensitivity' }));
@@ -280,7 +295,7 @@ async function runOneWay(user: User): Promise<void> {
 }
 
 async function runTwoWay(user: User): Promise<void> {
-  await goTo(user, 'Risk');
+  await openRiskSensitivity(user);
   await user.click(screen.getByRole('tab', { name: 'Two-Way' }));
   const scope = sensitivityPanel('two-way');
   await enterCandidates(user, scope, 'Row Exit Cap Rate candidate value', ['6', '6.5']);
@@ -412,7 +427,7 @@ describe('switching deals', () => {
     await open(user, 'Deal B');
     await goTo(user, 'AI Analyst');
     expect(within(workspacePanel('ai')).queryByText(ANALYSIS.executive_summary)).toBeNull();
-    await goTo(user, 'Risk');
+    await openRiskSensitivity(user);
     expect(within(sensitivityPanel('one-way')).queryByRole('table')).toBeNull();
     await user.click(screen.getByRole('tab', { name: 'Two-Way' }));
     expect(within(sensitivityPanel('two-way')).queryByRole('table')).toBeNull();
@@ -426,7 +441,7 @@ describe('switching deals', () => {
       await within(workspacePanel('ai')).findByText(ANALYSIS.executive_summary),
     ).toBeTruthy();
 
-    await goTo(user, 'Risk');
+    await openRiskSensitivity(user);
     expect(within(sensitivityPanel('one-way')).getByRole('table')).toBeTruthy();
     await user.click(screen.getByRole('tab', { name: 'Two-Way' }));
     expect(within(sensitivityPanel('two-way')).getByRole('table')).toBeTruthy();
@@ -465,7 +480,7 @@ describe('switching deals', () => {
 
     await open(user, 'Deal B');
     await open(user, 'Deal A');
-    await goTo(user, 'Risk');
+    await openRiskSensitivity(user);
 
     // 17, 18, 19, 23: metric, target, values and their order.
     expect(
@@ -505,7 +520,7 @@ describe('browser refresh', () => {
       await within(workspacePanel('ai')).findByText(ANALYSIS.executive_summary),
     ).toBeTruthy();
 
-    await goTo(user, 'Risk');
+    await openRiskSensitivity(user);
     expect(within(sensitivityPanel('one-way')).getByRole('table')).toBeTruthy();
     await user.click(screen.getByRole('tab', { name: 'Two-Way' }));
     expect(within(sensitivityPanel('two-way')).getByRole('table')).toBeTruthy();
@@ -528,7 +543,7 @@ describe('browser refresh', () => {
     mockGetDeal.mockImplementation(async (id: string) => clone(stored.get(id)!));
     user = await launch();
     await open(user, 'Deal A');
-    await goTo(user, 'Risk');
+    await openRiskSensitivity(user);
 
     const scope = sensitivityPanel('one-way');
     const table = within(scope).getByRole('table');
@@ -567,7 +582,7 @@ describe('browser refresh', () => {
     mockGetDeal.mockImplementation(async (id: string) => clone(stored.get(id)!));
     user = await launch();
     await open(user, 'Deal A');
-    await goTo(user, 'Risk');
+    await openRiskSensitivity(user);
     await user.click(screen.getByRole('tab', { name: 'Two-Way' }));
 
     // 2 rows of 3 columns, the shape that was run. A transposed restore would
@@ -633,7 +648,7 @@ describe('an underwriting edit', () => {
     await waitFor(() => expect(mockSaveTwoWay).toHaveBeenCalled());
 
     const saved = await editPurchasePrice(user, '31000000');
-    await goTo(user, 'Risk');
+    await openRiskSensitivity(user);
     expect(within(sensitivityPanel('one-way')).queryByRole('table')).toBeNull();
 
     // Back to exactly the saved value. Typed as the grouped string the field

@@ -19,6 +19,7 @@ import {
   fetchDetailedSensitivityPresets,
   fetchSensitivityPresets,
   getDeal,
+  listDealScenarios,
   listDeals,
   updateDeal,
   updateDealAiSnapshot,
@@ -30,6 +31,7 @@ import {
   uploadOm,
 } from './api';
 import { formatCurrency, formatMultiple, formatPercent } from './format';
+import { SAVE_BEFORE_SCENARIOS_MESSAGE } from './scenarioComparison';
 import { groupDigits } from './numberFormat';
 import {
   BLANK_DETAILED_FORM_VALUES,
@@ -91,6 +93,15 @@ vi.mock('./api', async () => {
     listDeals: vi.fn(),
     duplicateDeal: vi.fn(),
     deleteDeal: vi.fn(),
+    // P7.3: Risk opens on Scenarios, which reads the deal's Scenarios and the
+    // target catalog. Answered here so no test ever reaches a real backend;
+    // the Scenario behaviour itself is proven in `scenarioWorkspace.test.tsx`.
+    listDealScenarios: vi.fn(async (dealId: string) => ({
+      deal_id: dealId,
+      investment_id: null,
+      scenarios: [],
+    })),
+    fetchScenarioTargetCatalog: vi.fn(async () => ({ quick: [], detailed: [], lease_level: [] })),
   };
 });
 
@@ -3702,7 +3713,8 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     await analyzeDetailedGoldenDeal(user);
 
     await waitFor(() => expect(sensitivityHeading()).not.toBeNull());
-    await goTo(user, 'Risk');
+    // P7.3: Risk opens on Scenarios; the preset tabs live in its sensitivity view.
+    await openRiskView(user, 'Return Sensitivity');
     // The Detailed-only preset bundle has no exit_cap_noi_growth member --
     // that tab must never appear for a Detailed result.
     expect(screen.queryByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeNull();
@@ -3775,7 +3787,8 @@ describe('Detailed sensitivity + break-even (Gate 14)', () => {
     expect(mockFetchDetailedSensitivityPresets).not.toHaveBeenCalled();
     expect(mockFetchSensitivityPresets).toHaveBeenCalledWith(mockAnalyze.mock.calls[0][0], EMPTY_PLAN);
     // Quick's own preset bundle still has its exit_cap_noi_growth tab.
-    await goTo(user, 'Risk');
+    // P7.3: Risk opens on Scenarios; the preset tabs live in its sensitivity view.
+    await openRiskView(user, 'Return Sensitivity');
     expect(await screen.findByRole('tab', { name: 'Exit Cap × NOI Growth' })).toBeTruthy();
   });
 
@@ -6320,7 +6333,8 @@ describe('Sprint C Gate C2 -- app shell', () => {
     render(<App />);
     await analyzeQuickGoldenDeal(user);
 
-    await goTo(user, 'Risk');
+    // P7.3: Risk opens on Scenarios; the preset tabs live in its sensitivity view.
+    await openRiskView(user, 'Return Sensitivity');
 
     expect(sensitivityHeading()).not.toBeNull();
     expect(within(panel('risk')).getByText('Break-Even Analysis')).toBeTruthy();
@@ -7004,16 +7018,21 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
     );
   });
 
-  it('15. Deal Context shows as a compact strategy strip, not a permanent textarea', async () => {
+  it('15. Deal Context shows as a compact Deal Context strip, not a permanent textarea', async () => {
     const user = userEvent.setup();
     render(<App />);
     await goTo(user, 'Underwrite');
 
-    const strip = document.querySelector('.strategy-strip') as HTMLElement;
+    const strip = document.querySelector('.deal-context-strip') as HTMLElement;
     expect(strip).toBeTruthy();
-    expect(within(strip).getByText('Strategy')).toBeTruthy();
+    // P7.3: the strip names the field it shows. "Strategy" is reserved for
+    // the P7.4 decision configuration and is never this field's label.
+    expect((strip.querySelector('.deal-context-strip-label') as HTMLElement).textContent).toBe(
+      'Deal Context',
+    );
+    expect(within(strip).queryByText('Strategy')).toBeNull();
     // The editor is present but collapsed until the analyst opens it.
-    const editor = document.querySelector('.strategy-strip-editor') as HTMLElement;
+    const editor = document.querySelector('.deal-context-strip-editor') as HTMLElement;
     expect(editor.hasAttribute('hidden')).toBe(true);
 
     await user.click(within(strip).getByRole('button', { name: 'Edit' }));
@@ -7026,14 +7045,14 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
     render(<App />);
     await goTo(user, 'Underwrite');
 
-    const strip = document.querySelector('.strategy-strip') as HTMLElement;
+    const strip = document.querySelector('.deal-context-strip') as HTMLElement;
     await user.click(within(strip).getByRole('button', { name: 'Edit' }));
     fireEvent.change(screen.getByLabelText('Deal Context'), {
       target: { value: 'Core-plus industrial, mark-to-market lease-up.' },
     });
     await user.click(within(strip).getByRole('button', { name: 'Done' }));
 
-    expect((strip.querySelector('.strategy-strip-text') as HTMLElement).textContent).toBe(
+    expect((strip.querySelector('.deal-context-strip-text') as HTMLElement).textContent).toBe(
       'Core-plus industrial, mark-to-market lease-up.',
     );
     expect(screen.getByLabelText('Deal Context')).toHaveProperty(
@@ -7501,8 +7520,16 @@ describe('Sprint C Gate C4 -- Risk', () => {
     await waitFor(() => expect(activeWorkspace()).toBe('Overview'));
     await goTo(user, 'Risk');
 
-    expect(within(panel('risk')).getByText(/Run/)).toBeTruthy();
-    expect(document.querySelector('[aria-label="Risk views"]')).toBeNull();
+    // P7.3: Risk's navigation is always present now -- Scenarios resolve
+    // against the saved Deal and need no Analyze -- but the sensitivity and
+    // break-even views still say honestly that they need a refresh, and
+    // fabricate nothing.
+    const riskNav = document.querySelector('[aria-label="Risk views"]') as HTMLElement;
+    expect(riskNav).not.toBeNull();
+    await user.click(within(riskNav).getByRole('tab', { name: 'Return Sensitivity' }));
+    const pending = document.getElementById('risk-panel-pending') as HTMLElement;
+    expect(pending.hasAttribute('hidden')).toBe(false);
+    expect(pending.textContent).toBe('Run Analyze to refresh Risk outputs for this deal.');
     expect(sensitivityHeading()).toBeNull();
   });
 
@@ -8205,5 +8232,68 @@ describe('Sprint C acceptance -- break-even card layout', () => {
     );
     expect(mockFetchSensitivityPresets.mock.calls.length).toBe(sensitivityCalls);
     expect(mockAnalyze).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Phase 7 Gate P7.3 -- Scenarios in Risk', () => {
+  it('opens Risk on Scenarios, the first of its views, and an unsaved deal requests nothing', async () => {
+    vi.mocked(listDealScenarios).mockClear();
+    const user = userEvent.setup();
+    render(<App />);
+    await goTo(user, 'Risk');
+
+    const nav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
+    expect(nav.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Scenarios',
+      'Return Sensitivity',
+      'Debt Sensitivity',
+      'Break-Even',
+    ]);
+    expect(nav.getByRole('tab', { name: 'Scenarios' }).getAttribute('aria-selected')).toBe('true');
+    expect(riskViewPanel('scenarios').hasAttribute('hidden')).toBe(false);
+    expect(
+      within(riskViewPanel('scenarios')).getByText('Save this deal before adding scenarios.'),
+    ).toBeTruthy();
+    expect(vi.mocked(listDealScenarios)).not.toHaveBeenCalled();
+  });
+
+  it('reads a saved deal’s scenarios only once Risk is on screen, and creates nothing', async () => {
+    vi.mocked(listDealScenarios).mockClear();
+    const user = userEvent.setup();
+    const deal = makeDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '111 Main St'));
+    expect(vi.mocked(listDealScenarios)).not.toHaveBeenCalled();
+
+    await goTo(user, 'Risk');
+    await waitFor(() => expect(vi.mocked(listDealScenarios)).toHaveBeenCalledWith(deal.id));
+    const add = await within(riskViewPanel('scenarios')).findByRole('button', { name: 'Add Scenario' });
+    await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false));
+    // The hidden Investment never appears as chrome.
+    expect(within(panel('risk')).queryByText(/Investment/)).toBeNull();
+  });
+
+  it('blocks Scenario changes while the base underwriting has unsaved edits', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '111 Main St'));
+    await goTo(user, 'Underwrite');
+    fireEvent.change(screen.getByLabelText(/^Exit Cap Rate/), { target: { value: '6.9' } });
+    await goTo(user, 'Risk');
+
+    const scenarios = riskViewPanel('scenarios');
+    expect(await within(scenarios).findByText(SAVE_BEFORE_SCENARIOS_MESSAGE)).toBeTruthy();
+    expect(
+      (within(scenarios).getByRole('button', { name: 'Add Scenario' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { AssumptionFieldGrid } from './AssumptionFieldGrid';
 import { LiveCaseRail } from './LiveCaseRail';
-import { StrategyStrip } from './StrategyStrip';
+import { DealContextStrip } from './DealContextStrip';
 import { SubNav } from './SubNav';
 import { OPERATIONS_VIEWS, UNDERWRITE_TABS, resultsViewsFor, sectionsForView } from '../underwrite';
 import type { FieldSection, ResultsViewId, UnderwriteTabId } from '../underwrite';
@@ -50,7 +50,7 @@ function tabId(prefix: string, id: string): string {
  *
  * Replaces the C2 vertical stack (Deal Context textarea -> every assumption
  * -> the full results surfaces) with deliberate navigation: five tabs, a
- * compact strategy strip, a persistent Live Case rail, and results behind
+ * compact Deal Context strip, a persistent Live Case rail, and results behind
  * their own sub-navigation.
  *
  * Quick and Detailed render through this one component. They differ only in
@@ -99,7 +99,7 @@ export function UnderwriteWorkspace({
 
   return (
     <div className="underwrite">
-      <StrategyStrip value={dealContext} onChange={onDealContextChange} />
+      <DealContextStrip value={dealContext} onChange={onDealContextChange} />
 
       <SubNav
         items={UNDERWRITE_TABS}

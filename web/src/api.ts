@@ -32,6 +32,15 @@ import type {
 } from './leaseLevelSensitivityTypes';
 import { isBusinessPlanApiIssue } from './businessPlan';
 import type { BusinessPlanApiIssue, BusinessPlanInput } from './businessPlan';
+import type {
+  DealScenarios,
+  InvestmentScenario,
+  ScenarioDraft,
+  ScenarioIssue,
+  ScenarioTargetCatalog,
+  ScenarioVariantAnalysis,
+  ScenarioVariantFingerprint,
+} from './scenarioTypes';
 
 // Phase 6 Gate D6.6 -- every request that carries deal state carries the deal's
 // Business Plan as a top-level `business_plan`, taken from a required
@@ -1581,4 +1590,247 @@ async function _putSensitivitySnapshot(
   }
 
   return _handleDealResponse(response, 'The sensitivity analysis could not be cached');
+}
+
+// =============================================================================
+// Phase 7 Gate P7.3 -- the Scenario client.
+//
+// The P7.2 Scenario routes, plus the P7.3 read-only target catalog. Each
+// function sends a typed body and returns what the backend returned. None of
+// them resolves a Scenario, validates one beyond its shape, or computes a
+// figure. The backend decides what a Scenario may say, and produces every
+// number it shows.
+//
+// **One refusal shape.** A Scenario 422 carries the P7.1 issues, each with its
+// stage, its stable code and the validator's own message. A Lease-Level analysis
+// may instead refuse in the rent-roll vocabulary. `ScenarioApiError` reports
+// whichever arrived, recognised by shape rather than guessed from the mode, and
+// keeps every message the backend sent. A refusal is never flattened into a
+// generic sentence.
+// =============================================================================
+
+/** A refused Scenario request. `status` 422 means the backend judged the
+ * Scenario, or its variant over the saved Deal, invalid; `reasons` then holds
+ * the validators' own words. */
+export class ScenarioApiError extends ApiError {
+  status: number;
+  scenarioIssues: ScenarioIssue[];
+  leaseIssues: LeaseLevelIssue[];
+  /** Every reason the backend gave, in its order and in its own words. */
+  reasons: string[];
+
+  constructor(
+    message: string,
+    status: number,
+    detail: {
+      issues: ValidationIssue[];
+      scenarioIssues: ScenarioIssue[];
+      leaseIssues: LeaseLevelIssue[];
+      reasons: string[];
+    },
+  ) {
+    super(message, detail.issues);
+    this.name = 'ScenarioApiError';
+    this.status = status;
+    this.scenarioIssues = detail.scenarioIssues;
+    this.leaseIssues = detail.leaseIssues;
+    this.reasons = detail.reasons;
+  }
+}
+
+/** Narrows one 422 detail entry to the P7.1 issue shape `api.py` serializes. */
+function isScenarioIssue(entry: unknown): entry is ScenarioIssue {
+  if (typeof entry !== 'object' || entry === null) {
+    return false;
+  }
+  const candidate = entry as Record<string, unknown>;
+  return (
+    (candidate.stage === 'scenario' || candidate.stage === 'resolved_inputs') &&
+    typeof candidate.code === 'string' &&
+    typeof candidate.message === 'string'
+  );
+}
+
+/** A 404's backend detail names internal ids, so it is said in the analyst's
+ * words instead. */
+const SCENARIO_NOT_FOUND_MESSAGE =
+  'That scenario or deal could not be found. It may have been deleted.';
+
+async function scenarioRequestError(
+  response: Response,
+  failureMessage: string,
+): Promise<ScenarioApiError> {
+  const payload: unknown = await response.json().catch(() => null);
+  const detail: unknown =
+    typeof payload === 'object' && payload !== null
+      ? (payload as Record<string, unknown>).detail
+      : null;
+  const entries: unknown[] = Array.isArray(detail) ? detail : [];
+  const messages = entries
+    .map((entry) =>
+      typeof entry === 'object' && entry !== null
+        ? (entry as Record<string, unknown>).message
+        : null,
+    )
+    .filter((message): message is string => typeof message === 'string');
+  const stringDetail = typeof detail === 'string' && detail.trim() !== '' ? detail : null;
+  const reasons =
+    messages.length > 0
+      ? messages
+      : response.status === 404
+        ? [SCENARIO_NOT_FOUND_MESSAGE]
+        : stringDetail === null
+          ? []
+          : [stringDetail];
+  const message =
+    reasons.length > 0 ? reasons.join(' ') : `${failureMessage} (HTTP ${response.status}).`;
+  return new ScenarioApiError(message, response.status, {
+    issues: entries.filter(isValidationIssue),
+    scenarioIssues: entries.filter(isScenarioIssue),
+    leaseIssues: entries.filter(isLeaseLevelIssue),
+    reasons,
+  });
+}
+
+async function scenarioFetch(
+  path: string,
+  init: RequestInit,
+  failureMessage: string,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, init);
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE);
+  }
+  if (!response.ok) {
+    throw await scenarioRequestError(response, failureMessage);
+  }
+  return response;
+}
+
+/** Exactly the three keys a Scenario body may carry. The backend refuses any
+ * other key rather than ignoring it. */
+function scenarioBody(method: 'POST' | 'PUT', draft: ScenarioDraft): RequestInit {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: draft.name,
+      description: draft.description,
+      overrides: draft.overrides,
+    }),
+  };
+}
+
+function investmentScenarioPath(investmentId: string, scenarioId: string): string {
+  return `/investments/${encodeURIComponent(investmentId)}/scenarios/${encodeURIComponent(scenarioId)}`;
+}
+
+/** `GET /scenario-targets` -- each operating mode's Scenario targets, their
+ * operation whitelists and their units, projected from the P7.1 registry. */
+export async function fetchScenarioTargetCatalog(): Promise<ScenarioTargetCatalog> {
+  const response = await scenarioFetch(
+    '/scenario-targets',
+    { method: 'GET' },
+    'The scenario assumptions could not be loaded',
+  );
+  return (await response.json()) as ScenarioTargetCatalog;
+}
+
+/** `GET /deals/{id}/scenarios`. Read-only: a standalone Deal reports no
+ * Investment and no Scenarios, and gains neither. */
+export async function listDealScenarios(dealId: string): Promise<DealScenarios> {
+  const response = await scenarioFetch(
+    `/deals/${encodeURIComponent(dealId)}/scenarios`,
+    { method: 'GET' },
+    'The scenarios could not be loaded',
+  );
+  return (await response.json()) as DealScenarios;
+}
+
+/** `POST /deals/{id}/scenarios`. The Deal's first Scenario materializes its
+ * hidden Investment in the same transaction; later ones reuse it. An invalid
+ * Scenario leaves nothing behind. */
+export async function createDealScenario(
+  dealId: string,
+  draft: ScenarioDraft,
+): Promise<InvestmentScenario> {
+  const response = await scenarioFetch(
+    `/deals/${encodeURIComponent(dealId)}/scenarios`,
+    scenarioBody('POST', draft),
+    'The scenario could not be saved',
+  );
+  return (await response.json()) as InvestmentScenario;
+}
+
+/** `GET /investments/{id}/scenarios/{id}`. */
+export async function getInvestmentScenario(
+  investmentId: string,
+  scenarioId: string,
+): Promise<InvestmentScenario> {
+  const response = await scenarioFetch(
+    investmentScenarioPath(investmentId, scenarioId),
+    { method: 'GET' },
+    'The scenario could not be loaded',
+  );
+  return (await response.json()) as InvestmentScenario;
+}
+
+/** `PUT /investments/{id}/scenarios/{id}` -- replaces the name, description
+ * and whole override set; the Scenario keeps its id. */
+export async function updateInvestmentScenario(
+  investmentId: string,
+  scenarioId: string,
+  draft: ScenarioDraft,
+): Promise<InvestmentScenario> {
+  const response = await scenarioFetch(
+    investmentScenarioPath(investmentId, scenarioId),
+    scenarioBody('PUT', draft),
+    'The scenario could not be saved',
+  );
+  return (await response.json()) as InvestmentScenario;
+}
+
+/** `DELETE /investments/{id}/scenarios/{id}`. Deleting the last Scenario
+ * removes the hidden Investment too, so the Deal is a plain Deal again. */
+export async function deleteInvestmentScenario(
+  investmentId: string,
+  scenarioId: string,
+): Promise<void> {
+  await scenarioFetch(
+    investmentScenarioPath(investmentId, scenarioId),
+    { method: 'DELETE' },
+    'The scenario could not be deleted',
+  );
+}
+
+/** `GET /investments/{id}/scenarios/{id}/fingerprint` -- the opaque
+ * resolved-input fingerprint the backend computes. Transported, never computed
+ * or interpreted here. */
+export async function fetchScenarioVariantFingerprint(
+  investmentId: string,
+  scenarioId: string,
+): Promise<ScenarioVariantFingerprint> {
+  const response = await scenarioFetch(
+    `${investmentScenarioPath(investmentId, scenarioId)}/fingerprint`,
+    { method: 'GET' },
+    'The scenario fingerprint could not be retrieved',
+  );
+  return (await response.json()) as ScenarioVariantFingerprint;
+}
+
+/** `POST /investments/{id}/scenarios/{id}/analysis` -- the Scenario resolved
+ * over the Deal's saved inputs and run through the existing deterministic
+ * pipeline. A Lease-Level variant is always recomputed. */
+export async function analyzeInvestmentScenario(
+  investmentId: string,
+  scenarioId: string,
+): Promise<ScenarioVariantAnalysis> {
+  const response = await scenarioFetch(
+    `${investmentScenarioPath(investmentId, scenarioId)}/analysis`,
+    { method: 'POST' },
+    'The scenario analysis could not be completed',
+  );
+  return (await response.json()) as ScenarioVariantAnalysis;
 }

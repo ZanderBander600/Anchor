@@ -72,6 +72,7 @@ from .contracts import (
     UnsupportedOperatingModeError,
 )
 from .analysis.scenario import (
+    SCENARIO_TARGET_REGISTRY,
     ScenarioOperation,
     ScenarioOverride,
     ScenarioTarget,
@@ -2443,3 +2444,52 @@ def analyze_investment_scenario(
         raise _scenario_validation_error_response(error) from None
     except LeaseValidationError as error:
         raise _lease_validation_error_response(error) from None
+
+
+# =============================================================================
+# Phase 7 Gate P7.3 -- the read-only Scenario target catalog
+#
+# The Scenario editor must know which targets the current operating mode
+# offers, which operations each one allows, and the units a value is stated
+# in. The P7.1 registry is the one authority for all three, so this route only
+# projects it:
+# - every entry is read from the P7.1 registry, in its declaration order;
+# - each whitelist is listed in ``ScenarioOperation`` declaration order;
+# - ``units`` is the registry's own text, verbatim.
+#
+# Nothing is added, computed, persisted or re-decided here, and the route opens
+# no database. Without it the UI would need a target list of its own, which
+# could drift from the registry.
+# =============================================================================
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class _ScenarioTargetEntry:
+    """One registry target, as one operating mode offers it."""
+
+    target: str
+    allowed_operations: tuple[str, ...]
+    units: str
+
+
+@app.get("/scenario-targets", response_model=dict[str, list[_ScenarioTargetEntry]])
+def scenario_target_catalog() -> dict[str, list[_ScenarioTargetEntry]]:
+    """Each operating mode's Scenario targets, projected from the registry.
+    Read-only: it touches no database and changes no Scenario semantics."""
+
+    return {
+        mode.value: [
+            _ScenarioTargetEntry(
+                target=spec.target.value,
+                allowed_operations=tuple(
+                    operation.value
+                    for operation in ScenarioOperation
+                    if operation in spec.allowed_operations
+                ),
+                units=spec.units,
+            )
+            for spec in SCENARIO_TARGET_REGISTRY.values()
+            if mode in spec.modes
+        ]
+        for mode in OperatingMode
+    }
