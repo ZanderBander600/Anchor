@@ -146,7 +146,7 @@ import os
 import sqlite3
 import uuid
 from enum import Enum
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -191,6 +191,7 @@ from ..analysis.scenario import (
     ScenarioOverride,
     ScenarioTarget,
     ScenarioValidationError,
+    validate_investment_scenario,
     validate_scenario,
 )
 from ..analysis.strategy import (
@@ -205,6 +206,7 @@ from ..analysis.strategy import (
     StrategyIssue,
     StrategyOverlay,
     StrategyValidationError,
+    validate_investment_strategy,
     validate_strategy,
 )
 from ..engine.contracts import (
@@ -212,6 +214,19 @@ from ..engine.contracts import (
     DetailedAcquisitionResults,
     IrrStatus,
     OperatingProjection,
+)
+from ..investment import (
+    InvestmentIssue,
+    InvestmentIssueCode,
+    InvestmentTransactionCost,
+    InvestmentUnitMembership,
+    InvestmentValidationError,
+    TransactionCostCategory,
+    UnitEconomicFacts,
+    UnitKind,
+    validate_investment_inputs,
+    validate_unit_memberships,
+    validate_variant_economics,
 )
 from .contracts import (
     Deal,
@@ -222,10 +237,12 @@ from .contracts import (
     InvestmentStrategy,
     InvestmentStructureError,
     InvestmentUnit,
+    InvestmentUnitNotFoundError,
     OneWaySensitivitySnapshot,
     ScenarioNotFoundError,
     StrategyNotFoundError,
     TwoWaySensitivitySnapshot,
+    VisibleInvestment,
 )
 from .fingerprint import (
     fingerprint_ai,
@@ -283,7 +300,14 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # exactly as version 8's were. No ALTER and no existing row read or rewritten:
 # no Deal, Scenario, override or cached variant changes, and a Deal gains a
 # Strategy only when the analyst opts in.
-_SCHEMA_VERSION = 9
+# Phase 7 Gate P7.6: schema version 10 adds five purely additive sidecar tables
+# for the visible Investment -- its details, its Units' membership details, its
+# Business Plan items and its transaction costs -- created unconditionally by
+# ``_connect`` exactly as version 9's were. No ALTER of ``investments`` or
+# ``investment_units`` or any other table, and no existing row read or
+# rewritten: every hidden wrapper simply has no sidecar row, which is exactly
+# its neutral state, and none is created by reading it.
+_SCHEMA_VERSION = 10
 
 
 class PersistedDealDataError(RuntimeError):
@@ -933,6 +957,109 @@ _STRATEGY_OVERLAY_TABLES = (
 _P7_4_TABLES = ("strategies", *_STRATEGY_OVERLAY_TABLES)
 
 
+# =============================================================================
+# Phase 7 Gate P7.6 -- the visible Investment, schema version 10.
+#
+# Five purely additive sidecar tables keyed to the existing ``investments`` id
+# (and, for Units, the existing ``investment_units`` membership), created by
+# ``_connect`` via CREATE TABLE IF NOT EXISTS exactly as every table since
+# version 2. ``investments`` and ``investment_units`` are not altered: a visible
+# Investment is the same ``investments`` row with ``is_hidden = 0`` and these
+# sidecars beside it.
+#
+# ``investment_details`` -- the name and transaction price. Its presence is the
+# visible state's; a hidden wrapper never has one.
+#
+# ``investment_unit_details`` -- one row per member Unit: presentation
+# (``ordinal``, ``label``, ``unit_kind``) and economic timing
+# (``acquisition_month``, ``disposition_month``, NULL for "through the common
+# horizon"). Its Unit set must equal the ``investment_units`` membership; a
+# mismatch is corrupt and fails closed.
+#
+# ``investment_capital_plan_items`` / ``investment_owner_expense_items`` -- the
+# Investment-level Business Plan, in the D6 tables' own shape and decoded by the
+# one D6 row codec, in its own item-ID namespace.
+#
+# ``investment_transaction_costs`` -- the closing costs, with the analyst's
+# row order kept as a display ordinal.
+#
+# No FOREIGN KEY / ON DELETE CASCADE, for the reason stated above
+# ``lease_level_suites``. Every lifecycle function deletes these rows
+# explicitly, in one transaction with their parent.
+# =============================================================================
+
+_CREATE_INVESTMENT_DETAILS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS investment_details (
+    investment_id      TEXT PRIMARY KEY,
+    name               TEXT NOT NULL,
+    transaction_price  REAL NOT NULL
+)
+"""
+
+_CREATE_INVESTMENT_UNIT_DETAILS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS investment_unit_details (
+    investment_id      TEXT NOT NULL,
+    unit_id            TEXT NOT NULL UNIQUE,
+    ordinal            INTEGER NOT NULL,
+    label              TEXT,
+    unit_kind          TEXT NOT NULL,
+    acquisition_month  INTEGER NOT NULL,
+    disposition_month  INTEGER,
+    PRIMARY KEY (investment_id, unit_id)
+)
+"""
+
+_CREATE_INVESTMENT_CAPITAL_PLAN_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS investment_capital_plan_items (
+    investment_id  TEXT NOT NULL,
+    item_id        TEXT NOT NULL,
+    ordinal        INTEGER NOT NULL,
+    description    TEXT NOT NULL,
+    category       TEXT NOT NULL,
+    month          INTEGER NOT NULL,
+    amount         REAL NOT NULL,
+    PRIMARY KEY (investment_id, item_id)
+)
+"""
+
+_CREATE_INVESTMENT_OWNER_EXPENSE_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS investment_owner_expense_items (
+    investment_id  TEXT NOT NULL,
+    item_id        TEXT NOT NULL,
+    ordinal        INTEGER NOT NULL,
+    description    TEXT NOT NULL,
+    category       TEXT NOT NULL,
+    annual_amount  REAL NOT NULL,
+    first_year     INTEGER NOT NULL,
+    last_year      INTEGER,
+    PRIMARY KEY (investment_id, item_id)
+)
+"""
+
+_CREATE_INVESTMENT_TRANSACTION_COSTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS investment_transaction_costs (
+    investment_id  TEXT NOT NULL,
+    cost_id        TEXT NOT NULL,
+    ordinal        INTEGER NOT NULL,
+    description    TEXT NOT NULL,
+    category       TEXT NOT NULL,
+    amount         REAL NOT NULL,
+    model_month    INTEGER NOT NULL,
+    PRIMARY KEY (investment_id, cost_id)
+)
+"""
+
+#: Every sidecar a visible Investment owns. Deleting the Investment deletes its
+#: rows from each of them, explicitly, in one transaction with the Investment.
+_P7_6_TABLES = (
+    "investment_details",
+    "investment_unit_details",
+    "investment_capital_plan_items",
+    "investment_owner_expense_items",
+    "investment_transaction_costs",
+)
+
+
 _LEASE_LEVEL_CHILD_TABLES = (
     "lease_level_property_inputs",
     "lease_level_operating_inputs",
@@ -1390,6 +1517,9 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # Investment, membership or Scenario row is written for any existing deal.
     # P7.4 -- schema version 9 adds the eight Strategy tables the same way: no
     # row is written for any existing Deal, Scenario or cached variant.
+    # P7.6 -- schema version 10 adds the five visible-Investment sidecars the
+    # same way: no row is written for any existing Deal, hidden Investment,
+    # Scenario, Strategy or cached variant, and ``investments`` is not altered.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -1447,6 +1577,11 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_STRATEGY_OWNER_EXPENSE_ITEMS_TABLE_SQL)
     connection.execute(_CREATE_STRATEGY_OPERATING_OUTCOMES_TABLE_SQL)
     connection.execute(_CREATE_STRATEGY_DISPOSITION_OVERLAYS_TABLE_SQL)
+    connection.execute(_CREATE_INVESTMENT_DETAILS_TABLE_SQL)
+    connection.execute(_CREATE_INVESTMENT_UNIT_DETAILS_TABLE_SQL)
+    connection.execute(_CREATE_INVESTMENT_CAPITAL_PLAN_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_INVESTMENT_OWNER_EXPENSE_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_INVESTMENT_TRANSACTION_COSTS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -2680,47 +2815,55 @@ def get_deal(deal_id: str, *, db_path: Path | None = None) -> Deal:
     read from the same two tables inside the same connection."""
 
     with _connect(db_path) as connection:
-        quick_row = connection.execute(
-            "SELECT * FROM deals WHERE id = ?", (deal_id,)
-        ).fetchone()
-        if quick_row is not None:
-            return _row_to_deal(
-                quick_row, business_plan=_read_business_plan(connection, deal_id)
-            )
+        return _read_deal(connection, deal_id)
 
-        detailed_row = connection.execute(
-            "SELECT * FROM detailed_deals WHERE id = ?", (deal_id,)
-        ).fetchone()
-        if detailed_row is None:
-            # D5.4: the third table family. Probed last, so Quick and Detailed
-            # lookups are unchanged, and returned as LEASE_LEVEL by construction
-            # -- the mode is which table the row lives in, never a guess.
-            lease_level_row = connection.execute(
-                "SELECT * FROM lease_level_deals WHERE id = ?", (deal_id,)
-            ).fetchone()
-            if lease_level_row is None:
-                raise DealNotFoundError(deal_id)
-            return _row_to_lease_level_deal(
-                connection,
-                lease_level_row,
-                business_plan=_read_business_plan(connection, deal_id),
-            )
 
-        operating_row = connection.execute(
-            "SELECT * FROM detailed_operating_inputs WHERE deal_id = ?", (deal_id,)
+def _read_deal(connection: sqlite3.Connection, deal_id: str) -> Deal:
+    """``get_deal``'s read, inside the caller's connection -- so a P7.6
+    Investment write can judge its Units' stored inputs in the same
+    transaction that writes the Investment. Unchanged from ``get_deal``."""
+
+    quick_row = connection.execute(
+        "SELECT * FROM deals WHERE id = ?", (deal_id,)
+    ).fetchone()
+    if quick_row is not None:
+        return _row_to_deal(
+            quick_row, business_plan=_read_business_plan(connection, deal_id)
+        )
+
+    detailed_row = connection.execute(
+        "SELECT * FROM detailed_deals WHERE id = ?", (deal_id,)
+    ).fetchone()
+    if detailed_row is None:
+        # D5.4: the third table family. Probed last, so Quick and Detailed
+        # lookups are unchanged, and returned as LEASE_LEVEL by construction
+        # -- the mode is which table the row lives in, never a guess.
+        lease_level_row = connection.execute(
+            "SELECT * FROM lease_level_deals WHERE id = ?", (deal_id,)
         ).fetchone()
-        if operating_row is None:
-            # The 1:1 invariant (both rows always written/removed together
-            # by this module) means this should never happen; surfaced as
-            # DealNotFoundError rather than a raw None-access crash if it
-            # somehow does (e.g. a hand-edited database).
+        if lease_level_row is None:
             raise DealNotFoundError(deal_id)
-
-        return _row_to_detailed_deal(
-            detailed_row,
-            operating_row,
+        return _row_to_lease_level_deal(
+            connection,
+            lease_level_row,
             business_plan=_read_business_plan(connection, deal_id),
         )
+
+    operating_row = connection.execute(
+        "SELECT * FROM detailed_operating_inputs WHERE deal_id = ?", (deal_id,)
+    ).fetchone()
+    if operating_row is None:
+        # The 1:1 invariant (both rows always written/removed together
+        # by this module) means this should never happen; surfaced as
+        # DealNotFoundError rather than a raw None-access crash if it
+        # somehow does (e.g. a hand-edited database).
+        raise DealNotFoundError(deal_id)
+
+    return _row_to_detailed_deal(
+        detailed_row,
+        operating_row,
+        business_plan=_read_business_plan(connection, deal_id),
+    )
 
 
 def list_deals(*, db_path: Path | None = None) -> list[Deal]:
@@ -3536,15 +3679,65 @@ def _require_owned_scenario(
         raise ScenarioNotFoundError(investment_id, scenario_id)
 
 
-def _require_valid_scenario(
-    scenario: ScenarioDefinition, *, operating_mode: OperatingMode, unit_id: str
-) -> None:
-    """The P7.1 stage-1 contract, for the wrapper's one unit: identity, naming,
+class _StructureOwner:
+    """The Investment that owns Strategies and Scenarios, as their validators
+    see it: the hidden wrapper's one Unit, or -- from P7.6 -- a visible
+    Investment's member Units, each with its Deal's operating mode, in
+    ``unit_id`` order.
+
+    A plain slotted class rather than a dataclass: this module defines no
+    dataclass of its own, and several tests load it as a fresh module outside
+    ``sys.modules``, where dataclass annotation resolution cannot run."""
+
+    __slots__ = ("investment_id", "hidden", "unit_modes")
+
+    def __init__(
+        self, *, investment_id: str, hidden: bool, unit_modes: Mapping[str, OperatingMode]
+    ) -> None:
+        self.investment_id = investment_id
+        self.hidden = hidden
+        self.unit_modes = unit_modes
+
+
+def _require_structure_owner(
+    connection: sqlite3.Connection, investment_id: str
+) -> _StructureOwner:
+    """The owner of ``investment_id``'s Strategies and Scenarios, or a
+    refusal. A hidden wrapper is judged exactly as P7.2 judged it; a visible
+    Investment must hold coherent sidecars and only saved Deals."""
+
+    row = _investment_row(connection, investment_id)
+    if _decode_hidden_flag(row):
+        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        return _StructureOwner(
+            investment_id=investment_id, hidden=True, unit_modes={unit_id: operating_mode}
+        )
+    return _StructureOwner(
+        investment_id=investment_id,
+        hidden=False,
+        unit_modes=_require_visible_units(connection, investment_id),
+    )
+
+
+def _scenario_contract_issues(
+    scenario: ScenarioDefinition, owner: _StructureOwner
+) -> tuple[ScenarioIssue, ...]:
+    """The hidden wrapper's Scenarios keep the exact P7.1 one-Unit contract; a
+    visible Investment's are judged against its member set (P7.6)."""
+
+    if owner.hidden:
+        ((unit_id, operating_mode),) = owner.unit_modes.items()
+        return validate_scenario(scenario, operating_mode=operating_mode, unit_id=unit_id)
+    return validate_investment_scenario(scenario, unit_modes=owner.unit_modes)
+
+
+def _require_valid_scenario(scenario: ScenarioDefinition, *, owner: _StructureOwner) -> None:
+    """The P7.1 stage-1 contract, for the owner's Units: identity, naming,
     unit addressing (SC-5), ``(unit_id, target)`` uniqueness (SC-1), targets,
     each target's operation whitelist (Q5) and finite values. This store adds
     no rule of its own."""
 
-    issues = validate_scenario(scenario, operating_mode=operating_mode, unit_id=unit_id)
+    issues = _scenario_contract_issues(scenario, owner)
     if issues:
         raise ScenarioValidationError(issues)
 
@@ -3578,8 +3771,7 @@ def _scenario_from_rows(
     scenario_row: sqlite3.Row,
     override_rows: Iterable[sqlite3.Row],
     *,
-    unit_id: str,
-    operating_mode: OperatingMode,
+    owner: _StructureOwner,
 ) -> ScenarioDefinition:
     """Rebuild one stored Scenario as the exact P7.1 contract and refuse it if
     the P7.1 validator does. Nothing is repaired, defaulted or dropped."""
@@ -3604,7 +3796,7 @@ def _scenario_from_rows(
         description=scenario_row["description"],
         overrides=overrides,
     )
-    issues = validate_scenario(scenario, operating_mode=operating_mode, unit_id=unit_id)
+    issues = _scenario_contract_issues(scenario, owner)
     if issues:
         raise PersistedScenarioDataError(scenario_row["id"], issues)
     return scenario
@@ -3614,8 +3806,7 @@ def _read_scenarios(
     connection: sqlite3.Connection,
     investment_id: str,
     *,
-    unit_id: str,
-    operating_mode: OperatingMode,
+    owner: _StructureOwner,
     scenario_id: str | None = None,
 ) -> list[InvestmentScenario]:
     """The wrapper's Scenarios -- or the one ``scenario_id`` it owns -- in
@@ -3641,9 +3832,7 @@ def _read_scenarios(
         scenarios.append(
             InvestmentScenario(
                 investment_id=investment_id,
-                scenario=_scenario_from_rows(
-                    row, override_rows, unit_id=unit_id, operating_mode=operating_mode
-                ),
+                scenario=_scenario_from_rows(row, override_rows, owner=owner),
                 created_at=datetime.fromisoformat(row["created_at"]),
                 updated_at=datetime.fromisoformat(row["updated_at"]),
             )
@@ -3745,6 +3934,10 @@ def _delete_investment_rows(connection: sqlite3.Connection, investment_id: str) 
     (Q3)."""
 
     connection.execute("DELETE FROM variant_snapshots WHERE root_id = ?", (investment_id,))
+    # P7.6: a visible Investment's sidecars. A hidden wrapper has none, so this
+    # deletes nothing for it.
+    for table in _P7_6_TABLES:
+        connection.execute(f"DELETE FROM {table} WHERE investment_id = ?", (investment_id,))
     for table in _STRATEGY_OVERLAY_TABLES:
         connection.execute(
             f"DELETE FROM {table} WHERE strategy_id IN "
@@ -3787,6 +3980,13 @@ def _remove_hidden_wrapper_of_deal(connection: sqlite3.Connection, deal_id: str)
     investment_id = _investment_of_deal(connection, deal_id)
     if investment_id is None:
         return
+    if not _decode_hidden_flag(_investment_row(connection, investment_id)):
+        # P7.6: fail closed, and never mutate the visible Investment.
+        raise InvestmentStructureError(
+            f"Deal {deal_id!r} is a Unit of a visible Investment. Remove the Unit from the "
+            "Investment before deleting the Deal; deleting a Deal never changes an "
+            "Investment."
+        )
     _require_hidden_wrapper(connection, investment_id)
     _delete_investment_rows(connection, investment_id)
 
@@ -3825,7 +4025,12 @@ def create_scenario_for_deal(
         investment_id = _investment_of_deal(connection, deal_id)
         if investment_id is not None:
             _require_hidden_wrapper(connection, investment_id)
-        _require_valid_scenario(scenario, operating_mode=operating_mode, unit_id=deal_id)
+        _require_valid_scenario(
+            scenario,
+            owner=_StructureOwner(
+                investment_id=investment_id or "", hidden=True, unit_modes={deal_id: operating_mode}
+            ),
+        )
         if investment_id is None:
             investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
         _insert_scenario(connection, investment_id, scenario, now=now)
@@ -3841,8 +4046,9 @@ def create_scenario(
     overrides: Iterable[ScenarioOverride] = (),
     db_path: Path | None = None,
 ) -> InvestmentScenario:
-    """Persist another Scenario in the existing hidden wrapper
-    ``investment_id``, validated for its one unit."""
+    """Persist another Scenario in the existing Investment ``investment_id``:
+    the hidden wrapper, validated for its one unit, or (P7.6) a visible
+    Investment, validated for its member Units."""
 
     scenario = ScenarioDefinition(
         scenario_id=uuid.uuid4().hex,
@@ -3852,8 +4058,8 @@ def create_scenario(
     )
     now = _utc_now_iso()
     with _connect(db_path) as connection:
-        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
-        _require_valid_scenario(scenario, operating_mode=operating_mode, unit_id=unit_id)
+        owner = _require_structure_owner(connection, investment_id)
+        _require_valid_scenario(scenario, owner=owner)
         _insert_scenario(connection, investment_id, scenario, now=now)
 
     return get_scenario(investment_id, scenario.scenario_id, db_path=db_path)
@@ -3886,9 +4092,9 @@ def update_scenario(
     )
     now = _utc_now_iso()
     with _connect(db_path) as connection:
-        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        owner = _require_structure_owner(connection, investment_id)
         _require_owned_scenario(connection, investment_id, scenario_id)
-        _require_valid_scenario(scenario, operating_mode=operating_mode, unit_id=unit_id)
+        _require_valid_scenario(scenario, owner=owner)
         connection.execute(
             "UPDATE scenarios SET name = ?, description = ?, updated_at = ? "
             "WHERE id = ? AND investment_id = ?",
@@ -3908,25 +4114,29 @@ def delete_scenario(
 
     When that leaves the hidden wrapper holding no structure, the wrapper is
     removed too, in the same transaction, and the Deal is a plain standalone
-    Deal again (P-11: empty advanced structure leaves no state behind)."""
+    Deal again (P-11: empty advanced structure leaves no state behind). A
+    visible Investment never collapses: its ownership of its Units is meaningful
+    on its own (P7.6)."""
 
     with _connect(db_path) as connection:
-        _require_hidden_wrapper(connection, investment_id)
+        owner = _require_structure_owner(connection, investment_id)
         _require_owned_scenario(connection, investment_id, scenario_id)
         _delete_scenario_rows(connection, investment_id, scenario_id)
-        if _wrapper_holds_no_structure(connection, investment_id):
+        if owner.hidden and _wrapper_holds_no_structure(connection, investment_id):
             _delete_investment_rows(connection, investment_id)
         else:
             _touch_investment(connection, investment_id, now=_utc_now_iso())
 
 
 def delete_investment(investment_id: str, *, db_path: Path | None = None) -> None:
-    """Delete the hidden wrapper ``investment_id`` and everything it owns, and
-    release its Deal, which stays exactly as it was (Q3). Never deletes a Deal
-    row; refuses a visible Investment."""
+    """Delete the Investment ``investment_id`` and everything it owns -- for a
+    visible Investment (P7.6) also its details, Unit details, Business Plan and
+    transaction costs -- and release its Deals, each exactly as it was (Q3).
+    Never deletes a Deal row. One transaction."""
 
     with _connect(db_path) as connection:
-        _require_hidden_wrapper(connection, investment_id)
+        if _decode_hidden_flag(_investment_row(connection, investment_id)):
+            _require_hidden_wrapper(connection, investment_id)
         _delete_investment_rows(connection, investment_id)
 
 
@@ -3955,23 +4165,17 @@ def list_scenarios(
     investment_id: str, *, db_path: Path | None = None
 ) -> list[InvestmentScenario]:
     with _connect(db_path) as connection:
-        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
-        return _read_scenarios(
-            connection, investment_id, unit_id=unit_id, operating_mode=operating_mode
-        )
+        owner = _require_structure_owner(connection, investment_id)
+        return _read_scenarios(connection, investment_id, owner=owner)
 
 
 def get_scenario(
     investment_id: str, scenario_id: str, *, db_path: Path | None = None
 ) -> InvestmentScenario:
     with _connect(db_path) as connection:
-        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        owner = _require_structure_owner(connection, investment_id)
         found = _read_scenarios(
-            connection,
-            investment_id,
-            unit_id=unit_id,
-            operating_mode=operating_mode,
-            scenario_id=scenario_id,
+            connection, investment_id, owner=owner, scenario_id=scenario_id
         )
     if not found:
         raise ScenarioNotFoundError(investment_id, scenario_id)
@@ -3993,7 +4197,11 @@ def list_deal_scenarios(
             return None, []
         unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
         return investment_id, _read_scenarios(
-            connection, investment_id, unit_id=unit_id, operating_mode=operating_mode
+            connection,
+            investment_id,
+            owner=_StructureOwner(
+                investment_id=investment_id, hidden=True, unit_modes={unit_id: operating_mode}
+            ),
         )
 
 
@@ -4152,15 +4360,25 @@ def _require_owned_strategy(
         raise StrategyNotFoundError(investment_id, strategy_id)
 
 
-def _require_valid_strategy(
-    strategy: StrategyDefinition, *, operating_mode: OperatingMode, unit_id: str
-) -> None:
-    """The P7.4 stage-1 contract, for the wrapper's one unit: identity, naming,
+def _strategy_contract_issues(
+    strategy: StrategyDefinition, owner: _StructureOwner
+) -> tuple[StrategyIssue, ...]:
+    """The hidden wrapper's Strategies keep the exact P7.4 one-Unit contract; a
+    visible Investment's are judged against its member set (P7.6)."""
+
+    if owner.hidden:
+        ((unit_id, operating_mode),) = owner.unit_modes.items()
+        return validate_strategy(strategy, operating_mode=operating_mode, unit_id=unit_id)
+    return validate_investment_strategy(strategy, unit_modes=owner.unit_modes)
+
+
+def _require_valid_strategy(strategy: StrategyDefinition, *, owner: _StructureOwner) -> None:
+    """The P7.4 stage-1 contract, for the owner's Units: identity, naming,
     unit addressing, one overlay per ``(domain, unit_id)``, whole-domain
     completeness, finite numbers, the D6 plan rules and the operating-outcome
     whitelist. This store adds no rule of its own."""
 
-    issues = validate_strategy(strategy, operating_mode=operating_mode, unit_id=unit_id)
+    issues = _strategy_contract_issues(strategy, owner)
     if issues:
         raise StrategyValidationError(issues)
 
@@ -4336,8 +4554,7 @@ def _strategy_from_rows(
     connection: sqlite3.Connection,
     strategy_row: sqlite3.Row,
     *,
-    unit_id: str,
-    operating_mode: OperatingMode,
+    owner: _StructureOwner,
 ) -> StrategyDefinition:
     """Rebuild one stored Strategy as the exact P7.4 contract, its overlays in
     canonical order (domain, then unit), and refuse it if the P7.4 validator
@@ -4452,7 +4669,7 @@ def _strategy_from_rows(
             )
         ),
     )
-    issues = validate_strategy(strategy, operating_mode=operating_mode, unit_id=unit_id)
+    issues = _strategy_contract_issues(strategy, owner)
     if issues:
         raise PersistedStrategyDataError(strategy_id, issues)
     return strategy
@@ -4462,8 +4679,7 @@ def _read_strategies(
     connection: sqlite3.Connection,
     investment_id: str,
     *,
-    unit_id: str,
-    operating_mode: OperatingMode,
+    owner: _StructureOwner,
     strategy_id: str | None = None,
 ) -> list[InvestmentStrategy]:
     """The wrapper's Strategies -- or the one ``strategy_id`` it owns -- in
@@ -4483,9 +4699,7 @@ def _read_strategies(
     return [
         InvestmentStrategy(
             investment_id=investment_id,
-            strategy=_strategy_from_rows(
-                connection, row, unit_id=unit_id, operating_mode=operating_mode
-            ),
+            strategy=_strategy_from_rows(connection, row, owner=owner),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -4561,7 +4775,12 @@ def create_strategy_for_deal(
         investment_id = _investment_of_deal(connection, deal_id)
         if investment_id is not None:
             _require_hidden_wrapper(connection, investment_id)
-        _require_valid_strategy(strategy, operating_mode=operating_mode, unit_id=deal_id)
+        _require_valid_strategy(
+            strategy,
+            owner=_StructureOwner(
+                investment_id=investment_id or "", hidden=True, unit_modes={deal_id: operating_mode}
+            ),
+        )
         if investment_id is None:
             investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
         _insert_strategy(connection, investment_id, strategy, now=now)
@@ -4577,8 +4796,9 @@ def create_strategy(
     overlays: Iterable[StrategyOverlay] = (),
     db_path: Path | None = None,
 ) -> InvestmentStrategy:
-    """Persist another Strategy in the existing hidden wrapper
-    ``investment_id``, validated for its one unit."""
+    """Persist another Strategy in the existing Investment ``investment_id``:
+    the hidden wrapper, validated for its one unit, or (P7.6) a visible
+    Investment, validated for its member Units."""
 
     strategy = StrategyDefinition(
         strategy_id=uuid.uuid4().hex,
@@ -4588,8 +4808,8 @@ def create_strategy(
     )
     now = _utc_now_iso()
     with _connect(db_path) as connection:
-        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
-        _require_valid_strategy(strategy, operating_mode=operating_mode, unit_id=unit_id)
+        owner = _require_structure_owner(connection, investment_id)
+        _require_valid_strategy(strategy, owner=owner)
         _insert_strategy(connection, investment_id, strategy, now=now)
 
     return get_strategy(investment_id, strategy.strategy_id, db_path=db_path)
@@ -4622,9 +4842,9 @@ def update_strategy(
     )
     now = _utc_now_iso()
     with _connect(db_path) as connection:
-        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        owner = _require_structure_owner(connection, investment_id)
         _require_owned_strategy(connection, investment_id, strategy_id)
-        _require_valid_strategy(strategy, operating_mode=operating_mode, unit_id=unit_id)
+        _require_valid_strategy(strategy, owner=owner)
         connection.execute(
             "UPDATE strategies SET name = ?, description = ?, updated_at = ? "
             "WHERE id = ? AND investment_id = ?",
@@ -4645,13 +4865,13 @@ def delete_strategy(
     When that leaves the hidden wrapper holding no structure -- no Strategy and
     no Scenario -- the wrapper is removed too, in the same transaction, and the
     Deal is a plain standalone Deal again (P-11). A wrapper that still holds a
-    Scenario is kept."""
+    Scenario is kept, and a visible Investment never collapses (P7.6)."""
 
     with _connect(db_path) as connection:
-        _require_hidden_wrapper(connection, investment_id)
+        owner = _require_structure_owner(connection, investment_id)
         _require_owned_strategy(connection, investment_id, strategy_id)
         _delete_strategy_rows(connection, investment_id, strategy_id)
-        if _wrapper_holds_no_structure(connection, investment_id):
+        if owner.hidden and _wrapper_holds_no_structure(connection, investment_id):
             _delete_investment_rows(connection, investment_id)
         else:
             _touch_investment(connection, investment_id, now=_utc_now_iso())
@@ -4661,23 +4881,17 @@ def list_strategies(
     investment_id: str, *, db_path: Path | None = None
 ) -> list[InvestmentStrategy]:
     with _connect(db_path) as connection:
-        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
-        return _read_strategies(
-            connection, investment_id, unit_id=unit_id, operating_mode=operating_mode
-        )
+        owner = _require_structure_owner(connection, investment_id)
+        return _read_strategies(connection, investment_id, owner=owner)
 
 
 def get_strategy(
     investment_id: str, strategy_id: str, *, db_path: Path | None = None
 ) -> InvestmentStrategy:
     with _connect(db_path) as connection:
-        unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
+        owner = _require_structure_owner(connection, investment_id)
         found = _read_strategies(
-            connection,
-            investment_id,
-            unit_id=unit_id,
-            operating_mode=operating_mode,
-            strategy_id=strategy_id,
+            connection, investment_id, owner=owner, strategy_id=strategy_id
         )
     if not found:
         raise StrategyNotFoundError(investment_id, strategy_id)
@@ -4699,7 +4913,11 @@ def list_deal_strategies(
             return None, []
         unit_id, operating_mode = _require_hidden_wrapper(connection, investment_id)
         return investment_id, _read_strategies(
-            connection, investment_id, unit_id=unit_id, operating_mode=operating_mode
+            connection,
+            investment_id,
+            owner=_StructureOwner(
+                investment_id=investment_id, hidden=True, unit_modes={unit_id: operating_mode}
+            ),
         )
 
 
@@ -4828,3 +5046,739 @@ def put_strategy_variant_snapshot(
                 _utc_now_iso(),
             ),
         )
+
+
+# =============================================================================
+# Phase 7 Gate P7.6 -- the visible Investment
+#
+# Every function below manages a **visible** Investment: one negotiated
+# transaction over one or more Units, each an existing Deal, unchanged.
+#
+#   * **One transaction per request.** Creating, promoting, updating, adding or
+#     removing a Unit and deleting each validate everything first -- the
+#     Investment's own inputs, each Deal's existence and standalone state, and
+#     the Base variant's common timeline and price allocation -- and then write,
+#     inside one ``_connect`` transaction. Any failure rolls the whole request
+#     back: no parent without memberships, no membership without its details, no
+#     partial plan.
+#   * **Exclusive membership (Q3).** A Deal is a Unit of at most one Investment;
+#     the ``UNIQUE`` columns enforce it as well as this code.
+#   * **Promotion reuses the hidden wrapper.** Its Strategies, Scenarios and
+#     their ids stay exactly as they are; no second parent is created and
+#     nothing is copied.
+#   * **Nothing is auto-changed.** No transaction price, Unit price, hold or
+#     analysis start date is altered to make a request reconcile, and no Unit is
+#     dropped from a Strategy or Scenario.
+#   * **The result cache is never authority (Q14).** A membership change or a
+#     promotion deletes the Investment's variant cache rows; a visible
+#     Investment's variants are recomputed and never cached.
+#
+# Nothing here computes anything. Resolution and consolidation live in
+# ``anchor.deals.investment_variants`` and ``anchor.consolidation``.
+# =============================================================================
+
+
+def _visible_details_row(connection: sqlite3.Connection, investment_id: str) -> sqlite3.Row | None:
+    return connection.execute(
+        "SELECT * FROM investment_details WHERE investment_id = ?", (investment_id,)
+    ).fetchone()
+
+
+def _require_visible_units(
+    connection: sqlite3.Connection, investment_id: str
+) -> dict[str, OperatingMode]:
+    """The member Units of the visible Investment ``investment_id``, each with
+    its Deal's operating mode, in ``unit_id`` order -- or
+    ``PersistedDealDataError`` when its sidecars are incoherent: no details
+    record, no Unit, a membership and Unit details that disagree, or a member
+    that is no saved Deal. Nothing is repaired."""
+
+    if _visible_details_row(connection, investment_id) is None:
+        raise PersistedDealDataError(
+            f"Visible investment {investment_id!r} has no details record; a visible "
+            "Investment always has a name and a transaction price."
+        )
+    member_ids = [row["deal_id"] for row in _unit_rows(connection, investment_id)]
+    if not member_ids:
+        raise PersistedDealDataError(f"Visible investment {investment_id!r} has no units.")
+    detail_ids = {
+        row["unit_id"]
+        for row in connection.execute(
+            "SELECT unit_id FROM investment_unit_details WHERE investment_id = ?",
+            (investment_id,),
+        )
+    }
+    if detail_ids != set(member_ids):
+        raise PersistedDealDataError(
+            f"Visible investment {investment_id!r} holds unit details that do not match its "
+            "membership."
+        )
+    unit_modes: dict[str, OperatingMode] = {}
+    for unit_id in member_ids:
+        operating_mode = _operating_mode_of(connection, unit_id)
+        if operating_mode is None:
+            raise PersistedDealDataError(
+                f"Visible investment {investment_id!r} names unit {unit_id!r}, which is not a "
+                "saved deal."
+            )
+        unit_modes[unit_id] = operating_mode
+    return unit_modes
+
+
+def _membership_from_row(row: sqlite3.Row) -> InvestmentUnitMembership:
+    return InvestmentUnitMembership(
+        unit_id=row["unit_id"],
+        ordinal=row["ordinal"],
+        label=row["label"],
+        unit_kind=_decode_enum(  # type: ignore[arg-type]
+            row["unit_kind"], UnitKind, path=f"unit {row['unit_id']!r} unit_kind"
+        ),
+        acquisition_month=row["acquisition_month"],
+        disposition_month=row["disposition_month"],
+    )
+
+
+def _transaction_cost_from_row(row: sqlite3.Row) -> InvestmentTransactionCost:
+    return InvestmentTransactionCost(
+        cost_id=row["cost_id"],
+        description=row["description"],
+        category=_decode_enum(  # type: ignore[arg-type]
+            row["category"],
+            TransactionCostCategory,
+            path=f"transaction cost {row['cost_id']!r} category",
+        ),
+        amount=row["amount"],
+        model_month=row["model_month"],
+    )
+
+
+def _read_investment_business_plan(connection: sqlite3.Connection, investment_id: str) -> BusinessPlan:
+    """The Investment-level plan, through the one D6 row codec and its
+    validation authority."""
+
+    capital_rows = connection.execute(
+        "SELECT * FROM investment_capital_plan_items WHERE investment_id = ? ORDER BY ordinal",
+        (investment_id,),
+    ).fetchall()
+    owner_expense_rows = connection.execute(
+        "SELECT * FROM investment_owner_expense_items WHERE investment_id = ? ORDER BY ordinal",
+        (investment_id,),
+    ).fetchall()
+    try:
+        return _business_plan_from_rows(investment_id, capital_rows, owner_expense_rows)
+    except PersistedDealDataError as error:
+        raise PersistedDealDataError(
+            f"Investment {investment_id!r} holds a Business Plan that cannot be restored: {error}"
+        ) from error
+
+
+def _read_visible_investment(connection: sqlite3.Connection, investment_id: str) -> VisibleInvestment:
+    """The visible Investment as stored, re-validated on the way out: a record
+    that no longer validates fails closed rather than being repaired. A hidden
+    wrapper is refused -- it has no visible state, and none is created by
+    reading it."""
+
+    row = _investment_row(connection, investment_id)
+    if _decode_hidden_flag(row):
+        raise InvestmentStructureError(
+            f"Investment {investment_id!r} is a hidden one-unit wrapper, not a visible "
+            "Investment; it has no visible details. Promote it to make it visible."
+        )
+    _require_visible_units(connection, investment_id)
+    details = _visible_details_row(connection, investment_id)
+    assert details is not None
+    units = tuple(
+        _membership_from_row(unit_row)
+        for unit_row in connection.execute(
+            "SELECT * FROM investment_unit_details WHERE investment_id = ? ORDER BY ordinal, unit_id",
+            (investment_id,),
+        ).fetchall()
+    )
+    business_plan = _read_investment_business_plan(connection, investment_id)
+    costs = tuple(
+        _transaction_cost_from_row(cost_row)
+        for cost_row in connection.execute(
+            "SELECT * FROM investment_transaction_costs WHERE investment_id = ? ORDER BY ordinal",
+            (investment_id,),
+        ).fetchall()
+    )
+    issues = validate_investment_inputs(
+        name=details["name"],
+        transaction_price=details["transaction_price"],
+        memberships=units,
+        business_plan=business_plan,
+        transaction_costs=costs,
+    )
+    if issues:
+        raise PersistedDealDataError(
+            f"Visible investment {investment_id!r} does not validate: "
+            + "; ".join(issue.message for issue in issues)
+        )
+    return VisibleInvestment(
+        id=investment_id,
+        name=details["name"],
+        transaction_price=details["transaction_price"],
+        units=units,
+        business_plan=business_plan,
+        transaction_costs=costs,
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _write_visible_details(
+    connection: sqlite3.Connection, investment_id: str, *, name: str, transaction_price: float
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO investment_details (investment_id, name, transaction_price) VALUES (?, ?, ?)
+        ON CONFLICT (investment_id) DO UPDATE SET
+            name = excluded.name, transaction_price = excluded.transaction_price
+        """,
+        (investment_id, name, float(transaction_price)),
+    )
+
+
+def _write_membership(
+    connection: sqlite3.Connection, investment_id: str, membership: InvestmentUnitMembership
+) -> None:
+    """One Unit's membership and its Unit details, together."""
+
+    connection.execute(
+        "INSERT INTO investment_units (investment_id, deal_id) VALUES (?, ?)",
+        (investment_id, membership.unit_id),
+    )
+    connection.execute(
+        """
+        INSERT INTO investment_unit_details
+            (investment_id, unit_id, ordinal, label, unit_kind, acquisition_month,
+             disposition_month)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            investment_id,
+            membership.unit_id,
+            membership.ordinal,
+            membership.label,
+            _encode_enum(membership.unit_kind),
+            membership.acquisition_month,
+            membership.disposition_month,
+        ),
+    )
+
+
+def _replace_investment_business_plan(
+    connection: sqlite3.Connection, investment_id: str, business_plan: BusinessPlan
+) -> None:
+    """The Investment-level plan, replaced whole, in the D6 item tables' own
+    shape and the analyst's order."""
+
+    for table in ("investment_capital_plan_items", "investment_owner_expense_items"):
+        connection.execute(f"DELETE FROM {table} WHERE investment_id = ?", (investment_id,))
+    connection.executemany(
+        """
+        INSERT INTO investment_capital_plan_items
+            (investment_id, item_id, ordinal, description, category, month, amount)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                investment_id,
+                item.item_id,
+                ordinal,
+                item.description,
+                _encode_enum(item.category),
+                item.month,
+                item.amount,
+            )
+            for ordinal, item in enumerate(business_plan.capital_items)
+        ],
+    )
+    connection.executemany(
+        """
+        INSERT INTO investment_owner_expense_items
+            (investment_id, item_id, ordinal, description, category, annual_amount,
+             first_year, last_year)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                investment_id,
+                item.item_id,
+                ordinal,
+                item.description,
+                _encode_enum(item.category),
+                item.annual_amount,
+                item.first_year,
+                item.last_year,
+            )
+            for ordinal, item in enumerate(business_plan.owner_expense_items)
+        ],
+    )
+
+
+def _replace_transaction_costs(
+    connection: sqlite3.Connection,
+    investment_id: str,
+    costs: Iterable[InvestmentTransactionCost],
+) -> None:
+    """The transaction costs, replaced whole, in the analyst's order."""
+
+    connection.execute(
+        "DELETE FROM investment_transaction_costs WHERE investment_id = ?", (investment_id,)
+    )
+    connection.executemany(
+        """
+        INSERT INTO investment_transaction_costs
+            (investment_id, cost_id, ordinal, description, category, amount, model_month)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                investment_id,
+                cost.cost_id,
+                ordinal,
+                cost.description,
+                _encode_enum(cost.category),
+                float(cost.amount),
+                cost.model_month,
+            )
+            for ordinal, cost in enumerate(costs)
+        ],
+    )
+
+
+def _require_standalone_deal(connection: sqlite3.Connection, deal_id: str) -> None:
+    """``deal_id`` names a saved Deal that belongs to no Investment. A Deal that
+    already has one is refused without disclosing that Investment's
+    structure."""
+
+    if _operating_mode_of(connection, deal_id) is None:
+        raise DealNotFoundError(deal_id)
+    investment_id = _investment_of_deal(connection, deal_id)
+    if investment_id is None:
+        return
+    if _decode_hidden_flag(_investment_row(connection, investment_id)):
+        raise InvestmentStructureError(
+            f"Deal {deal_id!r} already has its own Strategies or Scenarios in a hidden "
+            "Investment. Promote that Investment to make it visible; a Deal is never a Unit "
+            "of two Investments."
+        )
+    raise InvestmentStructureError(
+        f"Deal {deal_id!r} is already a Unit of another Investment. A Deal belongs to at "
+        "most one Investment."
+    )
+
+
+def _unit_economic_facts(deal: Deal) -> UnitEconomicFacts:
+    """The Base facts of one Unit the Investment-level rules read, off the
+    Deal's own stored contracts."""
+
+    match deal.operating_mode:
+        case OperatingMode.QUICK:
+            assert deal.inputs is not None
+            return UnitEconomicFacts(
+                unit_id=deal.id,
+                operating_mode=deal.operating_mode,
+                purchase_price=deal.inputs.purchase_price,
+                hold_period=deal.inputs.hold_period,
+                analysis_start_date=None,
+            )
+        case OperatingMode.DETAILED:
+            assert deal.terms is not None
+            return UnitEconomicFacts(
+                unit_id=deal.id,
+                operating_mode=deal.operating_mode,
+                purchase_price=deal.terms.purchase_price,
+                hold_period=deal.terms.hold_period,
+                analysis_start_date=None,
+            )
+        case OperatingMode.LEASE_LEVEL:
+            assert deal.terms is not None
+            assert deal.property_inputs is not None
+            return UnitEconomicFacts(
+                unit_id=deal.id,
+                operating_mode=deal.operating_mode,
+                purchase_price=deal.terms.purchase_price,
+                hold_period=deal.terms.hold_period,
+                analysis_start_date=deal.property_inputs.analysis_start_date,
+            )
+        case _:
+            raise UnsupportedOperatingModeError(deal.operating_mode, operation="_unit_economic_facts")
+
+
+def _require_valid_investment_inputs(
+    *,
+    name: object,
+    transaction_price: object,
+    memberships: tuple[InvestmentUnitMembership, ...],
+    business_plan: BusinessPlan,
+    transaction_costs: tuple[InvestmentTransactionCost, ...],
+) -> None:
+    issues = validate_investment_inputs(
+        name=name,
+        transaction_price=transaction_price,
+        memberships=memberships,
+        business_plan=business_plan,
+        transaction_costs=transaction_costs,
+    )
+    if issues:
+        raise InvestmentValidationError(issues)
+
+
+def _require_reconciled_base(
+    connection: sqlite3.Connection,
+    memberships: tuple[InvestmentUnitMembership, ...],
+    transaction_price: float,
+) -> None:
+    """The Base variant's common timeline and price allocation, over the Units'
+    stored Deals, read in this transaction. Nothing is adjusted to pass."""
+
+    facts = [
+        _unit_economic_facts(_read_deal(connection, membership.unit_id))
+        for membership in sorted(memberships, key=lambda membership: membership.unit_id)
+    ]
+    issues = validate_variant_economics(facts, transaction_price=transaction_price)
+    if issues:
+        raise InvestmentValidationError(issues)
+
+
+def _structure_references(
+    connection: sqlite3.Connection, investment_id: str, unit_id: str
+) -> list[str]:
+    """Every persisted Scenario override and Strategy overlay of this
+    Investment that addresses ``unit_id``, named deterministically."""
+
+    scenarios = connection.execute(
+        """
+        SELECT DISTINCT s.id, s.name FROM scenarios s
+        JOIN scenario_overrides o ON o.scenario_id = s.id
+        WHERE s.investment_id = ? AND o.unit_id = ?
+        ORDER BY s.id
+        """,
+        (investment_id, unit_id),
+    ).fetchall()
+    strategies: dict[str, str] = {}
+    for table in _STRATEGY_OVERLAY_TABLES:
+        for row in connection.execute(
+            f"""
+            SELECT DISTINCT st.id, st.name FROM strategies st
+            JOIN {table} t ON t.strategy_id = st.id
+            WHERE st.investment_id = ? AND t.unit_id = ?
+            """,
+            (investment_id, unit_id),
+        ):
+            strategies[row["id"]] = row["name"]
+    return [
+        *(f"Scenario {row['name']!r} ({row['id']})" for row in scenarios),
+        *(f"Strategy {strategies[key]!r} ({key})" for key in sorted(strategies)),
+    ]
+
+
+def get_visible_investment(investment_id: str, *, db_path: Path | None = None) -> VisibleInvestment:
+    """Read one visible Investment. Read-only: a hidden wrapper is refused and
+    gains nothing."""
+
+    with _connect(db_path) as connection:
+        return _read_visible_investment(connection, investment_id)
+
+
+def list_visible_investments(*, db_path: Path | None = None) -> list[VisibleInvestment]:
+    """Every visible Investment, most recently updated first. Hidden wrappers are
+    never listed: they stay the P7.2-P7.5 per-Deal state."""
+
+    with _connect(db_path) as connection:
+        rows = connection.execute(
+            "SELECT id FROM investments WHERE is_hidden = 0 ORDER BY updated_at DESC, rowid DESC"
+        ).fetchall()
+        return [_read_visible_investment(connection, row["id"]) for row in rows]
+
+
+def create_visible_investment(
+    *,
+    name: str,
+    transaction_price: float,
+    units: Iterable[InvestmentUnitMembership],
+    business_plan: BusinessPlan,
+    transaction_costs: Iterable[InvestmentTransactionCost] = (),
+    db_path: Path | None = None,
+) -> VisibleInvestment:
+    """Create a visible Investment over one or more standalone Deals.
+
+    One transaction: the Investment's inputs validate; every Deal exists and
+    belongs to no Investment; the Base variant's timeline and allocation hold;
+    then the parent, the memberships and Unit details, the details, the plan
+    and the costs are written. Any failure leaves no row behind.
+
+    Raises ``InvestmentValidationError``, ``DealNotFoundError`` or
+    ``InvestmentStructureError``."""
+
+    memberships = tuple(units)
+    costs = tuple(transaction_costs)
+    investment_id = uuid.uuid4().hex
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        _require_valid_investment_inputs(
+            name=name,
+            transaction_price=transaction_price,
+            memberships=memberships,
+            business_plan=business_plan,
+            transaction_costs=costs,
+        )
+        for membership in sorted(memberships, key=lambda membership: membership.unit_id):
+            _require_standalone_deal(connection, membership.unit_id)
+        _require_reconciled_base(connection, memberships, transaction_price)
+        connection.execute(
+            "INSERT INTO investments (id, is_hidden, created_at, updated_at) VALUES (?, 0, ?, ?)",
+            (investment_id, now, now),
+        )
+        for membership in memberships:
+            _write_membership(connection, investment_id, membership)
+        _write_visible_details(connection, investment_id, name=name, transaction_price=transaction_price)
+        _replace_investment_business_plan(connection, investment_id, business_plan)
+        _replace_transaction_costs(connection, investment_id, costs)
+
+    return get_visible_investment(investment_id, db_path=db_path)
+
+
+def promote_hidden_investment(
+    investment_id: str,
+    *,
+    name: str,
+    transaction_price: float,
+    units: Iterable[InvestmentUnitMembership],
+    business_plan: BusinessPlan,
+    transaction_costs: Iterable[InvestmentTransactionCost] = (),
+    db_path: Path | None = None,
+) -> VisibleInvestment:
+    """Make the hidden wrapper ``investment_id`` a visible Investment -- the
+    same Investment, never a second parent.
+
+    ``units`` lists every Unit of the result: the wrapper's own Unit (which it
+    must retain) and any standalone Deals added with it. One transaction: its
+    Strategies, Scenarios and their ids are kept exactly; the memberships of the
+    added Units, every Unit's details, the details, the plan and the costs are
+    written; ``is_hidden`` is set to 0; and its variant cache rows are deleted,
+    because its variants now consolidate. Any failure leaves the wrapper exactly
+    as it was."""
+
+    memberships = tuple(units)
+    costs = tuple(transaction_costs)
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        existing_unit, _ = _require_hidden_wrapper(connection, investment_id)
+        _require_valid_investment_inputs(
+            name=name,
+            transaction_price=transaction_price,
+            memberships=memberships,
+            business_plan=business_plan,
+            transaction_costs=costs,
+        )
+        if existing_unit not in {membership.unit_id for membership in memberships}:
+            raise InvestmentValidationError(
+                [
+                    InvestmentIssue(
+                        code=InvestmentIssueCode.UNIT_NOT_RETAINED,
+                        message=(
+                            f"The Investment's own Unit {existing_unit!r} must be listed: its "
+                            "Strategies and Scenarios address it, and promoting never drops a "
+                            "Unit."
+                        ),
+                        unit_id=existing_unit,
+                        field="units",
+                    )
+                ]
+            )
+        added = [m for m in memberships if m.unit_id != existing_unit]
+        for membership in sorted(added, key=lambda membership: membership.unit_id):
+            _require_standalone_deal(connection, membership.unit_id)
+        _require_reconciled_base(connection, memberships, transaction_price)
+        connection.execute(
+            "UPDATE investments SET is_hidden = 0, updated_at = ? WHERE id = ?",
+            (now, investment_id),
+        )
+        for membership in memberships:
+            if membership.unit_id == existing_unit:
+                connection.execute(
+                    """
+                    INSERT INTO investment_unit_details
+                        (investment_id, unit_id, ordinal, label, unit_kind, acquisition_month,
+                         disposition_month)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        investment_id,
+                        membership.unit_id,
+                        membership.ordinal,
+                        membership.label,
+                        _encode_enum(membership.unit_kind),
+                        membership.acquisition_month,
+                        membership.disposition_month,
+                    ),
+                )
+            else:
+                _write_membership(connection, investment_id, membership)
+        _write_visible_details(connection, investment_id, name=name, transaction_price=transaction_price)
+        _replace_investment_business_plan(connection, investment_id, business_plan)
+        _replace_transaction_costs(connection, investment_id, costs)
+        connection.execute("DELETE FROM variant_snapshots WHERE root_id = ?", (investment_id,))
+
+    return get_visible_investment(investment_id, db_path=db_path)
+
+
+def update_visible_investment(
+    investment_id: str,
+    *,
+    name: str,
+    transaction_price: float,
+    business_plan: BusinessPlan,
+    transaction_costs: Iterable[InvestmentTransactionCost],
+    db_path: Path | None = None,
+) -> VisibleInvestment:
+    """Replace the visible Investment's name, transaction price, Business Plan
+    and transaction costs as one request. Validated first -- the Base variant
+    must reconcile to the new price -- and written in one transaction; a failure
+    leaves the Investment exactly as it was. Its Units and Deals are
+    untouched."""
+
+    costs = tuple(transaction_costs)
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        current = _read_visible_investment(connection, investment_id)
+        _require_valid_investment_inputs(
+            name=name,
+            transaction_price=transaction_price,
+            memberships=current.units,
+            business_plan=business_plan,
+            transaction_costs=costs,
+        )
+        _require_reconciled_base(connection, current.units, transaction_price)
+        _write_visible_details(connection, investment_id, name=name, transaction_price=transaction_price)
+        _replace_investment_business_plan(connection, investment_id, business_plan)
+        _replace_transaction_costs(connection, investment_id, costs)
+        _touch_investment(connection, investment_id, now=now)
+
+    return get_visible_investment(investment_id, db_path=db_path)
+
+
+def add_investment_unit(
+    investment_id: str,
+    unit: InvestmentUnitMembership,
+    *,
+    transaction_price: float | None = None,
+    db_path: Path | None = None,
+) -> VisibleInvestment:
+    """Add the standalone Deal ``unit.unit_id`` to the visible Investment, last
+    in presentation order.
+
+    ``transaction_price`` optionally restates the Investment's price in the same
+    request -- the analyst's figure, never a derived one. The resulting Base
+    variant must reconcile and share one timeline; no price, hold or date is
+    changed to make it. One transaction; the Investment's variant cache rows are
+    deleted."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        current = _read_visible_investment(connection, investment_id)
+        price = current.transaction_price if transaction_price is None else transaction_price
+        membership = dataclasses.replace(
+            unit, ordinal=max(existing.ordinal for existing in current.units) + 1
+        )
+        memberships = (*current.units, membership)
+        _require_valid_investment_inputs(
+            name=current.name,
+            transaction_price=price,
+            memberships=memberships,
+            business_plan=current.business_plan,
+            transaction_costs=current.transaction_costs,
+        )
+        _require_standalone_deal(connection, membership.unit_id)
+        _require_reconciled_base(connection, memberships, price)
+        _write_membership(connection, investment_id, membership)
+        if transaction_price is not None:
+            _write_visible_details(
+                connection, investment_id, name=current.name, transaction_price=transaction_price
+            )
+        connection.execute("DELETE FROM variant_snapshots WHERE root_id = ?", (investment_id,))
+        _touch_investment(connection, investment_id, now=now)
+
+    return get_visible_investment(investment_id, db_path=db_path)
+
+
+def update_investment_unit(
+    investment_id: str,
+    unit_id: str,
+    *,
+    label: str | None,
+    unit_kind: UnitKind,
+    ordinal: int,
+    db_path: Path | None = None,
+) -> VisibleInvestment:
+    """Change one Unit's display metadata -- label, kind and presentation order.
+    None of them is economic, so no variant, fingerprint or cache is touched."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        current = _read_visible_investment(connection, investment_id)
+        if unit_id not in {membership.unit_id for membership in current.units}:
+            raise InvestmentUnitNotFoundError(investment_id, unit_id)
+        memberships = tuple(
+            dataclasses.replace(membership, label=label, unit_kind=unit_kind, ordinal=ordinal)
+            if membership.unit_id == unit_id
+            else membership
+            for membership in current.units
+        )
+        issues = validate_unit_memberships(memberships)
+        if issues:
+            raise InvestmentValidationError(issues)
+        connection.execute(
+            "UPDATE investment_unit_details SET ordinal = ?, label = ?, unit_kind = ? "
+            "WHERE investment_id = ? AND unit_id = ?",
+            (ordinal, label, _encode_enum(unit_kind), investment_id, unit_id),
+        )
+        _touch_investment(connection, investment_id, now=now)
+
+    return get_visible_investment(investment_id, db_path=db_path)
+
+
+def remove_investment_unit(
+    investment_id: str, unit_id: str, *, db_path: Path | None = None
+) -> VisibleInvestment:
+    """Remove the Unit ``unit_id`` from the visible Investment, releasing its
+    Deal -- which is neither deleted nor changed -- to standalone.
+
+    Refused while a persisted Scenario override or Strategy overlay addresses
+    the Unit (those are never silently edited), and for the Investment's last
+    Unit (delete the Investment to release every Unit). The Investment stays
+    visible, even with one Unit. One transaction; its variant cache rows are
+    deleted."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        current = _read_visible_investment(connection, investment_id)
+        if unit_id not in {membership.unit_id for membership in current.units}:
+            raise InvestmentUnitNotFoundError(investment_id, unit_id)
+        if len(current.units) == 1:
+            raise InvestmentStructureError(
+                f"Unit {unit_id!r} is the Investment's last Unit. Delete the Investment to "
+                "release it; a visible Investment always holds at least one Unit."
+            )
+        references = _structure_references(connection, investment_id, unit_id)
+        if references:
+            raise InvestmentStructureError(
+                f"Unit {unit_id!r} is still addressed by {', '.join(references)}. Remove those "
+                "overrides and overlays first; Strategies and Scenarios are never edited "
+                "silently."
+            )
+        connection.execute(
+            "DELETE FROM investment_units WHERE investment_id = ? AND deal_id = ?",
+            (investment_id, unit_id),
+        )
+        connection.execute(
+            "DELETE FROM investment_unit_details WHERE investment_id = ? AND unit_id = ?",
+            (investment_id, unit_id),
+        )
+        connection.execute("DELETE FROM variant_snapshots WHERE root_id = ?", (investment_id,))
+        _touch_investment(connection, investment_id, now=now)
+
+    return get_visible_investment(investment_id, db_path=db_path)

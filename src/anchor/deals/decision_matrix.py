@@ -61,6 +61,7 @@ from ..analysis.scenario import (
 from ..analysis.strategy import BASE_SCENARIO_ID, BASE_STRATEGY_ID, StrategyValidationError
 from ..contracts import OperatingMode
 from ..decision.comparison import (
+    INVESTMENT_PROJECT_METRIC_CATALOG,
     AxisMember,
     CellInput,
     CellIssue,
@@ -70,7 +71,15 @@ from ..decision.comparison import (
 )
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 from . import store
-from .contracts import InvestmentScenario, InvestmentStrategy
+from .contracts import InvestmentScenario, InvestmentStrategy, InvestmentStructureError
+from .investment_variants import (
+    InvestmentVariantIssue,
+    InvestmentVariantIssueSource,
+    InvestmentVariantValidationError,
+    analyze_investment_variant,
+    inspect_investment_variant_inputs,
+    investment_base_fingerprint,
+)
 from .variants import (
     ResolvedScenarioInputs,
     VariantResults,
@@ -316,6 +325,11 @@ def analyze_decision_matrix(
     the last. If it moved, ``DecisionMatrixConflictError``: one package is never
     a mix of two states."""
 
+    if not store.get_investment(investment_id, db_path=db_path).hidden:
+        raise InvestmentStructureError(
+            f"Investment {investment_id!r} is a visible Investment. Its Decision Matrix "
+            "consolidates its Units: use the Investment Decision Matrix."
+        )
     before = _source_state(investment_id, db_path)
     strategy_axis = (
         AxisMember(id=BASE_STRATEGY_ID, name=BASE_STRATEGY_NAME, is_base=True),
@@ -348,4 +362,183 @@ def analyze_decision_matrix(
         unit_id=deal.id,
         operating_mode=deal.operating_mode,
         matrix=compare_decision_matrix(strategies=strategy_axis, scenarios=scenario_axis, cells=cells),
+    )
+
+
+# =============================================================================
+# Phase 7 Gate P7.6 -- the Decision Matrix of a visible Investment
+#
+# The same comparison, over a visible Investment's variants. Every cell runs the
+# visible Investment variant pathway (``investment_variants``): every Unit
+# through the existing engine, then consolidation, so each cell's Project
+# metrics are the consolidated Investment's (``ConsolidatedResults``), never one
+# arbitrary Unit's. Delta, Worst Case and Range are the unchanged P7.5
+# cross-cell figures of ``anchor.decision.comparison``, and its Minimum DSCR is
+# the Aggregate DSCR, labelled as such.
+#
+# One invalid variant is one invalid cell, with every issue's Unit named in its
+# location; a variant is never consolidated over only its valid Units. The whole
+# run is bracketed by the same economic state token, whose Base fingerprint is
+# the visible Investment's own.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InvestmentMatrixUnit:
+    """One Unit of a visible Investment's matrix, with its operating mode."""
+
+    unit_id: str
+    operating_mode: OperatingMode
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InvestmentDecisionMatrixReport:
+    """The Decision Matrix of one visible Investment: its Units, in ``unit_id``
+    order, and the comparison package of its consolidated variants."""
+
+    investment_id: str
+    units: tuple[InvestmentMatrixUnit, ...]
+    matrix: DecisionMatrix
+
+
+_INVESTMENT_ISSUE_SOURCES = {
+    InvestmentVariantIssueSource.STRATEGY: CellIssueSource.STRATEGY,
+    InvestmentVariantIssueSource.SCENARIO: CellIssueSource.SCENARIO,
+    InvestmentVariantIssueSource.LEASE_LEVEL: CellIssueSource.LEASE_LEVEL,
+    InvestmentVariantIssueSource.INVESTMENT: CellIssueSource.INVESTMENT,
+}
+
+
+def _unit_located(issue: InvestmentVariantIssue) -> str | None:
+    """The issue's location, rooted at its Unit when it has one, so a matrix
+    cell never hides which Unit made the variant invalid."""
+
+    if issue.unit_id is None:
+        return issue.field
+    root = f"units[{issue.unit_id}]"
+    return root if issue.field is None else f"{root}.{issue.field}"
+
+
+def _investment_cell(
+    investment_id: str, strategy_id: str, scenario_id: str, db_path: Path | None
+) -> CellInput:
+    """One visible Investment variant through the P7.6 pathway. Its typed
+    validation error makes the cell invalid; every other failure propagates."""
+
+    try:
+        analysis = analyze_investment_variant(investment_id, strategy_id, scenario_id, db_path=db_path)
+    except InvestmentVariantValidationError as error:
+        return _invalid(
+            strategy_id,
+            scenario_id,
+            tuple(
+                CellIssue(
+                    source=_INVESTMENT_ISSUE_SOURCES[issue.source],
+                    code=issue.code,
+                    message=issue.message,
+                    field=_unit_located(issue),
+                )
+                for issue in error.issues
+            ),
+        )
+
+    try:
+        inputs = inspect_investment_variant_inputs(
+            investment_id, strategy_id, scenario_id, db_path=db_path
+        )
+    except InvestmentVariantValidationError as error:
+        raise DecisionMatrixConflictError(
+            "The saved underwriting changed while the decision matrix was running. Run it again."
+        ) from error
+    if inputs.source_fingerprint != analysis.source_fingerprint:
+        raise DecisionMatrixConflictError(
+            "The saved underwriting changed while the decision matrix was running. Run it again."
+        )
+    return CellInput(
+        strategy_id=strategy_id,
+        scenario_id=scenario_id,
+        results=analysis.consolidated_results,
+        source_fingerprint=analysis.source_fingerprint,
+        cache_status=analysis.cache_status.value,
+        hold_period=analysis.hold_period,
+    )
+
+
+def _investment_source_state(investment_id: str, db_path: Path | None) -> _SourceState:
+    """The visible Investment's economic source state: its membership, its
+    Base fingerprint (every Unit, the transaction price, the costs' economics
+    and its plan), and each Strategy's and Scenario's economic content --
+    never a name, a label, a kind, an ordinal or a timestamp."""
+
+    investment = store.get_visible_investment(investment_id, db_path=db_path)
+    strategies = tuple(store.list_strategies(investment_id, db_path=db_path))
+    scenarios = tuple(store.list_scenarios(investment_id, db_path=db_path))
+    return _SourceState(
+        token=economic_state_token(
+            hidden=False,
+            unit_ids=[membership.unit_id for membership in investment.units],
+            base_fingerprint=investment_base_fingerprint(investment_id, db_path=db_path),
+            strategies=strategies,
+            scenarios=scenarios,
+        ),
+        unit_id="",
+        strategies=strategies,
+        scenarios=scenarios,
+    )
+
+
+def analyze_investment_decision_matrix(
+    investment_id: str, *, db_path: Path | None = None
+) -> InvestmentDecisionMatrixReport:
+    """The Strategy x Scenario matrix of a visible Investment: the implicit
+    Base Strategy and every persisted Strategy, each under the implicit Base
+    Scenario and every persisted Scenario, with each cell's consolidated
+    Project metrics. Each axis is in its stored presentation order, Base first.
+
+    Bracketed by the economic source state exactly as the one-unit matrix is:
+    if it moved, ``DecisionMatrixConflictError``."""
+
+    before = _investment_source_state(investment_id, db_path)
+    strategy_axis = (
+        AxisMember(id=BASE_STRATEGY_ID, name=BASE_STRATEGY_NAME, is_base=True),
+        *(
+            AxisMember(id=record.strategy.strategy_id, name=record.strategy.name, is_base=False)
+            for record in before.strategies
+        ),
+    )
+    scenario_axis = (
+        AxisMember(id=BASE_SCENARIO_ID, name=BASE_SCENARIO_NAME, is_base=True),
+        *(
+            AxisMember(id=record.scenario.scenario_id, name=record.scenario.name, is_base=False)
+            for record in before.scenarios
+        ),
+    )
+    cells = [
+        _investment_cell(investment_id, strategy.id, scenario.id, db_path)
+        for strategy in strategy_axis
+        for scenario in scenario_axis
+    ]
+    after = _investment_source_state(investment_id, db_path)
+    if after.token != before.token:
+        raise DecisionMatrixConflictError(
+            "The saved underwriting, strategies or scenarios changed while the decision "
+            "matrix was running. Run it again."
+        )
+    investment = store.get_visible_investment(investment_id, db_path=db_path)
+    units = tuple(
+        InvestmentMatrixUnit(unit_id=deal.id, operating_mode=deal.operating_mode)
+        for deal in (
+            store.get_deal(unit_id, db_path=db_path)
+            for unit_id in sorted(membership.unit_id for membership in investment.units)
+        )
+    )
+    return InvestmentDecisionMatrixReport(
+        investment_id=investment_id,
+        units=units,
+        matrix=compare_decision_matrix(
+            strategies=strategy_axis,
+            scenarios=scenario_axis,
+            cells=cells,
+            catalog=INVESTMENT_PROJECT_METRIC_CATALOG,
+        ),
     )

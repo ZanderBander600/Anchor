@@ -501,9 +501,11 @@ _STORE_PLAN_CALLS = sorted(
         ("_row_to_lease_level_deal", "fingerprint_lease_level_inputs"),
         ("_row_to_deal", "fingerprint_quick_inputs"),
         ("_row_to_detailed_deal", "fingerprint_detailed_inputs"),
-        ("get_deal", "_row_to_deal"),
-        ("get_deal", "_row_to_lease_level_deal"),
-        ("get_deal", "_row_to_detailed_deal"),
+        # P7.6: ``get_deal``'s read moved, unchanged, into ``_read_deal`` so a
+        # visible Investment write can read its Units in its own transaction.
+        ("_read_deal", "_row_to_deal"),
+        ("_read_deal", "_row_to_lease_level_deal"),
+        ("_read_deal", "_row_to_detailed_deal"),
         ("list_deals", "_row_to_lease_level_deal"),
         ("list_deals", "_row_to_deal"),
         ("list_deals", "_row_to_detailed_deal"),
@@ -623,11 +625,11 @@ _STORE_MUTANTS = {
         "store.duplicate_deal calls create_deal without business_plan=",
     ),
     "reopen-hands-the-deal-an-empty-plan": (
-        "            return _row_to_deal(\n"
-        "                quick_row, business_plan=_read_business_plan(connection, deal_id)\n"
-        "            )",
-        "            return _row_to_deal(quick_row, business_plan=BusinessPlan())",
-        "store.get_deal passes business_plan=BusinessPlan() to _row_to_deal",
+        "        return _row_to_deal(\n"
+        "            quick_row, business_plan=_read_business_plan(connection, deal_id)\n"
+        "        )",
+        "        return _row_to_deal(quick_row, business_plan=BusinessPlan())",
+        "store._read_deal passes business_plan=BusinessPlan() to _row_to_deal",
     ),
     "provenance-ignores-the-plan": (
         "            expected_fingerprint = fingerprint_quick_inputs(\n"
@@ -685,7 +687,12 @@ def test_only_the_store_codec_reads_plan_items() -> None:
     # through the one D6 codec, ``_business_plan_from_rows``, so the store still
     # builds a plan in exactly one place
     # (``tests/test_p7_4_strategy_architecture.py``).
-    assert reading == {"_write_business_plan", "_write_strategy_business_plan"}
+    # Widened at P7.6 by exactly one more writer: the visible Investment's own
+    # plan is written to its own item tables in the same D6 row shape and read
+    # back through the same codec (``tests/test_p7_6_consolidation_architecture.py``).
+    assert reading == {
+        "_write_business_plan", "_write_strategy_business_plan", "_replace_investment_business_plan",
+    }
 
 
 # =============================================================================

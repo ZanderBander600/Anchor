@@ -705,6 +705,69 @@ def validate_scenario(
             f"{type(operating_mode).__qualname__}."
         )
     _require_unit_identity(unit_id)
+    return _contract_issues(scenario, {unit_id: operating_mode}, analysed_unit=unit_id)
+
+
+def validate_investment_scenario(
+    scenario: ScenarioDefinition, *, unit_modes: Mapping[str, OperatingMode]
+) -> tuple[ScenarioIssue, ...]:
+    """Stage 1 for a visible Investment (P7.6): every issue in ``scenario`` as a
+    contract for the Investment's member Units, ``unit_modes`` mapping each
+    Unit (Deal) id to the mode it is analysed in.
+
+    Exactly ``validate_scenario``'s rules and order, with the Investment's
+    member set in place of the one analysed Unit: an override may address any
+    member, and is judged against that member's own mode; an override on any
+    other unit is ``UNIT_NOT_IN_VARIANT`` (SC-5), never ignored. SC-1 stays one
+    override per ``(unit_id, target)``. The operators, whitelists and targets are
+    unchanged -- only the Unit addressing is generalized."""
+
+    if not isinstance(scenario, ScenarioDefinition):
+        raise TypeError(
+            f"scenario must be a ScenarioDefinition; got {type(scenario).__qualname__}."
+        )
+    if not isinstance(unit_modes, Mapping) or not unit_modes:
+        raise ValueError("unit_modes must map at least one member Unit to its OperatingMode.")
+    for member, mode in unit_modes.items():
+        _require_unit_identity(member)
+        if not isinstance(mode, OperatingMode):
+            raise TypeError(
+                f"unit_modes[{member!r}] must be an OperatingMode; got {type(mode).__qualname__}."
+            )
+    return _contract_issues(scenario, dict(unit_modes), analysed_unit=None)
+
+
+def _foreign_unit_message(
+    target: ScenarioTarget,
+    override_unit: str,
+    unit_modes: Mapping[str, OperatingMode],
+    analysed_unit: str | None,
+) -> str:
+    if analysed_unit is not None:
+        return (
+            f"{target.value}: the override addresses unit "
+            f"{_safe_repr(override_unit)}, which is not in this analysis; it "
+            f"resolves unit {_safe_repr(analysed_unit)} only. The override is refused, "
+            "never ignored and never applied to another unit."
+        )
+    return (
+        f"{target.value}: the override addresses unit {_safe_repr(override_unit)}, which "
+        "is not a Unit of this Investment (its Units: "
+        f"{', '.join(_safe_repr(member) for member in sorted(unit_modes))}). The override "
+        "is refused, never ignored and never applied to another unit."
+    )
+
+
+def _contract_issues(
+    scenario: ScenarioDefinition,
+    unit_modes: Mapping[str, OperatingMode],
+    *,
+    analysed_unit: str | None,
+) -> tuple[ScenarioIssue, ...]:
+    """The stage-1 rules over the member Units ``unit_modes``. For one analysed
+    Unit (``validate_scenario``) this is exactly the P7.1 procedure; for a
+    visible Investment each override is judged against its own member's
+    mode."""
 
     issues = _header_issues(scenario)
 
@@ -778,20 +841,19 @@ def validate_scenario(
                     unit_id=override_unit,
                 )
             )
-        elif override_unit != unit_id:
+        elif override_unit not in unit_modes:
             issues.append(
                 _scenario_issue(
                     ScenarioIssueCode.UNIT_NOT_IN_VARIANT,
-                    f"{target.value}: the override addresses unit "
-                    f"{_safe_repr(override_unit)}, which is not in this analysis; it "
-                    f"resolves unit {_safe_repr(unit_id)} only. The override is refused, "
-                    "never ignored and never applied to another unit.",
+                    _foreign_unit_message(target, override_unit, unit_modes, analysed_unit),
                     target=target,
                     unit_id=override_unit,
                 )
             )
         else:
-            issues.extend(_override_issues(occurrences[0], operating_mode, unit_id))
+            issues.extend(
+                _override_issues(occurrences[0], unit_modes[override_unit], override_unit)
+            )
 
     return tuple(issues)
 

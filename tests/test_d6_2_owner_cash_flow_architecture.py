@@ -730,6 +730,10 @@ def test_a_business_plan_is_resolved_in_exactly_one_module() -> None:
         "anchor/analysis/business_plan_analysis.py",
         "anchor/analysis/lease_level_sensitivity.py",
         "anchor/analysis/sensitivity.py",
+        # P7.6 -- the visible Investment variant pathway resolves the
+        # Investment-level plan, exactly once per variant, for the common hold
+        # (``tests/test_p7_6_consolidation_architecture.py``).
+        "anchor/deals/investment_variants.py",
     ]
 
 

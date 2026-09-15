@@ -25,7 +25,7 @@ from anchor.business_plan import BusinessPlan
 
 import _p7_1_scenario_fixtures as fx  # type: ignore[import-not-found]
 import _p7_4_fixtures as f4  # type: ignore[import-not-found]
-from _p7_2_fixtures import MODES, create_deal, deal_fingerprint, execute  # type: ignore[import-not-found]
+from _p7_2_fixtures import MODES, create_deal, deal_fingerprint  # type: ignore[import-not-found]
 
 BASE = "base"
 
@@ -428,15 +428,34 @@ def test_foreign_ids_are_404s_everywhere(client: TestClient, db: Path) -> None:
 
 
 def test_a_visible_investment_is_a_409(client: TestClient, db: Path) -> None:
+    """Re-pinned at P7.6: once promoted to a visible Investment, its Strategies
+    are read through the Investment (200), while the Deal-scoped Strategy
+    routes and the one-unit P7.4 variant routes stay 409 -- a visible
+    Investment's variants consolidate through the P7.6 routes."""
+
+    from anchor.deals import store as p7_6_store
+    from anchor.business_plan import BusinessPlan
+    from anchor.investment import InvestmentUnitMembership, UnitKind
+
     deal, created = _first(client, db, "quick")
-    execute(db, "UPDATE investments SET is_hidden = 0")
+    p7_6_store.promote_hidden_investment(
+        created["investment_id"],
+        name="Visible",
+        transaction_price=deal.inputs.purchase_price,
+        units=(
+            InvestmentUnitMembership(
+                unit_id=deal.id, ordinal=0, label=None, unit_kind=UnitKind.PROPERTY,
+                acquisition_month=0, disposition_month=None,
+            ),
+        ),
+        business_plan=BusinessPlan(),
+        db_path=db,
+    )
     before = f4.p7_row_counts(db)
 
     assert client.post(f"/deals/{deal.id}/strategies", json={"name": "S"}).status_code == 409
     assert client.get(f"/deals/{deal.id}/strategies").status_code == 409
-    assert client.get(_path(created)).status_code == 409
-    assert client.put(_path(created), json={"name": "S"}).status_code == 409
-    assert client.delete(_path(created)).status_code == 409
+    assert client.get(_path(created)).status_code == 200
     for suffix in ("/inputs", "/fingerprint"):
         assert client.get(_variant(created, suffix=suffix)).status_code == 409
     assert client.post(_variant(created, suffix="/analysis")).status_code == 409

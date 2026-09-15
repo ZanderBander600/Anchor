@@ -89,8 +89,18 @@ _P7_4_TABLES = {
     "strategy_operating_outcomes",
     "strategy_disposition_overlays",
 }
+#: P7.6 (schema 10) adds five visible-Investment sidecars on the same path, all
+#: empty for a legacy deal; ``tests/test_p7_6_compatibility_oracle.py`` holds
+#: the v9 -> v10 step on its own.
+_P7_6_TABLES = {
+    "investment_details",
+    "investment_unit_details",
+    "investment_capital_plan_items",
+    "investment_owner_expense_items",
+    "investment_transaction_costs",
+}
 #: The schema version the current store migrates a v6 database to.
-_CURRENT_VERSION = 9
+_CURRENT_VERSION = 10
 
 
 @pytest.fixture(scope="module")
@@ -231,10 +241,10 @@ def test_the_version_advances_to_7_exactly_once_and_only_the_plan_tables_appear(
     migrated = _raw(db)
 
     assert _version(db) == _CURRENT_VERSION
-    assert set(migrated) == set(before) | _PLAN_TABLES | _P7_2_TABLES | _P7_4_TABLES
+    assert set(migrated) == set(before) | _PLAN_TABLES | _P7_2_TABLES | _P7_4_TABLES | _P7_6_TABLES
     assert migrated["deal_capital_plan_items"] == []
     assert migrated["deal_owner_expense_items"] == []
-    assert all(migrated[table] == [] for table in _P7_2_TABLES | _P7_4_TABLES)
+    assert all(migrated[table] == [] for table in _P7_2_TABLES | _P7_4_TABLES | _P7_6_TABLES)
 
     for _ in range(3):
         deals_store.list_deals(db_path=db)

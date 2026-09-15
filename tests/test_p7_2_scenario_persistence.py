@@ -81,7 +81,7 @@ def test_a_fresh_store_is_schema_8_with_the_five_tables_empty(db: Path) -> None:
     connection = sqlite3.connect(db)
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     connection.close()
-    assert version == 9  # P7.4 added schema version 9's eight Strategy tables
+    assert version == 10  # P7.4 added schema 9's Strategy tables; P7.6 schema 10's sidecars
     assert row_counts(db) == EMPTY
 
 
@@ -402,16 +402,30 @@ def test_several_malformed_stored_overrides_report_in_one_order_whatever_the_row
 # =============================================================================
 
 
-def _visible_investment(db: Path, deal_id: str) -> str:
-    investment_id = "v" * 32
-    execute(db, "INSERT INTO investments VALUES (?, 0, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')", (investment_id,))
-    execute(db, "INSERT INTO investment_units VALUES (?, ?)", (investment_id, deal_id))
-    return investment_id
-
-
 def test_a_visible_investment_is_refused_by_every_p7_2_mutation_and_never_orphaned(db: Path) -> None:
+    """Re-pinned at P7.6, where a visible Investment became a managed state:
+    its own Scenarios, and its deletion, are the Investment's (P7.6 tests).
+    What stays refused is every Deal-scoped P7.2 path -- a Unit of a visible
+    Investment never gains a hidden wrapper, never lists one, and is never
+    deleted out of its Investment -- and none of them changes a row."""
+
+    from anchor.business_plan import BusinessPlan
+
+    from anchor.investment import InvestmentUnitMembership, UnitKind
+
     deal = create_deal("quick", db)
-    investment_id = _visible_investment(db, deal.id)
+    investment_id = store.create_visible_investment(
+        name="Visible",
+        transaction_price=12_500_000.0,
+        units=(
+            InvestmentUnitMembership(
+                unit_id=deal.id, ordinal=0, label=None, unit_kind=UnitKind.PROPERTY,
+                acquisition_month=0, disposition_month=None,
+            ),
+        ),
+        business_plan=BusinessPlan(),
+        db_path=db,
+    ).id
     before = legacy_rows(db), row_counts(db)
 
     visible = store.get_investment(investment_id, db_path=db)
@@ -419,10 +433,7 @@ def test_a_visible_investment_is_refused_by_every_p7_2_mutation_and_never_orphan
     assert (visible.hidden, visible.units) == (False, (InvestmentUnit(unit_id=deal.id),))
     for refused in (
         lambda: store.create_scenario_for_deal(deal.id, name="S", db_path=db),
-        lambda: store.create_scenario(investment_id, name="S", db_path=db),
-        lambda: store.list_scenarios(investment_id, db_path=db),
         lambda: store.list_deal_scenarios(deal.id, db_path=db),
-        lambda: store.delete_investment(investment_id, db_path=db),
         lambda: store.delete_deal(deal.id, db_path=db),
     ):
         with pytest.raises(InvestmentStructureError):

@@ -1341,7 +1341,10 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     # P7.4 moves it to 9: eight additive Strategy tables. Strategy variants
     # reuse the same variant cache under the same rule: Lease-Level is never
     # stored.
-    assert "_SCHEMA_VERSION = 9" in store
+    # P7.6 moves it to 10: five additive visible-Investment sidecar tables. A
+    # visible Investment's variants are recomputed and never cached, so still no
+    # Lease-Level financial result is stored.
+    assert "_SCHEMA_VERSION = 10" in store
     assert "deal_sensitivity_snapshots" in store, (
         "D5.8A should persist the latest Lease-Level sensitivity runs"
     )

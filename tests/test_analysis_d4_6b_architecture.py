@@ -1724,6 +1724,12 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         # read-only ``anchor.decision`` comparison, with no financial logic of
         # its own (``tests/test_p7_5_decision_architecture.py``).
         "src/anchor/deals/decision_matrix.py",
+        # P7.6 -- the visible Investment variant pathway beside them: it runs
+        # every Unit through the P7.4 per-Unit resolution and the existing D6
+        # entry points, then hands completed results to ``anchor.consolidation``,
+        # with no financial logic of its own
+        # (``tests/test_p7_6_consolidation_architecture.py``).
+        "src/anchor/deals/investment_variants.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
                  "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):

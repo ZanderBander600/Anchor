@@ -117,7 +117,7 @@ def test_a_fresh_store_is_schema_9_with_every_p7_table_empty(db: Path) -> None:
     connection = sqlite3.connect(db)
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     connection.close()
-    assert version == 9
+    assert version == 10  # P7.6 added schema 10's visible-Investment sidecars
     assert f4.p7_row_counts(db) == f4.P7_EMPTY
 
 
@@ -464,24 +464,41 @@ def test_a_strategy_is_reachable_only_through_the_investment_that_owns_it(db: Pa
 
 
 def test_a_visible_investment_is_refused_everywhere(db: Path) -> None:
+    """Re-pinned at P7.6: once the wrapper is promoted to a visible Investment,
+    its Strategies are managed through the Investment (P7.6 tests). Every
+    Deal-scoped P7.4 path stays refused and changes nothing."""
+
+    from anchor.business_plan import BusinessPlan
+
+    from anchor.investment import InvestmentUnitMembership, UnitKind
+
     deal, record = _first("quick", db)
-    execute(db, "UPDATE investments SET is_hidden = 0")
+    assert deal.inputs is not None
+    store.promote_hidden_investment(
+        record.investment_id,
+        name="Visible",
+        transaction_price=deal.inputs.purchase_price,
+        units=(
+            InvestmentUnitMembership(
+                unit_id=deal.id, ordinal=0, label=None, unit_kind=UnitKind.PROPERTY,
+                acquisition_month=0, disposition_month=None,
+            ),
+        ),
+        business_plan=BusinessPlan(),
+        db_path=db,
+    )
     key = (record.investment_id, record.strategy.strategy_id)
     state = _state(db)
 
     for call in (
         lambda: store.create_strategy_for_deal(deal.id, name="S", db_path=db),
-        lambda: store.create_strategy(record.investment_id, name="S", db_path=db),
-        lambda: store.list_strategies(record.investment_id, db_path=db),
-        lambda: store.get_strategy(*key, db_path=db),
-        lambda: store.update_strategy(*key, name="S", db_path=db),
-        lambda: store.delete_strategy(*key, db_path=db),
         lambda: store.list_deal_strategies(deal.id, db_path=db),
         lambda: store.delete_deal(deal.id, db_path=db),
     ):
         with pytest.raises(InvestmentStructureError):
             call()
     assert _state(db) == state
+    assert store.get_strategy(*key, db_path=db).strategy == record.strategy
 
 
 # =============================================================================

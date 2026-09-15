@@ -242,12 +242,23 @@ P7_4_TABLES = (
 )
 
 
+#: The five visible-Investment sidecars schema v10 adds (P7.6). P7 structure,
+#: never legacy rows, exactly like the tables above.
+P7_6_TABLES = (
+    "investment_details",
+    "investment_unit_details",
+    "investment_capital_plan_items",
+    "investment_owner_expense_items",
+    "investment_transaction_costs",
+)
+
+
 def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
     """Every row of every table that is not a P7 table, in rowid order."""
 
     return {
         table: rows(db, table)
-        for table in sorted(table_names(db) - set(P7_2_TABLES) - set(P7_4_TABLES))
+        for table in sorted(table_names(db) - set(P7_2_TABLES) - set(P7_4_TABLES) - set(P7_6_TABLES))
         if not table.startswith("sqlite_")
     }
 

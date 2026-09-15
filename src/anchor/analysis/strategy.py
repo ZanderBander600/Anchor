@@ -783,6 +783,69 @@ def validate_strategy(
             f"{type(operating_mode).__qualname__}."
         )
     _require_unit_identity(unit_id)
+    return _contract_issues(strategy, {unit_id: operating_mode}, analysed_unit=unit_id)
+
+
+def validate_investment_strategy(
+    strategy: StrategyDefinition, *, unit_modes: Mapping[str, OperatingMode]
+) -> tuple[StrategyIssue, ...]:
+    """Stage 1 for a visible Investment (P7.6): every issue in ``strategy`` as a
+    contract for the Investment's member Units, ``unit_modes`` mapping each
+    Unit (Deal) id to the mode it is analysed in.
+
+    Exactly ``validate_strategy``'s rules and order, with the member set in
+    place of the one analysed Unit: one Strategy may hold, say, Unit A's
+    ACQUISITION, Unit B's BUSINESS_PLAN and Unit C's OPERATING_OUTCOME, still at
+    most one overlay per ``(domain, unit_id)``, each judged against its own
+    member's mode. An overlay on any other unit is ``UNIT_NOT_IN_VARIANT``,
+    never ignored. No domain's semantics change, and there is still no
+    investment-scoped overlay and no UNIT_SELECTION."""
+
+    if not isinstance(strategy, StrategyDefinition):
+        raise TypeError(
+            f"strategy must be a StrategyDefinition; got {type(strategy).__qualname__}."
+        )
+    if not isinstance(unit_modes, Mapping) or not unit_modes:
+        raise ValueError("unit_modes must map at least one member Unit to its OperatingMode.")
+    for member, mode in unit_modes.items():
+        _require_unit_identity(member)
+        if not isinstance(mode, OperatingMode):
+            raise TypeError(
+                f"unit_modes[{member!r}] must be an OperatingMode; got {type(mode).__qualname__}."
+            )
+    return _contract_issues(strategy, dict(unit_modes), analysed_unit=None)
+
+
+def _foreign_unit_message(
+    domain: StrategyDomain,
+    overlay_unit: str,
+    unit_modes: Mapping[str, OperatingMode],
+    analysed_unit: str | None,
+) -> str:
+    if analysed_unit is not None:
+        return (
+            f"{domain.value}: the overlay addresses unit {_safe_repr(overlay_unit)}, "
+            f"which is not in this analysis; it resolves unit {_safe_repr(analysed_unit)} "
+            "only. The overlay is refused, never ignored and never applied to "
+            "another unit."
+        )
+    return (
+        f"{domain.value}: the overlay addresses unit {_safe_repr(overlay_unit)}, which is "
+        "not a Unit of this Investment (its Units: "
+        f"{', '.join(_safe_repr(member) for member in sorted(unit_modes))}). The overlay is "
+        "refused, never ignored and never applied to another unit."
+    )
+
+
+def _contract_issues(
+    strategy: StrategyDefinition,
+    unit_modes: Mapping[str, OperatingMode],
+    *,
+    analysed_unit: str | None,
+) -> tuple[StrategyIssue, ...]:
+    """The stage-1 rules over the member Units ``unit_modes``. For one analysed
+    Unit (``validate_strategy``) this is exactly the P7.4 procedure; for a
+    visible Investment each overlay is judged against its own member's mode."""
 
     issues = _header_issues(strategy)
 
@@ -858,20 +921,19 @@ def validate_strategy(
                     unit_id=overlay_unit,
                 )
             )
-        elif overlay_unit != unit_id:
+        elif overlay_unit not in unit_modes:
             issues.append(
                 _strategy_issue(
                     StrategyIssueCode.UNIT_NOT_IN_VARIANT,
-                    f"{domain.value}: the overlay addresses unit {_safe_repr(overlay_unit)}, "
-                    f"which is not in this analysis; it resolves unit {_safe_repr(unit_id)} "
-                    "only. The overlay is refused, never ignored and never applied to "
-                    "another unit.",
+                    _foreign_unit_message(domain, overlay_unit, unit_modes, analysed_unit),
                     domain=domain,
                     unit_id=overlay_unit,
                 )
             )
         else:
-            issues.extend(_content_issues(occurrences[0], operating_mode, unit_id))
+            issues.extend(
+                _content_issues(occurrences[0], unit_modes[overlay_unit], overlay_unit)
+            )
 
     return tuple(issues)
 

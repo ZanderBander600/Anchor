@@ -183,6 +183,19 @@ def _baseline(path: str) -> str:
     return _lf(_git("show", f"{_P7_4_BASE}:{path}"))
 
 
+def _merged(path: str) -> str:
+    """``path`` as P7.4 left it, at the P7.4 merge.
+
+    Re-pinned at P7.6: the guards that describe what P7.4 *added* to the store
+    and the API -- its tables, its migration step, its ``_connect`` lines, its
+    enumerated functions and validators, its one Investment writer, its API
+    additions and their vocabulary -- read P7.4's own committed code, exactly as
+    its ledger does. P7.6 extends the same files and its own guards pin those
+    additions (``tests/test_p7_6_consolidation_architecture.py``)."""
+
+    return _lf(_git("show", f"{_P7_4_MERGE}:{path}"))
+
+
 def _functions(tree: ast.Module) -> dict[str, ast.FunctionDef]:
     return {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
 
@@ -234,7 +247,7 @@ def _added_nodes(path: str) -> list[ast.stmt]:
     """The current file's top-level statements, docstrings removed, that are
     absent from ``aa96155`` -- for a new file, all of them."""
 
-    current = _without_docstrings(ast.parse(_current(path))).body
+    current = _without_docstrings(ast.parse(_merged(path))).body
     if path == _STRATEGY:
         return current
     baseline = {ast.dump(node) for node in _without_docstrings(ast.parse(_baseline(path))).body}
@@ -579,7 +592,7 @@ def _create_constants(text: str) -> dict[str, str]:
 
 
 def test_every_earlier_table_definition_is_unchanged_and_eight_are_appended() -> None:
-    current, baseline = _create_constants(_current(_STORE)), _create_constants(_baseline(_STORE))
+    current, baseline = _create_constants(_merged(_STORE)), _create_constants(_baseline(_STORE))
     assert {name: current[name] for name in baseline} == baseline
     assert set(current) - set(baseline) == set(_P7_4_DDL)
     for name, table in _P7_4_DDL.items():
@@ -607,7 +620,7 @@ def test_each_overlay_table_holds_exactly_its_domains_typed_columns() -> None:
 
 
 def test_the_migration_body_is_unchanged_and_the_version_moves_by_one() -> None:
-    current, baseline = ast.parse(_current(_STORE)), ast.parse(_baseline(_STORE))
+    current, baseline = ast.parse(_merged(_STORE)), ast.parse(_baseline(_STORE))
     assert ast.dump(_functions(current)["_migrate"]) == ast.dump(_functions(baseline)["_migrate"])
 
     def version(tree: ast.Module) -> int:
@@ -629,7 +642,7 @@ def test_connect_only_appends_the_eight_table_creations() -> None:
             if isinstance(node, ast.Call) and _callee(node) == "execute"
         ]
 
-    assert executes(_current(_STORE)) == executes(_baseline(_STORE)) + list(_P7_4_DDL)
+    assert executes(_merged(_STORE)) == executes(_baseline(_STORE)) + list(_P7_4_DDL)
 
 
 #: The functions P7.4 adds to ``store.py``.
@@ -653,7 +666,7 @@ def test_p7_4_added_exactly_the_enumerated_store_functions_and_changed_four() ->
     function, ``delete_deal`` and every P7.2 Scenario function included, is
     ``aa96155``'s exactly."""
 
-    current = _functions(ast.parse(_current(_STORE)))
+    current = _functions(ast.parse(_merged(_STORE)))
     baseline = _functions(ast.parse(_baseline(_STORE)))
     assert set(current) - set(baseline) == _P7_4_STORE_FUNCTIONS
     assert set(baseline) <= set(current)
@@ -691,7 +704,7 @@ def test_no_new_code_alters_or_drops_a_table() -> None:
 
 
 def test_the_new_store_code_does_no_arithmetic_and_validates_with_the_p7_4_validator() -> None:
-    functions = _functions(ast.parse(_current(_STORE)))
+    functions = _functions(ast.parse(_merged(_STORE)))
     assert {name: _arithmetic(functions[name]) for name in _P7_4_STORE_FUNCTIONS if _arithmetic(functions[name])} == {}
     validators = sorted(name for name in functions if "validate_strategy" in _calls(functions[name]))
     assert validators == ["_require_valid_strategy", "_strategy_from_rows"]
@@ -719,7 +732,7 @@ _WRITE_HELPERS = frozenset(
 
 
 def test_one_function_writes_an_investment_and_both_first_opt_ins_validate_before_it() -> None:
-    functions = _functions(ast.parse(_current(_STORE)))
+    functions = _functions(ast.parse(_merged(_STORE)))
     writers = sorted(
         name for name, function in functions.items()
         if any(re.search(r"INSERT INTO (investments|investment_units)\b", text) for text in _strings(function))
@@ -794,7 +807,7 @@ def test_every_p7_4_get_route_calls_only_read_functions() -> None:
 
 
 def test_api_py_changed_only_by_additions() -> None:
-    current = _without_docstrings(ast.parse(_current(_API))).body
+    current = _without_docstrings(ast.parse(_merged(_API))).body
     baseline = _without_docstrings(ast.parse(_baseline(_API))).body
     current_dumps = {ast.dump(node) for node in current}
     removed = [node for node in baseline if ast.dump(node) not in current_dumps]

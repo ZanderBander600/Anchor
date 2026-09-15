@@ -1003,6 +1003,13 @@ _BUSINESS_PLAN_IMPORTS = {
     "anchor/api.py": {"BusinessPlan", "BusinessPlanValidationError", "parse_business_plan"},
     "anchor/deals/contracts.py": {"BusinessPlan"},
     "anchor/deals/fingerprint.py": {"BusinessPlan"},
+    # Widened at P7.6 by exactly two files. The Investment variant pathway
+    # resolves the Investment-level plan once per variant, for the common hold,
+    # and hands the schedule to consolidation; the Investment validator judges
+    # that plan with the D6 validation authority. Neither opens an item
+    # (``tests/test_p7_6_consolidation_architecture.py``).
+    "anchor/deals/investment_variants.py": {"BusinessPlan", "resolve_business_plan"},
+    "anchor/investment/validation.py": {"BusinessPlan", "validate_business_plan"},
     "anchor/deals/store.py": {
         "BusinessPlan",
         "CapitalItemCategory",
