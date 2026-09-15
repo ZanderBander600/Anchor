@@ -505,3 +505,38 @@ describe('the Investment tables never widen the page', () => {
     expect(section).not.toMatch(/--(success|positive|gain|loss)|heat|winner|best|gradient/i);
   });
 });
+
+// =============================================================================
+// 5. Open decision drafts survive a Unit visit
+// =============================================================================
+
+describe('the Investment’s decision tools stay mounted, never duplicating an id', () => {
+  const DECISION_COMPONENTS = [
+    'components/RiskDecisionWorkspace.tsx',
+    'components/StrategyManager.tsx',
+    'components/StrategyEditor.tsx',
+    'components/ScenarioWorkspace.tsx',
+    'components/ScenarioEditor.tsx',
+    'components/DecisionMatrixPanel.tsx',
+  ];
+
+  it('renders the Risk section while hidden, so an open Strategy or Scenario draft is never unmounted', () => {
+    const workspace = sourceOf('components/InvestmentWorkspace.tsx');
+    // Hidden may stop requests (`isActive`), never rendering.
+    expect(workspace).not.toMatch(/scope !== null && isShown/);
+    expect(workspace).toContain("isActive={isShown && tab === 'risk'}");
+    expect(workspace).toContain("{entry.id === 'risk' && workspace.scope !== null && (");
+    expect(workspace).toContain('idFor={(id) => `${RISK_IDS}risk-tab-${id}`}');
+    expect(workspace).toContain('controlsFor={(id) => `${RISK_IDS}risk-panel-${id}`}');
+    expect(workspace).toContain('onDraftsChange={setDrafts}');
+  });
+
+  it('namespaces every decision-tool id by scope, with no literal id of its own', () => {
+    for (const relative of DECISION_COMPONENTS) {
+      const text = sourceOf(relative);
+      expect(text, relative).not.toMatch(/\b(id|htmlFor|aria-labelledby|aria-controls|aria-describedby)="/);
+      expect(text, relative).toContain('decisionIdScope(');
+    }
+    expect(sourceOf('investmentCatalog.ts')).toContain("return isInvestment ? 'investment-' : '';");
+  });
+});

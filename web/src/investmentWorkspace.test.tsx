@@ -18,6 +18,7 @@ import {
   deleteVisibleInvestment,
   fetchScenarioTargetCatalog,
   fetchStrategyTargetCatalog,
+  getDeal,
   getVisibleInvestment,
   InvestmentApiError,
   listDeals,
@@ -51,6 +52,7 @@ vi.mock('./api', async () => {
     deleteVisibleInvestment: vi.fn(),
     fetchScenarioTargetCatalog: vi.fn(),
     fetchStrategyTargetCatalog: vi.fn(),
+    getDeal: vi.fn(),
     getVisibleInvestment: vi.fn(),
     listDeals: vi.fn(),
     listInvestmentScenarios: vi.fn(),
@@ -216,7 +218,7 @@ interface Handlers {
   onOpenUnit: Mock<(deal: Deal) => void>;
   onChanged: Mock<() => void>;
   onDeleted: Mock<() => void>;
-  onDirtyChange: Mock<(isDirty: boolean) => void>;
+  onUnsavedChange: Mock<(warning: string | null) => void>;
 }
 
 let handlers: Handlers;
@@ -230,7 +232,7 @@ function renderWorkspace(signal: object = {}) {
       onOpenUnit={handlers.onOpenUnit}
       onChanged={handlers.onChanged}
       onDeleted={handlers.onDeleted}
-      onDirtyChange={handlers.onDirtyChange}
+      onUnsavedChange={handlers.onUnsavedChange}
     />,
   );
 }
@@ -240,10 +242,11 @@ beforeEach(() => {
     onOpenUnit: vi.fn<(deal: Deal) => void>(),
     onChanged: vi.fn<() => void>(),
     onDeleted: vi.fn<() => void>(),
-    onDirtyChange: vi.fn<(isDirty: boolean) => void>(),
+    onUnsavedChange: vi.fn<(warning: string | null) => void>(),
   };
   mockGet.mockResolvedValue(INVESTMENT);
   mockDeals.mockResolvedValue(DEALS);
+  vi.mocked(getDeal).mockImplementation(async (id) => DEALS.find((candidate) => candidate.id === id) as Deal);
   mockAnalyze.mockResolvedValue(ANALYSIS);
   vi.mocked(listInvestmentStrategies).mockResolvedValue([]);
   vi.mocked(listInvestmentScenarios).mockResolvedValue([]);
@@ -383,13 +386,73 @@ describe('the Base consolidated analysis', () => {
         onOpenUnit={handlers.onOpenUnit}
         onChanged={handlers.onChanged}
         onDeleted={handlers.onDeleted}
-        onDirtyChange={handlers.onDirtyChange}
+        onUnsavedChange={handlers.onUnsavedChange}
       />,
     );
     expect(await screen.findByText(INVESTMENT_ANALYSIS_STALE_MESSAGE)).toBeTruthy();
     expect(screen.queryByRole('table', { name: /Returns/ })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Annual consolidated cash flow' })).toBeNull();
     expect((screen.getByRole('button', { name: 'Refresh Base Analysis' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('keeps an open Strategy draft through a Unit visit; the re-read Unit makes the analysis stale, never the draft', async () => {
+    const user = userEvent.setup();
+    const signal = {};
+    const { rerender } = renderWorkspace(signal);
+    await runBase(user);
+    await user.click(screen.getByRole('tab', { name: 'Risk' }));
+    await user.click(screen.getByRole('tab', { name: 'Strategies' }));
+    await user.click(await screen.findByRole('button', { name: 'Add Strategy' }));
+    await user.type(screen.getByLabelText('Strategy Name'), 'Hold Longer');
+    const office = screen.getByRole('region', { name: 'Harbor Office' });
+    const specific = within(within(office).getByRole('radiogroup', { name: 'Disposition' })).getByRole('radio', {
+      name: 'Strategy-specific',
+    }) as HTMLInputElement;
+    await waitFor(() => expect(specific.disabled).toBe(false));
+    await user.click(specific);
+    await user.click(within(office).getByLabelText('Hold Period'));
+    await user.keyboard('{Control>}a{/Control}7');
+    const editor = () => document.getElementById('investment-strategy-editor') as HTMLElement;
+    const fields = () =>
+      [...editor().querySelectorAll('input')].map((input) =>
+        input.type === 'radio' ? [`${input.name}=${input.value}`, String(input.checked)] : [input.id, input.value],
+      );
+    const typed = fields();
+    expect(typed).toContainEqual(['investment-strategy-u1-disposition-holdPeriod', '7']);
+
+    const workspace = (isShown: boolean, refreshSignal: object) => (
+      <InvestmentWorkspace
+        investmentId="inv-1"
+        investments={[INVESTMENT]}
+        refreshSignal={refreshSignal}
+        onOpenUnit={handlers.onOpenUnit}
+        onChanged={handlers.onChanged}
+        onDeleted={handlers.onDeleted}
+        onUnsavedChange={handlers.onUnsavedChange}
+        isShown={isShown}
+      />
+    );
+    // Harbor Office's underwriting is open: the Investment is hidden, mounted.
+    rerender(workspace(false, signal));
+    expect(editor()).toBeTruthy();
+    // Harbor Office is saved at a new price; coming back re-reads it.
+    const resaved = deal('deal-b', 'Harbor Office', 'detailed', 21_000_000, 'deal-b-saved-2');
+    const reread = [RETAIL, resaved, INDUSTRIAL, STANDALONE];
+    mockDeals.mockResolvedValue(reread);
+    vi.mocked(getDeal).mockImplementation(async (id) => reread.find((candidate) => candidate.id === id) as Deal);
+    rerender(workspace(true, {}));
+
+    expect(await screen.findByText(INVESTMENT_ANALYSIS_STALE_MESSAGE)).toBeTruthy();
+    expect(mockGet).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(getDeal).toHaveBeenLastCalledWith('deal-b'));
+    expect(await within(screen.getByRole('region', { name: 'Harbor Office' })).findByText(/\$21,000,000/)).toBeTruthy();
+    expect(fields()).toEqual(typed);
+    expect((screen.getByRole('button', { name: 'Save Strategy' }) as HTMLButtonElement).disabled).toBe(false);
+
+    await user.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(screen.queryByRole('table', { name: /Returns/ })).toBeNull();
+    await user.click(screen.getByRole('tab', { name: 'Risk' }));
+    expect(fields()).toEqual(typed);
   });
 
   it('stays current when only a Unit’s label, kind or order changes', async () => {
@@ -433,7 +496,9 @@ describe('Edit Investment', () => {
     await user.keyboard('{Control>}a{/Control}45500000');
     expect((screen.getByRole('button', { name: 'Run Base Analysis' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(INVESTMENT_ANALYSIS_DIRTY_MESSAGE)).toBeTruthy();
-    expect(handlers.onDirtyChange).toHaveBeenLastCalledWith(true);
+    expect(handlers.onUnsavedChange).toHaveBeenLastCalledWith(
+      'You have unsaved Investment changes. Leaving will discard them.',
+    );
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect((screen.getByLabelText('Transaction Price') as HTMLInputElement).value).toBe('45,000,000');

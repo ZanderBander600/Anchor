@@ -140,6 +140,16 @@ export function withUnitNames(message: string, names: Readonly<Record<string, st
   return text;
 }
 
+/** The element-id namespace of a decision workspace: its Risk views, its
+ * Strategy and Scenario managers and editors, its Decision Matrix. A Deal's
+ * keeps the ids it has always had; a visible Investment's are prefixed. The
+ * Investment's decision tools stay mounted, hidden, while one of its Units --
+ * or any other Deal -- is open, so an open draft survives the trip, and the
+ * namespace keeps the two workspaces from sharing an id. Stable, never random. */
+export function decisionIdScope(isInvestment: boolean): string {
+  return isInvestment ? 'investment-' : '';
+}
+
 // =============================================================================
 // Refusals, in the analyst's words
 // =============================================================================
@@ -217,6 +227,33 @@ export const INVESTMENT_ANALYSIS_STALE_MESSAGE =
 // prettier-ignore
 export const INVESTMENT_ANALYSIS_DIRTY_MESSAGE =
   'The Investment has unsaved changes. Save them, then run Base Analysis.';
+
+/** What leaving the open Investment for another would discard, worded for the
+ * confirmation -- or `null` when nothing would be lost. An open Strategy or
+ * Scenario editor is an unsaved draft. */
+export function investmentLeaveWarning(unsaved: {
+  details: boolean;
+  strategyDraft: boolean;
+  scenarioDraft: boolean;
+}): string | null {
+  const parts: string[] = [];
+  if (unsaved.details) {
+    parts.push('unsaved Investment changes');
+  }
+  if (unsaved.strategyDraft) {
+    parts.push('an unsaved Strategy draft');
+  }
+  if (unsaved.scenarioDraft) {
+    parts.push('an unsaved Scenario draft');
+  }
+  const last = parts.pop();
+  if (last === undefined) {
+    return null;
+  }
+  const what = parts.length === 0 ? last : `${parts.join(', ')} and ${last}`;
+  const discarded = unsaved.details || parts.length > 0 ? 'them' : 'it';
+  return `You have ${what}. Leaving will discard ${discarded}.`;
+}
 
 // prettier-ignore
 export const DELETE_INVESTMENT_CONSEQUENCES =

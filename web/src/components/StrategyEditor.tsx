@@ -28,7 +28,7 @@
 
 import { Fragment, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
-import { unitDisplayName, unitMeta } from '../investmentCatalog';
+import { decisionIdScope, unitDisplayName, unitMeta } from '../investmentCatalog';
 import type { DecisionUnit } from '../investmentCatalog';
 import { scenarioTargetLabel, scenarioValueFormat } from '../scenarioCatalog';
 import {
@@ -224,8 +224,9 @@ function OutcomeRow({ unitId, row, entries, taken, issues, locked, state }: Outc
     row.target === ''
       ? null
       : scenarioValueFormat(row.target, 'set', entry === undefined ? undefined : { ...entry, allowed_operations: ['set'] });
-  const issuesId = `${row.key}-issues`;
-  const hintId = `${row.key}-hint`;
+  const rowId = `${decisionIdScope(state.investment !== null)}${row.key}`;
+  const issuesId = `${rowId}-issues`;
+  const hintId = `${rowId}-hint`;
   const describedBy = [format === null ? null : hintId, issues.length > 0 ? issuesId : null]
     .filter((part): part is string => part !== null)
     .join(' ');
@@ -234,11 +235,11 @@ function OutcomeRow({ unitId, row, entries, taken, issues, locked, state }: Outc
     <Fragment>
       <tr className="scenario-override-row">
         <td className="scenario-override-cell">
-          <label className="scenario-override-label" htmlFor={`${row.key}-target`}>
+          <label className="scenario-override-label" htmlFor={`${rowId}-target`}>
             Assumption
           </label>
           <select
-            id={`${row.key}-target`}
+            id={`${rowId}-target`}
             className="field-input scenario-select"
             value={row.target}
             onChange={(event) => state.setOutcomeTarget(unitId, row.key, event.target.value)}
@@ -256,13 +257,13 @@ function OutcomeRow({ unitId, row, entries, taken, issues, locked, state }: Outc
           </select>
         </td>
         <td className="scenario-override-cell scenario-override-value">
-          <label className="scenario-override-label" htmlFor={`${row.key}-value`}>
+          <label className="scenario-override-label" htmlFor={`${rowId}-value`}>
             Value<span className="visually-hidden"> for {label}</span>
           </label>
           <div className="field-input-wrap">
             {format?.prefix && <span className="field-affix field-affix-left">{format.prefix}</span>}
             <NumericInput
-              id={`${row.key}-value`}
+              id={`${rowId}-value`}
               className="field-input"
               value={row.value}
               onChange={(value) => state.setOutcomeValue(unitId, row.key, value)}
@@ -588,7 +589,8 @@ function UnitSection({
   locked: boolean;
 }) {
   const known: DecisionUnit | undefined = state.units.find((candidate) => candidate.unitId === unit.unitId);
-  const headingId = `strategy-unit-${position}-title`;
+  const ids = decisionIdScope(state.investment !== null);
+  const headingId = `${ids}strategy-unit-${position}-title`;
   return (
     <section className="strategy-unit" aria-labelledby={headingId}>
       <div className="strategy-unit-head">
@@ -598,7 +600,7 @@ function UnitSection({
         {known !== undefined && <span className="strategy-unit-meta">{unitMeta(known)}</span>}
       </div>
       <BasePrefillStatus state={state} unitId={unit.unitId} />
-      <UnitDomains state={state} unit={unit} prefix={`strategy-u${position}`} locked={locked} />
+      <UnitDomains state={state} unit={unit} prefix={`${ids}strategy-u${position}`} locked={locked} />
     </section>
   );
 }
@@ -608,6 +610,7 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
   const feedback = state.feedback;
   const locked = !state.canEdit;
   const isMultiUnit = state.investment !== null;
+  const ids = decisionIdScope(isMultiUnit);
   const onlyUnit = editor.units[0];
 
   useEffect(() => {
@@ -615,8 +618,8 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
   }, []);
 
   return (
-    <section id={id} className="scenario-editor strategy-editor" aria-labelledby="strategy-editor-title">
-      <h4 id="strategy-editor-title" className="scenario-editor-title">
+    <section id={id} className="scenario-editor strategy-editor" aria-labelledby={`${ids}strategy-editor-title`}>
+      <h4 id={`${ids}strategy-editor-title`} className="scenario-editor-title">
         {editor.strategyId === null ? 'New Strategy' : 'Edit Strategy'}
       </h4>
 
@@ -643,11 +646,11 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
       )}
 
       <div className="scenario-editor-fields">
-        <label className="field" htmlFor="strategy-editor-name">
+        <label className="field" htmlFor={`${ids}strategy-editor-name`}>
           <span className="field-label">Strategy Name</span>
           <input
             ref={nameInput}
-            id="strategy-editor-name"
+            id={`${ids}strategy-editor-name`}
             className="field-input"
             type="text"
             value={editor.name}
@@ -656,10 +659,10 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
             autoComplete="off"
           />
         </label>
-        <label className="field" htmlFor="strategy-editor-description">
+        <label className="field" htmlFor={`${ids}strategy-editor-description`}>
           <span className="field-label">Description (optional)</span>
           <input
-            id="strategy-editor-description"
+            id={`${ids}strategy-editor-description`}
             className="field-input"
             type="text"
             value={editor.description}
@@ -682,8 +685,8 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
       )}
 
       {isMultiUnit ? (
-        <div className="strategy-units" role="group" aria-labelledby="strategy-units-title">
-          <h5 id="strategy-units-title" className="strategy-units-title">
+        <div className="strategy-units" role="group" aria-labelledby={`${ids}strategy-units-title`}>
+          <h5 id={`${ids}strategy-units-title`} className="strategy-units-title">
             Unit Decisions
           </h5>
           {editor.units.map((unit, position) => (
@@ -694,7 +697,7 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
         onlyUnit !== undefined && (
           <>
             <BasePrefillStatus state={state} unitId={onlyUnit.unitId} />
-            <UnitDomains state={state} unit={onlyUnit} prefix="strategy" locked={locked} />
+            <UnitDomains state={state} unit={onlyUnit} prefix={`${ids}strategy`} locked={locked} />
           </>
         )
       )}

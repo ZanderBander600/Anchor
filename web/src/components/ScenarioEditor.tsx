@@ -31,7 +31,7 @@
 
 import { Fragment, useEffect, useRef } from 'react';
 import { operatingModeLabel } from '../operatingMode';
-import { unitDisplayName } from '../investmentCatalog';
+import { decisionIdScope, unitDisplayName } from '../investmentCatalog';
 import {
   SCENARIO_OPERATION_LABELS,
   scenarioTargetLabel,
@@ -86,8 +86,9 @@ function OverrideRow({ row, taken, issues, state, withUnit }: OverrideRowProps) 
     row.target === '' || row.operation === ''
       ? null
       : scenarioValueFormat(row.target, row.operation, entry);
-  const issuesId = `${row.key}-issues`;
-  const hintId = `${row.key}-hint`;
+  const rowId = `${decisionIdScope(state.investment !== null)}${row.key}`;
+  const issuesId = `${rowId}-issues`;
+  const hintId = `${rowId}-hint`;
   const hasIssues = issues.length > 0;
   const describedBy = [format === null ? null : hintId, hasIssues ? issuesId : null]
     .filter((id): id is string => id !== null)
@@ -100,11 +101,11 @@ function OverrideRow({ row, taken, issues, state, withUnit }: OverrideRowProps) 
       <tr className="scenario-override-row">
         {withUnit && (
           <td className="scenario-override-cell scenario-override-unit">
-            <label className="scenario-override-label" htmlFor={`${row.key}-unit`}>
+            <label className="scenario-override-label" htmlFor={`${rowId}-unit`}>
               Unit
             </label>
             <select
-              id={`${row.key}-unit`}
+              id={`${rowId}-unit`}
               className="field-input scenario-select"
               value={row.unitId}
               onChange={(event) => state.setRowUnit(row.key, event.target.value)}
@@ -123,11 +124,11 @@ function OverrideRow({ row, taken, issues, state, withUnit }: OverrideRowProps) 
           </td>
         )}
         <td className="scenario-override-cell">
-          <label className="scenario-override-label" htmlFor={`${row.key}-target`}>
+          <label className="scenario-override-label" htmlFor={`${rowId}-target`}>
             Assumption
           </label>
           <select
-            id={`${row.key}-target`}
+            id={`${rowId}-target`}
             className="field-input scenario-select"
             value={row.target}
             onChange={(event) => state.setRowTarget(row.key, event.target.value)}
@@ -145,11 +146,11 @@ function OverrideRow({ row, taken, issues, state, withUnit }: OverrideRowProps) 
           </select>
         </td>
         <td className="scenario-override-cell">
-          <label className="scenario-override-label" htmlFor={`${row.key}-operation`}>
+          <label className="scenario-override-label" htmlFor={`${rowId}-operation`}>
             Operation<span className="visually-hidden"> for {label}</span>
           </label>
           <select
-            id={`${row.key}-operation`}
+            id={`${rowId}-operation`}
             className="field-input scenario-select"
             value={row.operation}
             onChange={(event) =>
@@ -166,13 +167,13 @@ function OverrideRow({ row, taken, issues, state, withUnit }: OverrideRowProps) 
           </select>
         </td>
         <td className="scenario-override-cell scenario-override-value">
-          <label className="scenario-override-label" htmlFor={`${row.key}-value`}>
+          <label className="scenario-override-label" htmlFor={`${rowId}-value`}>
             Value<span className="visually-hidden"> for {label}</span>
           </label>
           <div className="field-input-wrap">
             {format?.prefix && <span className="field-affix field-affix-left">{format.prefix}</span>}
             <NumericInput
-              id={`${row.key}-value`}
+              id={`${rowId}-value`}
               className="field-input"
               value={row.value}
               onChange={(value) => state.setRowValue(row.key, value)}
@@ -225,6 +226,7 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
   const feedback = state.feedback;
   const locked = !state.canEdit;
   const withUnit = state.investment !== null;
+  const ids = decisionIdScope(withUnit);
   const taken = new Set(
     editor.rows.filter((row) => row.target !== '').map((row) => takenKey(row.unitId, row.target)),
   );
@@ -238,8 +240,8 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
   }, []);
 
   return (
-    <section id={id} className="scenario-editor" aria-labelledby="scenario-editor-title">
-      <h4 id="scenario-editor-title" className="scenario-editor-title">
+    <section id={id} className="scenario-editor" aria-labelledby={`${ids}scenario-editor-title`}>
+      <h4 id={`${ids}scenario-editor-title`} className="scenario-editor-title">
         {editor.scenarioId === null ? 'New Scenario' : 'Edit Scenario'}
       </h4>
 
@@ -266,11 +268,11 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
       )}
 
       <div className="scenario-editor-fields">
-        <label className="field" htmlFor="scenario-editor-name">
+        <label className="field" htmlFor={`${ids}scenario-editor-name`}>
           <span className="field-label">Scenario Name</span>
           <input
             ref={nameInput}
-            id="scenario-editor-name"
+            id={`${ids}scenario-editor-name`}
             className="field-input"
             type="text"
             value={editor.name}
@@ -279,10 +281,10 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
             autoComplete="off"
           />
         </label>
-        <label className="field" htmlFor="scenario-editor-description">
+        <label className="field" htmlFor={`${ids}scenario-editor-description`}>
           <span className="field-label">Description (optional)</span>
           <input
-            id="scenario-editor-description"
+            id={`${ids}scenario-editor-description`}
             className="field-input"
             type="text"
             value={editor.description}

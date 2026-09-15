@@ -15,13 +15,20 @@
  *
  * State lives in `useInvestmentWorkspace` and `useInvestmentAnalysis`; the
  * decision tools own theirs (`RiskDecisionWorkspace`). Every panel stays
- * mounted and hidden when inactive, so an open draft survives switching
- * workspaces -- and returning from a Unit's underwriting.
+ * mounted and hidden when inactive, so an open draft -- the details draft, a
+ * Strategy draft, a Scenario draft -- survives switching workspaces and a trip
+ * into a Unit's underwriting. The decision tools' element ids are namespaced
+ * (`decisionIdScope`), so they never collide with the open Deal's own.
  */
 
 import { useEffect, useState } from 'react';
 import { formatCurrency } from '../format';
-import { DELETE_INVESTMENT_CONSEQUENCES, INVESTMENT_LABEL } from '../investmentCatalog';
+import {
+  decisionIdScope,
+  DELETE_INVESTMENT_CONSEQUENCES,
+  INVESTMENT_LABEL,
+  investmentLeaveWarning,
+} from '../investmentCatalog';
 import type { VisibleInvestment } from '../investmentTypes';
 import type { Deal } from '../types';
 import { useInvestmentAnalysis } from '../useInvestmentAnalysis';
@@ -29,6 +36,7 @@ import { useInvestmentWorkspace } from '../useInvestmentWorkspace';
 import { InvestmentOverview } from './InvestmentOverview';
 import { InvestmentUnitsPanel } from './InvestmentUnitsPanel';
 import { RiskDecisionWorkspace } from './RiskDecisionWorkspace';
+import type { DecisionDrafts } from './RiskDecisionWorkspace';
 import { SubNav } from './SubNav';
 
 export interface InvestmentWorkspaceProps {
@@ -40,12 +48,13 @@ export interface InvestmentWorkspaceProps {
   onOpenUnit: (deal: Deal) => void;
   onChanged: () => void;
   onDeleted: () => void;
-  /** Whether anything here is unsaved, so leaving can ask first. */
-  onDirtyChange: (isDirty: boolean) => void;
+  /** What leaving this Investment for another would discard -- unsaved details,
+   * an open Strategy or Scenario draft -- worded for the confirmation, or
+   * `null` when nothing would be lost. */
+  onUnsavedChange: (warning: string | null) => void;
   /** Whether the workspace is on screen. It stays mounted, hidden, while one
-   * of its Units is open -- so its details draft survives -- but its decision
-   * tools render only while it is shown: they share their element ids with the
-   * Deal workspace's own, and two copies would collide. */
+   * of its Units (or another Deal) is open, so every draft survives; while
+   * hidden its decision tools request nothing. */
   isShown?: boolean;
 }
 
@@ -76,6 +85,12 @@ const RISK_VIEWS = [
   { id: 'scenarios', label: 'Scenarios' },
 ];
 
+/** The Investment's decision tools' id namespace: its Risk tabs and panels
+ * never share an id with the open Deal's. */
+const RISK_IDS = decisionIdScope(true);
+
+const NO_DRAFTS: DecisionDrafts = { strategy: false, scenario: false };
+
 function unitCount(count: number): string {
   return count === 1 ? '1 Unit' : `${count} Units`;
 }
@@ -87,7 +102,7 @@ export function InvestmentWorkspace({
   onOpenUnit,
   onChanged,
   onDeleted,
-  onDirtyChange,
+  onUnsavedChange,
   isShown = true,
 }: InvestmentWorkspaceProps) {
   const workspace = useInvestmentWorkspace({ investmentId, refreshSignal, onChanged, onDeleted });
@@ -98,11 +113,17 @@ export function InvestmentWorkspace({
   });
   const [tab, setTab] = useState<InvestmentTabId>('overview');
   const [riskView, setRiskView] = useState('matrix');
+  const [drafts, setDrafts] = useState<DecisionDrafts>(NO_DRAFTS);
   const hasUnsaved = workspace.isDirty || workspace.isMembershipChanging;
+  const leaveWarning = investmentLeaveWarning({
+    details: hasUnsaved,
+    strategyDraft: drafts.strategy,
+    scenarioDraft: drafts.scenario,
+  });
 
   useEffect(() => {
-    onDirtyChange(hasUnsaved);
-  }, [hasUnsaved, onDirtyChange]);
+    onUnsavedChange(leaveWarning);
+  }, [leaveWarning, onUnsavedChange]);
 
   const investment = workspace.investment;
 
@@ -238,15 +259,15 @@ export function InvestmentWorkspace({
               {entry.id === 'units' && (
                 <InvestmentUnitsPanel workspace={workspace} investments={investments} onOpenUnit={onOpenUnit} />
               )}
-              {entry.id === 'risk' && workspace.scope !== null && isShown && (
+              {entry.id === 'risk' && workspace.scope !== null && (
                 <div className="risk-workspace">
                   <SubNav
                     items={RISK_VIEWS}
                     active={riskView}
                     onSelect={setRiskView}
                     label="Investment risk views"
-                    idFor={(id) => `risk-tab-${id}`}
-                    controlsFor={(id) => `risk-panel-${id}`}
+                    idFor={(id) => `${RISK_IDS}risk-tab-${id}`}
+                    controlsFor={(id) => `${RISK_IDS}risk-panel-${id}`}
                   />
                   <RiskDecisionWorkspace
                     key={investmentId}
@@ -254,9 +275,10 @@ export function InvestmentWorkspace({
                     dealId={null}
                     isDirty={workspace.isEconomicBlocked}
                     savedAt={null}
-                    isActive={tab === 'risk'}
+                    isActive={isShown && tab === 'risk'}
                     view={riskView}
                     investment={workspace.scope}
+                    onDraftsChange={setDrafts}
                   />
                 </div>
               )}

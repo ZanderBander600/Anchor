@@ -16,11 +16,19 @@
  * the Deal-scoped routes would refuse.
  *
  * Each view is an ARIA tab panel, always mounted, hidden when inactive: an open
- * Strategy or Scenario draft survives switching views.
+ * Strategy or Scenario draft survives switching views. A visible Investment's
+ * workspace also stays mounted while one of its Units is open, so its element
+ * ids are namespaced (`decisionIdScope`) and never collide with the Deal's.
  */
 
+import { useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { INVESTMENT_MATRIX_COPY, UNIT_OF_INVESTMENT_NOTICE, unitNames } from '../investmentCatalog';
+import {
+  decisionIdScope,
+  INVESTMENT_MATRIX_COPY,
+  UNIT_OF_INVESTMENT_NOTICE,
+  unitNames,
+} from '../investmentCatalog';
 import type { InvestmentDecisionScope } from '../investmentCatalog';
 import { useDecisionMatrix } from '../useDecisionMatrix';
 import { useScenarios } from '../useScenarios';
@@ -34,6 +42,12 @@ import { StrategyManager } from './StrategyManager';
 export interface InvestmentMembership {
   investmentName: string;
   onOpen: () => void;
+}
+
+/** Which decision editors are open, each holding an unsaved draft. */
+export interface DecisionDrafts {
+  strategy: boolean;
+  scenario: boolean;
 }
 
 export interface RiskDecisionWorkspaceProps {
@@ -53,6 +67,9 @@ export interface RiskDecisionWorkspaceProps {
   investment?: InvestmentDecisionScope | null;
   /** P7.6: set when the open Deal is a Unit of a visible Investment. */
   memberOf?: InvestmentMembership | null;
+  /** P7.6: told whenever a Strategy or Scenario editor opens or closes, so an
+   * owner that could unmount this workspace can ask before a draft is lost. */
+  onDraftsChange?: (drafts: DecisionDrafts) => void;
 }
 
 function UnitOfInvestment({ membership }: { membership: InvestmentMembership }) {
@@ -79,6 +96,7 @@ export function RiskDecisionWorkspace({
   view,
   investment = null,
   memberOf = null,
+  onDraftsChange,
 }: RiskDecisionWorkspaceProps) {
   const requests = isActive && memberOf === null;
   const scenarios = useScenarios({ operatingMode, dealId, isDirty, isActive: requests, investment });
@@ -94,10 +112,17 @@ export function RiskDecisionWorkspace({
   });
   const listError = strategies.loadError ?? scenarios.loadError;
   const scopeId = investment?.investmentId ?? dealId;
+  const ids = decisionIdScope(investment !== null);
+  const hasStrategyDraft = strategies.editor !== null;
+  const hasScenarioDraft = scenarios.editor !== null;
+
+  useEffect(() => {
+    onDraftsChange?.({ strategy: hasStrategyDraft, scenario: hasScenarioDraft });
+  }, [hasStrategyDraft, hasScenarioDraft, onDraftsChange]);
 
   function panel(id: 'matrix' | 'strategies' | 'scenarios', content: ReactNode) {
     return (
-      <div id={`risk-panel-${id}`} role="tabpanel" aria-labelledby={`risk-tab-${id}`} hidden={view !== id}>
+      <div id={`${ids}risk-panel-${id}`} role="tabpanel" aria-labelledby={`${ids}risk-tab-${id}`} hidden={view !== id}>
         {memberOf === null ? content : <UnitOfInvestment membership={memberOf} />}
       </div>
     );

@@ -55,7 +55,7 @@ import type {
   DecisionStrategyFigures,
   DecisionStrategyRow,
 } from '../decisionTypes';
-import { investmentIssueLead, withUnitNames } from '../investmentCatalog';
+import { decisionIdScope, investmentIssueLead, withUnitNames } from '../investmentCatalog';
 import type { InvestmentScenario } from '../scenarioTypes';
 import type { InvestmentStrategy } from '../strategyTypes';
 import type { DecisionMatrixState } from '../useDecisionMatrix';
@@ -94,7 +94,7 @@ interface Notes {
   list: { id: string; text: string }[];
 }
 
-function collectNotes(): Notes {
+function collectNotes(ids: string): Notes {
   const byText = new Map<string, string>();
   const list: { id: string; text: string }[] = [];
   return {
@@ -103,7 +103,7 @@ function collectNotes(): Notes {
       if (existing !== undefined) {
         return existing;
       }
-      const id = `decision-note-${list.length}`;
+      const id = `${ids}decision-note-${list.length}`;
       byText.set(text, id);
       list.push({ id, text });
       return id;
@@ -140,10 +140,12 @@ interface TableProps {
   labels: Labels;
   caption: string;
   names: Readonly<Record<string, string>>;
+  /** The element-id namespace (`decisionIdScope`). */
+  ids: string;
 }
 
-function DecisionMatrixTable({ matrix, labels, caption, names }: TableProps) {
-  const notes = collectNotes();
+function DecisionMatrixTable({ matrix, labels, caption, names, ids }: TableProps) {
+  const notes = collectNotes(ids);
   const cells = new Map<string, DecisionCell>(
     matrix.cells.map((cell) => [`${cell.strategy_id}|${cell.scenario_id}`, cell]),
   );
@@ -269,7 +271,7 @@ function DecisionMatrixTable({ matrix, labels, caption, names }: TableProps) {
 
   const body = matrix.strategies.map((row) => {
     const label = labels.strategy(row);
-    const groupId = `decision-group-${row.strategy_id}`;
+    const groupId = `${ids}decision-group-${row.strategy_id}`;
     return (
       <tbody key={row.strategy_id} className="decision-matrix-rowgroup" aria-labelledby={groupId}>
         <tr className="decision-matrix-group">
@@ -379,6 +381,8 @@ export function DecisionMatrixPanel({
 }: DecisionMatrixPanelProps) {
   const report = matrix.report;
   const scopeId = investmentId ?? dealId;
+  const ids = decisionIdScope(investmentId !== null);
+  const blockedReasonId = `${ids}${BLOCKED_REASON_ID}`;
   const showTable = report !== null && matrix.isCurrent;
   const blocked = scopeId !== null && matrix.hasComparison && isDirty;
 
@@ -401,10 +405,10 @@ export function DecisionMatrixPanel({
   };
 
   return (
-    <section className="scenario-panel decision-matrix-panel" aria-labelledby="decision-matrix-title">
+    <section className="scenario-panel decision-matrix-panel" aria-labelledby={`${ids}decision-matrix-title`}>
       <div className="scenario-panel-header">
         <div className="scenario-panel-heading">
-          <h3 id="decision-matrix-title" className="scenario-panel-title">
+          <h3 id={`${ids}decision-matrix-title`} className="scenario-panel-title">
             Decision Matrix
           </h3>
           <p className="scenario-panel-subtitle">{copy.subtitle}</p>
@@ -415,7 +419,7 @@ export function DecisionMatrixPanel({
             className="btn btn-primary btn-sm"
             onClick={() => void matrix.run()}
             disabled={!matrix.canRun}
-            aria-describedby={blocked ? BLOCKED_REASON_ID : undefined}
+            aria-describedby={blocked ? blockedReasonId : undefined}
           >
             {matrix.isRunning ? 'Running…' : matrix.hasRun ? 'Refresh Matrix' : 'Run Decision Matrix'}
           </button>
@@ -444,7 +448,7 @@ export function DecisionMatrixPanel({
       )}
 
       {blocked && (
-        <p id={BLOCKED_REASON_ID} className="scenario-blocked" role="status">
+        <p id={blockedReasonId} className="scenario-blocked" role="status">
           {copy.blocked}
         </p>
       )}
@@ -478,7 +482,13 @@ export function DecisionMatrixPanel({
             <StaleAnalysisNotice message={isDirty ? copy.dirty : copy.stale} />
           )}
           {showTable && (
-            <DecisionMatrixTable matrix={report.matrix} labels={labels} caption={copy.caption} names={unitNames} />
+            <DecisionMatrixTable
+              matrix={report.matrix}
+              labels={labels}
+              caption={copy.caption}
+              names={unitNames}
+              ids={ids}
+            />
           )}
         </>
       )}

@@ -1195,7 +1195,8 @@ export default function App() {
   const [openInvestmentId, setOpenInvestmentId] = useState<string | null>(null);
   const [investmentRefresh, setInvestmentRefresh] = useState<object>({});
   const [unitReturnId, setUnitReturnId] = useState<string | null>(null);
-  const [isInvestmentUnsaved, setIsInvestmentUnsaved] = useState(false);
+  /** What leaving the open Investment would discard, or `null`. */
+  const [investmentUnsaved, setInvestmentUnsaved] = useState<string | null>(null);
   const [dealName, setDealName] = useState('');
   const [currentDealId, setCurrentDealId] = useState<string | null>(null);
   const [isSavingDeal, setIsSavingDeal] = useState(false);
@@ -2287,17 +2288,19 @@ export default function App() {
   // is open, and the way back from one of its Units. An Investment's state
   // lives in its own hooks (`useInvestments`, `useInvestmentWorkspace`,
   // `useInvestmentAnalysis`, `useNewInvestment`). The open Investment's
-  // workspace stays mounted while a Unit's underwriting is open, so its drafts
-  // survive the trip; coming back re-reads it.
+  // workspace -- its details draft and its Strategy and Scenario drafts --
+  // stays mounted while a Unit's underwriting (or any other surface) is open,
+  // so every draft survives the trip; coming back re-reads it. Only opening a
+  // different Investment unmounts it, and that asks first.
   // ===========================================================================
 
-  /** Whether leaving the open Investment for another would discard unsaved
-   * changes -- the app's `window.confirm` convention. */
+  /** Whether leaving the open Investment for another may discard what it
+   * holds unsaved -- the app's `window.confirm` convention, naming the draft. */
   function confirmLeaveInvestment(nextInvestmentId: string): boolean {
-    if (openInvestmentId === null || openInvestmentId === nextInvestmentId || !isInvestmentUnsaved) {
+    if (openInvestmentId === null || openInvestmentId === nextInvestmentId || investmentUnsaved === null) {
       return true;
     }
-    return window.confirm('Discard unsaved Investment changes?');
+    return window.confirm(investmentUnsaved);
   }
 
   function openInvestment(investmentId: string) {
@@ -2305,7 +2308,7 @@ export default function App() {
       return;
     }
     if (openInvestmentId !== investmentId) {
-      setIsInvestmentUnsaved(false);
+      setInvestmentUnsaved(null);
       setOpenInvestmentId(investmentId);
     }
     setUnitReturnId(null);
@@ -2335,7 +2338,7 @@ export default function App() {
 
   function handleInvestmentDeleted() {
     setOpenInvestmentId(null);
-    setIsInvestmentUnsaved(false);
+    setInvestmentUnsaved(null);
     investments.reload();
     setView('investment-library');
   }
@@ -2344,7 +2347,7 @@ export default function App() {
     await investments.remove(investmentId);
     if (openInvestmentId === investmentId) {
       setOpenInvestmentId(null);
-      setIsInvestmentUnsaved(false);
+      setInvestmentUnsaved(null);
     }
   }
 
@@ -3344,7 +3347,7 @@ export default function App() {
               onOpenUnit={handleOpenUnit}
               onChanged={investments.reload}
               onDeleted={handleInvestmentDeleted}
-              onDirtyChange={setIsInvestmentUnsaved}
+              onUnsavedChange={setInvestmentUnsaved}
               isShown={view === 'investment'}
             />
           </div>
