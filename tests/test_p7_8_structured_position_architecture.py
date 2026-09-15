@@ -543,6 +543,41 @@ def test_no_p7_8_module_names_a_resolution_and_each_claim_carries_its_positions_
     assert _calls(code).count("settle_claim") == 1 and _calls(code).count("common_equity_outcome") == 1
 
 
+def test_settlement_stops_at_a_positions_first_unresolved_claim() -> None:
+    """The review correction: once a claim is unresolved, no later year of that
+    position is settled -- no arrears, capitalization, cure or write-off."""
+
+    settle = _functions(_tree(_EXECUTION))["_settle_position"]
+    (loop,) = [node for node in settle.body if isinstance(node, ast.For)]
+    last = loop.body[-1]
+    assert isinstance(last, ast.If)
+    assert ast.unparse(last.test) == (
+        "requirement is not None and requirement.status is FundingRequirementStatus.UNRESOLVED"
+    )
+    assert [type(node) for node in last.body] == [ast.Break] and last.orelse == []
+    assert ast.unparse(loop.body[-2]) == "requirement = settlement.funding_requirement"
+    assert "claims.append(" in ast.unparse(loop.body[-3])
+
+
+def test_closing_is_never_over_funded_at_the_analysis_root() -> None:
+    from anchor.capital_structure.execution_contracts import OVERFUNDED_CLOSING_TOLERANCE
+
+    assert OVERFUNDED_CLOSING_TOLERANCE == 0.01
+    functions = _functions(_tree(_EXECUTION))
+    check = ast.unparse(functions["_require_funded_closing"])
+    assert "closing = [closing_source]" in check
+    assert "for position in scheduled:\n        _apply_closing(closing, position)" in check
+    assert "if closing[0] > OVERFUNDED_CLOSING_TOLERANCE:" in check
+    assert "code=ExecutionIssueCode.OVERFUNDED_CLOSING" in check
+    for executor, root in (("execute_unit_capital_structure", "'Unit'"), ("execute_investment_capital_structure", "'Investment'")):
+        function = functions[executor]
+        (call,) = _call_nodes(function, "_require_funded_closing")
+        assert _keywords(call) == {"closing_source": "source[0]", "root": root} and ast.unparse(call.args[0]) == "scheduled"
+        first_settle = min(node.lineno for node in _call_nodes(function, "_settle_scope"))
+        last_schedule = max(node.lineno for node in _call_nodes(function, "schedule_position"))
+        assert last_schedule < call.lineno < first_settle, executor
+
+
 # =============================================================================
 # 5. Scope isolation and economic order
 # =============================================================================

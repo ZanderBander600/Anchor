@@ -1,7 +1,8 @@
 # P7.8 Structured Position Cash Flows + Position Returns
 
-Status: Session A (backend financial execution) decision record, awaiting human
-financial review.
+Status: Session A (backend financial execution) decision record. The human
+financial review approved it with two corrections -- unresolved-claim finality
+and the over-funded closing -- recorded here; awaiting re-review.
 Base: `main` @ `a9f9b09` (the P7.7 merge).
 Branch: `feature/p7-8-structured-position-returns`.
 Risk: Tier 1 (financial / contract critical).
@@ -90,6 +91,7 @@ executor does not execute, and raises `CapitalStructureExecutionError`:
 | `multiple_common_equity_markers` | more than one marker |
 | `claim_below_common_equity` | a claim ranked below the marker in its scope |
 | `duplicate_result_event_id` | an authored funding or fee id equal to a scheduled event id |
+| `overfunded_closing` | authored closing funding, net of closing fees, that leaves the analysis root's closing Common Equity flow above +$0.01 (Section 9) |
 
 Nothing is moved to a supported convention, ignored or partially executed.
 
@@ -207,14 +209,36 @@ t = y   eligible  = max(residual_y, 0)
 - A Unit-scoped claim reads only its own Unit's cash, never another Unit's
   surplus.
 - The Common Equity Cash Flow is never floored.
+- **Closing is never over-funded (review correction).**
+  - Before any claim is settled, every authored month-0 funding and fee is
+    applied in economic order to the analysis root's pre-structured-capital
+    closing flow. That covers every claim-bearing position, blocked later or
+    not.
+  - The root is the Unit, for a standalone Unit, or the Investment, after its
+    Business Plan and transaction costs, for a visible Investment.
+  - A result above **+$0.01** (`OVERFUNDED_CLOSING_TOLERANCE`) raises
+    `CapitalStructureExecutionError` (`overfunded_closing`). P7.8 has no
+    ratified destination for excess proceeds: no cash reserve, closing
+    distribution or recapitalization is inferred.
+  - No position is resized, rescaled or rebalanced, the upstream Initial
+    Equity Requirement is untouched, and the cash-flow series is never rounded
+    to pass.
+  - A fully financed closing (at or below +$0.01) is valid.
+  - A Unit funded locally beyond its own equity need is not refused while the
+    Investment root still has closing uses and stays at or below +$0.01.
 
 ## 10. Unresolved funding
 
 - **The position.** A position with an unresolved requirement is
   `UNRESOLVED_FUNDING`: returns are N/A with the requirement ids.
-  - Its later years are still settled one by one.
-  - An unpaid amount is reported. It is never carried forward, accrued, cured
-    or written off.
+  - Settlement stops after the first unresolved claim. Later contractual
+    events remain inspectable, but their settlement is unavailable until a
+    future default / arrears convention exists.
+  - `annual_claims` holds every claim settled before the failure, plus the
+    first unresolved claim itself. No later Funding Requirement is generated
+    for the position.
+  - The unpaid amount is preserved in that requirement. It is never carried
+    forward, accrued, capitalized, cured or written off.
 - **Junior positions.** Every position junior to it in its scope is
   `BLOCKED_BY_SENIOR_UNRESOLVED` and is not settled at all.
 - **Investment-scoped positions.** Once any Unit scope is unresolved, every
@@ -286,19 +310,32 @@ cash settlement.
   - It excludes balloons, redemptions, accrued return, fees and funding.
   - Headline is Year 1; minimum is the lowest defined year.
 
-## 14. Implementation decisions for review
+## 14. Implementation decisions (human financial review)
 
-1. **Coverage after payoff.** Coverage is `None` in years after the position's
-   modeled payoff year, as well as where the service is zero. The position is
-   no longer outstanding then, and a value would describe only its seniors.
-2. **Unresolved later years.** They are settled one by one, and no unpaid
-   amount is carried forward (Section 10).
-3. **Standalone Unit.** It refuses Investment-scoped positions. A standalone
-   Unit has no Investment scope; P7.8B owns the product surface.
-4. **Structural metrics** are reported for unresolved and blocked positions.
-5. **Zero fees** are reported as events; they move nothing.
-6. **A closing funding above the Initial Equity Requirement** may make the
-   Common Equity closing flow positive. It is reported, not refused.
+1. **Coverage after payoff: approved.** Coverage is `None` in years after the
+   position's modeled payoff year, as well as where the service is zero. The
+   position is no longer outstanding then, and a value would describe only its
+   seniors.
+2. **Unresolved finality: approved with correction.** Settlement of a position
+   stops at its first unresolved claim (Section 10). Its later years were
+   originally settled one by one; the review found that unsupportable, because
+   no arrears, default or capitalization convention exists.
+3. **Standalone Unit: approved.** It refuses Investment-scoped positions. A
+   standalone Unit has no Investment scope; P7.8B owns Investment
+   materialization and the product surface.
+4. **Structural metrics on unresolved and blocked positions: approved.** They
+   stay reported:
+   - attachment, detachment and last-dollar basis;
+   - debt yield through;
+   - contractual coverage through.
+
+   They are contractual underwriting metrics, not realized returns, and P7.8B's
+   UI must keep that distinction. Position returns stay N/A.
+5. **Zero fees: approved.** A zero fee stays an explicit, auditable event that
+   moves nothing. P7.8B may de-emphasize it.
+6. **Over-funded closing: corrected.** A positive closing Common Equity flow is
+   no longer reported as a distribution. The root-level fail-closed rule of
+   Section 9 refuses any root closing residual above **+$0.01**.
 
 ## 15. Deferred
 

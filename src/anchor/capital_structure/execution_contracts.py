@@ -44,6 +44,13 @@ from .contracts import (
     ScopeKind,
 )
 
+#: The over-funded closing tolerance, in nominal dollars. After every authored
+#: closing funding and fee, the analysis root's closing Common Equity flow may
+#: reach zero within this tolerance, never turn materially positive: no cash
+#: reserve, closing distribution or recapitalization is inferred for excess
+#: proceeds.
+OVERFUNDED_CLOSING_TOLERANCE = 0.01
+
 # =============================================================================
 # Execution issues
 # =============================================================================
@@ -67,6 +74,7 @@ class ExecutionIssueCode(StrEnum):
     MULTIPLE_COMMON_EQUITY_MARKERS = "multiple_common_equity_markers"
     CLAIM_BELOW_COMMON_EQUITY = "claim_below_common_equity"
     DUPLICATE_RESULT_EVENT_ID = "duplicate_result_event_id"
+    OVERFUNDED_CLOSING = "overfunded_closing"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -288,8 +296,11 @@ class PositionReturns:
 
     **Identity and schedule.** Its identity, the resolved ``funding`` and
     ``funded_amount``, its debt or preferred schedule, its contractual
-    ``cash_flow_events`` and its ``annual_claims`` (empty when blocked). Its own
-    Funding Requirements are also in ``funding_requirements``.
+    ``cash_flow_events`` (every scheduled event, settled or not) and its
+    ``annual_claims``: empty when blocked, and ending at its first unresolved
+    claim when it has one, because no later year can be settled without an
+    arrears or default convention. Its own Funding Requirements are also in
+    ``funding_requirements``.
 
     **Returns** (``None`` unless ``status`` is ``COMPLETE``, with
     ``unavailable_reason`` and ``unavailable_message`` naming the

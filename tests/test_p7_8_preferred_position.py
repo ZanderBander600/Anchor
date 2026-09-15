@@ -236,7 +236,8 @@ def test_a_current_pay_shortfall_is_a_funding_requirement_never_an_accrual(resol
     # The accrual is contractual: the shortfall changes neither it nor the balance.
     assert pref.preferred_schedule == clean_pref.preferred_schedule
     assert pref.balance_at_maturity_or_exit == clean_pref.balance_at_maturity_or_exit
-    assert bits([pref.annual_claims[-1].claim_due]) == bits([clean_pref.annual_claims[-1].claim_due])
+    # The contractual events, redemption included, are never increased by the shortfall.
+    assert pref.cash_flow_events == clean_pref.cash_flow_events
 
     year_2 = pref.annual_claims[1]
     requirement = year_2.settlement.funding_requirement
@@ -252,8 +253,11 @@ def test_a_current_pay_shortfall_is_a_funding_requirement_never_an_accrual(resol
         assert pref.status is PositionResultStatus.UNRESOLVED_FUNDING
         assert (pref.irr, pref.moic, pref.annual_cash_flows) == (None, None, None)
         assert pref.blocking_requirement_ids == ("pref/hold_year/2",)
-        # Each later year is settled on its own; the unpaid amount is not carried.
-        assert [claim.settlement.funding_requirement for claim in pref.annual_claims[2:]] == [None, None, None]
+        # Settlement stops at the first unresolved claim; the later years stay
+        # scheduled but are never settled, and the unpaid amount is not carried.
+        assert [claim.hold_year for claim in pref.annual_claims] == [1, 2]
+        assert pref.funding_requirements == (requirement,)
+        assert max(event.model_month for event in pref.cash_flow_events) == 60
         assert stressed.common_equity.cash_flows is None
         assert stressed.status is CapitalStructureStatus.UNRESOLVED_FUNDING
 

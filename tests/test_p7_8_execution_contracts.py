@@ -111,6 +111,7 @@ def test_the_execution_enumerations_have_exactly_their_members() -> None:
         "multiple_common_equity_markers",
         "claim_below_common_equity",
         "duplicate_result_event_id",
+        "overfunded_closing",
     ]
     assert [member.value for member in Kind] == [
         "funding", "fee", "scheduled_debt_service", "balloon", "preferred_current_pay", "preferred_redemption",

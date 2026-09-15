@@ -39,11 +39,23 @@ never cash available to the next. The Common Equity Cash Flow is never floored.
 One Unit's surplus never pays another Unit's claim.
 
 **Unresolved funding (P7.7 Section 6.5).** A position whose claim is left
-unresolved reports N/A returns. Every position junior to it in its scope, and
-every Investment-scoped position once any Unit scope is unresolved, is blocked
-and not settled at all. Senior and independent positions stay valid. The
-Common Equity result is unavailable. Nothing is zero-filled, written off or
-cured by assumption, and upstream results are untouched.
+unresolved reports N/A returns, and its own settlement stops at that first
+unresolved claim: its later contractual events stay in its schedule, but with no
+arrears or default convention their settlement is unknowable, so no later
+year is settled and no later Funding Requirement is emitted. Every position
+junior to it in its scope, and every Investment-scoped position once any Unit
+scope is unresolved, is blocked and not settled at all. Senior and independent
+positions stay valid. The Common Equity result is unavailable. Nothing is
+zero-filled, carried forward, accrued, written off or cured by assumption, and
+upstream results are untouched.
+
+**Closing is never over-funded.** Before any claim is settled, every authored
+closing funding and fee is applied to the analysis root's pre-structured-capital
+closing flow -- the Unit's own, or the Investment's after its Business Plan and
+transaction costs. A root flow above ``OVERFUNDED_CLOSING_TOLERANCE`` ($0.01)
+is refused: no reserve, closing distribution or recapitalization is inferred,
+and nothing is resized. A Unit funded locally beyond its own equity need is not
+refused while the Investment root is not.
 
 **Neutral.** With no authored claim-bearing position the Common Equity Cash
 Flow *is* the P7.7 authority series, passed through untouched.
@@ -75,6 +87,7 @@ from .contracts import (
 )
 from .debt_position import schedule_debt_position
 from .execution_contracts import (
+    OVERFUNDED_CLOSING_TOLERANCE,
     CapitalStructureExecutionError,
     CommonEquityReturns,
     DebtPositionSchedule,
@@ -237,12 +250,46 @@ def _apply_closing(residual: list[float], scheduled: ScheduledPosition) -> None:
             residual[0] = residual[0] - event.amount
 
 
+def _require_funded_closing(scheduled: tuple[ScheduledPosition, ...], *, closing_source: float, root: str) -> None:
+    """Fail closed on an over-funded closing. Every authored closing funding
+    and fee -- of every claim-bearing position, whatever its later settlement
+    -- is applied in economic order to the root's pre-structured-capital
+    closing flow, exactly as the residual will apply it. Above
+    ``OVERFUNDED_CLOSING_TOLERANCE`` there is no ratified destination for the
+    excess, so the structure is refused; nothing is resized or rounded."""
+
+    if not scheduled:
+        return
+    closing = [closing_source]
+    for position in scheduled:
+        _apply_closing(closing, position)
+    if closing[0] > OVERFUNDED_CLOSING_TOLERANCE:
+        raise CapitalStructureExecutionError(
+            (
+                ExecutionIssue(
+                    code=ExecutionIssueCode.OVERFUNDED_CLOSING,
+                    message=(
+                        f"Authored capital exceeds the {root} closing funding requirement by {closing[0]:,.2f}. "
+                        "P7.8 does not infer a cash reserve, closing distribution or recapitalization for excess "
+                        "proceeds."
+                    ),
+                    field="funding",
+                ),
+            )
+        )
+
+
 def _settle_position(
     scheduled: ScheduledPosition, *, residual: list[float], hold_period: int
 ) -> tuple[PositionAnnualClaim, ...]:
     """Settle one position against ``residual``, the cash its scope has left
     after every senior position, and leave in ``residual`` what remains for the
-    next. One annual claim per hold year with a contractual receipt."""
+    next. One annual claim per hold year with a contractual receipt.
+
+    Settlement stops at the position's first unresolved claim, which is kept.
+    No arrears, default or capitalization convention exists, so a later year
+    cannot be settled honestly: its events stay in the schedule, and no later
+    claim or Funding Requirement is produced."""
 
     position = scheduled.position
     resolution = position.shortfall_resolution
@@ -282,6 +329,9 @@ def _settle_position(
                 settlement=settlement,
             )
         )
+        requirement = settlement.funding_requirement
+        if requirement is not None and requirement.status is FundingRequirementStatus.UNRESOLVED:
+            break
     return tuple(claims)
 
 
@@ -510,6 +560,7 @@ def execute_unit_capital_structure(
     scheduled = tuple(schedule_position(position, price_basis=basis, hold_period=hold_period) for position in claim_bearing)
 
     source = foundation.cash_authority.post_acquisition_debt_cash_flows
+    _require_funded_closing(scheduled, closing_source=source[0], root="Unit")
     residual = list(source)
     settled, _ = _settle_scope(scheduled, residual=residual, hold_period=hold_period, blocking=())
     layers, _, _ = _layers(
@@ -595,6 +646,7 @@ def execute_investment_capital_structure(
     )
 
     source = foundation.investment_cash_authority.cash_flows_after_unit_positions
+    _require_funded_closing(scheduled, closing_source=source[0], root="Investment")
     investment_residual = list(source)
     settled: dict[str, _Settled] = {}
     layers: dict[str, _Layer] = {}

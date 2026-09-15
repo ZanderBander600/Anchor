@@ -83,12 +83,13 @@ def round_unit(business_plan: BusinessPlan | None = None, **overrides: Any) -> t
     return acquisition_terms_from_inputs(inputs), results
 
 
-def round_deal(db: Path, *, name: str, **overrides: Any) -> Any:
+def round_deal(db: Path, *, name: str, business_plan: BusinessPlan | None = None, **overrides: Any) -> Any:
     """The round-number Unit saved as a Quick Deal on the common P7.6 hold."""
 
     inputs = round_inputs(**overrides)
     fields = {key: getattr(inputs, key) for key in inputs.__dataclass_fields__}
-    return quick_deal(db, name=name, **fields)
+    plan = BusinessPlan() if business_plan is None else business_plan
+    return quick_deal(db, name=name, business_plan=plan, **fields)
 
 
 def visible(db: Path, *deals: Any, **kwargs: Any) -> tuple[Any, tuple[CapitalStructureUnit, ...]]:
