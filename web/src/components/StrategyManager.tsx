@@ -19,12 +19,19 @@
 
 import { useEffect, useRef } from 'react';
 import {
+  INVESTMENT_BASE_STRATEGY_DESCRIPTION,
+  INVESTMENT_DIRTY_MESSAGE,
+  INVESTMENT_STRATEGY_SUBTITLE,
+  unitNames,
+} from '../investmentCatalog';
+import {
   describeStrategyOverlay,
   SAVE_BEFORE_STRATEGIES_MESSAGE,
   SAVE_DEAL_BEFORE_STRATEGIES_MESSAGE,
   STRATEGY_RESOLVES_TO_BASE_MESSAGE,
   strategyDomainsReplaced,
 } from '../strategyCatalog';
+import type { StrategyOverlay } from '../strategyTypes';
 import type { StrategiesState } from '../useStrategies';
 import { StrategyEditor } from './StrategyEditor';
 
@@ -35,7 +42,19 @@ export interface StrategyManagerProps {
 const BLOCKED_REASON_ID = 'strategy-blocked-reason';
 const EDITOR_ID = 'strategy-editor';
 
+/** One saved overlay as a line. A visible Investment's names its Unit. */
+function overlayLine(state: StrategiesState, overlay: StrategyOverlay): string {
+  if (state.investment === null) {
+    return describeStrategyOverlay(overlay);
+  }
+  const name = unitNames(state.units)[overlay.unit_id] ?? overlay.unit_id;
+  return `${name} · ${describeStrategyOverlay(overlay)}`;
+}
+
 function blockedReason(state: StrategiesState): string | null {
+  if (state.investment !== null) {
+    return state.isDirty ? INVESTMENT_DIRTY_MESSAGE : null;
+  }
   if (state.dealId === null) {
     return SAVE_DEAL_BEFORE_STRATEGIES_MESSAGE;
   }
@@ -71,8 +90,9 @@ export function StrategyManager({ state }: StrategyManagerProps) {
               Strategies
             </h3>
             <p className="scenario-panel-subtitle">
-              Alternative decisions: bid, financing, business plan, operating outcome and hold. Each
-              domain inherits Base or replaces it whole. Compare them in the Decision Matrix.
+              {state.investment !== null
+                ? INVESTMENT_STRATEGY_SUBTITLE
+                : 'Alternative decisions: bid, financing, business plan, operating outcome and hold. Each domain inherits Base or replaces it whole. Compare them in the Decision Matrix.'}
             </p>
           </div>
           <button
@@ -114,7 +134,11 @@ export function StrategyManager({ state }: StrategyManagerProps) {
           <li className="scenario-list-item strategy-list-base">
             <div className="scenario-list-identity">
               <span className="scenario-list-name">Base Strategy</span>
-              <span className="scenario-list-description">The saved underwriting. Edit it on Underwrite.</span>
+              <span className="scenario-list-description">
+                {state.investment !== null
+                  ? INVESTMENT_BASE_STRATEGY_DESCRIPTION
+                  : 'The saved underwriting. Edit it on Underwrite.'}
+              </span>
             </div>
             <div className="scenario-list-overrides">
               <span className="scenario-list-count">Implicit</span>
@@ -146,7 +170,7 @@ export function StrategyManager({ state }: StrategyManagerProps) {
                   ) : (
                     <ul className="strategy-overlay-summary">
                       {overlays.map((overlay) => (
-                        <li key={overlay.domain}>{describeStrategyOverlay(overlay)}</li>
+                        <li key={`${overlay.unit_id}:${overlay.domain}`}>{overlayLine(state, overlay)}</li>
                       ))}
                     </ul>
                   )}

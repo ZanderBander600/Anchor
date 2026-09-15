@@ -20,6 +20,7 @@
 import { irrNotReportedExplanation } from './capitalEconomics';
 import type { DecisionMetricSpec, DecisionMetricUnit } from './decisionTypes';
 import { formatCurrency, formatMultiple, formatPercent } from './format';
+import { SAVE_BEFORE_STRATEGIES_MESSAGE } from './strategyCatalog';
 import type { IrrStatus } from './types';
 
 /** One backend value in its metric's own unit. */
@@ -92,3 +93,35 @@ export const STALE_MATRIX_MESSAGE =
 // prettier-ignore
 export const DIRTY_MATRIX_MESSAGE =
   'Base underwriting has unsaved changes. Save the deal, then Refresh Matrix.';
+
+/** Phase 7 Gate P7.6: the words one matrix surface uses, so the same
+ * component reads a Deal's matrix or a visible Investment's. The Deal's are
+ * these; the Investment's live with its own copy (`investmentCatalog.ts`). */
+export interface DecisionMatrixCopy {
+  subtitle: string;
+  unsaved: string;
+  dirty: string;
+  stale: string;
+  /** Why Run / Refresh is unavailable while there are unsaved changes. */
+  blocked: string;
+  caption: string;
+}
+
+export const DEAL_MATRIX_COPY: DecisionMatrixCopy = {
+  subtitle:
+    'Each strategy (what you choose) under each scenario (what may happen). Every cell is a complete deterministic analysis of the saved underwriting.',
+  unsaved: UNSAVED_MATRIX_MESSAGE,
+  dirty: DIRTY_MATRIX_MESSAGE,
+  stale: STALE_MATRIX_MESSAGE,
+  blocked: SAVE_BEFORE_STRATEGIES_MESSAGE,
+  caption:
+    'Project results of each strategy under each scenario, with the backend’s Delta vs Base, Worst Case and Range',
+};
+
+/** P7.6: an invalid variant cell of a visible Investment roots each issue's
+ * location at its Unit (`units[<unit_id>].<field>`), so the Unit is never
+ * hidden. The Unit's id, read off that location; `null` when it names none. */
+export function issueUnitId(field: string | null): string | null {
+  const match = field === null ? null : /^units\[([^\]]+)\]/.exec(field);
+  return match === null ? null : match[1];
+}

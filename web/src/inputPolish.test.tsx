@@ -41,6 +41,8 @@ vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');
   return {
     ...actual,
+    // P7.6: the sidebar's Recent Investments, answered so no test reaches a backend.
+    listVisibleInvestments: vi.fn(async () => []),
     analyzeLeaseLevelAcquisition: vi.fn(),
     getDeal: vi.fn(),
     listDeals: vi.fn(),

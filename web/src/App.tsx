@@ -49,6 +49,13 @@ import { SubNav } from './components/SubNav';
 import { UnderwriteWorkspace } from './components/UnderwriteWorkspace';
 import { WorkspaceNav } from './components/WorkspaceNav';
 import { WorkspacePanel } from './components/WorkspacePanel';
+import type { AppView } from './components/AppSidebar';
+import { InvestmentLibraryPanel } from './components/InvestmentLibraryPanel';
+import { InvestmentReturnBar } from './components/InvestmentReturnBar';
+import { InvestmentWorkspace } from './components/InvestmentWorkspace';
+import { NewInvestmentPanel } from './components/NewInvestmentPanel';
+import type { VisibleInvestment } from './investmentTypes';
+import { useInvestments } from './useInvestments';
 import { buildOwnerSummaryData } from './ownerSummary';
 import { buildDetailedSections, buildQuickSections } from './underwrite';
 import type { ResultsViewId, UnderwriteTabId } from './underwrite';
@@ -1180,7 +1187,15 @@ export default function App() {
   // decides whether Save Deal calls POST /deals (null) or PUT /deals/{id}
   // (set). No AcquisitionResults is ever part of this state -- reopening a
   // deal always means resubmitting its inputs to the existing /analyze.
-  const [view, setView] = useState<'workspace' | 'library'>('workspace');
+  const [view, setView] = useState<AppView>('workspace');
+  // Phase 7 Gate P7.6: which visible Investment is open, the way back from one
+  // of its Units, and whether it holds unsaved changes. Everything else about
+  // an Investment lives in its own hooks.
+  const investments = useInvestments();
+  const [openInvestmentId, setOpenInvestmentId] = useState<string | null>(null);
+  const [investmentRefresh, setInvestmentRefresh] = useState<object>({});
+  const [unitReturnId, setUnitReturnId] = useState<string | null>(null);
+  const [isInvestmentUnsaved, setIsInvestmentUnsaved] = useState(false);
   const [dealName, setDealName] = useState('');
   const [currentDealId, setCurrentDealId] = useState<string | null>(null);
   const [isSavingDeal, setIsSavingDeal] = useState(false);
@@ -2265,6 +2280,114 @@ export default function App() {
     setView('workspace');
   }
 
+  // ===========================================================================
+  // Phase 7 Gate P7.6 -- Investment navigation.
+  //
+  // App only coordinates: which surface is showing, which visible Investment
+  // is open, and the way back from one of its Units. An Investment's state
+  // lives in its own hooks (`useInvestments`, `useInvestmentWorkspace`,
+  // `useInvestmentAnalysis`, `useNewInvestment`). The open Investment's
+  // workspace stays mounted while a Unit's underwriting is open, so its drafts
+  // survive the trip; coming back re-reads it.
+  // ===========================================================================
+
+  /** Whether leaving the open Investment for another would discard unsaved
+   * changes -- the app's `window.confirm` convention. */
+  function confirmLeaveInvestment(nextInvestmentId: string): boolean {
+    if (openInvestmentId === null || openInvestmentId === nextInvestmentId || !isInvestmentUnsaved) {
+      return true;
+    }
+    return window.confirm('Discard unsaved Investment changes?');
+  }
+
+  function openInvestment(investmentId: string) {
+    if (!confirmLeaveInvestment(investmentId)) {
+      return;
+    }
+    if (openInvestmentId !== investmentId) {
+      setIsInvestmentUnsaved(false);
+      setOpenInvestmentId(investmentId);
+    }
+    setUnitReturnId(null);
+    setView('investment');
+  }
+
+  function handleOpenInvestmentLibrary() {
+    setUnitReturnId(null);
+    setView('investment-library');
+    investments.reload();
+  }
+
+  function handleNewInvestment() {
+    setUnitReturnId(null);
+    setView('new-investment');
+    void loadSavedDeals();
+  }
+
+  function handleCloseInvestmentPage() {
+    setView(openInvestmentId === null ? 'workspace' : 'investment');
+  }
+
+  function handleInvestmentCreated(investment: VisibleInvestment) {
+    investments.reload();
+    openInvestment(investment.id);
+  }
+
+  function handleInvestmentDeleted() {
+    setOpenInvestmentId(null);
+    setIsInvestmentUnsaved(false);
+    investments.reload();
+    setView('investment-library');
+  }
+
+  async function handleDeleteInvestmentFromLibrary(investmentId: string) {
+    await investments.remove(investmentId);
+    if (openInvestmentId === investmentId) {
+      setOpenInvestmentId(null);
+      setIsInvestmentUnsaved(false);
+    }
+  }
+
+  /** Opens a Unit in its own, existing Deal workspace, remembering the way
+   * back. The Investment never repeats a Unit's underwriting form. */
+  function handleOpenUnit(deal: Deal) {
+    setUnitReturnId(openInvestmentId);
+    void handleOpenDeal(deal);
+  }
+
+  /** Back from a Unit: the Investment and its Deals are re-read, so a Unit
+   * saved in the meantime is never assumed unchanged. */
+  function handleBackToInvestment() {
+    setUnitReturnId(null);
+    setInvestmentRefresh({});
+    investments.reload();
+    setView('investment');
+  }
+
+  /** P7.6: the visible Investment the open Deal is a Unit of, if any. That
+   * Deal's strategies, scenarios and decision matrix live on the Investment. */
+  const activeDealInvestment =
+    activeDealId === null
+      ? undefined
+      : investments.investments.find((investment) =>
+          investment.units.some((unit) => unit.unit_id === activeDealId),
+        );
+  const activeDealMembership =
+    activeDealInvestment === undefined
+      ? null
+      : {
+          investmentName: activeDealInvestment.name,
+          onOpen: () => {
+            if (activeDealInvestment.id === openInvestmentId) {
+              handleBackToInvestment();
+            } else {
+              openInvestment(activeDealInvestment.id);
+            }
+          },
+        };
+  const returnInvestmentName =
+    investments.investments.find((investment) => investment.id === unitReturnId)?.name ?? 'Investment';
+
   /** Deal-header overflow actions. Both reuse the same by-id handlers the
    * Deal Library rows use, and delete asks for the same `window.confirm`
    * the library asks for -- the app's existing convention. */
@@ -2431,6 +2554,7 @@ export default function App() {
             savedAt={lastDetailedSavedAt}
             isActive={isRiskVisible}
             view={riskView}
+            memberOf={activeDealMembership}
           />
 
           {detailedRiskOutputs === 'unanalyzed' ? (
@@ -2733,6 +2857,7 @@ export default function App() {
             savedAt={lastSavedAt}
             isActive={isRiskVisible}
             view={riskView}
+            memberOf={activeDealMembership}
           />
 
           {quickRiskOutputs === 'unanalyzed' ? (
@@ -3047,6 +3172,7 @@ export default function App() {
             savedAt={leaseLevel.lastSavedAt}
             isActive={isRiskVisible}
             view={leaseLevelRiskView}
+            memberOf={activeDealMembership}
           />
 
           <div
@@ -3145,26 +3271,90 @@ export default function App() {
         isDealsLoading={isDealsLoading}
         activeDealId={activeDealId}
         view={view}
-        onOpenLibrary={handleOpenLibrary}
-        onNewDeal={handleNewDealFromSidebar}
-        onOpenDeal={(deal) => void handleOpenDeal(deal)}
+        onOpenLibrary={() => {
+          setUnitReturnId(null);
+          handleOpenLibrary();
+        }}
+        onNewDeal={() => {
+          setUnitReturnId(null);
+          handleNewDealFromSidebar();
+        }}
+        onOpenDeal={(deal) => {
+          setUnitReturnId(null);
+          void handleOpenDeal(deal);
+        }}
+        investments={investments.investments}
+        isInvestmentsLoading={investments.isLoading}
+        activeInvestmentId={openInvestmentId}
+        onOpenInvestmentLibrary={handleOpenInvestmentLibrary}
+        onNewInvestment={handleNewInvestment}
+        onOpenInvestment={openInvestment}
       />
 
       <div className="app-main">
-        {view === 'library' ? (
+        {view === 'library' && (
           <div className="library-view">
             <DealLibraryPanel
               deals={savedDeals}
               isLoading={isDealsLoading}
               error={dealsError}
-              onOpen={(deal) => void handleOpenDeal(deal)}
+              onOpen={(deal) => {
+                setUnitReturnId(null);
+                void handleOpenDeal(deal);
+              }}
               onDuplicate={(deal) => void handleDuplicateDeal(deal)}
               onDelete={(deal) => void handleDeleteDeal(deal)}
               onClose={handleCloseLibrary}
             />
           </div>
-        ) : (
+        )}
+
+        {view === 'investment-library' && (
+          <div className="library-view investment-page">
+            <InvestmentLibraryPanel
+              investments={investments.investments}
+              isLoading={investments.isLoading}
+              error={investments.error}
+              onOpen={openInvestment}
+              onDelete={handleDeleteInvestmentFromLibrary}
+              onNew={handleNewInvestment}
+              onClose={handleCloseInvestmentPage}
+            />
+          </div>
+        )}
+
+        {view === 'new-investment' && (
+          <div className="library-view investment-page">
+            <NewInvestmentPanel
+              deals={savedDeals}
+              investments={investments.investments}
+              onCreated={handleInvestmentCreated}
+              onCancel={handleCloseInvestmentPage}
+            />
+          </div>
+        )}
+
+        {openInvestmentId !== null && (
+          <div className="investment-host" hidden={view !== 'investment'}>
+            <InvestmentWorkspace
+              key={openInvestmentId}
+              investmentId={openInvestmentId}
+              investments={investments.investments}
+              refreshSignal={investmentRefresh}
+              onOpenUnit={handleOpenUnit}
+              onChanged={investments.reload}
+              onDeleted={handleInvestmentDeleted}
+              onDirtyChange={setIsInvestmentUnsaved}
+              isShown={view === 'investment'}
+            />
+          </div>
+        )}
+
+        {view === 'workspace' && (
           <>
+            {unitReturnId !== null && unitReturnId === openInvestmentId && (
+              <InvestmentReturnBar investmentName={returnInvestmentName} onBack={handleBackToInvestment} />
+            )}
             <DealHeader
               dealName={byMode(operatingMode, {
                 quick: dealName,

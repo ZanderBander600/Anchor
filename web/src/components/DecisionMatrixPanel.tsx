@@ -5,20 +5,23 @@
  * inside it; each Scenario is a column, Base first. When a saved Scenario
  * exists, two more columns give each Strategy's Worst Case and Range across
  * its Scenarios. Every cell is one complete deterministic analysis of one
- * Analysis Variant.
+ * Analysis Variant -- for a visible Investment (P7.6), every Unit's analysis,
+ * consolidated by the backend.
  *
  * **Every figure is a backend field (P-5, Q22, DC-5).** A cell shows one
- * metric of its variant's `AcquisitionResults`, and under it the backend's
- * Delta vs Base Scenario for the same Strategy. Worst Case and Range are the
- * backend's too, with the Scenarios it named. This component formats and lays
- * out; it subtracts, compares, sorts, ranks and averages nothing. There is no
- * winner, no score and no colour that means good or bad.
+ * metric of its variant's Project results, and under it the backend's Delta vs
+ * Base Scenario for the same Strategy. Worst Case and Range are the backend's
+ * too, with the Scenarios it named. Metric labels are the backend catalog's
+ * (a visible Investment's DSCR is its Minimum Aggregate DSCR). This component
+ * formats and lays out; it subtracts, compares, sorts, ranks and averages
+ * nothing. There is no winner, no score and no colour that means good or bad.
  *
  * **Honest cells (DC-2).** `N/A` carries its reason in a note under the table,
  * which the cell points to and its tooltip repeats. An invalid variant shows
- * `Invalid variant` with the validators' reasons in its own cell, and every
- * other cell stands. When Strategies hold for different periods the backend
- * omits Exit Value and Minimum DSCR, and one note says why.
+ * `Invalid variant` with the validators' reasons in its own cell -- each naming
+ * the Unit it concerns -- and every other cell stands. When Strategies hold for
+ * different periods the backend omits Exit Value and Minimum DSCR, and one note
+ * says why.
  *
  * **Current or out of date, never mixed (DC-7).** The table is shown only
  * while the package matches the saved state on screen; otherwise the
@@ -32,27 +35,28 @@
 import {
   BASE_SCENARIO_LABEL,
   BASE_STRATEGY_LABEL,
-  DIRTY_MATRIX_MESSAGE,
+  DEAL_MATRIX_COPY,
   EMPTY_MATRIX_MESSAGE,
   formatDifference,
   formatMetricValue,
   formatSignedDifference,
   INVALID_VARIANT,
+  issueUnitId,
   NOT_AVAILABLE,
   notAvailableText,
-  STALE_MATRIX_MESSAGE,
-  UNSAVED_MATRIX_MESSAGE,
 } from '../decisionMatrix';
+import type { DecisionMatrixCopy } from '../decisionMatrix';
 import type {
   DecisionCell,
+  DecisionCellIssue,
   DecisionMatrix,
   DecisionMetricSpec,
   DecisionScenarioColumn,
   DecisionStrategyFigures,
   DecisionStrategyRow,
 } from '../decisionTypes';
+import { investmentIssueLead, withUnitNames } from '../investmentCatalog';
 import type { InvestmentScenario } from '../scenarioTypes';
-import { SAVE_BEFORE_STRATEGIES_MESSAGE } from '../strategyCatalog';
 import type { InvestmentStrategy } from '../strategyTypes';
 import type { DecisionMatrixState } from '../useDecisionMatrix';
 import { StaleAnalysisNotice } from './StaleAnalysisNotice';
@@ -60,6 +64,13 @@ import { StaleAnalysisNotice } from './StaleAnalysisNotice';
 export interface DecisionMatrixPanelProps {
   matrix: DecisionMatrixState;
   dealId: string | null;
+  /** P7.6: the visible Investment whose matrix this is, or `null` for a Deal. */
+  investmentId?: string | null;
+  /** The surface's words; a Deal's by default. */
+  copy?: DecisionMatrixCopy;
+  /** P7.6: each Unit's id, mapped to the name an analyst knows it by, so an
+   * invalid variant's reasons name their Unit. */
+  unitNames?: Readonly<Record<string, string>>;
   isDirty: boolean;
   /** The saved Strategies and Scenarios on screen, for their current labels. */
   strategies: InvestmentStrategy[];
@@ -70,6 +81,7 @@ export interface DecisionMatrixPanelProps {
 }
 
 const BLOCKED_REASON_ID = 'decision-matrix-blocked-reason';
+const NO_NAMES: Readonly<Record<string, string>> = {};
 
 interface Labels {
   strategy: (row: DecisionStrategyRow) => string;
@@ -108,12 +120,29 @@ function NotAvailable({ text, noteId }: { text: string; noteId: string }) {
   );
 }
 
+/** One validator's reason, with the Unit it concerns named first and the
+ * analyst's reading of an Investment rule before the backend's own words. */
+function CellReason({ issue, names }: { issue: DecisionCellIssue; names: Readonly<Record<string, string>> }) {
+  const unitId = issueUnitId(issue.field);
+  const unit = unitId === null ? undefined : (names[unitId] ?? unitId);
+  const lead = investmentIssueLead(issue.code);
+  return (
+    <li>
+      {unit !== undefined && <span className="decision-matrix-reason-unit">{`${unit}: `}</span>}
+      {lead !== null && <span className="decision-matrix-reason-lead">{`${lead} `}</span>}
+      {withUnitNames(issue.message, names)}
+    </li>
+  );
+}
+
 interface TableProps {
   matrix: DecisionMatrix;
   labels: Labels;
+  caption: string;
+  names: Readonly<Record<string, string>>;
 }
 
-function DecisionMatrixTable({ matrix, labels }: TableProps) {
+function DecisionMatrixTable({ matrix, labels, caption, names }: TableProps) {
   const notes = collectNotes();
   const cells = new Map<string, DecisionCell>(
     matrix.cells.map((cell) => [`${cell.strategy_id}|${cell.scenario_id}`, cell]),
@@ -145,7 +174,7 @@ function DecisionMatrixTable({ matrix, labels }: TableProps) {
           <span className="decision-matrix-invalid">{INVALID_VARIANT}</span>
           <ul className="decision-matrix-reasons">
             {cell.issues.map((issue, index) => (
-              <li key={`${issue.code}-${index}`}>{issue.message}</li>
+              <CellReason key={`${issue.code}-${index}`} issue={issue} names={names} />
             ))}
           </ul>
         </td>
@@ -285,10 +314,7 @@ function DecisionMatrixTable({ matrix, labels }: TableProps) {
         tabIndex={0}
       >
         <table className="decision-matrix">
-          <caption className="visually-hidden">
-            Project results of each strategy under each scenario, with the backend&apos;s Delta vs
-            Base, Worst Case and Range
-          </caption>
+          <caption className="visually-hidden">{caption}</caption>
           <thead>
             <tr>
               <th scope="col" className="decision-matrix-corner">
@@ -341,6 +367,9 @@ function DecisionMatrixTable({ matrix, labels }: TableProps) {
 export function DecisionMatrixPanel({
   matrix,
   dealId,
+  investmentId = null,
+  copy = DEAL_MATRIX_COPY,
+  unitNames = NO_NAMES,
   isDirty,
   strategies,
   scenarios,
@@ -349,8 +378,9 @@ export function DecisionMatrixPanel({
   retryLoad,
 }: DecisionMatrixPanelProps) {
   const report = matrix.report;
+  const scopeId = investmentId ?? dealId;
   const showTable = report !== null && matrix.isCurrent;
-  const blocked = dealId !== null && matrix.hasComparison && isDirty;
+  const blocked = scopeId !== null && matrix.hasComparison && isDirty;
 
   const labels: Labels = {
     strategy: (row) =>
@@ -377,12 +407,9 @@ export function DecisionMatrixPanel({
           <h3 id="decision-matrix-title" className="scenario-panel-title">
             Decision Matrix
           </h3>
-          <p className="scenario-panel-subtitle">
-            Each strategy (what you choose) under each scenario (what may happen). Every cell is a
-            complete deterministic analysis of the saved underwriting.
-          </p>
+          <p className="scenario-panel-subtitle">{copy.subtitle}</p>
         </div>
-        {dealId !== null && matrix.hasComparison && (
+        {scopeId !== null && matrix.hasComparison && (
           <button
             type="button"
             className="btn btn-primary btn-sm"
@@ -395,7 +422,7 @@ export function DecisionMatrixPanel({
         )}
       </div>
 
-      {dealId === null && <p className="scenario-blocked">{UNSAVED_MATRIX_MESSAGE}</p>}
+      {scopeId === null && <p className="scenario-blocked">{copy.unsaved}</p>}
 
       {isLoading && (
         <p className="scenario-muted" role="status">
@@ -412,17 +439,17 @@ export function DecisionMatrixPanel({
         </div>
       )}
 
-      {dealId !== null && !isLoading && loadError === null && !matrix.hasComparison && (
+      {scopeId !== null && !isLoading && loadError === null && !matrix.hasComparison && (
         <p className="decision-matrix-empty">{EMPTY_MATRIX_MESSAGE}</p>
       )}
 
       {blocked && (
         <p id={BLOCKED_REASON_ID} className="scenario-blocked" role="status">
-          {SAVE_BEFORE_STRATEGIES_MESSAGE}
+          {copy.blocked}
         </p>
       )}
 
-      {dealId !== null && matrix.hasComparison && (
+      {scopeId !== null && matrix.hasComparison && (
         <>
           {!matrix.hasRun && !isLoading && (
             <p className="scenario-muted">
@@ -436,7 +463,7 @@ export function DecisionMatrixPanel({
           )}
           {matrix.error !== null && (
             <div className="error-banner scenario-error" role="alert">
-              <span>{matrix.error}</span>
+              <span>{withUnitNames(matrix.error, unitNames)}</span>
               <button
                 type="button"
                 className="btn btn-ghost btn-xs"
@@ -448,9 +475,11 @@ export function DecisionMatrixPanel({
             </div>
           )}
           {report !== null && !matrix.isCurrent && (
-            <StaleAnalysisNotice message={isDirty ? DIRTY_MATRIX_MESSAGE : STALE_MATRIX_MESSAGE} />
+            <StaleAnalysisNotice message={isDirty ? copy.dirty : copy.stale} />
           )}
-          {showTable && <DecisionMatrixTable matrix={report.matrix} labels={labels} />}
+          {showTable && (
+            <DecisionMatrixTable matrix={report.matrix} labels={labels} caption={copy.caption} names={unitNames} />
+          )}
         </>
       )}
     </section>

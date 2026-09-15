@@ -114,6 +114,11 @@ vi.mock('./api', async () => {
       strategies: [],
     })),
     fetchStrategyTargetCatalog: vi.fn(async () => ({ quick: [], detailed: [], lease_level: [] })),
+    // P7.6: the sidebar lists the visible Investments on mount. Answered here
+    // so no test reaches a real backend; the Investment workspace itself is
+    // proven in `investmentWorkspace.test.tsx` and
+    // `investmentNavigation.test.tsx`.
+    listVisibleInvestments: vi.fn(async () => []),
   };
 });
 

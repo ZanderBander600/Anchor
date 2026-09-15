@@ -21,7 +21,13 @@
  */
 
 import { useEffect, useRef } from 'react';
+import {
+  INVESTMENT_DIRTY_MESSAGE,
+  INVESTMENT_SCENARIO_SUBTITLE,
+  unitNames,
+} from '../investmentCatalog';
 import { describeScenarioOverride } from '../scenarioCatalog';
+import type { ScenarioOverride } from '../scenarioTypes';
 import { SAVE_BEFORE_SCENARIOS_MESSAGE } from '../useScenarios';
 import type { ScenariosState } from '../useScenarios';
 import { ScenarioEditor } from './ScenarioEditor';
@@ -37,8 +43,20 @@ function overrideCount(count: number): string {
   return count === 1 ? '1 override' : `${count} overrides`;
 }
 
+/** One saved override as a phrase. A visible Investment's names its Unit. */
+function overridePhrase(state: ScenariosState, override: ScenarioOverride): string {
+  if (state.investment === null) {
+    return describeScenarioOverride(override);
+  }
+  const name = unitNames(state.units)[override.unit_id] ?? override.unit_id;
+  return `${name} · ${describeScenarioOverride(override)}`;
+}
+
 /** Why the analyst cannot change Scenarios right now, or `null`. */
 function blockedReason(state: ScenariosState): string | null {
+  if (state.investment !== null) {
+    return state.isDirty ? INVESTMENT_DIRTY_MESSAGE : null;
+  }
   if (state.dealId === null) {
     return 'Save this deal before adding scenarios.';
   }
@@ -77,8 +95,9 @@ export function ScenarioWorkspace({ state }: ScenarioWorkspaceProps) {
               Scenarios
             </h3>
             <p className="scenario-panel-subtitle">
-              Create named Downside, Upside, or other views by overriding selected assumptions.
-              Compare them in the Decision Matrix.
+              {state.investment !== null
+                ? INVESTMENT_SCENARIO_SUBTITLE
+                : 'Create named Downside, Upside, or other views by overriding selected assumptions. Compare them in the Decision Matrix.'}
             </p>
           </div>
           <button
@@ -138,7 +157,7 @@ export function ScenarioWorkspace({ state }: ScenarioWorkspaceProps) {
                     <span className="scenario-list-count">{overrideCount(overrides.length)}</span>
                     {overrides.length > 0 && (
                       <span className="scenario-list-summary">
-                        {overrides.map(describeScenarioOverride).join(' · ')}
+                        {overrides.map((override) => overridePhrase(state, override)).join(' · ')}
                       </span>
                     )}
                   </div>

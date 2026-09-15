@@ -1,5 +1,7 @@
 """Phase 7 Gate P7.6 -- the production ledger and the architecture guards for
-multi-unit Investments and consolidation (Session A, backend).
+multi-unit Investments and consolidation (Session A, backend; Session B, the
+Investment workspace UI, whose frontend guards live in
+``web/src/investmentArchitecture.test.ts``).
 
 ``docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md`` Sections 3 (P-1,
 P-3, P-4, P-9, P-10), 8, 9, 10, 11 and 15, and the P7.6 gate's own Q16
@@ -21,7 +23,8 @@ query reads objects only (protocol 11.2). The guards hold:
    body, enumerated store changes, validation before every write;
 6. **P7.2 - P7.5 compatibility** -- every baseline route and the one-unit matrix
    service unchanged, the comparison changed only as enumerated;
-7. **no later-gate concept**, no AI, no frontend, no case identifier.
+7. **no later-gate concept**, no AI, no case identifier -- and a frontend that
+   changes only the enumerated Session B files.
 """
 
 from __future__ import annotations
@@ -76,7 +79,7 @@ _API = "src/anchor/api.py"
 #: - ``analysis/scenario.py`` and ``analysis/strategy.py``: Unit addressing
 #:   generalized to an Investment's member set, nothing else;
 #: - ``api.py``: the visible Investment routes.
-_P7_6_PRODUCTION_FILES = frozenset(
+_P7_6_BACKEND_FILES = frozenset(
     {
         _CONSOLIDATION_ENGINE, _CONSOLIDATION_CONTRACTS, _CONSOLIDATION_INIT,
         _INVESTMENT_CONTRACTS, _INVESTMENT_VALIDATION, _INVESTMENT_INIT,
@@ -84,9 +87,58 @@ _P7_6_PRODUCTION_FILES = frozenset(
     }
 )
 
+#: Every frontend production file P7.6 Session B changes, exactly:
+#: - the typed client (``api.ts``, additions only) and the wire contracts
+#:   (``investmentTypes.ts``; ``decisionTypes.ts`` gains the Investment issue
+#:   source the backend already emits);
+#: - the Investment's presentation, draft boundary and state hooks, and its
+#:   Library, builder, workspace, Overview, Units, transaction-cost editor and
+#:   return bar;
+#: - the P7.3 / P7.5 Strategy, Scenario and Decision Matrix modules, generalized
+#:   to an explicit Investment scope (one implementation, two scopes);
+#: - global navigation (``App.tsx``, ``AppSidebar.tsx``) and the styles.
+_P7_6_WEB_FILES = frozenset(
+    {
+        "web/src/api.ts",
+        "web/src/App.tsx",
+        "web/src/index.css",
+        "web/src/decisionTypes.ts",
+        "web/src/decisionMatrix.ts",
+        "web/src/strategyForm.ts",
+        "web/src/useStrategies.ts",
+        "web/src/useScenarios.ts",
+        "web/src/useDecisionMatrix.ts",
+        "web/src/investmentTypes.ts",
+        "web/src/investmentCatalog.ts",
+        "web/src/investmentForm.ts",
+        "web/src/useInvestments.ts",
+        "web/src/useInvestmentWorkspace.ts",
+        "web/src/useInvestmentAnalysis.ts",
+        "web/src/useNewInvestment.ts",
+        "web/src/components/AppSidebar.tsx",
+        "web/src/components/RiskDecisionWorkspace.tsx",
+        "web/src/components/DecisionMatrixPanel.tsx",
+        "web/src/components/StrategyManager.tsx",
+        "web/src/components/StrategyEditor.tsx",
+        "web/src/components/ScenarioWorkspace.tsx",
+        "web/src/components/ScenarioEditor.tsx",
+        "web/src/components/InvestmentIssueList.tsx",
+        "web/src/components/InvestmentLibraryPanel.tsx",
+        "web/src/components/NewInvestmentPanel.tsx",
+        "web/src/components/TransactionCostEditor.tsx",
+        "web/src/components/InvestmentOverview.tsx",
+        "web/src/components/InvestmentUnitsPanel.tsx",
+        "web/src/components/InvestmentWorkspace.tsx",
+        "web/src/components/InvestmentReturnBar.tsx",
+    }
+)
+_P7_6_PRODUCTION_FILES = _P7_6_BACKEND_FILES | _P7_6_WEB_FILES
+
 #: The mature engine, leasing, the D6 Business Plan, AI, ingestion, the one-unit
-#: variant service, the fingerprint functions and the frontend: P7.6 consumes
-#: them and changes none. ``engine/returns.py`` is called, never modified.
+#: variant service, the fingerprint functions, and the frontend's financial,
+#: formatting, contract and Business Plan modules: P7.6 consumes them and
+#: changes none. ``engine/returns.py`` is called, never modified; the frontend
+#: formats backend figures with the shipped formatters and derives none.
 _PROTECTED = (
     "src/anchor/engine",
     "src/anchor/leasing",
@@ -106,7 +158,25 @@ _PROTECTED = (
     "src/anchor/deals/variants.py",
     "src/anchor/deals/__init__.py",
     "src/anchor/decision/__init__.py",
-    "web",
+    "web/src/convert.ts",
+    "web/src/format.ts",
+    "web/src/liveMetrics.ts",
+    "web/src/ownerSummary.ts",
+    "web/src/capitalEconomics.ts",
+    "web/src/businessPlan.ts",
+    "web/src/useBusinessPlan.ts",
+    "web/src/types.ts",
+    "web/src/leaseLevelTypes.ts",
+    "web/src/scenarioTypes.ts",
+    "web/src/scenarioCatalog.ts",
+    "web/src/strategyTypes.ts",
+    "web/src/strategyCatalog.ts",
+    "web/src/operatingMode.ts",
+    "web/src/components/BusinessPlanEditor.tsx",
+    "web/src/components/CapitalEconomicsSection.tsx",
+    "web/src/components/NumericInput.tsx",
+    "web/src/components/UnderwriteWorkspace.tsx",
+    "web/src/components/LeaseLevelWorkspace.tsx",
 )
 
 
@@ -284,7 +354,8 @@ def test_the_ledger_rejects_any_unexpected_production_change() -> None:
         "src/anchor/deals/variants.py",
         "src/anchor/deals/fingerprint.py",
         "src/anchor/ai/prompts.py",
-        "web/src/App.tsx",
+        "web/src/convert.ts",
+        "web/src/capitalEconomics.ts",
     ):
         assert _ledger_violations({*_P7_6_PRODUCTION_FILES, intruder}) == ([intruder], [])
     assert not _is_production("tests/test_p7_6_consolidation_architecture.py")
@@ -746,10 +817,33 @@ def _identifiers_and_strings(tree: ast.AST) -> set[str]:
     return found
 
 
-@pytest.mark.parametrize("path", sorted(_P7_6_PRODUCTION_FILES))
+@pytest.mark.parametrize("path", sorted(_P7_6_BACKEND_FILES))
 def test_no_p7_6_code_names_a_later_gate_concept(path: str) -> None:
     code = ast.Module(body=_added_nodes(path), type_ignores=[])
     assert {t for t in _identifiers_and_strings(code) if _LATER_GATE_VOCABULARY.search(t)} == set()
+
+
+def _added_web_text(path: str) -> str:
+    """Every line P7.6 added to a frontend file that already existed at the
+    base."""
+
+    diff = _git("diff", "-U0", _P7_6_BASE, "--", path)
+    return "\n".join(line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+
+
+def _is_new_web_file(path: str) -> bool:
+    return subprocess.run(
+        ["git", "cat-file", "-e", f"{_P7_6_BASE}:{path}"], capture_output=True, cwd=_PROJECT_ROOT
+    ).returncode != 0
+
+
+@pytest.mark.parametrize("path", sorted(_P7_6_WEB_FILES))
+def test_no_p7_6_frontend_addition_names_a_later_gate_concept(path: str) -> None:
+    """Session B adds no Capital Structure, Partnership, waterfall, refinancing,
+    valuation-timepoint, funding-requirement or Unit-selection surface."""
+
+    text = _current(path) if _is_new_web_file(path) else _added_web_text(path)
+    assert sorted({match.group(0) for match in _LATER_GATE_VOCABULARY.finditer(text)}) == []
 
 
 def test_the_vocabulary_guard_has_teeth() -> None:
@@ -766,7 +860,7 @@ def test_no_unit_selection_domain_ships() -> None:
 
 
 def test_no_p7_6_module_reaches_the_ai() -> None:
-    for path in sorted(_P7_6_PRODUCTION_FILES - {_API, _STORE, _CONTRACTS}):
+    for path in sorted(_P7_6_BACKEND_FILES - {_API, _STORE, _CONTRACTS}):
         assert not {name for name in _imports(_tree(path)) if re.search(r"(^|\.)ai(\.|$)", name)}, path
 
 

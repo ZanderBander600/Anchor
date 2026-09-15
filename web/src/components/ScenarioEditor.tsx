@@ -7,31 +7,38 @@
  * the id, and values are typed in the units an analyst reads (see
  * `scenarioCatalog.ts`).
  *
+ * **A Unit column for a visible Investment (P7.6).** Each override row names
+ * the Unit it addresses, by name, first; its assumptions are then that Unit's
+ * own operating mode's, and its operations that assumption's whitelist. A Deal
+ * keeps the table exactly as it was: the Deal is the unit.
+ *
  * **The registry decides what is offered.** Assumptions come from the
  * operating mode's catalog (`GET /scenario-targets`), and each assumption's
- * operations come from its own whitelist. An assumption already used in another
- * row is not offered again, which prevents the obvious duplicate. The backend
- * still refuses duplicates itself; this is a convenience, not the rule.
+ * operations come from its own whitelist. An assumption already used for the
+ * same Unit in another row is not offered again, which prevents the obvious
+ * duplicate. The backend still refuses duplicates itself; this is a
+ * convenience, not the rule.
  *
  * **Refusals are shown as the backend worded them.** Each issue appears on the
  * row it names, or above the table if no row owns it. A failed save keeps every
  * value the analyst typed.
  *
- * **Locked while the base underwriting is dirty.** An editor that is already
- * open when the analyst edits the base stays on screen with its draft intact,
- * but every control that could change it is disabled until the Deal is saved
- * or its edits are reverted. Cancel stays available. The workspace states the
- * reason.
+ * **Locked while the base is dirty.** An editor that is already open when the
+ * analyst edits the base stays on screen with its draft intact, but every
+ * control that could change it is disabled until the base is saved or its
+ * edits are reverted. Cancel stays available. The workspace states the reason.
  */
 
 import { Fragment, useEffect, useRef } from 'react';
+import { operatingModeLabel } from '../operatingMode';
+import { unitDisplayName } from '../investmentCatalog';
 import {
   SCENARIO_OPERATION_LABELS,
   scenarioTargetLabel,
   scenarioValueFormat,
 } from '../scenarioCatalog';
 import type { ScenarioEditorDraft, ScenarioEditorRow, ScenariosState } from '../useScenarios';
-import type { ScenarioOperation, ScenarioTargetEntry } from '../scenarioTypes';
+import type { ScenarioOperation } from '../scenarioTypes';
 import { NumericInput } from './NumericInput';
 
 export interface ScenarioEditorProps {
@@ -49,20 +56,26 @@ function suffixPadding(suffix: string | null): string | undefined {
   return suffix.length > 2 ? '3.9rem' : '1.8rem';
 }
 
+/** One (Unit, assumption) pair: a Deal's rows share the one implicit Unit. */
+function takenKey(unitId: string, target: string): string {
+  return `${unitId}|${target}`;
+}
+
 interface OverrideRowProps {
   row: ScenarioEditorRow;
-  entries: ScenarioTargetEntry[];
   taken: ReadonlySet<string>;
   issues: string[];
   state: ScenariosState;
+  withUnit: boolean;
 }
 
-function OverrideRow({ row, entries, taken, issues, state }: OverrideRowProps) {
+function OverrideRow({ row, taken, issues, state, withUnit }: OverrideRowProps) {
   const locked = !state.canEdit;
+  const entries = state.targetsFor(row.unitId);
   const entry = entries.find((candidate) => candidate.target === row.target);
   const label = row.target === '' ? 'this override' : scenarioTargetLabel(row.target);
   const offered = entries.filter(
-    (candidate) => candidate.target === row.target || !taken.has(candidate.target),
+    (candidate) => candidate.target === row.target || !taken.has(takenKey(row.unitId, candidate.target)),
   );
   // A stored target the catalog does not offer (or has not loaded yet) is
   // still shown as what it is, never silently replaced.
@@ -79,10 +92,36 @@ function OverrideRow({ row, entries, taken, issues, state }: OverrideRowProps) {
   const describedBy = [format === null ? null : hintId, hasIssues ? issuesId : null]
     .filter((id): id is string => id !== null)
     .join(' ');
+  const needsUnit = withUnit && row.unitId === '';
+  const knownUnit = state.units.some((unit) => unit.unitId === row.unitId);
 
   return (
     <Fragment>
       <tr className="scenario-override-row">
+        {withUnit && (
+          <td className="scenario-override-cell scenario-override-unit">
+            <label className="scenario-override-label" htmlFor={`${row.key}-unit`}>
+              Unit
+            </label>
+            <select
+              id={`${row.key}-unit`}
+              className="field-input scenario-select"
+              value={row.unitId}
+              onChange={(event) => state.setRowUnit(row.key, event.target.value)}
+              disabled={locked}
+              aria-invalid={hasIssues ? true : undefined}
+              aria-describedby={hasIssues ? issuesId : undefined}
+            >
+              <option value="">Choose unit…</option>
+              {!knownUnit && row.unitId !== '' && <option value={row.unitId}>{row.unitId}</option>}
+              {state.units.map((unit) => (
+                <option key={unit.unitId} value={unit.unitId}>
+                  {`${unitDisplayName(unit)} · ${operatingModeLabel(unit.operatingMode)}`}
+                </option>
+              ))}
+            </select>
+          </td>
+        )}
         <td className="scenario-override-cell">
           <label className="scenario-override-label" htmlFor={`${row.key}-target`}>
             Assumption
@@ -92,7 +131,7 @@ function OverrideRow({ row, entries, taken, issues, state }: OverrideRowProps) {
             className="field-input scenario-select"
             value={row.target}
             onChange={(event) => state.setRowTarget(row.key, event.target.value)}
-            disabled={locked}
+            disabled={locked || needsUnit}
             aria-invalid={hasIssues ? true : undefined}
             aria-describedby={hasIssues ? issuesId : undefined}
           >
@@ -168,7 +207,7 @@ function OverrideRow({ row, entries, taken, issues, state }: OverrideRowProps) {
       </tr>
       {hasIssues && (
         <tr className="scenario-override-issue-row">
-          <td colSpan={4}>
+          <td colSpan={withUnit ? 5 : 4}>
             <ul id={issuesId} className="scenario-override-issues" role="alert">
               {issues.map((issue) => (
                 <li key={issue}>{issue}</li>
@@ -185,9 +224,14 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
   const nameInput = useRef<HTMLInputElement>(null);
   const feedback = state.feedback;
   const locked = !state.canEdit;
-  const taken = new Set(editor.rows.map((row) => row.target).filter((target) => target !== ''));
+  const withUnit = state.investment !== null;
+  const taken = new Set(
+    editor.rows.filter((row) => row.target !== '').map((row) => takenKey(row.unitId, row.target)),
+  );
+  const rowUnits = withUnit ? state.units.map((unit) => unit.unitId) : [''];
   const canAddRow =
-    state.catalogStatus === 'ready' && state.targets.some((entry) => !taken.has(entry.target));
+    state.catalogStatus === 'ready' &&
+    rowUnits.some((unitId) => state.targetsFor(unitId).some((entry) => !taken.has(takenKey(unitId, entry.target))));
 
   useEffect(() => {
     nameInput.current?.focus();
@@ -250,10 +294,11 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
       </div>
 
       <div className="scenario-override-block">
-        <table className="scenario-override-table">
+        <table className={withUnit ? 'scenario-override-table scenario-override-table-units' : 'scenario-override-table'}>
           <caption className="scenario-override-caption">Assumption overrides</caption>
           <thead>
             <tr>
+              {withUnit && <th scope="col">Unit</th>}
               <th scope="col">Assumption</th>
               <th scope="col">Operation</th>
               <th scope="col">Value</th>
@@ -267,10 +312,10 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
               <OverrideRow
                 key={row.key}
                 row={row}
-                entries={state.targets}
                 taken={taken}
                 issues={feedback?.byRow[row.key] ?? []}
                 state={state}
+                withUnit={withUnit}
               />
             ))}
           </tbody>

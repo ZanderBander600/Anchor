@@ -5944,3 +5944,738 @@ body {
     align-items: flex-start;
   }
 }
+
+/* ==========================================================================
+   Phase 7 Gate P7.6 -- the visible Investment workspace.
+
+   An acquisition and investment-committee workspace over one or more Deals:
+   the Deal shell's header, navigation and scroll, dense ledgers and tables
+   with tabular figures, hairline rules. Every table scrolls inside its own
+   region and never widens the page. No colour ranks anything, and a refusal
+   carries its own words.
+   ========================================================================== */
+
+/* --- Shell -------------------------------------------------------------------- */
+
+.investment-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.investment-host[hidden] {
+  display: none;
+}
+
+/* The Investment Library and the builder scroll inside the main column. */
+.investment-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.investment-header .deal-header-row {
+  flex-wrap: wrap;
+  row-gap: var(--sp-2);
+}
+
+.investment-header-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2) var(--sp-4);
+  min-width: 0;
+}
+
+.investment-header-name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.investment-kind-tag {
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.investment-header-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-5);
+  margin: 0;
+}
+
+.investment-header-figures div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.investment-header-figures dt {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.investment-header-figures dd {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.investment-delete-confirm {
+  margin-top: var(--sp-3);
+}
+
+/* The way back from a Unit: a quiet breadcrumb above the Deal header. */
+.investment-return-bar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  padding: var(--sp-2) var(--sp-6);
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.investment-return-button {
+  appearance: none;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.investment-return-button:hover {
+  text-decoration: underline;
+}
+
+.investment-return-button:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+}
+
+.investment-return-trail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+}
+
+.investment-return-trail li:first-child {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.investment-return-trail li + li::before {
+  content: '›';
+  margin-right: var(--sp-2);
+}
+
+/* --- Sections and words --------------------------------------------------------- */
+
+.investment-overview,
+.investment-units {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+.investment-note {
+  margin: 0;
+  max-width: 90ch;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.investment-section-label {
+  padding: 0;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.investment-muted {
+  color: var(--text-muted);
+}
+
+.investment-issues {
+  margin: var(--sp-1) 0 0;
+  padding-left: 1.1rem;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--color-negative);
+}
+
+.investment-issue-unit,
+.investment-issue-lead {
+  font-weight: 650;
+}
+
+.investment-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.investment-inline-error {
+  margin: var(--sp-1) 0 0;
+  font-size: 12.5px;
+  color: var(--color-negative);
+}
+
+/* The one details draft: its state and its Save / Cancel stay in view. */
+.investment-edit-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-md);
+}
+
+.investment-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.investment-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.investment-summary-fields,
+.investment-builder-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  gap: var(--sp-3);
+  max-width: 44rem;
+}
+
+.investment-summary-units {
+  max-width: 40rem;
+}
+
+/* --- Ledgers ------------------------------------------------------------------- */
+
+.investment-ledgers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr));
+  align-items: start;
+  gap: var(--sp-3) var(--sp-6);
+}
+
+.investment-ledger {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.investment-ledger-caption {
+  caption-side: top;
+  padding-bottom: var(--sp-1);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.investment-ledger th,
+.investment-ledger td {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.investment-ledger th {
+  padding-right: var(--sp-4);
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.investment-ledger td {
+  text-align: right;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.investment-ledger td.capital-economics-negative {
+  color: var(--color-negative);
+}
+
+.investment-ledger-note {
+  display: block;
+  max-width: 30rem;
+  margin-top: 2px;
+  margin-left: auto;
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--text-muted);
+  white-space: normal;
+}
+
+.investment-closing .investment-ledger {
+  max-width: 40rem;
+}
+
+/* --- Tables -------------------------------------------------------------------- */
+
+/* `position: relative` gives a visually hidden header its containing block
+   here, so it is clipped with the table instead of widening the page. */
+.investment-table-scroll {
+  position: relative;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.investment-table-scroll:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.investment-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.investment-table th,
+.investment-table td {
+  padding: 6px var(--sp-3);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.investment-table thead th {
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.investment-table th[scope='row'] {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.investment-table .investment-num {
+  text-align: right;
+}
+
+.investment-name-cell {
+  min-width: 10rem;
+  white-space: normal;
+}
+
+.investment-table th.investment-name-cell,
+.investment-table td.investment-actions-cell,
+.investment-subrow td {
+  white-space: normal;
+}
+
+.investment-row-note {
+  display: block;
+  max-width: 28rem;
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: normal;
+}
+
+.investment-row-selected th,
+.investment-row-selected td,
+.investment-row-pending th,
+.investment-row-pending td,
+.investment-subrow td {
+  background: var(--surface-muted);
+}
+
+.investment-row-actions,
+.investment-confirm-actions,
+.investment-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.investment-actions-cell {
+  width: 1%;
+  text-align: right;
+}
+
+.investment-actions-cell .investment-row-actions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.investment-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--warning);
+  background: var(--warning-soft);
+  text-align: left;
+  white-space: normal;
+}
+
+.investment-confirm-text {
+  margin: 0;
+  max-width: 72ch;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.investment-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3);
+}
+
+.investment-inline-form .field {
+  flex: 1 1 11rem;
+  min-width: 11rem;
+  max-width: 18rem;
+}
+
+.investment-compact-input {
+  min-width: 9rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.investment-check-cell {
+  width: 1%;
+}
+
+.investment-check-cell input {
+  width: 16px;
+  height: 16px;
+}
+
+.investment-unit-name {
+  display: block;
+}
+
+/* The annual table keeps its line names in view while years scroll. */
+.investment-cash-flow .investment-row-head {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 15rem;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.investment-cash-flow thead .investment-row-head {
+  z-index: 2;
+  background: var(--surface-muted);
+}
+
+.investment-row-strong th,
+.investment-row-strong td {
+  font-weight: 650;
+}
+
+/* A reason spanning the years wraps rather than widening every year column. */
+.investment-table td.investment-wrap-cell {
+  white-space: normal;
+}
+
+.investment-table td.capital-economics-negative {
+  color: var(--color-negative);
+}
+
+/* --- Transaction costs ----------------------------------------------------------- */
+
+.investment-costs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.investment-cost-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.investment-cost-table thead th {
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) 0;
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.investment-cost-table td {
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) 0;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.investment-cost-amount {
+  width: 12rem;
+}
+
+.investment-cost-timing,
+.investment-cost-remove {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.investment-cost-remove {
+  padding-right: 0;
+  text-align: right;
+}
+
+.investment-timing-tag {
+  display: inline-block;
+  margin-top: 0.45rem;
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.investment-section .business-plan-embedded {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+/* --- Library and builder ---------------------------------------------------------- */
+
+.investment-library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+.investment-builder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.investment-builder-units {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* --- Multi-unit decisions -------------------------------------------------------- */
+
+.strategy-units {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.strategy-units-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.strategy-unit {
+  min-width: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+.strategy-unit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-3);
+}
+
+.strategy-unit-name {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.strategy-unit-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.scenario-override-table-units .scenario-override-row .scenario-override-cell:nth-child(1) {
+  width: 31%;
+}
+
+.scenario-override-table-units .scenario-override-row .scenario-override-cell:nth-child(2) {
+  width: 22%;
+}
+
+.scenario-override-table-units .scenario-override-row .scenario-override-cell:nth-child(3) {
+  width: 13%;
+}
+
+.decision-matrix-reason-unit,
+.decision-matrix-reason-lead {
+  font-weight: 650;
+}
+
+/* --- Sidebar: Investments beside Deals ------------------------------------------- */
+
+.app-sidebar:has(.sidebar-investments) .sidebar-deals {
+  flex: 0 1 auto;
+}
+
+.sidebar-investments {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--nav-border);
+}
+
+@media (max-width: 1023px) {
+  .sidebar-investments {
+    align-items: center;
+  }
+}
+
+@media (max-width: 767px) {
+  .investment-return-bar {
+    padding: var(--sp-2) var(--sp-4);
+  }
+
+  .investment-header-figures {
+    gap: var(--sp-1) var(--sp-3);
+  }
+
+  .investment-inline-form .field {
+    max-width: none;
+  }
+
+  /* Ledger labels wrap on a phone rather than pushing figures out of view. */
+  .investment-ledger th {
+    white-space: normal;
+  }
+
+  .investment-cash-flow .investment-row-head {
+    min-width: 9.5rem;
+    max-width: 11rem;
+    white-space: normal;
+  }
+
+  .scenario-override-table-units .scenario-override-row .scenario-override-cell:nth-child(1),
+  .scenario-override-table-units .scenario-override-row .scenario-override-cell:nth-child(2),
+  .scenario-override-table-units .scenario-override-row .scenario-override-cell:nth-child(3) {
+    width: auto;
+  }
+
+  /* Transaction costs stack: one cost per block, each field labelled. */
+  .investment-cost-table,
+  .investment-cost-table tbody {
+    display: block;
+  }
+
+  .investment-cost-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+  }
+
+  .investment-cost-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--sp-2);
+    padding: var(--sp-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .investment-cost-row td {
+    display: block;
+    width: auto;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .investment-cost-row td:first-child {
+    grid-column: 1 / -1;
+  }
+}
