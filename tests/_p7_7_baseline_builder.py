@@ -41,7 +41,15 @@ os.environ["ANCHOR_DB_PATH"] = str(db_path)
 import anchor  # noqa: E402
 
 assert Path(anchor.__file__).resolve().is_relative_to(root / "src"), anchor.__file__
-assert not (root / "src" / "anchor" / "capital_structure").exists(), "the baseline tree already has P7.7"
+#: Which tree this is: the P7.6 merge by default (P7.7's oracle), or the P7.7
+#: merge when an optional fourth argument ``p7_7`` says so (P7.8's oracle).
+baseline_gate = sys.argv[4] if len(sys.argv) > 4 else "p7_6"
+_package = root / "src" / "anchor" / "capital_structure"
+if baseline_gate == "p7_6":
+    assert not _package.exists(), "the baseline tree already has P7.7"
+else:
+    assert baseline_gate == "p7_7", baseline_gate
+    assert _package.exists() and not (_package / "execution.py").exists(), "the baseline tree is not the P7.7 merge"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
