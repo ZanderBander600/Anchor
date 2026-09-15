@@ -456,9 +456,16 @@ def test_the_plan_tables_are_mode_blind_and_carry_every_contract_field(db: Path)
     # Strategy's BUSINESS_PLAN overlay stores its replacement plan in the same D6
     # row shape, keyed by strategy and unit, and reads it back through the same
     # D6 codec (``tests/test_p7_4_strategy_architecture.py``).
+    #
+    # P7.6 adds two more, again not a Deal's plan: a visible Investment's own
+    # plan, in the same D6 row shape, keyed by investment and read back through
+    # the same codec (``tests/test_p7_6_consolidation_architecture.py``).
     assert {table for table in tables if "capital" in table or "expense" in table} == set(
         _PLAN_TABLES
-    ) | {"strategy_capital_plan_items", "strategy_owner_expense_items"}
+    ) | {
+        "strategy_capital_plan_items", "strategy_owner_expense_items",
+        "investment_capital_plan_items", "investment_owner_expense_items",
+    }
     assert not parent_columns & {"business_plan", "capital_items", "owner_expense_items"}
 
 

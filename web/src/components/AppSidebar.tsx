@@ -1,6 +1,13 @@
 import { formatCurrency } from '../format';
+import { RECENT_INVESTMENT_LIMIT } from '../investmentCatalog';
+import type { VisibleInvestment } from '../investmentTypes';
 import type { Deal } from '../types';
 import { assertNeverMode, operatingModeLabel } from '../operatingMode';
+
+/** Which global surface is showing. Phase 7 Gate P7.6 adds the Investment
+ * surfaces beside the Deal ones: a Deal and an Investment are different
+ * things, each with its own library. */
+export type AppView = 'workspace' | 'library' | 'investment-library' | 'new-investment' | 'investment';
 
 /** Maximum saved deals surfaced in the sidebar's Recent Deals list. The full
  * list always remains one click away in the Deal Library view -- the sidebar
@@ -39,6 +46,17 @@ function IconSettings() {
     <svg className="nav-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
       <circle cx="8" cy="8" r="2.1" fill="none" strokeWidth="1.4" stroke="currentColor" />
       <circle cx="8" cy="8" r="5.6" fill="none" strokeWidth="1.4" stroke="currentColor" strokeDasharray="2.6 2" />
+    </svg>
+  );
+}
+
+/** P7.6: an Investment -- several buildings held as one transaction. */
+function IconPortfolio() {
+  return (
+    <svg className="nav-icon nav-icon-deal" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <rect x="1.8" y="5" width="4" height="8.4" rx="0.7" />
+      <rect x="6.3" y="2.6" width="4" height="10.8" rx="0.7" />
+      <rect x="10.8" y="6.4" width="3.4" height="7" rx="0.7" />
     </svg>
   );
 }
@@ -83,11 +101,26 @@ export interface AppSidebarProps {
   /** Id of the deal currently open in the active operating mode, or null for
    * a never-saved working deal. Drives the active-row treatment. */
   activeDealId: string | null;
-  /** Which global surface is showing -- the library view or a deal workspace. */
-  view: 'workspace' | 'library';
+  /** Which global surface is showing -- a library, a deal workspace, or (P7.6)
+   * an Investment surface. */
+  view: AppView;
   onOpenLibrary: () => void;
   onNewDeal: () => void;
   onOpenDeal: (deal: Deal) => void;
+  /** P7.6: the visible Investments, most recently updated first. The
+   * Investment group is shown when its navigation is wired. */
+  investments?: VisibleInvestment[];
+  isInvestmentsLoading?: boolean;
+  /** The Investment open in the Investment workspace, or `null`. */
+  activeInvestmentId?: string | null;
+  onOpenInvestmentLibrary?: () => void;
+  onNewInvestment?: () => void;
+  onOpenInvestment?: (investmentId: string) => void;
+}
+
+function investmentMeta(investment: VisibleInvestment): string {
+  const units = investment.units.length === 1 ? '1 Unit' : `${investment.units.length} Units`;
+  return `${units} · ${formatCurrency(investment.transaction_price)}`;
 }
 
 /**
@@ -112,7 +145,19 @@ export function AppSidebar({
   onOpenLibrary,
   onNewDeal,
   onOpenDeal,
+  investments = [],
+  isInvestmentsLoading = false,
+  activeInvestmentId = null,
+  onOpenInvestmentLibrary,
+  onNewInvestment,
+  onOpenInvestment,
 }: AppSidebarProps) {
+  const recentInvestments = investments.slice(0, RECENT_INVESTMENT_LIMIT);
+  const activeInvestment = investments.find((investment) => investment.id === activeInvestmentId);
+  const shownInvestments =
+    activeInvestment && !recentInvestments.includes(activeInvestment)
+      ? [...recentInvestments, activeInvestment]
+      : recentInvestments;
   // Never hide the deal the analyst currently has open: if it falls outside
   // the most-recent window, it is appended rather than dropped, so the rail
   // always shows where you are.
@@ -192,6 +237,68 @@ export function AppSidebar({
           </button>
         )}
       </div>
+
+      {onOpenInvestmentLibrary !== undefined && (
+        <div className="sidebar-investments">
+          <div className="sidebar-section">
+            <button
+              type="button"
+              className={
+                view === 'investment-library'
+                  ? 'sidebar-nav-item sidebar-nav-item-active'
+                  : 'sidebar-nav-item'
+              }
+              aria-current={view === 'investment-library' ? 'page' : undefined}
+              aria-label="Investment Library"
+              onClick={onOpenInvestmentLibrary}
+            >
+              <IconPortfolio />
+              <span className="sidebar-nav-label">Investment Library</span>
+            </button>
+            <button
+              type="button"
+              className={
+                view === 'new-investment' ? 'sidebar-nav-item sidebar-nav-item-active' : 'sidebar-nav-item'
+              }
+              aria-current={view === 'new-investment' ? 'page' : undefined}
+              aria-label="New Investment"
+              onClick={onNewInvestment}
+            >
+              <IconPlus />
+              <span className="sidebar-nav-label">New Investment</span>
+            </button>
+          </div>
+
+          <p className="sidebar-section-label">Recent Investments</p>
+          {isInvestmentsLoading && shownInvestments.length === 0 && (
+            <p className="sidebar-deals-status">Loading…</p>
+          )}
+          {!isInvestmentsLoading && shownInvestments.length === 0 && (
+            <p className="sidebar-deals-status">No investments yet.</p>
+          )}
+          <ul className="sidebar-deal-list" aria-label="Recent Investments">
+            {shownInvestments.map((investment) => {
+              const isActive = view === 'investment' && investment.id === activeInvestmentId;
+              return (
+                <li key={investment.id}>
+                  <button
+                    type="button"
+                    className={isActive ? 'sidebar-deal-row sidebar-deal-row-active' : 'sidebar-deal-row'}
+                    aria-current={isActive ? 'true' : undefined}
+                    onClick={() => onOpenInvestment?.(investment.id)}
+                  >
+                    <IconPortfolio />
+                    <span className="sidebar-deal-text">
+                      <span className="sidebar-deal-name">{investment.name}</span>
+                      <span className="sidebar-deal-meta">{investmentMeta(investment)}</span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       <div className="sidebar-footer">
         {/* Anchor has no settings implementation. This is a non-interactive

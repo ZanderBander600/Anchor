@@ -31,6 +31,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 #: ``main`` when P7.5 began: the no-ff P7.4 merge.
 _P7_5_BASE = "5f04d3775152494cd717c86ea7318161908494be"
 
+#: ``main`` after P7.5 -- the no-ff merge of
+#: ``feature/p7-5-strategy-scenario-matrix-v1``, and the end of P7.5's committed
+#: range.
+_P7_5_MERGE = "6cade6279ff9f071d672f68889585065a829fb2c"
+
 _COMPARISON = "src/anchor/decision/comparison.py"
 _DECISION_INIT = "src/anchor/decision/__init__.py"
 _SERVICE = "src/anchor/deals/decision_matrix.py"
@@ -103,13 +108,12 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
-def _changes_since(base: str, *paths: str) -> set[str]:
-    """Committed, staged, unstaged and untracked changes since ``base``, with
-    renames split into their removal and addition."""
+def _changes_between(start: str, end: str, *paths: str) -> set[str]:
+    """Files that differ between two commits, renames split into removal and
+    addition. Reads Git objects only; it never touches the index."""
 
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+    changed = _git("diff", "--name-only", "--no-renames", start, end, "--", *paths).split()
+    return {path for path in changed if path}
 
 
 def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
@@ -128,8 +132,21 @@ def _baseline(path: str) -> str:
     return _lf(_git("show", f"{_P7_5_BASE}:{path}"))
 
 
+def _merged(path: str) -> str:
+    """``path`` as P7.5 left it, at the P7.5 merge.
+
+    Re-pinned at P7.6: the guards that describe what P7.5 *added* -- the
+    comparison module, the service, its routes and API additions -- read
+    P7.5's own committed code, exactly as its ledger does. P7.6 extends the
+    comparison (a visible Investment's ``ConsolidatedResults``) and the service
+    (the visible Investment matrix), and its own guards pin those additions
+    (``tests/test_p7_6_consolidation_architecture.py``)."""
+
+    return _lf(_git("show", f"{_P7_5_MERGE}:{path}"))
+
+
 def _tree(path: str) -> ast.Module:
-    return ast.parse(_current(path))
+    return ast.parse(_merged(path))
 
 
 def _callee(call: ast.Call) -> str:
@@ -195,11 +212,16 @@ def _imports(tree: ast.Module) -> set[str]:
 
 
 def test_p7_5_changed_exactly_its_authorized_production_files() -> None:
-    """The P7.5 production ledger. The next gate must re-pin this to P7.5's
-    committed range, ``5f04d37..<the P7.5 merge>``, before adding its own
-    scope. Never widen this set to admit another gate's files."""
+    """The P7.5 production ledger.
 
-    changed = {path for path in _changes_since(_P7_5_BASE, "src", "web") if _is_production(path)}
+    Pinned at P7.6 to P7.5's own committed range, ``5f04d37..6cade62``, so it
+    keeps proving exactly what P7.5 changed however later gates move the tree.
+    P7.6's own ledger is ``tests/test_p7_6_consolidation_architecture.py``.
+    Never widen this set to admit another gate's files."""
+
+    changed = {
+        path for path in _changes_between(_P7_5_BASE, _P7_5_MERGE, "src", "web") if _is_production(path)
+    }
     assert _ledger_violations(changed) == ([], [])
 
 
@@ -210,7 +232,9 @@ def test_the_p7_5_ledger_base_is_the_p7_4_merge() -> None:
 
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged_since_p7_4(path: str) -> None:
-    assert _changes_since(_P7_5_BASE, path) == set(), f"{path} changed at P7.5"
+    # Within P7.5's own committed range (pinned at P7.6). What later gates may
+    # change is their own ledgers' business.
+    assert _changes_between(_P7_5_BASE, _P7_5_MERGE, path) == set(), f"{path} changed at P7.5"
 
 
 def test_the_ledger_rejects_any_unexpected_production_change() -> None:
@@ -395,7 +419,7 @@ def test_p7_5_adds_exactly_two_routes() -> None:
 
 
 def test_api_py_changed_only_by_additions_that_compute_nothing() -> None:
-    current = _without_docstrings(ast.parse(_current(_API))).body
+    current = _without_docstrings(ast.parse(_merged(_API))).body
     baseline = _without_docstrings(ast.parse(_baseline(_API))).body
     current_dumps = {ast.dump(node) for node in current}
     baseline_dumps = {ast.dump(node) for node in baseline}
@@ -509,8 +533,8 @@ def test_no_p7_5_backend_code_names_a_later_gate_concept(path: str) -> None:
 
 
 def test_the_schema_version_and_every_table_are_unchanged() -> None:
-    assert _current("src/anchor/deals/store.py") == _baseline("src/anchor/deals/store.py")
-    assert re.search(r"^_SCHEMA_VERSION = 9$", _current("src/anchor/deals/store.py"), re.MULTILINE)
+    assert _merged("src/anchor/deals/store.py") == _baseline("src/anchor/deals/store.py")
+    assert re.search(r"^_SCHEMA_VERSION = 9$", _merged("src/anchor/deals/store.py"), re.MULTILINE)
 
 
 @pytest.mark.parametrize("path", sorted(_P7_5_BACKEND_FILES))

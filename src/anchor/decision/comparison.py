@@ -64,7 +64,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from ..consolidation.contracts import ConsolidatedResults
 from ..engine.contracts import AcquisitionResults, IrrStatus
+
+#: What one cell's Project results are: a Unit's ``AcquisitionResults`` (the
+#: hidden one-unit Investment) or, from P7.6, a visible Investment's
+#: ``ConsolidatedResults``. Both are completed result contracts.
+ProjectResults = AcquisitionResults | ConsolidatedResults
 
 # =============================================================================
 # The Project metric catalog
@@ -176,9 +182,25 @@ PROJECT_METRIC_CATALOG: tuple[MetricSpec, ...] = (
     ),
 )
 
-def _reported(results: AcquisitionResults, metric: DecisionMetric) -> tuple[float | None, IrrStatus | None]:
-    """The metric's one ``AcquisitionResults`` field, and the IRR status that
-    explains it where there is one. Explicit per metric: no reflection."""
+#: The Project catalog of a visible Investment (P7.6): the same metrics, read off
+#: ``ConsolidatedResults``. Its DSCR is consolidated NOI over consolidated debt
+#: service -- the Aggregate DSCR -- and is labelled as such, never as a Unit's.
+INVESTMENT_PROJECT_METRIC_CATALOG: tuple[MetricSpec, ...] = tuple(
+    MetricSpec(
+        metric=spec.metric,
+        label="Minimum Aggregate DSCR" if spec.metric is DecisionMetric.MIN_DSCR else spec.label,
+        unit=spec.unit,
+        direction=spec.direction,
+        horizon_dependent=spec.horizon_dependent,
+    )
+    for spec in PROJECT_METRIC_CATALOG
+)
+
+
+def _reported(results: ProjectResults, metric: DecisionMetric) -> tuple[float | None, IrrStatus | None]:
+    """The metric's one Project result field, and the IRR status that explains
+    it where there is one. Explicit per metric: no reflection. A visible
+    Investment's Minimum DSCR is its ``min_aggregate_dscr``."""
 
     match metric:
         case DecisionMetric.LEVERED_IRR:
@@ -194,6 +216,8 @@ def _reported(results: AcquisitionResults, metric: DecisionMetric) -> tuple[floa
         case DecisionMetric.EXIT_VALUE:
             return results.exit_value, None
         case DecisionMetric.MIN_DSCR:
+            if isinstance(results, ConsolidatedResults):
+                return results.min_aggregate_dscr, None
             return results.min_dscr, None
 
 
@@ -226,6 +250,7 @@ class CellIssueSource(StrEnum):
     STRATEGY = "strategy"
     SCENARIO = "scenario"
     LEASE_LEVEL = "lease_level"
+    INVESTMENT = "investment"
 
 
 class CellStatus(StrEnum):
@@ -274,7 +299,7 @@ class CellInput:
 
     strategy_id: str
     scenario_id: str
-    results: AcquisitionResults | None
+    results: ProjectResults | None
     source_fingerprint: str | None
     cache_status: str | None
     hold_period: int | None
@@ -385,7 +410,7 @@ class DecisionCell:
     source_fingerprint: str | None
     cache_status: str | None
     hold_period: int | None
-    results: AcquisitionResults | None
+    results: ProjectResults | None
     metrics: tuple[MetricValue, ...]
     deltas: tuple[DeltaVsBase, ...]
 
@@ -723,22 +748,24 @@ def _range(
 
 def _applicable_metrics(
     hold_periods: tuple[int, ...],
+    catalog: tuple[MetricSpec, ...] = PROJECT_METRIC_CATALOG,
 ) -> tuple[tuple[MetricSpec, ...], tuple[OmittedMetric, ...]]:
     """Every catalog metric when the valid variants share one hold period;
     otherwise the horizon-independent metrics alone (ST-5, DC-4)."""
 
     if len(hold_periods) <= 1:
-        return PROJECT_METRIC_CATALOG, ()
+        return catalog, ()
     holds = " and ".join(str(hold) for hold in hold_periods)
+    omitted_labels = " and ".join(spec.label for spec in catalog if spec.horizon_dependent)
     message = (
-        f"Strategies use different hold periods ({holds} years). Exit Value and Minimum "
-        "DSCR are not compared across different horizons."
+        f"Strategies use different hold periods ({holds} years). {omitted_labels} are not "
+        "compared across different horizons."
     )
     return (
-        tuple(spec for spec in PROJECT_METRIC_CATALOG if not spec.horizon_dependent),
+        tuple(spec for spec in catalog if not spec.horizon_dependent),
         tuple(
             OmittedMetric(metric=spec.metric, reason=OmissionReason.DIFFERENT_HOLD_PERIODS, message=message)
-            for spec in PROJECT_METRIC_CATALOG
+            for spec in catalog
             if spec.horizon_dependent
         ),
     )
@@ -801,13 +828,16 @@ def compare_decision_matrix(
     strategies: Sequence[AxisMember],
     scenarios: Sequence[AxisMember],
     cells: Iterable[CellInput],
+    catalog: tuple[MetricSpec, ...] = PROJECT_METRIC_CATALOG,
 ) -> DecisionMatrix:
     """The Strategy x Scenario comparison of completed variants.
 
     ``strategies`` and ``scenarios`` are the axes in presentation order, each
     with exactly one implicit Base; ``cells`` holds exactly one completed
-    variant per pair. Raises ``DecisionComparisonError`` for an incoherent
-    matrix -- never for an invalid variant, which is a cell of its own."""
+    variant per pair. ``catalog`` is the Project catalog the cells' results
+    are read with: a Unit's, or (P7.6) a visible Investment's. Raises
+    ``DecisionComparisonError`` for an incoherent matrix -- never for an
+    invalid variant, which is a cell of its own."""
 
     _require_axis(strategies, "Strategy")
     _require_axis(scenarios, "Scenario")
@@ -819,7 +849,7 @@ def compare_decision_matrix(
     hold_periods = tuple(
         sorted({cell.hold_period for cell in indexed.values() if cell.hold_period is not None})
     )
-    applicable, omitted = _applicable_metrics(hold_periods)
+    applicable, omitted = _applicable_metrics(hold_periods, catalog)
     values = {
         (key, spec.metric): _metric_value(cell, spec)
         for key, cell in indexed.items()
@@ -901,7 +931,9 @@ def compare_decision_matrix(
 
 
 __all__ = [
+    "INVESTMENT_PROJECT_METRIC_CATALOG",
     "PROJECT_METRIC_CATALOG",
+    "ProjectResults",
     "AxisMember",
     "CellInput",
     "CellIssue",

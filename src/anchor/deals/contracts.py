@@ -65,6 +65,7 @@ from ..analysis.scenario import ScenarioDefinition
 from ..analysis.strategy import StrategyDefinition
 from ..business_plan import BusinessPlan
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
+from ..investment.contracts import InvestmentTransactionCost, InvestmentUnitMembership
 
 
 # =============================================================================
@@ -505,4 +506,60 @@ class InvestmentStructureError(RuntimeError):
     P7.2 creates and edits only the hidden one-unit wrapper. A visible
     Investment (a later gate's state) is never silently edited, collapsed,
     orphaned or deleted by P7.2 code (Section 15.2: a unit of a visible
-    Investment must be removed from it before the Deal is deleted)."""
+    Investment must be removed from it before the Deal is deleted).
+
+    P7.6 also raises it for every structural refusal of the visible
+    Investment's lifecycle: a Deal that already belongs to an Investment, a
+    Unit a Strategy or Scenario still addresses, the removal of the last Unit,
+    and deleting a Deal that is a Unit of a visible Investment."""
+
+
+# =============================================================================
+# Phase 7 Gate P7.6 -- the visible Investment
+#
+# ``docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md`` Sections 6, 8.2,
+# 10, 11 and 15 govern.
+#
+# A visible Investment is one negotiated transaction over one or more Units.
+# It is the same ``investments`` row a hidden wrapper uses -- promoting a
+# wrapper reuses it, so its Strategies and Scenarios keep their ids -- with its
+# visible state in sidecar records: a name and transaction price, one
+# membership per Unit, an Investment-level Business Plan and its transaction
+# costs. A hidden wrapper has none of them, and reading one never creates them.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class VisibleInvestment:
+    """One visible Investment and everything it states beyond its Units.
+
+    - ``units``: the memberships, in presentation order (``ordinal``, then
+      ``unit_id``). Presentation only: every economic sum orders Units by
+      ``unit_id`` instead.
+    - ``transaction_price``: validation and reporting only; it never enters a
+      cash flow (PP-3).
+    - ``business_plan``: the Investment-level D6 plan, the same contract as a
+      Deal's, in its own item-ID namespace (BP-7). ``BusinessPlan()`` when
+      there is none.
+    - ``transaction_costs``: the Investment's closing costs, in the analyst's
+      order."""
+
+    id: str
+    name: str
+    transaction_price: float
+    units: tuple[InvestmentUnitMembership, ...]
+    business_plan: BusinessPlan
+    transaction_costs: tuple[InvestmentTransactionCost, ...]
+    created_at: datetime
+    updated_at: datetime
+
+
+class InvestmentUnitNotFoundError(LookupError):
+    """No Unit with this id belongs to this Investment. Raised identically
+    whether the Deal does not exist or belongs elsewhere, so a caller's id never
+    discloses another Investment's structure."""
+
+    def __init__(self, investment_id: str, unit_id: str) -> None:
+        self.investment_id = investment_id
+        self.unit_id = unit_id
+        super().__init__(f"No unit {unit_id!r} belongs to investment {investment_id!r}.")

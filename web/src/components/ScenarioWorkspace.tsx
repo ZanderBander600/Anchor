@@ -21,7 +21,14 @@
  */
 
 import { useEffect, useRef } from 'react';
+import {
+  decisionIdScope,
+  INVESTMENT_DIRTY_MESSAGE,
+  INVESTMENT_SCENARIO_SUBTITLE,
+  unitNames,
+} from '../investmentCatalog';
 import { describeScenarioOverride } from '../scenarioCatalog';
+import type { ScenarioOverride } from '../scenarioTypes';
 import { SAVE_BEFORE_SCENARIOS_MESSAGE } from '../useScenarios';
 import type { ScenariosState } from '../useScenarios';
 import { ScenarioEditor } from './ScenarioEditor';
@@ -37,8 +44,20 @@ function overrideCount(count: number): string {
   return count === 1 ? '1 override' : `${count} overrides`;
 }
 
+/** One saved override as a phrase. A visible Investment's names its Unit. */
+function overridePhrase(state: ScenariosState, override: ScenarioOverride): string {
+  if (state.investment === null) {
+    return describeScenarioOverride(override);
+  }
+  const name = unitNames(state.units)[override.unit_id] ?? override.unit_id;
+  return `${name} · ${describeScenarioOverride(override)}`;
+}
+
 /** Why the analyst cannot change Scenarios right now, or `null`. */
 function blockedReason(state: ScenariosState): string | null {
+  if (state.investment !== null) {
+    return state.isDirty ? INVESTMENT_DIRTY_MESSAGE : null;
+  }
   if (state.dealId === null) {
     return 'Save this deal before adding scenarios.';
   }
@@ -47,6 +66,9 @@ function blockedReason(state: ScenariosState): string | null {
 
 export function ScenarioWorkspace({ state }: ScenarioWorkspaceProps) {
   const reason = blockedReason(state);
+  const ids = decisionIdScope(state.investment !== null);
+  const editorId = `${ids}${EDITOR_ID}`;
+  const blockedReasonId = `${ids}${BLOCKED_REASON_ID}`;
   const addButton = useRef<HTMLButtonElement>(null);
   const cancelDeleteButton = useRef<HTMLButtonElement>(null);
   const wasEditing = useRef(false);
@@ -70,15 +92,16 @@ export function ScenarioWorkspace({ state }: ScenarioWorkspaceProps) {
 
   return (
     <div className="scenario-workspace">
-      <section className="scenario-panel" aria-labelledby="scenario-manager-title">
+      <section className="scenario-panel" aria-labelledby={`${ids}scenario-manager-title`}>
         <div className="scenario-panel-header">
           <div className="scenario-panel-heading">
-            <h3 id="scenario-manager-title" className="scenario-panel-title">
+            <h3 id={`${ids}scenario-manager-title`} className="scenario-panel-title">
               Scenarios
             </h3>
             <p className="scenario-panel-subtitle">
-              Create named Downside, Upside, or other views by overriding selected assumptions.
-              Compare them in the Decision Matrix.
+              {state.investment !== null
+                ? INVESTMENT_SCENARIO_SUBTITLE
+                : 'Create named Downside, Upside, or other views by overriding selected assumptions. Compare them in the Decision Matrix.'}
             </p>
           </div>
           <button
@@ -88,15 +111,15 @@ export function ScenarioWorkspace({ state }: ScenarioWorkspaceProps) {
             onClick={state.openNew}
             disabled={!state.canEdit || state.editor !== null}
             aria-expanded={isCreating}
-            aria-controls={isCreating ? EDITOR_ID : undefined}
-            aria-describedby={reason === null ? undefined : BLOCKED_REASON_ID}
+            aria-controls={isCreating ? editorId : undefined}
+            aria-describedby={reason === null ? undefined : blockedReasonId}
           >
             Add Scenario
           </button>
         </div>
 
         {reason !== null && (
-          <p id={BLOCKED_REASON_ID} className="scenario-blocked" role="status">
+          <p id={blockedReasonId} className="scenario-blocked" role="status">
             {reason}
           </p>
         )}
@@ -138,7 +161,7 @@ export function ScenarioWorkspace({ state }: ScenarioWorkspaceProps) {
                     <span className="scenario-list-count">{overrideCount(overrides.length)}</span>
                     {overrides.length > 0 && (
                       <span className="scenario-list-summary">
-                        {overrides.map(describeScenarioOverride).join(' · ')}
+                        {overrides.map((override) => overridePhrase(state, override)).join(' · ')}
                       </span>
                     )}
                   </div>
@@ -176,7 +199,7 @@ export function ScenarioWorkspace({ state }: ScenarioWorkspaceProps) {
                           onClick={() => state.openEdit(scenarioId)}
                           disabled={!state.canEdit || state.editor !== null}
                           aria-expanded={isEditingThis}
-                          aria-controls={isEditingThis ? EDITOR_ID : undefined}
+                          aria-controls={isEditingThis ? editorId : undefined}
                           aria-label={`Edit ${name}`}
                         >
                           Edit
@@ -205,7 +228,7 @@ export function ScenarioWorkspace({ state }: ScenarioWorkspaceProps) {
         )}
 
         {state.editor !== null && (
-          <ScenarioEditor id={EDITOR_ID} state={state} editor={state.editor} />
+          <ScenarioEditor id={editorId} state={state} editor={state.editor} />
         )}
       </section>
     </div>

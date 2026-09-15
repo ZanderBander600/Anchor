@@ -117,6 +117,17 @@ const AUDITED = [
   'components/StrategyManager.tsx',
   'components/StrategyEditor.tsx',
   'components/DecisionMatrixPanel.tsx',
+  // P7.6. The visible Investment reads each Unit's operating mode: to read a
+  // Deal's stored price and hold off the contract its mode populates (a total
+  // switch in `investmentCatalog.ts`), and to pick each Unit's own target
+  // catalog. The rest only show a mode's label; all are audited so none starts
+  // branching on it.
+  'investmentCatalog.ts',
+  'useInvestmentWorkspace.ts',
+  'components/InvestmentOverview.tsx',
+  'components/InvestmentUnitsPanel.tsx',
+  'components/NewInvestmentPanel.tsx',
+  'components/InvestmentWorkspace.tsx',
 ];
 
 const MODE_LITERALS = new Set(['quick', 'detailed', 'lease_level']);

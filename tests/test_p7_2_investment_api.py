@@ -29,7 +29,6 @@ from _p7_2_fixtures import (  # type: ignore[import-not-found]
     MODES,
     create_deal,
     deal_fingerprint,
-    execute,
     row_counts,
 )
 
@@ -361,13 +360,31 @@ def test_an_override_on_a_unit_outside_the_investment_is_refused(client: TestCli
 
 
 def test_a_visible_investment_is_a_409_and_its_deal_survives(client: TestClient, db: Path) -> None:
+    """Re-pinned at P7.6: the Deal-scoped Scenario route and deleting the Deal
+    stay 409 for a Unit of a visible Investment; deleting the Investment itself
+    is now the P7.6 lifecycle, which releases the Deal unchanged (Q3)."""
+
+    from anchor.deals import store as p7_6_store
+    from anchor.business_plan import BusinessPlan
+    from anchor.investment import InvestmentUnitMembership, UnitKind
+
     deal = create_deal("quick", db)
-    execute(db, "INSERT INTO investments VALUES (?, 0, 'now', 'now')", ("v" * 32,))
-    execute(db, "INSERT INTO investment_units VALUES (?, ?)", ("v" * 32, deal.id))
+    visible = p7_6_store.create_visible_investment(
+        name="Visible",
+        transaction_price=12_500_000.0,
+        units=(
+            InvestmentUnitMembership(
+                unit_id=deal.id, ordinal=0, label=None, unit_kind=UnitKind.PROPERTY,
+                acquisition_month=0, disposition_month=None,
+            ),
+        ),
+        business_plan=BusinessPlan(),
+        db_path=db,
+    )
 
     assert client.post(f"/deals/{deal.id}/scenarios", json={"name": "S"}).status_code == 409
     assert client.delete(f"/deals/{deal.id}").status_code == 409
-    assert client.delete(f"/investments/{'v' * 32}").status_code == 409
+    assert client.delete(f"/investments/{visible.id}").status_code == 204
     assert _ok(client.get(f"/deals/{deal.id}"))["id"] == deal.id
 
 

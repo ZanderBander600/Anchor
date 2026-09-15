@@ -314,6 +314,35 @@ _PERMITTED_WEB = frozenset(
         "web/src/components/DecisionMatrixPanel.tsx",
         "web/src/components/StrategyManager.tsx",
         "web/src/components/StrategyEditor.tsx",
+        # Phase 7 P7.6 Session B -- the visible Investment workspace. New
+        # production modules: the Investment wire contracts
+        # (`investmentTypes.ts`), its presentation and copy
+        # (`investmentCatalog.ts`), the details draft's one boundary to the wire
+        # (`investmentForm.ts`), four state hooks and eight components. None
+        # computes economics: `web/src/investmentArchitecture.test.ts` parses
+        # them, allows only enumerated display expressions, and forbids every
+        # sum, subtraction, aggregate and derived figure -- the allocated price,
+        # the allocation variance and every consolidated number are backend
+        # fields. Every shipped file P7.6 edits -- App.tsx, api.ts (additions
+        # only), index.css, AppSidebar.tsx and the P7.3 / P7.5 Strategy,
+        # Scenario and Decision Matrix modules it generalizes to an Investment
+        # scope -- is already listed above. The P7.6 production ledger is
+        # `tests/test_p7_6_consolidation_architecture.py`.
+        "web/src/investmentTypes.ts",
+        "web/src/investmentCatalog.ts",
+        "web/src/investmentForm.ts",
+        "web/src/useInvestments.ts",
+        "web/src/useInvestmentWorkspace.ts",
+        "web/src/useInvestmentAnalysis.ts",
+        "web/src/useNewInvestment.ts",
+        "web/src/components/InvestmentIssueList.tsx",
+        "web/src/components/InvestmentLibraryPanel.tsx",
+        "web/src/components/NewInvestmentPanel.tsx",
+        "web/src/components/TransactionCostEditor.tsx",
+        "web/src/components/InvestmentOverview.tsx",
+        "web/src/components/InvestmentUnitsPanel.tsx",
+        "web/src/components/InvestmentWorkspace.tsx",
+        "web/src/components/InvestmentReturnBar.tsx",
     }
 )
 
@@ -1724,6 +1753,12 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         # read-only ``anchor.decision`` comparison, with no financial logic of
         # its own (``tests/test_p7_5_decision_architecture.py``).
         "src/anchor/deals/decision_matrix.py",
+        # P7.6 -- the visible Investment variant pathway beside them: it runs
+        # every Unit through the P7.4 per-Unit resolution and the existing D6
+        # entry points, then hands completed results to ``anchor.consolidation``,
+        # with no financial logic of its own
+        # (``tests/test_p7_6_consolidation_architecture.py``).
+        "src/anchor/deals/investment_variants.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
                  "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):

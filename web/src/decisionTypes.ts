@@ -95,9 +95,12 @@ export interface DecisionScenarioRange {
   sources: DecisionCellSource[];
 }
 
-/** One validator's reason a variant is invalid, in its own words. */
+/** One validator's reason a variant is invalid, in its own words. A visible
+ * Investment's cell (P7.6) may also be refused by the Investment rules
+ * (`investment`), and roots `field` at the Unit it concerns:
+ * `units[<unit_id>].<field>`. */
 export interface DecisionCellIssue {
-  source: 'strategy' | 'scenario' | 'lease_level';
+  source: 'strategy' | 'scenario' | 'lease_level' | 'investment';
   code: string;
   message: string;
   field: string | null;

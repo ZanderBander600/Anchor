@@ -216,11 +216,18 @@ def test_no_production_module_imports_the_scenario_layer() -> None:
     # reads the hold period off the resolved-input bundles the variant ran. It
     # resolves and validates nothing itself
     # (``tests/test_p7_5_decision_architecture.py``).
+    #
+    # **Widened at P7.6 -- by exactly one named file.** The visible Investment
+    # variant pathway validates a Scenario against the Investment's member Units
+    # with the P7.1 validator, hands each Unit its own overrides, and runs the
+    # unchanged per-Unit resolution. It resolves and validates nothing itself
+    # (``tests/test_p7_6_consolidation_architecture.py``).
     assert importers == [
         "anchor/analysis/strategy.py",
         "anchor/api.py",
         "anchor/deals/contracts.py",
         "anchor/deals/decision_matrix.py",
+        "anchor/deals/investment_variants.py",
         "anchor/deals/store.py",
         "anchor/deals/variants.py",
     ]
@@ -244,11 +251,13 @@ def test_no_other_production_file_defines_or_names_a_scenario_contract() -> None
         if path != _SCENARIO
         and any(re.search(rf"\b{name}\b", path.read_text(encoding="utf-8")) for name in _SCENARIO_NAMES)
     )
+    # Widened at P7.6 by the visible Investment variant pathway (see above).
     assert offenders == [
         "anchor/analysis/strategy.py",
         "anchor/api.py",
         "anchor/deals/contracts.py",
         "anchor/deals/decision_matrix.py",
+        "anchor/deals/investment_variants.py",
         "anchor/deals/store.py",
         "anchor/deals/variants.py",
     ]
@@ -520,7 +529,10 @@ def test_the_scenario_layer_names_modes_as_data_and_never_dispatches_on_one() ->
             "mode" in ast.unparse(side) for side in (node.left, *node.comparators)
         ):
             assert all(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops), ast.unparse(node)
-            assert ast.unparse(node.comparators[-1]) == "spec.modes", ast.unparse(node)
+            # P7.6: stage 1 over a visible Investment also tests an override's
+            # unit for membership in the member set (``unit_modes``, each Unit's
+            # mode as data). It refuses a foreign unit and never routes one.
+            assert ast.unparse(node.comparators[-1]) in {"spec.modes", "unit_modes"}, ast.unparse(node)
     assert member_sites >= 10
 
 
@@ -547,7 +559,10 @@ def test_duplicate_identity_is_the_unit_and_target_address() -> None:
     """SC-1: overrides are grouped by ``(unit_id, target)``, never by target
     alone, so the same target on two units is two addresses."""
 
-    validate = _functions(_tree())["validate_scenario"]
+    # P7.6: the stage-1 rules live in ``_contract_issues``, which both
+    # ``validate_scenario`` (one Unit) and ``validate_investment_scenario``
+    # (a member set) call.
+    validate = _functions(_tree())["_contract_issues"]
     keys = [
         ast.unparse(node.args[0])
         for node in ast.walk(validate)
@@ -569,7 +584,7 @@ def test_no_resolver_can_discard_or_reassign_a_foreign_unit_override() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.Attribute) and node.attr == "unit_id"
     }
-    assert readers == {"validate_scenario"}
+    assert readers == {"_contract_issues"}  # stage 1's one shared body (P7.6)
 
     functions = _functions(tree)
     (ordering,) = [

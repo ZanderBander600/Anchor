@@ -49,6 +49,17 @@ import type {
   StrategyTargetCatalog,
 } from './strategyTypes';
 import type { DecisionMatrixReport } from './decisionTypes';
+import type {
+  InvestmentAddUnitRequest,
+  InvestmentCreateRequest,
+  InvestmentDecisionMatrixReport,
+  InvestmentDetailsRequest,
+  InvestmentIssue,
+  InvestmentUnitDisplayRequest,
+  InvestmentVariantAnalysis,
+  InvestmentVariantIssue,
+  VisibleInvestment,
+} from './investmentTypes';
 
 // Phase 6 Gate D6.6 -- every request that carries deal state carries the deal's
 // Business Plan as a top-level `business_plan`, taken from a required
@@ -2081,4 +2092,480 @@ export async function analyzeDecisionMatrix(investmentId: string): Promise<Decis
     'The decision matrix could not be completed',
   );
   return (await response.json()) as DecisionMatrixReport;
+}
+
+// =============================================================================
+// Phase 7 Gate P7.6 -- the visible Investment client.
+//
+// The P7.6 routes: the visible Investment's lifecycle, its Units, its
+// consolidated variant analysis and its Decision Matrix, plus the
+// Investment-scoped Strategy and Scenario routes a visible Investment must use
+// (the Deal-scoped ones refuse a Unit of a visible Investment with 409). Each
+// function sends a typed body and returns what the backend returned. None
+// validates beyond shape, derives a price, or computes a figure: the backend
+// owns the $0.01 reconciliation, every consolidated number and every rule.
+//
+// **One refusal shape.** An Investment 422 carries `InvestmentIssue`s (the
+// Investment validator's own words, each naming its Unit), a variant 422
+// carries `InvestmentVariantIssue`s, and a Business Plan refusal carries the
+// D6 `code`/`path`/`message`. A 409 is one sentence. `InvestmentApiError`
+// reports whichever arrived, recognised by shape, and keeps every message.
+// =============================================================================
+
+/** A refused visible Investment request. `status` 422 means the backend
+ * judged the Investment (or one of its variants) invalid; 409 means the
+ * structure refused the change. `reasons` holds every backend message. */
+export class InvestmentApiError extends ApiError {
+  status: number;
+  investmentIssues: InvestmentIssue[];
+  variantIssues: InvestmentVariantIssue[];
+  /** D6 Business Plan refusals, each path rooted at `business_plan`. */
+  planIssues: BusinessPlanApiIssue[];
+  reasons: string[];
+
+  constructor(
+    message: string,
+    status: number,
+    detail: {
+      investmentIssues: InvestmentIssue[];
+      variantIssues: InvestmentVariantIssue[];
+      planIssues: BusinessPlanApiIssue[];
+      reasons: string[];
+    },
+  ) {
+    super(message);
+    this.name = 'InvestmentApiError';
+    this.status = status;
+    this.investmentIssues = detail.investmentIssues;
+    this.variantIssues = detail.variantIssues;
+    this.planIssues = detail.planIssues;
+    this.reasons = detail.reasons;
+  }
+}
+
+/** Narrows one 422 detail entry to the `InvestmentIssue` shape `api.py`
+ * serializes. The `source_code` key tells it apart from a variant issue. */
+function isInvestmentIssue(entry: unknown): entry is InvestmentIssue {
+  if (typeof entry !== 'object' || entry === null) {
+    return false;
+  }
+  const candidate = entry as Record<string, unknown>;
+  return (
+    typeof candidate.code === 'string' &&
+    typeof candidate.message === 'string' &&
+    'unit_id' in candidate &&
+    'source_code' in candidate
+  );
+}
+
+const INVESTMENT_VARIANT_SOURCES = new Set(['strategy', 'scenario', 'lease_level', 'investment']);
+
+/** Narrows one 422 detail entry to the `InvestmentVariantIssue` shape. */
+function isInvestmentVariantIssue(entry: unknown): entry is InvestmentVariantIssue {
+  if (typeof entry !== 'object' || entry === null) {
+    return false;
+  }
+  const candidate = entry as Record<string, unknown>;
+  return (
+    typeof candidate.source === 'string' &&
+    INVESTMENT_VARIANT_SOURCES.has(candidate.source) &&
+    typeof candidate.code === 'string' &&
+    typeof candidate.message === 'string' &&
+    'unit_id' in candidate
+  );
+}
+
+/** A 404's backend detail names internal ids, so it is said in the analyst's
+ * words instead. */
+const INVESTMENT_NOT_FOUND_MESSAGE =
+  'That investment, unit or deal could not be found. It may have been deleted.';
+
+/** The detail array of a refusal, or an empty one. */
+function refusalEntries(detail: unknown): unknown[] {
+  return Array.isArray(detail) ? detail : [];
+}
+
+/** Every reason a refusal gave, in its order and in its own words: each
+ * entry's message, a one-sentence detail, or the analyst's 404 wording. */
+function refusalReasons(detail: unknown, status: number, notFoundMessage: string): string[] {
+  const messages = refusalEntries(detail)
+    .map((entry) =>
+      typeof entry === 'object' && entry !== null
+        ? (entry as Record<string, unknown>).message
+        : null,
+    )
+    .filter((message): message is string => typeof message === 'string');
+  if (messages.length > 0) {
+    return messages;
+  }
+  if (status === 404) {
+    return [notFoundMessage];
+  }
+  return typeof detail === 'string' && detail.trim() !== '' ? [detail] : [];
+}
+
+function refusalDetail(payload: unknown): unknown {
+  return typeof payload === 'object' && payload !== null
+    ? (payload as Record<string, unknown>).detail
+    : null;
+}
+
+async function investmentRequestError(
+  response: Response,
+  failureMessage: string,
+): Promise<InvestmentApiError> {
+  const payload: unknown = await response.json().catch(() => null);
+  const detail = refusalDetail(payload);
+  const entries = refusalEntries(detail);
+  const reasons = refusalReasons(detail, response.status, INVESTMENT_NOT_FOUND_MESSAGE);
+  const message =
+    reasons.length > 0 ? reasons.join(' ') : `${failureMessage} (HTTP ${response.status}).`;
+  return new InvestmentApiError(message, response.status, {
+    investmentIssues: entries.filter(isInvestmentIssue),
+    variantIssues: entries.filter(isInvestmentVariantIssue),
+    planIssues: entries.filter(isBusinessPlanApiIssue),
+    reasons,
+  });
+}
+
+async function investmentFetch(
+  path: string,
+  init: RequestInit,
+  failureMessage: string,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, init);
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE);
+  }
+  if (!response.ok) {
+    throw await investmentRequestError(response, failureMessage);
+  }
+  return response;
+}
+
+function investmentPath(investmentId: string): string {
+  return `/investments/${encodeURIComponent(investmentId)}`;
+}
+
+function investmentUnitPath(investmentId: string, unitId: string): string {
+  return `${investmentPath(investmentId)}/units/${encodeURIComponent(unitId)}`;
+}
+
+function jsonRequest(method: 'POST' | 'PUT', body: unknown): RequestInit {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
+/** Exactly the five keys a create or promote body may carry, and exactly the
+ * keys of each Unit and cost. */
+function investmentCreateBody(request: InvestmentCreateRequest): RequestInit {
+  return jsonRequest('POST', {
+    name: request.name,
+    transaction_price: request.transaction_price,
+    units: request.units.map((unit) => ({
+      unit_id: unit.unit_id,
+      label: unit.label,
+      unit_kind: unit.unit_kind,
+    })),
+    business_plan: request.business_plan,
+    transaction_costs: request.transaction_costs.map((cost) => ({
+      cost_id: cost.cost_id,
+      description: cost.description,
+      category: cost.category,
+      amount: cost.amount,
+      model_month: cost.model_month,
+    })),
+  });
+}
+
+/** `GET /investments` -- every visible Investment, most recently updated
+ * first. Hidden one-unit wrappers are never listed. */
+export async function listVisibleInvestments(): Promise<VisibleInvestment[]> {
+  const response = await investmentFetch(
+    '/investments',
+    { method: 'GET' },
+    'The investments could not be loaded',
+  );
+  return (await response.json()) as VisibleInvestment[];
+}
+
+/** `GET /investments/{id}/details` -- one visible Investment and everything it
+ * states beyond its Units. */
+export async function getVisibleInvestment(investmentId: string): Promise<VisibleInvestment> {
+  const response = await investmentFetch(
+    `${investmentPath(investmentId)}/details`,
+    { method: 'GET' },
+    'The investment could not be loaded',
+  );
+  return (await response.json()) as VisibleInvestment;
+}
+
+/** `POST /investments` -- a visible Investment over one or more standalone
+ * Deals, in one transaction. An invalid request leaves nothing behind. */
+export async function createVisibleInvestment(
+  request: InvestmentCreateRequest,
+): Promise<VisibleInvestment> {
+  const response = await investmentFetch(
+    '/investments',
+    investmentCreateBody(request),
+    'The investment could not be created',
+  );
+  return (await response.json()) as VisibleInvestment;
+}
+
+/** `POST /investments/{id}/promote` -- a Deal's hidden wrapper becomes the
+ * visible Investment: the same Investment, its Strategies and Scenarios kept,
+ * never a second parent. `request.units` lists every Unit of the result. */
+export async function promoteHiddenInvestment(
+  investmentId: string,
+  request: InvestmentCreateRequest,
+): Promise<VisibleInvestment> {
+  const response = await investmentFetch(
+    `${investmentPath(investmentId)}/promote`,
+    investmentCreateBody(request),
+    'The investment could not be created',
+  );
+  return (await response.json()) as VisibleInvestment;
+}
+
+/** `PUT /investments/{id}/details` -- the name, transaction price, Investment
+ * Business Plan and transaction costs, replaced together in one request. */
+export async function updateVisibleInvestmentDetails(
+  investmentId: string,
+  request: InvestmentDetailsRequest,
+): Promise<VisibleInvestment> {
+  const response = await investmentFetch(
+    `${investmentPath(investmentId)}/details`,
+    jsonRequest('PUT', {
+      name: request.name,
+      transaction_price: request.transaction_price,
+      business_plan: request.business_plan,
+      transaction_costs: request.transaction_costs.map((cost) => ({
+        cost_id: cost.cost_id,
+        description: cost.description,
+        category: cost.category,
+        amount: cost.amount,
+        model_month: cost.model_month,
+      })),
+    }),
+    'The investment could not be saved',
+  );
+  return (await response.json()) as VisibleInvestment;
+}
+
+/** `DELETE /investments/{id}` -- deletes the Investment and what it owns (its
+ * Strategies, Scenarios, plan and costs) and releases its Deals, unchanged. */
+export async function deleteVisibleInvestment(investmentId: string): Promise<void> {
+  await investmentFetch(
+    investmentPath(investmentId),
+    { method: 'DELETE' },
+    'The investment could not be deleted',
+  );
+}
+
+/** `POST /investments/{id}/units` -- adds a standalone Deal as a Unit, with
+ * the analyst's resulting transaction price in the same request. */
+export async function addInvestmentUnit(
+  investmentId: string,
+  request: InvestmentAddUnitRequest,
+): Promise<VisibleInvestment> {
+  const response = await investmentFetch(
+    `${investmentPath(investmentId)}/units`,
+    jsonRequest('POST', {
+      unit_id: request.unit_id,
+      label: request.label,
+      unit_kind: request.unit_kind,
+      transaction_price: request.transaction_price,
+    }),
+    'The unit could not be added',
+  );
+  return (await response.json()) as VisibleInvestment;
+}
+
+/** `PUT /investments/{id}/units/{unit_id}` -- one Unit's display metadata:
+ * label, kind and presentation order. None of them is economic. */
+export async function updateInvestmentUnitDisplay(
+  investmentId: string,
+  unitId: string,
+  request: InvestmentUnitDisplayRequest,
+): Promise<VisibleInvestment> {
+  const response = await investmentFetch(
+    investmentUnitPath(investmentId, unitId),
+    jsonRequest('PUT', {
+      label: request.label,
+      unit_kind: request.unit_kind,
+      ordinal: request.ordinal,
+    }),
+    'The unit could not be updated',
+  );
+  return (await response.json()) as VisibleInvestment;
+}
+
+/** `DELETE /investments/{id}/units/{unit_id}?transaction_price=...` -- ONE
+ * request that removes the Unit, releasing its Deal unchanged, and restates the
+ * Investment's transaction price as the analyst stated it. The remaining Units
+ * must reconcile to that price, or nothing changes (422). The price is never
+ * derived from the removed Unit's. */
+export async function removeInvestmentUnit(
+  investmentId: string,
+  unitId: string,
+  transactionPrice: number,
+): Promise<VisibleInvestment> {
+  const response = await investmentFetch(
+    `${investmentUnitPath(investmentId, unitId)}?transaction_price=${encodeURIComponent(String(transactionPrice))}`,
+    { method: 'DELETE' },
+    'The unit could not be removed',
+  );
+  return (await response.json()) as VisibleInvestment;
+}
+
+/** `POST /investments/{id}/investment-variants/{strategy_id}/{scenario_id}/analysis`
+ * -- every Unit through the existing engine, then consolidation. `base`/`base`
+ * is the Base variant. Always recomputed. */
+export async function analyzeInvestmentVariant(
+  investmentId: string,
+  strategyId: string,
+  scenarioId: string,
+): Promise<InvestmentVariantAnalysis> {
+  const response = await investmentFetch(
+    `${investmentPath(investmentId)}/investment-variants/${encodeURIComponent(strategyId)}/${encodeURIComponent(scenarioId)}/analysis`,
+    { method: 'POST' },
+    'The consolidated analysis could not be completed',
+  );
+  return (await response.json()) as InvestmentVariantAnalysis;
+}
+
+/** `POST /investments/{id}/investment-decision-matrix` -- every Strategy x
+ * Scenario variant of a visible Investment over consolidated Project metrics,
+ * with the backend's cross-cell figures. Never the one-unit matrix route. */
+export async function analyzeInvestmentDecisionMatrix(
+  investmentId: string,
+): Promise<InvestmentDecisionMatrixReport> {
+  const response = await investmentFetch(
+    `${investmentPath(investmentId)}/investment-decision-matrix`,
+    { method: 'POST' },
+    'The decision matrix could not be completed',
+  );
+  return (await response.json()) as InvestmentDecisionMatrixReport;
+}
+
+/** `GET /investments/{id}/scenarios` -- a visible Investment's Scenarios. */
+export async function listInvestmentScenarios(investmentId: string): Promise<InvestmentScenario[]> {
+  const response = await scenarioFetch(
+    `${investmentPath(investmentId)}/scenarios`,
+    { method: 'GET' },
+    'The scenarios could not be loaded',
+  );
+  return (await response.json()) as InvestmentScenario[];
+}
+
+/** `POST /investments/{id}/scenarios` -- a Scenario of a visible Investment,
+ * each override addressed to one of its Units. */
+export async function createInvestmentScenario(
+  investmentId: string,
+  draft: ScenarioDraft,
+): Promise<InvestmentScenario> {
+  const response = await scenarioFetch(
+    `${investmentPath(investmentId)}/scenarios`,
+    scenarioBody('POST', draft),
+    'The scenario could not be saved',
+  );
+  return (await response.json()) as InvestmentScenario;
+}
+
+/** `GET /investments/{id}/strategies` -- a visible Investment's Strategies. */
+export async function listInvestmentStrategies(investmentId: string): Promise<InvestmentStrategy[]> {
+  const response = await strategyFetch(
+    `${investmentPath(investmentId)}/strategies`,
+    { method: 'GET' },
+    'The strategies could not be loaded',
+  );
+  return (await response.json()) as InvestmentStrategy[];
+}
+
+/** A refused multi-unit Strategy save. `planIssueOverlays[i]` is the index,
+ * in the request's `overlays`, of the Business Plan overlay `planIssues[i]`
+ * names -- so an editor can place the refusal on its own Unit's plan. */
+export class InvestmentStrategyApiError extends StrategyApiError {
+  planIssueOverlays: number[];
+
+  constructor(
+    message: string,
+    status: number,
+    detail: {
+      issues: ValidationIssue[];
+      strategyIssues: StrategyIssue[];
+      planIssues: BusinessPlanApiIssue[];
+      reasons: string[];
+    },
+    planIssueOverlays: number[],
+  ) {
+    super(message, status, detail);
+    this.name = 'InvestmentStrategyApiError';
+    this.planIssueOverlays = planIssueOverlays;
+  }
+}
+
+const OVERLAY_INDEX = /^overlays\[(\d+)\]\.content/;
+
+async function investmentStrategyRequestError(
+  response: Response,
+  failureMessage: string,
+): Promise<InvestmentStrategyApiError> {
+  const payload: unknown = await response.json().catch(() => null);
+  const detail = refusalDetail(payload);
+  const entries = refusalEntries(detail);
+  const reasons = refusalReasons(detail, response.status, STRATEGY_NOT_FOUND_MESSAGE);
+  const message =
+    reasons.length > 0 ? reasons.join(' ') : `${failureMessage} (HTTP ${response.status}).`;
+  const placed = entries.flatMap((entry) => {
+    const issue = strategyPlanIssue(entry);
+    const path = (entry as Record<string, unknown>).path;
+    const match = typeof path === 'string' ? OVERLAY_INDEX.exec(path) : null;
+    return issue === null || match === null ? [] : [{ issue, overlay: Number(match[1]) }];
+  });
+  return new InvestmentStrategyApiError(
+    message,
+    response.status,
+    {
+      issues: entries.filter(isValidationIssue),
+      strategyIssues: entries.filter(isStrategyIssue),
+      planIssues: placed.map((entry) => entry.issue),
+      reasons,
+    },
+    placed.map((entry) => entry.overlay),
+  );
+}
+
+/** `POST /investments/{id}/strategies` when `strategyId` is `null`, otherwise
+ * `PUT /investments/{id}/strategies/{strategy_id}` -- a visible Investment's
+ * Strategy, whose overlays each name one of its Units. Always the
+ * Investment-scoped routes: the Deal-scoped ones refuse a visible Investment. */
+export async function saveInvestmentStrategy(
+  investmentId: string,
+  strategyId: string | null,
+  draft: StrategyDraft,
+): Promise<InvestmentStrategy> {
+  const path =
+    strategyId === null
+      ? `${investmentPath(investmentId)}/strategies`
+      : investmentStrategyPath(investmentId, strategyId);
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}${path}`,
+      strategyBody(strategyId === null ? 'POST' : 'PUT', draft),
+    );
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE);
+  }
+  if (!response.ok) {
+    throw await investmentStrategyRequestError(response, 'The strategy could not be saved');
+  }
+  return (await response.json()) as InvestmentStrategy;
 }

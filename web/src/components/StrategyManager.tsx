@@ -19,12 +19,20 @@
 
 import { useEffect, useRef } from 'react';
 import {
+  decisionIdScope,
+  INVESTMENT_BASE_STRATEGY_DESCRIPTION,
+  INVESTMENT_DIRTY_MESSAGE,
+  INVESTMENT_STRATEGY_SUBTITLE,
+  unitNames,
+} from '../investmentCatalog';
+import {
   describeStrategyOverlay,
   SAVE_BEFORE_STRATEGIES_MESSAGE,
   SAVE_DEAL_BEFORE_STRATEGIES_MESSAGE,
   STRATEGY_RESOLVES_TO_BASE_MESSAGE,
   strategyDomainsReplaced,
 } from '../strategyCatalog';
+import type { StrategyOverlay } from '../strategyTypes';
 import type { StrategiesState } from '../useStrategies';
 import { StrategyEditor } from './StrategyEditor';
 
@@ -35,7 +43,19 @@ export interface StrategyManagerProps {
 const BLOCKED_REASON_ID = 'strategy-blocked-reason';
 const EDITOR_ID = 'strategy-editor';
 
+/** One saved overlay as a line. A visible Investment's names its Unit. */
+function overlayLine(state: StrategiesState, overlay: StrategyOverlay): string {
+  if (state.investment === null) {
+    return describeStrategyOverlay(overlay);
+  }
+  const name = unitNames(state.units)[overlay.unit_id] ?? overlay.unit_id;
+  return `${name} · ${describeStrategyOverlay(overlay)}`;
+}
+
 function blockedReason(state: StrategiesState): string | null {
+  if (state.investment !== null) {
+    return state.isDirty ? INVESTMENT_DIRTY_MESSAGE : null;
+  }
   if (state.dealId === null) {
     return SAVE_DEAL_BEFORE_STRATEGIES_MESSAGE;
   }
@@ -44,6 +64,9 @@ function blockedReason(state: StrategiesState): string | null {
 
 export function StrategyManager({ state }: StrategyManagerProps) {
   const reason = blockedReason(state);
+  const ids = decisionIdScope(state.investment !== null);
+  const editorId = `${ids}${EDITOR_ID}`;
+  const blockedReasonId = `${ids}${BLOCKED_REASON_ID}`;
   const addButton = useRef<HTMLButtonElement>(null);
   const cancelDeleteButton = useRef<HTMLButtonElement>(null);
   const wasEditing = useRef(false);
@@ -64,15 +87,16 @@ export function StrategyManager({ state }: StrategyManagerProps) {
 
   return (
     <div className="scenario-workspace">
-      <section className="scenario-panel" aria-labelledby="strategy-manager-title">
+      <section className="scenario-panel" aria-labelledby={`${ids}strategy-manager-title`}>
         <div className="scenario-panel-header">
           <div className="scenario-panel-heading">
-            <h3 id="strategy-manager-title" className="scenario-panel-title">
+            <h3 id={`${ids}strategy-manager-title`} className="scenario-panel-title">
               Strategies
             </h3>
             <p className="scenario-panel-subtitle">
-              Alternative decisions: bid, financing, business plan, operating outcome and hold. Each
-              domain inherits Base or replaces it whole. Compare them in the Decision Matrix.
+              {state.investment !== null
+                ? INVESTMENT_STRATEGY_SUBTITLE
+                : 'Alternative decisions: bid, financing, business plan, operating outcome and hold. Each domain inherits Base or replaces it whole. Compare them in the Decision Matrix.'}
             </p>
           </div>
           <button
@@ -82,15 +106,15 @@ export function StrategyManager({ state }: StrategyManagerProps) {
             onClick={state.openNew}
             disabled={!state.canEdit || state.editor !== null}
             aria-expanded={isCreating}
-            aria-controls={isCreating ? EDITOR_ID : undefined}
-            aria-describedby={reason === null ? undefined : BLOCKED_REASON_ID}
+            aria-controls={isCreating ? editorId : undefined}
+            aria-describedby={reason === null ? undefined : blockedReasonId}
           >
             Add Strategy
           </button>
         </div>
 
         {reason !== null && (
-          <p id={BLOCKED_REASON_ID} className="scenario-blocked" role="status">
+          <p id={blockedReasonId} className="scenario-blocked" role="status">
             {reason}
           </p>
         )}
@@ -114,7 +138,11 @@ export function StrategyManager({ state }: StrategyManagerProps) {
           <li className="scenario-list-item strategy-list-base">
             <div className="scenario-list-identity">
               <span className="scenario-list-name">Base Strategy</span>
-              <span className="scenario-list-description">The saved underwriting. Edit it on Underwrite.</span>
+              <span className="scenario-list-description">
+                {state.investment !== null
+                  ? INVESTMENT_BASE_STRATEGY_DESCRIPTION
+                  : 'The saved underwriting. Edit it on Underwrite.'}
+              </span>
             </div>
             <div className="scenario-list-overrides">
               <span className="scenario-list-count">Implicit</span>
@@ -146,7 +174,7 @@ export function StrategyManager({ state }: StrategyManagerProps) {
                   ) : (
                     <ul className="strategy-overlay-summary">
                       {overlays.map((overlay) => (
-                        <li key={overlay.domain}>{describeStrategyOverlay(overlay)}</li>
+                        <li key={`${overlay.unit_id}:${overlay.domain}`}>{overlayLine(state, overlay)}</li>
                       ))}
                     </ul>
                   )}
@@ -181,7 +209,7 @@ export function StrategyManager({ state }: StrategyManagerProps) {
                         onClick={() => state.openEdit(strategyId)}
                         disabled={!state.canEdit || state.editor !== null}
                         aria-expanded={isEditingThis}
-                        aria-controls={isEditingThis ? EDITOR_ID : undefined}
+                        aria-controls={isEditingThis ? editorId : undefined}
                         aria-label={`Edit ${name}`}
                       >
                         Edit
@@ -208,7 +236,7 @@ export function StrategyManager({ state }: StrategyManagerProps) {
           })}
         </ul>
 
-        {state.editor !== null && <StrategyEditor id={EDITOR_ID} state={state} editor={state.editor} />}
+        {state.editor !== null && <StrategyEditor id={editorId} state={state} editor={state.editor} />}
       </section>
     </div>
   );

@@ -545,7 +545,11 @@ def test_resolution_is_the_p7_1_resolvers_and_validation_the_p7_1_validator() ->
     assert "validate_scenario" not in variants_calls
     assert not {c for c in variants_calls if c.startswith(("validate_acquisition", "validate_lease", "validate_detailed"))}
 
-    store_functions = _functions(ast.parse(_current(_STORE)))
+    # Re-pinned at P7.6 to the P7.2 merge: P7.6 routes the same validator
+    # through ``_scenario_contract_issues`` (the hidden wrapper's one Unit, or a
+    # visible Investment's member set), pinned by
+    # ``tests/test_p7_6_consolidation_architecture.py``.
+    store_functions = _functions(ast.parse(_merged(_STORE)))
     validators = sorted(
         name for name in _P7_2_STORE_FUNCTIONS if "validate_scenario" in _calls(store_functions[name])
     )

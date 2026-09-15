@@ -327,7 +327,14 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
         "anchor/api.py",
         "anchor/deals/contracts.py",
         "anchor/deals/fingerprint.py",
+        # **Narrowed at P7.6 -- by exactly two named files.** The Investment
+        # variant pathway resolves the Investment-level plan with the one D6
+        # resolver for the common hold; the Investment validator judges it with
+        # the one D6 validator. Neither opens a plan item
+        # (``tests/test_p7_6_consolidation_architecture.py``).
+        "anchor/deals/investment_variants.py",
         "anchor/deals/store.py",
+        "anchor/investment/validation.py",
     ], f"anchor.business_plan is imported by {importers}"
 
 
@@ -459,6 +466,11 @@ def test_owner_capital_schedule_is_referenced_only_by_its_producer_and_consumers
         "anchor/analysis/lease_level_sensitivity.py",
         "anchor/analysis/sensitivity.py",
         "anchor/business_plan/resolver.py",
+        # Narrowed at P7.6 by exactly consolidation, the Investment-level plan's
+        # one consumer: it applies the resolved schedule once, at the
+        # consolidation layer, and never resolves a plan itself
+        # (``tests/test_p7_6_consolidation_architecture.py``).
+        "anchor/consolidation/engine.py",
         "anchor/engine/acquisition.py",
         "anchor/engine/contracts.py",
     ]

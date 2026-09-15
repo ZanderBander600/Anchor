@@ -110,6 +110,32 @@ from .deals.decision_matrix import (
     DecisionMatrixReport,
     analyze_decision_matrix,
 )
+# P7.6: the visible Investment services are imported under distinct names. The
+# P7.4 and P7.5 route functions below are already named
+# ``analyze_investment_variant``, ``investment_variant_fingerprint`` and
+# ``analyze_investment_decision_matrix``, and a later ``def`` would shadow an
+# import of the same name.
+from .deals.decision_matrix import (
+    InvestmentDecisionMatrixReport,
+)
+from .deals.decision_matrix import (
+    analyze_investment_decision_matrix as analyze_consolidated_decision_matrix,
+)
+from .deals.investment_variants import (
+    InvestmentVariantAnalysis,
+    InvestmentVariantFingerprint,
+    InvestmentVariantInputs,
+    InvestmentVariantValidationError,
+)
+from .deals.investment_variants import (
+    analyze_investment_variant as analyze_consolidated_variant,
+)
+from .deals.investment_variants import (
+    inspect_investment_variant_inputs as inspect_consolidated_variant_inputs,
+)
+from .deals.investment_variants import (
+    investment_variant_fingerprint as consolidated_variant_fingerprint,
+)
 from .deals.contracts import (
     Investment,
     InvestmentNotFoundError,
@@ -118,6 +144,14 @@ from .deals.contracts import (
     InvestmentStructureError,
     ScenarioNotFoundError,
     StrategyNotFoundError,
+)
+from .deals.contracts import InvestmentUnitNotFoundError, VisibleInvestment
+from .investment import (
+    InvestmentTransactionCost,
+    InvestmentUnitMembership,
+    InvestmentValidationError,
+    TransactionCostCategory,
+    UnitKind,
 )
 from .deals.fingerprint import (
     fingerprint_ai,
@@ -2991,6 +3025,409 @@ def analyze_investment_decision_matrix(investment_id: str) -> DecisionMatrixRepo
 
     try:
         return analyze_decision_matrix(investment_id)
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except DecisionMatrixConflictError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from None
+
+
+# =============================================================================
+# Phase 7 Gate P7.6 -- the visible Investment
+#
+# The backend P7.6B builds the Investment workspace on. Every route delegates:
+# the lifecycle to ``anchor.deals.store``, the variant pathway (resolution,
+# fingerprints and consolidated analysis) to ``anchor.deals.investment_variants``,
+# and the matrix to ``anchor.deals.decision_matrix``. This module computes
+# nothing and adds no second analysis pathway.
+#
+# **The hidden one-unit Investment keeps every P7.2-P7.5 route unchanged.** A
+# visible Investment's variants and matrix have their own routes, because their
+# result is a different contract (``ConsolidatedResults`` beside every Unit's own
+# envelope); the P7.4 ``/variants`` routes and the P7.5 matrix route still refuse
+# a visible Investment with 409. A visible Investment's Strategies and Scenarios
+# use the existing ``/investments/{investment_id}/strategies`` and ``/scenarios``
+# routes, validated against its member Units.
+#
+# **The request parser is structural only.** Unknown keys are refused; tokens
+# become members when they are members and stay raw otherwise; the Investment
+# validator -- the one authority -- then reports every contract problem, in its
+# own deterministic order, as a structured 422. The Investment Business Plan is
+# parsed by the D6 parser, exactly as a Deal's plan is.
+# =============================================================================
+
+_INVESTMENT_FIELDS = ("name", "transaction_price", "units", "business_plan", "transaction_costs")
+_INVESTMENT_DETAILS_FIELDS = ("name", "transaction_price", "business_plan", "transaction_costs")
+_INVESTMENT_UNIT_FIELDS = ("unit_id", "label", "unit_kind", "acquisition_month", "disposition_month")
+_INVESTMENT_ADD_UNIT_FIELDS = (*_INVESTMENT_UNIT_FIELDS, "transaction_price")
+_INVESTMENT_UNIT_DISPLAY_FIELDS = ("label", "unit_kind", "ordinal")
+_TRANSACTION_COST_FIELDS = ("cost_id", "description", "category", "amount", "model_month")
+
+
+def _member_token(token_type: type[UnitKind] | type[TransactionCostCategory], raw: Any) -> Any:
+    """A member of ``token_type`` when ``raw`` is one of its tokens; otherwise
+    ``raw`` itself, left for the Investment validator to refuse by name. A plain
+    lookup, never a caught enum error."""
+
+    if isinstance(raw, str):
+        for member in token_type:
+            if member.value == raw:
+                return member
+    return raw
+
+
+def _stripped(raw: Any) -> Any:
+    return raw.strip() if isinstance(raw, str) else raw
+
+
+def _require_request_keys(body: dict[str, Any], keys: tuple[str, ...], where: str) -> None:
+    missing = [key for key in keys if key not in body]
+    if missing:
+        raise _structural_error(f"{where} must hold {', '.join(keys)} (missing: {', '.join(missing)}).")
+
+
+def _unit_membership_request(
+    raw: Any, ordinal: int, where: str, allowed: tuple[str, ...] = _INVESTMENT_UNIT_FIELDS
+) -> InvestmentUnitMembership:
+    body = _content_object(raw, allowed, where)
+    _require_request_keys(body, ("unit_id",), where)
+    return InvestmentUnitMembership(
+        unit_id=body["unit_id"],
+        ordinal=ordinal,
+        label=_stripped(body.get("label")),
+        unit_kind=_member_token(UnitKind, body.get("unit_kind")),
+        acquisition_month=body.get("acquisition_month", 0),
+        disposition_month=body.get("disposition_month"),
+    )
+
+
+def _transaction_costs_request(raw: Any) -> tuple[InvestmentTransactionCost, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise _structural_error("'transaction_costs' must be an array of transaction cost objects.")
+    costs: list[InvestmentTransactionCost] = []
+    for index, entry in enumerate(raw):
+        body = _content_object(entry, _TRANSACTION_COST_FIELDS, f"transaction_costs[{index}]")
+        # Raw values, a missing one as ``None``: the Investment validator judges
+        # each and reports it by name.
+        fields: dict[str, Any] = {key: body.get(key) for key in _TRANSACTION_COST_FIELDS}
+        costs.append(
+            InvestmentTransactionCost(
+                cost_id=fields["cost_id"],
+                description=_stripped(fields["description"]),
+                category=_member_token(TransactionCostCategory, fields["category"]),
+                amount=fields["amount"],
+                model_month=body.get("model_month", 0),
+            )
+        )
+    return tuple(costs)
+
+
+def _investment_business_plan_request(raw: Any) -> BusinessPlan:
+    try:
+        return parse_business_plan(raw)
+    except BusinessPlanValidationError as error:
+        raise _business_plan_validation_error_response(error) from None
+
+
+def _investment_request(payload: dict[str, Any], *, with_units: bool) -> dict[str, Any]:
+    """The contract fields of a create, promote or details body, or a
+    structural 422. No contract rule is applied here."""
+
+    allowed = _INVESTMENT_FIELDS if with_units else _INVESTMENT_DETAILS_FIELDS
+    body = _content_object(payload, allowed, "The request body")
+    _require_request_keys(body, ("name", "transaction_price", "units") if with_units else allowed, "The request body")
+    request: dict[str, Any] = {
+        "name": _stripped(body["name"]),
+        "transaction_price": body["transaction_price"],
+        "business_plan": _investment_business_plan_request(body.get("business_plan")),
+        "transaction_costs": _transaction_costs_request(body.get("transaction_costs")),
+    }
+    if with_units:
+        raw_units = body["units"]
+        if not isinstance(raw_units, list):
+            raise _structural_error("'units' must be an array of unit objects.")
+        request["units"] = tuple(
+            _unit_membership_request(raw, index, f"units[{index}]") for index, raw in enumerate(raw_units)
+        )
+    return request
+
+
+def _investment_validation_error_response(error: InvestmentValidationError) -> HTTPException:
+    """An invalid Investment as a structured 422: the Investment issues, in the
+    validator's own order, each with its stable code and the Unit it
+    concerns."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "unit_id": issue.unit_id,
+                "field": issue.field,
+                "source_code": issue.source_code,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _investment_variant_validation_error_response(
+    error: InvestmentVariantValidationError,
+) -> HTTPException:
+    """An invalid visible Investment variant as a structured 422: every issue,
+    with the layer that found it and the Unit it concerns."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "source": issue.source.value,
+                "code": issue.code,
+                "message": issue.message,
+                "unit_id": issue.unit_id,
+                "field": issue.field,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+@app.get("/investments", response_model=list[VisibleInvestment])
+def list_visible_investments() -> list[VisibleInvestment]:
+    """Every visible Investment. Hidden one-unit wrappers are never listed."""
+
+    return investment_store.list_visible_investments()
+
+
+@app.post("/investments", response_model=VisibleInvestment)
+def create_visible_investment(payload: dict[str, Any] = Body(...)) -> VisibleInvestment:
+    """Create a visible Investment over one or more standalone Deals, in one
+    transaction. An invalid request leaves nothing behind."""
+
+    request = _investment_request(payload, with_units=True)
+    try:
+        return investment_store.create_visible_investment(**request)
+    except DealNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except InvestmentValidationError as error:
+        raise _investment_validation_error_response(error) from None
+
+
+@app.get("/investments/{investment_id}/details", response_model=VisibleInvestment)
+def read_visible_investment(investment_id: str) -> VisibleInvestment:
+    """A visible Investment and everything it states beyond its Units.
+    Read-only; a hidden wrapper is a 409 and gains nothing."""
+
+    try:
+        return investment_store.get_visible_investment(investment_id)
+    except InvestmentNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+@app.put("/investments/{investment_id}/details", response_model=VisibleInvestment)
+def update_visible_investment(
+    investment_id: str, payload: dict[str, Any] = Body(...)
+) -> VisibleInvestment:
+    """Replace the name, transaction price, Investment Business Plan and
+    transaction costs as one request, in one transaction."""
+
+    request = _investment_request(payload, with_units=False)
+    try:
+        return investment_store.update_visible_investment(investment_id, **request)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except InvestmentValidationError as error:
+        raise _investment_validation_error_response(error) from None
+
+
+@app.post("/investments/{investment_id}/promote", response_model=VisibleInvestment)
+def promote_hidden_investment(
+    investment_id: str, payload: dict[str, Any] = Body(...)
+) -> VisibleInvestment:
+    """Make a Deal's hidden wrapper a visible Investment -- the same
+    Investment, its Strategies and Scenarios kept -- optionally adding
+    standalone Deals as Units, in one transaction."""
+
+    request = _investment_request(payload, with_units=True)
+    try:
+        return investment_store.promote_hidden_investment(investment_id, **request)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except InvestmentValidationError as error:
+        raise _investment_validation_error_response(error) from None
+
+
+@app.post("/investments/{investment_id}/units", response_model=VisibleInvestment)
+def add_investment_unit(investment_id: str, payload: dict[str, Any] = Body(...)) -> VisibleInvestment:
+    """Add a standalone Deal as a Unit. ``transaction_price`` may restate the
+    Investment's price in the same request; nothing is changed automatically."""
+
+    body = _content_object(payload, _INVESTMENT_ADD_UNIT_FIELDS, "The request body")
+    unit = _unit_membership_request(
+        {key: value for key, value in body.items() if key != "transaction_price"}, 0, "The request body"
+    )
+    try:
+        return investment_store.add_investment_unit(
+            investment_id, unit, transaction_price=body.get("transaction_price")
+        )
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except InvestmentValidationError as error:
+        raise _investment_validation_error_response(error) from None
+
+
+@app.put("/investments/{investment_id}/units/{unit_id}", response_model=VisibleInvestment)
+def update_investment_unit(
+    investment_id: str, unit_id: str, payload: dict[str, Any] = Body(...)
+) -> VisibleInvestment:
+    """Change one Unit's display metadata: label, kind and presentation order.
+    None of them is economic."""
+
+    body = _content_object(payload, _INVESTMENT_UNIT_DISPLAY_FIELDS, "The request body")
+    _require_request_keys(body, ("unit_kind", "ordinal"), "The request body")
+    try:
+        return investment_store.update_investment_unit(
+            investment_id,
+            unit_id,
+            label=_stripped(body.get("label")),
+            unit_kind=_member_token(UnitKind, body["unit_kind"]),
+            ordinal=body["ordinal"],
+        )
+    except (InvestmentNotFoundError, InvestmentUnitNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except InvestmentValidationError as error:
+        raise _investment_validation_error_response(error) from None
+
+
+@app.delete("/investments/{investment_id}/units/{unit_id}", response_model=VisibleInvestment)
+def remove_investment_unit(
+    investment_id: str, unit_id: str, transaction_price: float | None = None
+) -> VisibleInvestment:
+    """Remove a Unit, releasing its Deal unchanged, and -- in the same
+    transaction -- restate the Investment's transaction price when the query
+    supplies ``transaction_price``. The remaining Units must reconcile to the
+    resulting price; nothing is derived from the removed Unit's price. An
+    unreconciled result is a structured 422 and nothing changes. Refused (409)
+    for the last Unit and for a Unit a Strategy or Scenario still addresses."""
+
+    try:
+        return investment_store.remove_investment_unit(
+            investment_id, unit_id, transaction_price=transaction_price
+        )
+    except (InvestmentNotFoundError, InvestmentUnitNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except InvestmentValidationError as error:
+        raise _investment_validation_error_response(error) from None
+
+
+@app.get(
+    "/investments/{investment_id}/investment-variants/{strategy_id}/{scenario_id}/inputs",
+    response_model=InvestmentVariantInputs,
+)
+def visible_investment_variant_inputs(
+    investment_id: str, strategy_id: str, scenario_id: str
+) -> InvestmentVariantInputs:
+    """What exactly a visible Investment variant runs: every Unit's resolved
+    contracts and the Investment-level inputs, with the variant's source
+    fingerprint. Read-only."""
+
+    try:
+        return inspect_consolidated_variant_inputs(investment_id, strategy_id, scenario_id)
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except InvestmentVariantValidationError as error:
+        raise _investment_variant_validation_error_response(error) from None
+
+
+@app.get(
+    "/investments/{investment_id}/investment-variants/{strategy_id}/{scenario_id}/fingerprint",
+    response_model=InvestmentVariantFingerprint,
+)
+def visible_investment_variant_fingerprint(
+    investment_id: str, strategy_id: str, scenario_id: str
+) -> InvestmentVariantFingerprint:
+    """A visible Investment variant's source fingerprint. Read-only."""
+
+    try:
+        return consolidated_variant_fingerprint(investment_id, strategy_id, scenario_id)
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except InvestmentVariantValidationError as error:
+        raise _investment_variant_validation_error_response(error) from None
+
+
+@app.post(
+    "/investments/{investment_id}/investment-variants/{strategy_id}/{scenario_id}/analysis",
+    response_model=InvestmentVariantAnalysis,
+)
+def analyze_visible_investment_variant(
+    investment_id: str, strategy_id: str, scenario_id: str
+) -> InvestmentVariantAnalysis:
+    """Analyse a visible Investment variant: every Unit through the existing
+    engine, then consolidation. Always recomputed (``bypassed``)."""
+
+    try:
+        return analyze_consolidated_variant(investment_id, strategy_id, scenario_id)
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except InvestmentVariantValidationError as error:
+        raise _investment_variant_validation_error_response(error) from None
+
+
+@app.post(
+    "/investments/{investment_id}/investment-decision-matrix",
+    response_model=InvestmentDecisionMatrixReport,
+)
+def analyze_visible_investment_decision_matrix(investment_id: str) -> InvestmentDecisionMatrixReport:
+    """The Strategy x Scenario Decision Matrix of a visible Investment, over its
+    consolidated Project metrics, derived on request and never stored."""
+
+    try:
+        return analyze_consolidated_decision_matrix(investment_id)
     except (
         InvestmentNotFoundError,
         StrategyNotFoundError,
