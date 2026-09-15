@@ -99,7 +99,8 @@ def test_the_schedule_is_the_debt_engines_own_schedule_bit_for_bit(
             annual_capex_reserve=0.0, io_period=io_period,
         )
     )
-    assert schedule.modeled_payoff_month == 12 * hold
+    assert schedule.scheduled_full_amortization_month == 12 * io_period + 12 * amortization
+    assert schedule.modeled_payoff_month == min(12 * hold, 12 * io_period + 12 * amortization)
     assert bits([schedule.amortizing_payment]) == bits([loan.monthly_debt_service])
     assert bits(_scheduled_by_year(events, hold)) == bits(loan.annual_debt_service)
     assert bits([schedule.balance_at_payoff]) == bits([loan.remaining_loan_balance])
@@ -127,8 +128,8 @@ def test_a_maturity_before_the_exit_pays_the_remaining_balance_at_maturity() -> 
     assert bits([balloon.amount, schedule.balance_at_payoff]) == bits([balances[-1], balances[-1]])
     hand = hand_balance(1_000_000.0, 0.09, hand_level_payment(1_000_000.0, 0.09, 240), 42)
     assert close(balloon.amount, hand, 1e-6)
-    assert modeled_debt_payoff_month(maturity_month=42, hold_period=5) == 42
-    assert modeled_debt_payoff_month(maturity_month=90, hold_period=5) == 60
+    assert modeled_debt_payoff_month(maturity_month=42, hold_period=5, full_amortization_month=240) == 42
+    assert modeled_debt_payoff_month(maturity_month=90, hold_period=5, full_amortization_month=240) == 60
 
 
 def test_a_loan_fully_amortized_before_its_payoff_has_no_balloon() -> None:
@@ -136,6 +137,7 @@ def test_a_loan_fully_amortized_before_its_payoff_has_no_balloon() -> None:
     schedule, events = schedule_debt_position(position_id="p", principal=500_000.0, terms=terms, hold_period=5)
     assert [event.model_month for event in events] == list(range(1, 25))
     assert schedule.balance_at_payoff == 0.0
+    assert (schedule.maturity_month, schedule.scheduled_full_amortization_month, schedule.modeled_payoff_month) == (60, 24, 24)
 
 
 def test_senior_and_mezzanine_debt_share_one_schedule() -> None:
@@ -334,7 +336,111 @@ def test_an_undefined_position_irr_keeps_its_status_and_the_multiple_stays_defin
 
 
 # =============================================================================
-# 4. Coverage and debt yield through a position
+# 4. The modeled payoff is the earliest extinguishment (final review correction)
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    ("amortization", "io_period", "maturity_month", "full_amortization", "payoff", "balloon"),
+    [
+        (20, 0, 42, 240, 42, True),  # legal maturity before full amortization and the exit
+        (30, 0, 84, 360, 60, True),  # the exit before maturity and full amortization
+        (2, 0, 60, 24, 24, False),  # full amortization before maturity and the exit
+        (2, 1, 60, 36, 36, False),  # interest-only, then amortization: io_months + n_payments
+        (5, 0, 60, 60, 60, False),  # all three coincide
+    ],
+)
+def test_the_modeled_payoff_is_the_earliest_of_maturity_exit_and_full_amortization(
+    amortization: int, io_period: int, maturity_month: int, full_amortization: int, payoff: int, balloon: bool
+) -> None:
+    terms = cash_pay_debt(rate=0.08, amortization=amortization, io_period=io_period, maturity_month=maturity_month)
+    schedule, events = schedule_debt_position(position_id="p", principal=500_000.0, terms=terms, hold_period=5)
+
+    assert schedule.maturity_month == maturity_month  # the legal maturity, never rewritten
+    assert schedule.scheduled_full_amortization_month == full_amortization == schedule.io_months + schedule.n_payments
+    assert schedule.modeled_payoff_month == payoff == modeled_debt_payoff_month(
+        maturity_month=maturity_month, hold_period=5, full_amortization_month=full_amortization
+    )
+    assert max(event.model_month for event in events) == payoff
+    balloons = [event for event in events if event.kind is Kind.BALLOON]
+    if balloon:
+        (payoff_balloon,) = balloons
+        assert payoff_balloon.model_month == payoff and payoff_balloon.amount > 0.0
+        assert schedule.balance_at_payoff == payoff_balloon.amount
+    else:
+        assert balloons == [] and schedule.balance_at_payoff == 0.0
+
+
+#: Hand: $500,000 at 8% over 24 level payments, no interest-only months.
+EARLY_PMT = hand_level_payment(500_000.0, 0.08, 24)
+
+
+@pytest.fixture(scope="module")
+def early() -> dict[str, Any]:
+    """The round-number Unit (its $6,000,000 legacy mortgage pays $300,000 in
+    every one of the five years) with a mezzanine loan that amortizes fully in
+    two years although its legal maturity is month 60."""
+
+    terms, results = round_unit()
+    mezz = claim_position(
+        "mezz", position_class=PositionClass.MEZZANINE_DEBT, priority=2, resolution=CEC, amount=500_000.0,
+        terms=cash_pay_debt(rate=0.08, amortization=2, io_period=0, maturity_month=60),
+    )
+    result = execute_unit_capital_structure(unit_id=UNIT, terms=terms, results=results, capital_structure=structure(mezz))
+    return {"results": results, "result": result, "mezz": result.positions[0]}
+
+
+def test_early_amortization_payoff_semantics(early: dict[str, Any]) -> None:
+    mezz = early["mezz"]
+    schedule = mezz.debt_schedule
+    assert schedule.maturity_month == 60
+    assert schedule.scheduled_full_amortization_month == 24
+    assert (schedule.modeled_payoff_month, mezz.modeled_payoff_month) == (24, 24)
+    assert schedule.balance_at_payoff == 0.0 and mezz.balance_at_maturity_or_exit == 0.0
+    assert math.isclose(schedule.amortizing_payment, EARLY_PMT, rel_tol=1e-12)
+    payments = [event.model_month for event in mezz.cash_flow_events if event.kind is Kind.SCHEDULED_DEBT_SERVICE]
+    assert payments == list(range(1, 25))
+    assert [event for event in mezz.cash_flow_events if event.kind is Kind.BALLOON] == []
+
+
+def test_early_amortization_leaves_the_provider_cash_flow_unchanged(early: dict[str, Any]) -> None:
+    """The same loan through the unchanged debt engine over the whole hold --
+    the pre-correction schedule -- pays in years 1-2 only: the provider series
+    is identical, bit for bit."""
+
+    mezz = early["mezz"]
+    loan = engine_debt.calculate_debt_schedule(
+        AcquisitionTerms(
+            purchase_price=500_000.0, hold_period=5, exit_cap_rate=0.07, ltv=1.0, interest_rate=0.08, amortization=2,
+            acquisition_cost_pct=0.0, financing_fee_pct=0.0, disposition_cost_pct=0.0, annual_capex_reserve=0.0,
+            io_period=0,
+        )
+    )
+    assert loan.remaining_loan_balance == 0.0
+    assert mezz.annual_cash_flows[0] == -500_000.0
+    assert bits(mezz.annual_cash_flows[1:]) == bits(loan.annual_debt_service)
+    assert all_close(mezz.annual_cash_flows, (-500_000.0, 12 * EARLY_PMT, 12 * EARLY_PMT, 0.0, 0.0, 0.0))
+    assert mezz.status is PositionResultStatus.COMPLETE and mezz.irr_status is IrrStatus.DEFINED
+
+
+def test_coverage_through_an_amortized_mezz_is_na_while_the_senior_mortgage_continues(early: dict[str, Any]) -> None:
+    results, mezz = early["results"], early["mezz"]
+    assert results.annual_debt_service == (300_000.0,) * 5  # the senior mortgage is outstanding all five years
+    coverage = mezz.coverage_by_year
+    assert coverage[0] is not None and coverage[1] is not None
+    assert all(math.isclose(value, 800_000.0 / (300_000.0 + 12 * EARLY_PMT), rel_tol=1e-9) for value in coverage[:2])
+    assert coverage[2:] == (None, None, None)
+    assert (mezz.headline_coverage, mezz.minimum_coverage) == (coverage[0], min(coverage[0], coverage[1]))
+    # Senior-only coverage exists in years 3-5, and is deliberately never
+    # reported as coverage through the extinguished mezzanine loan.
+    senior_only = engine_returns.calculate_dscr_by_year(
+        noi_by_year=results.noi_by_year, annual_debt_service=results.annual_debt_service
+    )
+    assert senior_only[2:] == (800_000.0 / 300_000.0,) * 3
+
+
+# =============================================================================
+# 5. Coverage and debt yield through a position
 # =============================================================================
 
 

@@ -1,8 +1,9 @@
 # P7.8 Structured Position Cash Flows + Position Returns
 
 Status: Session A (backend financial execution) decision record. The human
-financial review approved it with two corrections -- unresolved-claim finality
-and the over-funded closing -- recorded here; awaiting re-review.
+financial review approved it with three corrections -- unresolved-claim
+finality, the over-funded closing and the full-amortization payoff -- recorded
+here; awaiting re-review.
 Base: `main` @ `a9f9b09` (the P7.7 merge).
 Branch: `feature/p7-8-structured-position-returns`.
 Risk: Tier 1 (financial / contract critical).
@@ -130,13 +131,28 @@ Nothing is moved to a supported convention, ignored or partially executed.
   - `calculate_monthly_debt_service`;
   - `calculate_monthly_payment`;
   - `calculate_amortization_schedule`.
-- **Payoff.** `modeled_payoff_month = min(maturity_month, 12H)`.
-  `maturity_month` is never rewritten.
+- **Payoff (final review correction).**
+  `modeled_payoff_month = min(maturity_month, exit_month, io_months + n_payments)`,
+  with `exit_month = 12H`. This is the earliest modeled extinguishment:
+  - legal maturity;
+  - the modeled sale;
+  - scheduled full amortization, the month the unchanged amortization
+    recurrence sets the balance to exactly zero.
+
+  More:
+  - `maturity_month` stays the legal contractual maturity. It is reported
+    separately and never rewritten, with `scheduled_full_amortization_month`
+    reported beside it.
+  - The position is outstanding through the modeled payoff and not after.
+    Coverage through it ends there (Sections 13 and 14).
+  - The provider cash flows are those of scheduling to the exit, because no
+    payment falls after full amortization.
 - **Events.**
   - Each month `1..payoff` carries its scheduled payment (sequence 1).
-  - The remaining balance after that month's payment is the balloon
+  - Any balance remaining after that month's payment is the balloon
     (sequence 2), in the payoff month.
-  - A loan fully amortized by then has no balloon.
+  - When full amortization comes first, the balance is exactly `0.0` and
+    there is no balloon.
 - **Balance at maturity or exit.** The balance immediately before the balloon.
 
 ## 7. Preferred equity
@@ -312,10 +328,14 @@ cash settlement.
 
 ## 14. Implementation decisions (human financial review)
 
-1. **Coverage after payoff: approved.** Coverage is `None` in years after the
-   position's modeled payoff year, as well as where the service is zero. The
-   position is no longer outstanding then, and a value would describe only its
-   seniors.
+1. **Coverage after payoff: approved; payoff corrected at final review.**
+   Coverage is `None` in years after the position's modeled payoff year, as
+   well as where the service is zero.
+   - "Payoff" includes scheduled full amortization, not merely legal maturity
+     or the exit (Section 6).
+   - A junior loan that amortizes away while a senior loan continues
+     therefore reports no coverage in the later years. A value there would
+     describe only its seniors, under the repaid position's name.
 2. **Unresolved finality: approved with correction.** Settlement of a position
    stops at its first unresolved claim (Section 10). Its later years were
    originally settled one by one; the review found that unsupportable, because

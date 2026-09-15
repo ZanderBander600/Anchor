@@ -376,6 +376,22 @@ def test_the_debt_helpers_are_called_not_copied() -> None:
     assert not [node for node in ast.walk(_code(_DEBT_POSITION)) if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)]
 
 
+def test_the_modeled_debt_payoff_is_the_earliest_extinguishment() -> None:
+    """Final review correction: legal maturity, the exit or scheduled full
+    amortization, whichever comes first; the amortization authority runs only
+    through it."""
+
+    functions = _functions(_tree(_DEBT_POSITION))
+    assert ast.unparse(functions["scheduled_full_amortization_month"].body[-1]) == "return io_months + n_payments"
+    assert ast.unparse(functions["modeled_debt_payoff_month"].body[-1]) == (
+        "return min(maturity_month, MONTHS_PER_HOLD_YEAR * hold_period, full_amortization_month)"
+    )
+    schedule = ast.unparse(functions["schedule_debt_position"])
+    assert "full_amortization_month = scheduled_full_amortization_month(io_months=io_months, n_payments=n_payments)" in schedule
+    assert "months_to_run=payoff_month" in schedule
+    assert "maturity_month=terms.maturity_month" in schedule
+
+
 def test_every_irr_is_evaluate_irr_and_no_second_solver_exists() -> None:
     solver_like = re.compile(
         r"(^|_)(solve|solver|horner|bisect|bisection|newton|secant|find_root|npv|xirr|discount)(_|$)", re.IGNORECASE
@@ -421,7 +437,7 @@ _P7_8_ARITHMETIC = {
     _EXEC_CONTRACTS: set(),
     _EXEC_VALIDATION: set(),
     _FUNDING: {"-event.amount", "rule.pct * price_basis.amount", "total + event.amount"},
-    _DEBT_POSITION: {"-1", "MONTHS_PER_HOLD_YEAR * hold_period", "payoff_month + 1"},
+    _DEBT_POSITION: {"-1", "MONTHS_PER_HOLD_YEAR * hold_period", "io_months + n_payments", "payoff_month + 1"},
     _PREFERRED: {
         "(principal + accrued) * accrual_rate",
         "MONTHS_PER_HOLD_YEAR * hold_period",

@@ -180,10 +180,16 @@ class DebtPositionSchedule:
     - ``principal``: the funded amount.
     - ``monthly_rate``, ``n_payments``, ``io_months``, ``io_payment`` and
       ``amortizing_payment``: exactly what those functions return for it.
-    - ``maturity_month``: the legal maturity, as stated.
-    - ``modeled_payoff_month``: ``min(maturity_month, 12 x hold_period)``.
+    - ``maturity_month``: the legal contractual maturity, as stated; never
+      rewritten.
+    - ``scheduled_full_amortization_month``: ``io_months + n_payments``, when
+      the unchanged amortization recurrence reaches exactly zero.
+    - ``modeled_payoff_month``: the earliest modeled extinguishment,
+      ``min(maturity_month, 12 x hold_period, scheduled_full_amortization_month)``.
+      The position is outstanding through it and not after.
     - ``balance_at_payoff``: the remaining principal immediately before the
-      balloon, after that month's scheduled payment."""
+      balloon, after that month's scheduled payment; ``0.0`` when full
+      amortization comes first, and then there is no balloon."""
 
     principal: float
     interest_rate: float
@@ -193,6 +199,7 @@ class DebtPositionSchedule:
     io_payment: float
     amortizing_payment: float
     maturity_month: int
+    scheduled_full_amortization_month: int
     modeled_payoff_month: int
     balance_at_payoff: float
 

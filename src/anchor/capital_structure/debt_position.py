@@ -20,10 +20,14 @@ functions use; the executor refuses PIK and a split current-pay rate first.
 Senior and mezzanine debt share this one schedule: the class orders payment and
 reporting, and never selects a formula.
 
-**Payoff.** ``modeled_payoff_month = min(maturity_month, 12 x hold_period)``.
-Each month up to it carries its scheduled payment; the remaining balance after
-that month's payment is paid as the balloon, in the same month. The legal
-``maturity_month`` is never rewritten.
+**Payoff.** ``modeled_payoff_month = min(maturity_month, 12 x hold_period,
+io_months + n_payments)``: the earliest of the legal maturity, the modeled sale
+and scheduled full amortization -- the month the unchanged amortization
+recurrence sets the balance to exactly zero. The position is outstanding through
+it and not after. Each month up to it carries its scheduled payment; any
+balance remaining after that month's payment is paid as the balloon, in the
+same month, and a fully amortized loan has none. The legal ``maturity_month``
+is never rewritten and is reported beside it.
 """
 
 from __future__ import annotations
@@ -45,10 +49,19 @@ PAYMENT_SEQUENCE = 1
 BALLOON_SEQUENCE = 2
 
 
-def modeled_debt_payoff_month(*, maturity_month: int, hold_period: int) -> int:
-    """Maturity when it falls within the hold, and the exit month otherwise."""
+def scheduled_full_amortization_month(*, io_months: int, n_payments: int) -> int:
+    """The month the unchanged amortization recurrence sets the balance to
+    exactly zero: every interest-only month, then every level payment
+    (``calculate_amortization_schedule``'s own ``io_months + N``)."""
 
-    return min(maturity_month, MONTHS_PER_HOLD_YEAR * hold_period)
+    return io_months + n_payments
+
+
+def modeled_debt_payoff_month(*, maturity_month: int, hold_period: int, full_amortization_month: int) -> int:
+    """The earliest modeled extinguishment: the legal maturity, the exit (the
+    modeled sale) or scheduled full amortization."""
+
+    return min(maturity_month, MONTHS_PER_HOLD_YEAR * hold_period, full_amortization_month)
 
 
 def schedule_debt_position(
@@ -65,7 +78,10 @@ def schedule_debt_position(
     amortizing_payment = calculate_monthly_debt_service(
         loan_amount=principal, interest_rate=terms.interest_rate, n_payments=n_payments
     )
-    payoff_month = modeled_debt_payoff_month(maturity_month=terms.maturity_month, hold_period=hold_period)
+    full_amortization_month = scheduled_full_amortization_month(io_months=io_months, n_payments=n_payments)
+    payoff_month = modeled_debt_payoff_month(
+        maturity_month=terms.maturity_month, hold_period=hold_period, full_amortization_month=full_amortization_month
+    )
     ending_balances = calculate_amortization_schedule(
         loan_amount=principal,
         monthly_rate=monthly_rate,
@@ -118,6 +134,7 @@ def schedule_debt_position(
         io_payment=io_payment,
         amortizing_payment=amortizing_payment,
         maturity_month=terms.maturity_month,
+        scheduled_full_amortization_month=full_amortization_month,
         modeled_payoff_month=payoff_month,
         balance_at_payoff=balance_at_payoff,
     )
