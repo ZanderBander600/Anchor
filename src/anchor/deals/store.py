@@ -5742,16 +5742,33 @@ def update_investment_unit(
 
 
 def remove_investment_unit(
-    investment_id: str, unit_id: str, *, db_path: Path | None = None
+    investment_id: str,
+    unit_id: str,
+    *,
+    transaction_price: float | None = None,
+    db_path: Path | None = None,
 ) -> VisibleInvestment:
     """Remove the Unit ``unit_id`` from the visible Investment, releasing its
     Deal -- which is neither deleted nor changed -- to standalone.
 
-    Refused while a persisted Scenario override or Strategy overlay addresses
-    the Unit (those are never silently edited), and for the Investment's last
-    Unit (delete the Investment to release every Unit). The Investment stays
-    visible, even with one Unit. One transaction; its variant cache rows are
-    deleted."""
+    The Investment that remains must be a valid Base when the transaction
+    commits: its remaining Units share one timeline and reconcile to the
+    resulting transaction price. That price is ``transaction_price`` when the
+    request restates it, and the current price otherwise. Nothing is derived --
+    removing a Unit never subtracts its price -- so a removal that leaves the
+    old price unreconciled is refused (``ALLOCATION_MISMATCH``) until the
+    caller restates the price in the same request. Restating it first, or
+    removing first and repairing later, would each commit an invalid state.
+
+    Also refused while a persisted Scenario override or Strategy overlay
+    addresses the Unit (those are never silently edited), and for the
+    Investment's last Unit (delete the Investment to release every Unit). The
+    Investment stays visible, even with one Unit.
+
+    One transaction: every check runs before any write; then the membership and
+    its Unit details are deleted, a restated price is written, and the
+    Investment's variant cache rows are deleted. Any failure rolls all of it
+    back."""
 
     now = _utc_now_iso()
     with _connect(db_path) as connection:
@@ -5770,6 +5787,16 @@ def remove_investment_unit(
                 "overrides and overlays first; Strategies and Scenarios are never edited "
                 "silently."
             )
+        remaining = tuple(membership for membership in current.units if membership.unit_id != unit_id)
+        price = current.transaction_price if transaction_price is None else transaction_price
+        _require_valid_investment_inputs(
+            name=current.name,
+            transaction_price=price,
+            memberships=remaining,
+            business_plan=current.business_plan,
+            transaction_costs=current.transaction_costs,
+        )
+        _require_reconciled_base(connection, remaining, price)
         connection.execute(
             "DELETE FROM investment_units WHERE investment_id = ? AND deal_id = ?",
             (investment_id, unit_id),
@@ -5778,6 +5805,10 @@ def remove_investment_unit(
             "DELETE FROM investment_unit_details WHERE investment_id = ? AND unit_id = ?",
             (investment_id, unit_id),
         )
+        if transaction_price is not None:
+            _write_visible_details(
+                connection, investment_id, name=current.name, transaction_price=transaction_price
+            )
         connection.execute("DELETE FROM variant_snapshots WHERE root_id = ?", (investment_id,))
         _touch_investment(connection, investment_id, now=now)
 

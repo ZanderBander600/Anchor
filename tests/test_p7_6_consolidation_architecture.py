@@ -587,7 +587,10 @@ def test_every_write_is_validated_first() -> None:
     validations = {"_require_valid_investment_inputs", "_require_standalone_deal", "_require_reconciled_base"}
     writes = {"execute", "_write_membership", "_write_visible_details", "_replace_investment_business_plan",
               "_replace_transaction_costs", "_touch_investment"}
-    for name in ("create_visible_investment", "promote_hidden_investment", "update_visible_investment", "add_investment_unit"):
+    for name in (
+        "create_visible_investment", "promote_hidden_investment", "update_visible_investment",
+        "add_investment_unit", "remove_investment_unit",
+    ):
         calls = sorted((node.lineno, _callee(node)) for node in ast.walk(functions[name]) if isinstance(node, ast.Call))
         checked = [line for line, callee in calls if callee in validations]
         written = [line for line, callee in calls if callee in writes]

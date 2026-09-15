@@ -371,22 +371,94 @@ def test_updating_a_units_display_metadata(db: Path) -> None:
         store.update_investment_unit(visible.id, first.id, label=" ", unit_kind=UnitKind.PHASE, ordinal=0, db_path=db)
 
 
-def test_removing_a_unit_releases_its_deal_unchanged_and_keeps_the_investment_visible(db: Path) -> None:
-    first, second = quick_deal(db), detailed_deal(db)
-    visible = create_investment(db, first, second)
-    second_before = store.get_deal(second.id, db_path=db)
+def _twelve_and_eighteen(db: Path) -> tuple[Any, Any, Any]:
+    """Unit A $12.0M (Quick) and Unit B $18.0M (Detailed), priced at $30.0M,
+    with a stale cache row seeded under the Investment's root."""
 
-    remaining = store.remove_investment_unit(visible.id, second.id, db_path=db)
+    a, b = quick_deal(db, purchase_price=12_000_000.0), detailed_deal(db, purchase_price=18_000_000.0)
+    visible = create_investment(db, a, b)
+    assert visible.transaction_price == 30_000_000.0
+    connection = sqlite3.connect(db)
+    connection.execute(
+        "INSERT INTO variant_snapshots VALUES (?, 'base', 'base', '{}', 1, 'seeded', '2026-01-01T00:00:00+00:00')",
+        (visible.id,),
+    )
+    connection.commit()
+    connection.close()
+    return a, b, visible
 
-    assert [unit.unit_id for unit in remaining.units] == [first.id]
+
+def test_removing_a_unit_without_a_reconciling_price_is_refused_and_changes_nothing(db: Path) -> None:
+    """PP-2 holds when the removal commits: the old $30.0M no longer reconciles
+    with A's $12.0M, and nothing derives a new price from B's."""
+
+    a, b, visible = _twelve_and_eighteen(db)
+    before = _every_row(db)
+
+    with pytest.raises(InvestmentValidationError) as error:
+        store.remove_investment_unit(visible.id, b.id, db_path=db)
+    assert _codes(error) == [Code.ALLOCATION_MISMATCH]
+    with pytest.raises(InvestmentValidationError) as error:
+        store.remove_investment_unit(visible.id, b.id, transaction_price=12_500_000.0, db_path=db)
+    assert _codes(error) == [Code.ALLOCATION_MISMATCH]
+    with pytest.raises(InvestmentValidationError) as error:
+        store.remove_investment_unit(visible.id, b.id, transaction_price=0.0, db_path=db)
+    assert Code.INVALID_TRANSACTION_PRICE in _codes(error)
+
+    assert _every_row(db) == before
+    current = store.get_visible_investment(visible.id, db_path=db)
+    assert [unit.unit_id for unit in current.units] == [a.id, b.id]
+    assert current.transaction_price == 30_000_000.0
+    assert [row[0] for row in rows(db, "investment_units") if row[1] == b.id] == [visible.id]
+    assert len(rows(db, "variant_snapshots")) == 1
+
+
+def test_removing_a_unit_with_the_restated_price_is_one_atomic_valid_change(db: Path) -> None:
+    from anchor.deals.investment_variants import analyze_investment_variant, investment_variant_fingerprint
+
+    a, b, visible = _twelve_and_eighteen(db)
+    b_before = store.get_deal(b.id, db_path=db)
+
+    remaining = store.remove_investment_unit(visible.id, b.id, transaction_price=12_000_000.0, db_path=db)
+
+    assert [unit.unit_id for unit in remaining.units] == [a.id]
+    assert remaining.transaction_price == 12_000_000.0
     assert rows(db, "investments")[0][1] == 0  # still visible, even with one Unit
-    assert store.get_deal(second.id, db_path=db) == second_before
-    assert store.list_deal_scenarios(second.id, db_path=db) == (None, [])
+    assert store.get_deal(b.id, db_path=db) == b_before
+    assert store.list_deal_scenarios(b.id, db_path=db) == (None, [])
+    assert [row[1] for row in rows(db, "investment_units")] == [a.id]
     assert p7_6_row_counts(db)["investment_unit_details"] == 1
+    assert rows(db, "variant_snapshots") == []
+    assert investment_variant_fingerprint(visible.id, "base", "base", db_path=db).source_fingerprint
+    analysis = analyze_investment_variant(visible.id, "base", "base", db_path=db)
+    assert abs(analysis.consolidated_results.allocation_variance) <= 0.01
+    assert analysis.consolidated_results.allocated_purchase_price == 12_000_000.0
+
+
+def test_an_injected_failure_rolls_the_whole_removal_back(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, b, visible = _twelve_and_eighteen(db)
+    before = _every_row(db)
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("injected")
+
+    monkeypatch.setattr(store, "_write_visible_details", fail)
+    with pytest.raises(RuntimeError, match="injected"):
+        store.remove_investment_unit(visible.id, b.id, transaction_price=12_000_000.0, db_path=db)
+
+    assert _every_row(db) == before
+
+
+def test_the_last_unit_and_an_unknown_unit_are_refused(db: Path) -> None:
+    a, b, visible = _twelve_and_eighteen(db)
+    store.remove_investment_unit(visible.id, b.id, transaction_price=12_000_000.0, db_path=db)
+    before = _every_row(db)
+
     with pytest.raises(InvestmentStructureError, match="last Unit"):
-        store.remove_investment_unit(visible.id, first.id, db_path=db)
+        store.remove_investment_unit(visible.id, a.id, transaction_price=12_000_000.0, db_path=db)
     with pytest.raises(InvestmentUnitNotFoundError):
-        store.remove_investment_unit(visible.id, second.id, db_path=db)
+        store.remove_investment_unit(visible.id, b.id, db_path=db)
+    assert _every_row(db) == before
 
 
 def test_a_unit_a_strategy_or_scenario_addresses_cannot_be_removed(db: Path) -> None:
@@ -405,7 +477,8 @@ def test_a_unit_a_strategy_or_scenario_addresses_cannot_be_removed(db: Path) -> 
     with pytest.raises(InvestmentStructureError, match="Hold"):
         store.remove_investment_unit(visible.id, second.id, db_path=db)
     store.delete_strategy(visible.id, strategy.strategy.strategy_id, db_path=db)
-    assert [unit.unit_id for unit in store.remove_investment_unit(visible.id, second.id, db_path=db).units] == [first.id]
+    released = store.remove_investment_unit(visible.id, second.id, transaction_price=price(first), db_path=db)
+    assert [unit.unit_id for unit in released.units] == [first.id]
 
 
 # =============================================================================
@@ -569,9 +642,16 @@ def test_the_visible_investment_routes_round_trip(client: TestClient, db: Path) 
     assert added.status_code == 200, added.text
     assert [u["unit_id"] for u in added.json()["units"]] == [quick.id, detailed.id, lease.id]
     moved = client.put(f"/investments/{investment}/units/{lease.id}", json={"label": None, "unit_kind": "phase", "ordinal": 0})
-    assert moved.status_code == 200 and moved.json()["units"][0]["unit_id"] == lease.id
-    removed = client.delete(f"/investments/{investment}/units/{lease.id}")
-    assert removed.status_code == 200 and len(removed.json()["units"]) == 2
+    assert moved.status_code == 200, moved.text
+    # Ordinal 0 now ties the first Unit's; ties break by unit_id, so assert the
+    # metadata, never a position.
+    (lease_entry,) = [u for u in moved.json()["units"] if u["unit_id"] == lease.id]
+    assert (lease_entry["ordinal"], lease_entry["unit_kind"], lease_entry["label"]) == (0, "phase", None)
+    removed = client.delete(
+        f"/investments/{investment}/units/{lease.id}", params={"transaction_price": body["transaction_price"]}
+    )
+    assert removed.status_code == 200, removed.text
+    assert len(removed.json()["units"]) == 2 and removed.json()["transaction_price"] == body["transaction_price"]
 
     details = client.put(f"/investments/{investment}/details", json={
         "name": "Renamed", "transaction_price": body["transaction_price"], "business_plan": None, "transaction_costs": [],
@@ -610,6 +690,24 @@ def test_the_routes_report_refusals_with_their_status_and_reasons(client: TestCl
     assert client.delete(f"/investments/{record.investment_id}/units/{wrapped.id}").status_code == 409  # its Scenario addresses it
     assert client.delete(f"/investments/{record.investment_id}/units/{'0' * 32}").status_code == 404
     assert p7_6_row_counts(db)["investment_unit_details"] == 2
+
+
+def test_the_removal_route_restates_the_price_atomically(client: TestClient, db: Path) -> None:
+    a, b, visible = _twelve_and_eighteen(db)
+    before = _every_row(db)
+
+    refused = client.delete(f"/investments/{visible.id}/units/{b.id}")
+    assert refused.status_code == 422
+    assert [issue["code"] for issue in refused.json()["detail"]] == ["allocation_mismatch"]
+    assert _every_row(db) == before
+
+    removed = client.delete(f"/investments/{visible.id}/units/{b.id}", params={"transaction_price": 12_000_000})
+    assert removed.status_code == 200, removed.text
+    assert ([u["unit_id"] for u in removed.json()["units"]], removed.json()["transaction_price"]) == ([a.id], 12_000_000.0)
+    analysis = client.post(f"/investments/{visible.id}/investment-variants/base/base/analysis")
+    assert analysis.status_code == 200, analysis.text
+    assert client.delete(f"/investments/{visible.id}/units/{a.id}", params={"transaction_price": 12_000_000}).status_code == 409
+    assert client.delete(f"/investments/{visible.id}/units/{b.id}").status_code == 404
 
 
 def test_no_ordinary_read_route_materializes_a_visible_investment(client: TestClient, db: Path) -> None:

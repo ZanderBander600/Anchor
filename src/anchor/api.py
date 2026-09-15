@@ -3321,16 +3321,26 @@ def update_investment_unit(
 
 
 @app.delete("/investments/{investment_id}/units/{unit_id}", response_model=VisibleInvestment)
-def remove_investment_unit(investment_id: str, unit_id: str) -> VisibleInvestment:
-    """Remove a Unit, releasing its Deal unchanged. Refused for the last Unit
-    and for a Unit a Strategy or Scenario still addresses."""
+def remove_investment_unit(
+    investment_id: str, unit_id: str, transaction_price: float | None = None
+) -> VisibleInvestment:
+    """Remove a Unit, releasing its Deal unchanged, and -- in the same
+    transaction -- restate the Investment's transaction price when the query
+    supplies ``transaction_price``. The remaining Units must reconcile to the
+    resulting price; nothing is derived from the removed Unit's price. An
+    unreconciled result is a structured 422 and nothing changes. Refused (409)
+    for the last Unit and for a Unit a Strategy or Scenario still addresses."""
 
     try:
-        return investment_store.remove_investment_unit(investment_id, unit_id)
+        return investment_store.remove_investment_unit(
+            investment_id, unit_id, transaction_price=transaction_price
+        )
     except (InvestmentNotFoundError, InvestmentUnitNotFoundError) as error:
         raise _not_found(error) from None
     except InvestmentStructureError as error:
         raise _investment_structure_conflict(error) from None
+    except InvestmentValidationError as error:
+        raise _investment_validation_error_response(error) from None
 
 
 @app.get(
