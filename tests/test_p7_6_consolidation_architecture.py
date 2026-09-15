@@ -48,6 +48,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 #: ``main`` when P7.6 began: the no-ff P7.5 merge.
 _P7_6_BASE = "6cade6279ff9f071d672f68889585065a829fb2c"
 
+#: ``main`` after P7.6 -- the no-ff merge of
+#: ``feature/p7-6-multi-unit-consolidation``, and the end of P7.6's committed
+#: range.
+_P7_6_MERGE = "fbaa07bfe546b05d104e4e6335f8501ca9293558"
+
 _CONSOLIDATION_ENGINE = "src/anchor/consolidation/engine.py"
 _CONSOLIDATION_CONTRACTS = "src/anchor/consolidation/contracts.py"
 _CONSOLIDATION_INIT = "src/anchor/consolidation/__init__.py"
@@ -190,13 +195,12 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
-def _changes_since(base: str, *paths: str) -> set[str]:
-    """Committed, staged, unstaged and untracked changes since ``base``, with
-    renames split into their removal and addition."""
+def _changes_between(start: str, end: str, *paths: str) -> set[str]:
+    """Files that differ between two commits, renames split into removal and
+    addition. Reads Git objects only; it never touches the index."""
 
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+    changed = _git("diff", "--name-only", "--no-renames", start, end, "--", *paths).split()
+    return {path for path in changed if path}
 
 
 def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
@@ -326,11 +330,16 @@ def _changed_functions(path: str) -> tuple[set[str], set[str]]:
 
 
 def test_p7_6_changed_exactly_its_authorized_production_files() -> None:
-    """The P7.6 production ledger. The next gate must re-pin this to P7.6's
-    committed range, ``6cade62..<the P7.6 merge>``, before adding its own scope.
+    """The P7.6 production ledger.
+
+    Pinned at P7.7 to P7.6's own committed range, ``6cade62..fbaa07b``, so it
+    keeps proving exactly what P7.6 changed however later gates move the tree.
+    P7.7's own ledger is ``tests/test_p7_7_capital_structure_architecture.py``.
     Never widen this set to admit another gate's files."""
 
-    changed = {path for path in _changes_since(_P7_6_BASE, "src", "web") if _is_production(path)}
+    changed = {
+        path for path in _changes_between(_P7_6_BASE, _P7_6_MERGE, "src", "web") if _is_production(path)
+    }
     assert _ledger_violations(changed) == ([], [])
 
 
@@ -339,9 +348,19 @@ def test_the_p7_6_ledger_base_is_the_p7_5_merge() -> None:
     assert parents == [_git("rev-parse", ref).strip() for ref in ("5f04d37", "fddecc2")]
 
 
+def test_the_p7_6_ledger_end_is_the_p7_6_merge() -> None:
+    """``fbaa07b`` is the no-ff merge of P7.6 (tip ``91f1c27``) into the P7.5
+    merge ``6cade62`` -- the exact end of P7.6's committed range."""
+
+    parents = _git("rev-list", "--parents", "-n", "1", _P7_6_MERGE).split()[1:]
+    assert parents == [_git("rev-parse", ref).strip() for ref in (_P7_6_BASE, "91f1c27")]
+
+
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged_since_p7_5(path: str) -> None:
-    assert _changes_since(_P7_6_BASE, path) == set(), f"{path} changed at P7.6"
+    # Within P7.6's own committed range (pinned at P7.7). What later gates may
+    # change is their own ledgers' business.
+    assert _changes_between(_P7_6_BASE, _P7_6_MERGE, path) == set(), f"{path} changed at P7.6"
 
 
 def test_the_ledger_rejects_any_unexpected_production_change() -> None:
