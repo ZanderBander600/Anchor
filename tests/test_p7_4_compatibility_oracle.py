@@ -35,7 +35,13 @@ from fastapi.testclient import TestClient
 from anchor import api as api_module
 from anchor.deals import store
 
-from _p7_2_fixtures import P7_4_TABLES, P7_6_TABLES, rows, table_names  # type: ignore[import-not-found]
+from _p7_2_fixtures import (  # type: ignore[import-not-found]
+    P7_4_TABLES,
+    P7_6_TABLES,
+    P7_8_TABLES,
+    rows,
+    table_names,
+)
 import _p7_4_fixtures as f4  # type: ignore[import-not-found]
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -97,12 +103,18 @@ def _schema(db: Path) -> list[tuple[Any, ...]]:
 
 
 def _every_row(db: Path) -> dict[str, list[tuple[Any, ...]]]:
-    """Every row of every table that is not a P7.4 table -- legacy and P7.2
-    alike -- in rowid order."""
+    """Every row of every table that is not a P7 structure table -- legacy and
+    P7.2 alike -- in rowid order.
+
+    A later gate's tables are excluded for the same reason P7.4's are: this
+    compares the rows a v8 database already held, and a gate that appends empty
+    tables must not read as a row that moved. P7.6's five sidecars and P7.8B's
+    six Capital Structure tables are each proved empty by the assertions above,
+    and by their own gate's oracle."""
 
     return {
         table: rows(db, table)
-        for table in sorted(table_names(db) - set(P7_4_TABLES) - set(P7_6_TABLES))
+        for table in sorted(table_names(db) - set(P7_4_TABLES) - set(P7_6_TABLES) - set(P7_8_TABLES))
         if not table.startswith("sqlite_")
     }
 
@@ -147,21 +159,24 @@ def test_the_migration_adds_exactly_eight_empty_tables_and_rewrites_no_row(legac
     store.list_deals(db_path=db)  # any store call migrates
     migrated_schema, migrated_rows = _schema(db), _every_row(db)
 
-    assert _version(db) == 10  # P7.6 migrates the same v8 database on to schema 10
-    assert table_names(db) == before_tables | set(P7_4_TABLES) | set(P7_6_TABLES)
+    assert _version(db) == 11  # P7.6 and P7.8B migrate the same v8 database on to schema 11
+    assert table_names(db) == (
+        before_tables | set(P7_4_TABLES) | set(P7_6_TABLES) | set(P7_8_TABLES)
+    )
+    assert {table: rows(db, table) for table in P7_8_TABLES} == dict.fromkeys(P7_8_TABLES, [])
     assert {table: rows(db, table) for table in P7_6_TABLES} == dict.fromkeys(P7_6_TABLES, [])
     assert {table: rows(db, table) for table in P7_4_TABLES} == dict.fromkeys(P7_4_TABLES, [])
     assert migrated_rows == before_rows
     for _ in range(3):
         store.list_deals(db_path=db)
-        assert (_version(db), _schema(db), _every_row(db)) == (10, migrated_schema, migrated_rows)
+        assert (_version(db), _schema(db), _every_row(db)) == (11, migrated_schema, migrated_rows)
 
     connection = sqlite3.connect(db)
     connection.row_factory = sqlite3.Row
     store._migrate(connection)
     connection.commit()
     connection.close()
-    assert (_version(db), _schema(db), _every_row(db)) == (10, migrated_schema, migrated_rows)
+    assert (_version(db), _schema(db), _every_row(db)) == (11, migrated_schema, migrated_rows)
 
 
 # =============================================================================
@@ -179,7 +194,7 @@ def test_every_recorded_response_is_identical_after_migration(client: TestClient
     db, manifest = legacy
     replayed = _replay(client, manifest["exchanges"])
 
-    assert _version(db) == 10
+    assert _version(db) == 11
     mismatched = [
         (exchange["method"], exchange["path"])
         for exchange, now in zip(manifest["exchanges"], replayed, strict=True)

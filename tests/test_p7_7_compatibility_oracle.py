@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import shutil
 import sqlite3
 import subprocess
@@ -34,7 +33,7 @@ from fastapi.testclient import TestClient
 
 from anchor import api as api_module
 
-from _p7_2_fixtures import rows, table_names  # type: ignore[import-not-found]
+from _p7_2_fixtures import P7_8_TABLES, rows, table_names  # type: ignore[import-not-found]
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _BUILDER = Path(__file__).resolve().parent / "_p7_7_baseline_builder.py"
@@ -150,9 +149,15 @@ def test_no_schema_change_and_no_read_triggered_materialization(client: TestClie
     _replay(client, manifest["exchanges"])
 
     assert (_version(db), _schema(db), _every_row(db)) == before
-    assert not {
-        table for table in table_names(db) if re.search(r"capital_(position|structure|event)|funding_requirement", table)
-    }
+    # Re-pinned at P7.8B, which is the gate that adds the six Capital Structure
+    # tables. What P7.7 proved is unchanged and still proved above: opening and
+    # replaying against a legacy database moves no version, schema or row once
+    # the tables exist. What moved is only that they now exist -- appended
+    # empty, and left empty, because a Deal that never opted into structured
+    # capital has no position and no read makes it one (P-11).
+    assert sorted(table for table in table_names(db) if table.startswith("capital_")) == sorted(P7_8_TABLES)
+    assert {table: rows(db, table) for table in P7_8_TABLES} == dict.fromkeys(P7_8_TABLES, [])
+    assert not {table for table in table_names(db) if "funding_requirement" in table}
 
 
 def test_the_comparison_detects_a_single_changed_bit(legacy: tuple[Path, dict[str, Any]]) -> None:

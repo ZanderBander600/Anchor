@@ -303,7 +303,15 @@ describe('the Investment header and workspaces', () => {
     renderWorkspace();
     await user.click(await screen.findByRole('tab', { name: 'Risk' }));
     const views = within(screen.getByRole('tablist', { name: 'Investment risk views' })).getAllByRole('tab');
-    expect(views.map((tab) => tab.textContent)).toEqual(['Decision Matrix', 'Strategies', 'Scenarios']);
+    // Re-pinned at P7.8B: Capital Structure joins the decision tools at
+    // Investment level. Sensitivity and break-even stay Unit-level, which is
+    // what this test is actually about, and are still absent.
+    expect(views.map((tab) => tab.textContent)).toEqual([
+      'Decision Matrix',
+      'Strategies',
+      'Scenarios',
+      'Capital Structure',
+    ]);
     await waitFor(() => expect(listInvestmentStrategies).toHaveBeenCalledWith('inv-1'));
   });
 });

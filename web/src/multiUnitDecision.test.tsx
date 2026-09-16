@@ -245,8 +245,11 @@ describe('a visible Investment’s decision set lives on its own routes', () => 
         memberOf={{ investmentName: 'Harbor Portfolio', onOpen }}
       />,
     );
-    // Every decision view says so; only the one on screen is reachable.
-    expect(screen.getAllByText(UNIT_OF_INVESTMENT_NOTICE)).toHaveLength(3);
+    // Every decision view says so; only the one on screen is reachable. Four
+    // since P7.8B, which adds Capital Structure beside the other three: a Unit
+    // of a visible Investment states its structure on the Investment, exactly
+    // as it states its strategies and scenarios there.
+    expect(screen.getAllByText(UNIT_OF_INVESTMENT_NOTICE)).toHaveLength(4);
     await user.click(screen.getByRole('button', { name: 'Open Harbor Portfolio' }));
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(listDealStrategies).not.toHaveBeenCalled();

@@ -36,7 +36,6 @@ from pathlib import Path
 
 import pytest
 
-from anchor.analysis.strategy import StrategyDomain
 from anchor.decision.comparison import (
     INVESTMENT_PROJECT_METRIC_CATALOG,
     PROJECT_METRIC_CATALOG,
@@ -211,8 +210,18 @@ def _lf(text: str) -> str:
     return text.replace("\r\n", "\n")
 
 
-def _current(path: str) -> str:
-    return _lf((_PROJECT_ROOT / path).read_bytes().decode("utf-8"))
+def _merged(path: str) -> str:
+    """``path`` as P7.6 left it, at the P7.6 merge ``fbaa07b``.
+
+    Re-pinned at P7.8B. This file judges what *P7.6* did, so it reads P7.6's
+    own committed tree rather than the working tree -- exactly as its ledger
+    already does, and as P7.7's guards do (``_merged`` in
+    ``tests/test_p7_7_capital_structure_architecture.py``). A later gate that
+    legitimately adds a table, a route, a store function or a Strategy domain
+    is answerable to its own guards, not to P7.6's, and what P7.6 shipped can
+    no longer drift underneath it. Reads Git objects only (protocol 11.2)."""
+
+    return _lf(_git("show", f"{_P7_6_MERGE}:{path}"))
 
 
 def _baseline(path: str) -> str:
@@ -220,7 +229,7 @@ def _baseline(path: str) -> str:
 
 
 def _tree(path: str) -> ast.Module:
-    return ast.parse(_current(path))
+    return ast.parse(_merged(path))
 
 
 def _functions(tree: ast.Module) -> dict[str, ast.FunctionDef]:
@@ -304,10 +313,10 @@ def _arithmetic(node: ast.AST) -> list[str]:
 
 
 def _added_nodes(path: str) -> list[ast.stmt]:
-    """The current file's top-level statements, docstrings removed, that are
-    absent from the P7.6 base -- for a new file, all of them."""
+    """The merged file's top-level statements, docstrings removed, that are
+    absent from the P7.6 base -- for a file new at P7.6, all of them."""
 
-    current = _without_docstrings(ast.parse(_current(path))).body
+    current = _without_docstrings(ast.parse(_merged(path))).body
     try:
         baseline_text = _baseline(path)
     except subprocess.CalledProcessError:
@@ -555,8 +564,8 @@ def test_the_fingerprint_reads_only_economic_fields() -> None:
 
 def test_a_visible_investment_is_never_cached() -> None:
     assert not {c for c in _calls(_tree(_VARIANTS)) if "variant_snapshot" in c}
-    assert "VariantCacheStatus.BYPASSED" in _current(_VARIANTS)
-    assert not re.search(r"VariantCacheStatus\.(HIT|MISS)", _current(_VARIANTS))
+    assert "VariantCacheStatus.BYPASSED" in _merged(_VARIANTS)
+    assert not re.search(r"VariantCacheStatus\.(HIT|MISS)", _merged(_VARIANTS))
     store = _functions(_tree(_STORE))
     for name in ("get_variant_snapshot", "put_variant_snapshot", "put_strategy_variant_snapshot"):
         assert name not in _changed_functions(_STORE)[1], name
@@ -598,20 +607,20 @@ _P7_6_DDL = {
 
 
 def test_every_earlier_table_is_unchanged_and_five_sidecars_are_appended() -> None:
-    current, baseline = _create_constants(_current(_STORE)), _create_constants(_baseline(_STORE))
+    current, baseline = _create_constants(_merged(_STORE)), _create_constants(_baseline(_STORE))
     assert {name: current[name] for name in baseline} == baseline
     assert set(current) - set(baseline) == set(_P7_6_DDL)
     for name, table in _P7_6_DDL.items():
         statement = " ".join(current[name].split())
         assert statement.startswith(f"CREATE TABLE IF NOT EXISTS {table} ("), name
         assert not re.search(r"\b(ALTER|DROP|INSERT|UPDATE|DELETE)\b", statement), name
-    assert _current(_STORE).count("ALTER TABLE") == _baseline(_STORE).count("ALTER TABLE")
+    assert _merged(_STORE).count("ALTER TABLE") == _baseline(_STORE).count("ALTER TABLE")
 
 
 def test_the_migration_body_is_unchanged_and_the_version_moves_to_10() -> None:
     current, baseline = _tree(_STORE), ast.parse(_baseline(_STORE))
     assert ast.dump(_functions(current)["_migrate"]) == ast.dump(_functions(baseline)["_migrate"])
-    assert re.search(r"^_SCHEMA_VERSION = 10$", _current(_STORE), re.MULTILINE)
+    assert re.search(r"^_SCHEMA_VERSION = 10$", _merged(_STORE), re.MULTILINE)
     assert re.search(r"^_SCHEMA_VERSION = 9$", _baseline(_STORE), re.MULTILINE)
 
     def executes(tree: ast.Module) -> list[str]:
@@ -714,7 +723,7 @@ def test_a_deal_in_a_visible_investment_is_refused_before_anything_is_deleted() 
 
 
 def test_every_baseline_api_node_is_unchanged_and_the_additions_compute_nothing() -> None:
-    current = {ast.dump(node) for node in ast.parse(_current(_API)).body}
+    current = {ast.dump(node) for node in ast.parse(_merged(_API)).body}
     removed = [node for node in ast.parse(_baseline(_API)).body if ast.dump(node) not in current]
     assert removed == []
     assert _arithmetic(ast.Module(body=_added_nodes(_API), type_ignores=[])) == []
@@ -736,7 +745,7 @@ def _routes(text: str) -> set[tuple[str, str]]:
 
 def test_p7_6_adds_exactly_these_routes() -> None:
     variant = "/investments/{investment_id}/investment-variants/{strategy_id}/{scenario_id}"
-    assert _routes(_current(_API)) - _routes(_baseline(_API)) == {
+    assert _routes(_merged(_API)) - _routes(_baseline(_API)) == {
         ("get", "/investments"),
         ("post", "/investments"),
         ("get", "/investments/{investment_id}/details"),
@@ -758,7 +767,7 @@ def test_no_api_name_is_defined_twice() -> None:
     once."""
 
     names: list[str] = []
-    for node in ast.parse(_current(_API)).body:
+    for node in ast.parse(_merged(_API)).body:
         if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
             names.append(node.name)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -846,7 +855,7 @@ def _added_web_text(path: str) -> str:
     """Every line P7.6 added to a frontend file that already existed at the
     base."""
 
-    diff = _git("diff", "-U0", _P7_6_BASE, "--", path)
+    diff = _git("diff", "-U0", _P7_6_BASE, _P7_6_MERGE, "--", path)
     return "\n".join(line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
 
 
@@ -861,7 +870,7 @@ def test_no_p7_6_frontend_addition_names_a_later_gate_concept(path: str) -> None
     """Session B adds no Capital Structure, Partnership, waterfall, refinancing,
     valuation-timepoint, funding-requirement or Unit-selection surface."""
 
-    text = _current(path) if _is_new_web_file(path) else _added_web_text(path)
+    text = _merged(path) if _is_new_web_file(path) else _added_web_text(path)
     assert sorted({match.group(0) for match in _LATER_GATE_VOCABULARY.finditer(text)}) == []
 
 
@@ -873,9 +882,19 @@ def test_the_vocabulary_guard_has_teeth() -> None:
 
 
 def test_no_unit_selection_domain_ships() -> None:
-    assert {domain.value for domain in StrategyDomain} == {
-        "acquisition", "financing", "business_plan", "operating_outcome", "disposition",
-    }
+    """P7.6 wired no sixth Strategy domain: its merged ``strategy.py`` declares
+    exactly the five P7.4 Unit domains. P7.8B adds the Investment-root
+    ``CAPITAL_STRUCTURE`` domain under its own gate's approval, pinned by
+    ``tests/test_p7_8b_product_integration_architecture.py``."""
+
+    (domains,) = [
+        node
+        for node in ast.walk(ast.parse(_merged(_STRATEGY)))
+        if isinstance(node, ast.ClassDef) and node.name == "StrategyDomain"
+    ]
+    assert {
+        ast.literal_eval(node.value) for node in domains.body if isinstance(node, ast.Assign)
+    } == {"acquisition", "financing", "business_plan", "operating_outcome", "disposition"}
 
 
 def test_no_p7_6_module_reaches_the_ai() -> None:
@@ -887,4 +906,4 @@ def test_no_p7_6_module_reaches_the_ai() -> None:
 def test_no_case_or_competition_identifier(path: str) -> None:
     import test_p7_0_decision_architecture as p7_0
 
-    assert p7_0._case_identifiers_in(_current(path)) == []
+    assert p7_0._case_identifiers_in(_merged(path)) == []

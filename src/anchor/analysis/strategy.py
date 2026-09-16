@@ -33,7 +33,8 @@ Both layers are gone before the engine boundary. Nothing here computes NOI,
 debt service, a value or a return, and this module has no arithmetic at all: a
 Strategy only ever *states* a value.
 
-**Five domains, each a whole-domain overlay (ST-2)**, and one home per field:
+**Five Unit domains, each a whole-domain overlay (ST-2)**, and one home per
+field:
 
 - ``ACQUISITION``: ``purchase_price`` and ``acquisition_cost_pct``;
 - ``FINANCING``: the acquisition loan -- ``ltv``, ``interest_rate``,
@@ -93,6 +94,8 @@ from types import MappingProxyType
 from typing import TypeVar
 
 from ..business_plan import BusinessPlan, validate_business_plan
+from ..capital_structure.contracts import CapitalStructure
+from ..capital_structure.validation import validate_capital_structure
 from ..contracts import (
     AcquisitionInputs,
     AcquisitionTerms,
@@ -161,28 +164,54 @@ BASE_SCENARIO_ID = "base"
 
 
 class StrategyDomain(StrEnum):
-    """The five P7.4 Strategy domains. Declaration order is the canonical order
-    for resolution and for reporting.
+    """The Strategy domains. Declaration order is the canonical order for
+    resolution and for reporting.
 
-    Section 7.4 also names ``CAPITAL_STRUCTURE``, ``PARTNERSHIP`` and
-    ``UNIT_SELECTION``. They belong to later gates and are deliberately not
-    members, so a token naming one is refused (``UNSUPPORTED_DOMAIN``)."""
+    The first five are **Unit domains** (P7.4): each addresses one Unit and
+    replaces part of that Unit's Project inputs. ``CAPITAL_STRUCTURE`` (P7.8B)
+    is the first **Investment-root domain**: it replaces an Investment-level
+    contract whose positions carry their own Unit or Investment scope, so it is
+    never addressed to a Unit. ``UNIT_STRATEGY_DOMAINS`` and
+    ``INVESTMENT_STRATEGY_DOMAINS`` are the two sets, and every rule below reads
+    them rather than the enum itself.
+
+    Section 7.4 also names ``PARTNERSHIP`` and ``UNIT_SELECTION``. They belong
+    to later gates and are deliberately not members, so a token naming one is
+    refused (``UNSUPPORTED_DOMAIN``)."""
 
     ACQUISITION = "acquisition"
     FINANCING = "financing"
     BUSINESS_PLAN = "business_plan"
     OPERATING_OUTCOME = "operating_outcome"
     DISPOSITION = "disposition"
+    CAPITAL_STRUCTURE = "capital_structure"
 
 
 _DOMAIN_RANK: Mapping[StrategyDomain, int] = MappingProxyType(
     {domain: rank for rank, domain in enumerate(StrategyDomain)}
 )
 
-#: Every input field a Strategy can write, under the one domain that owns it. No
-#: field has two homes. ``interest_rate`` and ``ltv`` are financing decisions,
-#: so they are FINANCING fields and never operating outcomes; ``exit_cap_rate``
-#: is an operating outcome and never DISPOSITION.
+#: The domains one Unit overlay may carry (P7.4). Each replaces part of that
+#: Unit's own Project inputs, and every one is addressed by ``unit_id``.
+UNIT_STRATEGY_DOMAINS: tuple[StrategyDomain, ...] = (
+    StrategyDomain.ACQUISITION,
+    StrategyDomain.FINANCING,
+    StrategyDomain.BUSINESS_PLAN,
+    StrategyDomain.OPERATING_OUTCOME,
+    StrategyDomain.DISPOSITION,
+)
+
+#: The domains an Investment-root overlay may carry (P7.8B). ``PARTNERSHIP``
+#: joins this set at P7.9 without another representation: a root overlay is
+#: addressed by its domain alone, never by a Unit id, a sentinel or ``"*"``.
+INVESTMENT_STRATEGY_DOMAINS: tuple[StrategyDomain, ...] = (StrategyDomain.CAPITAL_STRUCTURE,)
+
+#: Every *Project input* field a Strategy can write, under the one Unit domain
+#: that owns it. No field has two homes. ``interest_rate`` and ``ltv`` are
+#: financing decisions, so they are FINANCING fields and never operating
+#: outcomes; ``exit_cap_rate`` is an operating outcome and never DISPOSITION.
+#: ``CAPITAL_STRUCTURE`` writes no Project input at all -- it replaces a
+#: downstream contract, not a field of one -- so it is not a key here.
 STRATEGY_DOMAIN_FIELDS: Mapping[StrategyDomain, tuple[str, ...]] = MappingProxyType(
     {
         StrategyDomain.ACQUISITION: ("purchase_price", "acquisition_cost_pct"),
@@ -318,18 +347,43 @@ class StrategyOverlay:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class InvestmentStrategyOverlay:
+    """One whole-domain overlay on an Investment-root domain (P7.8B).
+
+    It is addressed by its ``domain`` alone: a root domain replaces an
+    Investment-level contract, and the positions inside that contract carry
+    their own Unit or Investment scope, so there is no Unit to address and no
+    sentinel Unit id. ``content`` is the P7.7 ``CapitalStructure`` itself -- the
+    same contract the executor runs, never a parallel shape.
+
+    Shape only: ``validate_strategy`` holds the rules."""
+
+    domain: StrategyDomain
+    content: CapitalStructure
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class StrategyDefinition:
     """A named decision configuration (Section 6).
 
     ``strategy_id`` is a stable, opaque, nonblank identity other than the
     reserved Base key. ``name`` is arbitrary analyst text and ``description``
     optional context; neither has financial meaning. ``overlays`` holds at most
-    one overlay per ``(domain, unit_id)``, and its order is irrelevant."""
+    one overlay per ``(domain, unit_id)``, and its order is irrelevant.
+
+    ``root_overlays`` (P7.8B) holds at most one overlay per Investment-root
+    domain. It is additive and defaults to none, which is what every Strategy
+    saved before P7.8B has: **no root overlay at all means inherit** -- the
+    Investment's Base contract, unchanged. A root overlay replaces that contract
+    whole, and an overlay whose content is the empty ``CapitalStructure`` is a
+    real choice ("this Strategy uses no structured capital"), never the same
+    thing as having none."""
 
     strategy_id: str
     name: str
     description: str | None = None
     overlays: tuple[StrategyOverlay, ...] = ()
+    root_overlays: tuple[InvestmentStrategyOverlay, ...] = ()
 
 
 # =============================================================================
@@ -357,7 +411,11 @@ class StrategyIssueCode(StrEnum):
     INVALID_NAME = "invalid_name"
     INVALID_DESCRIPTION = "invalid_description"
     INVALID_OVERLAYS = "invalid_overlays"
+    INVALID_ROOT_OVERLAYS = "invalid_root_overlays"
     UNSUPPORTED_DOMAIN = "unsupported_domain"
+    ROOT_DOMAIN_ON_UNIT = "root_domain_on_unit"
+    UNIT_DOMAIN_AT_ROOT = "unit_domain_at_root"
+    INVALID_CAPITAL_STRUCTURE = "invalid_capital_structure"
     INVALID_UNIT_ID = "invalid_unit_id"
     DUPLICATE_DOMAIN = "duplicate_domain"
     UNIT_NOT_IN_VARIANT = "unit_not_in_variant"
@@ -752,6 +810,128 @@ def _address_order(address: tuple[StrategyDomain, str]) -> tuple[int, str]:
     return _DOMAIN_RANK[domain], unit
 
 
+def _capital_structure_issues(
+    structure: CapitalStructure, unit_modes: Mapping[str, OperatingMode]
+) -> list[StrategyIssue]:
+    """The P7.7 structural authority on a root ``CAPITAL_STRUCTURE`` overlay,
+    its findings wrapped unchanged and located within the overlay.
+
+    It judges the *contract*: identity, class and terms pairing, scope, priority
+    within a scope, funding, fees and the explicit shortfall resolution. It
+    deliberately states no acquisition-loan Unit, because whether a Unit carries
+    one is a mutable Base fact (and a FINANCING overlay can change it): a
+    priority that collides with an acquisition loan, or CS-5, is a *variant*
+    question the executor asks of the resolved Project state, exactly as an
+    out-of-domain resolved input is (the two-layer rule above). So no Base edit
+    can ever make a stored Strategy unreadable."""
+
+    located: list[StrategyIssue] = []
+    for issue in validate_capital_structure(
+        structure, member_unit_ids=sorted(unit_modes), acquisition_loan_unit_ids=()
+    ):
+        position = "" if issue.position_id is None else f".positions[{issue.position_id}]"
+        within = "" if issue.field is None else f".{issue.field}"
+        located.append(
+            _strategy_issue(
+                StrategyIssueCode.INVALID_CAPITAL_STRUCTURE,
+                f"capital_structure: {issue.message}",
+                domain=StrategyDomain.CAPITAL_STRUCTURE,
+                field=f"capital_structure{position}{within}",
+                source_code=issue.code.value,
+            )
+        )
+    return located
+
+
+def _root_issues(
+    strategy: StrategyDefinition, unit_modes: Mapping[str, OperatingMode]
+) -> list[StrategyIssue]:
+    """Stage 1 for the Investment-root overlays, in the same deterministic
+    shape the Unit overlays follow: a malformed collection or member, then
+    unsupported domains, then per domain in declaration order -- a Unit domain
+    stated at the root, a duplicate, and finally that domain's own content
+    rules. Nothing is inferred, filtered or repaired."""
+
+    root_overlays = strategy.root_overlays
+    if not isinstance(root_overlays, tuple):
+        return [
+            _strategy_issue(
+                StrategyIssueCode.INVALID_ROOT_OVERLAYS,
+                "root_overlays must be a tuple of InvestmentStrategyOverlay; got "
+                f"{type(root_overlays).__qualname__}.",
+            )
+        ]
+
+    issues: list[StrategyIssue] = []
+    for index, overlay in enumerate(root_overlays):
+        if not isinstance(overlay, InvestmentStrategyOverlay):
+            issues.append(
+                _strategy_issue(
+                    StrategyIssueCode.INVALID_ROOT_OVERLAYS,
+                    f"root_overlays[{index}] must be an InvestmentStrategyOverlay; got "
+                    f"{type(overlay).__qualname__}.",
+                )
+            )
+
+    typed = [overlay for overlay in root_overlays if isinstance(overlay, InvestmentStrategyOverlay)]
+    unsupported = sorted(
+        (overlay for overlay in typed if not isinstance(overlay.domain, StrategyDomain)),
+        key=lambda overlay: _safe_repr(overlay.domain),
+    )
+    for overlay in unsupported:
+        issues.append(
+            _strategy_issue(
+                StrategyIssueCode.UNSUPPORTED_DOMAIN,
+                f"Unsupported Investment-root strategy domain {_safe_repr(overlay.domain)}. A "
+                "strategy overlays only: "
+                f"{', '.join(domain.value for domain in INVESTMENT_STRATEGY_DOMAINS)} at the "
+                "Investment root.",
+            )
+        )
+
+    by_domain: dict[StrategyDomain, list[InvestmentStrategyOverlay]] = {}
+    for overlay in typed:
+        if isinstance(overlay.domain, StrategyDomain):
+            by_domain.setdefault(overlay.domain, []).append(overlay)
+
+    for domain in sorted(by_domain, key=lambda candidate: _DOMAIN_RANK[candidate]):
+        occurrences = by_domain[domain]
+        if domain not in INVESTMENT_STRATEGY_DOMAINS:
+            issues.append(
+                _strategy_issue(
+                    StrategyIssueCode.UNIT_DOMAIN_AT_ROOT,
+                    f"{domain.value} is a Unit domain: it replaces part of one Unit's own "
+                    "inputs and is addressed by unit_id, never stated at the Investment root.",
+                    domain=domain,
+                )
+            )
+            continue
+        if len(occurrences) > 1:
+            issues.append(
+                _strategy_issue(
+                    StrategyIssueCode.DUPLICATE_DOMAIN,
+                    f"{domain.value}: {len(occurrences)} Investment-root overlays; a strategy "
+                    "holds at most one overlay per root domain, and overlays are never "
+                    "composed.",
+                    domain=domain,
+                )
+            )
+            continue
+        content = occurrences[0].content
+        if not isinstance(content, CapitalStructure):
+            issues.append(
+                _strategy_issue(
+                    StrategyIssueCode.INVALID_CONTENT,
+                    f"{domain.value}: content must be a CapitalStructure; got "
+                    f"{type(content).__qualname__}.",
+                    domain=domain,
+                )
+            )
+            continue
+        issues.extend(_capital_structure_issues(content, unit_modes))
+    return issues
+
+
 def validate_strategy(
     strategy: StrategyDefinition, *, operating_mode: OperatingMode, unit_id: str
 ) -> tuple[StrategyIssue, ...]:
@@ -886,7 +1066,33 @@ def _contract_issues(
             )
         )
 
-    supported = [overlay for overlay in typed if isinstance(overlay.domain, StrategyDomain)]
+    root_on_unit = sorted(
+        (
+            overlay
+            for overlay in typed
+            if isinstance(overlay.domain, StrategyDomain)
+            and overlay.domain in INVESTMENT_STRATEGY_DOMAINS
+        ),
+        key=lambda overlay: (_DOMAIN_RANK[overlay.domain], _safe_repr(overlay.unit_id)),
+    )
+    for overlay in root_on_unit:
+        issues.append(
+            _strategy_issue(
+                StrategyIssueCode.ROOT_DOMAIN_ON_UNIT,
+                f"{overlay.domain.value} is an Investment-root domain: it replaces an "
+                "Investment-level contract whose positions carry their own scope, so it is "
+                "never a Unit overlay. State it in root_overlays.",
+                domain=overlay.domain,
+                unit_id=overlay.unit_id if _is_nonblank_text(overlay.unit_id) else None,
+            )
+        )
+
+    supported = [
+        overlay
+        for overlay in typed
+        if isinstance(overlay.domain, StrategyDomain)
+        and overlay.domain not in INVESTMENT_STRATEGY_DOMAINS
+    ]
     unaddressed = sorted(
         (overlay for overlay in supported if not _is_nonblank_text(overlay.unit_id)),
         key=lambda overlay: (_DOMAIN_RANK[overlay.domain], _safe_repr(overlay.unit_id)),
@@ -935,17 +1141,34 @@ def _contract_issues(
                 _content_issues(occurrences[0], unit_modes[overlay_unit], overlay_unit)
             )
 
+    issues.extend(_root_issues(strategy, unit_modes))
     return tuple(issues)
+
+
+def _unit_strategy(strategy: StrategyDefinition) -> StrategyDefinition:
+    """``strategy`` as the Project pathway sees it: its Unit overlays alone.
+
+    Resolution never reads an Investment-root overlay. The Capital Structure is
+    a layer *downstream* of the Project engine (P-4), so it can neither change
+    a resolved Project input nor make a Project variant invalid; whether it is
+    executable is the structured layer's question, asked of the completed
+    Project state."""
+
+    if not isinstance(strategy, StrategyDefinition) or not strategy.root_overlays:
+        return strategy
+    return replace(strategy, root_overlays=())
 
 
 def _require_resolvable(
     strategy: StrategyDefinition, operating_mode: OperatingMode, unit_id: str
 ) -> tuple[StrategyOverlay, ...]:
-    """Raise on any stage-1 issue; otherwise return **every** overlay, in
+    """Raise on any stage-1 issue; otherwise return **every** Unit overlay, in
     domain declaration order. Stage 1 has proven each addresses ``unit_id`` in
     a distinct domain, so nothing is filtered here and nothing is dropped."""
 
-    issues = validate_strategy(strategy, operating_mode=operating_mode, unit_id=unit_id)
+    issues = validate_strategy(
+        _unit_strategy(strategy), operating_mode=operating_mode, unit_id=unit_id
+    )
     if issues:
         raise StrategyValidationError(issues)
     return tuple(sorted(strategy.overlays, key=lambda overlay: _DOMAIN_RANK[overlay.domain]))
@@ -1647,3 +1870,41 @@ def analyze_lease_level_acquisition_with_strategy(
         operating_inputs=resolved.operating_inputs,
         business_plan=resolved.business_plan,
     )
+
+
+# =============================================================================
+# The resolved Capital Structure -- Base, replaced whole by a Strategy's own
+# =============================================================================
+
+
+def strategy_capital_structure(strategy: StrategyDefinition | None) -> CapitalStructure | None:
+    """The Strategy's own Capital Structure, or ``None`` when it states none.
+
+    The two are different answers, and the difference is the whole point of the
+    root overlay: ``None`` means *inherit the Investment's Base structure*, and
+    ``CapitalStructure(positions=())`` means *this Strategy deliberately uses no
+    structured capital*. Nothing here ever turns one into the other."""
+
+    if strategy is None:
+        return None
+    for overlay in strategy.root_overlays:
+        if overlay.domain is StrategyDomain.CAPITAL_STRUCTURE:
+            return overlay.content
+    return None
+
+
+def resolve_capital_structure(
+    base_capital_structure: CapitalStructure, strategy: StrategyDefinition | None
+) -> CapitalStructure:
+    """The Capital Structure the variant ``strategy`` executes: the Investment's
+    Base structure, or the Strategy's own **in whole** where it states one
+    (ST-2).
+
+    A whole-domain replacement, never a merge: a position of the Base structure
+    that the Strategy's own structure does not restate is absent from it, and no
+    field of it survives. Removing the overlay restores the Base structure
+    exactly, because the Base structure was never changed (P-6)."""
+
+    _require_instance(base_capital_structure, CapitalStructure, "base_capital_structure")
+    own = strategy_capital_structure(strategy)
+    return base_capital_structure if own is None else own

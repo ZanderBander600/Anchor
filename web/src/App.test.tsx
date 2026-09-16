@@ -2322,6 +2322,10 @@ describe('Excel ingestion workflow', () => {
     expect(mockAnalyze).not.toHaveBeenCalled();
   });
 
+  // Integration-heavy end-to-end workflow: it renders the whole App, analyses,
+  // uploads a workbook, completes the review and approves it. Its behaviour is
+  // valid -- this file passes on its own -- but its wall time can exceed the 5s
+  // unit-test default while the complete suite is running.
   it('deterministic results remain visible immediately after upload, and clear only once the review is approved', async () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
@@ -2352,7 +2356,7 @@ describe('Excel ingestion workflow', () => {
     await waitFor(() => {
       expect(screen.queryByText('7.91%')).toBeNull();
     });
-  });
+  }, 30_000);
 
   it('shows a review-oriented success message naming the uploaded file, not an immediate-population message', async () => {
     const user = userEvent.setup();
@@ -6501,7 +6505,14 @@ describe('Sprint C Gate C2 -- app shell', () => {
 
     // Sensitivity/break-even are not persisted -- C2 changes no persistence
     // and fabricates nothing.
-    expect(within(panel('risk')).getByText(/Run/)).toBeTruthy();
+    // Narrowed at P7.8B. This asserts the *refresh* message, and `/Run/` alone
+    // stopped naming it once the Capital Structure view -- always mounted,
+    // hidden when another view is on screen -- put a "Run Analysis" button in
+    // the same panel. The claim is unchanged; the query now says which text it
+    // means instead of relying on there being only one.
+    expect(
+      within(panel('risk')).getByText(/to refresh Risk outputs for this deal/),
+    ).toBeTruthy();
     expect(within(panel('risk')).queryByRole('heading', { name: 'Return Sensitivity' })).toBeNull();
   });
 
@@ -8279,10 +8290,14 @@ describe('Phase 7 Gates P7.3 / P7.5 -- the decision views in Risk', () => {
     await goTo(user, 'Risk');
 
     const nav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
+    // Re-pinned at P7.8B, which adds Capital Structure as the fourth decision
+    // view. Its position is part of the claim: the decision views stay
+    // together, ahead of Sensitivity and Break-Even.
     expect(nav.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       'Decision Matrix',
       'Strategies',
       'Scenarios',
+      'Capital Structure',
       'Sensitivity',
       'Break-Even',
     ]);

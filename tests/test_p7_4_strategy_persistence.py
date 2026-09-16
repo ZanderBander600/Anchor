@@ -117,7 +117,9 @@ def test_a_fresh_store_is_schema_9_with_every_p7_table_empty(db: Path) -> None:
     connection = sqlite3.connect(db)
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     connection.close()
-    assert version == 10  # P7.6 added schema 10's visible-Investment sidecars
+    # P7.6 added schema 10's visible-Investment sidecars and P7.8B schema 11's
+    # Capital Structure tables; P7.4's own eight are still empty.
+    assert version == 11
     assert f4.p7_row_counts(db) == f4.P7_EMPTY
 
 
@@ -318,7 +320,13 @@ def test_every_domain_round_trips_exactly_in_canonical_order(db: Path, mode: str
 
     assert record.strategy == _canonical(record.strategy.strategy_id, "Renovate", overlays, "Renovate and hold")
     assert store.get_strategy(record.investment_id, record.strategy.strategy_id, db_path=db) == record
-    assert [o.domain for o in record.strategy.overlays] == list(StrategyDomain)
+    assert [o.domain for o in record.strategy.overlays] == [
+        StrategyDomain.ACQUISITION,
+        StrategyDomain.FINANCING,
+        StrategyDomain.BUSINESS_PLAN,
+        StrategyDomain.OPERATING_OUTCOME,
+        StrategyDomain.DISPOSITION,
+    ]
 
 
 def test_values_round_trip_bit_identically_and_whole_years_stay_integers(db: Path) -> None:

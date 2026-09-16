@@ -258,7 +258,15 @@ def test_an_invalid_replacement_plan_is_a_d6_shaped_422_rooted_at_the_overlay(cl
         (lambda u: {**f4.wire(f4.financing(u)), "content": {k: v for k, v in f4.wire(f4.financing(u))["content"].items() if k != "amortization"}},
          {"code": "incomplete_domain", "domain": "financing", "field": "amortization"}),
         (lambda u: {"unit_id": u, "domain": "unit_selection", "content": {"units": [u]}}, {"code": "unsupported_domain", "domain": None}),
-        (lambda u: {"unit_id": u, "domain": "capital_structure", "content": {}}, {"code": "unsupported_domain", "domain": None}),
+        # Re-pinned at P7.8B, which is the gate that adds CAPITAL_STRUCTURE as
+        # the first Investment-root domain. Until then the token named no domain
+        # at all and was refused as unsupported, with no domain to report. It is
+        # now a supported domain stated in the wrong place, and is refused as
+        # exactly that -- a more specific answer to the same malformed request,
+        # naming the domain and telling the client where it belongs. The
+        # ``partnership`` row below still proves the unsupported-domain refusal
+        # itself is intact for a token no gate has published.
+        (lambda u: {"unit_id": u, "domain": "capital_structure", "content": {}}, {"code": "root_domain_on_unit", "domain": "capital_structure"}),
         (lambda u: {"unit_id": u, "domain": "partnership", "content": {}}, {"code": "unsupported_domain", "domain": None}),
         (lambda u: f4.wire(f4.outcomes(u, f4.outcome("exit_cap_rate", 0.005, "add"))),
          {"code": "invalid_operation", "domain": "operating_outcome", "target": "exit_cap_rate"}),

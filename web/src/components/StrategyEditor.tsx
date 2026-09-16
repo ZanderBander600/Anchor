@@ -48,6 +48,7 @@ import type { BusinessPlanChoice, OutcomeRowDraft, StrategyEditorDraft, Strategy
 import type { StrategyDomain, StrategyTargetEntry } from '../strategyTypes';
 import type { StrategiesState } from '../useStrategies';
 import { BusinessPlanEditor } from './BusinessPlanEditor';
+import { CapitalStructureEditor } from './CapitalStructureEditor';
 import { NumericInput } from './NumericInput';
 
 export interface StrategyEditorProps {
@@ -701,6 +702,55 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
           </>
         )
       )}
+
+      {/* The whole-transaction domain, stated once rather than per Unit: its
+        * positions carry their own scope, so there is nothing to address by
+        * unit_id. Inherit Base and Strategy-specific are different wire bodies,
+        * and a strategy-specific structure holding no position is the third,
+        * explicit decision -- use no structured capital at all. */}
+      <fieldset className="strategy-domain strategy-root-domain">
+        <legend className="strategy-domain-legend">
+          {domainPresentation('capital_structure').label}
+        </legend>
+        <div className="strategy-domain-head">
+          <p className="strategy-domain-replaces">
+            {domainPresentation('capital_structure').replaces}
+          </p>
+          <ModeChoice
+            name={`${ids}strategy-capital-structure-mode`}
+            label="Capital Structure"
+            value={editor.capitalStructure.choice}
+            options={INHERIT_OR_SPECIFIC}
+            disabled={locked}
+            onChange={(value) => state.setCapitalStructureChoice(value)}
+          />
+        </div>
+        {editor.capitalStructure.choice === 'inherit' ? (
+          <Inherited summary="Every position is Base’s." />
+        ) : (
+          <>
+            <p className="strategy-domain-note">
+              A complete replacement structure. It starts as a copy of Base for convenience; once
+              saved it is this strategy&apos;s own, and later changes to Base do not reach it. A
+              structure with no position is a real choice: this strategy uses no structured capital.
+            </p>
+            <CapitalStructureEditor
+              id={`${ids}strategy-capital-structure`}
+              prefix={`${ids}strategy-capital`}
+              form={editor.capitalStructure.form}
+              onChange={(form) => state.setCapitalStructure(form)}
+              issues={[]}
+              locked={locked}
+              lockedReason={null}
+              units={state.units.map((unit) => ({
+                unitId: unit.unitId,
+                name: unitDisplayName(unit),
+              }))}
+              embedded
+            />
+          </>
+        )}
+      </fieldset>
 
       <div className="scenario-editor-actions">
         <button type="button" className="btn btn-ghost btn-sm" onClick={state.cancelEdit} disabled={state.isSaving}>

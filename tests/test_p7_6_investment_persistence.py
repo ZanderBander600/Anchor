@@ -85,7 +85,7 @@ def test_a_fresh_store_is_schema_10_with_five_empty_sidecars(db: Path) -> None:
     }
     connection.close()
 
-    assert version == 10
+    assert version == 11  # P7.8B added schema 11's Capital Structure tables
     assert p7_6_row_counts(db) == P7_6_EMPTY
     assert columns == {
         "investment_details": ["investment_id", "name", "transaction_price"],

@@ -235,6 +235,8 @@ export function investmentLeaveWarning(unsaved: {
   details: boolean;
   strategyDraft: boolean;
   scenarioDraft: boolean;
+  /** P7.8B: an open Capital Structure editor is an unsaved draft too. */
+  capitalStructureDraft?: boolean;
 }): string | null {
   const parts: string[] = [];
   if (unsaved.details) {
@@ -245,6 +247,9 @@ export function investmentLeaveWarning(unsaved: {
   }
   if (unsaved.scenarioDraft) {
     parts.push('an unsaved Scenario draft');
+  }
+  if (unsaved.capitalStructureDraft === true) {
+    parts.push('an unsaved Capital Structure draft');
   }
   const last = parts.pop();
   if (last === undefined) {

@@ -83,13 +83,14 @@ const RISK_VIEWS = [
   { id: 'matrix', label: 'Decision Matrix' },
   { id: 'strategies', label: 'Strategies' },
   { id: 'scenarios', label: 'Scenarios' },
+  { id: 'capital-structure', label: 'Capital Structure' },
 ];
 
 /** The Investment's decision tools' id namespace: its Risk tabs and panels
  * never share an id with the open Deal's. */
 const RISK_IDS = decisionIdScope(true);
 
-const NO_DRAFTS: DecisionDrafts = { strategy: false, scenario: false };
+const NO_DRAFTS: DecisionDrafts = { strategy: false, scenario: false, capitalStructure: false };
 
 function unitCount(count: number): string {
   return count === 1 ? '1 Unit' : `${count} Units`;
@@ -119,6 +120,7 @@ export function InvestmentWorkspace({
     details: hasUnsaved,
     strategyDraft: drafts.strategy,
     scenarioDraft: drafts.scenario,
+    capitalStructureDraft: drafts.capitalStructure,
   });
 
   useEffect(() => {

@@ -251,7 +251,11 @@ def test_no_other_production_file_defines_or_names_a_scenario_contract() -> None
         if path != _SCENARIO
         and any(re.search(rf"\b{name}\b", path.read_text(encoding="utf-8")) for name in _SCENARIO_NAMES)
     )
-    # Widened at P7.6 by the visible Investment variant pathway (see above).
+    # Widened at P7.6 by the visible Investment variant pathway (see above), and
+    # at P7.8B by the structured variant service, which names a Scenario only to
+    # address one and to re-raise its refusal: it resolves and validates nothing
+    # itself, and defines no scenario contract
+    # (``tests/test_p7_8b_product_integration_architecture.py``).
     assert offenders == [
         "anchor/analysis/strategy.py",
         "anchor/api.py",
@@ -259,6 +263,7 @@ def test_no_other_production_file_defines_or_names_a_scenario_contract() -> None
         "anchor/deals/decision_matrix.py",
         "anchor/deals/investment_variants.py",
         "anchor/deals/store.py",
+        "anchor/deals/structured_variants.py",
         "anchor/deals/variants.py",
     ]
 

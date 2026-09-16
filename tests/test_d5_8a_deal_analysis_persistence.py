@@ -1075,8 +1075,10 @@ def test_a_pre_gate_database_opens_and_starts_empty(tmp_path: Path) -> None:
     connection.close()
     # D6.5 adds the two Business Plan tables on top of D5.8A's, and P7.2 the
     # five additive P7 tables on top of those, and P7.4 the eight Strategy
-    # tables on top of those, and P7.6 five visible-Investment sidecars.
-    assert version == 10
+    # tables on top of those, and P7.6 five visible-Investment sidecars, and
+    # P7.8B six Capital Structure tables. Every one is appended empty: this
+    # pre-gate database opted into none of them, and opening it creates no row.
+    assert version == 11
     assert empty == 0
 
 

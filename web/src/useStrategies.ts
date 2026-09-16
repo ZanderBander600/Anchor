@@ -50,6 +50,9 @@ import {
 } from './api';
 import { businessPlanDraftFromInput, placeBusinessPlanApiIssues } from './businessPlan';
 import type { BusinessPlanDraft } from './businessPlan';
+import { formFromStructure } from './capitalStructureForm';
+import type { CapitalStructureForm } from './capitalStructureForm';
+import type { CapitalStructure } from './capitalTypes';
 import { unitNames, withUnitNames } from './investmentCatalog';
 import type { DecisionUnit, InvestmentDecisionScope } from './investmentCatalog';
 import {
@@ -89,6 +92,11 @@ export interface UseStrategiesOptions {
   /** P7.6: a visible Investment's scope. When present, every read and write
    * uses the Investment-scoped routes and the Deal fields are not read. */
   investment?: InvestmentDecisionScope | null;
+  /** P7.8B: the saved Base Capital Structure. Making that domain
+   * strategy-specific for the first time starts from a copy of it, every
+   * position keeping its id (P-8), exactly as a Custom Business Plan starts
+   * from a copy of the Base plan. */
+  baseCapitalStructure?: CapitalStructure;
 }
 
 type ListState =
@@ -148,6 +156,10 @@ export interface StrategiesState {
   cancelEdit: () => void;
   setName: (name: string) => void;
   setDescription: (description: string) => void;
+  /** The whole-transaction domain: inherit the Base structure, or state this
+   * Strategy's own. Stated once, never per Unit. */
+  setCapitalStructureChoice: (choice: 'inherit' | 'specific') => void;
+  setCapitalStructure: (form: CapitalStructureForm) => void;
   setAcquisitionEnabled: (unitId: string, enabled: boolean) => void;
   setAcquisitionField: (unitId: string, field: AcquisitionField, value: string) => void;
   setFinancingEnabled: (unitId: string, enabled: boolean) => void;
@@ -174,6 +186,8 @@ export interface StrategiesState {
 const NO_STRATEGIES: InvestmentStrategy[] = [];
 const NO_TARGETS: StrategyTargetEntry[] = [];
 const NO_UNITS: readonly DecisionUnit[] = [];
+/** No Base structure to copy: the analyst states the whole stack. */
+const NO_CAPITAL_STRUCTURE: CapitalStructure = { positions: [] };
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'The request could not be completed.';
@@ -291,6 +305,7 @@ export function useStrategies({
   savedAt,
   isActive,
   investment = null,
+  baseCapitalStructure = NO_CAPITAL_STRUCTURE,
 }: UseStrategiesOptions): StrategiesState {
   const [list, setList] = useState<ListState>({ status: 'idle' });
   const [catalog, setCatalog] = useState<CatalogState>({ status: 'idle' });
@@ -621,6 +636,24 @@ export function useStrategies({
     },
     setName: (name) => editDraft((draft) => ({ ...draft, name })),
     setDescription: (description) => editDraft((draft) => ({ ...draft, description })),
+    setCapitalStructureChoice: (choice) =>
+      editDraft((draft) => {
+        if (draft.capitalStructure.choice === choice) {
+          return draft;
+        }
+        // The first switch to strategy-specific copies the Base structure, so
+        // the analyst edits a real stack rather than building one from nothing
+        // -- and every position keeps the id the Position matrix addresses it
+        // by. A form already typed into is kept exactly as typed: returning to
+        // Inherit Base and back does not discard the analyst's work.
+        const form =
+          choice === 'specific' && draft.capitalStructure.form.positions.length === 0
+            ? formFromStructure(baseCapitalStructure)
+            : draft.capitalStructure.form;
+        return { ...draft, capitalStructure: { choice, form } };
+      }),
+    setCapitalStructure: (form) =>
+      editDraft((draft) => ({ ...draft, capitalStructure: { ...draft.capitalStructure, form } })),
     setAcquisitionEnabled: (unitId, enabled) => enableFromBase(unitId, 'acquisition', enabled),
     setAcquisitionField: (unitId, field, value) =>
       editUnit(unitId, (unit) => ({ ...unit, acquisition: { ...unit.acquisition, [field]: value } })),

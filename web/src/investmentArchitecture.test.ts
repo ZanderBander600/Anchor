@@ -445,16 +445,22 @@ describe('a visible Investment reaches the backend by its own routes', () => {
       expect(shown.filter((token) => /^(Duplicate|Copy|Clone)\b/.test(token.trim())), relative).toEqual([]);
     }
     const workspace = sourceOf('components/InvestmentWorkspace.tsx');
+    // Re-pinned at P7.8B, the gate that publishes Capital Structure at
+    // Investment level. Until then the words were banned here for the reason
+    // every unreached capability is: naming it would have been half-wiring.
+    // Sensitivity and Break-Even stay Unit-level and stay banned, and
+    // Partnership still belongs to no shipped gate.
     expect(workspace).toContain(
       [
         "const RISK_VIEWS = [",
         "  { id: 'matrix', label: 'Decision Matrix' },",
         "  { id: 'strategies', label: 'Strategies' },",
         "  { id: 'scenarios', label: 'Scenarios' },",
+        "  { id: 'capital-structure', label: 'Capital Structure' },",
         '];',
       ].join('\n'),
     );
-    expect(textTokens('components/InvestmentWorkspace.tsx', workspace).filter((token) => /^(Sensitivity|Break-Even|AI Analyst|Documents|Capital Structure|Partnership)$/.test(token.trim()))).toEqual([]);
+    expect(textTokens('components/InvestmentWorkspace.tsx', workspace).filter((token) => /^(Sensitivity|Break-Even|AI Analyst|Documents|Partnership)$/.test(token.trim()))).toEqual([]);
   });
 
   it('shows no Quick / Detailed / Lease-Level toggle at Investment level', () => {

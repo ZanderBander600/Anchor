@@ -64,6 +64,7 @@ from ..analysis.contracts import OneWaySensitivityResult, TwoWaySensitivityResul
 from ..analysis.scenario import ScenarioDefinition
 from ..analysis.strategy import StrategyDefinition
 from ..business_plan import BusinessPlan
+from ..capital_structure.contracts import CapitalStructure
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 from ..investment.contracts import InvestmentTransactionCost, InvestmentUnitMembership
 
@@ -552,6 +553,60 @@ class VisibleInvestment:
     transaction_costs: tuple[InvestmentTransactionCost, ...]
     created_at: datetime
     updated_at: datetime
+
+
+# =============================================================================
+# Phase 7 Gate P7.8B -- the persisted Capital Structures of one Investment
+#
+# One owner type, the Investment (Section 15.1): its Base Capital Structure,
+# which the implicit Base Strategy owns, and each Strategy's own whole
+# replacement. A Strategy that inherits the Base structure states none and is
+# simply absent from ``strategies`` -- inheritance is the absence of a
+# replacement, never a copy of one.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StrategyCapitalStructure:
+    """One Strategy's own Capital Structure: the whole replacement it states.
+
+    ``name`` is that Strategy's display name, carried for messages and for the
+    Position perspective list; it never reaches a calculation or a fingerprint
+    (FP-1). ``capital_structure`` may be empty, which is the Strategy's explicit
+    "no structured capital" -- not inheritance."""
+
+    strategy_id: str
+    name: str
+    capital_structure: CapitalStructure
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InvestmentCapitalStructures:
+    """Everything one Investment has authored: its Base structure (the empty
+    structure when it states none) and every Strategy replacement.
+
+    One coherent read, because the questions asked of it are cross-structure:
+    which positions are addressable (the Position perspectives), whether one
+    position id keeps one identity (P-8), and what each variant resolves to."""
+
+    investment_id: str
+    base: CapitalStructure
+    strategies: tuple[StrategyCapitalStructure, ...]
+
+
+class PositionPerspectiveNotFoundError(LookupError):
+    """No Capital Structure of this Investment holds a position with this id, so
+    there is no ``POSITION(position_id)`` perspective to compare.
+
+    Raised identically whether the id never existed or belongs to another
+    Investment: a caller's id never discloses another Investment's structure."""
+
+    def __init__(self, investment_id: str, position_id: str) -> None:
+        self.investment_id = investment_id
+        self.position_id = position_id
+        super().__init__(
+            f"No capital position {position_id!r} belongs to investment {investment_id!r}."
+        )
 
 
 class InvestmentUnitNotFoundError(LookupError):

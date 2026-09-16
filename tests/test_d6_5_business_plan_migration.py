@@ -99,8 +99,20 @@ _P7_6_TABLES = {
     "investment_owner_expense_items",
     "investment_transaction_costs",
 }
+#: P7.8B (schema 11) adds the six Capital Structure tables on the same path, all
+#: empty for a legacy deal, which opted into no structured capital;
+#: ``tests/test_p7_8_compatibility_oracle.py`` holds the v10 -> v11 step on its
+#: own.
+_P7_8_TABLES = {
+    "capital_structures",
+    "capital_positions",
+    "capital_funding_events",
+    "capital_position_fees",
+    "capital_debt_terms",
+    "capital_preferred_terms",
+}
 #: The schema version the current store migrates a v6 database to.
-_CURRENT_VERSION = 10
+_CURRENT_VERSION = 11
 
 
 @pytest.fixture(scope="module")
@@ -241,10 +253,15 @@ def test_the_version_advances_to_7_exactly_once_and_only_the_plan_tables_appear(
     migrated = _raw(db)
 
     assert _version(db) == _CURRENT_VERSION
-    assert set(migrated) == set(before) | _PLAN_TABLES | _P7_2_TABLES | _P7_4_TABLES | _P7_6_TABLES
+    assert set(migrated) == (
+        set(before) | _PLAN_TABLES | _P7_2_TABLES | _P7_4_TABLES | _P7_6_TABLES | _P7_8_TABLES
+    )
     assert migrated["deal_capital_plan_items"] == []
     assert migrated["deal_owner_expense_items"] == []
-    assert all(migrated[table] == [] for table in _P7_2_TABLES | _P7_4_TABLES | _P7_6_TABLES)
+    assert all(
+        migrated[table] == []
+        for table in _P7_2_TABLES | _P7_4_TABLES | _P7_6_TABLES | _P7_8_TABLES
+    )
 
     for _ in range(3):
         deals_store.list_deals(db_path=db)

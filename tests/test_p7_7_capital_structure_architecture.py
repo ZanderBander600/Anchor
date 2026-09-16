@@ -34,14 +34,18 @@ from pathlib import Path
 
 import pytest
 
-from anchor.analysis.strategy import StrategyDomain
 from anchor.capital_structure import ShortfallResolution
-from anchor.deals import store
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 #: ``main`` when P7.7 began: the no-ff P7.6 merge.
 _P7_7_BASE = "fbaa07bfe546b05d104e4e6335f8501ca9293558"
+#: The P7.7 merge (PR #27; parents ``fbaa07b`` and ``6abdeb8``). Pinned at P7.8:
+#: the ledger, the protected paths and the byte identity prove exactly what
+#: P7.7's committed range ``fbaa07b..a9f9b09`` changed, however later gates move
+#: the tree. P7.8's own ledger is
+#: ``tests/test_p7_8_structured_position_architecture.py``.
+_P7_7_MERGE = "a9f9b09fd71940cfdc079c109e9261187a041261"
 
 _PACKAGE = "src/anchor/capital_structure"
 _INIT = f"{_PACKAGE}/__init__.py"
@@ -99,13 +103,12 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
-def _changes_since(base: str, *paths: str) -> set[str]:
-    """Committed, staged, unstaged and untracked changes since ``base``, with
-    renames split into their removal and addition."""
+def _changes_between(start: str, end: str, *paths: str) -> set[str]:
+    """Files that differ between two commits, renames split into removal and
+    addition. Reads Git objects only; it never touches the index."""
 
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+    changed = _git("diff", "--name-only", "--no-renames", start, end, "--", *paths).split()
+    return {path for path in changed if path}
 
 
 def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
@@ -114,6 +117,20 @@ def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
 
 def _current(path: str) -> str:
     return (_PROJECT_ROOT / path).read_bytes().decode("utf-8").replace("\r\n", "\n")
+
+
+def _merged(path: str) -> str:
+    """``path`` as P7.7 left it, at the P7.7 merge.
+
+    Re-pinned at P7.8B: the guards that describe what P7.7 did *not* add -- a
+    schema, a route, a Strategy domain, an upstream importer -- read P7.7's own
+    committed tree, exactly as its ledger does. P7.8B adds all four under its
+    own gate's approval, and its own guards pin them
+    (``tests/test_p7_8_structured_position_architecture.py``). The P7.7 modules
+    themselves are still judged in the working tree, where they are still
+    byte-identical to this commit."""
+
+    return _git("show", f"{_P7_7_MERGE}:{path}").replace("\r\n", "\n")
 
 
 def _tree(path: str) -> ast.Module:
@@ -232,17 +249,23 @@ def _arithmetic(node: ast.AST) -> set[str]:
 
 
 def test_p7_7_changed_exactly_its_authorized_production_files() -> None:
-    """The P7.7 production ledger. The next gate must re-pin this to P7.7's
-    committed range, ``fbaa07b..<the P7.7 merge>``, before adding its own
-    scope. Never widen this set to admit another gate's files."""
+    """The P7.7 production ledger, pinned at P7.8 to P7.7's committed range
+    ``fbaa07b..a9f9b09``, so it keeps proving exactly what P7.7 changed however
+    later gates move the tree (the P7.6 ledger precedent). Never widen this set
+    to admit another gate's files."""
 
-    changed = {path for path in _changes_since(_P7_7_BASE, "src", "web") if _is_production(path)}
+    changed = {path for path in _changes_between(_P7_7_BASE, _P7_7_MERGE, "src", "web") if _is_production(path)}
     assert _ledger_violations(changed) == ([], [])
 
 
 def test_the_p7_7_ledger_base_is_the_p7_6_merge() -> None:
     parents = _git("rev-list", "--parents", "-n", "1", _P7_7_BASE).split()[1:]
     assert parents == [_git("rev-parse", ref).strip() for ref in ("6cade62", "91f1c27")]
+
+
+def test_the_p7_7_ledger_boundary_is_the_p7_7_merge() -> None:
+    parents = _git("rev-list", "--parents", "-n", "1", _P7_7_MERGE).split()[1:]
+    assert parents == [_P7_7_BASE, _git("rev-parse", "6abdeb8").strip()]
 
 
 def test_the_ledger_rejects_any_unexpected_production_change() -> None:
@@ -252,17 +275,17 @@ def test_the_ledger_rejects_any_unexpected_production_change() -> None:
 
 
 @pytest.mark.parametrize("path", _PROTECTED)
-def test_a_protected_path_is_unchanged_since_p7_6(path: str) -> None:
-    assert _changes_since(_P7_7_BASE, path) == set(), f"{path} changed at P7.7"
+def test_a_protected_path_is_unchanged_by_p7_7(path: str) -> None:
+    assert _changes_between(_P7_7_BASE, _P7_7_MERGE, path) == set(), f"{path} changed at P7.7"
 
 
 @pytest.mark.parametrize("path", _MATURE)
-def test_each_mature_financial_module_is_byte_identical_to_the_p7_6_merge(path: str) -> None:
-    assert _git("hash-object", path).strip() == _git("rev-parse", f"{_P7_7_BASE}:{path}").strip(), path
+def test_each_mature_financial_module_is_byte_identical_across_p7_7(path: str) -> None:
+    assert _git("rev-parse", f"{_P7_7_MERGE}:{path}").strip() == _git("rev-parse", f"{_P7_7_BASE}:{path}").strip(), path
 
 
 def test_no_frontend_production_file_changed() -> None:
-    assert _changes_since(_P7_7_BASE, "web") == set()
+    assert _changes_between(_P7_7_BASE, _P7_7_MERGE, "web") == set()
 
 
 # =============================================================================
@@ -270,7 +293,12 @@ def test_no_frontend_production_file_changed() -> None:
 # =============================================================================
 
 _EXPECTED_IMPORTS = {
-    _INIT: {"__future__", ".contracts", ".foundation", ".legacy", ".validation"},
+    # P7.8 extends the package's exports with its executor; its own guards
+    # (tests/test_p7_8_structured_position_architecture.py) hold those modules.
+    _INIT: {
+        "__future__", ".contracts", ".execution", ".execution_contracts", ".execution_validation", ".foundation",
+        ".legacy", ".validation",
+    },
     _CONTRACTS: {"__future__", "collections.abc", "dataclasses", "enum", "typing", "..contracts", "..engine.contracts"},
     _VALIDATION: {"__future__", "collections", "collections.abc", "math", ".contracts"},
     _LEGACY: {"__future__", "math", "..contracts", "..engine.contracts", ".contracts"},
@@ -302,11 +330,23 @@ def test_only_calculation_free_names_are_imported_from_upstream() -> None:
 
 
 def test_nothing_upstream_imports_the_capital_structure() -> None:
+    """At P7.7, nothing outside the package imported it: the foundation was
+    reachable from no service, route or store, which is what made it provably
+    downstream. Re-pinned at P7.8B, which connects it to exactly the layers its
+    own ledger names -- and whose guard pins that list."""
+
+    files = [
+        path
+        for path in _git("ls-tree", "-r", "--name-only", _P7_7_MERGE, "src/anchor").split()
+        if path.endswith(".py") and not path.startswith(f"{_PACKAGE}/")
+    ]
     importers = sorted(
-        path.relative_to(_PROJECT_ROOT).as_posix()
-        for path in (_PROJECT_ROOT / "src" / "anchor").rglob("*.py")
-        if "capital_structure" not in path.relative_to(_PROJECT_ROOT / "src" / "anchor").parts[:1]
-        and any("capital_structure" in name for name in _imports(ast.parse(path.read_text(encoding="utf-8"))))
+        path
+        for path in files
+        if any(
+            "capital_structure" in name
+            for name in _imports(ast.parse(_git("show", f"{_P7_7_MERGE}:{path}")))
+        )
     )
     assert importers == []
 
@@ -522,7 +562,12 @@ def test_the_later_gate_guards_have_teeth() -> None:
 
 
 def test_no_persistence_schema_or_sql() -> None:
-    assert store._SCHEMA_VERSION == 10
+    """P7.7 persisted nothing: it left the schema where it found it, and none of
+    its modules knows SQL or the store. The schema version is read from P7.7's
+    own merged tree (P7.8B is the gate that adds the Capital Structure tables);
+    the modules are read in the working tree, where they are unchanged."""
+
+    assert re.search(r"^_SCHEMA_VERSION = 10$", _merged("src/anchor/deals/store.py"), re.MULTILINE)
     for path in _MODULES:
         text = " ".join(_strings(_code(path)))
         assert not re.search(r"\b(CREATE|INSERT|SELECT|UPDATE|DELETE|ALTER|DROP)\b", text), path
@@ -530,19 +575,35 @@ def test_no_persistence_schema_or_sql() -> None:
 
 
 def test_no_route_serves_the_capital_structure() -> None:
-    api = _current("src/anchor/api.py")
+    """P7.7 shipped no product surface: its merged ``api.py`` names no Capital
+    Structure route, path or contract."""
+
+    api = _merged("src/anchor/api.py")
     assert "capital_structure" not in api and "capital-position" not in api and "capital-structure" not in api
 
 
 def test_no_strategy_capital_structure_domain_is_wired() -> None:
-    assert {domain.value for domain in StrategyDomain} == {
-        "acquisition", "financing", "business_plan", "operating_outcome", "disposition",
-    }
+    """P7.7 wired no Strategy domain: its merged ``strategy.py`` still declares
+    exactly the five P7.4 Unit domains."""
+
+    strategy = ast.parse(_merged("src/anchor/analysis/strategy.py"))
+    (domains,) = [
+        node
+        for node in ast.walk(strategy)
+        if isinstance(node, ast.ClassDef) and node.name == "StrategyDomain"
+    ]
+    assert {
+        ast.literal_eval(node.value) for node in domains.body if isinstance(node, ast.Assign)
+    } == {"acquisition", "financing", "business_plan", "operating_outcome", "disposition"}
 
 
 def test_the_p7_6_decision_matrix_is_untouched() -> None:
-    assert _changes_since(
-        _P7_7_BASE, "src/anchor/decision", "src/anchor/deals/decision_matrix.py", "src/anchor/deals/investment_variants.py"
+    assert _changes_between(
+        _P7_7_BASE,
+        _P7_7_MERGE,
+        "src/anchor/decision",
+        "src/anchor/deals/decision_matrix.py",
+        "src/anchor/deals/investment_variants.py",
     ) == set()
 
 

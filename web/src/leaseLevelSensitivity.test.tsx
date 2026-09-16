@@ -1619,6 +1619,10 @@ describe('D5.7A: the two-way corner names each axis and its direction', () => {
     expect(corner().textContent).not.toContain('Exit Cap Rate');
   });
 
+  // Integration-heavy: opens Risk, runs the two-way grid and asserts the whole
+  // matrix cell by cell. Its behaviour is valid -- this file passes on its own
+  // -- but its wall time can exceed the 5s unit-test default while the complete
+  // suite is running.
   it('M11/M12/M13: leaves the matrix, its baseline cell and its values alone', async () => {
     const user = await openRisk();
     mockTwoWay.mockResolvedValue(twoWayResult({ baseline_row_value: 0.065 }));
@@ -1659,8 +1663,12 @@ describe('D5.7A: the two-way corner names each axis and its direction', () => {
     );
     expect(marked).toHaveLength(1);
     expect(marked[0].textContent).toContain('13.40%');
-  });
+  }, 30_000);
 
+  // Integration-heavy: opens Risk and runs the two-way grid before asserting
+  // the baseline line and caption. Its behaviour is valid -- this file passes
+  // on its own -- but its wall time can exceed the 5s unit-test default while
+  // the complete suite is running.
   it('keeps the baseline context line and the caption it already had', async () => {
     const user = await openRisk();
     mockTwoWay.mockResolvedValue(twoWayResult());
@@ -1677,5 +1685,5 @@ describe('D5.7A: the two-way corner names each axis and its direction', () => {
         'Levered IRR: Exit Cap Rate (rows) × Purchase Price (columns)',
       ),
     ).toBeTruthy();
-  });
+  }, 30_000);
 });
