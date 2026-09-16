@@ -14,6 +14,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import {
   analyzeDecisionMatrix,
+  analyzePositionDecisionMatrix,
   ApiError,
   deleteInvestmentScenario,
   fetchScenarioTargetCatalog,
@@ -21,11 +22,14 @@ import {
   getDeal,
   listDealScenarios,
   listDealStrategies,
+  listPositionPerspectives,
+  readDealCapitalStructure,
   updateInvestmentStrategy,
 } from './api';
 import { RiskDecisionWorkspace } from './components/RiskDecisionWorkspace';
 import type { RiskDecisionWorkspaceProps } from './components/RiskDecisionWorkspace';
 import {
+  DEAL_MATRIX_COPY,
   DIRTY_MATRIX_MESSAGE,
   EMPTY_MATRIX_MESSAGE,
   STALE_MATRIX_MESSAGE,
@@ -39,6 +43,7 @@ import type {
   DecisionStrategyFigures,
   DecisionWorstCase,
 } from './decisionTypes';
+import type { PositionDecisionMatrixReport } from './capitalTypes';
 import type { InvestmentScenario } from './scenarioTypes';
 import type { InvestmentStrategy, StrategyOverlay } from './strategyTypes';
 import type { AcquisitionResults, IrrStatus } from './types';
@@ -48,12 +53,15 @@ vi.mock('./api', async () => {
   return {
     ...actual,
     analyzeDecisionMatrix: vi.fn(),
+    analyzePositionDecisionMatrix: vi.fn(),
     deleteInvestmentScenario: vi.fn(),
     fetchScenarioTargetCatalog: vi.fn(),
     fetchStrategyTargetCatalog: vi.fn(),
     getDeal: vi.fn(),
     listDealScenarios: vi.fn(),
     listDealStrategies: vi.fn(),
+    listPositionPerspectives: vi.fn(),
+    readDealCapitalStructure: vi.fn(),
     updateInvestmentStrategy: vi.fn(),
   };
 });
@@ -63,6 +71,9 @@ const mockScenarios = vi.mocked(listDealScenarios);
 const mockStrategies = vi.mocked(listDealStrategies);
 const mockUpdateStrategy = vi.mocked(updateInvestmentStrategy);
 const mockDeleteScenario = vi.mocked(deleteInvestmentScenario);
+const mockPositionMatrix = vi.mocked(analyzePositionDecisionMatrix);
+const mockPerspectives = vi.mocked(listPositionPerspectives);
+const mockCapital = vi.mocked(readDealCapitalStructure);
 
 // =============================================================================
 // Saved Strategies and Scenarios
@@ -332,6 +343,13 @@ async function run(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole('table');
 }
 
+/** The matrix the view ran by itself when it first came on screen: exactly one
+ * request, and no click. */
+async function autoRun() {
+  await screen.findByRole('table');
+  expect(mockAnalyze).toHaveBeenCalledTimes(1);
+}
+
 function table(): HTMLElement {
   return screen.getByRole('table');
 }
@@ -353,6 +371,12 @@ beforeEach(() => {
   vi.mocked(fetchScenarioTargetCatalog).mockResolvedValue({ quick: [], detailed: [], lease_level: [] });
   vi.mocked(fetchStrategyTargetCatalog).mockResolvedValue({ quick: [], detailed: [], lease_level: [] });
   vi.mocked(getDeal).mockRejectedValue(new ApiError('not used'));
+  // The Risk workspace reads the Base Capital Structure; this Deal has none.
+  mockCapital.mockResolvedValue({
+    deal_id: 'deal-1',
+    investment_id: null,
+    capital_structure: { positions: [] },
+  });
 });
 
 afterEach(() => {
@@ -380,16 +404,47 @@ describe('the matrix stays simple until there is something to compare', () => {
     expect(mockStrategies).not.toHaveBeenCalled();
   });
 
-  it('runs only when asked, as one request for the whole package', async () => {
+  it('runs itself once when the view opens, as one request for the whole package', async () => {
     saved([HOLD], [DOWN]);
     mockAnalyze.mockResolvedValue(fullReport());
-    const { user } = renderMatrix();
-    expect(await screen.findByText('Run Decision Matrix to analyze every strategy under every scenario.')).toBeTruthy();
-    expect(mockAnalyze).not.toHaveBeenCalled();
-    await run(user);
-    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    renderMatrix();
+    await autoRun();
     expect(mockAnalyze).toHaveBeenCalledWith('inv-1');
     expect(button('Refresh Matrix')).toBeTruthy();
+  });
+
+  it('waits until the matrix view is on screen, and never re-runs on a view switch', async () => {
+    saved([HOLD], [DOWN]);
+    mockAnalyze.mockResolvedValue(fullReport());
+    const { rerenderWith } = renderMatrix({ view: 'strategies' });
+    expect(await screen.findByText('Hold / Lease-Up')).toBeTruthy();
+    // Everything a run needs is ready -- the hidden Run button is enabled --
+    // and still nothing ran, because the matrix is not on screen.
+    await waitFor(() =>
+      expect(
+        (screen.getByText('Run Decision Matrix').closest('button') as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    expect(mockAnalyze).not.toHaveBeenCalled();
+
+    rerenderWith({ view: 'matrix' });
+    await autoRun();
+    rerenderWith({ view: 'scenarios' });
+    rerenderWith({ view: 'matrix' });
+    rerenderWith({ isActive: false });
+    rerenderWith({ isActive: true });
+    expect(screen.getByRole('table')).toBeTruthy();
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+  });
+
+  it('never runs itself while the base has unsaved edits, and keeps the prompt', async () => {
+    saved([HOLD], [DOWN]);
+    mockAnalyze.mockResolvedValue(fullReport());
+    renderMatrix({ isDirty: true });
+    expect(await screen.findByText(DEAL_MATRIX_COPY.blocked)).toBeTruthy();
+    await waitFor(() => expect(button('Run Decision Matrix').disabled).toBe(true));
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(mockAnalyze).not.toHaveBeenCalled();
   });
 });
 
@@ -408,8 +463,8 @@ describe('the axes', () => {
         figures: [{ strategy_id: 'base', worst_cases: SPECS.map((s) => worst(s.metric, 1, 'sc-down')), ranges: SPECS.map((s) => range(s.metric, 0, 'base', 'base')) }],
       }),
     );
-    const { user } = renderMatrix();
-    await run(user);
+    renderMatrix();
+    await autoRun();
 
     expect(within(table()).getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
       'Metric', 'Base', 'Downside', 'Upside', 'Worst Case', 'Range',
@@ -428,8 +483,8 @@ describe('the axes', () => {
         cells: STRATEGY_AXIS.map((s) => ({ strategy: s.id, scenario: 'base' })),
       }),
     );
-    const { user } = renderMatrix();
-    await run(user);
+    renderMatrix();
+    await autoRun();
 
     expect(within(table()).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Metric', 'Base']);
     expect(screen.queryByText('Worst Case')).toBeNull();
@@ -452,8 +507,8 @@ describe('every figure is a backend field', () => {
   it('shows the full 3 x 3 with each cell, the backend Delta, Worst Case and Range', async () => {
     saved([HOLD, RENO], [DOWN, UP]);
     mockAnalyze.mockResolvedValue(fullReport());
-    const { user } = renderMatrix();
-    await run(user);
+    renderMatrix();
+    await autoRun();
 
     expect(cell('Hold / Lease-Up', 'Levered IRR', 'base').textContent).toBe('12.00%');
     // The backend's Delta, never 9% - 12% = -3.00 pts.
@@ -474,8 +529,8 @@ describe('every figure is a backend field', () => {
   it('keeps the cache status off screen but available to diagnostics', async () => {
     saved([HOLD], [DOWN]);
     mockAnalyze.mockResolvedValue(fullReport());
-    const { user } = renderMatrix();
-    await run(user);
+    renderMatrix();
+    await autoRun();
     expect(cell('Hold / Lease-Up', 'Levered IRR', 'sc-down').getAttribute('data-cache-status')).toBe('miss');
     expect(screen.queryByText(/\b(miss|hit|bypassed|cache)\b/i)).toBeNull();
   });
@@ -483,8 +538,8 @@ describe('every figure is a backend field', () => {
   it('is a table inside its own keyboard-reachable scrolling region', async () => {
     saved([HOLD], [DOWN]);
     mockAnalyze.mockResolvedValue(fullReport());
-    const { user } = renderMatrix();
-    await run(user);
+    renderMatrix();
+    await autoRun();
     const region = screen.getByRole('region', { name: 'Decision matrix table' });
     expect(region.getAttribute('tabindex')).toBe('0');
     expect(within(region).getByRole('table')).toBe(table());
@@ -511,8 +566,8 @@ describe('honest cells', () => {
         : f,
     );
     mockAnalyze.mockResolvedValue({ ...base, matrix: { ...base.matrix, cells, strategy_figures: figures, matrix_fingerprint: null } });
-    const { user } = renderMatrix();
-    await run(user);
+    renderMatrix();
+    await autoRun();
 
     const invalid = cell('Renovate', 'Levered IRR', 'sc-down');
     expect(invalid.textContent).toContain('Invalid variant');
@@ -538,8 +593,8 @@ describe('honest cells', () => {
         : c,
     );
     mockAnalyze.mockResolvedValue({ ...base, matrix: { ...base.matrix, cells } });
-    const { user } = renderMatrix();
-    await run(user);
+    renderMatrix();
+    await autoRun();
 
     const na = cell('Hold / Lease-Up', 'Levered IRR', 'sc-down');
     expect(na.textContent).toBe('N/A');
@@ -561,8 +616,8 @@ describe('honest cells', () => {
         omitted,
       }),
     );
-    const { user } = renderMatrix();
-    await run(user);
+    renderMatrix();
+    await autoRun();
 
     expect(screen.getAllByText(omitted)).toHaveLength(1);
     expect(screen.getByRole('note').textContent).toBe(omitted);
@@ -581,7 +636,7 @@ describe('an old matrix is never shown as current', () => {
     saved([HOLD], [DOWN]);
     mockAnalyze.mockResolvedValue(fullReport());
     const rendered = renderMatrix();
-    await run(rendered.user);
+    await autoRun();
     return rendered;
   }
 
@@ -590,6 +645,8 @@ describe('an old matrix is never shown as current', () => {
     rerenderWith({ savedAt: 'saved-2' });
     expect(screen.getByText(STALE_MATRIX_MESSAGE)).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();
+    // A stale matrix waits for Refresh; it never re-runs itself.
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
     await run(user);
     expect(mockAnalyze).toHaveBeenCalledTimes(2);
     expect(screen.queryByText(STALE_MATRIX_MESSAGE)).toBeNull();
@@ -636,19 +693,99 @@ describe('an old matrix is never shown as current', () => {
   });
 });
 
+describe('the Position perspective', () => {
+  function withPosition() {
+    mockCapital.mockResolvedValue({
+      deal_id: 'deal-1',
+      investment_id: 'inv-1',
+      capital_structure: { positions: [] },
+    });
+    mockPerspectives.mockResolvedValue({
+      investment_id: 'inv-1',
+      positions: [
+        {
+          position_id: 'mezz-1',
+          name: 'Mezzanine Loan',
+          position_class: 'mezzanine_debt',
+          scope: { kind: 'investment', unit_id: null },
+          is_common_equity_marker: false,
+          present_in_base: true,
+          strategy_ids: [],
+        },
+        {
+          position_id: 'pref-1',
+          name: 'Preferred Equity',
+          position_class: 'preferred_equity',
+          scope: { kind: 'investment', unit_id: null },
+          is_common_equity_marker: false,
+          present_in_base: true,
+          strategy_ids: [],
+        },
+      ],
+    });
+    // Held in flight: what is proved is when the request is made.
+    mockPositionMatrix.mockReturnValue(new Promise<PositionDecisionMatrixReport>(() => {}));
+  }
+
+  async function choosePosition(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole('radio', { name: 'Position' }));
+  }
+
+  it('runs itself once for the first addressable position, and never on a switch back', async () => {
+    withPosition();
+    saved([], []);
+    const { user } = renderMatrix();
+    expect(await screen.findByText(EMPTY_MATRIX_MESSAGE)).toBeTruthy();
+    await choosePosition(user);
+
+    await waitFor(() => expect(mockPositionMatrix).toHaveBeenCalledTimes(1));
+    expect(mockPositionMatrix).toHaveBeenCalledWith('inv-1', 'mezz-1');
+    await user.click(screen.getByRole('radio', { name: 'Project' }));
+    await choosePosition(user);
+    expect(mockPositionMatrix).toHaveBeenCalledTimes(1);
+    // Choosing another position is the analyst's own comparison: it waits for Run.
+    await user.selectOptions(screen.getByRole('combobox'), 'pref-1');
+    expect(mockPositionMatrix).toHaveBeenCalledTimes(1);
+    // With nothing to compare, the Project matrix never asked for anything.
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('never runs itself while the base has unsaved edits', async () => {
+    withPosition();
+    saved([], []);
+    const { user } = renderMatrix({ isDirty: true });
+    expect(await screen.findByText(EMPTY_MATRIX_MESSAGE)).toBeTruthy();
+    await choosePosition(user);
+    await waitFor(() => expect(mockPerspectives).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('combobox')).toBeTruthy();
+    expect(mockPositionMatrix).not.toHaveBeenCalled();
+  });
+
+  it('asks for nothing when the Deal has no Investment yet', async () => {
+    saved([], []);
+    const { user } = renderMatrix();
+    expect(await screen.findByText(EMPTY_MATRIX_MESSAGE)).toBeTruthy();
+    await waitFor(() => expect(mockCapital).toHaveBeenCalledTimes(1));
+    await choosePosition(user);
+    expect(mockPerspectives).not.toHaveBeenCalled();
+    expect(mockPositionMatrix).not.toHaveBeenCalled();
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+});
+
 describe('a failed request', () => {
   it('reports the failure for the whole package and retries', async () => {
     saved([HOLD], [DOWN]);
     mockAnalyze.mockRejectedValueOnce(new ApiError('The decision matrix could not be completed (HTTP 500).'));
     const { user } = renderMatrix();
-    const runButton = await screen.findByRole('button', { name: 'Run Decision Matrix' });
-    await waitFor(() => expect((runButton as HTMLButtonElement).disabled).toBe(false));
-    await user.click(runButton);
 
+    // The automatic run fails and says so, exactly as a clicked one would.
     const alert = await screen.findByRole('alert');
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
     expect(alert.textContent).toContain('The decision matrix could not be completed (HTTP 500).');
     mockAnalyze.mockResolvedValue(fullReport());
     await user.click(within(alert).getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('table')).toBeTruthy();
+    expect(mockAnalyze).toHaveBeenCalledTimes(2);
   });
 });
