@@ -21,7 +21,7 @@
  * ids are namespaced (`decisionIdScope`) and never collide with the Deal's.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import {
   decisionIdScope,
@@ -213,6 +213,35 @@ export function RiskDecisionWorkspace({
     stateToken: positionStateToken,
     isActive: requests && view === 'matrix',
   });
+
+  // The matrix runs itself once when its view is first on screen with no
+  // report loaded, per perspective and per mounted workspace (the owner keys
+  // this workspace by Deal or Investment). It is the Run button's own call,
+  // gated by the same `canRun`: a saved, unedited base whose lists have loaded,
+  // and an Investment that already exists -- a Deal without Scenarios,
+  // Strategies or a Capital Structure has none, keeps its prompt, and never
+  // creates one here. Switching views never re-runs it, and a report that has
+  // gone stale keeps its stale notice and waits for Refresh.
+  const matrixOnScreen = requests && view === 'matrix';
+  const autoRan = useRef({ project: false, position: false });
+  const perspective = positionMatrix.perspective;
+  const projectReady = matrix.canRun && matrix.hasComparison && !matrix.hasRun;
+  const positionReady = positionMatrix.canRun && !positionMatrix.hasRun;
+  useEffect(() => {
+    if (!matrixOnScreen || autoRan.current[perspective]) {
+      return;
+    }
+    if (perspective === 'project' && projectReady) {
+      autoRan.current.project = true;
+      void matrix.run();
+    } else if (perspective === 'position' && positionReady) {
+      autoRan.current.position = true;
+      void positionMatrix.run();
+    }
+    // `run` is recreated every render; the readiness flags above are what
+    // decide whether it may be called.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matrixOnScreen, perspective, projectReady, positionReady]);
 
   useEffect(() => {
     onDraftsChange?.({
