@@ -20,7 +20,7 @@
  * a row loaded from a saved deal, or a flag about the request in flight.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AIAnalysis, ReturnHurdleMetric } from './types';
 import {
   ApiError,
@@ -52,7 +52,11 @@ import {
 } from './leaseLevelConvert';
 import { EMPTY_SUBMITTED_RENT_ROLL, resolveRowIssues } from './leaseLevelIssues';
 import { BUSINESS_PLAN_INCOMPLETE_MESSAGE, useBusinessPlan } from './useBusinessPlan';
-import { blankBusinessPlanDraft, isSameBusinessPlanDraft } from './businessPlan';
+import {
+  blankBusinessPlanDraft,
+  isSameBusinessPlanDraft,
+  prepareBusinessPlanInput,
+} from './businessPlan';
 import type {
   BusinessPlanDraft,
   BusinessPlanFieldIssue,
@@ -833,6 +837,9 @@ export function useLeaseLevelDeal(options: {
 
   const aiAnalysis = presentedAi?.artifact ?? null;
   const isAiAnalysisStale = presentedAi?.isStale ?? false;
+  // Bumped by every assumption edit, open and reset. An automatic Analyze that
+  // returns after a bump describes inputs no longer on screen and is dropped.
+  const analysisGeneration = useRef(0);
   const isAiAnalysisRestored = (presentedAi?.isRestored ?? false) && !isAiAnalysisStale;
   const oneWayResult = presentedOneWay?.artifact ?? null;
   const twoWayResult = presentedTwoWay?.artifact ?? null;
@@ -856,6 +863,7 @@ export function useLeaseLevelDeal(options: {
    * ones, and clears the issues raised against them -- the same rule Quick and
    * Detailed apply. Results are dropped, never recomputed automatically. */
   function resetDownstream() {
+    analysisGeneration.current += 1;
     setResults(null);
     // D5.8: the AI report is downstream of the same assumptions the analysis
     // is, so it is dropped by the same rule and at the same moment. Leaving it
@@ -1067,7 +1075,9 @@ export function useLeaseLevelDeal(options: {
     return prepared.ok ? prepared.request : null;
   }
 
-  async function analyze(): Promise<void> {
+  async function analyze({ automatic = false }: { automatic?: boolean } = {}): Promise<void> {
+    const generation = analysisGeneration.current;
+    const superseded = () => automatic && generation !== analysisGeneration.current;
     setIsAnalyzing(true);
     setError(null);
     setLeaseIssues([]);
@@ -1089,13 +1099,21 @@ export function useLeaseLevelDeal(options: {
         request.inputs,
         request.businessPlan,
       );
+      if (superseded()) {
+        return;
+      }
       setAnalyzedTerms(request.terms);
       setResults(analysis);
       // D5.6: Analyze must visibly do something. Landing on Results is what
       // makes a successful run self-evident rather than something the analyst
-      // has to go looking for.
-      setActiveSection('results');
+      // has to go looking for. An automatic run on open does not navigate.
+      if (!automatic) {
+        setActiveSection('results');
+      }
     } catch (caught) {
+      if (superseded()) {
+        return;
+      }
       setResults(null);
       setError(recordFailure(caught, 'An unexpected error occurred while analyzing the deal.'));
       if (businessPlanState.recordApiFailure(caught, submittedPlan)) {
@@ -1589,6 +1607,7 @@ export function useLeaseLevelDeal(options: {
     setLeaseIssues([]);
     setTermsIssues([]);
     hydrateDerivedAnalysis(deal);
+    analysisGeneration.current += 1;
   }
 
   /**
@@ -1636,10 +1655,50 @@ export function useLeaseLevelDeal(options: {
     }
     hydrate(await getDeal(dealId));
     options.onOpened();
+    setPendingAutoAnalyze(true);
     return true;
   }
 
+  /** A saved deal analyzes itself once after it opens -- see App.tsx's
+   * `pendingAutoAnalyze`. Raised by `open`, consumed here once the hydrated
+   * values are committed, and only for a saved, unedited deal whose loaded
+   * rent roll and assumptions pass the client checks `analyze` itself makes, so
+   * a deal that would stop on blanks opens without marking them. */
+  const [pendingAutoAnalyze, setPendingAutoAnalyze] = useState(false);
+
+  function passesClientValidation(): boolean {
+    const blanks = collectBlankScalarIssues(values);
+    if (
+      blanks.leaseIssues.length > 0 ||
+      blanks.termsIssues.length > 0 ||
+      collectRentRollBlankIssues(values).length > 0 ||
+      !prepareBusinessPlanInput(businessPlanState.draft).ok
+    ) {
+      return false;
+    }
+    try {
+      buildLeaseLevelTermsRequest(values.terms);
+      buildLeaseLevelInputsRequest(values);
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
+  useEffect(() => {
+    if (!pendingAutoAnalyze) {
+      return;
+    }
+    setPendingAutoAnalyze(false);
+    if (currentDealId !== null && !isDirty && passesClientValidation()) {
+      void analyze({ automatic: true });
+    }
+    // Runs once per open: only the flag `open` raises re-triggers it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAutoAnalyze]);
+
   function resetToBlank(): void {
+    analysisGeneration.current += 1;
     setValues(BLANK_LEASE_LEVEL_FORM_VALUES);
     // D6.6: a new deal has no Business Plan -- no rows, nothing assumed.
     businessPlanState.reset();

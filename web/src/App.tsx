@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   analyzeAcquisition,
   analyzeDetailedAcquisition,
@@ -196,6 +196,7 @@ import {
   blankBusinessPlanDraft,
   emptyBusinessPlanInput,
   isSameBusinessPlanDraft,
+  prepareBusinessPlanInput,
 } from './businessPlan';
 import type { BusinessPlanDraft, BusinessPlanInput } from './businessPlan';
 
@@ -330,6 +331,7 @@ export default function App() {
    * break-even, AI output) without touching `detailedValues` itself. Never
    * touches any Quick-mode state. */
   function resetDetailedDownstreamAnalysisState() {
+    detailedAnalysisGeneration.current += 1;
     setDetailedResults(null);
     setDetailedError(null);
     setDetailedSensitivity(null);
@@ -824,6 +826,7 @@ export default function App() {
     equityMultipleInput: string,
     headlineDscrInput: string,
     metric: ReturnHurdleMetric,
+    isSuperseded: () => boolean = () => false,
   ) {
     let targetLeveredIrr: number;
     let targetEquityMultipleValue: number;
@@ -853,9 +856,13 @@ export default function App() {
         targetHeadlineDscrValue,
         metric,
       );
-      setDetailedBreakEven(analysis);
+      if (!isSuperseded()) {
+        setDetailedBreakEven(analysis);
+      }
     } catch (apiError) {
-      if (apiError instanceof ApiError) {
+      if (isSuperseded()) {
+        // An automatic run that was superseded shows nothing.
+      } else if (apiError instanceof ApiError) {
         setDetailedBreakEvenError(apiError.message);
       } else {
         setDetailedBreakEvenError(
@@ -934,8 +941,23 @@ export default function App() {
    * deterministic results, the snapshot-provenance refresh, and every piece
    * of downstream state are unchanged -- relocating the action changed
    * nothing about what it does. */
-  async function runDetailedAnalyze() {
-    resetDetailedDownstreamAnalysisState();
+  async function runDetailedAnalyze({ keepRestored = false }: { keepRestored?: boolean } = {}) {
+    const generation = detailedAnalysisGeneration.current;
+    const superseded = () =>
+      keepRestored && generation !== detailedAnalysisGeneration.current;
+    if (keepRestored) {
+      // Auto-analyze on open: the restored results and AI report were verified
+      // against these exact saved assumptions, so they stay on screen while the
+      // fresh run is in flight. Everything else is reset as usual.
+      setDetailedError(null);
+      setDetailedSensitivity(null);
+      setDetailedSensitivityError(null);
+      setDetailedBreakEven(null);
+      setDetailedBreakEvenError(null);
+      detailedBusinessPlan.clearApiIssues();
+    } else {
+      resetDetailedDownstreamAnalysisState();
+    }
 
     // D6.6: prepared first so its rows are marked even when a scalar
     // assumption is what stops the analysis.
@@ -965,6 +987,14 @@ export default function App() {
         detailedOperatingInputs,
         businessPlan,
       );
+      if (superseded()) {
+        setIsDetailedSubmitting(false);
+        return;
+      }
+      if (keepRestored && !isSameAnalysisResult(detailedResults, nextResults)) {
+        // See runQuickAnalyze: a report about different results is cleared.
+        clearDetailedAiAnalysis();
+      }
       setDetailedResults(nextResults);
       // Owner Return Metrics V3 Gate A6: silently refresh the persisted
       // analysis snapshot for an already-saved, not-dirty deal -- fired
@@ -1003,6 +1033,10 @@ export default function App() {
         })();
       }
     } catch (apiError) {
+      if (superseded()) {
+        setIsDetailedSubmitting(false);
+        return;
+      }
       if (detailedBusinessPlan.recordApiFailure(apiError, businessPlan)) {
         revealBusinessPlan();
       }
@@ -1020,7 +1054,10 @@ export default function App() {
     // analyst to Overview -- the owner-facing read of what they just
     // produced. Placed after the error path's early `return` above, so a
     // failed Analyze never navigates away from the inputs that need fixing.
-    setWorkspace('overview');
+    // An automatic run on open never navigates: the opener chose the landing.
+    if (!keepRestored) {
+      setWorkspace('overview');
+    }
 
     setIsDetailedSensitivityLoading(true);
     try {
@@ -1029,9 +1066,13 @@ export default function App() {
         detailedOperatingInputs,
         businessPlan,
       );
-      setDetailedSensitivity(presets);
+      if (!superseded()) {
+        setDetailedSensitivity(presets);
+      }
     } catch (apiError) {
-      if (apiError instanceof ApiError) {
+      if (superseded()) {
+        // Dropped with the rest of this run's outcome.
+      } else if (apiError instanceof ApiError) {
         setDetailedSensitivityError(apiError.message);
       } else {
         setDetailedSensitivityError('An unexpected error occurred while calculating sensitivity.');
@@ -1040,6 +1081,9 @@ export default function App() {
       setIsDetailedSensitivityLoading(false);
     }
 
+    if (superseded()) {
+      return;
+    }
     await runDetailedBreakEven(
       terms,
       detailedOperatingInputs,
@@ -1048,6 +1092,7 @@ export default function App() {
       detailedTargetEquityMultiple,
       detailedTargetHeadlineDscr,
       detailedReturnHurdleMetric,
+      superseded,
     );
   }
 
@@ -1292,6 +1337,7 @@ export default function App() {
   }
 
   function resetDownstreamAnalysisState() {
+    quickAnalysisGeneration.current += 1;
     setResults(null);
     setError(null);
     setSensitivity(null);
@@ -1771,6 +1817,7 @@ export default function App() {
       clearDetailedIntakeFeedback();
       setOperatingMode('detailed');
       setView('workspace');
+      setPendingAutoAnalyze('detailed');
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setDealsError(apiError.message);
@@ -1830,6 +1877,7 @@ export default function App() {
       clearIntakeFeedback();
       setOperatingMode('quick');
       setView('workspace');
+      setPendingAutoAnalyze('quick');
     } catch (apiError) {
       if (apiError instanceof ApiError) {
         setDealsError(apiError.message);
@@ -1838,6 +1886,89 @@ export default function App() {
       }
     }
   }
+
+  /** A saved Quick or Detailed deal analyzes itself once after it opens, so
+   * Overview, Live Case, Sensitivity and Break-Even are populated without a
+   * click. (Lease-Level does the same inside `useLeaseLevelDeal`.)
+   *
+   * The openers only raise this flag; the effect below runs after the loaded
+   * values have been committed, so the analyze path reads the deal just opened
+   * rather than the state from before the load. It runs the Analyze button's
+   * own function, and only for a saved, unedited deal whose loaded inputs pass
+   * the client validation -- a deal that would fail it opens exactly as before,
+   * without an error it did not ask for. The analyze path's own
+   * saved-and-not-dirty check still governs the background snapshot refresh,
+   * which never changes `updated_at`. */
+  const [pendingAutoAnalyze, setPendingAutoAnalyze] = useState<'quick' | 'detailed' | null>(
+    null,
+  );
+  // Bumped by each mode's downstream reset -- every assumption edit and every
+  // open. An automatic run that returns after a bump describes inputs that are
+  // no longer on screen, so it drops its outcome instead of showing it.
+  const quickAnalysisGeneration = useRef(0);
+  const detailedAnalysisGeneration = useRef(0);
+
+  /** Whether a fresh analysis equals the restored one, compared as data (key
+   * order ignored). No restored result counts as different: there is nothing
+   * to vouch for the kept AI report. */
+  function isSameAnalysisResult(restored: unknown, fresh: unknown): boolean {
+    if (restored === null || restored === undefined) {
+      return false;
+    }
+    const canonical = (value: unknown): unknown => {
+      if (Array.isArray(value)) {
+        return value.map(canonical);
+      }
+      if (value !== null && typeof value === 'object') {
+        return Object.fromEntries(
+          Object.keys(value as Record<string, unknown>)
+            .sort()
+            .map((key) => [key, canonical((value as Record<string, unknown>)[key])]),
+        );
+      }
+      return value;
+    };
+    return JSON.stringify(canonical(restored)) === JSON.stringify(canonical(fresh));
+  }
+
+  function passesQuickClientValidation(): boolean {
+    try {
+      buildAcquisitionRequest(values);
+    } catch {
+      return false;
+    }
+    return prepareBusinessPlanInput(quickBusinessPlan.draft).ok;
+  }
+
+  function passesDetailedClientValidation(): boolean {
+    try {
+      buildAcquisitionTermsRequest(detailedValues.terms);
+      buildDetailedOperatingInputsRequest(detailedValues.operating);
+    } catch {
+      return false;
+    }
+    return prepareBusinessPlanInput(detailedBusinessPlan.draft).ok;
+  }
+
+  useEffect(() => {
+    if (pendingAutoAnalyze === null) {
+      return;
+    }
+    setPendingAutoAnalyze(null);
+    if (pendingAutoAnalyze === 'quick') {
+      if (currentDealId !== null && !isDirty && passesQuickClientValidation()) {
+        void runQuickAnalyze({ keepRestored: true });
+      }
+    } else if (
+      currentDetailedDealId !== null &&
+      !isDetailedDirty &&
+      passesDetailedClientValidation()
+    ) {
+      void runDetailedAnalyze({ keepRestored: true });
+    }
+    // Runs once per open: only the flag the openers raise re-triggers it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAutoAnalyze]);
 
   function handleNewDeal() {
     if (!confirmDiscardIfDirty()) {
@@ -1948,6 +2079,7 @@ export default function App() {
     equityMultipleInput: string,
     headlineDscrInput: string,
     metric: ReturnHurdleMetric,
+    isSuperseded: () => boolean = () => false,
   ) {
     let targetLeveredIrr: number;
     let targetEquityMultipleValue: number;
@@ -1976,9 +2108,13 @@ export default function App() {
         targetHeadlineDscrValue,
         metric,
       );
-      setBreakEven(analysis);
+      if (!isSuperseded()) {
+        setBreakEven(analysis);
+      }
     } catch (apiError) {
-      if (apiError instanceof ApiError) {
+      if (isSuperseded()) {
+        // An automatic run that was superseded shows nothing.
+      } else if (apiError instanceof ApiError) {
         setBreakEvenError(apiError.message);
       } else {
         setBreakEvenError('An unexpected error occurred while calculating break-even results.');
@@ -2114,16 +2250,23 @@ export default function App() {
 
   /** Sprint C Gate C2: the Quick analysis path, extracted verbatim from the
    * former `handleSubmit` -- see `runDetailedAnalyze`'s note. */
-  async function runQuickAnalyze() {
-    setResults(null);
+  async function runQuickAnalyze({ keepRestored = false }: { keepRestored?: boolean } = {}) {
+    // See runDetailedAnalyze: an automatic run drops a superseded outcome.
+    const generation = quickAnalysisGeneration.current;
+    const superseded = () => keepRestored && generation !== quickAnalysisGeneration.current;
+    // Auto-analyze on open keeps the restored results and AI report -- see
+    // runDetailedAnalyze.
+    if (!keepRestored) {
+      setResults(null);
+      setLastRequest(null);
+      setAiAnalysis(null);
+      setAiAnalysisError(null);
+    }
     setError(null);
     setSensitivity(null);
     setSensitivityError(null);
-    setLastRequest(null);
     setBreakEven(null);
     setBreakEvenError(null);
-    setAiAnalysis(null);
-    setAiAnalysisError(null);
 
     // D6.6: prepared first so its rows are marked even when a scalar
     // assumption is what stops the analysis.
@@ -2147,6 +2290,16 @@ export default function App() {
     setIsSubmitting(true);
     try {
       const nextResults = await analyzeAcquisition(request, businessPlan);
+      if (superseded()) {
+        setIsSubmitting(false);
+        return;
+      }
+      if (keepRestored && !isSameAnalysisResult(results, nextResults)) {
+        // The kept AI report described the restored results; these differ, so
+        // it is cleared exactly as the Analyze button clears it.
+        setAiAnalysis(null);
+        setAiAnalysisError(null);
+      }
       setResults(nextResults);
       // Owner Return Metrics V3 Gate A6/A7: mirrors handleDetailedSubmit's
       // silent background cache refresh exactly -- see its comment.
@@ -2172,6 +2325,10 @@ export default function App() {
         })();
       }
     } catch (apiError) {
+      if (superseded()) {
+        setIsSubmitting(false);
+        return;
+      }
       if (quickBusinessPlan.recordApiFailure(apiError, businessPlan)) {
         revealBusinessPlan();
       }
@@ -2186,14 +2343,20 @@ export default function App() {
     setIsSubmitting(false);
     setLastRequest({ inputs: request, businessPlan });
     // Sprint C Gate C2 (spec section 12.4) -- see runDetailedAnalyze.
-    setWorkspace('overview');
+    if (!keepRestored) {
+      setWorkspace('overview');
+    }
 
     setIsSensitivityLoading(true);
     try {
       const presets = await fetchSensitivityPresets(request, businessPlan);
-      setSensitivity(presets);
+      if (!superseded()) {
+        setSensitivity(presets);
+      }
     } catch (apiError) {
-      if (apiError instanceof ApiError) {
+      if (superseded()) {
+        // Dropped with the rest of this run's outcome.
+      } else if (apiError instanceof ApiError) {
         setSensitivityError(apiError.message);
       } else {
         setSensitivityError('An unexpected error occurred while calculating sensitivity.');
@@ -2202,12 +2365,16 @@ export default function App() {
       setIsSensitivityLoading(false);
     }
 
+    if (superseded()) {
+      return;
+    }
     await runBreakEven(
       { inputs: request, businessPlan },
       targetLeveredIrrPercent,
       targetEquityMultiple,
       targetHeadlineDscr,
       returnHurdleMetric,
+      superseded,
     );
   }
 
