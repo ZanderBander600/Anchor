@@ -1,9 +1,8 @@
 # P7.8B Capital Structure Product Integration
 
-Status: Session B (product integration) decision record. **Incomplete**: the
-backend integration below is implemented and verified; the analyst-facing UI,
-the browser QA and the mutation proofs the gate calls for are not yet in the
-tree (Section 14).
+Status: Session B implementation complete; automated backend/frontend proof and
+the browser QA are complete; **human visual acceptance is pending**
+(Section 14).
 Base: Session A's reviewed head `f5850ad` on
 `feature/p7-8-structured-position-returns`.
 Risk: Tier 2 (state / integration), over a Tier 1 engine that does not move.
@@ -90,6 +89,12 @@ than the enum.
 - `StrategyDefinition.root_overlays` is additive and defaults to none.
 - A root domain stated as a Unit overlay is refused (`root_domain_on_unit`), and
   a Unit domain stated at the root is refused (`unit_domain_at_root`).
+  `root_domain_on_unit` is a **deliberate, wire-visible change**: before this
+  gate, `capital_structure` on a Unit overlay was refused as
+  `unsupported_domain`, because the domain did not exist. Now that
+  `CAPITAL_STRUCTURE` is a published Strategy domain, the request is not an
+  unknown domain but a known one stated in the wrong place, and it earns the
+  more specific refusal. `tests/test_p7_4_strategy_api.py` pins the new code.
 - P7.9 adds `PARTNERSHIP` to the same collection without another
   representation.
 
@@ -295,19 +300,27 @@ months (Phase 8), debt PIK and non-closing fees, refinancing and
 recapitalization, partnership and investor returns (P7.9), further shortfall
 resolutions, and any second IRR cadence.
 
-## 14. Not yet in the tree
-
-The gate's remaining Session B scope, not implemented here:
-
-- component tests for the editor, the result surface, the Risk view, the
-  Position matrix and a Strategy's own structure;
-- the browser QA at 1440 / 1280 / 390 and the screenshot package;
-- the B1-B10 mutation proofs.
+## 14. Closeout status
 
 Every approved P7.8A capability this gate exists to reach is now reachable from
-the product. What remains is **proof, not wiring**: until those tests, the
-browser QA and the mutation proofs land, the gate is **not** ready for visual
-acceptance.
+the product, and the automated proof is in the tree:
+
+- **component tests** for the editor, the result surface, the Risk view, the
+  Position matrix and a Strategy's own structure -- **complete**;
+- the **B1-B10 mutation proofs** (`tests/test_p7_8b_mutation_proofs.py`) --
+  **complete**;
+- the **browser QA at 1440 / 1280 / 390 and the screenshot package** --
+  **complete**: the mixed-mode Investment (Quick + Detailed + Lease-Level
+  Units), a Strategy inheriting / replacing / explicitly emptying the
+  structure, the Project matrix left unchanged, the POSITION matrix over
+  3 Strategies x 3 Scenarios including the not-applicable and unresolved cell
+  states, the Common Equity perspective, the Unit-removal refusal, draft
+  survival across a Unit save, and the 1280 and 390 passes.
+
+**Visual acceptance remains human-owned.** No automated run in this gate is a
+visual approval, and this document never claims one. Browser QA being complete
+is evidence that the product behaves as specified -- not that a human has
+accepted how it looks.
 
 ## 15. Evidence
 
