@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import {
@@ -860,6 +860,22 @@ function aiSectionHeading(title: string): HTMLElement | null {
   return (nodes.find((n) => n.textContent === title) as HTMLElement) ?? null;
 }
 
+/** A reply that never arrives. Opening a saved deal analyzes it by itself;
+ * holding that automatic call in flight lets a test observe the deal exactly as
+ * it opened, while still counting the call. */
+function pendingReply<T>(): Promise<T> {
+  return new Promise<T>(() => {});
+}
+
+/** A reply the test releases when it chooses. */
+function deferredReply<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 function makeAiAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
   return {
     executive_summary: 'Five-year hold with moderate leverage.',
@@ -880,6 +896,11 @@ function makeAiAnalysis(overrides: Partial<AIAnalysis> = {}): AIAnalysis {
 beforeEach(() => {
   mockAnalyze.mockReset();
   mockAnalyzeDetailed.mockReset();
+  // Opening a saved deal analyzes it once by itself. Its default reply is the
+  // same fixture the restored snapshots use, so a restored AI report is kept;
+  // tests that care about that call count it explicitly.
+  mockAnalyze.mockResolvedValue(makeResults());
+  mockAnalyzeDetailed.mockResolvedValue(makeDetailedResults());
   mockFetchSensitivityPresets.mockReset();
   mockFetchSensitivityPresets.mockResolvedValue(makeSensitivityPresets());
   mockFetchBreakEvenAnalysis.mockReset();
@@ -2680,27 +2701,20 @@ describe('Deal persistence workflow', () => {
     fillGoldenDeal();
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
     expect((await screen.findAllByText('7.91%')).length).toBeGreaterThanOrEqual(1);
+    // The opened deal's automatic analysis stays in flight, so the assertions
+    // below see the deal exactly as it opened.
+    mockAnalyze.mockReturnValueOnce(pendingReply());
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
 
     expect(await screen.findByText(/Enter assumptions and click/)).toBeTruthy();
     expect(screen.queryByText('7.91%')).toBeNull();
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(2));
   });
 
-  it('opening a deal does not automatically call /analyze', async () => {
-    const user = userEvent.setup();
-    const deal = makeDeal();
-    mockListDeals.mockResolvedValue([deal]);
-    mockGetDeal.mockResolvedValue(deal);
-    render(<App />);
-
-    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
-    await user.click(await screen.findByRole('button', { name: 'Open' }));
-    await screen.findByLabelText(/^Purchase Price/);
-
-    expect(mockAnalyze).not.toHaveBeenCalled();
-  });
+  // Opening a saved deal now analyzes it once by itself -- see the
+  // 'Auto-analyze on open' block at the end of this file.
 
   it('an opened deal can be edited and saved via updateDeal', async () => {
     const user = userEvent.setup();
@@ -4389,9 +4403,11 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
     await screen.findByText(/^Saved/);
+    // The automatic analysis on open, counted on its own.
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
-    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(2));
 
     expect(screen.getByText(/^Saved/)).toBeTruthy();
   });
@@ -4406,8 +4422,10 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
     await screen.findByText(/^Saved/);
-    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    // The automatic analysis on open, counted on its own.
     await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(2));
 
     await goTo(user, 'AI Analyst');
     await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
@@ -4579,9 +4597,14 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
     if (!quickRow) throw new Error('Quick deal row not found');
     await user.click(within(quickRow).getByRole('button', { name: 'Open' }));
     await screen.findByText(/^Saved/);
-    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    // The automatic analysis on open, counted on its own.
     await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(2));
     expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
+    // The Detailed deal's own automatic analysis stays in flight, so what is
+    // asserted below is the Detailed workspace exactly as it opened.
+    mockAnalyzeDetailed.mockReturnValueOnce(pendingReply());
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     const detailedRow = (await within(dealLibrary()).findByText(detailedDeal.name)).closest(
@@ -4597,6 +4620,8 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
     expect(screen.queryByText('Key Returns')).toBeNull();
     expect(screen.getByText(/Enter assumptions and click/)).toBeTruthy();
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('10000000'));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+    expect(mockAnalyze).toHaveBeenCalledTimes(2);
   });
 
   it('opening a Quick deal after a Detailed deal was open leaves no Detailed assumptions/results attached to the Quick workspace', async () => {
@@ -4617,9 +4642,13 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
     if (!detailedRow) throw new Error('Detailed deal row not found');
     await user.click(within(detailedRow).getByRole('button', { name: 'Open' }));
     await screen.findByText(/^Saved/);
-    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    // The automatic analysis on open, counted on its own.
     await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(2));
     expect(operatingStatement()).not.toBeNull();
+    // The Quick deal's own automatic analysis stays in flight.
+    mockAnalyze.mockReturnValueOnce(pendingReply());
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     const quickRow = (await within(dealLibrary()).findByText(quickDeal.name)).closest('li');
@@ -4635,6 +4664,8 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
       'value',
       shown(DEFAULT_FORM_VALUES.purchasePrice),
     );
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -5220,8 +5251,11 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
     await screen.findByText(/^Saved/);
+    // The automatic analysis on open, counted on its own.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(2));
     expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
     await waitFor(() =>
       expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
@@ -5231,6 +5265,9 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
       ),
     );
 
+    // Deal B's and the reopened Deal A's automatic analyses stay in flight, so
+    // what each shows below comes from its own restored state alone.
+    mockAnalyze.mockReturnValueOnce(pendingReply()).mockReturnValueOnce(pendingReply());
     mockGetDeal.mockResolvedValueOnce(dealB);
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[1]);
@@ -5242,8 +5279,9 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[0]);
 
     expect((await screen.findAllByText('Key Returns')).length).toBeGreaterThanOrEqual(1);
-    // Restored from the cache, not a fresh network call.
-    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    // Restored from the cache: the only calls since the click are the two
+    // automatic ones still in flight.
+    expect(mockAnalyze).toHaveBeenCalledTimes(4);
   });
 
   it('restores Detailed analysis (including the operating statement) after switching away and back', async () => {
@@ -5261,8 +5299,11 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     expect(
       screen.getByRole('tab', { name: 'Detailed Underwrite' }),
     ).toHaveProperty('ariaSelected', 'true');
+    // The automatic analysis on open, counted on its own.
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
 
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(operatingStatement()).not.toBeNull());
     expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
     await waitFor(() =>
@@ -5273,6 +5314,8 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
       ),
     );
 
+    // Deal B's and the reopened Deal A's automatic analyses stay in flight.
+    mockAnalyzeDetailed.mockReturnValueOnce(pendingReply()).mockReturnValueOnce(pendingReply());
     mockGetDeal.mockResolvedValueOnce(dealB);
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click((await screen.findAllByRole('button', { name: 'Open' }))[1]);
@@ -5286,7 +5329,8 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     // complete result surface, not just headline cards.
     await waitFor(() => expect(operatingStatement()).not.toBeNull());
     expect(screen.getAllByText('Owner Returns').length).toBeGreaterThanOrEqual(1);
-    expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1);
+    // Restored from the cache: only the two in-flight automatic calls since.
+    expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(4);
   });
 
   it('restores Quick AI Analyst output after switching away and back', async () => {
@@ -5401,6 +5445,9 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     mockListDeals.mockResolvedValue([deal]);
     mockGetDeal.mockResolvedValue(deal);
     mockUpdateDeal.mockResolvedValue({ ...deal, analysis_snapshot: null, ai_snapshot: null });
+    // The automatic analysis on open stays in flight: what is asserted below
+    // comes from the restored snapshot alone.
+    mockAnalyze.mockReturnValueOnce(pendingReply());
     render(<App />);
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
@@ -5420,6 +5467,8 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
     expect(mockUpdateDealAnalysisSnapshot).not.toHaveBeenCalled();
     expect(mockUpdateDealAiSnapshot).not.toHaveBeenCalled();
+    // Exactly one call: the automatic analysis, still in flight.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
   });
 
   it('editing Deal Context on a snapshot-restored deal preserves the result and clears the AI', async () => {
@@ -5666,13 +5715,17 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     const deal = makeDeal({ id: 'deal-1', analysis_snapshot: makeResults() });
     mockListDeals.mockResolvedValue([deal]);
     mockGetDeal.mockResolvedValue(deal);
+    // The automatic analysis on open stays in flight: what is asserted below
+    // comes from the restored snapshot alone.
+    mockAnalyze.mockReturnValueOnce(pendingReply());
     render(<App />);
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
 
     await waitFor(() => expect(document.querySelector('.owner-summary-panel')).not.toBeNull());
-    expect(mockAnalyze).not.toHaveBeenCalled();
+    // Exactly one call: the automatic analysis, still in flight.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
   });
 
   it('renders immediately for a restored Detailed snapshot, with no Analyze click', async () => {
@@ -5680,13 +5733,17 @@ describe('One-Page Owner Summary (Gate B3)', () => {
     const deal = makeDetailedDeal({ id: 'detailed-1', analysis_snapshot: makeDetailedResults() });
     mockListDeals.mockResolvedValue([deal]);
     mockGetDeal.mockResolvedValue(deal);
+    // The automatic analysis on open stays in flight: what is asserted below
+    // comes from the restored snapshot alone.
+    mockAnalyzeDetailed.mockReturnValueOnce(pendingReply());
     render(<App />);
 
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
 
     await waitFor(() => expect(document.querySelector('.owner-summary-panel')).not.toBeNull());
-    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+    // Exactly one call: the automatic analysis, still in flight.
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
   });
 
   it('disappears when a financial-assumption edit clears the deterministic result', async () => {
@@ -6442,6 +6499,9 @@ describe('Sprint C Gate C2 -- app shell', () => {
     const deal = makeDeal({ analysis_snapshot: makeResults(), ai_snapshot: makeAiAnalysis() });
     mockListDeals.mockResolvedValue([deal]);
     mockGetDeal.mockResolvedValue(deal);
+    // The automatic analysis on open stays in flight: what is asserted below
+    // comes from the restored snapshot alone.
+    mockAnalyze.mockReturnValueOnce(pendingReply());
     render(<App />);
 
     await user.click(await within(sidebar()).findByText('111 Main St'));
@@ -6450,7 +6510,8 @@ describe('Sprint C Gate C2 -- app shell', () => {
     expect(panel('overview').querySelector('.owner-summary-panel')).toBeTruthy();
     await goTo(user, 'AI Analyst');
     expect(screen.getByText('Five-year hold with moderate leverage.')).toBeTruthy();
-    expect(mockAnalyze).not.toHaveBeenCalled();
+    // Exactly one call: the automatic analysis, still in flight.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
   });
 
@@ -6459,6 +6520,9 @@ describe('Sprint C Gate C2 -- app shell', () => {
     const deal = makeDetailedDeal({ analysis_snapshot: makeDetailedResults() });
     mockListDeals.mockResolvedValue([deal]);
     mockGetDeal.mockResolvedValue(deal);
+    // The automatic analysis on open stays in flight: what is asserted below
+    // comes from the restored snapshot alone.
+    mockAnalyzeDetailed.mockReturnValueOnce(pendingReply());
     render(<App />);
 
     await user.click(await within(sidebar()).findByText('Golden Detailed Deal'));
@@ -6471,7 +6535,8 @@ describe('Sprint C Gate C2 -- app shell', () => {
     expect(panel('overview').querySelector('.owner-summary-panel')).toBeTruthy();
     await goTo(user, 'Underwrite');
     expect(panel('underwrite').contains(operatingStatement())).toBe(true);
-    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+    // Exactly one call: the automatic analysis, still in flight.
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
   });
 
   it('30. an unanalyzed saved deal opens on Underwrite, with honest empty states', async () => {
@@ -6479,6 +6544,9 @@ describe('Sprint C Gate C2 -- app shell', () => {
     const deal = makeDeal();
     mockListDeals.mockResolvedValue([deal]);
     mockGetDeal.mockResolvedValue(deal);
+    // The automatic analysis on open stays in flight, so these are the states
+    // the deal opens with.
+    mockAnalyze.mockReturnValueOnce(pendingReply());
     render(<App />);
 
     await user.click(await within(sidebar()).findByText('111 Main St'));
@@ -6490,6 +6558,8 @@ describe('Sprint C Gate C2 -- app shell', () => {
     expect(within(panel('ai')).getByText(/Analyze the deal first/)).toBeTruthy();
     // No fabricated N/A grids.
     expect(panel('overview').querySelector('.owner-summary-panel')).toBeNull();
+    // Exactly one call: the automatic analysis, still in flight.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
   });
 
   it('30b. Risk states honestly that its outputs need a refresh on a reopened deal', async () => {
@@ -6497,6 +6567,9 @@ describe('Sprint C Gate C2 -- app shell', () => {
     const deal = makeDeal({ analysis_snapshot: makeResults() });
     mockListDeals.mockResolvedValue([deal]);
     mockGetDeal.mockResolvedValue(deal);
+    // The automatic analysis on open stays in flight: what is asserted below
+    // comes from the restored snapshot alone.
+    mockAnalyze.mockReturnValueOnce(pendingReply());
     render(<App />);
 
     await user.click(await within(sidebar()).findByText('111 Main St'));
@@ -6514,6 +6587,8 @@ describe('Sprint C Gate C2 -- app shell', () => {
       within(panel('risk')).getByText(/to refresh Risk outputs for this deal/),
     ).toBeTruthy();
     expect(within(panel('risk')).queryByRole('heading', { name: 'Return Sensitivity' })).toBeNull();
+    // Exactly one call: the automatic analysis, still in flight.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
   });
 
   it('31. a financial edit still invalidates the analysis, seen from Overview', async () => {
@@ -6665,15 +6740,21 @@ describe('Sprint C Gate C2 -- app shell', () => {
 
     await user.click(await within(sidebar()).findByText('111 Main St'));
     await waitFor(() => expect(mockGetDeal).toHaveBeenCalled());
+    // The automatic analysis on open refreshes the snapshot the same way;
+    // counted on its own before the click.
+    await waitFor(() => expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledTimes(1));
+    expect(mockFetchDealFingerprint).toHaveBeenCalledTimes(1);
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
 
     mockAnalyze.mockResolvedValue(makeResults());
     await user.click(screen.getByRole('button', { name: 'Analyze' }));
 
     // The same provenance-validated refresh as before Sprint C: a fresh
     // fingerprint for the exact assumptions analyzed, then the snapshot.
-    await waitFor(() => expect(mockFetchDealFingerprint).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockFetchDealFingerprint).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledTimes(2));
     await waitFor(() =>
-      expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
+      expect(mockUpdateDealAnalysisSnapshot).toHaveBeenLastCalledWith(
         'deal-1',
         makeResults(),
         'fp-financial',
@@ -6687,6 +6768,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     }
     expect(mockUpdateDealAnalysisSnapshot.mock.calls.length).toBe(snapshotCalls);
     expect(mockFetchDealFingerprint.mock.calls.length).toBe(fingerprintCalls);
+    expect(mockAnalyze).toHaveBeenCalledTimes(2);
   });
 
   describe('default workspace rules (spec section 12.4)', () => {
@@ -7238,6 +7320,9 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
     const deal = makeDeal({ analysis_snapshot: makeResults() });
     mockListDeals.mockResolvedValue([deal]);
     mockGetDeal.mockResolvedValue(deal);
+    // The automatic analysis on open stays in flight: what is asserted below
+    // comes from the restored snapshot alone.
+    mockAnalyze.mockReturnValueOnce(pendingReply());
     render(<App />);
 
     await user.click(await within(sidebar()).findByText('111 Main St'));
@@ -7246,7 +7331,8 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
 
     expect(underwritePanel('results').querySelector('.results-panel')).toBeTruthy();
     expect(within(liveCase()).getByText('7.91%')).toBeTruthy();
-    expect(mockAnalyze).not.toHaveBeenCalled();
+    // Exactly one call: the automatic analysis, still in flight.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
   });
 
   it('28. dirty state still tracks an assumption edited on any tab', async () => {
@@ -7460,13 +7546,17 @@ describe('Sprint C Gate C4 -- Overview', () => {
     const deal = makeDetailedDeal({ analysis_snapshot: makeDetailedResults() });
     mockListDeals.mockResolvedValue([deal]);
     mockGetDeal.mockResolvedValue(deal);
+    // The automatic analysis on open stays in flight: what is asserted below
+    // comes from the restored snapshot alone.
+    mockAnalyzeDetailed.mockReturnValueOnce(pendingReply());
     render(<App />);
 
     await user.click(await within(sidebar()).findByText('Golden Detailed Deal'));
     await waitFor(() => expect(activeWorkspace()).toBe('Overview'));
 
     expect(panel('overview').querySelectorAll('.metric-card').length).toBe(4);
-    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+    // Exactly one call: the automatic analysis, still in flight.
+    await waitFor(() => expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1));
   });
 });
 
@@ -7551,6 +7641,9 @@ describe('Sprint C Gate C4 -- Risk', () => {
     const deal = makeDeal({ analysis_snapshot: makeResults() });
     mockListDeals.mockResolvedValue([deal]);
     mockGetDeal.mockResolvedValue(deal);
+    // The automatic analysis on open stays in flight: what is asserted below
+    // comes from the restored snapshot alone.
+    mockAnalyze.mockReturnValueOnce(pendingReply());
     render(<App />);
 
     await user.click(await within(sidebar()).findByText('111 Main St'));
@@ -7568,6 +7661,8 @@ describe('Sprint C Gate C4 -- Risk', () => {
     expect(pending.hasAttribute('hidden')).toBe(false);
     expect(pending.textContent).toBe('Run Analyze to refresh Risk outputs for this deal.');
     expect(sensitivityHeading()).toBeNull();
+    // Exactly one call: the automatic analysis, still in flight.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
   });
 
   it('preserves risk data across workspace navigation', async () => {
@@ -8361,5 +8456,278 @@ describe('Phase 7 Gates P7.3 / P7.5 -- the decision views in Risk', () => {
     expect(
       (within(scenarios).getByRole('button', { name: 'Add Scenario' }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+});
+
+// =============================================================================
+// Demo polish -- a saved deal analyzes itself once when it opens
+// =============================================================================
+
+describe('Auto-analyze on open', () => {
+  it('a saved, valid, unedited Quick deal analyzes itself exactly once per open', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    expect(mockAnalyze).toHaveBeenCalledWith(GOLDEN_DEAL_REQUEST, EMPTY_PLAN);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+    expect(within(liveCase()).getByText('7.91%')).toBeTruthy();
+    // An automatic run never navigates: an unanalyzed deal still opens on
+    // Underwrite, now with its analysis behind every other workspace.
+    expect(activeWorkspace()).toBe('Underwrite');
+    expect(panel('overview').querySelector('.owner-summary-panel')).toBeTruthy();
+
+    // Opening it again is a second open, and runs exactly once more.
+    await user.click(within(sidebar()).getByText('111 Main St'));
+    await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(2));
+    expect(mockGetDeal).toHaveBeenCalledTimes(2);
+    expect(mockAnalyze).toHaveBeenCalledTimes(2);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(2);
+  });
+
+  it('a saved, valid, unedited Detailed deal analyzes itself exactly once per open', async () => {
+    const user = userEvent.setup();
+    const deal = makeDetailedDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('Golden Detailed Deal'));
+    await waitFor(() => expect(mockFetchDetailedBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockAnalyzeDetailed).toHaveBeenCalledTimes(1);
+    expect(mockAnalyzeDetailed).toHaveBeenCalledWith(
+      GOLDEN_DETAILED_TERMS_REQUEST,
+      GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
+      EMPTY_PLAN,
+    );
+    expect(mockFetchDetailedSensitivityPresets).toHaveBeenCalledTimes(1);
+    expect(mockAnalyze).not.toHaveBeenCalled();
+    expect(activeWorkspace()).toBe('Underwrite');
+  });
+
+  it('switching workspaces or operating modes never runs it again', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+
+    for (const workspace of ['Overview', 'Risk', 'Documents', 'AI Analyst', 'Underwrite']) {
+      await goTo(user, workspace);
+    }
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+    await goTo(user, 'Overview');
+
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
+    expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1);
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+    expect(mockGetDeal).toHaveBeenCalledTimes(1);
+  });
+
+  it('a new, unsaved deal never analyzes itself', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+
+    await user.click(within(sidebar()).getByRole('button', { name: 'New Deal' }));
+    await waitFor(() => expect(screen.getByText('Unsaved deal')).toBeTruthy());
+    fillGoldenDeal();
+    await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
+    await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
+    await goTo(user, 'Overview');
+    await goTo(user, 'Underwrite');
+
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    expect(mockAnalyzeDetailed).not.toHaveBeenCalled();
+  });
+
+  it('a saved deal whose loaded inputs fail the client checks opens without analyzing or an error', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({ inputs: { ...GOLDEN_DEAL_REQUEST, io_period: 1.5 } });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '111 Main St'),
+    );
+    await screen.findByText(/^Saved/);
+
+    expect(mockAnalyze).not.toHaveBeenCalled();
+    expect(mockFetchSensitivityPresets).not.toHaveBeenCalled();
+    expect(screen.queryByText('Interest-Only Period must be a whole number.')).toBeNull();
+
+    // The Analyze button still reports it exactly as before.
+    await user.click(screen.getByRole('button', { name: 'Analyze' }));
+    expect(await screen.findByText('Interest-Only Period must be a whole number.')).toBeTruthy();
+    expect(mockAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('a deal with unsaved edits is not replaced or analyzed when the discard is cancelled', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), { target: { value: '60000000' } });
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    await user.click(within(sidebar()).getByText('111 Main St'));
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    expect(mockGetDeal).toHaveBeenCalledTimes(1);
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+  });
+
+  it('an edit made while the automatic run is in flight drops its outcome and saves nothing', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal();
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    const automatic = deferredReply<AcquisitionResults>();
+    mockAnalyze.mockReturnValueOnce(automatic.promise);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText(/^Purchase Price/), { target: { value: '60000000' } });
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+    await act(async () => {
+      automatic.resolve(makeResults());
+    });
+
+    expect(panel('overview').querySelector('.owner-summary-panel')).toBeNull();
+    expect(within(panel('overview')).getByText(/Enter assumptions and click/)).toBeTruthy();
+    expect(mockFetchSensitivityPresets).not.toHaveBeenCalled();
+    expect(mockFetchBreakEvenAnalysis).not.toHaveBeenCalled();
+    expect(mockFetchDealFingerprint).not.toHaveBeenCalled();
+    expect(mockUpdateDealAnalysisSnapshot).not.toHaveBeenCalled();
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+  });
+
+  it('opening another deal while the automatic run is in flight never shows the first deal’s results', async () => {
+    const user = userEvent.setup();
+    const dealA = makeDeal({ id: 'deal-a', name: 'Deal A' });
+    const dealB = makeDeal({ id: 'deal-b', name: 'Deal B' });
+    mockListDeals.mockResolvedValue([dealA, dealB]);
+    mockGetDeal.mockImplementation(async (id: string) => (id === 'deal-a' ? dealA : dealB));
+    const automaticA = deferredReply<AcquisitionResults>();
+    mockAnalyze.mockReturnValueOnce(automaticA.promise).mockReturnValueOnce(pendingReply());
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('Deal A'));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    await user.click(within(sidebar()).getByText('Deal B'));
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      automaticA.resolve(makeResults());
+    });
+
+    expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', 'Deal B');
+    expect(panel('overview').querySelector('.owner-summary-panel')).toBeNull();
+    expect(mockFetchSensitivityPresets).not.toHaveBeenCalled();
+    expect(mockUpdateDealAnalysisSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('the restored AI report survives the automatic run', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({ analysis_snapshot: makeResults(), ai_snapshot: makeAiAnalysis() });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+    expect(activeWorkspace()).toBe('Overview');
+
+    await goTo(user, 'AI Analyst');
+    expect(screen.getByText('Five-year hold with moderate leverage.')).toBeTruthy();
+    expect(aiSectionHeading('Investment View')).not.toBeNull();
+    expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
+    expect(mockUpdateDealAiSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('a fresh result that differs from the restored one clears the AI report, as Analyze does', async () => {
+    const user = userEvent.setup();
+    const deal = makeDeal({ analysis_snapshot: makeResults(), ai_snapshot: makeAiAnalysis() });
+    mockListDeals.mockResolvedValue([deal]);
+    mockGetDeal.mockResolvedValue(deal);
+    mockAnalyze.mockResolvedValueOnce(makeResults({ levered_irr: 0.2 }));
+    render(<App />);
+
+    await user.click(await within(sidebar()).findByText('111 Main St'));
+    await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+
+    await goTo(user, 'AI Analyst');
+    expect(screen.queryByText('Five-year hold with moderate leverage.')).toBeNull();
+    expect(aiSectionHeading('Investment View')).toBeNull();
+    expect(mockFetchAIAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('opening never changes the saved timestamp or the Recent Deals order', async () => {
+    const user = userEvent.setup();
+    const older = makeDeal({
+      id: 'deal-a',
+      name: 'Deal A',
+      updated_at: '2026-09-01T12:00:00+00:00',
+    });
+    const newer = makeDeal({
+      id: 'deal-b',
+      name: 'Deal B',
+      updated_at: '2026-09-02T12:00:00+00:00',
+    });
+    mockListDeals.mockResolvedValue([newer, older]);
+    mockGetDeal.mockResolvedValue(older);
+    render(<App />);
+
+    const names = () =>
+      Array.from(sidebar().querySelectorAll('.sidebar-deal-name')).map((node) => node.textContent);
+    await within(sidebar()).findByText('Deal A');
+    expect(names()).toEqual(['Deal B', 'Deal A']);
+    const listCalls = mockListDeals.mock.calls.length;
+
+    await user.click(within(sidebar()).getByText('Deal A'));
+    const savedLabel = (await screen.findByText(/^Saved/)).textContent;
+    await waitFor(() =>
+      expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
+        'deal-a',
+        makeResults(),
+        'fp-financial',
+      ),
+    );
+    await waitFor(() => expect(mockFetchBreakEvenAnalysis).toHaveBeenCalledTimes(1));
+
+    expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/^Saved/).textContent).toBe(savedLabel);
+    expect(savedLabel).not.toBe('Saved');
+    expect(names()).toEqual(['Deal B', 'Deal A']);
+    expect(mockListDeals.mock.calls.length).toBe(listCalls);
+    expect(mockUpdateDeal).not.toHaveBeenCalled();
+    expect(mockCreateDeal).not.toHaveBeenCalled();
   });
 });

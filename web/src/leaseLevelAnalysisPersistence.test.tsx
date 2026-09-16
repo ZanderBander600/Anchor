@@ -126,6 +126,13 @@ const mockUpdateDeal = vi.mocked(updateLeaseLevelDeal);
 
 const HEALTHY = fixture.healthy as unknown as LeaseLevelAcquisitionResults;
 
+/** A reply that never arrives. Opening a saved deal analyzes it by itself;
+ * holding that automatic call in flight proves that whatever is on screen came
+ * from storage, while the call itself is still counted. */
+function pendingReply<T>(): Promise<T> {
+  return new Promise<T>(() => {});
+}
+
 /**
  * The durable side of the world.
  *
@@ -444,6 +451,7 @@ describe('switching deals', () => {
 
     // Back to Deal A: everything is where it was left.
     const analysesBefore = mockAnalyze.mock.calls.length;
+    mockAnalyze.mockReturnValueOnce(pendingReply());
     await open(user, 'Deal A');
 
     await goTo(user, 'AI Analyst');
@@ -458,7 +466,8 @@ describe('switching deals', () => {
 
     //
     // NO FAKE RESTORE: nothing was recomputed to put any of that on screen.
-    expect(mockAnalyze.mock.calls.length).toBe(analysesBefore);
+    // The one new call is the reopen's automatic analysis, still in flight.
+    expect(mockAnalyze.mock.calls.length).toBe(analysesBefore + 1);
     expect(mockAi).toHaveBeenCalledTimes(1);
     expect(mockOneWay).toHaveBeenCalledTimes(1);
     expect(mockTwoWay).toHaveBeenCalledTimes(1);
@@ -470,6 +479,10 @@ describe('switching deals', () => {
     await doTheWork(user);
     await waitFor(() => expect(mockSaveTwoWay).toHaveBeenCalled());
 
+    // Deal B's automatic analysis stays in flight: what is asserted is the
+    // state Deal B opened with.
+    const analysesBefore = mockAnalyze.mock.calls.length;
+    mockAnalyze.mockReturnValueOnce(pendingReply());
     await open(user, 'Deal B');
 
     // Deal B has no stored analysis, so its AI workspace is the empty state --
@@ -479,6 +492,7 @@ describe('switching deals', () => {
       within(workspacePanel('ai')).getByText(/Analyze the deal first/i),
     ).toBeTruthy();
     expect(stored.get('deal-b')?.ai_snapshot).toBeNull();
+    expect(mockAnalyze.mock.calls.length).toBe(analysesBefore + 1);
   });
 
   it('restores the candidate editor exactly as it was submitted', async () => {
@@ -521,6 +535,7 @@ describe('browser refresh', () => {
     vi.clearAllMocks();
     mockListDeals.mockImplementation(async () => [...stored.values()].map(clone));
     mockGetDeal.mockImplementation(async (id: string) => clone(stored.get(id)!));
+    mockAnalyze.mockReturnValueOnce(pendingReply());
 
     user = await launch();
     await open(user, 'Deal A');
@@ -535,8 +550,9 @@ describe('browser refresh', () => {
     await user.click(screen.getByRole('tab', { name: 'Two-Way' }));
     expect(within(sensitivityPanel('two-way')).getByRole('table')).toBeTruthy();
 
-    // And none of it was recomputed after the refresh.
-    expect(mockAnalyze).not.toHaveBeenCalled();
+    // And none of it was recomputed after the refresh: the one call is the
+    // automatic analysis on open, still in flight.
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
     expect(mockAi).not.toHaveBeenCalled();
     expect(mockOneWay).not.toHaveBeenCalled();
     expect(mockTwoWay).not.toHaveBeenCalled();

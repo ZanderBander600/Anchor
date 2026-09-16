@@ -69,20 +69,33 @@ async function analyze(analysis: LeaseLevelAcquisitionResults = HEALTHY) {
   await waitFor(() => {
     expect(screen.getByRole('tablist', { name: 'Lease-Level sections' })).toBeTruthy();
   });
+  // Opening the saved deal analyzes it once by itself; the click is the next call.
+  await waitFor(() => {
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+  });
   await user.click(screen.getByRole('button', { name: /^Analyz/i }));
   await waitFor(() => {
-    expect(mockAnalyze).toHaveBeenCalled();
+    expect(mockAnalyze).toHaveBeenCalledTimes(2);
   });
   return user;
 }
 
-async function openDealWithoutAnalyzing() {
+/** Opens the saved deal with its automatic analysis held in flight, so what is
+ * on screen is exactly what the deal opened with. The automatic call is counted. */
+async function openDealWithoutAnalyzing(
+  automaticReply: Promise<LeaseLevelAcquisitionResults> = new Promise(() => {}),
+) {
+  const before = mockAnalyze.mock.calls.length;
+  mockAnalyze.mockReturnValueOnce(automaticReply);
   const user = userEvent.setup();
   render(<App />);
   await screen.findByText('Fulton Exchange');
   await user.click(screen.getByText('Fulton Exchange'));
   await waitFor(() => {
     expect(screen.getByRole('tablist', { name: 'Lease-Level sections' })).toBeTruthy();
+  });
+  await waitFor(() => {
+    expect(mockAnalyze).toHaveBeenCalledTimes(before + 1);
   });
   return user;
 }
@@ -499,7 +512,9 @@ describe('results never outlive the inputs they describe', () => {
     const user = await openDealWithoutAnalyzing();
     await user.click(screen.getByRole('tab', { name: 'Results' }));
 
-    expect(within(resultsPanel()).getByText(/Analyze to see results/)).toBeTruthy();
+    // A reopened deal is recalculated, never restored: its automatic analysis
+    // is still in flight, and nothing stored stands in for it.
+    expect(within(resultsPanel()).getByText('Running the analysis…')).toBeTruthy();
     // Nothing was restored, because nothing is persisted.
     expect(savedDeal().analysis_snapshot).toBeNull();
     expect(within(resultsPanel()).queryByText('Levered IRR')).toBeNull();
@@ -550,13 +565,29 @@ describe('results never outlive the inputs they describe', () => {
 
     // Reopen: inputs only.
     cleanup();
-    const reopened = await openDealWithoutAnalyzing();
+    let finishAutomatic: (value: LeaseLevelAcquisitionResults) => void = () => {};
+    const reopened = await openDealWithoutAnalyzing(
+      new Promise((settle) => {
+        finishAutomatic = settle;
+      }),
+    );
     await reopened.click(screen.getByRole('tab', { name: 'Results' }));
-    expect(within(resultsPanel()).getByText(/Analyze to see results/)).toBeTruthy();
+    expect(within(resultsPanel()).getByText('Running the analysis…')).toBeTruthy();
+    expect(within(resultsPanel()).queryByText('Levered IRR')).toBeNull();
 
-    // Analyze again: current results.
+    // The automatic analysis returns: current results, recalculated.
+    finishAutomatic(HEALTHY);
+    await waitFor(() => {
+      expect(within(resultsPanel()).getByText('Levered IRR')).toBeTruthy();
+    });
+
+    // Analyze again: current results, from a fresh call.
+    const before = mockAnalyze.mock.calls.length;
     mockAnalyze.mockResolvedValue(HEALTHY);
     await reopened.click(screen.getByRole('button', { name: /^Analyz/i }));
+    await waitFor(() => {
+      expect(mockAnalyze).toHaveBeenCalledTimes(before + 1);
+    });
     await waitFor(() => {
       expect(within(resultsPanel()).getByText('Levered IRR')).toBeTruthy();
     });

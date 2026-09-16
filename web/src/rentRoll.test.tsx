@@ -67,8 +67,18 @@ let confirmSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.clearAllMocks();
   mockListDeals.mockResolvedValue([]);
+  // Opening a saved deal analyzes it once by itself.
+  mockAnalyze.mockResolvedValue(results());
   confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
+
+/** Opening a saved deal analyzes it once by itself. That call is counted here,
+ * exactly, and then cleared -- so every later count and call index in this file
+ * describes what the test itself did. */
+async function settleAutomaticAnalysis(): Promise<void> {
+  await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+  mockAnalyze.mockClear();
+}
 
 afterEach(() => {
   cleanup();
@@ -266,6 +276,7 @@ async function openSavedDeal() {
   await waitFor(() => {
     expect(screen.getByRole('tablist', { name: 'Lease-Level sections' })).toBeTruthy();
   });
+  await settleAutomaticAnalysis();
   await user.click(screen.getByRole('tab', { name: 'Rent Roll' }));
   return user;
 }

@@ -221,6 +221,11 @@ async function openDeal() {
   await waitFor(() => {
     expect(mockGetDeal).toHaveBeenCalledWith('deal-ll-1');
   });
+  // Opening the saved deal analyzes it once by itself. That call is counted
+  // here, exactly, and then cleared -- so every later count in this file
+  // describes what the test itself did.
+  await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+  mockAnalyze.mockClear();
   return user;
 }
 
@@ -270,6 +275,8 @@ describe('the Lease-Level AI Analyst workspace', () => {
   });
 
   it('37: offers no generate action before an analysis exists', async () => {
+    // The automatic analysis on open stays in flight: no analysis exists yet.
+    mockAnalyze.mockReturnValueOnce(new Promise<LeaseLevelAcquisitionResults>(() => {}));
     const user = await openDeal();
     await openAi(user);
 

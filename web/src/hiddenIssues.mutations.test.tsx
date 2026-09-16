@@ -26,7 +26,7 @@ import issuesSourceText from './leaseLevelIssues.ts?raw';
 import workspaceSourceText from './components/LeaseLevelWorkspace.tsx?raw';
 import { withLfLineEndings } from './testSourceText';
 
-import { HIDDEN_RECOVERY_ISSUE, savedDeal } from './hiddenIssuesFixture';
+import { HIDDEN_RECOVERY_ISSUE, results, savedDeal } from './hiddenIssuesFixture';
 
 // D5.9: source text is normalised to LF where it is loaded, so no assertion in
 // this file depends on how the working tree happens to store a line break.
@@ -54,7 +54,17 @@ const mockListDeals = vi.mocked(listDeals);
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(window, 'confirm').mockReturnValue(true);
+  // Opening a saved deal analyzes it once by itself.
+  mockAnalyze.mockResolvedValue(results());
 });
+
+/** Opening a saved deal analyzes it once by itself. That call is counted here,
+ * exactly, and then cleared -- so every later count and call index in this file
+ * describes what the test itself did. */
+async function settleAutomaticAnalysis(): Promise<void> {
+  await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+  mockAnalyze.mockClear();
+}
 
 afterEach(() => {
   cleanup();
@@ -93,6 +103,7 @@ async function hiddenRecoveryState(issues: LeaseLevelIssue[] = [HIDDEN_RECOVERY_
   await waitFor(() => {
     expect(screen.getByRole('tablist', { name: 'Lease-Level sections' })).toBeTruthy();
   });
+  await settleAutomaticAnalysis();
   await user.click(screen.getByRole('tab', { name: 'Rent Roll' }));
   await user.click(
     within(rows()[0]).getByRole('button', { name: /Edit details for suite 100/ }),
@@ -215,6 +226,7 @@ describe('M4: no duplication between inline and banner', () => {
     await waitFor(() => {
       expect(screen.getByRole('tablist', { name: 'Lease-Level sections' })).toBeTruthy();
     });
+    await settleAutomaticAnalysis();
     await user.click(screen.getByRole('tab', { name: 'Rent Roll' }));
     await user.click(screen.getByRole('button', { name: /^Analyz/i }));
     await waitFor(() => {
@@ -288,6 +300,7 @@ describe('M5: the frontend renders issues, it does not derive them', () => {
     await waitFor(() => {
       expect(screen.getByRole('tablist', { name: 'Lease-Level sections' })).toBeTruthy();
     });
+    await settleAutomaticAnalysis();
     await user.click(screen.getByRole('tab', { name: 'Rent Roll' }));
     await user.click(
       within(rows()[0]).getByRole('button', { name: /Edit details for suite 100/ }),
@@ -369,6 +382,7 @@ describe('M7: the workspace fallback still catches what no row owns', () => {
     await waitFor(() => {
       expect(screen.getByRole('tablist', { name: 'Lease-Level sections' })).toBeTruthy();
     });
+    await settleAutomaticAnalysis();
     await user.click(screen.getByRole('tab', { name: 'Rent Roll' }));
     await user.click(screen.getByRole('button', { name: /^Analyz/i }));
     await waitFor(() => {

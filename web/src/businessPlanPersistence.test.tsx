@@ -480,13 +480,19 @@ describe('every analytical request carries the current plan (PART S, U, V)', () 
   it('Quick: analyze, sensitivity, break-even, fingerprint and the AI Analyst', async () => {
     const user = await launch();
     await open(user, 'Harbor Point');
+    // The automatic analysis on open runs first, carrying the same plan;
+    // counted on its own.
+    await waitFor(() => expect(sent('/break-even').length).toBe(1));
+    expect(sent('/analyze').length).toBe(1);
+    expect(lastSent('/analyze').body?.business_plan).toEqual(referencePlan());
     await analyze(user);
 
     expect(lastSent('/analyze').body).toEqual({
       ...buildAcquisitionRequest(DEFAULT_FORM_VALUES),
       business_plan: referencePlan(),
     });
-    await waitFor(() => expect(sent('/break-even').length).toBe(1));
+    expect(sent('/analyze').length).toBe(2);
+    await waitFor(() => expect(sent('/break-even').length).toBe(2));
     expect(lastSent('/sensitivity/presets').body?.business_plan).toEqual(referencePlan());
     expect(lastSent('/break-even').body?.business_plan).toEqual(referencePlan());
     // The saved, unedited deal refreshes its analysis snapshot: the provenance
@@ -503,12 +509,18 @@ describe('every analytical request carries the current plan (PART S, U, V)', () 
   it('Detailed: analyze, sensitivity and break-even', async () => {
     const user = await launch();
     await open(user, 'Canal Works');
+    // The automatic analysis on open runs first, carrying the same plan;
+    // counted on its own.
+    await waitFor(() => expect(sent('/break-even').length).toBe(1));
+    expect(sent('/analyze').length).toBe(1);
+    expect(lastSent('/analyze').body?.business_plan).toEqual(referencePlan());
     await analyze(user);
     expect(lastSent('/analyze').body).toMatchObject({
       operating_mode: 'detailed',
       business_plan: referencePlan(),
     });
-    await waitFor(() => expect(sent('/break-even').length).toBe(1));
+    expect(sent('/analyze').length).toBe(2);
+    await waitFor(() => expect(sent('/break-even').length).toBe(2));
     expect(lastSent('/sensitivity/presets').body?.business_plan).toEqual(referencePlan());
     expect(lastSent('/break-even').body?.business_plan).toEqual(referencePlan());
   });
@@ -516,6 +528,8 @@ describe('every analytical request carries the current plan (PART S, U, V)', () 
   it('Lease-Level: analyze, the AI Analyst and the snapshot fingerprint', async () => {
     const user = await launch();
     await open(user, 'Fulton Exchange');
+    // The automatic analysis on open, counted on its own.
+    await waitFor(() => expect(sent('/analyze').length).toBe(1));
     await analyze(user);
     expect(lastSent('/analyze').body).toMatchObject({
       operating_mode: 'lease_level',

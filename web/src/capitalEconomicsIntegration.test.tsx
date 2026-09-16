@@ -235,8 +235,10 @@ async function analyzeLeaseLevelCapitalEconomics(user: User): Promise<HTMLElemen
   await waitFor(() =>
     expect(screen.getByRole('tablist', { name: 'Lease-Level sections' })).toBeTruthy(),
   );
-  await user.click(screen.getByRole('button', { name: /^Analyz/i }));
+  // Opening the saved deal analyzes it once by itself; the click is the second call.
   await waitFor(() => expect(analyzeCalls).toBe(1));
+  await user.click(screen.getByRole('button', { name: /^Analyz/i }));
+  await waitFor(() => expect(analyzeCalls).toBe(2));
   const results = await waitFor(() => {
     const node = document.getElementById('lease-level-panel-results');
     expect(node).not.toBeNull();

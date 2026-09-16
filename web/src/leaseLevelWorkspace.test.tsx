@@ -68,6 +68,9 @@ const mockListDeals = vi.mocked(listDeals);
 beforeEach(() => {
   vi.clearAllMocks();
   mockListDeals.mockResolvedValue([]);
+  // Opening a saved deal analyzes it once by itself; tests that care about
+  // that call count it explicitly.
+  mockAnalyze.mockResolvedValue(leaseLevelResults());
 });
 
 afterEach(() => {
@@ -576,6 +579,49 @@ describe('opening a saved Lease-Level deal', () => {
     ).toBe('Value-add reposition of a 1990s suburban office park.');
   });
 
+  it('analyzes itself exactly once when opened, without leaving the section it opened on', async () => {
+    const user = await openSavedDeal();
+
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    const [terms, inputs] = mockAnalyze.mock.calls[0];
+    expect(terms).toEqual(TERMS);
+    expect(inputs.suites).toEqual(SUITES);
+    expect(inputs.leases).toEqual(LEASES);
+    await waitFor(() => {
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
+    });
+    expect(section('Acquisition & Debt').getAttribute('aria-selected')).toBe('true');
+
+    // Moving between sections and workspaces never runs it again.
+    await user.click(section('Rent Roll'));
+    await user.click(section('Results'));
+    await user.click(section('Acquisition & Debt'));
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
+  });
+
+  it('never analyzes a saved deal whose vacant suite has no stated treatment, and marks nothing', async () => {
+    const deal = savedLeaseLevelDeal();
+    const blank = {
+      ...deal,
+      suites: (deal.suites ?? []).map((suite, index) =>
+        index === 3 ? { ...suite, initial_vacancy: null } : suite,
+      ),
+    };
+    mockListDeals.mockResolvedValue([blank]);
+    mockGetDeal.mockResolvedValue(blank);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Fulton Exchange');
+    await user.click(screen.getByText('Fulton Exchange'));
+    await waitFor(() => {
+      expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
+    });
+    await screen.findByText(/^Saved/);
+
+    expect(mockAnalyze).not.toHaveBeenCalled();
+    expect(document.querySelector('.error-banner')).toBeNull();
+  });
+
   it('never reads a Quick or Detailed field', async () => {
     mockListDeals.mockResolvedValue([savedLeaseLevelDeal()]);
     mockGetDeal.mockResolvedValue(savedLeaseLevelDeal());
@@ -606,15 +652,18 @@ describe('the held rent roll', () => {
     await waitFor(() => {
       expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
+    // The automatic analysis on open, counted on its own.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     await user.clear(field(TERMS_PURCHASE_PRICE));
     await user.type(field(TERMS_PURCHASE_PRICE), '44000000');
 
     await user.click(analyzeButton());
 
     await waitFor(() => {
-      expect(mockAnalyze).toHaveBeenCalled();
+      expect(mockAnalyze).toHaveBeenCalledTimes(2);
     });
-    const [terms, inputs] = mockAnalyze.mock.calls[0];
+    expect(mockAnalyze.mock.calls[0][0].purchase_price).toBe(42_500_000);
+    const [terms, inputs] = mockAnalyze.mock.calls[1];
     expect(terms.purchase_price).toBe(44_000_000);
     expect(inputs.suites).toEqual(SUITES);
     expect(inputs.leases).toEqual(LEASES);
@@ -627,16 +676,18 @@ describe('the held rent roll', () => {
     await waitFor(() => {
       expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
+    // The automatic analysis on open, counted on its own.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     await user.click(section('Market Leasing'));
     await user.clear(field(MARKET_RENT));
     await user.type(field(MARKET_RENT), '36');
 
     await user.click(analyzeButton());
     await waitFor(() => {
-      expect(mockAnalyze).toHaveBeenCalled();
+      expect(mockAnalyze).toHaveBeenCalledTimes(2);
     });
 
-    const [, inputs] = mockAnalyze.mock.calls[0];
+    const [, inputs] = mockAnalyze.mock.calls[1];
     // The property default changed; the suite that overrides it did not. An
     // override is all-or-nothing by design, and editing the default must never
     // reach into one.
@@ -1058,14 +1109,17 @@ describe('mutation kills', () => {
     await waitFor(() => {
       expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000');
     });
+    // The automatic analysis on open, counted on its own.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
     await user.click(analyzeButton());
 
+    // The click is the second call: routed anywhere else, this stays at one.
     await waitFor(() => {
-      expect(mockAnalyze).toHaveBeenCalledTimes(1);
+      expect(mockAnalyze).toHaveBeenCalledTimes(2);
     });
     // And the Lease-Level runner received the Lease-Level inputs, not a
     // fabricated Quick or Detailed shape.
-    const [, inputs] = mockAnalyze.mock.calls[0];
+    const [, inputs] = mockAnalyze.mock.calls[1];
     expect(Object.keys(inputs).sort()).toEqual([
       'leases',
       'market_leasing',

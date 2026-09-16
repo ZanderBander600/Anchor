@@ -38,11 +38,13 @@ import type {
   LeaseLevelTwoWaySensitivityResult,
 } from './leaseLevelSensitivityTypes';
 import type {
+  LeaseLevelAcquisitionResults,
   LeaseRequest,
   MarketLeasingAssumptionsRequest,
   SuiteRequest,
 } from './leaseLevelTypes';
 import type { AcquisitionTermsRequest, Deal } from './types';
+import fixture from './leaseLevelResultsFixture.json';
 
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');
@@ -84,6 +86,9 @@ const mockTwoWay = vi.mocked(runLeaseLevelTwoWaySensitivity);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Opening a saved deal analyzes it once by itself; tests that care about
+  // that call count it explicitly.
+  mockAnalyze.mockResolvedValue(fixture.healthy as unknown as LeaseLevelAcquisitionResults);
 });
 
 afterEach(() => {
@@ -598,12 +603,17 @@ describe('one-way candidate values are absolute', () => {
     // The same request Analyze would have submitted, field for field.
     await user.click(screen.getByRole('tab', { name: 'Underwrite' }));
     await user.click(screen.getByRole('button', { name: /^Analyz/i }));
-    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
+    // The first call is the automatic analysis on open; the click is the second.
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(2));
+    expect(mockAnalyze.mock.calls[1][0]).toEqual(terms);
+    expect(mockAnalyze.mock.calls[1][1]).toEqual(inputs);
     expect(mockAnalyze.mock.calls[0][0]).toEqual(terms);
     expect(mockAnalyze.mock.calls[0][1]).toEqual(inputs);
   });
 
   it('M29: needs no prior Analyze', async () => {
+    // The automatic analysis on open never completes, so no analysis exists.
+    mockAnalyze.mockReturnValueOnce(new Promise<LeaseLevelAcquisitionResults>(() => {}));
     const user = await openRisk();
     mockOneWay.mockResolvedValue(oneWayResult());
 
@@ -611,8 +621,9 @@ describe('one-way candidate values are absolute', () => {
     await runIn(user, panel('one-way'));
 
     await waitFor(() => expect(mockOneWay).toHaveBeenCalledTimes(1));
-    // No analysis was ever requested, and the API contract does not require one.
-    expect(mockAnalyze).not.toHaveBeenCalled();
+    // No analysis ever completed -- the one call is the automatic analysis,
+    // still in flight -- and the API contract does not require one.
+    expect(mockAnalyze).toHaveBeenCalledTimes(1);
   });
 });
 
