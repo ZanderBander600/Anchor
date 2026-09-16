@@ -2322,6 +2322,10 @@ describe('Excel ingestion workflow', () => {
     expect(mockAnalyze).not.toHaveBeenCalled();
   });
 
+  // Integration-heavy end-to-end workflow: it renders the whole App, analyses,
+  // uploads a workbook, completes the review and approves it. Its behaviour is
+  // valid -- this file passes on its own -- but its wall time can exceed the 5s
+  // unit-test default while the complete suite is running.
   it('deterministic results remain visible immediately after upload, and clear only once the review is approved', async () => {
     const user = userEvent.setup();
     mockAnalyze.mockResolvedValue(makeResults());
@@ -2352,7 +2356,7 @@ describe('Excel ingestion workflow', () => {
     await waitFor(() => {
       expect(screen.queryByText('7.91%')).toBeNull();
     });
-  });
+  }, 30_000);
 
   it('shows a review-oriented success message naming the uploaded file, not an immediate-population message', async () => {
     const user = userEvent.setup();
