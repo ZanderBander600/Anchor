@@ -41,6 +41,7 @@ from _p7_2_fixtures import (  # type: ignore[import-not-found]
     P7_2_TABLES,
     P7_4_TABLES,
     P7_6_TABLES,
+    P7_8_TABLES,
     legacy_rows,
     row_counts,
     rows,
@@ -138,9 +139,12 @@ def test_the_legacy_database_is_genuinely_v7(legacy: tuple[Path, dict[str, Any]]
 
 
 def test_the_migration_adds_exactly_five_empty_tables_and_rewrites_no_row(legacy: tuple[Path, dict[str, Any]]) -> None:
-    """P7.2's five tables -- and, since P7.4 migrates the same v7 database on
-    to schema 9, P7.4's eight Strategy tables beside them, every one empty. P7.4
-    carries its own v8 -> v9 oracle (``tests/test_p7_4_compatibility_oracle.py``)."""
+    """P7.2's five tables -- and, since later gates migrate the same v7 database
+    on to schema 11, P7.4's eight Strategy tables, P7.6's five Investment
+    sidecars and P7.8B's six Capital Structure tables beside them, every one
+    empty. Each of those gates carries its own oracle for its own step
+    (``tests/test_p7_4_compatibility_oracle.py`` and its P7.6 / P7.8
+    counterparts)."""
 
     db, _ = legacy
     before_tables, before_rows = table_names(db), legacy_rows(db)
@@ -148,22 +152,25 @@ def test_the_migration_adds_exactly_five_empty_tables_and_rewrites_no_row(legacy
     store.list_deals(db_path=db)  # any store call migrates
     migrated_schema, migrated_rows = _schema(db), legacy_rows(db)
 
-    assert _version(db) == 10  # P7.4 and P7.6 migrate the same v7 database on to schema 10
-    assert table_names(db) == before_tables | set(P7_2_TABLES) | set(P7_4_TABLES) | set(P7_6_TABLES)
+    assert _version(db) == 11  # P7.4, P7.6 and P7.8B migrate the same v7 database on to schema 11
+    assert table_names(db) == (
+        before_tables | set(P7_2_TABLES) | set(P7_4_TABLES) | set(P7_6_TABLES) | set(P7_8_TABLES)
+    )
+    assert {table: rows(db, table) for table in P7_8_TABLES} == dict.fromkeys(P7_8_TABLES, [])
     assert {table: rows(db, table) for table in P7_6_TABLES} == dict.fromkeys(P7_6_TABLES, [])
     assert row_counts(db) == _EMPTY
     assert {table: rows(db, table) for table in P7_4_TABLES} == dict.fromkeys(P7_4_TABLES, [])
     assert migrated_rows == before_rows
     for _ in range(3):
         store.list_deals(db_path=db)
-        assert (_version(db), _schema(db), legacy_rows(db)) == (10, migrated_schema, migrated_rows)
+        assert (_version(db), _schema(db), legacy_rows(db)) == (11, migrated_schema, migrated_rows)
 
     connection = sqlite3.connect(db)
     connection.row_factory = sqlite3.Row
     store._migrate(connection)
     connection.commit()
     connection.close()
-    assert (_version(db), _schema(db), legacy_rows(db)) == (10, migrated_schema, migrated_rows)
+    assert (_version(db), _schema(db), legacy_rows(db)) == (11, migrated_schema, migrated_rows)
 
 
 # =============================================================================
@@ -182,7 +189,7 @@ def test_every_legacy_response_is_identical_after_migration(
     db, manifest = legacy
     replayed = _replay(client, manifest["exchanges"])
 
-    assert _version(db) == 10  # P7.4 and P7.6 migrate the same v7 database on to schema 10
+    assert _version(db) == 11  # P7.4, P7.6 and P7.8B migrate the same v7 database on to schema 11
     mismatched = [
         (exchange["method"], exchange["path"])
         for exchange, now in zip(manifest["exchanges"], replayed, strict=True)

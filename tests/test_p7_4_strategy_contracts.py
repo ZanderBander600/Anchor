@@ -85,23 +85,37 @@ def test_every_contract_is_frozen_keyword_only_and_slotted() -> None:
 
 
 def test_the_definition_carries_identity_naming_and_overlays_and_no_unit() -> None:
+    """P7.8B appends ``root_overlays``, the Investment-root overlay collection,
+    and nothing else: the Strategy is still addressed by its own id, its Unit
+    overlays are still ``overlays``, and it still carries no ``unit_id`` of its
+    own."""
+
     assert [field.name for field in dataclasses.fields(StrategyDefinition)] == [
-        "strategy_id", "name", "description", "overlays",
+        "strategy_id", "name", "description", "overlays", "root_overlays",
     ]
     assert [field.name for field in dataclasses.fields(StrategyOverlay)] == ["unit_id", "domain", "content"]
     unit_field = dataclasses.fields(StrategyOverlay)[0]
     assert unit_field.default is dataclasses.MISSING and unit_field.default_factory is dataclasses.MISSING
 
 
-def test_exactly_the_five_p7_4_domains_exist() -> None:
+def test_exactly_the_five_unit_domains_and_the_one_investment_root_domain_exist() -> None:
+    """The five P7.4 Unit domains, in declaration order, and -- from P7.8B --
+    ``CAPITAL_STRUCTURE``, the first Investment-root domain. Only the Unit
+    domains own engine input fields: a root domain replaces a downstream
+    contract, not a field of one."""
+
     assert [(domain.name, domain.value) for domain in StrategyDomain] == [
         ("ACQUISITION", "acquisition"),
         ("FINANCING", "financing"),
         ("BUSINESS_PLAN", "business_plan"),
         ("OPERATING_OUTCOME", "operating_outcome"),
         ("DISPOSITION", "disposition"),
+        ("CAPITAL_STRUCTURE", "capital_structure"),
     ]
-    for later in ("unit_selection", "capital_structure", "partnership"):
+    assert tuple(STRATEGY_DOMAIN_FIELDS) == tuple(
+        domain for domain in StrategyDomain if domain is not StrategyDomain.CAPITAL_STRUCTURE
+    )
+    for later in ("unit_selection", "partnership"):
         assert later not in {domain.value for domain in StrategyDomain}
 
 
@@ -115,9 +129,9 @@ def test_the_base_strategy_key_is_reserved() -> None:
 
 
 def test_no_field_is_writable_by_two_domains() -> None:
-    for first, second in itertools.combinations(StrategyDomain, 2):
+    for first, second in itertools.combinations(STRATEGY_DOMAIN_FIELDS, 2):
         assert not set(STRATEGY_DOMAIN_FIELDS[first]) & set(STRATEGY_DOMAIN_FIELDS[second]), (first, second)
-    everything = [field for domain in StrategyDomain for field in STRATEGY_DOMAIN_FIELDS[domain]]
+    everything = [field for domain in STRATEGY_DOMAIN_FIELDS for field in STRATEGY_DOMAIN_FIELDS[domain]]
     assert len(everything) == len(set(everything))
 
 

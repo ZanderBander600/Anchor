@@ -50,6 +50,16 @@ import type {
 } from './strategyTypes';
 import type { DecisionMatrixReport } from './decisionTypes';
 import type {
+  CapitalStructure,
+  CapitalStructureIssue,
+  DealCapitalStructure,
+  InvestmentCapitalStructure,
+  PositionDecisionMatrixReport,
+  PositionPerspectives,
+  StructuredVariantAnalysis,
+  StructuredVariantFingerprint,
+} from './capitalTypes';
+import type {
   InvestmentAddUnitRequest,
   InvestmentCreateRequest,
   InvestmentDecisionMatrixReport,
@@ -2001,6 +2011,12 @@ async function strategyFetch(
 
 /** Exactly the three keys a Strategy body may carry. */
 function strategyBody(method: 'POST' | 'PUT', draft: StrategyDraft): RequestInit {
+  // P7.8B adds a fourth, `root_overlays`, sent **only when the Strategy states
+  // one**. Sending an empty array would say "this Strategy replaces the Base
+  // Capital Structure with nothing", which is a different decision from
+  // inheriting it -- so omitting the key is how a Strategy inherits.
+  const stated =
+    draft.root_overlays === undefined ? {} : { root_overlays: draft.root_overlays };
   return {
     method,
     headers: { 'Content-Type': 'application/json' },
@@ -2008,6 +2024,7 @@ function strategyBody(method: 'POST' | 'PUT', draft: StrategyDraft): RequestInit
       name: draft.name,
       description: draft.description,
       overlays: draft.overlays,
+      ...stated,
     }),
   };
 }
@@ -2092,6 +2109,215 @@ export async function analyzeDecisionMatrix(investmentId: string): Promise<Decis
     'The decision matrix could not be completed',
   );
   return (await response.json()) as DecisionMatrixReport;
+}
+
+// =============================================================================
+// Phase 7 Gate P7.8B -- the Capital Structure client.
+//
+// The P7.8B routes: the persisted Base Capital Structure (through the Deal's
+// own door or the Investment's), the structured variant's two fingerprints and
+// its analysis, the addressable Position perspectives, and the POSITION
+// Decision Matrix. Each function sends a typed body and returns what the
+// backend returned.
+//
+// **Nothing here calculates.** Every funded amount, IRR, MOIC, attachment,
+// coverage, Funding Requirement and Common Equity figure is the backend's; this
+// client carries JSON.
+//
+// **Refusals keep their structure.** A refused Capital Structure carries the
+// issues that refused it -- the P7.7 contract rules, the P7.8A execution rules
+// or a position-identity conflict -- so the editor can show them against the
+// position they concern instead of one flattened sentence.
+// =============================================================================
+
+/** A refused Capital Structure request, with the backend's own issues. */
+export class CapitalStructureError extends Error {
+  readonly issues: CapitalStructureIssue[];
+
+  constructor(message: string, issues: CapitalStructureIssue[] = []) {
+    super(message);
+    this.name = 'CapitalStructureError';
+    this.issues = issues;
+  }
+}
+
+function capitalIssues(detail: unknown): CapitalStructureIssue[] {
+  if (!Array.isArray(detail)) {
+    return [];
+  }
+  return detail.flatMap((entry) => {
+    if (typeof entry !== 'object' || entry === null || !('message' in entry)) {
+      return [];
+    }
+    const issue = entry as Partial<CapitalStructureIssue> & { path?: string | null };
+    return [
+      {
+        code: typeof issue.code === 'string' ? issue.code : '',
+        message: String(issue.message),
+        position_id: typeof issue.position_id === 'string' ? issue.position_id : null,
+        field: typeof issue.field === 'string' ? issue.field : (issue.path ?? null),
+      },
+    ];
+  });
+}
+
+function capitalMessage(detail: unknown, issues: CapitalStructureIssue[], failureMessage: string): string {
+  if (typeof detail === 'string' && detail !== '') {
+    return detail;
+  }
+  return issues.length === 0 ? failureMessage : issues.map((issue) => issue.message).join('\n');
+}
+
+async function capitalFetch(
+  path: string,
+  init: RequestInit,
+  failureMessage: string,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, init);
+  } catch {
+    throw new CapitalStructureError(NETWORK_ERROR_MESSAGE);
+  }
+  if (!response.ok) {
+    let detail: unknown = null;
+    try {
+      detail = ((await response.json()) as { detail?: unknown }).detail ?? null;
+    } catch {
+      detail = null;
+    }
+    const issues = capitalIssues(detail);
+    throw new CapitalStructureError(capitalMessage(detail, issues, failureMessage), issues);
+  }
+  return response;
+}
+
+function structureBody(capitalStructure: CapitalStructure): RequestInit {
+  return {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ positions: capitalStructure.positions }),
+  };
+}
+
+/** `GET /deals/{id}/capital-structure`. Read-only: a Deal with no structured
+ * capital reports the neutral empty structure and no Investment, and asking
+ * gives it neither. */
+export async function readDealCapitalStructure(dealId: string): Promise<DealCapitalStructure> {
+  const response = await capitalFetch(
+    `/deals/${encodeURIComponent(dealId)}/capital-structure`,
+    { method: 'GET' },
+    'The capital structure could not be loaded',
+  );
+  return (await response.json()) as DealCapitalStructure;
+}
+
+/** `PUT /deals/{id}/capital-structure`. The first non-empty save materializes
+ * the Deal's hidden one-unit Investment; an empty save clears the structure and
+ * releases the Deal when nothing else is held. */
+export async function saveDealCapitalStructure(
+  dealId: string,
+  capitalStructure: CapitalStructure,
+): Promise<DealCapitalStructure> {
+  const response = await capitalFetch(
+    `/deals/${encodeURIComponent(dealId)}/capital-structure`,
+    structureBody(capitalStructure),
+    'The capital structure could not be saved',
+  );
+  return (await response.json()) as DealCapitalStructure;
+}
+
+/** `GET /investments/{id}/capital-structure`. */
+export async function readInvestmentCapitalStructure(
+  investmentId: string,
+): Promise<InvestmentCapitalStructure> {
+  const response = await capitalFetch(
+    `/investments/${encodeURIComponent(investmentId)}/capital-structure`,
+    { method: 'GET' },
+    'The capital structure could not be loaded',
+  );
+  return (await response.json()) as InvestmentCapitalStructure;
+}
+
+/** `PUT /investments/{id}/capital-structure`. */
+export async function saveInvestmentCapitalStructure(
+  investmentId: string,
+  capitalStructure: CapitalStructure,
+): Promise<InvestmentCapitalStructure> {
+  const response = await capitalFetch(
+    `/investments/${encodeURIComponent(investmentId)}/capital-structure`,
+    structureBody(capitalStructure),
+    'The capital structure could not be saved',
+  );
+  return (await response.json()) as InvestmentCapitalStructure;
+}
+
+function structuredVariantPath(
+  investmentId: string,
+  strategyId: string,
+  scenarioId: string,
+): string {
+  return `/investments/${encodeURIComponent(investmentId)}/structured-variants/${encodeURIComponent(
+    strategyId,
+  )}/${encodeURIComponent(scenarioId)}`;
+}
+
+/** The variant's two fingerprints, without executing anything. */
+export async function readStructuredVariantFingerprint(
+  investmentId: string,
+  strategyId: string,
+  scenarioId: string,
+): Promise<StructuredVariantFingerprint> {
+  const response = await capitalFetch(
+    `${structuredVariantPath(investmentId, strategyId, scenarioId)}/fingerprint`,
+    { method: 'GET' },
+    'The capital structure fingerprint could not be read',
+  );
+  return (await response.json()) as StructuredVariantFingerprint;
+}
+
+/** The structured analysis: the existing Project analysis, then the approved
+ * executor. An unresolved Funding Requirement is a successful analysis with N/A
+ * returns, never an error. */
+export async function analyzeStructuredVariant(
+  investmentId: string,
+  strategyId: string,
+  scenarioId: string,
+): Promise<StructuredVariantAnalysis> {
+  const response = await capitalFetch(
+    `${structuredVariantPath(investmentId, strategyId, scenarioId)}/analysis`,
+    { method: 'POST' },
+    'The capital structure analysis could not be completed',
+  );
+  return (await response.json()) as StructuredVariantAnalysis;
+}
+
+/** `GET /investments/{id}/position-perspectives` -- the addressable positions,
+ * by name, for the Position matrix selector. */
+export async function listPositionPerspectives(
+  investmentId: string,
+): Promise<PositionPerspectives> {
+  const response = await capitalFetch(
+    `/investments/${encodeURIComponent(investmentId)}/position-perspectives`,
+    { method: 'GET' },
+    'The capital positions could not be loaded',
+  );
+  return (await response.json()) as PositionPerspectives;
+}
+
+/** `POST /investments/{id}/position-decision-matrix/{position_id}`. */
+export async function analyzePositionDecisionMatrix(
+  investmentId: string,
+  positionId: string,
+): Promise<PositionDecisionMatrixReport> {
+  const response = await capitalFetch(
+    `/investments/${encodeURIComponent(investmentId)}/position-decision-matrix/${encodeURIComponent(
+      positionId,
+    )}`,
+    { method: 'POST' },
+    'The position decision matrix could not be completed',
+  );
+  return (await response.json()) as PositionDecisionMatrixReport;
 }
 
 // =============================================================================

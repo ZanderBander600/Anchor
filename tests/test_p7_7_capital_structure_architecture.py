@@ -34,9 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from anchor.analysis.strategy import StrategyDomain
 from anchor.capital_structure import ShortfallResolution
-from anchor.deals import store
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -119,6 +117,20 @@ def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
 
 def _current(path: str) -> str:
     return (_PROJECT_ROOT / path).read_bytes().decode("utf-8").replace("\r\n", "\n")
+
+
+def _merged(path: str) -> str:
+    """``path`` as P7.7 left it, at the P7.7 merge.
+
+    Re-pinned at P7.8B: the guards that describe what P7.7 did *not* add -- a
+    schema, a route, a Strategy domain, an upstream importer -- read P7.7's own
+    committed tree, exactly as its ledger does. P7.8B adds all four under its
+    own gate's approval, and its own guards pin them
+    (``tests/test_p7_8_structured_position_architecture.py``). The P7.7 modules
+    themselves are still judged in the working tree, where they are still
+    byte-identical to this commit."""
+
+    return _git("show", f"{_P7_7_MERGE}:{path}").replace("\r\n", "\n")
 
 
 def _tree(path: str) -> ast.Module:
@@ -318,11 +330,23 @@ def test_only_calculation_free_names_are_imported_from_upstream() -> None:
 
 
 def test_nothing_upstream_imports_the_capital_structure() -> None:
+    """At P7.7, nothing outside the package imported it: the foundation was
+    reachable from no service, route or store, which is what made it provably
+    downstream. Re-pinned at P7.8B, which connects it to exactly the layers its
+    own ledger names -- and whose guard pins that list."""
+
+    files = [
+        path
+        for path in _git("ls-tree", "-r", "--name-only", _P7_7_MERGE, "src/anchor").split()
+        if path.endswith(".py") and not path.startswith(f"{_PACKAGE}/")
+    ]
     importers = sorted(
-        path.relative_to(_PROJECT_ROOT).as_posix()
-        for path in (_PROJECT_ROOT / "src" / "anchor").rglob("*.py")
-        if "capital_structure" not in path.relative_to(_PROJECT_ROOT / "src" / "anchor").parts[:1]
-        and any("capital_structure" in name for name in _imports(ast.parse(path.read_text(encoding="utf-8"))))
+        path
+        for path in files
+        if any(
+            "capital_structure" in name
+            for name in _imports(ast.parse(_git("show", f"{_P7_7_MERGE}:{path}")))
+        )
     )
     assert importers == []
 
@@ -538,7 +562,12 @@ def test_the_later_gate_guards_have_teeth() -> None:
 
 
 def test_no_persistence_schema_or_sql() -> None:
-    assert store._SCHEMA_VERSION == 10
+    """P7.7 persisted nothing: it left the schema where it found it, and none of
+    its modules knows SQL or the store. The schema version is read from P7.7's
+    own merged tree (P7.8B is the gate that adds the Capital Structure tables);
+    the modules are read in the working tree, where they are unchanged."""
+
+    assert re.search(r"^_SCHEMA_VERSION = 10$", _merged("src/anchor/deals/store.py"), re.MULTILINE)
     for path in _MODULES:
         text = " ".join(_strings(_code(path)))
         assert not re.search(r"\b(CREATE|INSERT|SELECT|UPDATE|DELETE|ALTER|DROP)\b", text), path
@@ -546,14 +575,26 @@ def test_no_persistence_schema_or_sql() -> None:
 
 
 def test_no_route_serves_the_capital_structure() -> None:
-    api = _current("src/anchor/api.py")
+    """P7.7 shipped no product surface: its merged ``api.py`` names no Capital
+    Structure route, path or contract."""
+
+    api = _merged("src/anchor/api.py")
     assert "capital_structure" not in api and "capital-position" not in api and "capital-structure" not in api
 
 
 def test_no_strategy_capital_structure_domain_is_wired() -> None:
-    assert {domain.value for domain in StrategyDomain} == {
-        "acquisition", "financing", "business_plan", "operating_outcome", "disposition",
-    }
+    """P7.7 wired no Strategy domain: its merged ``strategy.py`` still declares
+    exactly the five P7.4 Unit domains."""
+
+    strategy = ast.parse(_merged("src/anchor/analysis/strategy.py"))
+    (domains,) = [
+        node
+        for node in ast.walk(strategy)
+        if isinstance(node, ast.ClassDef) and node.name == "StrategyDomain"
+    ]
+    assert {
+        ast.literal_eval(node.value) for node in domains.body if isinstance(node, ast.Assign)
+    } == {"acquisition", "financing", "business_plan", "operating_outcome", "disposition"}
 
 
 def test_the_p7_6_decision_matrix_is_untouched() -> None:

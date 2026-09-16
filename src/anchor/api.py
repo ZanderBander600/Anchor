@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping
+from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from io import BytesIO
@@ -21,6 +22,7 @@ from typing import Any
 
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import TypeAdapter
 from starlette.datastructures import Headers
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -84,11 +86,44 @@ from .analysis.strategy import (
     AcquisitionChoice,
     DispositionChoice,
     FinancingChoice,
+    InvestmentStrategyOverlay,
     OperatingOutcome,
     OperatingOutcomeSet,
     StrategyDomain,
     StrategyOverlay,
     StrategyValidationError,
+)
+from .capital_structure.contracts import (
+    CapitalPosition,
+    CapitalStructure,
+    CapitalStructureValidationError,
+    DebtTerms,
+    FixedAmount,
+    FundingEvent,
+    HoldYearPeriod,
+    ModelMonthPeriod,
+    PctOfPrice,
+    PctOfValue,
+    PositionClass,
+    PositionFee,
+    PositionScope,
+    PreferredEquityTerms,
+    ScopeKind,
+    ShortfallResolution,
+    TimingBasis,
+    UnsupportedCapitalPositionError,
+)
+from .capital_structure.contracts import AccrualConvention as PreferredAccrualConvention
+from .capital_structure.execution_contracts import (
+    CapitalStructureExecutionError,
+    ExecutionIssueCode,
+)
+from .deals.capital_structure_codec import FundingAmountRuleKind, PositionTermsKind
+from .deals.position_identity import PositionIdentityConflictError
+from .deals.structured_variants import (
+    analyze_structured_variant,
+    position_perspectives,
+    structured_variant_fingerprint,
 )
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError, SnapshotValidationError
@@ -142,9 +177,11 @@ from .deals.contracts import (
     InvestmentScenario,
     InvestmentStrategy,
     InvestmentStructureError,
+    PositionPerspectiveNotFoundError,
     ScenarioNotFoundError,
     StrategyNotFoundError,
 )
+from .deals.decision_matrix import analyze_position_decision_matrix
 from .deals.contracts import InvestmentUnitNotFoundError, VisibleInvestment
 from .investment import (
     InvestmentTransactionCost,
@@ -2584,7 +2621,7 @@ def scenario_target_catalog() -> dict[str, list[_ScenarioTargetEntry]]:
 #: Literal tuples, so an unknown key is always refused rather than ignored. A
 #: whole-domain overlay's content keys are its contract's own fields
 #: (``STRATEGY_DOMAIN_FIELDS``), never restated here.
-_STRATEGY_FIELDS = ("name", "description", "overlays")
+_STRATEGY_FIELDS = ("name", "description", "overlays", "root_overlays")
 _STRATEGY_OVERLAY_FIELDS = ("unit_id", "domain", "content")
 _OPERATING_OUTCOME_CONTENT_FIELDS = ("outcomes",)
 _OPERATING_OUTCOME_FIELDS = ("target", "operation", "value")
@@ -2709,15 +2746,20 @@ def _strategy_content(domain: Any, raw: Any, where: str) -> Any:
 
 def _strategy_request(
     payload: dict[str, Any],
-) -> tuple[Any, Any, tuple[StrategyOverlay, ...]]:
-    """``(name, description, overlays)`` from a Strategy body, or a structural
-    422. No contract rule is applied here."""
+) -> tuple[Any, Any, tuple[StrategyOverlay, ...], tuple[InvestmentStrategyOverlay, ...]]:
+    """``(name, description, overlays, root_overlays)`` from a Strategy body, or
+    a structural 422. No contract rule is applied here.
+
+    ``root_overlays`` (P7.8B) carries the Strategy's Investment-root
+    replacements. Omitting it is inheriting the Base Capital Structure; stating
+    one whose structure has no position is the explicit "no structured
+    capital"."""
 
     unknown = sorted(key for key in payload if key not in _STRATEGY_FIELDS)
     if unknown:
         raise _structural_error(
             f"Unknown strategy field(s): {', '.join(unknown)}. A strategy body holds "
-            "only 'name', 'description' and 'overlays'."
+            "only 'name', 'description', 'overlays' and 'root_overlays'."
         )
     raw_overlays = payload.get("overlays", [])
     if not isinstance(raw_overlays, list):
@@ -2742,7 +2784,12 @@ def _strategy_request(
                 content=_strategy_content(domain, raw["content"], f"{where}.content"),
             )
         )
-    return payload.get("name"), payload.get("description"), tuple(overlays)
+    return (
+        payload.get("name"),
+        payload.get("description"),
+        tuple(overlays),
+        _strategy_root_overlays(payload),
+    )
 
 
 def _strategy_validation_error_response(error: StrategyValidationError) -> HTTPException:
@@ -2778,17 +2825,68 @@ class _DealStrategies:
     strategies: tuple[InvestmentStrategy, ...]
 
 
-@app.post("/deals/{deal_id}/strategies", response_model=InvestmentStrategy)
-def create_deal_strategy(deal_id: str, payload: dict[str, Any] = Body(...)) -> InvestmentStrategy:
+#: The serializers the Strategy responses shape by hand (P7.8B). A Strategy's
+#: own Capital Structure is a typed union, which pydantic would serialize
+#: without its ``kind`` discriminator, so those responses are built here
+#: instead: the same pydantic dump for everything that existed before -- so a
+#: Strategy that states no structure answers byte for byte as it always did --
+#: and the explicit ``_wire`` encoding for the structure itself.
+_STRATEGY_RESPONSE = TypeAdapter(InvestmentStrategy)
+_DEAL_STRATEGIES_RESPONSE = TypeAdapter(_DealStrategies)
+
+
+def _strategy_payload(record: InvestmentStrategy) -> dict[str, Any]:
+    """One persisted Strategy on the wire.
+
+    ``root_overlays`` appears **only when the Strategy states one**: an empty
+    key would make "inherits the Base Capital Structure" and "this gate added a
+    field" indistinguishable to a reader, and would change every existing
+    Strategy response for a Strategy that has no structured capital at all."""
+
+    root_overlays = record.strategy.root_overlays
+    payload = _STRATEGY_RESPONSE.dump_python(
+        dataclasses.replace(
+            record, strategy=dataclasses.replace(record.strategy, root_overlays=())
+        ),
+        mode="json",
+    )
+    payload["strategy"].pop("root_overlays", None)
+    if root_overlays:
+        payload["strategy"]["root_overlays"] = [
+            {"domain": overlay.domain.value, "content": _wire(overlay.content)}
+            for overlay in root_overlays
+        ]
+    return payload
+
+
+def _deal_strategies_payload(
+    deal_id: str, investment_id: str | None, strategies: tuple[InvestmentStrategy, ...]
+) -> dict[str, Any]:
+    payload = _DEAL_STRATEGIES_RESPONSE.dump_python(
+        _DealStrategies(deal_id=deal_id, investment_id=investment_id, strategies=()),
+        mode="json",
+    )
+    payload["strategies"] = [_strategy_payload(record) for record in strategies]
+    return payload
+
+
+@app.post("/deals/{deal_id}/strategies", response_model=None)
+def create_deal_strategy(deal_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Create a Strategy for the Deal ``deal_id``. A Deal with no Investment
     gains the hidden one-unit wrapper in the same transaction; a Deal whose
     Scenarios already created one reuses it. An invalid Strategy leaves nothing
     behind."""
 
-    name, description, overlays = _strategy_request(payload)
+    name, description, overlays, root_overlays = _strategy_request(payload)
     try:
-        return investment_store.create_strategy_for_deal(
-            deal_id, name=name, description=description, overlays=overlays
+        return _strategy_payload(
+            investment_store.create_strategy_for_deal(
+                deal_id,
+                name=name,
+                description=description,
+                overlays=overlays,
+                root_overlays=root_overlays,
+            )
         )
     except DealNotFoundError as error:
         raise _not_found(error) from None
@@ -2796,10 +2894,12 @@ def create_deal_strategy(deal_id: str, payload: dict[str, Any] = Body(...)) -> I
         raise _investment_structure_conflict(error) from None
     except StrategyValidationError as error:
         raise _strategy_validation_error_response(error) from None
+    except PositionIdentityConflictError as error:
+        raise _position_identity_conflict_response(error) from None
 
 
-@app.get("/deals/{deal_id}/strategies", response_model=_DealStrategies)
-def list_strategies_of_deal(deal_id: str) -> _DealStrategies:
+@app.get("/deals/{deal_id}/strategies", response_model=None)
+def list_strategies_of_deal(deal_id: str) -> dict[str, Any]:
     """Read-only: a standalone Deal reports no Investment and no Strategies,
     and gains neither."""
 
@@ -2809,29 +2909,33 @@ def list_strategies_of_deal(deal_id: str) -> _DealStrategies:
         raise _not_found(error) from None
     except InvestmentStructureError as error:
         raise _investment_structure_conflict(error) from None
-    return _DealStrategies(
-        deal_id=deal_id, investment_id=investment_id, strategies=tuple(strategies)
-    )
+    return _deal_strategies_payload(deal_id, investment_id, tuple(strategies))
 
 
-@app.get("/investments/{investment_id}/strategies", response_model=list[InvestmentStrategy])
-def list_investment_strategies(investment_id: str) -> list[InvestmentStrategy]:
+@app.get("/investments/{investment_id}/strategies", response_model=None)
+def list_investment_strategies(investment_id: str) -> list[dict[str, Any]]:
     try:
-        return investment_store.list_strategies(investment_id)
+        return [_strategy_payload(record) for record in investment_store.list_strategies(investment_id)]
     except InvestmentNotFoundError as error:
         raise _not_found(error) from None
     except InvestmentStructureError as error:
         raise _investment_structure_conflict(error) from None
 
 
-@app.post("/investments/{investment_id}/strategies", response_model=InvestmentStrategy)
+@app.post("/investments/{investment_id}/strategies", response_model=None)
 def create_investment_strategy(
     investment_id: str, payload: dict[str, Any] = Body(...)
-) -> InvestmentStrategy:
-    name, description, overlays = _strategy_request(payload)
+) -> dict[str, Any]:
+    name, description, overlays, root_overlays = _strategy_request(payload)
     try:
-        return investment_store.create_strategy(
-            investment_id, name=name, description=description, overlays=overlays
+        return _strategy_payload(
+            investment_store.create_strategy(
+                investment_id,
+                name=name,
+                description=description,
+                overlays=overlays,
+                root_overlays=root_overlays,
+            )
         )
     except InvestmentNotFoundError as error:
         raise _not_found(error) from None
@@ -2839,33 +2943,39 @@ def create_investment_strategy(
         raise _investment_structure_conflict(error) from None
     except StrategyValidationError as error:
         raise _strategy_validation_error_response(error) from None
+    except PositionIdentityConflictError as error:
+        raise _position_identity_conflict_response(error) from None
 
 
-@app.get(
-    "/investments/{investment_id}/strategies/{strategy_id}", response_model=InvestmentStrategy
-)
-def read_investment_strategy(investment_id: str, strategy_id: str) -> InvestmentStrategy:
+@app.get("/investments/{investment_id}/strategies/{strategy_id}", response_model=None)
+def read_investment_strategy(investment_id: str, strategy_id: str) -> dict[str, Any]:
     try:
-        return investment_store.get_strategy(investment_id, strategy_id)
+        return _strategy_payload(investment_store.get_strategy(investment_id, strategy_id))
     except (InvestmentNotFoundError, StrategyNotFoundError) as error:
         raise _not_found(error) from None
     except InvestmentStructureError as error:
         raise _investment_structure_conflict(error) from None
 
 
-@app.put(
-    "/investments/{investment_id}/strategies/{strategy_id}", response_model=InvestmentStrategy
-)
+@app.put("/investments/{investment_id}/strategies/{strategy_id}", response_model=None)
 def update_investment_strategy(
     investment_id: str, strategy_id: str, payload: dict[str, Any] = Body(...)
-) -> InvestmentStrategy:
-    """Replace the Strategy's name, description and whole overlay set; its id
-    is kept."""
+) -> dict[str, Any]:
+    """Replace the Strategy's name, description, whole overlay set and whole
+    Investment-root overlay set; its id is kept. Omitting ``root_overlays`` is
+    the analyst choosing to inherit the Base Capital Structure again."""
 
-    name, description, overlays = _strategy_request(payload)
+    name, description, overlays, root_overlays = _strategy_request(payload)
     try:
-        return investment_store.update_strategy(
-            investment_id, strategy_id, name=name, description=description, overlays=overlays
+        return _strategy_payload(
+            investment_store.update_strategy(
+                investment_id,
+                strategy_id,
+                name=name,
+                description=description,
+                overlays=overlays,
+                root_overlays=root_overlays,
+            )
         )
     except (InvestmentNotFoundError, StrategyNotFoundError) as error:
         raise _not_found(error) from None
@@ -2873,6 +2983,8 @@ def update_investment_strategy(
         raise _investment_structure_conflict(error) from None
     except StrategyValidationError as error:
         raise _strategy_validation_error_response(error) from None
+    except PositionIdentityConflictError as error:
+        raise _position_identity_conflict_response(error) from None
 
 
 @app.delete(
@@ -3439,3 +3551,622 @@ def analyze_visible_investment_decision_matrix(investment_id: str) -> Investment
         raise _investment_structure_conflict(error) from None
     except DecisionMatrixConflictError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from None
+
+
+# =============================================================================
+# Phase 7 Gate P7.8B -- the Capital Structure surface
+#
+# Thin routes over ``anchor.deals.store`` (the persisted structures),
+# ``anchor.deals.structured_variants`` (the resolved structure, the two
+# fingerprints and the P7.8A executor) and ``anchor.deals.decision_matrix`` (the
+# POSITION perspective). This module computes nothing, resolves nothing and
+# adds no second analysis pathway.
+#
+# **One owner, two doors.** A Capital Structure belongs to an Investment
+# (Section 15.1). The ``/deals`` routes are the convenience door for a standalone
+# Deal: the GET never materializes anything, and the first non-empty PUT
+# materializes the hidden one-unit wrapper (Q4) exactly as a first Scenario or
+# Strategy does. A Deal that is a Unit of a visible Investment is refused with
+# 409 and told where its structure lives.
+#
+# **The authoring surface is the executable subset.** Persistence can represent
+# every P7.7 contract, but these routes accept only what P7.8 executes: closing
+# funding, ``FixedAmount`` and ``PctOfPrice``, closing fees, cash-pay debt and
+# explicit preferred terms. Anything else is refused here, with P7.8A's own
+# stable execution codes, rather than stored as something no analysis can run.
+#
+# **Kinds are explicit on the wire.** A typed union is a class in Python and
+# nothing at all in JSON, so every variant carries a ``kind`` discriminator from
+# the one codec (``anchor.deals.capital_structure_codec``). Nothing is inferred
+# from which fields happen to be present.
+# =============================================================================
+
+#: Every typed variant that needs a discriminator on the wire, with the token
+#: the codec (or the P7.7 timing contract) already spells. A dataclass absent
+#: from this map is serialized by its fields alone, because its shape is not a
+#: choice between alternatives.
+_CAPITAL_WIRE_KINDS: Mapping[type, str] = {
+    FixedAmount: FundingAmountRuleKind.FIXED_AMOUNT.value,
+    PctOfPrice: FundingAmountRuleKind.PCT_OF_PRICE.value,
+    PctOfValue: FundingAmountRuleKind.PCT_OF_VALUE.value,
+    DebtTerms: PositionTermsKind.DEBT.value,
+    PreferredEquityTerms: PositionTermsKind.PREFERRED_EQUITY.value,
+    ModelMonthPeriod: TimingBasis.MODEL_MONTH.value,
+    HoldYearPeriod: TimingBasis.HOLD_YEAR.value,
+}
+
+
+def _wire(value: Any) -> Any:
+    """One structured contract as JSON: dataclasses become objects, enums their
+    wire tokens, tuples arrays, and each typed variant carries its ``kind``.
+
+    Explicit rather than ``response_model``: pydantic serializes a union member
+    by its fields, which would put ``{"pct": 0.15}`` on the wire for a
+    percentage funding and ``{"amount": 1500000.0}`` for a fixed one, leaving
+    the reader to guess which rule was authored. It formats and selects; it
+    computes nothing."""
+
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        fields = {
+            field.name: _wire(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+        }
+        kind = _CAPITAL_WIRE_KINDS.get(type(value))
+        return fields if kind is None else {"kind": kind, **fields}
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (tuple, list)):
+        return [_wire(item) for item in value]
+    if isinstance(value, Mapping):
+        return {str(key): _wire(item) for key, item in value.items()}
+    return value
+
+
+#: The keys each Capital Structure body may carry. Literal tuples, so an unknown
+#: key is always refused rather than silently ignored -- a misspelled
+#: ``maturity_month`` must never read as "no maturity stated".
+_CAPITAL_STRUCTURE_FIELDS = ("positions",)
+_POSITION_FIELDS = (
+    "position_id",
+    "name",
+    "position_class",
+    "priority",
+    "scope",
+    "funding",
+    "terms",
+    "shortfall_resolution",
+)
+_SCOPE_FIELDS = ("kind", "unit_id")
+_FUNDING_EVENT_FIELDS = ("event_id", "model_month", "sequence", "amount_rule")
+_FEE_FIELDS = ("fee_id", "description", "amount", "model_month", "sequence")
+_FIXED_AMOUNT_FIELDS = ("kind", "amount")
+_PCT_OF_PRICE_FIELDS = ("kind", "pct")
+_DEBT_TERMS_FIELDS = (
+    "kind",
+    "interest_rate",
+    "amortization",
+    "io_period",
+    "maturity_month",
+    "fees",
+    "current_pay_rate",
+    "pik_rate",
+)
+_PREFERRED_TERMS_FIELDS = (
+    "kind",
+    "preferred_rate",
+    "current_pay_rate",
+    "accrual_permitted",
+    "accrual_convention",
+    "redemption_month",
+)
+_STRATEGY_ROOT_OVERLAY_FIELDS = ("domain", "content")
+
+
+def _capital_token(token_type: type[Enum], raw: Any) -> Any:
+    """A wire token as its member, or ``raw`` itself for the P7.7 validator to
+    refuse by name. ``None`` stays ``None``: common equity states no terms and
+    no resolution, and that absence is a real answer, not a missing one."""
+
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        for member in token_type:
+            if member.value == raw:
+                return member
+    return raw
+
+
+def _exact_keys(raw: Any, keys: tuple[str, ...], where: str) -> dict[str, Any]:
+    """``raw`` as an object stating exactly ``keys``. Every field is stated
+    explicitly, including the ones that are ``null``, so nothing a position does
+    not say can be filled in from anywhere else."""
+
+    if not isinstance(raw, dict):
+        raise _structural_error(f"{where} must be an object.")
+    missing = [key for key in keys if key not in raw]
+    extra = sorted(key for key in raw if key not in keys)
+    if missing or extra:
+        raise _structural_error(
+            f"{where} must hold exactly {', '.join(repr(key) for key in keys)} "
+            f"(missing: {missing}; unknown: {extra})."
+        )
+    return raw
+
+
+def _unsupported_authoring(code: ExecutionIssueCode, path: str, message: str) -> HTTPException:
+    """A contract P7.7 can represent and P7.8 does not execute, refused at the
+    door with P7.8A's own stable code -- never stored as an analysis nobody can
+    run."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[{"code": code.value, "path": path, "message": message}],
+    )
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _require_closing(month: Any, code: ExecutionIssueCode, where: str, what: str) -> None:
+    """Closing only (Section 5). A month the contract can hold and the executor
+    cannot schedule is refused here; a non-integer is left to the validator."""
+
+    if isinstance(month, int) and not isinstance(month, bool) and month != 0:
+        raise _unsupported_authoring(
+            code,
+            f"{where}.model_month",
+            f"{what} is authored at closing (model month 0); month {month} arrives with "
+            "scheduled draws.",
+        )
+
+
+def _amount_rule_request(raw: Any, where: str) -> Any:
+    """One funding amount rule, by its explicit ``kind``."""
+
+    if not isinstance(raw, dict):
+        raise _structural_error(f"{where} must be an object.")
+    kind = raw.get("kind")
+    if kind == FundingAmountRuleKind.FIXED_AMOUNT:
+        return FixedAmount(amount=_exact_keys(raw, _FIXED_AMOUNT_FIELDS, where)["amount"])
+    if kind == FundingAmountRuleKind.PCT_OF_PRICE:
+        return PctOfPrice(pct=_exact_keys(raw, _PCT_OF_PRICE_FIELDS, where)["pct"])
+    if kind == FundingAmountRuleKind.PCT_OF_VALUE:
+        raise _unsupported_authoring(
+            ExecutionIssueCode.UNSUPPORTED_AMOUNT_RULE,
+            where,
+            "Funding as a percentage of value arrives with valuation timepoints; author a "
+            "fixed amount or a percentage of price.",
+        )
+    raise _structural_error(
+        f"{where}.kind must be {FundingAmountRuleKind.FIXED_AMOUNT.value!r} or "
+        f"{FundingAmountRuleKind.PCT_OF_PRICE.value!r}; got {kind!r}."
+    )
+
+
+def _funding_event_request(raw: Any, where: str) -> FundingEvent:
+    body = _exact_keys(raw, _FUNDING_EVENT_FIELDS, where)
+    _require_closing(
+        body["model_month"], ExecutionIssueCode.UNSUPPORTED_FUNDING_TIMING, where, "Funding"
+    )
+    return FundingEvent(
+        event_id=body["event_id"],
+        model_month=body["model_month"],
+        sequence=body["sequence"],
+        amount_rule=_amount_rule_request(body["amount_rule"], f"{where}.amount_rule"),
+    )
+
+
+def _fee_request(raw: Any, where: str) -> PositionFee:
+    body = _exact_keys(raw, _FEE_FIELDS, where)
+    _require_closing(body["model_month"], ExecutionIssueCode.UNSUPPORTED_FEE_TIMING, where, "A fee")
+    return PositionFee(
+        fee_id=body["fee_id"],
+        description=body["description"],
+        amount=body["amount"],
+        model_month=body["model_month"],
+        sequence=body["sequence"],
+    )
+
+
+def _debt_terms_request(raw: dict[str, Any], where: str) -> DebtTerms:
+    """Cash-pay debt, exactly (Section 6). The request states the whole approved
+    contract -- ``current_pay_rate`` equal to the coupon and ``pik_rate`` zero --
+    and any other split is refused here rather than stored unexecutable."""
+
+    body = _exact_keys(raw, _DEBT_TERMS_FIELDS, where)
+    interest_rate, current_pay, pik = body["interest_rate"], body["current_pay_rate"], body["pik_rate"]
+    if _is_number(pik) and pik != 0:
+        raise _unsupported_authoring(
+            ExecutionIssueCode.UNSUPPORTED_DEBT_PIK,
+            f"{where}.pik_rate",
+            "P7.8 debt is cash pay: its PIK rate is 0.",
+        )
+    if _is_number(interest_rate) and _is_number(current_pay) and current_pay != interest_rate:
+        raise _unsupported_authoring(
+            ExecutionIssueCode.UNSUPPORTED_DEBT_CURRENT_PAY,
+            f"{where}.current_pay_rate",
+            "P7.8 debt is cash pay: its current-pay rate is its whole interest rate.",
+        )
+    raw_fees = body["fees"]
+    if not isinstance(raw_fees, list):
+        raise _structural_error(f"{where}.fees must be an array of fee objects.")
+    return DebtTerms(
+        interest_rate=interest_rate,
+        amortization=body["amortization"],
+        io_period=body["io_period"],
+        maturity_month=body["maturity_month"],
+        fees=tuple(
+            _fee_request(item, f"{where}.fees[{index}]") for index, item in enumerate(raw_fees)
+        ),
+        current_pay_rate=current_pay,
+        pik_rate=pik,
+    )
+
+
+def _preferred_terms_request(raw: dict[str, Any], where: str) -> PreferredEquityTerms:
+    body = _exact_keys(raw, _PREFERRED_TERMS_FIELDS, where)
+    return PreferredEquityTerms(
+        preferred_rate=body["preferred_rate"],
+        current_pay_rate=body["current_pay_rate"],
+        accrual_permitted=body["accrual_permitted"],
+        accrual_convention=_capital_token(
+            PreferredAccrualConvention, body["accrual_convention"]
+        ),
+        redemption_month=body["redemption_month"],
+    )
+
+
+def _position_terms_request(raw: Any, where: str) -> Any:
+    """A position's typed terms, by explicit ``kind`` -- or ``None``, which is
+    the common-equity marker's honest answer: the residual has no terms."""
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise _structural_error(f"{where} must be an object or null.")
+    kind = raw.get("kind")
+    if kind == PositionTermsKind.DEBT:
+        return _debt_terms_request(raw, where)
+    if kind == PositionTermsKind.PREFERRED_EQUITY:
+        return _preferred_terms_request(raw, where)
+    raise _structural_error(
+        f"{where}.kind must be {PositionTermsKind.DEBT.value!r} or "
+        f"{PositionTermsKind.PREFERRED_EQUITY.value!r}; got {kind!r}."
+    )
+
+
+def _scope_request(raw: Any, where: str) -> PositionScope:
+    body = _exact_keys(raw, _SCOPE_FIELDS, where)
+    return PositionScope(kind=_capital_token(ScopeKind, body["kind"]), unit_id=body["unit_id"])
+
+
+def _capital_position_request(raw: Any, where: str) -> CapitalPosition:
+    body = _exact_keys(raw, _POSITION_FIELDS, where)
+    raw_funding = body["funding"]
+    if not isinstance(raw_funding, list):
+        raise _structural_error(f"{where}.funding must be an array of funding events.")
+    return CapitalPosition(
+        position_id=body["position_id"],
+        name=body["name"],
+        position_class=_capital_token(PositionClass, body["position_class"]),
+        priority=body["priority"],
+        scope=_scope_request(body["scope"], f"{where}.scope"),
+        funding=tuple(
+            _funding_event_request(item, f"{where}.funding[{index}]")
+            for index, item in enumerate(raw_funding)
+        ),
+        terms=_position_terms_request(body["terms"], f"{where}.terms"),
+        shortfall_resolution=_capital_token(ShortfallResolution, body["shortfall_resolution"]),
+    )
+
+
+def _capital_structure_request(raw: Any, where: str) -> CapitalStructure:
+    """A Capital Structure from its wire object, structurally. No contract rule
+    is applied here: the P7.7 validator -- the one authority -- reports every
+    structural problem, in its own deterministic order, as a structured 422."""
+
+    body = _content_object(raw, _CAPITAL_STRUCTURE_FIELDS, where)
+    raw_positions = body.get("positions", [])
+    if not isinstance(raw_positions, list):
+        raise _structural_error(f"{where}.positions must be an array of position objects.")
+    return CapitalStructure(
+        positions=tuple(
+            _capital_position_request(item, f"{where}.positions[{index}]")
+            for index, item in enumerate(raw_positions)
+        )
+    )
+
+
+def _strategy_root_overlays(payload: dict[str, Any]) -> tuple[InvestmentStrategyOverlay, ...]:
+    """A Strategy's Investment-root overlays from its body, structurally.
+
+    Absent or empty means the Strategy states none, which is *inherit the Base
+    Capital Structure*. An overlay whose content is a structure with no position
+    is the other thing entirely -- an explicit, stored "no structured capital" --
+    and the two travel differently all the way down."""
+
+    raw_overlays = payload.get("root_overlays", [])
+    if not isinstance(raw_overlays, list):
+        raise _structural_error("'root_overlays' must be an array of overlay objects.")
+    overlays: list[InvestmentStrategyOverlay] = []
+    for index, raw in enumerate(raw_overlays):
+        where = f"root_overlays[{index}]"
+        body = _exact_keys(raw, _STRATEGY_ROOT_OVERLAY_FIELDS, where)
+        domain = _strategy_domain_token(body["domain"])
+        content = (
+            _capital_structure_request(body["content"], f"{where}.content")
+            if domain is StrategyDomain.CAPITAL_STRUCTURE
+            else body["content"]
+        )
+        overlays.append(InvestmentStrategyOverlay(domain=domain, content=content))
+    return tuple(overlays)
+
+
+def _capital_structure_validation_error_response(
+    error: CapitalStructureValidationError | UnsupportedCapitalPositionError,
+) -> HTTPException:
+    """An invalid Capital Structure as a structured 422: the P7.7 issues, in the
+    validator's own order, each with its stable code and the position it
+    concerns."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "position_id": issue.position_id,
+                "field": issue.field,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _capital_structure_execution_error_response(
+    error: CapitalStructureExecutionError,
+) -> HTTPException:
+    """A valid Capital Structure this Project state cannot execute, as a
+    structured 422 -- an over-funded closing, or a convention P7.8 does not
+    schedule. Deliberately distinct from an invalid contract: the structure is
+    well formed, and what it cannot do depends on the variant."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "position_id": issue.position_id,
+                "field": issue.field,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _position_identity_conflict_response(error: PositionIdentityConflictError) -> HTTPException:
+    """One position id that would name two economic instruments in one
+    Investment (P-8), as a structured 422. The analyst gives the different
+    instrument its own id; no id is ever regenerated for them."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "position_id": issue.position_id,
+                "field": issue.field,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _structured_conflict(error: Exception) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
+
+
+@app.get("/deals/{deal_id}/capital-structure", response_model=None)
+def read_deal_capital_structure(deal_id: str) -> dict[str, Any]:
+    """The Deal's Base Capital Structure, and the hidden Investment that owns it
+    when one exists.
+
+    Read-only and never materializing: a Deal with no structured capital reports
+    the neutral empty structure and no Investment, and asking gives it
+    neither."""
+
+    try:
+        investment_id, structure = investment_store.read_deal_capital_structure(deal_id)
+    except DealNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {
+        "deal_id": deal_id,
+        "investment_id": investment_id,
+        "capital_structure": _wire(structure),
+    }
+
+
+@app.put("/deals/{deal_id}/capital-structure", response_model=None)
+def update_deal_capital_structure(
+    deal_id: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Replace the Deal's Base Capital Structure whole.
+
+    The first non-empty save materializes the hidden one-unit Investment in the
+    same transaction (Q4); an empty save for a Deal that has none creates
+    nothing at all, and an empty save that leaves the wrapper holding no
+    Scenario, Strategy or structure removes the wrapper too. The UI keeps saying
+    "Deal" throughout."""
+
+    structure = _capital_structure_request(payload, "The request body")
+    try:
+        investment_id, saved = investment_store.set_deal_capital_structure(deal_id, structure)
+    except DealNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except (CapitalStructureValidationError, UnsupportedCapitalPositionError) as error:
+        raise _capital_structure_validation_error_response(error) from None
+    except PositionIdentityConflictError as error:
+        raise _position_identity_conflict_response(error) from None
+    return {"deal_id": deal_id, "investment_id": investment_id, "capital_structure": _wire(saved)}
+
+
+@app.get("/investments/{investment_id}/capital-structure", response_model=None)
+def read_investment_capital_structure(investment_id: str) -> dict[str, Any]:
+    """The Investment's Base Capital Structure -- the neutral empty structure
+    when it states none. Read-only."""
+
+    try:
+        structure = investment_store.get_base_capital_structure(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "capital_structure": _wire(structure)}
+
+
+@app.put("/investments/{investment_id}/capital-structure", response_model=None)
+def update_investment_capital_structure(
+    investment_id: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Replace the Investment's Base Capital Structure whole; an empty structure
+    clears it."""
+
+    structure = _capital_structure_request(payload, "The request body")
+    try:
+        saved = investment_store.set_base_capital_structure(investment_id, structure)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except (CapitalStructureValidationError, UnsupportedCapitalPositionError) as error:
+        raise _capital_structure_validation_error_response(error) from None
+    except PositionIdentityConflictError as error:
+        raise _position_identity_conflict_response(error) from None
+    return {"investment_id": investment_id, "capital_structure": _wire(saved)}
+
+
+@app.get(
+    "/investments/{investment_id}/structured-variants/{strategy_id}/{scenario_id}/fingerprint",
+    response_model=None,
+)
+def read_structured_variant_fingerprint(
+    investment_id: str, strategy_id: str, scenario_id: str
+) -> dict[str, Any]:
+    """Both fingerprints of one structured variant, without executing anything.
+
+    The Project fingerprint is the existing one, untouched by the Capital
+    Structure; the structured one is that fingerprint plus the resolved
+    structure's economics, and *is* that fingerprint when the structure is
+    empty. Either identity may be the reserved ``base``."""
+
+    try:
+        return _wire(structured_variant_fingerprint(investment_id, strategy_id, scenario_id))
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+    except InvestmentVariantValidationError as error:
+        raise _investment_variant_validation_error_response(error) from None
+
+
+@app.post(
+    "/investments/{investment_id}/structured-variants/{strategy_id}/{scenario_id}/analysis",
+    response_model=None,
+)
+def analyze_structured_capital_variant(
+    investment_id: str, strategy_id: str, scenario_id: str
+) -> dict[str, Any]:
+    """Analyse one structured variant: the existing Project analysis, then the
+    P7.8A executor on its completed results.
+
+    One route for both roots -- a hidden one-unit Deal and a visible Investment
+    -- because the difference is which executor runs, not which API exists. An
+    unresolved Funding Requirement is a successful analysis with N/A returns and
+    a deterministic reason, never an HTTP error."""
+
+    try:
+        return _wire(analyze_structured_variant(investment_id, strategy_id, scenario_id))
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+    except InvestmentVariantValidationError as error:
+        raise _investment_variant_validation_error_response(error) from None
+    except (CapitalStructureValidationError, UnsupportedCapitalPositionError) as error:
+        raise _capital_structure_validation_error_response(error) from None
+    except CapitalStructureExecutionError as error:
+        raise _capital_structure_execution_error_response(error) from None
+
+
+@app.get("/investments/{investment_id}/position-perspectives", response_model=None)
+def read_position_perspectives(investment_id: str) -> dict[str, Any]:
+    """Every addressable ``POSITION(position_id)`` perspective: the union of the
+    stable ids the Investment's Base structure and its Strategies' own
+    structures hold, with the class and scope each id keeps everywhere.
+
+    Presentation only -- no financial figure is computed here -- so the editor
+    can offer names instead of asking an analyst to choose a UUID."""
+
+    try:
+        perspectives = position_perspectives(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "positions": _wire(perspectives)}
+
+
+@app.post(
+    "/investments/{investment_id}/position-decision-matrix/{position_id}", response_model=None
+)
+def analyze_investment_position_decision_matrix(
+    investment_id: str, position_id: str
+) -> dict[str, Any]:
+    """The Strategy x Scenario matrix of one capital position, derived on
+    request and never stored.
+
+    The Project matrix keeps its own route, its own perspective and its own
+    fingerprint: this one compares a different namespace over the same
+    variants."""
+
+    try:
+        return _wire(analyze_position_decision_matrix(investment_id, position_id))
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+        PositionPerspectiveNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except DecisionMatrixConflictError as error:
+        raise _structured_conflict(error) from None

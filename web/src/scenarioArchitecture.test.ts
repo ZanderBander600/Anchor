@@ -285,11 +285,16 @@ describe('Deal Context is never called a Strategy', () => {
 describe('the Risk workspace', () => {
   it('leads with the Decision Matrix, Strategies and Scenarios, and opens on the matrix in every mode', () => {
     const app = sourceOf('App.tsx');
+    // Re-pinned at P7.8B, which adds Capital Structure as the fourth decision
+    // view. Its position is part of the claim: the decision views stay
+    // together, ahead of Sensitivity and Break-Even, so the analyst reads
+    // "what I choose" before "how it moves".
     expect(app).toContain(
       [
         "  { id: 'matrix', label: 'Decision Matrix' },",
         "  { id: 'strategies', label: 'Strategies' },",
         "  { id: 'scenarios', label: 'Scenarios' },",
+        "  { id: 'capital-structure', label: 'Capital Structure' },",
         "  { id: 'sensitivity', label: 'Sensitivity' },",
         "  { id: 'break-even', label: 'Break-Even' },",
       ].join('\n'),
@@ -299,6 +304,7 @@ describe('the Risk workspace', () => {
         "  { id: 'matrix', label: 'Decision Matrix' },",
         "  { id: 'strategies', label: 'Strategies' },",
         "  { id: 'scenarios', label: 'Scenarios' },",
+        "  { id: 'capital-structure', label: 'Capital Structure' },",
         "  { id: 'sensitivity', label: 'Sensitivity' },",
         '];',
       ].join('\n'),

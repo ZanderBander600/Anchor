@@ -68,11 +68,18 @@ import type { WorkspaceId } from './workspaces';
  * it compares. Sensitivity and break-even keep their own views, state and
  * vocabulary; Return and Debt Sensitivity are one Sensitivity view with its
  * own nested navigation. */
-type RiskViewId = 'matrix' | 'strategies' | 'scenarios' | 'sensitivity' | 'break-even';
+type RiskViewId =
+  | 'matrix'
+  | 'strategies'
+  | 'scenarios'
+  | 'capital-structure'
+  | 'sensitivity'
+  | 'break-even';
 const RISK_VIEWS: { id: RiskViewId; label: string }[] = [
   { id: 'matrix', label: 'Decision Matrix' },
   { id: 'strategies', label: 'Strategies' },
   { id: 'scenarios', label: 'Scenarios' },
+  { id: 'capital-structure', label: 'Capital Structure' },
   { id: 'sensitivity', label: 'Sensitivity' },
   { id: 'break-even', label: 'Break-Even' },
 ];
@@ -86,18 +93,28 @@ const SENSITIVITY_VIEWS: { id: SensitivityViewId; label: string }[] = [
 
 /** Lease-Level Risk has no break-even (D5.7), so its views are the decision
  * views and the existing one-way / two-way sensitivity workspace. */
-type LeaseLevelRiskViewId = 'matrix' | 'strategies' | 'scenarios' | 'sensitivity';
+type LeaseLevelRiskViewId =
+  | 'matrix'
+  | 'strategies'
+  | 'scenarios'
+  | 'capital-structure'
+  | 'sensitivity';
 const LEASE_LEVEL_RISK_VIEWS: { id: LeaseLevelRiskViewId; label: string }[] = [
   { id: 'matrix', label: 'Decision Matrix' },
   { id: 'strategies', label: 'Strategies' },
   { id: 'scenarios', label: 'Scenarios' },
+  { id: 'capital-structure', label: 'Capital Structure' },
   { id: 'sensitivity', label: 'Sensitivity' },
 ];
 
-/** The three views `RiskDecisionWorkspace` owns. They resolve against the saved
- * Deal, never the last Analyze. */
+/** The four views `RiskDecisionWorkspace` owns. They resolve against the saved
+ * Deal, never the last Analyze. P7.8B adds Capital Structure beside them: it is
+ * authored against the saved Deal and analysed on demand, so it is on offer
+ * before any Analyze exactly as the other three are. */
 function isDecisionView(id: string): boolean {
-  return id === 'matrix' || id === 'strategies' || id === 'scenarios';
+  return (
+    id === 'matrix' || id === 'strategies' || id === 'scenarios' || id === 'capital-structure'
+  );
 }
 
 /** Whether the sensitivity and break-even views have outputs to show. The

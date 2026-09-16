@@ -34,6 +34,8 @@
 
 import { businessPlanDraftFromInput, blankBusinessPlanDraft, prepareBusinessPlanInput } from './businessPlan';
 import type { BusinessPlanDraft, BusinessPlanFieldIssue, BusinessPlanInput } from './businessPlan';
+import { EMPTY_FORM, formFromStructure, structureFromForm } from './capitalStructureForm';
+import type { CapitalStructureForm } from './capitalStructureForm';
 import {
   buildDetailedTermsFormValuesFromRequest,
   formatDisplayNumber,
@@ -46,6 +48,7 @@ import { scenarioTargetLabel, scenarioValueToText, scenarioValueToWire } from '.
 import { describeStrategyOverlay } from './strategyCatalog';
 import type {
   InvestmentStrategy,
+  InvestmentStrategyOverlay,
   OperatingOutcome,
   StrategyDomain,
   StrategyDraft,
@@ -91,6 +94,14 @@ export interface StrategyEditorDraft {
   strategyId: string | null;
   name: string;
   description: string;
+  /** The whole-transaction domain, stated once rather than per Unit.
+   *
+   * `inherit` sends no overlay and resolves to the Base structure. `specific`
+   * sends one, replacing the Base structure whole -- and a `specific` choice
+   * whose form holds no position is the different, explicit decision to use no
+   * structured capital at all. The two are different wire bodies because they
+   * are different decisions. */
+  capitalStructure: { choice: 'inherit' | 'specific'; form: CapitalStructureForm };
   /** One section per Unit, in presentation order. A Deal's Strategy has one. */
   units: StrategyUnitDraft[];
 }
@@ -186,7 +197,13 @@ export function blankUnitDraft(unitId: string): StrategyUnitDraft {
 
 /** A new Strategy over these Units, every domain inheriting Base. */
 export function blankStrategyDraft(unitIds: readonly string[]): StrategyEditorDraft {
-  return { strategyId: null, name: '', description: '', units: unitIds.map(blankUnitDraft) };
+  return {
+    strategyId: null,
+    name: '',
+    description: '',
+    capitalStructure: { choice: 'inherit', form: EMPTY_FORM },
+    units: unitIds.map(blankUnitDraft),
+  };
 }
 
 /** A stored decimal rate as the percentage an analyst types. Display units,
@@ -265,10 +282,20 @@ export function draftFromStrategy(
       ids.push(overlay.unit_id);
     }
   }
+  // An absent overlay is the Strategy inheriting the Base structure; a stated
+  // one is its own, restored exactly as saved -- every position keeping the id
+  // the Position matrix addresses it by (P-8).
+  const root = record.strategy.root_overlays?.find(
+    (overlay) => overlay.domain === 'capital_structure',
+  );
   return {
     strategyId: record.strategy.strategy_id,
     name: record.strategy.name,
     description: record.strategy.description ?? '',
+    capitalStructure:
+      root === undefined
+        ? { choice: 'inherit', form: EMPTY_FORM }
+        : { choice: 'specific', form: formFromStructure(root.content) },
     units: ids.map((unitId) =>
       unitDraftFrom(
         unitId,
@@ -293,7 +320,10 @@ export function unitHasEconomicContent(unit: StrategyUnitDraft): boolean {
 /** Whether the draft states any economic assumption on any Unit. A Strategy
  * that states none is valid; it resolves to Base. */
 export function draftHasEconomicContent(draft: StrategyEditorDraft): boolean {
-  return draft.units.some(unitHasEconomicContent);
+  // Stating a whole-transaction domain is economic content even when every Unit
+  // inherits Base: replacing the structure with no structured capital is a real
+  // decision, and it resolves differently from Base.
+  return draft.capitalStructure.choice === 'specific' || draft.units.some(unitHasEconomicContent);
 }
 
 /** Whether making ``domain`` strategy-specific on this Unit must first copy in
@@ -327,6 +357,13 @@ export function domainNeedsBase(unit: StrategyUnitDraft, domain: StrategyDomain)
       return false;
     case 'disposition':
       return !unit.disposition.enabled && unit.disposition.holdPeriod === '';
+    case 'capital_structure':
+      // Not a Unit domain. It replaces a whole-transaction contract whose
+      // positions carry their own scope, so no Unit's saved Base prefills it:
+      // its prefill is a copy of the Base *structure*, made in `useStrategies`.
+      // Stated explicitly rather than left to fall off the end of the switch,
+      // which would answer `undefined` to a question that has an answer.
+      return false;
   }
 }
 
@@ -480,6 +517,22 @@ export function buildStrategyRequest(
     }
   }
 
+  let rootOverlays: InvestmentStrategyOverlay[] | undefined;
+  if (editor.capitalStructure.choice === 'specific') {
+    try {
+      rootOverlays = [
+        { domain: 'capital_structure', content: structureFromForm(editor.capitalStructure.form) },
+      ];
+    } catch (error) {
+      if (!(error instanceof FormValidationError)) {
+        throw error;
+      }
+      // Not a Unit domain, so it belongs with the editor rather than on a
+      // Unit's section.
+      feedback.general.push(error.message);
+    }
+  }
+
   if (
     feedback.general.length > 0 ||
     Object.keys(feedback.byUnit).length > 0 ||
@@ -492,6 +545,8 @@ export function buildStrategyRequest(
       name: editor.name,
       description: editor.description.trim() === '' ? null : editor.description,
       overlays,
+      // Sent only when stated: omitting the key is how a Strategy inherits.
+      ...(rootOverlays === undefined ? {} : { root_overlays: rootOverlays }),
     },
     submittedPlans,
   };

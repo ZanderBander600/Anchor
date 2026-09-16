@@ -1344,7 +1344,12 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     # P7.6 moves it to 10: five additive visible-Investment sidecar tables. A
     # visible Investment's variants are recomputed and never cached, so still no
     # Lease-Level financial result is stored.
-    assert "_SCHEMA_VERSION = 10" in store
+    # P7.8B moves it to 11: six additive Capital Structure tables, holding the
+    # authored *contract* -- positions, funding events, fees and terms. No
+    # structured result is persisted either: a structured analysis is recomputed
+    # on every request (Q14), so the assertion above still forbids naming a
+    # Lease-Level financial result here, undiminished.
+    assert "_SCHEMA_VERSION = 11" in store
     assert "deal_sensitivity_snapshots" in store, (
         "D5.8A should persist the latest Lease-Level sensitivity runs"
     )

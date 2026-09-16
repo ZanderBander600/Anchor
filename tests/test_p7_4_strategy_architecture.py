@@ -337,6 +337,8 @@ def test_no_scenario_operation_logic_or_registry_is_duplicated() -> None:
         "StrategyDomain", "AcquisitionChoice", "FinancingChoice", "OperatingOutcome", "OperatingOutcomeSet",
         "DispositionChoice", "StrategyOverlay", "StrategyDefinition", "StrategyIssueStage", "StrategyIssueCode",
         "StrategyIssue", "StrategyValidationError",
+        # Widened at P7.8B by exactly the Investment-root overlay contract.
+        "InvestmentStrategyOverlay",
     }
     assert not {name for name in classes if name.startswith("Scenario")}
     matches = [ast.unparse(node.subject) for node in ast.walk(_strategy_tree()) if isinstance(node, ast.Match)]
@@ -368,6 +370,12 @@ def test_the_strategy_module_imports_exactly_these_names() -> None:
         "types": {"MappingProxyType"},
         "typing": {"TypeVar"},
         "..business_plan": {"BusinessPlan", "validate_business_plan"},
+        # Widened at P7.8B by exactly the Capital Structure contract the root
+        # overlay carries and the P7.7 validator that judges it. Both are
+        # calculation-free: the Strategy engine still computes nothing, and it
+        # still never imports an engine, a store or a route.
+        "..capital_structure.contracts": {"CapitalStructure"},
+        "..capital_structure.validation": {"validate_capital_structure"},
         "..contracts": {"AcquisitionInputs", "AcquisitionTerms", "DetailedOperatingInputs", "OperatingMode"},
         "..engine.contracts": {"AcquisitionResults", "DetailedAcquisitionResults"},
         "..leasing": {
@@ -502,6 +510,10 @@ def test_replace_is_called_only_by_the_domain_writers_and_the_overlay_dispatch()
     assert users == {
         "_with_acquisition", "_with_financing", "_with_disposition",
         "_apply_quick_overlay", "_apply_detailed_overlay", "_apply_lease_level_overlay",
+        # Widened at P7.8B by exactly the Project pathway's view of a Strategy:
+        # its Unit overlays alone, with the Investment-root overlays dropped, so
+        # resolution never reads a Capital Structure (P-4).
+        "_unit_strategy",
     }
     for name in ("_apply_quick_overlay", "_apply_detailed_overlay", "_apply_lease_level_overlay"):
         for call in _call_nodes(functions[name], "replace"):
@@ -680,9 +692,17 @@ def test_p7_4_added_exactly_the_enumerated_store_functions_and_changed_four() ->
 
 
 def test_the_wrapper_collapses_only_when_it_holds_neither_scenarios_nor_strategies() -> None:
+    """The hidden wrapper collapses only when it holds no P7 structure at all,
+    and each kind is asked for explicitly rather than inferred.
+
+    P7.4 asked about Scenarios and Strategies; P7.8B added the Capital Structure
+    as the third kind a wrapper can hold, so clearing the last one is what
+    releases the Deal -- and a wrapper that still holds any of the three
+    stays."""
+
     function = _functions(ast.parse(_current(_STORE)))["_wrapper_holds_no_structure"]
     selects = sorted(re.findall(r"SELECT 1 FROM (\w+) WHERE investment_id", " ".join(_strings(function))))
-    assert selects == ["scenarios", "strategies"]
+    assert selects == ["capital_structures", "scenarios", "strategies"]
 
 
 def test_deleting_an_investment_deletes_its_strategy_structure_and_never_a_deal() -> None:
@@ -894,9 +914,15 @@ def test_p7_4_code_names_no_later_gate_concept(path: str) -> None:
 
 
 def test_no_later_gate_domain_is_a_member() -> None:
+    """P7.4 shipped the five Unit domains; P7.8B activated ``CAPITAL_STRUCTURE``
+    as the first Investment-root domain, under its own gate's approval. The
+    domains still deferred are still absent."""
+
     assert {domain.value for domain in StrategyDomain} == {
         "acquisition", "financing", "business_plan", "operating_outcome", "disposition",
+        "capital_structure",
     }
+    assert not {"unit_selection", "partnership"} & {domain.value for domain in StrategyDomain}
 
 
 def test_the_later_gate_guard_detects_a_unit_selection_domain() -> None:

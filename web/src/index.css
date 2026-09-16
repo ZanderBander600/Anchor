@@ -6679,3 +6679,241 @@ body {
     grid-column: 1 / -1;
   }
 }
+
+/* ==========================================================================
+   Phase 7 Gate P7.8B -- Capital Structure
+   ========================================================================== */
+
+/* --- The editor ----------------------------------------------------------- */
+
+.capital-editor {
+  min-width: 0;
+}
+
+.capital-positions {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* One position: the same hairline-separated block a Strategy domain uses, so
+   an authored decision looks like an authored decision wherever it is made. */
+.capital-position {
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-3) 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.capital-position > * + * {
+  margin-top: var(--sp-2);
+}
+
+.capital-position-error {
+  border-left: 2px solid var(--danger);
+  padding-left: var(--sp-2);
+}
+
+.capital-position-legend {
+  padding: 0;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Identity, then the figures. Each wraps rather than widening the page. */
+.capital-position-head,
+.capital-position-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.capital-position-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.capital-position-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.capital-position-check {
+  display: flex;
+  align-items: center;
+}
+
+.capital-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.capital-position-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.capital-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+/* What the analyst must still state. A standing condition, not an error: it
+   never uses the error colour, because nothing has failed yet. */
+.capital-unstated {
+  padding: var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.capital-unstated-title {
+  margin: 0 0 var(--sp-2) 0;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.capital-unstated-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* --- The result ----------------------------------------------------------- */
+
+.capital-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.capital-results-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.capital-results-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.capital-result-card {
+  min-width: 0;
+}
+
+.capital-result-helper,
+.capital-result-empty {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* An unresolved Funding Requirement is a deterministic outcome, not a failure,
+   so it is warning-toned and never uses the error colour. */
+.capital-result-unresolved {
+  margin: 0;
+  padding: var(--sp-2);
+  border-left: 2px solid var(--accent);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.capital-result-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.capital-result-table th,
+.capital-result-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.capital-result-table thead th,
+.capital-result-table tbody th {
+  text-align: left;
+}
+
+/* A figure the backend did not report reads as N/A with its reason beneath --
+   never as a zero, and never as a dash that could be read as one. */
+.capital-result-na {
+  white-space: normal;
+}
+
+.capital-result-reason,
+.capital-result-class {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.capital-result-name {
+  display: block;
+  font-weight: 650;
+}
+
+/* The status is written, so it survives a monochrome display, a colour-vision
+   difference and a screen reader. */
+.capital-result-status {
+  font-weight: 650;
+}
+
+.capital-result-status-unresolved {
+  color: var(--danger);
+}
+
+/* --- The POSITION perspective --------------------------------------------- */
+
+.decision-perspective {
+  align-self: flex-start;
+}
+
+.capital-position-matrix {
+  min-width: 0;
+}
+
+.capital-position-picker {
+  max-width: 22rem;
+}
+
+/* A strategy that does not hold the selected position. Absent is not zero and
+   not unavailable, so it is written in words rather than tinted. */
+.capital-cell-absent {
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+@media (max-width: 720px) {
+  .capital-position-head,
+  .capital-position-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .capital-position-group {
+    align-items: stretch;
+  }
+
+  .capital-position-picker {
+    max-width: 100%;
+  }
+}

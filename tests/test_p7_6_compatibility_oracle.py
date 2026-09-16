@@ -32,7 +32,12 @@ from fastapi.testclient import TestClient
 from anchor import api as api_module
 from anchor.deals import store
 
-from _p7_2_fixtures import P7_6_TABLES, rows, table_names  # type: ignore[import-not-found]
+from _p7_2_fixtures import (  # type: ignore[import-not-found]
+    P7_6_TABLES,
+    P7_8_TABLES,
+    rows,
+    table_names,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _BUILDER = Path(__file__).resolve().parent / "_p7_6_v9_database_builder.py"
@@ -91,11 +96,17 @@ def _schema(db: Path) -> list[tuple[Any, ...]]:
 
 
 def _every_row(db: Path) -> dict[str, list[tuple[Any, ...]]]:
-    """Every row of every table that is not a P7.6 sidecar, in rowid order."""
+    """Every row of every table that is not a P7.6 sidecar or a later gate's
+    appended table, in rowid order.
+
+    P7.8B's six Capital Structure tables are excluded for the same reason the
+    sidecars are: they are appended empty, and an empty table a v9 database
+    never had must not read as a row that moved. That they are empty is
+    asserted directly."""
 
     return {
         table: rows(db, table)
-        for table in sorted(table_names(db) - set(P7_6_TABLES))
+        for table in sorted(table_names(db) - set(P7_6_TABLES) - set(P7_8_TABLES))
         if not table.startswith("sqlite_")
     }
 
@@ -130,31 +141,36 @@ def test_the_migration_adds_exactly_five_empty_sidecars_and_rewrites_no_row(lega
     store.list_deals(db_path=db)
     migrated_schema, migrated_rows = _schema(db), _every_row(db)
 
-    assert _version(db) == 10
-    assert table_names(db) == before_tables | set(P7_6_TABLES)
+    assert _version(db) == 11  # P7.8B migrates the same v9 database on to schema 11
+    assert table_names(db) == before_tables | set(P7_6_TABLES) | set(P7_8_TABLES)
+    assert {table: rows(db, table) for table in P7_8_TABLES} == dict.fromkeys(P7_8_TABLES, [])
     assert {table: rows(db, table) for table in P7_6_TABLES} == dict.fromkeys(P7_6_TABLES, [])
     assert migrated_rows == before_rows
     for _ in range(3):
         store.list_deals(db_path=db)
-        assert (_version(db), _schema(db), _every_row(db)) == (10, migrated_schema, migrated_rows)
+        assert (_version(db), _schema(db), _every_row(db)) == (11, migrated_schema, migrated_rows)
     connection = sqlite3.connect(db)
     connection.row_factory = sqlite3.Row
     store._migrate(connection)
     connection.commit()
     connection.close()
-    assert (_version(db), _schema(db), _every_row(db)) == (10, migrated_schema, migrated_rows)
+    assert (_version(db), _schema(db), _every_row(db)) == (11, migrated_schema, migrated_rows)
 
 
 def test_every_recorded_response_is_identical_after_migration(client: TestClient, legacy: tuple[Path, dict[str, Any]]) -> None:
     """Deals, fingerprints, ``/analyze``, Scenarios, Strategies, every variant's
     inputs, fingerprint and analysis (Quick and Detailed served from the cache
     the v9 tree wrote), every one-unit Decision Matrix and both target catalogs:
-    every exchange the v9 tree answered, the v10 tree answers identically."""
+    every exchange the v9 tree answered, the current tree answers identically.
+
+    Re-pinned at P7.8B: the same v9 database now migrates on to schema 11, and
+    every one of these responses is still byte-identical. What P7.6 proved is
+    unchanged -- only the version the migration lands on has moved."""
 
     db, manifest = legacy
     replayed = _replay(client, manifest["exchanges"])
 
-    assert _version(db) == 10
+    assert _version(db) == 11
     mismatched = [
         (exchange["method"], exchange["path"])
         for exchange, now in zip(manifest["exchanges"], replayed, strict=True)

@@ -42,6 +42,17 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _P7_8_BASE = "a9f9b09fd71940cfdc079c109e9261187a041261"
 _P7_7_BASE = "fbaa07bfe546b05d104e4e6335f8501ca9293558"
 
+#: P7.8 Session A's reviewed, human-approved head: the structured-position
+#: financial engine, and the end of Session A's committed range.
+#:
+#: **This file is Session A's guard.** Re-pinned here at Session B, which builds
+#: the product on top of that engine: every guard below reads Session A's own
+#: committed range, so it keeps proving exactly what Session A shipped -- and
+#: keeps proving that its financial modules have not moved since -- however far
+#: the product layer grows. Session B's ledger and its own invariants are
+#: ``tests/test_p7_8b_product_integration_architecture.py``.
+_P7_8A_HEAD = "f5850ade0bba907b0a2b9c329fa66abe131f5c23"
+
 _PACKAGE = "src/anchor/capital_structure"
 _INIT = f"{_PACKAGE}/__init__.py"
 _EXEC_CONTRACTS = f"{_PACKAGE}/execution_contracts.py"
@@ -122,13 +133,18 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
-def _changes_since(base: str, *paths: str) -> set[str]:
-    """Committed, staged, unstaged and untracked changes since ``base``, with
-    renames split into their removal and addition."""
+def _changes_between(start: str, end: str, *paths: str) -> set[str]:
+    """Files that differ between two commits, renames split into their removal
+    and addition. Reads Git objects only; it never touches the index."""
 
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+    changed = _git("diff", "--name-only", "--no-renames", start, end, "--", *paths).split()
+    return {path for path in changed if path}
+
+
+def _session_a(path: str) -> str:
+    """``path`` as Session A left it, at its reviewed head."""
+
+    return _git("show", f"{_P7_8A_HEAD}:{path}").replace("\r\n", "\n")
 
 
 def _ledger_violations(changed: set[str]) -> tuple[list[str], list[str]]:
@@ -259,11 +275,19 @@ def _arithmetic(node: ast.AST) -> set[str]:
 
 
 def test_p7_8_changed_exactly_its_authorized_production_files() -> None:
-    """The P7.8 production ledger. P7.8 Session B continues on the same branch
-    and must extend this set explicitly; the next gate re-pins it to P7.8's
-    committed range. Never widen it to admit another gate's files."""
+    """The P7.8 **Session A** production ledger, pinned at Session B to Session
+    A's own committed range, ``a9f9b09..f5850ad``.
 
-    changed = {path for path in _changes_since(_P7_8_BASE, "src", "web") if _is_production(path)}
+    It keeps proving exactly what the financial engine gate changed -- the seven
+    new modules and the package's exports, and nothing else -- however much the
+    product layer above it grows. Session B's ledger is its own file. Never
+    widen this set to admit another session's files."""
+
+    changed = {
+        path
+        for path in _changes_between(_P7_8_BASE, _P7_8A_HEAD, "src", "web")
+        if _is_production(path)
+    }
     assert _ledger_violations(changed) == ([], [])
 
 
@@ -283,12 +307,32 @@ def test_the_ledger_rejects_any_unexpected_production_change() -> None:
 
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged_since_p7_7(path: str) -> None:
-    assert _changes_since(_P7_8_BASE, path) == set(), f"{path} changed at P7.8"
+    """Within Session A's own committed range. What the product session changes
+    is its own ledger's business."""
+
+    assert _changes_between(_P7_8_BASE, _P7_8A_HEAD, path) == set(), f"{path} changed at P7.8A"
 
 
 @pytest.mark.parametrize("path", (*_MATURE, *_P7_7_MODULES))
 def test_each_mature_module_is_byte_identical_to_the_p7_7_merge(path: str) -> None:
+    """In the **working tree**: the mature engine, consolidation and the four
+    P7.7 modules are byte-identical to the P7.7 merge, today, whatever any later
+    session has built on them."""
+
     assert _git("hash-object", path).strip() == _git("rev-parse", f"{_P7_8_BASE}:{path}").strip(), path
+
+
+@pytest.mark.parametrize("path", _NEW)
+def test_each_p7_8a_financial_module_is_frozen_at_the_reviewed_head(path: str) -> None:
+    """The P7.8A financial freeze, in the working tree.
+
+    The structured-position economics were reviewed and approved as of
+    ``f5850ad``: the debt and preferred formulas, settlement, the Funding
+    Requirement propagation, the residual, the position returns and the
+    structural metrics. Every later session executes them; none of them edits
+    one. A change here is a financial change and needs its own review."""
+
+    assert _git("hash-object", path).strip() == _git("rev-parse", f"{_P7_8A_HEAD}:{path}").strip(), path
 
 
 def test_the_package_init_changes_only_by_its_exports() -> None:
@@ -678,30 +722,55 @@ def test_preferred_accrual_follows_only_the_explicit_contract() -> None:
 
 
 def test_no_persistence_schema_or_sql() -> None:
-    assert store._SCHEMA_VERSION == 10
+    """Session A persisted nothing: it left the schema where it found it, and
+    none of its modules knows SQL. The schema version is read from Session A's
+    own tree -- Session B is the one that adds the Capital Structure tables --
+    and the modules in the working tree, where they are frozen."""
+
+    assert re.search(r"^_SCHEMA_VERSION = 10$", _session_a("src/anchor/deals/store.py"), re.MULTILINE)
     for path in _P7_8_MODULES:
         text = " ".join(_strings(_code(path)))
         assert not re.search(r"\b(CREATE|INSERT|SELECT|UPDATE|DELETE|ALTER|DROP)\b", text), path
 
 
 def test_no_route_serves_the_executor() -> None:
-    api = _current("src/anchor/api.py")
+    """Session A shipped no product surface: its own ``api.py`` reaches neither
+    executor and names no Capital Structure at all."""
+
+    api = _session_a("src/anchor/api.py")
     assert "execute_unit_capital_structure" not in api and "execute_investment_capital_structure" not in api
     assert "capital_structure" not in api
 
 
 def test_no_strategy_capital_structure_domain_is_wired() -> None:
-    assert {domain.value for domain in StrategyDomain} == {
-        "acquisition", "financing", "business_plan", "operating_outcome", "disposition",
-    }
+    """Session A wired no Strategy domain: its own ``strategy.py`` declares
+    exactly the five P7.4 Unit domains."""
+
+    strategy = ast.parse(_session_a("src/anchor/analysis/strategy.py"))
+    (domains,) = [
+        node
+        for node in ast.walk(strategy)
+        if isinstance(node, ast.ClassDef) and node.name == "StrategyDomain"
+    ]
+    assert {
+        ast.literal_eval(node.value) for node in domains.body if isinstance(node, ast.Assign)
+    } == {"acquisition", "financing", "business_plan", "operating_outcome", "disposition"}
 
 
 def test_nothing_upstream_imports_the_capital_structure() -> None:
+    """At Session A, nothing outside the package imported it: the executor was
+    reachable from no service, route or store. Session B connects it to exactly
+    the layers its own ledger names, and its guard pins that list."""
+
+    files = [
+        path
+        for path in _git("ls-tree", "-r", "--name-only", _P7_8A_HEAD, "src/anchor").split()
+        if path.endswith(".py") and not path.startswith(f"{_PACKAGE}/")
+    ]
     importers = sorted(
-        path.relative_to(_PROJECT_ROOT).as_posix()
-        for path in (_PROJECT_ROOT / "src" / "anchor").rglob("*.py")
-        if "capital_structure" not in path.relative_to(_PROJECT_ROOT / "src" / "anchor").parts[:1]
-        and any("capital_structure" in name for name in _imports(ast.parse(path.read_text(encoding="utf-8"))))
+        path
+        for path in files
+        if any("capital_structure" in name for name in _imports(ast.parse(_git("show", f"{_P7_8A_HEAD}:{path}"))))
     )
     assert importers == []
 

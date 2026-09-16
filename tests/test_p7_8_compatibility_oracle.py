@@ -38,7 +38,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from _p7_2_fixtures import rows, table_names  # type: ignore[import-not-found]
+from _p7_2_fixtures import P7_8_TABLES, rows, table_names  # type: ignore[import-not-found]
 from _p7_7_fixtures import analyze_visible_investment  # type: ignore[import-not-found]
 from anchor import api as api_module
 from anchor.capital_structure import (
@@ -175,9 +175,14 @@ def test_no_schema_change_and_no_read_triggered_materialization(client: TestClie
     _replay(client, manifest["exchanges"])
 
     assert (_version(db), _schema(db), _every_row(db)) == before
-    assert not {
-        table for table in table_names(db) if re.search(r"capital_(position|structure|event|fee)|funding_requirement", table)
-    }
+    # P7.8B adds the six Capital Structure tables at schema v11. Opening a
+    # legacy database creates them and writes nothing into them: a Deal that
+    # never opted into structured capital has no position, and no read makes it
+    # one (P-11).
+    capital_tables = sorted(table for table in table_names(db) if table.startswith("capital_"))
+    assert capital_tables == sorted(P7_8_TABLES)
+    assert {table: rows(db, table) for table in capital_tables} == dict.fromkeys(capital_tables, [])
+    assert not {table for table in table_names(db) if "funding_requirement" in table}
 
 
 def test_the_p7_7_neutral_facades_reproduce_the_merged_tree(

@@ -199,6 +199,7 @@ from ..analysis.strategy import (
     AcquisitionChoice,
     DispositionChoice,
     FinancingChoice,
+    InvestmentStrategyOverlay,
     OperatingOutcome,
     OperatingOutcomeSet,
     StrategyDefinition,
@@ -206,9 +207,30 @@ from ..analysis.strategy import (
     StrategyIssue,
     StrategyOverlay,
     StrategyValidationError,
+    strategy_capital_structure,
     validate_investment_strategy,
     validate_strategy,
 )
+from ..capital_structure.contracts import (
+    AccrualConvention,
+    CapitalPosition,
+    CapitalStructure,
+    CapitalStructureValidationError,
+    DebtTerms,
+    FixedAmount,
+    FundingAmountRule,
+    FundingEvent,
+    PctOfPrice,
+    PctOfValue,
+    PositionClass,
+    PositionFee,
+    PositionScope,
+    PositionTerms,
+    PreferredEquityTerms,
+    ScopeKind,
+    ShortfallResolution,
+)
+from ..capital_structure.validation import validate_capital_structure
 from ..engine.contracts import (
     AcquisitionResults,
     DetailedAcquisitionResults,
@@ -228,10 +250,12 @@ from ..investment import (
     validate_unit_memberships,
     validate_variant_economics,
 )
+from .capital_structure_codec import FundingAmountRuleKind, amount_rule_kind
 from .contracts import (
     Deal,
     DealNotFoundError,
     Investment,
+    InvestmentCapitalStructures,
     InvestmentNotFoundError,
     InvestmentScenario,
     InvestmentStrategy,
@@ -240,9 +264,15 @@ from .contracts import (
     InvestmentUnitNotFoundError,
     OneWaySensitivitySnapshot,
     ScenarioNotFoundError,
+    StrategyCapitalStructure,
     StrategyNotFoundError,
     TwoWaySensitivitySnapshot,
     VisibleInvestment,
+)
+from .position_identity import (
+    StructureOwner,
+    StructureOwnerKind,
+    require_coherent_position_identity,
 )
 from .fingerprint import (
     fingerprint_ai,
@@ -307,7 +337,15 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # ``investment_units`` or any other table, and no existing row read or
 # rewritten: every hidden wrapper simply has no sidecar row, which is exactly
 # its neutral state, and none is created by reading it.
-_SCHEMA_VERSION = 10
+# Phase 7 Gate P7.8B: schema version 11 adds six purely additive Capital
+# Structure tables -- the structure owner and its positions, funding events,
+# fees, debt terms and preferred terms -- created unconditionally by
+# ``_connect`` exactly as version 10's were. No ALTER of any table and no
+# existing row read or rewritten: every Deal, Investment, Strategy, Scenario and
+# cached variant is untouched, and a Deal or Strategy gains a Capital Structure
+# only when the analyst opts in. An Investment with no structure row has the
+# neutral empty structure, which is exactly today's behaviour (P-11).
+_SCHEMA_VERSION = 11
 
 
 class PersistedDealDataError(RuntimeError):
@@ -338,6 +376,19 @@ class PersistedScenarioDataError(PersistedDealDataError):
             f"Stored scenario {scenario_id!r} does not validate: "
             + "; ".join(issue.message for issue in self.issues)
         )
+
+
+class PersistedCapitalStructureDataError(PersistedDealDataError):
+    """A stored Capital Structure that cannot recreate its authoritative P7.7
+    contract: a class, scope, resolution or amount-rule token the contract no
+    longer recognises, a position whose terms rows do not match its class, an
+    event or fee with no position, or a structure the P7.7 validator refuses.
+
+    Raised rather than repaired, and never softened into an empty structure. A
+    Capital Structure that read as empty because one row would not decode would
+    silently delete a lender from the stack, and every figure downstream of it --
+    the residual, the Common Equity return, the coverage of every senior
+    position -- would look perfectly ordinary."""
 
 
 class PersistedStrategyDataError(PersistedDealDataError):
@@ -1060,6 +1111,154 @@ _P7_6_TABLES = (
 )
 
 
+# =============================================================================
+# Phase 7 Gate P7.8B -- the persisted Capital Structure, schema version 11.
+#
+# Six purely additive tables, created by ``_connect`` via CREATE TABLE IF NOT
+# EXISTS exactly as every table since version 2. No ALTER, and no existing row
+# is read or rewritten.
+#
+# **One owner type: the Investment** (Section 15.1). ``capital_structures`` holds
+# one row per stored structure, and ``owner_kind`` says which of the two owners
+# states it:
+#
+#   * ``base``   -- the Investment's own Base Capital Structure, which the
+#                   implicit Base Strategy owns. ``owner_id`` is the Investment
+#                   id. The Base Strategy is never a stored Strategy row.
+#   * ``strategy`` -- one Strategy's whole replacement. ``owner_id`` is that
+#                   Strategy's id.
+#
+# ``UNIQUE (owner_kind, owner_id)`` is that rule in the schema: one structure per
+# owner, so a second can never be written beside the first.
+#
+# **The marker is the meaning** (P7.8B's mandatory distinction):
+#
+#   * no ``base`` row          -- the Investment has no Base structure, which is
+#                                the neutral empty one. Reading it creates
+#                                nothing.
+#   * no ``strategy`` row      -- that Strategy INHERITS the Base structure.
+#   * a ``strategy`` row with no position rows -- that Strategy explicitly
+#                                replaces the Base structure with an EMPTY one:
+#                                "this Strategy deliberately uses no structured
+#                                capital". It is not inheritance, and the two are
+#                                never collapsed.
+#
+# **Relational and typed, never a JSON blob.** Every field of the P7.7 financial
+# contracts is its own column, so the stored financial data is inspectable and a
+# malformed value is visible rather than hidden inside a document: REAL for rates
+# and dollars (an IEEE 754 double, so a float round-trips bit-identically),
+# INTEGER for whole months, years and sequences, and TEXT for the wire tokens the
+# enums already use.
+#
+# **Position ids are owner-scoped, never database-global.** The same
+# ``position_id`` is *meant* to appear in the Base structure and in one or more
+# Strategy structures -- that is what makes ``POSITION(position_id)`` a coherent
+# comparison -- so every key here is ``(structure_id, ...)``. The same holds for
+# a funding event id and a fee id, which are unique within one structure (P7.7's
+# one capital-event namespace) and repeat freely across copied structures.
+#
+# No FOREIGN KEY / ON DELETE CASCADE, for the reason stated above
+# ``lease_level_suites``. Every lifecycle function deletes these rows explicitly,
+# in one transaction with their parent.
+# =============================================================================
+
+_CREATE_CAPITAL_STRUCTURES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_structures (
+    structure_id   TEXT PRIMARY KEY,
+    investment_id  TEXT NOT NULL,
+    owner_kind     TEXT NOT NULL CHECK (owner_kind IN ('base', 'strategy')),
+    owner_id       TEXT NOT NULL,
+    UNIQUE (owner_kind, owner_id)
+)
+"""
+
+_CREATE_CAPITAL_POSITIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_positions (
+    structure_id          TEXT NOT NULL,
+    position_id           TEXT NOT NULL,
+    ordinal               INTEGER NOT NULL,
+    name                  TEXT NOT NULL,
+    position_class        TEXT NOT NULL,
+    priority              INTEGER NOT NULL,
+    scope_kind            TEXT NOT NULL,
+    scope_unit_id         TEXT,
+    shortfall_resolution  TEXT,
+    PRIMARY KEY (structure_id, position_id)
+)
+"""
+
+_CREATE_CAPITAL_FUNDING_EVENTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_funding_events (
+    structure_id   TEXT NOT NULL,
+    position_id    TEXT NOT NULL,
+    event_id       TEXT NOT NULL,
+    model_month    INTEGER NOT NULL,
+    sequence       INTEGER NOT NULL,
+    amount_rule    TEXT NOT NULL,
+    amount         REAL,
+    pct            REAL,
+    timepoint_id   TEXT,
+    PRIMARY KEY (structure_id, event_id)
+)
+"""
+
+_CREATE_CAPITAL_POSITION_FEES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_position_fees (
+    structure_id  TEXT NOT NULL,
+    position_id   TEXT NOT NULL,
+    fee_id        TEXT NOT NULL,
+    description   TEXT NOT NULL,
+    amount        REAL NOT NULL,
+    model_month   INTEGER NOT NULL,
+    sequence      INTEGER NOT NULL,
+    PRIMARY KEY (structure_id, fee_id)
+)
+"""
+
+_CREATE_CAPITAL_DEBT_TERMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_debt_terms (
+    structure_id      TEXT NOT NULL,
+    position_id       TEXT NOT NULL,
+    interest_rate     REAL NOT NULL,
+    amortization      INTEGER NOT NULL,
+    io_period         INTEGER NOT NULL,
+    maturity_month    INTEGER NOT NULL,
+    current_pay_rate  REAL NOT NULL,
+    pik_rate          REAL NOT NULL,
+    PRIMARY KEY (structure_id, position_id)
+)
+"""
+
+_CREATE_CAPITAL_PREFERRED_TERMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_preferred_terms (
+    structure_id       TEXT NOT NULL,
+    position_id        TEXT NOT NULL,
+    preferred_rate     REAL NOT NULL,
+    current_pay_rate   REAL NOT NULL,
+    accrual_permitted  INTEGER NOT NULL CHECK (accrual_permitted IN (0, 1)),
+    accrual_convention TEXT,
+    redemption_month   INTEGER NOT NULL,
+    PRIMARY KEY (structure_id, position_id)
+)
+"""
+
+#: Every child table one Capital Structure owns, in delete order (children
+#: before the structure row itself).
+_CAPITAL_STRUCTURE_CHILD_TABLES = (
+    "capital_funding_events",
+    "capital_position_fees",
+    "capital_debt_terms",
+    "capital_preferred_terms",
+    "capital_positions",
+)
+
+_P7_8_TABLES = ("capital_structures", *_CAPITAL_STRUCTURE_CHILD_TABLES)
+
+#: The two owners of a stored Capital Structure, as ``owner_kind`` spells them.
+_BASE_OWNER_KIND = "base"
+_STRATEGY_OWNER_KIND = "strategy"
+
+
 _LEASE_LEVEL_CHILD_TABLES = (
     "lease_level_property_inputs",
     "lease_level_operating_inputs",
@@ -1520,6 +1719,10 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # P7.6 -- schema version 10 adds the five visible-Investment sidecars the
     # same way: no row is written for any existing Deal, hidden Investment,
     # Scenario, Strategy or cached variant, and ``investments`` is not altered.
+    # P7.8B -- schema version 11 adds the six Capital Structure tables the same
+    # way: no row is written for anything that already exists, no table is
+    # altered, and no Investment gains a structure by being opened. A v10
+    # database simply gains six empty tables.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -1582,6 +1785,12 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_INVESTMENT_CAPITAL_PLAN_ITEMS_TABLE_SQL)
     connection.execute(_CREATE_INVESTMENT_OWNER_EXPENSE_ITEMS_TABLE_SQL)
     connection.execute(_CREATE_INVESTMENT_TRANSACTION_COSTS_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_STRUCTURES_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_POSITIONS_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_FUNDING_EVENTS_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_POSITION_FEES_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_DEBT_TERMS_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_PREFERRED_TERMS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -3934,6 +4143,9 @@ def _delete_investment_rows(connection: sqlite3.Connection, investment_id: str) 
     (Q3)."""
 
     connection.execute("DELETE FROM variant_snapshots WHERE root_id = ?", (investment_id,))
+    # P7.8B: every Capital Structure the Investment owns -- its Base structure
+    # and each Strategy's own. An Investment with none loses nothing here.
+    _delete_investment_capital_structures(connection, investment_id)
     # P7.6: a visible Investment's sidecars. A hidden wrapper has none, so this
     # deletes nothing for it.
     for table in _P7_6_TABLES:
@@ -3956,9 +4168,9 @@ def _delete_investment_rows(connection: sqlite3.Connection, investment_id: str) 
 
 
 def _wrapper_holds_no_structure(connection: sqlite3.Connection, investment_id: str) -> bool:
-    """Whether the hidden wrapper has no P7 structure left: no Scenario and,
-    from P7.4, no Strategy. A wrapper that still holds either never collapses,
-    whichever of the two was deleted last."""
+    """Whether the hidden wrapper has no P7 structure left: no Scenario, from
+    P7.4 no Strategy, and from P7.8B no Capital Structure. A wrapper that still
+    holds any of the three never collapses, whichever was removed last."""
 
     remaining_scenario = connection.execute(
         "SELECT 1 FROM scenarios WHERE investment_id = ? LIMIT 1", (investment_id,)
@@ -3966,7 +4178,10 @@ def _wrapper_holds_no_structure(connection: sqlite3.Connection, investment_id: s
     remaining_strategy = connection.execute(
         "SELECT 1 FROM strategies WHERE investment_id = ? LIMIT 1", (investment_id,)
     ).fetchone()
-    return remaining_scenario is None and remaining_strategy is None
+    remaining_structure = connection.execute(
+        "SELECT 1 FROM capital_structures WHERE investment_id = ? LIMIT 1", (investment_id,)
+    ).fetchone()
+    return remaining_scenario is None and remaining_strategy is None and remaining_structure is None
 
 
 def _remove_hidden_wrapper_of_deal(connection: sqlite3.Connection, deal_id: str) -> None:
@@ -4505,10 +4720,14 @@ def _write_strategy_overlays(
 
 
 def _delete_strategy_overlay_rows(connection: sqlite3.Connection, strategy_id: str) -> None:
-    """Every overlay row of one Strategy, from every domain's table."""
+    """Every overlay row of one Strategy: each Unit domain's table, and (P7.8B)
+    the Investment-root Capital Structure it states, with every row under it.
+    Removing the structure is what makes an update a whole replacement and makes
+    a deleted Strategy leave no position behind."""
 
     for table in _STRATEGY_OVERLAY_TABLES:
         connection.execute(f"DELETE FROM {table} WHERE strategy_id = ?", (strategy_id,))
+    _delete_capital_structure(connection, _STRATEGY_OWNER_KIND, strategy_id)
 
 
 def _strategy_rows(
@@ -4658,6 +4877,12 @@ def _strategy_from_rows(
             )
         )
 
+    own_structure = _stored_capital_structure(
+        connection,
+        _STRATEGY_OWNER_KIND,
+        strategy_id,
+        where=f"Strategy {strategy_id!r}'s Capital Structure",
+    )
     strategy = StrategyDefinition(
         strategy_id=strategy_id,
         name=strategy_row["name"],
@@ -4667,6 +4892,16 @@ def _strategy_from_rows(
                 overlays,
                 key=lambda overlay: (_STRATEGY_DOMAIN_RANK[overlay.domain], overlay.unit_id),
             )
+        ),
+        # P7.8B: no structure row means this Strategy INHERITS the Base Capital
+        # Structure; a row with no position means it explicitly replaces it with
+        # an empty one. The two are never collapsed on the way out either.
+        root_overlays=()
+        if own_structure is None
+        else (
+            InvestmentStrategyOverlay(
+                domain=StrategyDomain.CAPITAL_STRUCTURE, content=own_structure
+            ),
         ),
     )
     issues = _strategy_contract_issues(strategy, owner)
@@ -4722,6 +4957,7 @@ def _insert_strategy(
         (strategy.strategy_id, investment_id, strategy.name, strategy.description, now, now),
     )
     _write_strategy_overlays(connection, strategy.strategy_id, strategy.overlays)
+    _write_strategy_root_overlays(connection, investment_id, strategy)
     _touch_investment(connection, investment_id, now=now)
 
 
@@ -4747,10 +4983,15 @@ def create_strategy_for_deal(
     name: str,
     description: str | None = None,
     overlays: Iterable[StrategyOverlay] = (),
+    root_overlays: Iterable[InvestmentStrategyOverlay] = (),
     db_path: Path | None = None,
 ) -> InvestmentStrategy:
     """Persist a new Strategy for the Deal ``deal_id``, materializing its hidden
     one-unit Investment first if it has none (Q4).
+
+    ``root_overlays`` carries the Strategy's Investment-root replacements
+    (P7.8B): its own Capital Structure, when it states one. Stating none is
+    inheriting the Base structure.
 
     One transaction: the Deal must exist; any Investment it already belongs to
     must be its hidden wrapper, which is reused -- whether its Scenarios or an
@@ -4766,6 +5007,7 @@ def create_strategy_for_deal(
         name=name,
         description=description,
         overlays=tuple(overlays),
+        root_overlays=tuple(root_overlays),
     )
     now = _utc_now_iso()
     with _connect(db_path) as connection:
@@ -4783,6 +5025,7 @@ def create_strategy_for_deal(
         )
         if investment_id is None:
             investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
+        _require_coherent_strategy_identity(connection, investment_id, strategy)
         _insert_strategy(connection, investment_id, strategy, now=now)
 
     return get_strategy(investment_id, strategy.strategy_id, db_path=db_path)
@@ -4794,22 +5037,26 @@ def create_strategy(
     name: str,
     description: str | None = None,
     overlays: Iterable[StrategyOverlay] = (),
+    root_overlays: Iterable[InvestmentStrategyOverlay] = (),
     db_path: Path | None = None,
 ) -> InvestmentStrategy:
     """Persist another Strategy in the existing Investment ``investment_id``:
     the hidden wrapper, validated for its one unit, or (P7.6) a visible
-    Investment, validated for its member Units."""
+    Investment, validated for its member Units. ``root_overlays`` carries its
+    Investment-root replacements (P7.8B)."""
 
     strategy = StrategyDefinition(
         strategy_id=uuid.uuid4().hex,
         name=name,
         description=description,
         overlays=tuple(overlays),
+        root_overlays=tuple(root_overlays),
     )
     now = _utc_now_iso()
     with _connect(db_path) as connection:
         owner = _require_structure_owner(connection, investment_id)
         _require_valid_strategy(strategy, owner=owner)
+        _require_coherent_strategy_identity(connection, investment_id, strategy)
         _insert_strategy(connection, investment_id, strategy, now=now)
 
     return get_strategy(investment_id, strategy.strategy_id, db_path=db_path)
@@ -4822,23 +5069,31 @@ def update_strategy(
     name: str,
     description: str | None = None,
     overlays: Iterable[StrategyOverlay] = (),
+    root_overlays: Iterable[InvestmentStrategyOverlay] = (),
     db_path: Path | None = None,
 ) -> InvestmentStrategy:
-    """Replace one Strategy's name, description and whole overlay set, keeping
-    its id.
+    """Replace one Strategy's name, description, whole overlay set and whole
+    Investment-root overlay set, keeping its id.
 
-    Validated before anything is written; the old overlays are removed and the
-    new ones written in the same transaction, so a failure leaves the previous
-    Strategy exactly as it was. Cached variants are left alone: each is served
-    only while its source fingerprint still matches the resolved inputs, so a
-    rename, or a recipe that resolves to the same inputs, keeps its cache and
-    any other change makes the old row stale."""
+    Validated before anything is written; the old overlays and the old Capital
+    Structure are removed and the new ones written in the same transaction, so a
+    failure leaves the previous Strategy exactly as it was. Passing no
+    ``root_overlays`` is the analyst choosing to inherit the Base Capital
+    Structure again, and it removes the Strategy's own structure; passing an
+    empty structure keeps the explicit "no structured capital" replacement. The
+    two are never confused.
+
+    Cached Project variants are left alone: each is served only while its source
+    fingerprint still matches the resolved inputs, and a Capital Structure is
+    not one of those inputs (P-4), so junior financing never invalidates an
+    upstream Project result."""
 
     strategy = StrategyDefinition(
         strategy_id=strategy_id,
         name=name,
         description=description,
         overlays=tuple(overlays),
+        root_overlays=tuple(root_overlays),
     )
     now = _utc_now_iso()
     with _connect(db_path) as connection:
@@ -4850,8 +5105,10 @@ def update_strategy(
             "WHERE id = ? AND investment_id = ?",
             (strategy.name, strategy.description, now, strategy_id, investment_id),
         )
+        _require_coherent_strategy_identity(connection, investment_id, strategy)
         _delete_strategy_overlay_rows(connection, strategy_id)
         _write_strategy_overlays(connection, strategy_id, strategy.overlays)
+        _write_strategy_root_overlays(connection, investment_id, strategy)
         _touch_investment(connection, investment_id, now=now)
 
     return get_strategy(investment_id, strategy_id, db_path=db_path)
@@ -5472,6 +5729,11 @@ def _structure_references(
     return [
         *(f"Scenario {row['name']!r} ({row['id']})" for row in scenarios),
         *(f"Strategy {strategies[key]!r} ({key})" for key in sorted(strategies)),
+        # P7.8B: a Unit that a Capital Structure position is scoped to is
+        # referenced just as firmly as one a Scenario override addresses. The
+        # position is never reassigned to Investment scope and never deleted:
+        # the analyst changes the structure first.
+        *_capital_structure_references(connection, investment_id, unit_id),
     ]
 
 
@@ -5567,6 +5829,7 @@ def promote_hidden_investment(
     now = _utc_now_iso()
     with _connect(db_path) as connection:
         existing_unit, _ = _require_hidden_wrapper(connection, investment_id)
+        _require_promotable_capital_structures(connection, investment_id)
         _require_valid_investment_inputs(
             name=name,
             transaction_price=transaction_price,
@@ -5739,6 +6002,852 @@ def update_investment_unit(
         _touch_investment(connection, investment_id, now=now)
 
     return get_visible_investment(investment_id, db_path=db_path)
+
+
+def _capital_structure_owner_row(
+    connection: sqlite3.Connection, owner_kind: str, owner_id: str
+) -> sqlite3.Row | None:
+    """The structure row one owner states, or ``None`` -- the marker itself.
+
+    ``None`` for a ``base`` owner means the Investment states no Base structure,
+    which is the neutral empty one. ``None`` for a ``strategy`` owner means that
+    Strategy inherits the Base structure, which is a different answer from a row
+    with no positions (an explicit empty replacement)."""
+
+    return connection.execute(
+        "SELECT * FROM capital_structures WHERE owner_kind = ? AND owner_id = ?",
+        (owner_kind, owner_id),
+    ).fetchone()
+
+
+def _capital_enum(value: object, enum_type: type, *, path: str) -> Any:
+    """A stored Capital Structure token as its authoritative member.
+
+    The decode is the one shared codec; only the error type is this layer's own,
+    so a malformed capital stack is distinguishable from any other corrupt row --
+    and, like every decode here, a token the enum no longer recognises is a
+    failure rather than a reason to pick a default."""
+
+    try:
+        return _decode_enum(value, enum_type, path=path)
+    except PersistedDealDataError as error:
+        raise PersistedCapitalStructureDataError(str(error)) from None
+
+
+def _amount_rule_from_row(row: sqlite3.Row, *, where: str) -> FundingAmountRule:
+    """One stored funding amount rule, strictly. A token the contract no longer
+    knows, or a rule whose columns do not match the token it states, is corrupt:
+    nothing is defaulted to a fixed amount."""
+
+    kind, amount, pct, timepoint_id = (
+        row["amount_rule"],
+        row["amount"],
+        row["pct"],
+        row["timepoint_id"],
+    )
+    stated = {"amount": amount, "pct": pct, "timepoint_id": timepoint_id}
+
+    def _exactly(*required: str) -> None:
+        wrong = sorted(
+            name for name, value in stated.items() if (value is None) is (name in required)
+        )
+        if wrong:
+            raise PersistedCapitalStructureDataError(
+                f"{where} states {kind!r} funding, whose columns are exactly "
+                f"{', '.join(required)}; {', '.join(wrong)} disagree(s)."
+            )
+
+    match kind:
+        case FundingAmountRuleKind.FIXED_AMOUNT:
+            _exactly("amount")
+            return FixedAmount(amount=amount)
+        case FundingAmountRuleKind.PCT_OF_PRICE:
+            _exactly("pct")
+            return PctOfPrice(pct=pct)
+        case FundingAmountRuleKind.PCT_OF_VALUE:
+            _exactly("pct", "timepoint_id")
+            return PctOfValue(timepoint_id=timepoint_id, pct=pct)
+        case _:
+            raise PersistedCapitalStructureDataError(
+                f"{where} holds amount rule {kind!r}, which is not one of: "
+                f"{', '.join(member.value for member in FundingAmountRuleKind)}."
+            )
+
+
+def _capital_position_from_rows(
+    row: sqlite3.Row,
+    funding_rows: Iterable[sqlite3.Row],
+    fee_rows: Iterable[sqlite3.Row],
+    debt_row: sqlite3.Row | None,
+    preferred_row: sqlite3.Row | None,
+    *,
+    where: str,
+) -> CapitalPosition:
+    """One stored position as the exact P7.7 contract.
+
+    The class decides which terms rows must be there, and exactly which: a debt
+    position has debt terms and may have fees, a preferred position has
+    preferred terms and no fee (P7.7 puts fees on ``DebtTerms`` alone), and the
+    common-equity marker has neither. A position whose rows disagree with its
+    class is corrupt rather than coerced into a class its rows would fit."""
+
+    position_id = row["position_id"]
+    located = f"{where} position {position_id!r}"
+    position_class = _capital_enum(
+        row["position_class"], PositionClass, path=f"{located} position_class"
+    )
+    scope_kind = _capital_enum(row["scope_kind"], ScopeKind, path=f"{located} scope_kind")
+    resolution = _capital_enum(
+        row["shortfall_resolution"], ShortfallResolution, path=f"{located} shortfall_resolution"
+    )
+    funding = tuple(
+        FundingEvent(
+            event_id=event["event_id"],
+            model_month=event["model_month"],
+            sequence=event["sequence"],
+            amount_rule=_amount_rule_from_row(
+                event, where=f"{located} funding event {event['event_id']!r}"
+            ),
+        )
+        for event in funding_rows
+    )
+    fees = tuple(
+        PositionFee(
+            fee_id=fee["fee_id"],
+            description=fee["description"],
+            amount=fee["amount"],
+            model_month=fee["model_month"],
+            sequence=fee["sequence"],
+        )
+        for fee in fee_rows
+    )
+
+    def _require(carried: sqlite3.Row | None, *, kind: str, expected: bool) -> None:
+        if (carried is not None) is not expected:
+            state = "carries no" if expected else "also carries"
+            raise PersistedCapitalStructureDataError(
+                f"{located} is {position_class} and {state} {kind} terms."
+            )
+
+    terms: PositionTerms | None
+    match position_class:
+        case PositionClass.SENIOR_DEBT | PositionClass.MEZZANINE_DEBT:
+            _require(debt_row, kind="debt", expected=True)
+            _require(preferred_row, kind="preferred equity", expected=False)
+            assert debt_row is not None
+            terms = DebtTerms(
+                interest_rate=debt_row["interest_rate"],
+                amortization=debt_row["amortization"],
+                io_period=debt_row["io_period"],
+                maturity_month=debt_row["maturity_month"],
+                fees=fees,
+                current_pay_rate=debt_row["current_pay_rate"],
+                pik_rate=debt_row["pik_rate"],
+            )
+        case PositionClass.PREFERRED_EQUITY:
+            _require(preferred_row, kind="preferred equity", expected=True)
+            _require(debt_row, kind="debt", expected=False)
+            assert preferred_row is not None
+            permitted = preferred_row["accrual_permitted"]
+            if permitted not in (0, 1):
+                raise PersistedCapitalStructureDataError(
+                    f"{located} holds accrual_permitted={permitted!r}; it must be 0 or 1."
+                )
+            terms = PreferredEquityTerms(
+                preferred_rate=preferred_row["preferred_rate"],
+                current_pay_rate=preferred_row["current_pay_rate"],
+                accrual_permitted=bool(permitted),
+                accrual_convention=_capital_enum(  # type: ignore[arg-type]
+                    preferred_row["accrual_convention"],
+                    AccrualConvention,
+                    path=f"{located} accrual_convention",
+                ),
+                redemption_month=preferred_row["redemption_month"],
+            )
+        case _:
+            _require(debt_row, kind="debt", expected=False)
+            _require(preferred_row, kind="preferred equity", expected=False)
+            terms = None
+    if fees and not isinstance(terms, DebtTerms):
+        raise PersistedCapitalStructureDataError(
+            f"{located} is {position_class} and holds fee row(s); a fee belongs to a debt "
+            "position's terms."
+        )
+    return CapitalPosition(
+        position_id=position_id,
+        name=row["name"],
+        position_class=position_class,  # type: ignore[arg-type]
+        priority=row["priority"],
+        scope=PositionScope(kind=scope_kind, unit_id=row["scope_unit_id"]),  # type: ignore[arg-type]
+        funding=funding,
+        terms=terms,
+        shortfall_resolution=resolution,  # type: ignore[arg-type]
+    )
+
+
+def _read_capital_structure(
+    connection: sqlite3.Connection, structure_id: str, *, where: str
+) -> CapitalStructure:
+    """Every row of one stored structure, rebuilt as the P7.7 contract and
+    refused if the P7.7 validator refuses it.
+
+    Positions come back in the analyst's own authored order (``ordinal``), which
+    is presentation: the economic order is scope then priority, and every
+    consumer sorts by it. Membership is deliberately not judged here -- a Unit
+    cannot be removed while a structure references it -- so only the contract
+    itself can make a stored structure unreadable."""
+
+    position_rows = connection.execute(
+        "SELECT * FROM capital_positions WHERE structure_id = ? ORDER BY ordinal, position_id",
+        (structure_id,),
+    ).fetchall()
+    known = {row["position_id"] for row in position_rows}
+    funding_rows: dict[str, list[sqlite3.Row]] = {}
+    for event in connection.execute(
+        "SELECT * FROM capital_funding_events WHERE structure_id = ? "
+        "ORDER BY model_month, sequence, event_id",
+        (structure_id,),
+    ):
+        funding_rows.setdefault(event["position_id"], []).append(event)
+    fee_rows: dict[str, list[sqlite3.Row]] = {}
+    for fee in connection.execute(
+        "SELECT * FROM capital_position_fees WHERE structure_id = ? "
+        "ORDER BY model_month, sequence, fee_id",
+        (structure_id,),
+    ):
+        fee_rows.setdefault(fee["position_id"], []).append(fee)
+    debt_rows = {
+        row["position_id"]: row
+        for row in connection.execute(
+            "SELECT * FROM capital_debt_terms WHERE structure_id = ?", (structure_id,)
+        )
+    }
+    preferred_rows = {
+        row["position_id"]: row
+        for row in connection.execute(
+            "SELECT * FROM capital_preferred_terms WHERE structure_id = ?", (structure_id,)
+        )
+    }
+    orphaned = sorted(
+        (set(funding_rows) | set(fee_rows) | set(debt_rows) | set(preferred_rows)) - known
+    )
+    if orphaned:
+        raise PersistedCapitalStructureDataError(
+            f"{where} holds funding, fee or terms rows for position(s) "
+            f"{', '.join(orphaned)}, which it does not hold; a child row never implies a "
+            "position."
+        )
+
+    structure = CapitalStructure(
+        positions=tuple(
+            _capital_position_from_rows(
+                row,
+                funding_rows.get(row["position_id"], ()),
+                fee_rows.get(row["position_id"], ()),
+                debt_rows.get(row["position_id"]),
+                preferred_rows.get(row["position_id"]),
+                where=where,
+            )
+            for row in position_rows
+        )
+    )
+    issues = validate_capital_structure(structure, acquisition_loan_unit_ids=())
+    if issues:
+        raise PersistedCapitalStructureDataError(
+            f"{where} does not validate: " + "; ".join(issue.message for issue in issues)
+        )
+    return structure
+
+
+def _stored_capital_structure(
+    connection: sqlite3.Connection, owner_kind: str, owner_id: str, *, where: str
+) -> CapitalStructure | None:
+    """The structure one owner states, or ``None`` when it states none. A ``base``
+    marker with no position is corrupt: clearing a Base structure removes its
+    marker, so an empty one was never written."""
+
+    row = _capital_structure_owner_row(connection, owner_kind, owner_id)
+    if row is None:
+        return None
+    structure = _read_capital_structure(connection, row["structure_id"], where=where)
+    if owner_kind == _BASE_OWNER_KIND and not structure.positions:
+        raise PersistedCapitalStructureDataError(
+            f"{where} holds a Base Capital Structure marker with no position. Clearing the "
+            "Base structure removes its marker, so an empty one is never stored; an empty "
+            "structure is a Strategy's explicit replacement, never a Base."
+        )
+    return structure
+
+
+def _write_capital_structure(
+    connection: sqlite3.Connection,
+    *,
+    investment_id: str,
+    owner_kind: str,
+    owner_id: str,
+    capital_structure: CapitalStructure,
+) -> None:
+    """One whole structure: its marker, then every position with its funding,
+    its fees and its typed terms, in the analyst's authored order.
+
+    Called inside the caller's transaction, after validation, and after any
+    previous structure of this owner was removed: a Capital Structure is
+    replaced whole, never diffed, so no half-written position stack can exist."""
+
+    structure_id = uuid.uuid4().hex
+    connection.execute(
+        "INSERT INTO capital_structures (structure_id, investment_id, owner_kind, owner_id) "
+        "VALUES (?, ?, ?, ?)",
+        (structure_id, investment_id, owner_kind, owner_id),
+    )
+    for ordinal, position in enumerate(capital_structure.positions):
+        connection.execute(
+            """
+            INSERT INTO capital_positions
+                (structure_id, position_id, ordinal, name, position_class, priority, scope_kind,
+                 scope_unit_id, shortfall_resolution)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                structure_id,
+                position.position_id,
+                ordinal,
+                position.name,
+                _encode_enum(position.position_class),
+                int(position.priority),
+                _encode_enum(position.scope.kind),
+                position.scope.unit_id,
+                _encode_enum(position.shortfall_resolution),
+            ),
+        )
+        for event in position.funding:
+            rule = event.amount_rule
+            connection.execute(
+                """
+                INSERT INTO capital_funding_events
+                    (structure_id, position_id, event_id, model_month, sequence, amount_rule,
+                     amount, pct, timepoint_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    structure_id,
+                    position.position_id,
+                    event.event_id,
+                    int(event.model_month),
+                    int(event.sequence),
+                    amount_rule_kind(rule).value,
+                    float(rule.amount) if isinstance(rule, FixedAmount) else None,
+                    float(rule.pct) if isinstance(rule, (PctOfPrice, PctOfValue)) else None,
+                    rule.timepoint_id if isinstance(rule, PctOfValue) else None,
+                ),
+            )
+        terms = position.terms
+        if isinstance(terms, DebtTerms):
+            connection.execute(
+                """
+                INSERT INTO capital_debt_terms
+                    (structure_id, position_id, interest_rate, amortization, io_period,
+                     maturity_month, current_pay_rate, pik_rate)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    structure_id,
+                    position.position_id,
+                    float(terms.interest_rate),
+                    int(terms.amortization),
+                    int(terms.io_period),
+                    int(terms.maturity_month),
+                    float(terms.current_pay_rate),
+                    float(terms.pik_rate),
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO capital_position_fees
+                    (structure_id, position_id, fee_id, description, amount, model_month, sequence)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        structure_id,
+                        position.position_id,
+                        fee.fee_id,
+                        fee.description,
+                        float(fee.amount),
+                        int(fee.model_month),
+                        int(fee.sequence),
+                    )
+                    for fee in terms.fees
+                ],
+            )
+        elif isinstance(terms, PreferredEquityTerms):
+            connection.execute(
+                """
+                INSERT INTO capital_preferred_terms
+                    (structure_id, position_id, preferred_rate, current_pay_rate,
+                     accrual_permitted, accrual_convention, redemption_month)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    structure_id,
+                    position.position_id,
+                    float(terms.preferred_rate),
+                    float(terms.current_pay_rate),
+                    1 if terms.accrual_permitted else 0,
+                    _encode_enum(terms.accrual_convention),
+                    int(terms.redemption_month),
+                ),
+            )
+
+
+def _delete_capital_structure(
+    connection: sqlite3.Connection, owner_kind: str, owner_id: str
+) -> None:
+    """One owner's structure and every row it owns. Deleting nothing is
+    ordinary: most owners state no structure."""
+
+    row = _capital_structure_owner_row(connection, owner_kind, owner_id)
+    if row is None:
+        return
+    structure_id = row["structure_id"]
+    for table in _CAPITAL_STRUCTURE_CHILD_TABLES:
+        connection.execute(f"DELETE FROM {table} WHERE structure_id = ?", (structure_id,))
+    connection.execute("DELETE FROM capital_structures WHERE structure_id = ?", (structure_id,))
+
+
+def _delete_investment_capital_structures(
+    connection: sqlite3.Connection, investment_id: str
+) -> None:
+    """Every Capital Structure the Investment owns -- its Base structure and
+    each Strategy's own -- with every row under them."""
+
+    for table in _CAPITAL_STRUCTURE_CHILD_TABLES:
+        connection.execute(
+            f"DELETE FROM {table} WHERE structure_id IN "
+            "(SELECT structure_id FROM capital_structures WHERE investment_id = ?)",
+            (investment_id,),
+        )
+    connection.execute("DELETE FROM capital_structures WHERE investment_id = ?", (investment_id,))
+
+
+def _strategy_capital_structures(
+    connection: sqlite3.Connection, investment_id: str
+) -> list[tuple[str, str, CapitalStructure]]:
+    """``(strategy_id, name, structure)`` for every Strategy of the Investment
+    that states its own Capital Structure, in creation order. A Strategy that
+    inherits the Base structure is simply absent."""
+
+    stated: list[tuple[str, str, CapitalStructure]] = []
+    for row in connection.execute(
+        "SELECT id, name FROM strategies WHERE investment_id = ? ORDER BY created_at, rowid",
+        (investment_id,),
+    ).fetchall():
+        structure = _stored_capital_structure(
+            connection,
+            _STRATEGY_OWNER_KIND,
+            row["id"],
+            where=f"Strategy {row['id']!r}'s Capital Structure",
+        )
+        if structure is not None:
+            stated.append((row["id"], row["name"], structure))
+    return stated
+
+
+def _structure_owner(kind: StructureOwnerKind, owner_id: str, label: str) -> StructureOwner:
+    return StructureOwner(kind=kind, owner_id=owner_id, label=label)
+
+
+def _require_coherent_identity(
+    connection: sqlite3.Connection,
+    investment_id: str,
+    *,
+    owner_kind: str,
+    owner_id: str,
+    capital_structure: CapitalStructure,
+) -> None:
+    """P-8 across the Investment: the structure about to be written, beside
+    every other structure the Investment already holds.
+
+    The owner being written replaces its own stored structure rather than being
+    compared with it, so re-saving one structure never conflicts with the copy
+    it is replacing."""
+
+    others: list[tuple[StructureOwner, CapitalStructure]] = []
+    if owner_kind != _BASE_OWNER_KIND:
+        base = _stored_capital_structure(
+            connection,
+            _BASE_OWNER_KIND,
+            investment_id,
+            where="The Base Capital Structure",
+        )
+        if base is not None:
+            others.append(
+                (
+                    _structure_owner(
+                        StructureOwnerKind.BASE, investment_id, "the Base Capital Structure"
+                    ),
+                    base,
+                )
+            )
+    for strategy_id, name, structure in _strategy_capital_structures(connection, investment_id):
+        if owner_kind == _STRATEGY_OWNER_KIND and strategy_id == owner_id:
+            continue
+        others.append(
+            (
+                _structure_owner(StructureOwnerKind.STRATEGY, strategy_id, f"Strategy {name!r}"),
+                structure,
+            )
+        )
+    label = (
+        "the Base Capital Structure"
+        if owner_kind == _BASE_OWNER_KIND
+        else "this Strategy's Capital Structure"
+    )
+    kind = (
+        StructureOwnerKind.BASE if owner_kind == _BASE_OWNER_KIND else StructureOwnerKind.STRATEGY
+    )
+    require_coherent_position_identity(
+        [*others, (_structure_owner(kind, owner_id, label), capital_structure)]
+    )
+
+
+def _require_valid_capital_structure(
+    capital_structure: object, *, member_unit_ids: Iterable[str]
+) -> CapitalStructure:
+    """The P7.7 structural authority on a structure about to be stored, judged
+    against the owner's Units. This store adds no rule of its own.
+
+    Whether the structure *executes* for a given variant -- a priority the
+    acquisition loan holds, CS-5, a funding month P7.8 does not schedule -- is a
+    variant question the executor asks of the resolved Project state, so it is
+    deliberately not asked here: a Base edit must never make a stored structure
+    unwritable or unreadable."""
+
+    issues = validate_capital_structure(
+        capital_structure, member_unit_ids=sorted(member_unit_ids), acquisition_loan_unit_ids=()
+    )
+    if issues:
+        raise CapitalStructureValidationError(issues)
+    assert isinstance(capital_structure, CapitalStructure)
+    return capital_structure
+
+
+def _replace_capital_structure(
+    connection: sqlite3.Connection,
+    *,
+    investment_id: str,
+    owner_kind: str,
+    owner_id: str,
+    capital_structure: CapitalStructure,
+) -> None:
+    """Whole-structure atomic replacement: the owner's previous structure and
+    every row under it go, then the new one is written, inside the caller's one
+    transaction."""
+
+    _delete_capital_structure(connection, owner_kind, owner_id)
+    if capital_structure.positions or owner_kind == _STRATEGY_OWNER_KIND:
+        _write_capital_structure(
+            connection,
+            investment_id=investment_id,
+            owner_kind=owner_kind,
+            owner_id=owner_id,
+            capital_structure=capital_structure,
+        )
+
+
+def _every_capital_structure(
+    connection: sqlite3.Connection, investment_id: str
+) -> list[tuple[str, CapitalStructure]]:
+    """Every structure the Investment holds, each with the label a message names
+    it by: its Base structure, then each Strategy's own in creation order."""
+
+    stated: list[tuple[str, CapitalStructure]] = []
+    base = _stored_capital_structure(
+        connection, _BASE_OWNER_KIND, investment_id, where="The Base Capital Structure"
+    )
+    if base is not None:
+        stated.append(("the Base Capital Structure", base))
+    for _, name, structure in _strategy_capital_structures(connection, investment_id):
+        stated.append((f"Strategy {name!r}'s Capital Structure", structure))
+    return stated
+
+
+def _write_strategy_root_overlays(
+    connection: sqlite3.Connection, investment_id: str, strategy: StrategyDefinition
+) -> None:
+    """The Strategy's Investment-root overlays: in P7.8B, its own Capital
+    Structure when it states one.
+
+    The marker is written **even for the empty structure**, because that is
+    precisely what it distinguishes: a Strategy with no row inherits the Base
+    structure, and a Strategy with a row holding no position deliberately uses
+    no structured capital."""
+
+    own = strategy_capital_structure(strategy)
+    if own is None:
+        return
+    _write_capital_structure(
+        connection,
+        investment_id=investment_id,
+        owner_kind=_STRATEGY_OWNER_KIND,
+        owner_id=strategy.strategy_id,
+        capital_structure=own,
+    )
+
+
+def _require_coherent_strategy_identity(
+    connection: sqlite3.Connection, investment_id: str, strategy: StrategyDefinition
+) -> None:
+    """P-8 for a Strategy about to be written: its own Capital Structure against
+    every other structure this Investment holds. A Strategy that inherits the
+    Base structure states none and cannot conflict with it."""
+
+    own = strategy_capital_structure(strategy)
+    if own is None:
+        return
+    _require_coherent_identity(
+        connection,
+        investment_id,
+        owner_kind=_STRATEGY_OWNER_KIND,
+        owner_id=strategy.strategy_id,
+        capital_structure=own,
+    )
+
+
+def _require_promotable_capital_structures(
+    connection: sqlite3.Connection, investment_id: str
+) -> None:
+    """Refuse promotion while a stored structure names its residual at Unit
+    scope.
+
+    A hidden one-unit executor's analysis root is the Unit, so an authored
+    Common Equity marker there is Unit-scoped. A visible Investment's root is
+    the Investment, and the P7.8 executor requires the marker at the analysis
+    root. Rewriting the marker's scope during promotion would silently change a
+    stored financial contract, so the analyst changes it (under a new position
+    id, because scope is part of a position's identity) or removes it first."""
+
+    for label, structure in _every_capital_structure(connection, investment_id):
+        for position in structure.positions:
+            if (
+                position.position_class is PositionClass.COMMON_EQUITY
+                and position.scope.kind is ScopeKind.UNIT
+            ):
+                raise InvestmentStructureError(
+                    f"{label} names the Common Equity residual with position "
+                    f"{position.name!r} ({position.position_id}), scoped to Unit "
+                    f"{position.scope.unit_id!r}. A visible Investment's residual is the "
+                    "Investment's own, so that structure would no longer execute after "
+                    "promotion. Give the marker Investment scope under a new position id, or "
+                    "remove it, first; promotion never rewrites a stored structure."
+                )
+
+
+def _capital_structure_references(
+    connection: sqlite3.Connection, investment_id: str, unit_id: str
+) -> list[str]:
+    """Every stored Capital Structure position of this Investment whose scope
+    names ``unit_id``, named by its own display name and its structure's -- never
+    by an opaque id, because the analyst has to know which position to change."""
+
+    names = {
+        row["id"]: row["name"]
+        for row in connection.execute(
+            "SELECT id, name FROM strategies WHERE investment_id = ?", (investment_id,)
+        )
+    }
+    references: list[str] = []
+    for row in connection.execute(
+        """
+        SELECT cs.owner_kind, cs.owner_id, cp.name, cp.position_id
+        FROM capital_structures cs
+        JOIN capital_positions cp ON cp.structure_id = cs.structure_id
+        WHERE cs.investment_id = ? AND cp.scope_unit_id = ?
+        ORDER BY cs.owner_kind, cs.owner_id, cp.position_id
+        """,
+        (investment_id, unit_id),
+    ):
+        owner = (
+            "the Base Capital Structure"
+            if row["owner_kind"] == _BASE_OWNER_KIND
+            else f"Strategy {names.get(row['owner_id'], row['owner_id'])!r}'s Capital Structure"
+        )
+        references.append(f"Capital Structure position {row['name']!r} in {owner}")
+    return references
+
+
+def _require_deal_wrapper(connection: sqlite3.Connection, deal_id: str) -> str | None:
+    """The hidden wrapper ``deal_id`` belongs to, or ``None`` for a standalone
+    Deal. A Unit of a visible Investment is refused: that Investment's Capital
+    Structure is the Investment's own, and a Unit never holds a second one."""
+
+    investment_id = _investment_of_deal(connection, deal_id)
+    if investment_id is None:
+        return None
+    if not _decode_hidden_flag(_investment_row(connection, investment_id)):
+        raise InvestmentStructureError(
+            f"Deal {deal_id!r} is a Unit of a visible Investment, which owns the Capital "
+            "Structure for every one of its Units. Edit the Investment's Capital Structure; a "
+            "Unit never holds a second one."
+        )
+    _require_hidden_wrapper(connection, investment_id)
+    return investment_id
+
+
+def get_base_capital_structure(
+    investment_id: str, *, db_path: Path | None = None
+) -> CapitalStructure:
+    """The Investment's Base Capital Structure -- the neutral empty structure
+    when it states none. Read-only: reading one creates nothing."""
+
+    with _connect(db_path) as connection:
+        _require_structure_owner(connection, investment_id)
+        stored = _stored_capital_structure(
+            connection, _BASE_OWNER_KIND, investment_id, where="The Base Capital Structure"
+        )
+    return CapitalStructure(positions=()) if stored is None else stored
+
+
+def set_base_capital_structure(
+    investment_id: str,
+    capital_structure: CapitalStructure,
+    *,
+    db_path: Path | None = None,
+) -> CapitalStructure:
+    """Replace the Investment's Base Capital Structure whole.
+
+    One transaction: the structure validates against this Investment's Units,
+    its position identities agree with every other structure the Investment
+    holds, and then the previous structure and the new one are swapped. An empty
+    structure clears it, leaving no marker and no row. A hidden wrapper that is
+    left holding no structure at all -- no Scenario, no Strategy and no Capital
+    Structure -- is removed with it, and its Deal is a plain standalone Deal
+    again (P-11)."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        owner = _require_structure_owner(connection, investment_id)
+        structure = _require_valid_capital_structure(
+            capital_structure, member_unit_ids=owner.unit_modes
+        )
+        _require_coherent_identity(
+            connection,
+            investment_id,
+            owner_kind=_BASE_OWNER_KIND,
+            owner_id=investment_id,
+            capital_structure=structure,
+        )
+        _replace_capital_structure(
+            connection,
+            investment_id=investment_id,
+            owner_kind=_BASE_OWNER_KIND,
+            owner_id=investment_id,
+            capital_structure=structure,
+        )
+        if owner.hidden and _wrapper_holds_no_structure(connection, investment_id):
+            _delete_investment_rows(connection, investment_id)
+        else:
+            _touch_investment(connection, investment_id, now=now)
+    return structure
+
+
+def read_deal_capital_structure(
+    deal_id: str, *, db_path: Path | None = None
+) -> tuple[str | None, CapitalStructure]:
+    """The Deal's Base Capital Structure and the hidden Investment that owns it
+    -- or ``(None, the empty structure)`` for a standalone Deal.
+
+    Read-only, and it materializes nothing: asking a Deal what structured
+    capital it has never gives it an Investment."""
+
+    with _connect(db_path) as connection:
+        if _operating_mode_of(connection, deal_id) is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _require_deal_wrapper(connection, deal_id)
+        if investment_id is None:
+            return None, CapitalStructure(positions=())
+        stored = _stored_capital_structure(
+            connection, _BASE_OWNER_KIND, investment_id, where="The Base Capital Structure"
+        )
+    return investment_id, CapitalStructure(positions=()) if stored is None else stored
+
+
+def set_deal_capital_structure(
+    deal_id: str,
+    capital_structure: CapitalStructure,
+    *,
+    db_path: Path | None = None,
+) -> tuple[str | None, CapitalStructure]:
+    """Replace the Deal's Base Capital Structure, materializing its hidden
+    one-unit Investment on the first non-empty save (Q4).
+
+    One transaction. An empty structure for a Deal that has no Investment
+    creates nothing at all -- there is nothing to store and no wrapper to
+    materialize -- and an empty structure that empties an existing wrapper
+    removes the wrapper when no Scenario and no Strategy is left. The UI keeps
+    saying "Deal" throughout: a hidden wrapper is storage, never chrome."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        operating_mode = _operating_mode_of(connection, deal_id)
+        if operating_mode is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _require_deal_wrapper(connection, deal_id)
+        structure = _require_valid_capital_structure(
+            capital_structure, member_unit_ids=(deal_id,)
+        )
+        if investment_id is None:
+            if not structure.positions:
+                return None, structure
+            investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
+        _require_coherent_identity(
+            connection,
+            investment_id,
+            owner_kind=_BASE_OWNER_KIND,
+            owner_id=investment_id,
+            capital_structure=structure,
+        )
+        _replace_capital_structure(
+            connection,
+            investment_id=investment_id,
+            owner_kind=_BASE_OWNER_KIND,
+            owner_id=investment_id,
+            capital_structure=structure,
+        )
+        if _wrapper_holds_no_structure(connection, investment_id):
+            _delete_investment_rows(connection, investment_id)
+            return None, structure
+        _touch_investment(connection, investment_id, now=now)
+    return investment_id, structure
+
+
+def list_investment_capital_structures(
+    investment_id: str, *, db_path: Path | None = None
+) -> InvestmentCapitalStructures:
+    """Every Capital Structure the Investment holds: its Base structure and each
+    Strategy's own replacement, with the Strategies that state none simply
+    absent. Read-only.
+
+    This is what the Position perspectives, the structured fingerprints and the
+    Position Decision Matrix read: one coherent view of everything authored,
+    never one structure at a time."""
+
+    with _connect(db_path) as connection:
+        _require_structure_owner(connection, investment_id)
+        base = _stored_capital_structure(
+            connection, _BASE_OWNER_KIND, investment_id, where="The Base Capital Structure"
+        )
+        strategies = tuple(
+            StrategyCapitalStructure(strategy_id=strategy_id, name=name, capital_structure=structure)
+            for strategy_id, name, structure in _strategy_capital_structures(
+                connection, investment_id
+            )
+        )
+    return InvestmentCapitalStructures(
+        investment_id=investment_id,
+        base=CapitalStructure(positions=()) if base is None else base,
+        strategies=strategies,
+    )
 
 
 def remove_investment_unit(

@@ -301,6 +301,8 @@ describe('the matrix never widens the page, and never colours a winner', () => {
   }
 
   const P7_5_BANNER = 'Phase 7 Gate P7.5 -- Strategies and the Decision Matrix (Risk).';
+  /** The banner that ends P7.5's section. See the slice below. */
+  const P7_6_BANNER = 'Phase 7 Gate P7.6 -- the visible Investment workspace.';
 
   it('scrolls inside its own region, with the row identity pinned', () => {
     const scroll = rule('.decision-matrix-scroll');
@@ -315,7 +317,17 @@ describe('the matrix never widens the page, and never colours a winner', () => {
   });
 
   it('uses no good / bad / winner colour: only an invalid variant is tinted', () => {
-    const section = CSS.slice(CSS.indexOf(P7_5_BANNER));
+    // Bounded at P7.8B. The slice used to run from P7.5's banner to the end of
+    // the stylesheet, so it silently measured every later gate's styles too --
+    // a claim about the *matrix* that grew a little less true each time a gate
+    // appended to `index.css`, and that would eventually have failed for a
+    // reason having nothing to do with the matrix. It now covers exactly P7.5's
+    // own section, and the count below stays at its original two. A later
+    // gate's colours are that gate's guard's business: P7.8B's are pinned by
+    // `capitalStructureArchitecture.test.ts`.
+    const start = CSS.indexOf(P7_5_BANNER);
+    expect(start).toBeGreaterThan(-1);
+    const section = CSS.slice(start, CSS.indexOf(P7_6_BANNER, start));
     expect(section.length).toBeGreaterThan(0);
     expect(section).not.toMatch(/--(success|positive|negative|gain|loss)|heat|winner|best/i);
     const danger = section.split('\n').filter((line) => line.includes('--danger'));

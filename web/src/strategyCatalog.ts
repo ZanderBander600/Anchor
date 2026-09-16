@@ -22,7 +22,8 @@ export interface StrategyDomainPresentation {
   replaces: string;
 }
 
-/** The five decision domains, in the backend's canonical order. */
+/** The decision domains, in the backend's canonical order: the five a Strategy
+ * states per Unit, then the one it states once for the whole transaction. */
 export const STRATEGY_DOMAINS: readonly StrategyDomainPresentation[] = [
   {
     domain: 'acquisition',
@@ -49,6 +50,11 @@ export const STRATEGY_DOMAINS: readonly StrategyDomainPresentation[] = [
     label: 'Disposition',
     replaces: 'Hold Period.',
   },
+  {
+    domain: 'capital_structure',
+    label: 'Capital Structure',
+    replaces: 'The whole capital structure: every position above Common Equity.',
+  },
 ];
 
 export function strategyDomainLabel(domain: string): string {
@@ -58,7 +64,13 @@ export function strategyDomainLabel(domain: string): string {
 /** The domains a saved Strategy replaces, in canonical order. Empty means it
  * inherits Base everywhere. */
 export function strategyDomainsReplaced(strategy: StrategyDefinition): string[] {
-  const present = new Set(strategy.overlays.map((overlay) => overlay.domain));
+  const present = new Set<string>(strategy.overlays.map((overlay) => overlay.domain));
+  // A whole-transaction domain is stated once, beside the per-Unit overlays
+  // rather than inside them. A Strategy that states one replaces it whole, so
+  // it is reported as replaced exactly as the five are.
+  for (const overlay of strategy.root_overlays ?? []) {
+    present.add(overlay.domain);
+  }
   return STRATEGY_DOMAINS.filter((entry) => present.has(entry.domain)).map((entry) => entry.label);
 }
 

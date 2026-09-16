@@ -275,7 +275,17 @@ def test_no_decision_module_reaches_the_engine_a_store_or_a_route() -> None:
         text = _lf(path.read_text(encoding="utf-8"))
         imports = _imports(ast.parse(text))
         assert not {name for name in imports if _ENGINE_CALCULATION.search(name)}, path
-        assert not {name for name in imports if re.search(r"deals|api|store|sqlite3|fastapi|analysis", name)}, path
+        # Matched by import *segment* rather than by substring. The rule is
+        # "imports no delivery, persistence or analysis package", and a
+        # substring search also refused ``..capital_structure.contracts``,
+        # because "capital" contains "api". Segment matching keeps every case
+        # the rule is for -- ``anchor.api``, ``..deals.store``, ``fastapi``,
+        # ``sqlite3`` -- and stops reading a package name as one.
+        assert not {
+            name
+            for name in imports
+            if re.search(r"(^|\.)(deals|api|store|sqlite3|fastapi|analysis)(\.|$)", name)
+        }, path
         assert not re.search(r"\b(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE)\b", text), path
 
 

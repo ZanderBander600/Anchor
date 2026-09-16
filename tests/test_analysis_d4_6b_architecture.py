@@ -343,6 +343,43 @@ _PERMITTED_WEB = frozenset(
         "web/src/components/InvestmentUnitsPanel.tsx",
         "web/src/components/InvestmentWorkspace.tsx",
         "web/src/components/InvestmentReturnBar.tsx",
+        # Phase 7 P7.8B -- the Capital Structure product surface. Six new
+        # production modules: the Capital Structure and structured-result wire
+        # contracts (`capitalTypes.ts`), the editor's string form model and its
+        # one boundary to the contract (`capitalStructureForm.ts`), the state
+        # hook (`useCapitalStructure.ts`), and three components -- the editor,
+        # the result surface and the Risk view that holds them.
+        #
+        # None computes economics, and this is the gate where that matters most:
+        # every funded amount, IRR, MOIC, profit, attachment, detachment,
+        # last-dollar basis, debt yield, coverage, preferred accrual, Funding
+        # Requirement and Common Equity figure is a backend field, selected and
+        # formatted. The approved P7.8A executor produces all of them, and its
+        # five financial modules are byte-identical to the reviewed head. The one
+        # arithmetic carve-out is the display-scale conversion in
+        # `capitalStructureForm.ts` -- a rate typed as `12.5` sent as `0.125` --
+        # which is the same conversion `strategyForm.ts` and `convert.ts` already
+        # make, and it parses rather than derives.
+        #
+        # Every shipped file P7.8B edits -- App.tsx, api.ts (still
+        # addition-only), index.css, strategyTypes.ts, RiskDecisionWorkspace.tsx,
+        # DecisionMatrixPanel.tsx, StrategyEditor.tsx and InvestmentWorkspace.tsx
+        # -- is already listed above; `convert.ts`, `format.ts`,
+        # `capitalEconomics.ts` and `decisionMatrix.ts` stay untouched. That the
+        # six compute nothing is held on the TypeScript side by
+        # `web/src/capitalStructureArchitecture.test.ts`, which parses each of
+        # them and allows exactly the display-scale conversions and the
+        # position-id sequence -- every other arithmetic expression, aggregate,
+        # ordering and re-parse is rejected. The P7.8B production ledger is
+        # `tests/test_p7_8b_product_integration_architecture.py`.
+        "web/src/capitalTypes.ts",
+        "web/src/capitalStructureForm.ts",
+        "web/src/useCapitalStructure.ts",
+        "web/src/usePositionDecisionMatrix.ts",
+        "web/src/components/CapitalStructureEditor.tsx",
+        "web/src/components/CapitalStructureResults.tsx",
+        "web/src/components/CapitalStructureWorkspace.tsx",
+        "web/src/components/PositionDecisionMatrixPanel.tsx",
     }
 )
 
@@ -1759,6 +1796,27 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         # with no financial logic of its own
         # (``tests/test_p7_6_consolidation_architecture.py``).
         "src/anchor/deals/investment_variants.py",
+        # P7.8B -- the structured capital pathway beside them, three modules and
+        # no financial logic in any of them
+        # (``tests/test_p7_8b_product_integration_architecture.py``):
+        #
+        # - ``capital_structure_codec.py`` names the wire and storage
+        #   discriminator of each typed variant, so a union that JSON cannot
+        #   tell apart has one authority. It decides nothing economic.
+        # - ``position_identity.py`` holds P-8: within one Investment a
+        #   position id names one instrument, so its class and scope may not
+        #   disagree between the Base structure and a Strategy's own. It
+        #   compares identity, never money.
+        # - ``structured_variants.py`` is persistence orchestration, exactly as
+        #   ``variants.py`` is: it resolves which structure a variant runs,
+        #   hands it and the completed Project results to the *approved* P7.8A
+        #   executor, and reports what comes back. Every funded amount, return,
+        #   attachment, coverage and Funding Requirement is the executor's, and
+        #   the five P7.8A financial modules are byte-identical to the reviewed
+        #   head.
+        "src/anchor/deals/capital_structure_codec.py",
+        "src/anchor/deals/position_identity.py",
+        "src/anchor/deals/structured_variants.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
                  "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):
