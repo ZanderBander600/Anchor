@@ -5828,6 +5828,34 @@ body {
   color: var(--text);
 }
 
+/* Long scenario and strategy names wrap rather than widening the table, so the
+   Worst Case and Range columns stay in view; the full name is always shown. */
+.decision-matrix thead th,
+.decision-matrix th[scope='rowgroup'] {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.decision-matrix thead th:not(.decision-matrix-corner) {
+  min-width: 7.5rem;
+  max-width: 11rem;
+  vertical-align: bottom;
+}
+
+.decision-matrix th[scope='row'],
+.decision-matrix th[scope='rowgroup'] {
+  max-width: 14rem;
+}
+
+/* A laptop-width workspace: tighter cells keep Worst Case and Range in view. */
+@media (max-width: 1366px) {
+  .decision-matrix th,
+  .decision-matrix td {
+    padding-left: var(--sp-3);
+    padding-right: var(--sp-3);
+  }
+}
+
 .decision-matrix-group th[scope='rowgroup'],
 .decision-matrix-group td {
   padding-top: var(--sp-3);
@@ -5886,8 +5914,8 @@ body {
 }
 
 .decision-matrix td.decision-matrix-status {
-  min-width: 11rem;
-  max-width: 18rem;
+  min-width: 10rem;
+  max-width: 14rem;
   text-align: left;
   white-space: normal;
   background: var(--surface-muted);
