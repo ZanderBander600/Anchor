@@ -2346,8 +2346,25 @@ def _scenario_validation_error_response(error: ScenarioValidationError) -> HTTPE
     )
 
 
+#: What an analyst reads when something they had open no longer exists. The
+#: error's own text names internal ids, which mean nothing on screen; the error
+#: keeps them for logs and callers that need them.
+_NOT_FOUND_MESSAGES: tuple[tuple[type[LookupError], str], ...] = (
+    (DealNotFoundError, "This deal could not be found. It may have been deleted; reopen it from the Deal Library."),
+    (InvestmentNotFoundError, "This investment could not be found. It may have been deleted; reopen it from the Investment Library."),
+    (ScenarioNotFoundError, "This scenario could not be found. It may have been deleted; reopen the deal to refresh its scenarios."),
+    (StrategyNotFoundError, "This strategy could not be found. It may have been deleted; reopen the deal to refresh its strategies."),
+    (PositionPerspectiveNotFoundError, "This capital position is no longer in the saved capital structure. Choose another position."),
+    (InvestmentUnitNotFoundError, "This unit is no longer part of the investment. Reopen the investment to refresh its units."),
+)
+
+
 def _not_found(error: LookupError) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
+    detail = next(
+        (message for kind, message in _NOT_FOUND_MESSAGES if isinstance(error, kind)),
+        str(error),
+    )
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
 
 
 def _investment_structure_conflict(error: InvestmentStructureError) -> HTTPException:

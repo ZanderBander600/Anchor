@@ -4198,7 +4198,7 @@ def _remove_hidden_wrapper_of_deal(connection: sqlite3.Connection, deal_id: str)
     if not _decode_hidden_flag(_investment_row(connection, investment_id)):
         # P7.6: fail closed, and never mutate the visible Investment.
         raise InvestmentStructureError(
-            f"Deal {deal_id!r} is a Unit of a visible Investment. Remove the Unit from the "
+            "This deal is a Unit of a visible Investment. Remove the Unit from the "
             "Investment before deleting the Deal; deleting a Deal never changes an "
             "Investment."
         )
@@ -5727,8 +5727,9 @@ def _structure_references(
         ):
             strategies[row["id"]] = row["name"]
     return [
-        *(f"Scenario {row['name']!r} ({row['id']})" for row in scenarios),
-        *(f"Strategy {strategies[key]!r} ({key})" for key in sorted(strategies)),
+        # Named as the analyst named them; the ids stay internal.
+        *(f"Scenario {row['name']!r}" for row in scenarios),
+        *(f"Strategy {strategies[key]!r}" for key in sorted(strategies)),
         # P7.8B: a Unit that a Capital Structure position is scoped to is
         # referenced just as firmly as one a Scenario override addresses. The
         # position is never reassigned to Investment scope and never deleted:
