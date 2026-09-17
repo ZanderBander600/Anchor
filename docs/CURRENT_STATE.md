@@ -9,18 +9,16 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `5cb327d` (PR #33, the P7.9 contract
-  ratification, documentation only; merged). The last accepted financial
-  implementation merge is `cf403c2` (`P7.8 Structured Position Cash Flows +
-  Position Returns`, PR #28).
+- Accepted baseline: `main` at `70b92e2` (PR #34, P7.9 Stage 1 deterministic
+  contracts and engine; merged). This is also the last accepted financial
+  implementation merge.
 - Active gate: **P7.9 Partnership Waterfalls + Investor Returns**. The ratified
   contract is `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`.
-  - **Stage 1** (deterministic contracts and engine): **explicitly started;
-    in progress** on `feature/p7-9-stage-1-partnership-engine`.
+  - **Stage 1** (deterministic contracts and engine): **complete and accepted**
+    in PR #34 (`70b92e2`).
   - **Stage 2** (persistence, fingerprints, API): not started.
   - **Stage 3** (product UI, browser QA): not started.
-- Open PR: none at the time of this synchronization. Stage 1 is committed
-  locally for independent review before any PR or merge.
+- Open PR: none at the time of this synchronization.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active
 - Autonomous merge: not authorized
@@ -48,6 +46,7 @@ accepted merge before updating this file.
 - P7.7 Capital Structure Foundation and legacy debt adapter
 - P7.8 Structured Position Cash Flows, Position Returns, persistence, product
   integration, Position Decision Matrix, browser QA, and human visual acceptance
+- P7.9 Stage 1 deterministic Partnership Waterfall contracts and engine
 
 ## Next Work
 
@@ -56,7 +55,8 @@ ratified (PR #33). Human engine-scope approval (Q16) covers the P7.9
 Partnership Waterfall and Investor Return layer only. The gate runs in three
 stages, each started explicitly:
 
-1. Stage 1: deterministic contracts and engine. **Started; in progress.**
+1. Stage 1: deterministic contracts and engine. **Complete and accepted in
+   PR #34 (`70b92e2`).**
 2. Stage 2: persistence, migration, fingerprints and API. Not started.
 3. Stage 3: product UI with browser QA. Not started.
 
@@ -98,7 +98,7 @@ sub-gate.
   `docs/architecture/P7_7_CAPITAL_STRUCTURE_FOUNDATION.md`,
   `docs/architecture/P7_8_STRUCTURED_POSITION_ECONOMICS.md`, and
   `docs/architecture/P7_8_PRODUCT_INTEGRATION.md`
-- P7.9 ratified contract (Stage 1 in progress):
+- P7.9 ratified contract (Stage 1 complete; Stage 2 not started):
   `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`
 
 ## Historical-Document Rule

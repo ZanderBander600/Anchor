@@ -2,9 +2,9 @@
 
 Status: **Ratified.** The human review approved this contract with the
 reviewer's recommended decisions (Section 19). It is the authority for P7.9.
-**Stage 1 (Section 17.1) is in progress** on
-`feature/p7-9-stage-1-partnership-engine`. Stages 2 and 3 have not started: no
-P7.9 migration, persistence, fingerprint, API or UI exists.
+**Stage 1 (Section 17.1) is complete and accepted** in PR #34 (`70b92e2`).
+Stages 2 and 3 have not started: no P7.9 migration, persistence, fingerprint,
+API or UI exists.
 
 History:
 
@@ -1526,6 +1526,6 @@ Also ratified, as recorded in Section 19.1 and the body:
   layer only.
 - **Nothing reopened.** It changes no ratified P7.0, P7.7 or P7.8 convention
   and introduces no deferred scope (Section 18).
-- **Implementation.** Production implementation has not started. Stage 1,
-  Stage 2 and Stage 3 (Section 17) each require an explicit start, and
-  finishing one never starts the next.
+- **Implementation.** Stage 1 is complete and accepted in PR #34 (`70b92e2`).
+  Stage 2 and Stage 3 (Section 17) have not started; each requires an explicit
+  start, and finishing one never starts the next.
