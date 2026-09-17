@@ -31,7 +31,7 @@ import {
 } from '../decisionMatrix';
 import type { PositionDecisionCell, PositionDecisionMatrix } from '../capitalTypes';
 import type { PositionDecisionMatrixState } from '../usePositionDecisionMatrix';
-import { readableIssueMessage } from '../issueText';
+import { collectReasonNotes, firstSentence, readableIssueMessage } from '../issueText';
 import { StaleAnalysisNotice } from './StaleAnalysisNotice';
 
 export interface PositionDecisionMatrixPanelProps {
@@ -74,6 +74,7 @@ function PositionTable({ matrix, ids }: { matrix: PositionDecisionMatrix; ids: s
   const cells = new Map<string, PositionDecisionCell>(matrix.cells.map((cell) => [cellKey(cell), cell]));
   const figures = new Map(matrix.strategy_figures.map((row) => [row.strategy_id, row]));
   const cross = matrix.cross_scenario_figures;
+  const reasons = collectReasonNotes(`${ids}position-reason-`);
 
   function strategyLabel(row: { strategy_id: string; name: string; is_base: boolean }): string {
     return row.is_base ? BASE_STRATEGY_LABEL : row.name;
@@ -92,6 +93,7 @@ function PositionTable({ matrix, ids }: { matrix: PositionDecisionMatrix; ids: s
     scenarioId: string,
     spec: PositionDecisionMatrix['metrics'][number],
     metricIndex: number,
+    place: string,
   ) {
     const cell = cells.get(`${strategyId}|${scenarioId}`);
     if (cell === undefined) {
@@ -107,9 +109,17 @@ function PositionTable({ matrix, ids }: { matrix: PositionDecisionMatrix; ids: s
         >
           <span className="decision-matrix-invalid">{INVALID_VARIANT}</span>
           <ul className="decision-matrix-reasons">
-            {cell.issues.map((issue, index) => (
-              <li key={`${issue.code}-${index}`}>{readableIssueMessage(issue.message)}</li>
-            ))}
+            {cell.issues.map((issue, index) => {
+              // Short in the cell; the whole reason is listed once under the table.
+              const message = readableIssueMessage(issue.message);
+              const note = reasons.note(message, place);
+              return (
+                <li key={`${issue.code}-${index}`} title={message} aria-describedby={note.id}>
+                  <span className="decision-matrix-reason-short">{firstSentence(message)}</span>{' '}
+                  <a className="decision-matrix-note-ref" href={`#${note.id}`}>{`Note ${note.number}`}</a>
+                </li>
+              );
+            })}
           </ul>
         </td>
       ) : null;
@@ -267,7 +277,13 @@ function PositionTable({ matrix, ids }: { matrix: PositionDecisionMatrix; ids: s
                       <span className="visually-hidden">, {label}</span>
                     </th>
                     {matrix.scenarios.map((column) =>
-                      valueCell(row.strategy_id, column.scenario_id, spec, metricIndex),
+                      valueCell(
+                        row.strategy_id,
+                        column.scenario_id,
+                        spec,
+                        metricIndex,
+                        `${label} · ${scenarioLabel(column.scenario_id)}`,
+                      ),
                     )}
                     {cross && summaryCell(row.strategy_id, spec, 'worst')}
                     {cross && summaryCell(row.strategy_id, spec, 'range')}
@@ -278,6 +294,18 @@ function PositionTable({ matrix, ids }: { matrix: PositionDecisionMatrix; ids: s
           })}
         </table>
       </div>
+      {reasons.list.length > 0 && (
+        <ol className="decision-matrix-notes decision-matrix-reason-notes" aria-label="Why variants are invalid">
+          {reasons.list.map((reason) => (
+            <li key={reason.id} id={reason.id}>
+              <span className="decision-matrix-note-marker">{`Note ${reason.number}`}</span>{' '}
+              <span className="decision-matrix-note-places">{reason.places.join('; ')}</span>
+              {': '}
+              {reason.text}
+            </li>
+          ))}
+        </ol>
+      )}
     </>
   );
 }

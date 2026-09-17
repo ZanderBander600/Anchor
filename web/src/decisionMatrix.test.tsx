@@ -584,6 +584,45 @@ describe('honest cells', () => {
     expect(within(cell('Renovate', 'Levered IRR', 'worst')).getByText('N/A').getAttribute('title')).toBe(message);
   });
 
+  it('keeps each invalid cell short and states each distinct reason once, naming its cells', async () => {
+    saved([HOLD, RENO], [DOWN, UP]);
+    const base = fullReport();
+    const long =
+      'exit_cap_rate: value -0.5 must be greater than 0. The scenario override pushes the resolved exit cap rate below zero, so no disposition can be valued.';
+    const other = 'noi_growth: value -1.5 must be greater than -1.';
+    const cells = base.matrix.cells.map((c) =>
+      c.strategy_id === 'st-reno' && c.scenario_id !== 'base'
+        ? cellOf({ strategy: 'st-reno', scenario: c.scenario_id, invalid: c.scenario_id === 'sc-down' ? [long, other] : [long] })
+        : c,
+    );
+    mockAnalyze.mockResolvedValue({ ...base, matrix: { ...base.matrix, cells, matrix_fingerprint: null } });
+    renderMatrix();
+    await autoRun();
+
+    const down = cell('Renovate', 'Levered IRR', 'sc-down');
+    const up = cell('Renovate', 'Levered IRR', 'sc-up');
+    for (const invalid of [down, up]) {
+      // Which cell is invalid stays visible, with a short reason and its note.
+      expect(invalid.textContent).toContain('Invalid variant');
+      expect(invalid.textContent).toContain('exit_cap_rate: value -50.00% must be greater than 0%.');
+      expect(invalid.textContent).not.toContain('no disposition can be valued');
+      expect(within(invalid).getByRole('link', { name: 'Note 1' }).getAttribute('href')).toBe('#decision-reason-1');
+    }
+    expect(within(down).getByRole('link', { name: 'Note 2' })).toBeTruthy();
+    expect(within(up).queryByRole('link', { name: 'Note 2' })).toBeNull();
+
+    // Each full reason once, naming every cell it applies to; none dropped.
+    const reasons = screen.getByRole('list', { name: 'Why variants are invalid' });
+    const items = within(reasons).getAllByRole('listitem');
+    expect(items).toHaveLength(2);
+    expect(items[0].id).toBe('decision-reason-1');
+    expect(items[0].textContent).toBe(
+      'Note 1 Renovate · Downside; Renovate · Upside: exit_cap_rate: value -50.00% must be greater than 0%. The scenario override pushes the resolved exit cap rate below zero, so no disposition can be valued.',
+    );
+    expect(items[1].textContent).toBe('Note 2 Renovate · Downside: noi_growth: value -150.00% must be greater than -100%.');
+    expect(screen.getAllByText(/no disposition can be valued/)).toHaveLength(1);
+  });
+
   it('shows the numbers a validator quotes as an analyst reads them, never as float noise', async () => {
     saved([HOLD, RENO], [DOWN, UP]);
     const base = fullReport();

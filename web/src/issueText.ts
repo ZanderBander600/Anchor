@@ -76,6 +76,49 @@ function ruleText(field: string, rule: string): string {
   return rule.replace(new RegExp(String.raw`(?<![\w.])${NUMBER}(?![\w.])`, 'g'), convert);
 }
 
+/** The first sentence of a message: what a crowded table cell has room for.
+ * The whole message is always shown once elsewhere. */
+export function firstSentence(message: string): string {
+  return message.split(/(?<=[.!?])\s+/)[0];
+}
+
+/** One distinct reason, shown once, with every place it applies. */
+export interface ReasonNote {
+  id: string;
+  /** 1-based, in the order the reasons were first met. */
+  number: number;
+  text: string;
+  places: string[];
+}
+
+export interface ReasonNotes {
+  note: (text: string, place: string) => ReasonNote;
+  list: ReasonNote[];
+}
+
+/** Collects each distinct reason once, in first-met order, and the places
+ * (e.g. `Renovate · Downside`) it applies to. */
+export function collectReasonNotes(idPrefix: string): ReasonNotes {
+  const byText = new Map<string, ReasonNote>();
+  const list: ReasonNote[] = [];
+  return {
+    note(text, place) {
+      let entry = byText.get(text);
+      if (entry === undefined) {
+        entry = { id: '', number: 0, text, places: [] };
+        entry.number = list.push(entry);
+        entry.id = `${idPrefix}${entry.number}`;
+        byText.set(text, entry);
+      }
+      if (!entry.places.includes(place)) {
+        entry.places.push(place);
+      }
+      return entry;
+    },
+    list,
+  };
+}
+
 export function readableIssueMessage(message: string): string {
   return message
     .replace(

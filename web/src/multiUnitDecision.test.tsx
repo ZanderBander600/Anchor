@@ -654,7 +654,12 @@ describe('the consolidated Decision Matrix', () => {
     const invalid = within(table).getByText('Invalid variant').closest('td') as HTMLElement;
     expect(invalid.querySelector('.decision-matrix-reason-unit')?.textContent).toBe('Harbor Retail (Podium): ');
     expect(within(invalid).getByText(/All Units in one Investment variant must use the same hold period\./)).toBeTruthy();
-    expect(invalid.textContent).toContain('Harbor Retail (Podium): 7, Harbor Office: 5, Harbor Industrial: 5');
+    // The backend's full reason is stated once under the table, in the note the
+    // cell points at, with every Unit named.
+    const ref = within(invalid).getByRole('link', { name: 'Note 1' });
+    const note = document.getElementById((ref.getAttribute('href') ?? '').slice(1)) as HTMLElement;
+    expect(note.textContent).toContain('Harbor Retail (Podium): 7, Harbor Office: 5, Harbor Industrial: 5');
+    expect(note.textContent).not.toContain('deal-a');
     expect(invalid.textContent).not.toContain('deal-a');
     // Every other cell stands.
     expect(within(table).getByText('9.87%')).toBeTruthy();

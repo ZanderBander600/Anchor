@@ -5924,6 +5924,23 @@ body {
   color: var(--text-secondary);
 }
 
+/* Invalid variants: a short reason in the cell, the whole reason once below. */
+.decision-matrix-note-ref {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.decision-matrix-reason-notes {
+  margin-bottom: var(--sp-2);
+}
+
+.decision-matrix-note-places {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
 @media (max-width: 767px) {
   .decision-matrix th,
   .decision-matrix td {

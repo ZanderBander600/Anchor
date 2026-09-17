@@ -55,6 +55,8 @@ import type {
   DecisionStrategyFigures,
   DecisionStrategyRow,
 } from '../decisionTypes';
+import { collectReasonNotes, firstSentence } from '../issueText';
+import type { ReasonNotes } from '../issueText';
 import { decisionIdScope, investmentIssueLead, withUnitNames } from '../investmentCatalog';
 import type { InvestmentScenario } from '../scenarioTypes';
 import type { InvestmentStrategy } from '../strategyTypes';
@@ -120,17 +122,30 @@ function NotAvailable({ text, noteId }: { text: string; noteId: string }) {
   );
 }
 
-/** One validator's reason, with the Unit it concerns named first and the
- * analyst's reading of an Investment rule before the backend's own words. */
-function CellReason({ issue, names }: { issue: DecisionCellIssue; names: Readonly<Record<string, string>> }) {
+/** One validator's reason, kept short in the cell: the Unit it concerns, then
+ * the analyst's reading of an Investment rule or the first sentence of the
+ * backend's words. The whole reason is listed once under the table, with every
+ * variant it applies to, and the cell points at it. Called while the table
+ * renders -- not as a component -- so every note exists before the list under
+ * the table is drawn. */
+function cellReason(
+  issue: DecisionCellIssue,
+  index: number,
+  names: Readonly<Record<string, string>>,
+  reasons: ReasonNotes,
+  place: string,
+) {
   const unitId = issueUnitId(issue.field);
   const unit = unitId === null ? undefined : (names[unitId] ?? unitId);
   const lead = investmentIssueLead(issue.code);
+  const message = withUnitNames(issue.message, names);
+  const full = `${unit === undefined ? '' : `${unit}: `}${lead === null ? '' : `${lead} `}${message}`;
+  const note = reasons.note(full, place);
   return (
-    <li>
+    <li key={`${issue.code}-${index}`} title={full} aria-describedby={note.id}>
       {unit !== undefined && <span className="decision-matrix-reason-unit">{`${unit}: `}</span>}
-      {lead !== null && <span className="decision-matrix-reason-lead">{`${lead} `}</span>}
-      {withUnitNames(issue.message, names)}
+      <span className="decision-matrix-reason-short">{lead ?? firstSentence(message)}</span>{' '}
+      <a className="decision-matrix-note-ref" href={`#${note.id}`}>{`Note ${note.number}`}</a>
     </li>
   );
 }
@@ -146,6 +161,7 @@ interface TableProps {
 
 function DecisionMatrixTable({ matrix, labels, caption, names, ids }: TableProps) {
   const notes = collectNotes(ids);
+  const reasons = collectReasonNotes(`${ids}decision-reason-`);
   const cells = new Map<string, DecisionCell>(
     matrix.cells.map((cell) => [`${cell.strategy_id}|${cell.scenario_id}`, cell]),
   );
@@ -175,9 +191,7 @@ function DecisionMatrixTable({ matrix, labels, caption, names, ids }: TableProps
         >
           <span className="decision-matrix-invalid">{INVALID_VARIANT}</span>
           <ul className="decision-matrix-reasons">
-            {cell.issues.map((issue, index) => (
-              <CellReason key={`${issue.code}-${index}`} issue={issue} names={names} />
-            ))}
+            {cell.issues.map((issue, index) => cellReason(issue, index, names, reasons, context))}
           </ul>
         </td>
       ) : null;
@@ -353,6 +367,18 @@ function DecisionMatrixTable({ matrix, labels, caption, names, ids }: TableProps
         {cross &&
           ' Worst Case is the least favorable value across the strategy’s scenarios (the highest Total Equity Invested). Range is the highest less the lowest.'}
       </p>
+      {reasons.list.length > 0 && (
+        <ol className="decision-matrix-notes decision-matrix-reason-notes" aria-label="Why variants are invalid">
+          {reasons.list.map((reason) => (
+            <li key={reason.id} id={reason.id}>
+              <span className="decision-matrix-note-marker">{`Note ${reason.number}`}</span>{' '}
+              <span className="decision-matrix-note-places">{reason.places.join('; ')}</span>
+              {': '}
+              {reason.text}
+            </li>
+          ))}
+        </ol>
+      )}
       {notes.list.length > 0 && (
         <ul className="decision-matrix-notes" aria-label="Figures not available">
           {notes.list.map((note) => (

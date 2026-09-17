@@ -528,6 +528,35 @@ describe('the POSITION perspective of the Decision Matrix', () => {
     expect(screen.getByText('12.30%')).toBeTruthy();
   });
 
+  it('keeps invalid cells short and states a shared reason once, naming both cells', () => {
+    const reason = {
+      source: 'capital_structure',
+      code: 'unresolved',
+      message: 'The mezzanine loan cannot be repaid at exit. The senior loan absorbs the whole sale.',
+      field: null,
+    };
+    render(
+      <PositionDecisionMatrixPanel
+        state={positionState({
+          report: report([
+            cell({ status: 'invalid', issues: [reason], metrics: [] }),
+            cell({ strategy_id: 'str-1', status: 'invalid', issues: [reason], metrics: [] }),
+          ]),
+          hasRun: true,
+        })}
+        ids=""
+        isDirty={false}
+      />,
+    );
+    expect(screen.getAllByText('Invalid variant')).toHaveLength(2);
+    expect(screen.getAllByText('The mezzanine loan cannot be repaid at exit.')).toHaveLength(2);
+    expect(screen.getAllByRole('link', { name: 'Note 1' })).toHaveLength(2);
+    const notes = within(screen.getByRole('list', { name: 'Why variants are invalid' })).getAllByRole('listitem');
+    expect(notes.map((note) => note.textContent)).toEqual([
+      'Note 1 Base Strategy · Base; Hold Longer · Base: The mezzanine loan cannot be repaid at exit. The senior loan absorbs the whole sale.',
+    ]);
+  });
+
   it('says when there is no position to compare', () => {
     render(
       <PositionDecisionMatrixPanel
