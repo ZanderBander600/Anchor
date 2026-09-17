@@ -36,6 +36,16 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 #: of Session B's own committed range.
 _P7_8A_HEAD = "f5850ade0bba907b0a2b9c329fa66abe131f5c23"
 
+#: P7.8 Session B's reviewed head, merged into ``main`` as the second parent of
+#: the P7.8 merge. Re-pinned at P7.9 Stage 1: the ledger below reads Session B's
+#: own committed range ``f5850ad..69af6fe``, so a later gate's new files never
+#: read as P7.8B changes while every P7.8B change stays proven.
+_P7_8B_HEAD = "69af6fe31a93d7781e8fdaedc889b03d959fddde"
+
+#: The P7.8 merge (PR #28) and its first parent, the P7.7 merge.
+_P7_8_MERGE = "cf403c292f19e8e0e86b2e05a6be17300db83317"
+_P7_7_MERGE = "a9f9b09fd71940cfdc079c109e9261187a041261"
+
 _PACKAGE = "src/anchor/capital_structure"
 _STRATEGY = "src/anchor/analysis/strategy.py"
 _STORE = "src/anchor/deals/store.py"
@@ -139,6 +149,10 @@ _CAPITAL_STRUCTURE_IMPORTERS = [
     "anchor/deals/store.py",
     "anchor/deals/structured_variants.py",
     "anchor/decision/comparison.py",
+    # P7.9 Stage 1: the Common Equity seam reads the structured result, and the
+    # Partnership contracts reuse two calculation-free shapes.
+    "anchor/partnership/common_equity.py",
+    "anchor/partnership/contracts.py",
 ]
 
 
@@ -159,6 +173,13 @@ def _changes_since(base: str, *paths: str) -> set[str]:
     tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
     untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
     return {path for path in (*tracked, *untracked) if path}
+
+
+def _changes_between(start: str, end: str, *paths: str) -> set[str]:
+    """Files that differ between two commits, renames split into their removal
+    and addition. Reads Git objects only."""
+
+    return {path for path in _git("diff", "--name-only", "--no-renames", start, end, "--", *paths).split() if path}
 
 
 def _current(path: str) -> str:
@@ -214,18 +235,24 @@ def _imports(tree: ast.Module) -> set[str]:
 
 
 def test_p7_8b_changed_exactly_its_authorized_backend_files() -> None:
-    """The P7.8B backend ledger, measured from Session A's reviewed head.
+    """The P7.8B backend ledger: Session B's committed range, from Session A's
+    reviewed head to Session B's reviewed head (re-pinned at P7.9 Stage 1).
 
     Never widen it to admit a financial module: P7.8B executes the approved
     engine and edits none of it."""
 
     changed = {
         path
-        for path in _changes_since(_P7_8A_HEAD, "src")
+        for path in _changes_between(_P7_8A_HEAD, _P7_8B_HEAD, "src")
         if _is_production(path)
     }
     assert sorted(changed - _P7_8B_BACKEND_FILES) == []
     assert sorted(_P7_8B_BACKEND_FILES - changed) == []
+
+
+def test_the_p7_8b_ledger_head_is_the_second_parent_of_the_p7_8_merge() -> None:
+    parents = _git("rev-list", "--parents", "-n", "1", _P7_8_MERGE).split()[1:]
+    assert parents == [_P7_7_MERGE, _P7_8B_HEAD]
 
 
 @pytest.mark.parametrize("path", _FROZEN)
