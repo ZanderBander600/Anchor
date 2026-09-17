@@ -9,10 +9,16 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `cf403c2` (`P7.8 Structured Position Cash Flows
+- Accepted baseline: `main` at `79cb524` (PR #31, documentation only; the last
+  accepted financial merge is `cf403c2`, `P7.8 Structured Position Cash Flows
   + Position Returns`, PR #28)
-- Active gate: none
-- Open implementation PR: none at the time of this synchronization
+- Active gate: **P7.9 Partnership Waterfalls + Investor Returns**. The P7.9
+  contract, `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`, is
+  **ratified**. Stage 1 implementation has **not started** and requires an
+  explicit start. No P7.9 production code, migration, API or UI exists.
+- Open PR: the documentation-only P7.9 contract-ratification PR from
+  `feature/p7-9-partnership-waterfalls`, awaiting human merge. There is no open
+  implementation PR.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active
 - Autonomous merge: not authorized
@@ -43,12 +49,20 @@ accepted merge before updating this file.
 
 ## Next Work
 
-The next ratified architectural gate is **P7.9: Partnership Waterfalls +
-Investor Returns**. It has not started and requires an explicit gate prompt and
-fresh feature branch.
+**P7.9: Partnership Waterfalls + Investor Returns** is active. Its contract is
+ratified. Human engine-scope approval (Q16) covers the P7.9 Partnership
+Waterfall and Investor Return layer only. The gate runs in three stages, each
+started explicitly:
 
-A bounded post-P7.8 stabilization sweep is available for human authorization
-before P7.9. It is not automatically active. Its source issues are:
+1. Stage 1: deterministic contracts and engine. **Not started**; it requires
+   an explicit start.
+2. Stage 2: persistence, migration, fingerprints and API.
+3. Stage 3: product UI with browser QA.
+
+Finishing one stage never starts the next.
+
+A bounded stabilization sweep remains available for separate human
+authorization. It is not automatically active. Its source issues are:
 
 - #26: product polish and technical-debt backlog
 - #29: multifamily rent-roll abstraction improvements
@@ -83,6 +97,8 @@ sub-gate.
   `docs/architecture/P7_7_CAPITAL_STRUCTURE_FOUNDATION.md`,
   `docs/architecture/P7_8_STRUCTURED_POSITION_ECONOMICS.md`, and
   `docs/architecture/P7_8_PRODUCT_INTEGRATION.md`
+- P7.9 ratified contract (implementation not started):
+  `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`
 
 ## Historical-Document Rule
 
