@@ -86,9 +86,10 @@ const mockTwoWay = vi.mocked(runLeaseLevelTwoWaySensitivity);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Opening a saved deal analyzes it once by itself; tests that care about
-  // that call count it explicitly.
-  mockAnalyze.mockResolvedValue(fixture.healthy as unknown as LeaseLevelAcquisitionResults);
+  // Opening a saved deal analyzes it once by itself. Sensitivity needs no
+  // analysis, so that call is held in flight here and renders nothing; tests
+  // that click Analyze supply a reply first, and count the call explicitly.
+  mockAnalyze.mockReturnValue(new Promise<LeaseLevelAcquisitionResults>(() => {}));
 });
 
 afterEach(() => {
@@ -582,13 +583,10 @@ describe('one-way candidate values are absolute', () => {
   });
 
   it('sends the deal on screen, through the same mapper Analyze uses', async () => {
+    // The automatic analysis on open must finish, or Analyze stays busy.
+    mockAnalyze.mockResolvedValue(fixture.healthy as unknown as LeaseLevelAcquisitionResults);
     const user = await openRisk();
     mockOneWay.mockResolvedValue(oneWayResult());
-    mockAnalyze.mockResolvedValue({
-      monthly_projection: {} as never,
-      annual_projection: {} as never,
-      results: {} as never,
-    });
 
     await enterCandidates(user, panel('one-way'), 'Exit Cap Rate candidate value', ['6']);
     await runIn(user, panel('one-way'));
@@ -1174,7 +1172,10 @@ describe('sensitivity state', () => {
   });
 
   it('an underwriting edit still dirties the deal', async () => {
+    // Inputs are editable once the automatic analysis on open has finished.
+    mockAnalyze.mockResolvedValue(fixture.healthy as unknown as LeaseLevelAcquisitionResults);
     const user = await openRisk();
+    await waitFor(() => expect(mockAnalyze).toHaveBeenCalledTimes(1));
 
     await user.click(screen.getByRole('tab', { name: 'Underwrite' }));
     const purchasePrice = document.getElementById(
