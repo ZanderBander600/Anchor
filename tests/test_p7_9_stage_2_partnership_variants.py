@@ -57,7 +57,6 @@ from anchor.deals.partnership_variants import (
 from anchor.deals.structured_variants import StructuredRootKind, analyze_structured_variant
 from anchor.deals.variants import analyze_variant
 from anchor.partnership import (
-    PartnerRole,
     PartnershipExecutionError,
     PartnershipStatus,
     PartnershipUnavailableReason,
@@ -225,7 +224,10 @@ def test_perspectives_are_the_union_with_where_each_partner_is_present(db: Path)
 
     assert list(perspectives) == ["g1", "g2", "gp", "lp"]
     assert perspectives["gp"].present_in_base and perspectives["gp"].strategy_ids == (inherit,)
-    assert perspectives["gp"].role is PartnerRole.GP and perspectives["gp"].name == "GP"
+    # One deterministic display name for the selector; the role each
+    # Partnership states is per-cell presentation, not a perspective field.
+    assert perspectives["gp"].name == "GP"
+    assert not hasattr(perspectives["gp"], "role")
     assert perspectives["lp"].strategy_ids == tuple(sorted((inherit, replace)))
     assert not perspectives["g1"].present_in_base and perspectives["g1"].strategy_ids == (replace,)
     assert partner_perspective(investment_id, "g2", db_path=db) == perspectives["g2"]

@@ -302,7 +302,6 @@ from .contracts import (
     TwoWaySensitivitySnapshot,
     VisibleInvestment,
 )
-from .partner_identity import require_coherent_partner_identity
 from .partnership_codec import HurdleConditionKind, condition_kind, split_rule_kind
 from .position_identity import (
     StructureOwner,
@@ -5277,7 +5276,6 @@ def create_strategy_for_deal(
         if investment_id is None:
             investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
         _require_coherent_strategy_identity(connection, investment_id, strategy)
-        _require_coherent_strategy_partners(connection, investment_id, strategy)
         _insert_strategy(connection, investment_id, strategy, now=now)
 
     return get_strategy(investment_id, strategy.strategy_id, db_path=db_path)
@@ -5309,7 +5307,6 @@ def create_strategy(
         owner = _require_structure_owner(connection, investment_id)
         _require_valid_strategy(strategy, owner=owner)
         _require_coherent_strategy_identity(connection, investment_id, strategy)
-        _require_coherent_strategy_partners(connection, investment_id, strategy)
         _insert_strategy(connection, investment_id, strategy, now=now)
 
     return get_strategy(investment_id, strategy.strategy_id, db_path=db_path)
@@ -5359,7 +5356,6 @@ def update_strategy(
             (strategy.name, strategy.description, now, strategy_id, investment_id),
         )
         _require_coherent_strategy_identity(connection, investment_id, strategy)
-        _require_coherent_strategy_partners(connection, investment_id, strategy)
         _delete_strategy_overlay_rows(connection, strategy_id)
         _write_strategy_overlays(connection, strategy_id, strategy.overlays)
         _write_strategy_root_overlays(connection, investment_id, strategy)
@@ -7816,47 +7812,6 @@ def _require_valid_partnership(partnership: object) -> Partnership:
     return partnership
 
 
-def _require_coherent_partners(
-    connection: sqlite3.Connection,
-    investment_id: str,
-    *,
-    owner_kind: str,
-    owner_id: str,
-    partnership: Partnership | None,
-) -> None:
-    """P-8 across the Investment: the Partnership about to be written, beside
-    every other Partnership the Investment already states. The owner being
-    written replaces its own statement rather than being compared with it."""
-
-    if partnership is None:
-        return
-    others: list[tuple[StructureOwner, Partnership]] = []
-    if owner_kind != _BASE_OWNER_KIND:
-        base = _stored_base_partnership(connection, investment_id)
-        if base is not None:
-            others.append(
-                (
-                    _structure_owner(StructureOwnerKind.BASE, investment_id, "the Base Partnership"),
-                    base,
-                )
-            )
-    for strategy_id, name, stated in _strategy_partnerships(connection, investment_id):
-        if stated is None or (owner_kind == _STRATEGY_OWNER_KIND and strategy_id == owner_id):
-            continue
-        others.append(
-            (
-                _structure_owner(StructureOwnerKind.STRATEGY, strategy_id, f"Strategy {name!r}"),
-                stated,
-            )
-        )
-    own = (
-        _structure_owner(StructureOwnerKind.BASE, owner_id, "the Base Partnership")
-        if owner_kind == _BASE_OWNER_KIND
-        else _structure_owner(StructureOwnerKind.STRATEGY, owner_id, "this Strategy's Partnership")
-    )
-    require_coherent_partner_identity([*others, (own, partnership)])
-
-
 def _write_strategy_partnership(
     connection: sqlite3.Connection, investment_id: str, strategy: StrategyDefinition
 ) -> None:
@@ -7873,25 +7828,6 @@ def _write_strategy_partnership(
         owner_kind=_STRATEGY_OWNER_KIND,
         owner_id=strategy.strategy_id,
         partnership=own if isinstance(own, Partnership) else None,
-    )
-
-
-def _require_coherent_strategy_partners(
-    connection: sqlite3.Connection, investment_id: str, strategy: StrategyDefinition
-) -> None:
-    """P-8 for a Strategy about to be written: its own Partnership against every
-    other Partnership this Investment states. Inheriting, or stating none,
-    cannot conflict."""
-
-    own = strategy_partnership(strategy)
-    if not isinstance(own, Partnership):
-        return
-    _require_coherent_partners(
-        connection,
-        investment_id,
-        owner_kind=_STRATEGY_OWNER_KIND,
-        owner_id=strategy.strategy_id,
-        partnership=own,
     )
 
 
@@ -7969,22 +7905,17 @@ def set_base_partnership(
 ) -> Partnership | None:
     """Replace the Investment's Base Partnership whole; ``None`` clears it.
 
-    One transaction: the Partnership validates, its partner identities agree
-    with every other Partnership the Investment states, and the previous and new
-    statements are swapped. A hidden wrapper left holding no structure at all is
-    removed with it, and its Deal is a plain standalone Deal again (P-11)."""
+    One transaction: the Partnership validates, and the previous and new
+    statements are swapped. A ``partner_id`` is the partner's stable identity
+    (P-8); its name and role are presentation and may differ from the Base
+    Partnership's or another Strategy's. A hidden wrapper left holding no
+    structure at all is removed with it, and its Deal is a plain standalone
+    Deal again (P-11)."""
 
     now = _utc_now_iso()
     with _connect(db_path) as connection:
         owner = _require_structure_owner(connection, investment_id)
         stated = None if partnership is None else _require_valid_partnership(partnership)
-        _require_coherent_partners(
-            connection,
-            investment_id,
-            owner_kind=_BASE_OWNER_KIND,
-            owner_id=investment_id,
-            partnership=stated,
-        )
         _replace_base_partnership(connection, investment_id, stated)
         if owner.hidden and _wrapper_holds_no_structure(connection, investment_id):
             _delete_investment_rows(connection, investment_id)
@@ -8029,13 +7960,6 @@ def set_deal_partnership(
             if stated is None:
                 return None, None
             investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
-        _require_coherent_partners(
-            connection,
-            investment_id,
-            owner_kind=_BASE_OWNER_KIND,
-            owner_id=investment_id,
-            partnership=stated,
-        )
         _replace_base_partnership(connection, investment_id, stated)
         if _wrapper_holds_no_structure(connection, investment_id):
             _delete_investment_rows(connection, investment_id)

@@ -154,8 +154,9 @@ def renamed(partnership: Partnership, suffix: str = " (renamed)") -> Partnership
 
 
 def gp_as_lp(partnership: Partnership) -> Partnership:
-    """``partnership`` with its ``gp`` partner's role changed to LP: the same id
-    naming a different investor."""
+    """``partnership`` with its ``gp`` partner described as an LP: the same
+    investor (P-8: the ``partner_id`` is the identity) under a different
+    reporting-only role."""
 
     return with_partner(partnership, "gp", role=PartnerRole.LP)
 

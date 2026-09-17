@@ -39,9 +39,15 @@ History:
     content (a Partnership always has a partner, so it cannot be empty), stored
     as a Strategy marker row with `has_partnership = 0`, and spelled `null` on
     the wire;
-  - P-8 partner identity is the partner's `role`: one `partner_id` keeps one
-    role across the Base and every Strategy Partnership
-    (`partner_role_conflict`); everything else may vary per Strategy;
+  - **P-8 partner identity is the `partner_id` itself**, and nothing else. A
+    partner's `name` and `role` are presentation: `role` is reporting-only, it
+    never selects a subject, recipient or participant (Section 4.2), it is
+    excluded from every financial fingerprint (FP-1), and it may differ between
+    the Base Partnership and each Strategy's own. The same `partner_id` with
+    different roles persists, resolves, analyses and compares normally; the
+    Partner Decision Matrix reports each cell's own `partner_name` and
+    `partner_role`, from the Partnership that cell resolved, so one Strategy's
+    terms never label another's;
   - the Partnership fingerprint also records `contribution_rule` (an economic
     field with one v1 member), alongside every field Section 17.2 lists;
   - a Partner-matrix cell whose variant has no Partnership takes the structured

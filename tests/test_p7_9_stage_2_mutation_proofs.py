@@ -17,11 +17,12 @@ it is withdrawn.
 | S5 | a variant with no Partnership gets the structured fingerprint as its key | FP-2 |
 | S6 | a non-participant's Promote Earned is reported as 0.0 | N/A, never zero (R-E) |
 | S7 | deleting a Strategy leaves its Partnership rows | lifecycle |
-| S8 | the partner identity check is skipped | P-8 |
+| S8 | one Strategy's role labels every matrix cell | per-cell presentation |
 """
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -41,11 +42,12 @@ from anchor.analysis import strategy as strategy_module
 from anchor.decision import comparison
 from anchor.deals import fingerprint as fingerprint_module
 from anchor.deals import partnership_variants
+from anchor.deals import decision_matrix as matrix_module
 from anchor.deals import store
 from anchor.deals.decision_matrix import analyze_partner_decision_matrix
-from anchor.deals.partner_identity import PartnerIdentityConflictError
 from anchor.deals.partnership_variants import analyze_partnership_variant, resolve_variant_partnership
 from anchor.decision.comparison import FigureReason, PartnerMetric
+from anchor.partnership import PartnerRole
 
 _SRC = (Path(__file__).resolve().parents[1] / "src" / "anchor").resolve()
 
@@ -244,26 +246,40 @@ def test_s7_orphaned_strategy_partnership_rows_are_killed(tmp_path: Path, monkey
 
 
 # =============================================================================
-# S8 -- one partner identity per Investment
+# S8 -- every cell is described by its own Partnership
 # =============================================================================
 
 
-def test_s8_a_skipped_identity_check_is_killed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runs = iter(range(3))
+def test_s8_one_strategys_role_labelling_every_cell_is_killed(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``partner_id`` may be the GP under one Strategy and an LP under the
+    next (P-8: the id is the identity). A matrix that labelled every cell from
+    one Partnership would mislabel the others."""
 
-    def conflict_refused() -> None:
-        db = tmp_path / f"s8-{next(runs)}.db"
-        investment_id = _hidden(db, f.f1_terms())
-        with pytest.raises(PartnerIdentityConflictError):
-            store.create_strategy(
-                investment_id,
-                name="Recast",
-                root_overlays=(partnership_overlay(gp_as_lp(f.f1_terms())),),
-                db_path=db,
-            )
-        assert store.list_strategies(investment_id, db_path=db) == []
+    _, investment_id = structured_deal(db, f.f1_terms())
+    recast = store.create_strategy(
+        investment_id,
+        name="GP as LP",
+        root_overlays=(partnership_overlay(gp_as_lp(f.f1_terms())),),
+        db_path=db,
+    ).strategy.strategy_id
 
-    killed(monkeypatch, conflict_refused, store, "require_coherent_partner_identity", lambda partnerships: None)
+    def each_cell_states_its_own() -> None:
+        report = analyze_partner_decision_matrix(investment_id, "gp", db_path=db)
+        described = {cell.strategy_id: cell.partner_role for cell in report.matrix.cells}
+        assert described["base"] is PartnerRole.GP
+        assert described[recast] is PartnerRole.LP
+
+    real = matrix_module._partner_cell
+
+    def labelled_from_the_base(
+        investment: str, strategy_id: str, scenario_id: str, partner_id: str, db_path: object
+    ) -> object:
+        cell = real(investment, strategy_id, scenario_id, partner_id, db_path)  # type: ignore[arg-type]
+        if cell.partner_role is None:
+            return cell
+        return dataclasses.replace(cell, partner_role=PartnerRole.GP)
+
+    killed(monkeypatch, each_cell_states_its_own, matrix_module, "_partner_cell", labelled_from_the_base)
 
 
 def test_every_mutant_targets_a_real_function() -> None:
@@ -274,7 +290,7 @@ def test_every_mutant_targets_a_real_function() -> None:
         (partnership_variants, "_partnership_fingerprint"),
         (comparison, "_partner_metric_value"),
         (store, "_delete_partnership"),
-        (store, "require_coherent_partner_identity"),
+        (matrix_module, "_partner_cell"),
     ):
         assert callable(getattr(module, name)), name
         assert Path(module.__file__).resolve().is_relative_to(_SRC)  # type: ignore[arg-type]

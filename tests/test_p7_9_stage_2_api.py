@@ -269,23 +269,27 @@ def test_a_contract_violation_is_the_validators_422_and_writes_nothing(
     assert store.get_base_partnership(investment_id, db_path=db) == f.f7_terms()
 
 
-def test_a_partner_identity_conflict_is_its_own_422(client: TestClient, db: Path) -> None:
+def test_a_strategy_may_restate_a_partners_role(client: TestClient, db: Path) -> None:
+    """P-8 identity is the ``partner_id``; ``role`` is presentation, so a
+    Strategy that describes the same partner differently is saved and read back
+    exactly, and the Base Partnership is untouched."""
+
     _, investment_id = structured_deal(db, f.f1_terms())
+
     strategy = client.post(
         f"/investments/{investment_id}/strategies",
-        json={"name": "Recast", "root_overlays": [{"domain": "partnership", "content": wire(gp_as_lp(f.f1_terms()))}]},
+        json={"name": "GP as LP", "root_overlays": [{"domain": "partnership", "content": wire(gp_as_lp(f.f1_terms()))}]},
     )
 
-    assert strategy.status_code == 422
-    assert detail(strategy) == [
-        {
-            "code": "partner_role_conflict",
-            "message": detail(strategy)[0]["message"],
-            "partner_id": "gp",
-            "field": "role",
-        }
-    ]
-    assert client.get(f"/investments/{investment_id}/strategies").json() == []
+    assert strategy.status_code == 200
+    stated = strategy.json()["strategy"]["root_overlays"][0]["content"]
+    assert stated == wire(gp_as_lp(f.f1_terms()))
+    assert {partner["partner_id"]: partner["role"] for partner in stated["partners"]} == {"lp": "lp", "gp": "lp"}
+    base = client.get(f"/investments/{investment_id}/partnership").json()["partnership"]
+    assert {partner["partner_id"]: partner["role"] for partner in base["partners"]} == {"lp": "lp", "gp": "gp"}
+    assert client.post(
+        f"/investments/{investment_id}/partnership-variants/{strategy.json()['strategy']['strategy_id']}/base/analysis"
+    ).status_code == 200
 
 
 # =============================================================================
@@ -460,11 +464,13 @@ def test_the_partner_perspectives_route(client: TestClient, db: Path) -> None:
 
     body = client.get(f"/investments/{investment_id}/partner-perspectives").json()
 
+    # The perspective is keyed by the id, with one deterministic display name;
+    # a role belongs to the Partnership that states it, so it is not here.
     assert body == {
         "investment_id": investment_id,
         "partners": [
-            {"partner_id": "gp", "name": "GP", "role": "gp", "present_in_base": True, "strategy_ids": []},
-            {"partner_id": "lp", "name": "LP", "role": "lp", "present_in_base": True, "strategy_ids": []},
+            {"partner_id": "gp", "name": "GP", "present_in_base": True, "strategy_ids": []},
+            {"partner_id": "lp", "name": "LP", "present_in_base": True, "strategy_ids": []},
         ],
     }
     assert client.get("/investments/zzz-missing/partner-perspectives").status_code == 404
@@ -479,6 +485,8 @@ def test_the_partner_matrix_route(client: TestClient, db: Path, monkeypatch: pyt
     assert body["partner"]["partner_id"] == "lp" and body["root_kind"] == "hidden_unit"
     matrix = body["matrix"]
     assert matrix["perspective"] == "partner" and matrix["partner_id"] == "lp"
+    assert matrix["partner_name"] == "LP" and "role" not in matrix
+    assert (matrix["cells"][0]["partner_name"], matrix["cells"][0]["partner_role"]) == ("LP", "lp")
     assert [metric["metric"] for metric in matrix["metrics"]] == [
         "total_contributions", "total_distributions", "partner_irr", "partner_moic", "partner_profit",
         "distribution_difference", "promote_earned", "benchmark_capital_subordination",

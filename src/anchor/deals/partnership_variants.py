@@ -48,7 +48,7 @@ from ..analysis.strategy import (
     resolve_partnership,
     strategy_partnership,
 )
-from ..partnership import Partner, Partnership, PartnershipResult, PartnerRole, execute_partnership
+from ..partnership import Partner, Partnership, PartnershipResult, execute_partnership
 from . import store
 from .fingerprint import fingerprint_partnership_source
 from .structured_variants import (
@@ -129,10 +129,13 @@ class PartnerPerspective:
     """One addressable ``PARTNER(partner_id)`` perspective of an Investment.
 
     The union of the stable partner ids in the Investment's Base Partnership and
-    in every Strategy's own, with the role that identity keeps everywhere (P-8,
-    enforced at every save). ``name`` is presentation: the Base Partnership's
-    name where it has one, else the first Strategy's, so the analyst never has to
-    select an opaque id.
+    in every Strategy's own. **The ``partner_id`` is the identity** (P-8); the
+    name and role each Partnership describes that partner by are presentation
+    and may differ from Strategy to Strategy, so neither is an invariant of the
+    perspective. ``name`` is one deterministic label for the selector -- the
+    Base Partnership's where it states the partner, else the first stating
+    Strategy's in creation order -- so the analyst never has to select an opaque
+    id; the matrix reports each cell's own name and role beside its figures.
 
     ``present_in_base`` and ``strategy_ids`` say where the partner is actually
     present once each Strategy is resolved -- a Strategy that inherits the Base
@@ -142,7 +145,6 @@ class PartnerPerspective:
 
     partner_id: str
     name: str
-    role: PartnerRole
     present_in_base: bool
     strategy_ids: tuple[str, ...]
 
@@ -294,7 +296,6 @@ def partner_perspectives(
         PartnerPerspective(
             partner_id=partner_id,
             name=named[partner_id].name,
-            role=named[partner_id].role,
             present_in_base=partner_id in in_base,
             strategy_ids=tuple(sorted(set(holders.get(partner_id, ())))),
         )

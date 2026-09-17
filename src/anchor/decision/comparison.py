@@ -478,13 +478,23 @@ class PartnerCellInput:
     Stage 1 result (``None`` when the variant has no Partnership), and
     ``partner`` the selected partner's own result when the Partnership is
     complete and holds it. An invalid variant carries its ``issues`` and no
-    fingerprint."""
+    fingerprint.
+
+    ``partner_name`` and ``partner_role`` are **this cell's** presentation
+    fields, read from the Partnership this variant resolved: a ``partner_id``
+    is the stable identity (P-8), while the name and role it is described by
+    are presentation and may differ from Strategy to Strategy. They are stated
+    wherever the partner is present -- including while the Partnership's
+    figures are unavailable, because they come from the authored contract and
+    not from the result."""
 
     strategy_id: str
     scenario_id: str
     applicability: PartnerApplicability
     partnership: PartnershipResult | None = None
     partner: PartnerResult | None = None
+    partner_name: str | None = None
+    partner_role: PartnerRole | None = None
     project_source_fingerprint: str | None = None
     structured_source_fingerprint: str | None = None
     partnership_source_fingerprint: str | None = None
@@ -1832,12 +1842,20 @@ class PartnerDecisionCell:
 
     ``partnership_status`` and the unavailable fields are the Stage 1 result's
     own, and ``is_promote_participant`` is the partner's own flag, so the UI can
-    say *why* a figure is N/A without deriving anything."""
+    say *why* a figure is N/A without deriving anything.
+
+    ``partner_name`` and ``partner_role`` describe the partner **as this cell's
+    resolved Partnership states it**, so one Strategy's terms can never label
+    another's: an id that is the LP under one Strategy and a co-investor under
+    the next reports each in its own cell. Both are ``None`` where the partner
+    is not present."""
 
     strategy_id: str
     scenario_id: str
     status: CellStatus
     applicability: PartnerApplicability
+    partner_name: str | None
+    partner_role: PartnerRole | None
     issues: tuple[CellIssue, ...]
     project_source_fingerprint: str | None
     structured_source_fingerprint: str | None
@@ -1857,6 +1875,11 @@ class PartnerDecisionMatrix:
     """The whole Partner comparison package: the axes, the Partner catalog, the
     cells and the cross-Scenario figures.
 
+    ``partner_id`` is the perspective's identity (P-8) and ``partner_name`` the
+    deterministic display name the selector shows. There is deliberately **no**
+    matrix-level role: a role is presentation that each resolved Partnership
+    states for itself, so it belongs to the cell that states it.
+
     ``matrix_fingerprint`` includes the selected ``partner_id`` and every
     cell's source fingerprint, so two partners over the same variants never
     share one."""
@@ -1864,7 +1887,6 @@ class PartnerDecisionMatrix:
     perspective: DecisionPerspective
     partner_id: str
     partner_name: str
-    role: PartnerRole
     strategies: tuple[StrategyRow, ...]
     scenarios: tuple[ScenarioColumn, ...]
     metrics: tuple[MetricSpec, ...]
@@ -1994,12 +2016,17 @@ def _require_partner_cell(cell: PartnerCellInput) -> None:
             "exactly a source fingerprint and a hold period with no issues."
         )
     if cell.applicability is PartnerApplicability.NOT_PRESENT:
-        if cell.partner is not None:
+        if cell.partner is not None or cell.partner_name is not None or cell.partner_role is not None:
             raise DecisionComparisonError(
                 f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) is not present and carries a "
-                "partner result."
+                "partner result or its presentation fields."
             )
         return
+    if cell.partner_name is None or cell.partner_role is None:
+        raise DecisionComparisonError(
+            f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) is present and does not state the "
+            "name and role its own Partnership gives the partner."
+        )
     if cell.partnership is None:
         raise DecisionComparisonError(
             f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) is present and carries no "
@@ -2088,7 +2115,6 @@ def compare_partner_decision_matrix(
     *,
     partner_id: str,
     partner_name: str,
-    role: PartnerRole,
     strategies: Sequence[AxisMember],
     scenarios: Sequence[AxisMember],
     cells: Iterable[PartnerCellInput],
@@ -2130,6 +2156,8 @@ def compare_partner_decision_matrix(
                     if cell.applicability is PartnerApplicability.NOT_ANALYSED
                     else CellStatus.VALID,
                     applicability=cell.applicability,
+                    partner_name=cell.partner_name,
+                    partner_role=cell.partner_role,
                     issues=cell.issues,
                     project_source_fingerprint=cell.project_source_fingerprint,
                     structured_source_fingerprint=cell.structured_source_fingerprint,
@@ -2195,7 +2223,6 @@ def compare_partner_decision_matrix(
         perspective=DecisionPerspective.PARTNER,
         partner_id=partner_id,
         partner_name=partner_name,
-        role=role,
         strategies=tuple(
             StrategyRow(
                 strategy_id=strategy.id,

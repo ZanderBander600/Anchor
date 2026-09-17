@@ -35,6 +35,7 @@ from _p7_9_stage_2_fixtures import (  # type: ignore[import-not-found]
     renamed,
     structured_deal,
     unresolved_structure,
+    with_partner,
 )
 from anchor.analysis.strategy import AcquisitionChoice, StrategyDomain, StrategyOverlay
 from anchor.analysis.scenario import ScenarioOperation, ScenarioOverride, ScenarioTarget
@@ -185,7 +186,8 @@ def test_every_value_is_one_partner_result_field(setup: dict[str, Any], db: Path
     cell = _cell(report, BASE, BASE)
 
     assert report.matrix.perspective is DecisionPerspective.PARTNER
-    assert report.partner.partner_id == "gp" and report.matrix.role is PartnerRole.GP
+    assert report.partner.partner_id == "gp" and report.matrix.partner_name == "GP"
+    assert (cell.partner_name, cell.partner_role) == ("GP", PartnerRole.GP)
     assert report.root_kind is StructuredRootKind.HIDDEN_UNIT
     assert cell.status is CellStatus.VALID and cell.applicability is PartnerApplicability.PRESENT
     assert cell.is_promote_participant is True
@@ -246,6 +248,7 @@ def test_a_strategy_with_no_partnership_is_not_applicable(setup: dict[str, Any],
     cell = _cell(report, setup["none"], BASE)
 
     assert cell.status is CellStatus.VALID and cell.applicability is PartnerApplicability.NOT_PRESENT
+    assert (cell.partner_name, cell.partner_role) == (None, None)
     assert cell.partnership_status is None and cell.partnership_source_fingerprint is None
     assert cell.source_fingerprint == cell.structured_source_fingerprint
     for value in cell.metrics:
@@ -288,6 +291,7 @@ def test_an_unavailable_common_equity_reports_every_figure_na(setup: dict[str, A
     assert cell.partnership_status is PartnershipStatus.UNAVAILABLE
     assert cell.unavailable_reason is not None and cell.unavailable_message
     assert cell.is_promote_participant is None
+    assert (cell.partner_name, cell.partner_role) == ("GP", PartnerRole.GP)
     for value in cell.metrics:
         assert value.value is None
         assert value.reason is FigureReason.UNRESOLVED_FUNDING_REQUIREMENT
@@ -496,9 +500,99 @@ _AXES = {
             strategy_id=BASE, scenario_id=BASE, applicability=PartnerApplicability.PRESENT,
             source_fingerprint="x", hold_period=5,
         ),
+        PartnerCellInput(
+            strategy_id=BASE, scenario_id=BASE, applicability=PartnerApplicability.NOT_PRESENT,
+            source_fingerprint="x", hold_period=5, partner_name="GP", partner_role=PartnerRole.GP,
+        ),
     ],
-    ids=["unanalysed-without-issues", "analysed-without-fingerprint", "present-without-result"],
+    ids=[
+        "unanalysed-without-issues", "analysed-without-fingerprint", "present-without-result",
+        "absent-with-presentation-fields",
+    ],
 )
 def test_an_incoherent_cell_is_a_programming_error(cell: PartnerCellInput) -> None:
     with pytest.raises(DecisionComparisonError):
-        compare_partner_decision_matrix(partner_id="gp", partner_name="GP", role=PartnerRole.GP, cells=[cell], **_AXES)
+        compare_partner_decision_matrix(partner_id="gp", partner_name="GP", cells=[cell], **_AXES)
+
+
+# =============================================================================
+# One identity, many descriptions (P-8)
+# =============================================================================
+
+
+def test_one_partner_id_may_be_lp_gp_or_co_investor_in_different_strategies(db: Path) -> None:
+    """``partner_id`` is the identity; the name and role are presentation each
+    resolved Partnership states for itself. The matrix stays one perspective
+    keyed by that id, and every applicable cell reports its own metadata."""
+
+    _, investment_id = structured_deal(db, f.f1_terms())  # Base: gp is the GP
+    as_lp = store.create_strategy(
+        investment_id,
+        name="GP as LP",
+        root_overlays=(partnership_overlay(with_partner(f.f1_terms(), "gp", role=PartnerRole.LP, name="Sponsor LP")),),
+        db_path=db,
+    ).strategy.strategy_id
+    as_co_investor = store.create_strategy(
+        investment_id,
+        name="GP as co-investor",
+        root_overlays=(
+            partnership_overlay(
+                with_partner(f.f1_terms(), "gp", role=PartnerRole.CO_INVESTOR, name="Co-investor")
+            ),
+        ),
+        db_path=db,
+    ).strategy.strategy_id
+    absent = store.create_strategy(
+        investment_id, name="Other partners", root_overlays=(partnership_overlay(f.f12_terms()),), db_path=db
+    ).strategy.strategy_id
+
+    report = analyze_partner_decision_matrix(investment_id, "gp", db_path=db)
+
+    assert report.partner.partner_id == "gp"
+    assert report.matrix.partner_id == "gp" and report.matrix.partner_name == "GP"
+    assert not hasattr(report.matrix, "role")
+    described = {
+        cell.strategy_id: (cell.partner_name, cell.partner_role)
+        for cell in report.matrix.cells
+        if cell.scenario_id == BASE
+    }
+    assert described[BASE] == ("GP", PartnerRole.GP)
+    assert described[as_lp] == ("Sponsor LP", PartnerRole.LP)
+    assert described[as_co_investor] == ("Co-investor", PartnerRole.CO_INVESTOR)
+    assert described[absent] == (None, None)  # this Strategy states other partners
+
+    # Every Strategy that holds the id reports its figures; only the Strategy
+    # that does not hold it is not applicable.
+    applicability = {cell.strategy_id: cell.applicability for cell in report.matrix.cells if cell.scenario_id == BASE}
+    assert applicability[absent] is PartnerApplicability.NOT_PRESENT
+    for strategy_id in (BASE, as_lp, as_co_investor):
+        assert applicability[strategy_id] is PartnerApplicability.PRESENT
+        cell = _cell(report, strategy_id, BASE)
+        assert _metric(cell, PartnerMetric.PROFIT).value is not None
+        assert _metric(cell, PartnerMetric.PROMOTE_EARNED).value is not None
+
+    # A role is presentation: restating it moves no figure and no fingerprint.
+    base_cell = _cell(report, BASE, BASE)
+    lp_cell = _cell(report, as_lp, BASE)
+    assert [value.value for value in lp_cell.metrics] == [value.value for value in base_cell.metrics]
+    assert lp_cell.source_fingerprint == base_cell.source_fingerprint
+
+
+def test_the_perspective_is_addressable_even_when_no_partnership_states_the_base_role(db: Path) -> None:
+    """A partner only a Strategy states is still one perspective, named
+    deterministically from the first Partnership that states it."""
+
+    _, investment_id = structured_deal(db, f.f1_terms())
+    store.create_strategy(
+        investment_id,
+        name="Sponsors",
+        root_overlays=(partnership_overlay(f.f12_terms()),),
+        db_path=db,
+    )
+
+    report = analyze_partner_decision_matrix(investment_id, "g1", db_path=db)
+
+    assert report.partner.partner_id == "g1" and report.partner.present_in_base is False
+    assert report.matrix.partner_name == "G1"
+    present = [cell for cell in report.matrix.cells if cell.applicability is PartnerApplicability.PRESENT]
+    assert present and {(cell.partner_name, cell.partner_role) for cell in present} == {("G1", PartnerRole.GP)}

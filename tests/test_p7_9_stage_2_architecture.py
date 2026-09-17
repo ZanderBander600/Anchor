@@ -38,7 +38,6 @@ _STORE = "src/anchor/deals/store.py"
 _CONTRACTS = "src/anchor/deals/contracts.py"
 _FINGERPRINT = "src/anchor/deals/fingerprint.py"
 _CODEC = "src/anchor/deals/partnership_codec.py"
-_IDENTITY = "src/anchor/deals/partner_identity.py"
 _VARIANTS = "src/anchor/deals/partnership_variants.py"
 _MATRIX = "src/anchor/deals/decision_matrix.py"
 _COMPARISON = "src/anchor/decision/comparison.py"
@@ -49,14 +48,13 @@ _API = "src/anchor/api.py"
 #: - ``deals/store.py``: schema v12, the eight tables and the lifecycle;
 #: - ``deals/contracts.py``: the persisted-Partnership contracts;
 #: - ``deals/partnership_codec.py`` (new): the typed unions' one spelling;
-#: - ``deals/partner_identity.py`` (new): P-8 for partners;
 #: - ``deals/partnership_variants.py`` (new): the variant service;
 #: - ``deals/fingerprint.py``: the Partnership source fingerprint;
 #: - ``deals/decision_matrix.py`` and ``decision/comparison.py``: the PARTNER
 #:   perspective;
 #: - ``api.py``: the routes.
 _STAGE_2_PRODUCTION_FILES = frozenset(
-    {_STRATEGY, _STORE, _CONTRACTS, _CODEC, _IDENTITY, _VARIANTS, _FINGERPRINT, _MATRIX, _COMPARISON, _API}
+    {_STRATEGY, _STORE, _CONTRACTS, _CODEC, _VARIANTS, _FINGERPRINT, _MATRIX, _COMPARISON, _API}
 )
 
 #: Consumed and never changed: every financial module of P7.0 / P7.7 / P7.8 and
@@ -162,7 +160,7 @@ def test_the_ledger_base_follows_the_stage_1_merge() -> None:
 
 
 def test_the_new_modules_are_new_at_this_stage() -> None:
-    for path in (_CODEC, _IDENTITY, _VARIANTS):
+    for path in (_CODEC, _VARIANTS):
         assert _git("ls-tree", "--name-only", _STAGE_2_BASE, path).strip() == "", path
 
 
@@ -344,21 +342,77 @@ def test_inheritance_is_the_absence_of_a_row_and_none_is_a_flagged_row() -> None
     assert "if partnership is not None:" in base
 
 
-def test_every_write_path_checks_partner_identity() -> None:
+def test_the_position_identity_rule_is_untouched() -> None:
+    """P7.8B's own P-8 rule -- one ``position_id`` names one instrument -- still
+    runs on every Capital Structure write path."""
+
     store = _functions(_tree(_STORE))
-    for name in ("set_base_partnership", "set_deal_partnership"):
-        assert "_require_coherent_partners" in _calls(store[name]), name
+    for name in ("set_base_capital_structure", "set_deal_capital_structure"):
+        assert "_require_coherent_identity" in _calls(store[name]), name
     for name in ("create_strategy", "create_strategy_for_deal", "update_strategy"):
-        assert "_require_coherent_strategy_partners" in _calls(store[name]), name
         assert "_require_coherent_strategy_identity" in _calls(store[name]), name
 
 
-def test_the_identity_rule_names_role_and_nothing_else() -> None:
-    function = _functions(_tree(_IDENTITY))["partner_identity_issues"]
-    attributes = {node.attr for node in ast.walk(function) if isinstance(node, ast.Attribute)}
-    assert "role" in attributes
-    for varying in ("name", "commitment_share", "investor_class", "promote_participant_ids", "tiers"):
-        assert varying not in attributes, varying
+def test_identity_is_the_partner_id_and_a_role_is_never_a_cross_partnership_rule() -> None:
+    """P-8: the ``partner_id`` is the identity. ``role`` is reporting-only
+    presentation that may differ between the Base Partnership and each
+    Strategy's own, so no layer compares roles across Partnerships, refuses one,
+    or holds an identity rule of its own."""
+
+    assert not (_PROJECT_ROOT / "src/anchor/deals/partner_identity.py").exists()
+    for path in sorted(_STAGE_2_PRODUCTION_FILES):
+        text = _current(path)
+        for forbidden in ("partner_role_conflict", "PartnerIdentity", "partner_identity", "require_coherent_partner"):
+            assert forbidden not in text, (path, forbidden)
+    store = _functions(_tree(_STORE))
+    for name in ("set_base_partnership", "set_deal_partnership"):
+        # A save reads no role at all; only the row writer copies it through.
+        assert "role" not in {
+            node.attr for node in ast.walk(store[name]) if isinstance(node, ast.Attribute)
+        }, name
+    assert "role" in {
+        node.attr for node in ast.walk(store["_write_partnership_terms"]) if isinstance(node, ast.Attribute)
+    }
+
+
+def test_a_role_is_presentation_the_resolved_partnership_states_per_cell() -> None:
+    """The perspective holds no invariant role, and each matrix cell carries the
+    name and role its own Partnership gives the partner."""
+
+    perspective = next(
+        node for node in _tree(_VARIANTS).body
+        if isinstance(node, ast.ClassDef) and node.name == "PartnerPerspective"
+    )
+    fields = {
+        statement.target.id for statement in perspective.body
+        if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)
+    }
+    assert fields == {"partner_id", "name", "present_in_base", "strategy_ids"}
+
+    comparison = _tree(_COMPARISON)
+    for name, expected in (
+        ("PartnerDecisionCell", {"partner_name", "partner_role"}),
+        ("PartnerCellInput", {"partner_name", "partner_role"}),
+    ):
+        node = next(item for item in comparison.body if isinstance(item, ast.ClassDef) and item.name == name)
+        stated = {
+            statement.target.id for statement in node.body
+            if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)
+        }
+        assert expected <= stated, name
+    matrix = next(
+        item for item in comparison.body if isinstance(item, ast.ClassDef) and item.name == "PartnerDecisionMatrix"
+    )
+    matrix_fields = {
+        statement.target.id for statement in matrix.body
+        if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)
+    }
+    assert "role" not in matrix_fields and "partner_name" in matrix_fields
+
+    cell = _functions(_tree(_MATRIX))["_partner_cell"]
+    text = ast.unparse(cell)
+    assert "partner_name=None if authored is None else authored.name" in text
+    assert "partner_role=None if authored is None else authored.role" in text
 
 
 def test_every_lifecycle_path_removes_partnership_rows() -> None:
@@ -373,7 +427,7 @@ def test_every_lifecycle_path_removes_partnership_rows() -> None:
 
 
 def test_no_identifier_is_regenerated() -> None:
-    for path in (_IDENTITY, _VARIANTS, _CODEC, _FINGERPRINT):
+    for path in (_VARIANTS, _CODEC, _FINGERPRINT):
         assert "uuid" not in _current(path), path
     minted = sorted(
         name for name, function in _functions(_tree(_STORE)).items()
@@ -470,7 +524,7 @@ def test_the_codec_classifies_and_computes_nothing() -> None:
 _LATER = re.compile(r"fee\b|_fee|tax|clawback|claw_back|monthly|refinanc|recapitali|valuation|xirr|memo|template", re.IGNORECASE)
 
 
-@pytest.mark.parametrize("path", [_CODEC, _IDENTITY, _VARIANTS])
+@pytest.mark.parametrize("path", [_CODEC, _VARIANTS])
 def test_no_deferred_or_stage_3_identifier(path: str) -> None:
     assert not {name for name in _identifiers(_tree(path)) if _LATER.search(name)}, path
 

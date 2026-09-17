@@ -120,7 +120,6 @@ from .capital_structure.execution_contracts import (
     ExecutionIssueCode,
 )
 from .deals.capital_structure_codec import FundingAmountRuleKind, PositionTermsKind
-from .deals.partner_identity import PartnerIdentityConflictError
 from .deals.partnership_codec import HurdleConditionKind
 from .deals.partnership_variants import (
     analyze_partnership_variant,
@@ -2932,8 +2931,6 @@ def create_deal_strategy(deal_id: str, payload: dict[str, Any] = Body(...)) -> d
         raise _strategy_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
-    except PartnerIdentityConflictError as error:
-        raise _partner_identity_conflict_response(error) from None
 
 
 @app.get("/deals/{deal_id}/strategies", response_model=None)
@@ -2983,8 +2980,6 @@ def create_investment_strategy(
         raise _strategy_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
-    except PartnerIdentityConflictError as error:
-        raise _partner_identity_conflict_response(error) from None
 
 
 @app.get("/investments/{investment_id}/strategies/{strategy_id}", response_model=None)
@@ -3025,8 +3020,6 @@ def update_investment_strategy(
         raise _strategy_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
-    except PartnerIdentityConflictError as error:
-        raise _partner_identity_conflict_response(error) from None
 
 
 @app.delete(
@@ -4493,24 +4486,6 @@ def _partnership_execution_error_response(error: PartnershipExecutionError) -> H
     )
 
 
-def _partner_identity_conflict_response(error: PartnerIdentityConflictError) -> HTTPException:
-    """One partner id that would name two investors in one Investment (P-8), as
-    a structured 422."""
-
-    return HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        detail=[
-            {
-                "code": issue.code.value,
-                "message": issue.message,
-                "partner_id": issue.partner_id,
-                "field": issue.field,
-            }
-            for issue in error.issues
-        ],
-    )
-
-
 @app.get("/deals/{deal_id}/partnership", response_model=None)
 def read_deal_partnership(deal_id: str) -> dict[str, Any]:
     """The Deal's Base Partnership, and the hidden Investment that owns it when
@@ -4544,8 +4519,6 @@ def update_deal_partnership(deal_id: str, payload: dict[str, Any] = Body(...)) -
         raise _investment_structure_conflict(error) from None
     except PartnershipValidationError as error:
         raise _partnership_validation_error_response(error) from None
-    except PartnerIdentityConflictError as error:
-        raise _partner_identity_conflict_response(error) from None
     return {"deal_id": deal_id, "investment_id": investment_id, "partnership": _wire(saved)}
 
 
@@ -4578,8 +4551,6 @@ def update_investment_partnership(
         raise _investment_structure_conflict(error) from None
     except PartnershipValidationError as error:
         raise _partnership_validation_error_response(error) from None
-    except PartnerIdentityConflictError as error:
-        raise _partner_identity_conflict_response(error) from None
     return {"investment_id": investment_id, "partnership": _wire(saved)}
 
 

@@ -1086,7 +1086,8 @@ def _partner_cell(
         )
 
     result = analysis.result
-    present = resolved_partner(analysis.partnership, partner_id) is not None
+    authored = resolved_partner(analysis.partnership, partner_id)
+    present = authored is not None
     partner = None
     if present and result is not None and result.partners is not None:
         partner = next((item for item in result.partners if item.partner_id == partner_id), None)
@@ -1101,6 +1102,10 @@ def _partner_cell(
         applicability=PartnerApplicability.PRESENT if present else PartnerApplicability.NOT_PRESENT,
         partnership=result,
         partner=partner,
+        # Presentation, from the Partnership this variant resolved: the id is
+        # the identity, and the name and role are this Strategy's own.
+        partner_name=None if authored is None else authored.name,
+        partner_role=None if authored is None else authored.role,
         project_source_fingerprint=analysis.project_source_fingerprint,
         structured_source_fingerprint=analysis.structured_source_fingerprint,
         partnership_source_fingerprint=analysis.partnership_source_fingerprint,
@@ -1195,7 +1200,6 @@ def analyze_partner_decision_matrix(
         matrix=compare_partner_decision_matrix(
             partner_id=perspective.partner_id,
             partner_name=perspective.name,
-            role=perspective.role,
             strategies=strategy_axis,
             scenarios=scenario_axis,
             cells=cells,

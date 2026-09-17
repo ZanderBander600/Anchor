@@ -268,16 +268,15 @@ def test_only_metrics_imports_the_returns_functions() -> None:
 
 #: Exactly the modules outside the package that import it. Stage 1 had none;
 #: Stage 2 (Section 17.2) connects it to the Strategy root overlay, the
-#: Partnership persistence, codec, identity rule, fingerprint and variant
-#: service, the PARTNER comparison and matrix, and the routes -- and to nothing
-#: that calculates project, structured or position economics.
+#: Partnership persistence, codec, fingerprint and variant service, the
+#: PARTNER comparison and matrix, and the routes -- and to nothing that
+#: calculates project, structured or position economics.
 _PARTNERSHIP_IMPORTERS = [
     "src/anchor/analysis/strategy.py",
     "src/anchor/api.py",
     "src/anchor/deals/contracts.py",
     "src/anchor/deals/decision_matrix.py",
     "src/anchor/deals/fingerprint.py",
-    "src/anchor/deals/partner_identity.py",
     "src/anchor/deals/partnership_codec.py",
     "src/anchor/deals/partnership_variants.py",
     "src/anchor/deals/store.py",

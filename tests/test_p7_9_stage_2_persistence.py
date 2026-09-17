@@ -12,7 +12,8 @@
   ``PersistedPartnershipDataError`` -- never "no Partnership".
 - **Three marker states.** No Base row (none), no Strategy row (inherit), and a
   Strategy's explicit "no Partnership" are three different rows and answers.
-- **Whole replacement, P-8 identity and lifecycle** on every write path.
+- **Whole replacement and lifecycle** on every write path, and P-8 identity:
+  the ``partner_id`` alone, with the name and role free to vary by Strategy.
 """
 
 from __future__ import annotations
@@ -41,7 +42,6 @@ from _p7_9_stage_2_fixtures import (  # type: ignore[import-not-found]
 from anchor.analysis.strategy import NoPartnership, StrategyDomain
 from anchor.deals import store
 from anchor.deals.contracts import DealNotFoundError, InvestmentNotFoundError, InvestmentStructureError
-from anchor.deals.partner_identity import PartnerIdentityConflictError, PartnerIdentityIssueCode
 from anchor.partnership import PartnershipIssueCode, PartnershipValidationError, PartnerRole
 
 EMPTY = dict.fromkeys(P7_9_TABLES, [])
@@ -451,57 +451,74 @@ def test_a_rejected_strategy_update_leaves_the_previous_partnership(db: Path) ->
 
 
 # =============================================================================
-# One partner identity per Investment (P-8)
+# One partner identity per Investment (P-8): the partner_id, and nothing else
 # =============================================================================
 
 
-def test_a_partner_id_keeps_its_role_across_base_and_strategy(db: Path) -> None:
-    _, investment_id = hidden(db, f.f1_terms())
+def test_the_same_partner_id_may_hold_a_different_role_in_each_partnership(db: Path) -> None:
+    """P-8 makes ``partner_id`` the stable identity. ``role`` is reporting-only
+    presentation (Section 4.2): it selects no subject, recipient or
+    participant, reaches no fingerprint, and may differ between the Base
+    Partnership and each Strategy's own. Every write path accepts it."""
 
-    with pytest.raises(PartnerIdentityConflictError) as refused:
-        store.create_strategy(
-            investment_id, name="Recast", root_overlays=(partnership_overlay(gp_as_lp(f.f1_terms())),), db_path=db
-        )
+    deal, investment_id = hidden(db, f.f1_terms())
+    as_lp = gp_as_lp(f.f1_terms())
+    as_co_investor = with_partner(f.f1_terms(), "gp", role=PartnerRole.CO_INVESTOR)
 
-    (issue,) = refused.value.issues
-    assert issue.code is PartnerIdentityIssueCode.PARTNER_ROLE_CONFLICT
-    assert issue.partner_id == "gp" and issue.field == "role"
-    assert "the Base Partnership" in issue.message and "this Strategy's Partnership" in issue.message
-    assert store.list_strategies(investment_id, db_path=db) == []
-
-
-def test_every_write_path_checks_partner_identity(db: Path) -> None:
-    deal, investment_id = hidden(db)
     first = store.create_strategy(
-        investment_id, name="First", root_overlays=(partnership_overlay(f.f1_terms()),), db_path=db
+        investment_id, name="GP as LP", root_overlays=(partnership_overlay(as_lp),), db_path=db
+    ).strategy.strategy_id
+    second = store.create_strategy(
+        investment_id, name="GP as co-investor", root_overlays=(partnership_overlay(as_co_investor),), db_path=db
+    ).strategy.strategy_id
+    store.update_strategy(
+        investment_id, second, name="GP as co-investor", root_overlays=(partnership_overlay(as_co_investor),), db_path=db
     )
-    before = partnership_rows(db)
+    store.set_base_partnership(investment_id, f.f1_terms(), db_path=db)
+    store.set_deal_partnership(deal.id, f.f1_terms(), db_path=db)
 
-    with pytest.raises(PartnerIdentityConflictError):
-        store.set_base_partnership(investment_id, gp_as_lp(f.f1_terms()), db_path=db)
-    with pytest.raises(PartnerIdentityConflictError):
-        store.set_deal_partnership(deal.id, gp_as_lp(f.f1_terms()), db_path=db)
-    second = store.create_strategy(investment_id, name="Second", db_path=db)
-    with pytest.raises(PartnerIdentityConflictError):
-        store.update_strategy(
-            investment_id,
-            second.strategy.strategy_id,
-            name="Second",
-            root_overlays=(partnership_overlay(gp_as_lp(f.f1_terms())),),
-            db_path=db,
-        )
-    assert partnership_rows(db) == before
-    assert first.strategy.root_overlays
+    listed = store.list_investment_partnerships(investment_id, db_path=db)
+    roles = {
+        "base": {p.partner_id: p.role for p in listed.base.partners},  # type: ignore[union-attr]
+        **{
+            entry.strategy_id: {p.partner_id: p.role for p in entry.partnership.partners}  # type: ignore[union-attr]
+            for entry in listed.strategies
+        },
+    }
+    assert roles["base"]["gp"] is PartnerRole.GP
+    assert roles[first]["gp"] is PartnerRole.LP
+    assert roles[second]["gp"] is PartnerRole.CO_INVESTOR
+    # One identity throughout: the same id in every Partnership.
+    assert {tuple(sorted(stated)) for stated in roles.values()} == {("gp", "lp")}
 
 
-def test_what_a_strategy_varies_is_not_identity(db: Path) -> None:
-    """Name, commitment, benchmark, class, splits and participation may all
-    differ; re-saving an owner never conflicts with the copy it replaces; an
-    explicit "no Partnership" never conflicts."""
+def test_a_varying_role_changes_no_economics(db: Path) -> None:
+    """The waterfall never reads a role, so restating one changes no stored
+    economics and no fingerprint."""
+
+    from anchor.deals.fingerprint import fingerprint_partnership_source
+
+    _, investment_id = hidden(db, f.f1_terms())
+    digest = fingerprint_partnership_source(
+        structured_source_fingerprint="a" * 64, partnership=f.f1_terms()
+    )
+
+    store.set_base_partnership(investment_id, gp_as_lp(f.f1_terms()), db_path=db)
+    reloaded = store.get_base_partnership(investment_id, db_path=db)
+
+    assert reloaded == gp_as_lp(f.f1_terms())
+    assert fingerprint_partnership_source(
+        structured_source_fingerprint="a" * 64, partnership=reloaded
+    ) == digest
+
+
+def test_what_a_strategy_varies_is_kept_whole(db: Path) -> None:
+    """Name, role, commitment, benchmark, class, splits and participation may
+    all differ per Strategy, and each statement is stored and read back whole."""
 
     _, investment_id = hidden(db, f.f1_terms())
     varied = renamed(
-        with_partner(f.f7_terms(), "gp", investor_class="sponsor", commitment_share=0.1)
+        with_partner(f.f7_terms(), "gp", investor_class="sponsor", role=PartnerRole.CO_INVESTOR)
     )
     created = store.create_strategy(
         investment_id, name="Varied", root_overlays=(partnership_overlay(varied),), db_path=db
@@ -519,16 +536,6 @@ def test_what_a_strategy_varies_is_not_identity(db: Path) -> None:
     listed = store.list_investment_partnerships(investment_id, db_path=db)
     assert listed.base == renamed(f.f1_terms(), " again")
     assert [entry.partnership for entry in listed.strategies] == [renamed(varied, " twice"), None]
-
-
-def test_an_owner_may_change_a_role_that_no_other_partnership_names(db: Path) -> None:
-    _, investment_id = hidden(db, f.f1_terms())
-
-    store.set_base_partnership(investment_id, gp_as_lp(f.f1_terms()), db_path=db)
-
-    loaded = store.get_base_partnership(investment_id, db_path=db)
-    assert loaded is not None
-    assert {partner.partner_id: partner.role for partner in loaded.partners}["gp"] is PartnerRole.LP
 
 
 # =============================================================================
