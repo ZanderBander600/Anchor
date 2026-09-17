@@ -260,7 +260,7 @@ describe('Owner Cash Flow', () => {
     show(quick('v5_mixed'));
     expect(
       within(region('Owner Cash Flow')).getByText(
-        'Property Cash Flow reflects the Recurring CapEx Reserve and Lease-Level TI / LC. Owner Cash Flow then reflects Project Capital and Owner Expenses; Levered Owner Cash Flow is after debt service.',
+        'Property Cash Flow reflects the Recurring CapEx Reserve and, for Lease-Level deals, TI / LC. Owner Cash Flow then reflects Project Capital and Owner Expenses; Levered Owner Cash Flow is after debt service.',
       ),
     ).toBeTruthy();
   });

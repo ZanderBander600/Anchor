@@ -232,9 +232,9 @@ function OwnerCashFlow({ results }: { results: AcquisitionResults }) {
         Owner Cash Flow
       </h4>
       <p className="capital-economics-helper">
-        Property Cash Flow reflects the Recurring CapEx Reserve and Lease-Level TI / LC. Owner
-        Cash Flow then reflects Project Capital and Owner Expenses; Levered Owner Cash Flow is
-        after debt service.
+        Property Cash Flow reflects the Recurring CapEx Reserve and, for Lease-Level deals, TI /
+        LC. Owner Cash Flow then reflects Project Capital and Owner Expenses; Levered Owner Cash
+        Flow is after debt service.
       </p>
       <div className="table-scroll">
         <table className="capital-economics-table" aria-labelledby={titleId}>
