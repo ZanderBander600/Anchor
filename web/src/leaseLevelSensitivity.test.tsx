@@ -1559,6 +1559,10 @@ describe('D5.7A: the two-way corner names each axis and its direction', () => {
     );
   }
 
+  // Integration-heavy, like its siblings below: opens Risk and runs the two-way
+  // grid. It passes on its own (about 2-3s) but reached 5.1s under full-suite
+  // load, on main-era code as well; profiled first (the automatic analysis on
+  // open is held in flight in this file), so only this test's budget is raised.
   it('M8/M9: puts the column assumption first with a right arrow, the row assumption below with a down arrow', async () => {
     const user = await openRisk();
     mockTwoWay.mockResolvedValue(twoWayResult());
@@ -1575,8 +1579,12 @@ describe('D5.7A: the two-way corner names each axis and its direction', () => {
     expect(second).not.toContain('→');
     expect(first).not.toContain('Exit Cap Rate');
     expect(second).not.toContain('Purchase Price');
-  });
+  }, 30_000);
 
+  // Integration-heavy, like its siblings below: opens Risk and runs the two-way
+  // grid. It passes on its own (about 2-3s) but reached 5.1s under full-suite
+  // load, on main-era code as well; profiled first (the automatic analysis on
+  // open is held in flight in this file), so only this test's budget is raised.
   it('M14: says which axis is which in words, not by arrow alone', async () => {
     const user = await openRisk();
     mockTwoWay.mockResolvedValue(twoWayResult());
@@ -1593,8 +1601,12 @@ describe('D5.7A: the two-way corner names each axis and its direction', () => {
     for (const arrow of arrows) {
       expect(arrow.getAttribute('aria-hidden')).toBe('true');
     }
-  });
+  }, 30_000);
 
+  // Integration-heavy, like its siblings below: opens Risk and runs the two-way
+  // grid. It passes on its own (about 2-3s) but reached 5.1s under full-suite
+  // load, on main-era code as well; profiled first (the automatic analysis on
+  // open is held in flight in this file), so only this test's budget is raised.
   it('M10: takes both labels from the response, for any pair of axes', async () => {
     const user = await openRisk();
     mockTwoWay.mockResolvedValue(
@@ -1629,7 +1641,7 @@ describe('D5.7A: the two-way corner names each axis and its direction', () => {
     // Nothing is left over from the default pair.
     expect(corner().textContent).not.toContain('Purchase Price');
     expect(corner().textContent).not.toContain('Exit Cap Rate');
-  });
+  }, 30_000);
 
   // Integration-heavy: opens Risk, runs the two-way grid and asserts the whole
   // matrix cell by cell. Its behaviour is valid -- this file passes on its own
