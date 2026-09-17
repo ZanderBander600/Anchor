@@ -264,10 +264,12 @@ def test_an_invalid_replacement_plan_is_a_d6_shaped_422_rooted_at_the_overlay(cl
         # now a supported domain stated in the wrong place, and is refused as
         # exactly that -- a more specific answer to the same malformed request,
         # naming the domain and telling the client where it belongs. The
-        # ``partnership`` row below still proves the unsupported-domain refusal
-        # itself is intact for a token no gate has published.
+        # ``unit-selection`` row above still proves the unsupported-domain
+        # refusal itself is intact for a token no gate has published.
         (lambda u: {"unit_id": u, "domain": "capital_structure", "content": {}}, {"code": "root_domain_on_unit", "domain": "capital_structure"}),
-        (lambda u: {"unit_id": u, "domain": "partnership", "content": {}}, {"code": "unsupported_domain", "domain": None}),
+        # Re-pinned at P7.9 Stage 2 for the same reason: ``partnership`` is now the
+        # second Investment-root domain, stated in the wrong place.
+        (lambda u: {"unit_id": u, "domain": "partnership", "content": {}}, {"code": "root_domain_on_unit", "domain": "partnership"}),
         (lambda u: f4.wire(f4.outcomes(u, f4.outcome("exit_cap_rate", 0.005, "add"))),
          {"code": "invalid_operation", "domain": "operating_outcome", "target": "exit_cap_rate"}),
         (lambda u: f4.wire(f4.outcomes(u, f4.outcome("ltv", 0.5))), {"code": "unsupported_target", "target": "ltv"}),

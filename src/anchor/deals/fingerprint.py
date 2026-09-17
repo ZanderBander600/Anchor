@@ -47,7 +47,18 @@ from ..capital_structure.contracts import (
     PreferredEquityTerms,
 )
 from ..capital_structure.validation import economic_order
+from ..partnership.contracts import (
+    CatchUpTerms,
+    ExplicitSplit,
+    HurdleTerms,
+    IrrHurdle,
+    MoicHurdle,
+    Partnership,
+    ProRataByContribution,
+    WaterfallTier,
+)
 from .capital_structure_codec import PositionTermsKind, amount_rule_kind
+from .partnership_codec import condition_kind, recipient_kind, split_rule_kind, subject_kind
 
 #: The top-level fingerprint key a non-empty Business Plan is recorded under.
 #: No economic contract has a field of this name, so it cannot collide with one.
@@ -61,6 +72,12 @@ _CAPITAL_STRUCTURE_KEY = "capital_structure"
 #: The key the Project source fingerprint is recorded under inside a structured
 #: fingerprint's payload.
 _PROJECT_FINGERPRINT_KEY = "project_source_fingerprint"
+
+#: The keys a Partnership fingerprint's payload records (P7.9 Stage 2): the
+#: structured source fingerprint it is downstream of, and the resolved
+#: Partnership's canonical economics. No economic contract has either field.
+_STRUCTURED_FINGERPRINT_KEY = "structured_source_fingerprint"
+_PARTNERSHIP_KEY = "partnership"
 
 
 class UnfingerprintableValueError(TypeError):
@@ -451,5 +468,178 @@ def fingerprint_structured_source(
         {
             _PROJECT_FINGERPRINT_KEY: project_source_fingerprint,
             _CAPITAL_STRUCTURE_KEY: capital_structure_payload(capital_structure),
+        }
+    )
+
+
+# =============================================================================
+# Phase 7 Gate P7.9 Stage 2 -- the Partnership source fingerprint
+#
+# ``docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`` Section 17.2 and
+# ``docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md`` Section 15.4
+# (FP-1, FP-2, Section 15.5). The Partnership is a layer *downstream* of the
+# structured capital layer, so it gets its own fingerprint:
+#
+#     structured source fingerprint     P7.8B, UNCHANGED -- it never learns that
+#             |                         a Partnership exists
+#             v
+#     partnership source fingerprint = f(structured fingerprint, the RESOLVED
+#                                        Partnership's canonical economics)
+#
+# Editing a Partnership therefore invalidates the Partnership result and the
+# Partner Decision Matrix, and nothing upstream.
+#
+# **FP-2.** With no resolved Partnership there is no Partnership fingerprint at
+# all: this function requires one, and the variant service reports ``None``
+# rather than hashing an absence.
+#
+# **FP-1.** Only economics enter. Included: partner ids, investor classes and
+# commitment shares; the contribution rule; the benchmark shares; the sorted
+# promote participants; each tier's id, sequence, kind and split rule with its
+# shares; each hurdle's subject, conditions (accrual convention and SIMPLE order
+# included) and combinator; each catch-up's recipient and target. Excluded:
+# partner and tier names, and ``role``, which is reporting only.
+#
+# **Order (Section 15.5).** Partners, benchmark shares and split shares by
+# ``partner_id``; promote participants sorted; tiers by ``sequence``; conditions
+# by ``condition_id``. Authored list order and storage order never reach the
+# digest.
+# =============================================================================
+
+
+def _shares_payload(shares: Iterable[object]) -> list[list[Any]]:
+    """A share table as ``[partner_id, share]`` pairs in ``partner_id`` order."""
+
+    return sorted(
+        ([getattr(row, "partner_id"), float(getattr(row, "share"))] for row in shares),
+        key=lambda pair: pair[0],
+    )
+
+
+def _split_payload(split: object) -> dict[str, Any]:
+    """One tier split rule, by kind. An unknown rule is refused rather than
+    hashed as something else."""
+
+    match split:
+        case ExplicitSplit():
+            return {"kind": split_rule_kind(split).value, "shares": _shares_payload(split.shares)}
+        case ProRataByContribution():
+            return {"kind": split_rule_kind(split).value}
+        case _:
+            raise UnfingerprintableValueError(split)
+
+
+def _condition_payload(condition: object) -> dict[str, Any]:
+    match condition:
+        case IrrHurdle():
+            return {
+                "kind": condition_kind(condition).value,
+                "condition_id": condition.condition_id,
+                "rate": float(condition.rate),
+                "accrual_convention": condition.accrual_convention.value,
+                "simple_distribution_order": (
+                    None
+                    if condition.simple_distribution_order is None
+                    else condition.simple_distribution_order.value
+                ),
+            }
+        case MoicHurdle():
+            return {
+                "kind": condition_kind(condition).value,
+                "condition_id": condition.condition_id,
+                "multiple": float(condition.multiple),
+            }
+        case _:
+            raise UnfingerprintableValueError(condition)
+
+
+def _hurdle_payload(hurdle: HurdleTerms | None) -> dict[str, Any] | None:
+    if hurdle is None:
+        return None
+    subject = hurdle.hurdle_subject
+    return {
+        "hurdle_subject": {
+            "kind": subject_kind(subject).value,
+            "partner_id": subject.partner_id,
+            "investor_class": subject.investor_class,
+            "account": None if subject.account is None else subject.account.value,
+        },
+        "conditions": sorted(
+            (_condition_payload(condition) for condition in hurdle.conditions),
+            key=lambda item: item["condition_id"],
+        ),
+        "combinator": hurdle.combinator.value,
+    }
+
+
+def _catch_up_payload(catch_up: CatchUpTerms | None) -> dict[str, Any] | None:
+    if catch_up is None:
+        return None
+    recipient = catch_up.recipient
+    return {
+        "recipient": {
+            "kind": recipient_kind(recipient).value,
+            "partner_id": recipient.partner_id,
+            "investor_class": recipient.investor_class,
+        },
+        "target_profit_share": float(catch_up.target_profit_share),
+    }
+
+
+def _tier_payload(tier: WaterfallTier) -> dict[str, Any]:
+    """One tier's economics. ``name`` is deliberately absent (FP-1); the stable
+    ``tier_id`` is present, because the tier audit addresses it."""
+
+    return {
+        "tier_id": tier.tier_id,
+        "sequence": int(tier.sequence),
+        "kind": tier.kind.value,
+        "split": _split_payload(tier.split),
+        "hurdle": _hurdle_payload(tier.hurdle),
+        "catch_up": _catch_up_payload(tier.catch_up),
+    }
+
+
+def partnership_payload(partnership: Partnership) -> dict[str, Any]:
+    """The canonical economic form of a resolved Partnership. Partner names and
+    roles and tier names never appear; every list is in its canonical order."""
+
+    if not isinstance(partnership, Partnership):
+        raise UnfingerprintableValueError(partnership)
+    return {
+        "partners": [
+            {
+                "partner_id": partner.partner_id,
+                "investor_class": partner.investor_class,
+                "commitment_share": float(partner.commitment_share),
+            }
+            for partner in sorted(partnership.partners, key=lambda item: item.partner_id)
+        ],
+        "contribution_rule": partnership.contribution_rule.value,
+        "promote_benchmark": _shares_payload(partnership.promote_benchmark.shares),
+        "promote_participant_ids": sorted(partnership.promote_participant_ids),
+        "tiers": [
+            _tier_payload(tier)
+            for tier in sorted(partnership.tiers, key=lambda item: (item.sequence, item.tier_id))
+        ],
+    }
+
+
+def fingerprint_partnership_source(
+    *, structured_source_fingerprint: str, partnership: Partnership
+) -> str:
+    """The source fingerprint of one Partnership variant: the structured
+    variant's own fingerprint, and the resolved Partnership's economics.
+
+    A Partnership is required. A variant with no resolved Partnership has no
+    Partnership fingerprint (FP-2); the caller reports ``None`` instead of
+    asking for one."""
+
+    if not isinstance(structured_source_fingerprint, str) or not structured_source_fingerprint:
+        raise UnfingerprintableValueError(structured_source_fingerprint)
+    return _fingerprint_json(
+        {
+            _STRUCTURED_FINGERPRINT_KEY: structured_source_fingerprint,
+            _PARTNERSHIP_KEY: partnership_payload(partnership),
         }
     )

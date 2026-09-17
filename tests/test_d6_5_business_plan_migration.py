@@ -111,8 +111,21 @@ _P7_8_TABLES = {
     "capital_debt_terms",
     "capital_preferred_terms",
 }
+#: P7.9 Stage 2 (schema 12) adds the eight Partnership tables the same way,
+#: all empty for a legacy deal; ``tests/test_p7_9_stage_2_compatibility_oracle.py``
+#: holds the v11 -> v12 step on its own.
+_P7_9_TABLES = {
+    "partnerships",
+    "partners",
+    "partnership_benchmark_shares",
+    "partnership_promote_participants",
+    "waterfall_tiers",
+    "waterfall_tier_splits",
+    "waterfall_hurdle_conditions",
+    "waterfall_catch_up_terms",
+}
 #: The schema version the current store migrates a v6 database to.
-_CURRENT_VERSION = 11
+_CURRENT_VERSION = 12
 
 
 @pytest.fixture(scope="module")
@@ -254,13 +267,19 @@ def test_the_version_advances_to_7_exactly_once_and_only_the_plan_tables_appear(
 
     assert _version(db) == _CURRENT_VERSION
     assert set(migrated) == (
-        set(before) | _PLAN_TABLES | _P7_2_TABLES | _P7_4_TABLES | _P7_6_TABLES | _P7_8_TABLES
+        set(before)
+        | _PLAN_TABLES
+        | _P7_2_TABLES
+        | _P7_4_TABLES
+        | _P7_6_TABLES
+        | _P7_8_TABLES
+        | _P7_9_TABLES
     )
     assert migrated["deal_capital_plan_items"] == []
     assert migrated["deal_owner_expense_items"] == []
     assert all(
         migrated[table] == []
-        for table in _P7_2_TABLES | _P7_4_TABLES | _P7_6_TABLES | _P7_8_TABLES
+        for table in _P7_2_TABLES | _P7_4_TABLES | _P7_6_TABLES | _P7_8_TABLES | _P7_9_TABLES
     )
 
     for _ in range(3):

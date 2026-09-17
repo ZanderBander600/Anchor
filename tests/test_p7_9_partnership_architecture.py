@@ -30,6 +30,15 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _P7_9_BASE = "5cb327d010a96eb84a9dbf9e8c7764abf23eec55"
 _P7_9_BASE_PARENTS = ["79cb52461705e0acf4d9fe8d8682bf9cafc93b41", "2443c8218025d8195c10430d8e7f990796094637"]
 
+#: Stage 1's reviewed head, merged into ``main`` as the second parent of the
+#: Stage 1 merge (PR #34). Re-pinned at Stage 2: the ledger and the protected
+#: paths below read Stage 1's own committed range ``5cb327d..c9dd78d``, so the
+#: Stage 2 files never read as Stage 1 changes while every Stage 1 claim stays
+#: proven. Stage 2's own ledger and freeze are
+#: ``tests/test_p7_9_stage_2_architecture.py``.
+_STAGE_1_HEAD = "c9dd78dd9f254fa9aec8dd3a33f61c29eb1e6cec"
+_STAGE_1_MERGE = "70b92e2cdde29d2d2a1c5a19240bef91622a2219"
+
 _PACKAGE = "src/anchor/partnership"
 _NAMES = ("__init__", "contracts", "validation", "allocation", "accounts", "waterfall", "attribution", "metrics", "common_equity")
 _MODULES = tuple(f"{_PACKAGE}/{name}.py" for name in _NAMES)
@@ -96,6 +105,13 @@ def _git(*args: str) -> str:
 
 def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and re.search(r"\.test\.tsx?$", path) is None
+
+
+def _changes_between(start: str, end: str, *paths: str) -> set[str]:
+    """Files that differ between two commits, renames split into their removal
+    and addition. Reads Git objects only."""
+
+    return {path for path in _git("diff", "--name-only", "--no-renames", start, end, "--", *paths).split() if path}
 
 
 def _changes_since(base: str, *paths: str) -> set[str]:
@@ -169,13 +185,17 @@ def _enclosing_functions(tree: ast.Module) -> dict[ast.AST, str]:
 
 
 def test_stage_1_changed_exactly_the_partnership_package() -> None:
-    changed = {path for path in _changes_since(_P7_9_BASE, "src", "web") if _is_production(path)}
+    changed = {path for path in _changes_between(_P7_9_BASE, _STAGE_1_HEAD, "src", "web") if _is_production(path)}
     assert sorted(changed - _STAGE_1_PRODUCTION_FILES) == []
     assert sorted(_STAGE_1_PRODUCTION_FILES - changed) == []
 
 
 def test_the_ledger_base_is_the_contract_ratification_merge() -> None:
     assert _git("rev-list", "--parents", "-n", "1", _P7_9_BASE).split()[1:] == _P7_9_BASE_PARENTS
+
+
+def test_the_ledger_head_is_the_second_parent_of_the_stage_1_merge() -> None:
+    assert _git("rev-list", "--parents", "-n", "1", _STAGE_1_MERGE).split()[1:] == [_P7_9_BASE, _STAGE_1_HEAD]
 
 
 def test_the_package_is_new_at_this_gate() -> None:
@@ -194,7 +214,10 @@ def test_each_frozen_module_is_byte_identical_to_the_base(path: str) -> None:
 
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged(path: str) -> None:
-    assert _changes_since(_P7_9_BASE, path) == set(), path
+    """Within Stage 1's own committed range (re-pinned at Stage 2, whose
+    persistence, API and matrix surfaces are these paths)."""
+
+    assert _changes_between(_P7_9_BASE, _STAGE_1_HEAD, path) == set(), path
 
 
 # =============================================================================
@@ -243,14 +266,45 @@ def test_only_metrics_imports_the_returns_functions() -> None:
     }
 
 
-def test_nothing_upstream_imports_the_partnership() -> None:
+#: Exactly the modules outside the package that import it. Stage 1 had none;
+#: Stage 2 (Section 17.2) connects it to the Strategy root overlay, the
+#: Partnership persistence, codec, fingerprint and variant service, the
+#: PARTNER comparison and matrix, and the routes -- and to nothing that
+#: calculates project, structured or position economics.
+_PARTNERSHIP_IMPORTERS = [
+    "src/anchor/analysis/strategy.py",
+    "src/anchor/api.py",
+    "src/anchor/deals/contracts.py",
+    "src/anchor/deals/decision_matrix.py",
+    "src/anchor/deals/fingerprint.py",
+    "src/anchor/deals/partnership_codec.py",
+    "src/anchor/deals/partnership_variants.py",
+    "src/anchor/deals/store.py",
+    "src/anchor/decision/comparison.py",
+]
+
+
+def test_only_the_named_stage_2_layers_import_the_partnership() -> None:
+    """Nothing imported the package at Stage 1. Stage 2 connects exactly these
+    layers (re-pinned from "no importer at all")."""
+
     importers = sorted(
         path.relative_to(_PROJECT_ROOT).as_posix()
         for path in (_PROJECT_ROOT / "src" / "anchor").rglob("*.py")
         if "partnership" not in path.relative_to(_PROJECT_ROOT / "src" / "anchor").parts[:1]
-        and any("partnership" in module for module in _imports(ast.parse(path.read_text(encoding="utf-8"))))
+        and any(
+            module.lstrip(".").split(".")[0] == "partnership" or module.startswith(("anchor.partnership", "..partnership"))
+            for module in _imports(ast.parse(path.read_text(encoding="utf-8")))
+        )
     )
-    assert importers == []
+    assert importers == _PARTNERSHIP_IMPORTERS
+
+
+def test_no_upstream_engine_layer_imports_the_partnership() -> None:
+    for layer in ("engine", "consolidation", "capital_structure", "investment", "business_plan", "leasing", "ai", "ingestion"):
+        for path in (_PROJECT_ROOT / "src" / "anchor" / layer).rglob("*.py"):
+            modules = _imports(ast.parse(path.read_text(encoding="utf-8")))
+            assert not any("partnership" in module for module in modules), path
 
 
 def test_the_waterfall_engine_never_reaches_the_seam() -> None:

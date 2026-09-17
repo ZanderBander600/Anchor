@@ -452,8 +452,21 @@ def test_no_later_gate_economics_reach_the_new_surface() -> None:
         r"refinanc|recapitali|waterfall|partner|promote|hurdle|catch_up|capital_call|draw_schedule",
         re.IGNORECASE,
     )
-    for path in (_STRUCTURED, _IDENTITY, _CODEC, _FINGERPRINT):
+    for path in (_STRUCTURED, _IDENTITY, _CODEC):
         assert not {name for name in _identifiers(_tree(path)) if later.search(name)}, path
+    # Re-scoped at P7.9 Stage 2, the gate authorized to add the Partnership
+    # fingerprint to ``fingerprint.py``: the P7.8B structured fingerprint itself
+    # -- every function P7.8B added there -- still names no later-gate concept.
+    fingerprint = _functions(_tree(_FINGERPRINT))
+    for name in (
+        "_event_order",
+        "_amount_rule_payload",
+        "_terms_payload",
+        "_position_payload",
+        "capital_structure_payload",
+        "fingerprint_structured_source",
+    ):
+        assert not {found for found in _identifiers(fingerprint[name]) if later.search(found)}, name
     assert later.search("RefinanceEvent") and later.search("partner_share")
 
 

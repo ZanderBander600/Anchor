@@ -266,13 +266,33 @@ P7_8_TABLES = (
 )
 
 
+#: The eight Partnership tables schema v12 adds (P7.9 Stage 2): the Partnership
+#: owner marker and its partners, benchmark shares, promote participants,
+#: waterfall tiers, tier splits, hurdle conditions and catch-up terms.
+P7_9_TABLES = (
+    "partnerships",
+    "partners",
+    "partnership_benchmark_shares",
+    "partnership_promote_participants",
+    "waterfall_tiers",
+    "waterfall_tier_splits",
+    "waterfall_hurdle_conditions",
+    "waterfall_catch_up_terms",
+)
+
+
 def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
     """Every row of every table that is not a P7 table, in rowid order."""
 
     return {
         table: rows(db, table)
         for table in sorted(
-            table_names(db) - set(P7_2_TABLES) - set(P7_4_TABLES) - set(P7_6_TABLES) - set(P7_8_TABLES)
+            table_names(db)
+            - set(P7_2_TABLES)
+            - set(P7_4_TABLES)
+            - set(P7_6_TABLES)
+            - set(P7_8_TABLES)
+            - set(P7_9_TABLES)
         )
         if not table.startswith("sqlite_")
     }

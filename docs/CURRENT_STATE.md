@@ -9,14 +9,18 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `70b92e2` (PR #34, P7.9 Stage 1 deterministic
-  contracts and engine; merged). This is also the last accepted financial
-  implementation merge.
+- Accepted baseline: `main` at `1df2760` (documentation of the P7.9 Stage 1
+  completion, on top of the PR #34 merge).
+- Last accepted financial implementation merge: `70b92e2` (PR #34, P7.9
+  Stage 1 deterministic contracts and engine).
 - Active gate: **P7.9 Partnership Waterfalls + Investor Returns**. The ratified
   contract is `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`.
   - **Stage 1** (deterministic contracts and engine): **complete and accepted**
     in PR #34 (`70b92e2`).
-  - **Stage 2** (persistence, fingerprints, API): not started.
+  - **Stage 2** (persistence, migration, fingerprints, API, Partner Decision
+    Matrix; Section 17.2): **started and in progress** on
+    `feature/p7-9-stage-2-partnership-integration` from `1df2760`. Tier 2 over
+    the frozen Stage 1 engine.
   - **Stage 3** (product UI, browser QA): not started.
 - Open PR: none at the time of this synchronization.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
@@ -57,7 +61,8 @@ stages, each started explicitly:
 
 1. Stage 1: deterministic contracts and engine. **Complete and accepted in
    PR #34 (`70b92e2`).**
-2. Stage 2: persistence, migration, fingerprints and API. Not started.
+2. Stage 2: persistence, migration, fingerprints, API and the Partner
+   Decision Matrix. **Started and in progress.**
 3. Stage 3: product UI with browser QA. Not started.
 
 Finishing one stage never starts the next.
@@ -98,7 +103,8 @@ sub-gate.
   `docs/architecture/P7_7_CAPITAL_STRUCTURE_FOUNDATION.md`,
   `docs/architecture/P7_8_STRUCTURED_POSITION_ECONOMICS.md`, and
   `docs/architecture/P7_8_PRODUCT_INTEGRATION.md`
-- P7.9 ratified contract (Stage 1 complete; Stage 2 not started):
+- P7.9 ratified contract (Stage 1 complete; Stage 2 in progress; Stage 3 not
+  started):
   `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`
 
 ## Historical-Document Rule

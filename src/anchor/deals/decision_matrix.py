@@ -75,28 +75,47 @@ from ..decision.comparison import (
     CLAIM_BEARING_POSITION_METRIC_CATALOG,
     COMMON_EQUITY_POSITION_METRIC_CATALOG,
     INVESTMENT_PROJECT_METRIC_CATALOG,
+    PARTNER_METRIC_CATALOG,
     AxisMember,
     CellInput,
     CellIssue,
     CellIssueSource,
     DecisionComparisonError,
     DecisionMatrix,
+    PartnerApplicability,
+    PartnerCellInput,
+    PartnerDecisionMatrix,
     PositionApplicability,
     PositionCellInput,
     PositionDecisionMatrix,
     compare_decision_matrix,
+    compare_partner_decision_matrix,
     compare_position_decision_matrix,
 )
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
+from ..partnership import (
+    PartnershipExecutionError,
+    PartnershipExecutionIssue,
+    PartnershipIssue,
+    PartnershipValidationError,
+)
 from . import store
 from .contracts import (
     InvestmentCapitalStructures,
+    InvestmentPartnerships,
     InvestmentScenario,
     InvestmentStrategy,
     InvestmentStructureError,
+    PartnerPerspectiveNotFoundError,
     PositionPerspectiveNotFoundError,
 )
-from .fingerprint import capital_structure_payload
+from .fingerprint import capital_structure_payload, partnership_payload
+from .partnership_variants import (
+    PartnerPerspective,
+    analyze_partnership_variant,
+    partner_perspective,
+    resolved_partner,
+)
 from .structured_variants import (
     PositionPerspective,
     StructuredRootKind,
@@ -896,5 +915,294 @@ def analyze_position_decision_matrix(
             catalog=COMMON_EQUITY_POSITION_METRIC_CATALOG
             if perspective.is_common_equity_marker
             else CLAIM_BEARING_POSITION_METRIC_CATALOG,
+        ),
+    )
+
+
+# =============================================================================
+# Phase 7 Gate P7.9 Stage 2 -- the PARTNER Decision Matrix (DC-3)
+#
+# The same axes and the same cross-cell semantics, over one partner of the
+# Partnership waterfall. Every cell is one Partnership variant
+# (``partnership_variants.analyze_partnership_variant``), which is itself the
+# structured variant plus the accepted Stage 1 engine -- no second engine, no
+# second route to the Common Equity Cash Flow, and one implementation for the
+# hidden one-unit Deal and the visible Investment.
+#
+# **The Project and Position matrices are untouched.** A Partnership edit moves
+# this matrix and leaves those exactly where they were, because neither of their
+# cell identities includes a Partnership.
+#
+# **Honest cell states** (DC-2, P-9): an invalid variant (a Project, Capital
+# Structure or Partnership refusal); a valid variant with no Partnership, or
+# whose Partnership does not hold the partner; a Promote Earned that does not
+# apply because the partner is not a stated participant; and a present partner
+# whose figures are N/A because the upstream Common Equity is unavailable.
+#
+# **One coherent package** (DC-7): the economic state is read before the first
+# cell and again after the last, and now includes every stored Partnership
+# statement's canonical economics.
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PartnerDecisionMatrixReport:
+    """The Partner Decision Matrix of one Investment: which root executed it,
+    its Units, the perspective selected and the comparison package."""
+
+    investment_id: str
+    root_kind: StructuredRootKind
+    unit_ids: tuple[str, ...]
+    partner: PartnerPerspective
+    matrix: PartnerDecisionMatrix
+
+
+def _partnership_located(issue: PartnershipIssue | PartnershipExecutionIssue) -> str:
+    """A Partnership finding's location, rooted at the tier or partner it
+    concerns."""
+
+    if issue.tier_id is not None:
+        root = f"partnership.tiers[{issue.tier_id}]"
+    elif isinstance(issue, PartnershipIssue) and issue.partner_id is not None:
+        root = f"partnership.partners[{issue.partner_id}]"
+    else:
+        root = "partnership"
+    field = issue.field if isinstance(issue, PartnershipIssue) else None
+    return root if field is None else f"{root}.{field}"
+
+
+def _partnership_issues(
+    issues: Iterable[PartnershipIssue | PartnershipExecutionIssue],
+) -> tuple[CellIssue, ...]:
+    return tuple(
+        CellIssue(
+            source=CellIssueSource.PARTNERSHIP,
+            code=issue.code.value,
+            message=issue.message,
+            field=_partnership_located(issue),
+        )
+        for issue in issues
+    )
+
+
+def _structured_refusal_issues(error: Exception) -> tuple[CellIssue, ...]:
+    """The issues a structured-variant refusal carries, in the words and the
+    locations the Position matrix reports them. Anything that is not a typed
+    refusal propagates."""
+
+    match error:
+        case StrategyValidationError():
+            return tuple(
+                CellIssue(
+                    source=CellIssueSource.STRATEGY,
+                    code=issue.code.value,
+                    message=issue.message,
+                    field=issue.field,
+                )
+                for issue in error.issues
+            )
+        case ScenarioValidationError():
+            return tuple(
+                CellIssue(
+                    source=CellIssueSource.SCENARIO,
+                    code=issue.code.value,
+                    message=issue.message,
+                    field=issue.field,
+                )
+                for issue in error.issues
+            )
+        case LeaseValidationError():
+            return tuple(
+                CellIssue(
+                    source=CellIssueSource.LEASE_LEVEL,
+                    code=issue.code.value,
+                    message=issue.message,
+                    field=issue.path,
+                )
+                for issue in error.result.errors
+            )
+        case InvestmentVariantValidationError():
+            return tuple(
+                CellIssue(
+                    source=_INVESTMENT_ISSUE_SOURCES[issue.source],
+                    code=issue.code,
+                    message=issue.message,
+                    field=_unit_located(issue),
+                )
+                for issue in error.issues
+            )
+        case (
+            CapitalStructureValidationError()
+            | UnsupportedCapitalPositionError()
+            | CapitalStructureExecutionError()
+        ):
+            return _capital_issues(error.issues)
+        case _:
+            raise error
+
+
+def _partner_cell(
+    investment_id: str,
+    strategy_id: str,
+    scenario_id: str,
+    partner_id: str,
+    db_path: Path | None,
+) -> PartnerCellInput:
+    """One Partnership variant as one cell.
+
+    The typed validation errors of every layer make the cell invalid, in their
+    own validators' words: the structured variant's, and the Partnership
+    engine's. Every other failure propagates and fails the request visibly --
+    it is not a financial finding.
+
+    An unavailable upstream Common Equity Cash Flow is **not** an error here:
+    the cell is valid and the partner present, with every figure N/A."""
+
+    try:
+        analysis = analyze_partnership_variant(
+            investment_id, strategy_id, scenario_id, db_path=db_path
+        )
+    except (
+        StrategyValidationError,
+        ScenarioValidationError,
+        LeaseValidationError,
+        InvestmentVariantValidationError,
+        CapitalStructureValidationError,
+        UnsupportedCapitalPositionError,
+        CapitalStructureExecutionError,
+    ) as error:
+        return PartnerCellInput(
+            strategy_id=strategy_id,
+            scenario_id=scenario_id,
+            applicability=PartnerApplicability.NOT_ANALYSED,
+            issues=_structured_refusal_issues(error),
+        )
+    except (PartnershipValidationError, PartnershipExecutionError) as error:
+        return PartnerCellInput(
+            strategy_id=strategy_id,
+            scenario_id=scenario_id,
+            applicability=PartnerApplicability.NOT_ANALYSED,
+            issues=_partnership_issues(error.issues),
+        )
+
+    result = analysis.result
+    authored = resolved_partner(analysis.partnership, partner_id)
+    present = authored is not None
+    partner = None
+    if present and result is not None and result.partners is not None:
+        partner = next((item for item in result.partners if item.partner_id == partner_id), None)
+        if partner is None:
+            raise DecisionComparisonError(
+                f"The resolved Partnership of ({strategy_id!r}, {scenario_id!r}) holds partner "
+                f"{partner_id!r}, but its result reports no returns for it."
+            )
+    return PartnerCellInput(
+        strategy_id=strategy_id,
+        scenario_id=scenario_id,
+        applicability=PartnerApplicability.PRESENT if present else PartnerApplicability.NOT_PRESENT,
+        partnership=result,
+        partner=partner,
+        # Presentation, from the Partnership this variant resolved: the id is
+        # the identity, and the name and role are this Strategy's own.
+        partner_name=None if authored is None else authored.name,
+        partner_role=None if authored is None else authored.role,
+        project_source_fingerprint=analysis.project_source_fingerprint,
+        structured_source_fingerprint=analysis.structured_source_fingerprint,
+        partnership_source_fingerprint=analysis.partnership_source_fingerprint,
+        # A variant with no Partnership has no Partnership fingerprint (FP-2);
+        # its identity in this matrix is its structured variant's.
+        source_fingerprint=analysis.partnership_source_fingerprint
+        or analysis.structured_source_fingerprint,
+        hold_period=analysis.hold_period,
+    )
+
+
+def _partnership_state_token(structured_token: str, partnerships: InvestmentPartnerships) -> str:
+    """The economic state one Partner matrix is defined by: the structured state
+    token, plus every stored Partnership statement's canonical economics.
+
+    It reads the same canonical payload the Partnership fingerprint does, so a
+    partner or tier rename is never a conflict. A Strategy's explicit
+    "no Partnership" is recorded as such; an inheriting Strategy is absent."""
+
+    payload = {
+        "structured": structured_token,
+        "base": None if partnerships.base is None else partnership_payload(partnerships.base),
+        "strategies": sorted(
+            (
+                [
+                    entry.strategy_id,
+                    None if entry.partnership is None else partnership_payload(entry.partnership),
+                ]
+                for entry in partnerships.strategies
+            ),
+            key=lambda entry: str(entry[0]),
+        ),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _partner_source_state(investment_id: str, db_path: Path | None) -> tuple[_StructuredState, str]:
+    structured = _structured_source_state(investment_id, db_path)
+    partnerships = store.list_investment_partnerships(investment_id, db_path=db_path)
+    return structured, _partnership_state_token(structured.token, partnerships)
+
+
+def analyze_partner_decision_matrix(
+    investment_id: str, partner_id: str, *, db_path: Path | None = None
+) -> PartnerDecisionMatrixReport:
+    """The Strategy x Scenario matrix of one partner: the implicit Base Strategy
+    and every persisted Strategy, each under the implicit Base Scenario and
+    every persisted Scenario, compared on the Partner catalog.
+
+    The partner must be one this Investment states somewhere -- in its Base
+    Partnership or in some Strategy's own -- or there is no perspective to
+    compare (``PartnerPerspectiveNotFoundError``). Bracketed by the economic
+    source state, now including every Partnership statement: if it moved,
+    ``DecisionMatrixConflictError``."""
+
+    perspective = partner_perspective(investment_id, partner_id, db_path=db_path)
+    if perspective is None:
+        raise PartnerPerspectiveNotFoundError(investment_id, partner_id)
+
+    before, before_token = _partner_source_state(investment_id, db_path)
+    strategy_axis = (
+        AxisMember(id=BASE_STRATEGY_ID, name=BASE_STRATEGY_NAME, is_base=True),
+        *(
+            AxisMember(id=record.strategy.strategy_id, name=record.strategy.name, is_base=False)
+            for record in before.strategies
+        ),
+    )
+    scenario_axis = (
+        AxisMember(id=BASE_SCENARIO_ID, name=BASE_SCENARIO_NAME, is_base=True),
+        *(
+            AxisMember(id=record.scenario.scenario_id, name=record.scenario.name, is_base=False)
+            for record in before.scenarios
+        ),
+    )
+    cells = [
+        _partner_cell(investment_id, strategy.id, scenario.id, partner_id, db_path)
+        for strategy in strategy_axis
+        for scenario in scenario_axis
+    ]
+    _, after_token = _partner_source_state(investment_id, db_path)
+    if after_token != before_token:
+        raise DecisionMatrixConflictError(
+            "The saved underwriting, strategies, scenarios, capital structures or partnerships "
+            "changed while the decision matrix was running. Run it again."
+        )
+    return PartnerDecisionMatrixReport(
+        investment_id=investment_id,
+        root_kind=before.root_kind,
+        unit_ids=before.unit_ids,
+        partner=perspective,
+        matrix=compare_partner_decision_matrix(
+            partner_id=perspective.partner_id,
+            partner_name=perspective.name,
+            strategies=strategy_axis,
+            scenarios=scenario_axis,
+            cells=cells,
+            catalog=PARTNER_METRIC_CATALOG,
         ),
     )

@@ -1349,7 +1349,10 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     # structured result is persisted either: a structured analysis is recomputed
     # on every request (Q14), so the assertion above still forbids naming a
     # Lease-Level financial result here, undiminished.
-    assert "_SCHEMA_VERSION = 11" in store
+    # P7.9 Stage 2 moves it to 12: eight additive Partnership tables, holding
+    # the authored Partnership contract only. No Partnership result is
+    # persisted either; it is recomputed on every request (Q14).
+    assert "_SCHEMA_VERSION = 12" in store
     assert "deal_sensitivity_snapshots" in store, (
         "D5.8A should persist the latest Lease-Level sensitivity runs"
     )

@@ -96,6 +96,8 @@ from typing import TypeVar
 from ..business_plan import BusinessPlan, validate_business_plan
 from ..capital_structure.contracts import CapitalStructure
 from ..capital_structure.validation import validate_capital_structure
+from ..partnership.contracts import Partnership
+from ..partnership.validation import validate_partnership
 from ..contracts import (
     AcquisitionInputs,
     AcquisitionTerms,
@@ -175,9 +177,10 @@ class StrategyDomain(StrEnum):
     ``INVESTMENT_STRATEGY_DOMAINS`` are the two sets, and every rule below reads
     them rather than the enum itself.
 
-    Section 7.4 also names ``PARTNERSHIP`` and ``UNIT_SELECTION``. They belong
-    to later gates and are deliberately not members, so a token naming one is
-    refused (``UNSUPPORTED_DOMAIN``)."""
+    ``PARTNERSHIP`` (P7.9 Stage 2) is the second Investment-root domain: it
+    replaces the Investment's Base Partnership whole. Section 7.4 also names
+    ``UNIT_SELECTION``. It belongs to a later gate and is deliberately not a
+    member, so a token naming it is refused (``UNSUPPORTED_DOMAIN``)."""
 
     ACQUISITION = "acquisition"
     FINANCING = "financing"
@@ -185,6 +188,7 @@ class StrategyDomain(StrEnum):
     OPERATING_OUTCOME = "operating_outcome"
     DISPOSITION = "disposition"
     CAPITAL_STRUCTURE = "capital_structure"
+    PARTNERSHIP = "partnership"
 
 
 _DOMAIN_RANK: Mapping[StrategyDomain, int] = MappingProxyType(
@@ -202,16 +206,21 @@ UNIT_STRATEGY_DOMAINS: tuple[StrategyDomain, ...] = (
 )
 
 #: The domains an Investment-root overlay may carry (P7.8B). ``PARTNERSHIP``
-#: joins this set at P7.9 without another representation: a root overlay is
-#: addressed by its domain alone, never by a Unit id, a sentinel or ``"*"``.
-INVESTMENT_STRATEGY_DOMAINS: tuple[StrategyDomain, ...] = (StrategyDomain.CAPITAL_STRUCTURE,)
+#: joins this set at P7.9 Stage 2 without another representation: a root
+#: overlay is addressed by its domain alone, never by a Unit id, a sentinel or
+#: ``"*"``.
+INVESTMENT_STRATEGY_DOMAINS: tuple[StrategyDomain, ...] = (
+    StrategyDomain.CAPITAL_STRUCTURE,
+    StrategyDomain.PARTNERSHIP,
+)
 
 #: Every *Project input* field a Strategy can write, under the one Unit domain
 #: that owns it. No field has two homes. ``interest_rate`` and ``ltv`` are
 #: financing decisions, so they are FINANCING fields and never operating
 #: outcomes; ``exit_cap_rate`` is an operating outcome and never DISPOSITION.
-#: ``CAPITAL_STRUCTURE`` writes no Project input at all -- it replaces a
-#: downstream contract, not a field of one -- so it is not a key here.
+#: ``CAPITAL_STRUCTURE`` and ``PARTNERSHIP`` write no Project input at all --
+#: each replaces a downstream contract, not a field of one -- so neither is a
+#: key here.
 STRATEGY_DOMAIN_FIELDS: Mapping[StrategyDomain, tuple[str, ...]] = MappingProxyType(
     {
         StrategyDomain.ACQUISITION: ("purchase_price", "acquisition_cost_pct"),
@@ -347,6 +356,23 @@ class StrategyOverlay:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class NoPartnership:
+    """The ``PARTNERSHIP`` domain's explicit empty replacement (P7.9 Stage 2):
+    "this Strategy deliberately has no Partnership".
+
+    A ``Partnership`` always holds at least one partner, so there is no empty
+    ``Partnership`` to state it with. This marker is that statement. It is never
+    the same thing as stating no ``PARTNERSHIP`` overlay at all, which inherits
+    the Investment's Base Partnership."""
+
+
+#: What an Investment-root overlay carries, by domain: the P7.7
+#: ``CapitalStructure``, or (P7.9 Stage 2) the Stage 1 ``Partnership`` or the
+#: explicit ``NoPartnership``.
+InvestmentStrategyOverlayContent = CapitalStructure | Partnership | NoPartnership
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class InvestmentStrategyOverlay:
     """One whole-domain overlay on an Investment-root domain (P7.8B).
 
@@ -354,12 +380,14 @@ class InvestmentStrategyOverlay:
     Investment-level contract, and the positions inside that contract carry
     their own Unit or Investment scope, so there is no Unit to address and no
     sentinel Unit id. ``content`` is the P7.7 ``CapitalStructure`` itself -- the
-    same contract the executor runs, never a parallel shape.
+    same contract the executor runs, never a parallel shape -- or, for
+    ``PARTNERSHIP`` (P7.9 Stage 2), the Stage 1 ``Partnership`` or the explicit
+    ``NoPartnership``.
 
     Shape only: ``validate_strategy`` holds the rules."""
 
     domain: StrategyDomain
-    content: CapitalStructure
+    content: InvestmentStrategyOverlayContent
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -416,6 +444,7 @@ class StrategyIssueCode(StrEnum):
     ROOT_DOMAIN_ON_UNIT = "root_domain_on_unit"
     UNIT_DOMAIN_AT_ROOT = "unit_domain_at_root"
     INVALID_CAPITAL_STRUCTURE = "invalid_capital_structure"
+    INVALID_PARTNERSHIP = "invalid_partnership"
     INVALID_UNIT_ID = "invalid_unit_id"
     DUPLICATE_DOMAIN = "duplicate_domain"
     UNIT_NOT_IN_VARIANT = "unit_not_in_variant"
@@ -918,6 +947,19 @@ def _root_issues(
             )
             continue
         content = occurrences[0].content
+        if domain is StrategyDomain.PARTNERSHIP:
+            if not isinstance(content, (Partnership, NoPartnership)):
+                issues.append(
+                    _strategy_issue(
+                        StrategyIssueCode.INVALID_CONTENT,
+                        f"{domain.value}: content must be a Partnership or NoPartnership; got "
+                        f"{type(content).__qualname__}.",
+                        domain=domain,
+                    )
+                )
+                continue
+            issues.extend(_partnership_issues(content))
+            continue
         if not isinstance(content, CapitalStructure):
             issues.append(
                 _strategy_issue(
@@ -930,6 +972,39 @@ def _root_issues(
             continue
         issues.extend(_capital_structure_issues(content, unit_modes))
     return issues
+
+
+def _partnership_issues(content: Partnership | NoPartnership) -> list[StrategyIssue]:
+    """The P7.9 structural authority on a root ``PARTNERSHIP`` overlay, its
+    findings wrapped unchanged and located within the overlay. The explicit
+    ``NoPartnership`` has nothing to judge.
+
+    A Partnership names no Unit, so no Base or membership fact can make a
+    stored Strategy's Partnership unreadable; whether it executes over a given
+    Common Equity Cash Flow is the variant's question."""
+
+    if isinstance(content, NoPartnership):
+        return []
+    located: list[StrategyIssue] = []
+    for issue in validate_partnership(content):
+        within = "" if issue.field is None else f".{issue.field}"
+        where = (
+            f".tiers[{issue.tier_id}]"
+            if issue.tier_id is not None
+            else f".partners[{issue.partner_id}]"
+            if issue.partner_id is not None
+            else ""
+        )
+        located.append(
+            _strategy_issue(
+                StrategyIssueCode.INVALID_PARTNERSHIP,
+                f"partnership: {issue.message}",
+                domain=StrategyDomain.PARTNERSHIP,
+                field=f"partnership{where}{within}",
+                source_code=issue.code.value,
+            )
+        )
+    return located
 
 
 def validate_strategy(
@@ -1889,7 +1964,7 @@ def strategy_capital_structure(strategy: StrategyDefinition | None) -> CapitalSt
         return None
     for overlay in strategy.root_overlays:
         if overlay.domain is StrategyDomain.CAPITAL_STRUCTURE:
-            return overlay.content
+            return overlay.content  # type: ignore[return-value]
     return None
 
 
@@ -1908,3 +1983,47 @@ def resolve_capital_structure(
     _require_instance(base_capital_structure, CapitalStructure, "base_capital_structure")
     own = strategy_capital_structure(strategy)
     return base_capital_structure if own is None else own
+
+
+# =============================================================================
+# The resolved Partnership -- Base, replaced whole by a Strategy's own
+# (P7.9 Stage 2)
+# =============================================================================
+
+
+def strategy_partnership(
+    strategy: StrategyDefinition | None,
+) -> Partnership | NoPartnership | None:
+    """The Strategy's own Partnership statement, or ``None`` when it states
+    none.
+
+    Three different answers, never collapsed into one another: ``None`` means
+    *inherit the Investment's Base Partnership*, a ``Partnership`` is this
+    Strategy's whole replacement, and ``NoPartnership()`` means *this Strategy
+    deliberately has no Partnership*."""
+
+    if strategy is None:
+        return None
+    for overlay in strategy.root_overlays:
+        if overlay.domain is StrategyDomain.PARTNERSHIP:
+            return overlay.content  # type: ignore[return-value]
+    return None
+
+
+def resolve_partnership(
+    base_partnership: Partnership | None, strategy: StrategyDefinition | None
+) -> Partnership | None:
+    """The Partnership the variant ``strategy`` allocates with: the
+    Investment's Base Partnership, or the Strategy's own **in whole** where it
+    states one (ST-2), or none at all.
+
+    A whole-domain replacement, never a merge: a partner or tier of the Base
+    Partnership that the Strategy's own does not restate is absent from it.
+    Removing the overlay restores the Base Partnership exactly (P-6)."""
+
+    if base_partnership is not None:
+        _require_instance(base_partnership, Partnership, "base_partnership")
+    own = strategy_partnership(strategy)
+    if own is None:
+        return base_partnership
+    return None if isinstance(own, NoPartnership) else own

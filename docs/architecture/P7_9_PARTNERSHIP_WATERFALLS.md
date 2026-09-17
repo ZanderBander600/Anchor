@@ -3,8 +3,10 @@
 Status: **Ratified.** The human review approved this contract with the
 reviewer's recommended decisions (Section 19). It is the authority for P7.9.
 **Stage 1 (Section 17.1) is complete and accepted** in PR #34 (`70b92e2`).
-Stages 2 and 3 have not started: no P7.9 migration, persistence, fingerprint,
-API or UI exists.
+**Stage 2 (Section 17.2) has started and is in progress** on
+`feature/p7-9-stage-2-partnership-integration` from `main` @ `1df2760`; the
+Stage 1 package is frozen at `70b92e2`. Stage 3 has not started: no P7.9 UI
+exists.
 
 History:
 
@@ -31,6 +33,28 @@ History:
     16.6);
   - financial results carry no display names, and
     `PartnershipResult.cadence` is always stated (Section 12).
+- **Stage 2 implementation clarifications** (Section 17.2; no financial
+  decision changed, the Stage 1 package is byte-identical to `70b92e2`):
+  - the explicit "no Partnership" state is a `NoPartnership` root-overlay
+    content (a Partnership always has a partner, so it cannot be empty), stored
+    as a Strategy marker row with `has_partnership = 0`, and spelled `null` on
+    the wire;
+  - **P-8 partner identity is the `partner_id` itself**, and nothing else. A
+    partner's `name` and `role` are presentation: `role` is reporting-only, it
+    never selects a subject, recipient or participant (Section 4.2), it is
+    excluded from every financial fingerprint (FP-1), and it may differ between
+    the Base Partnership and each Strategy's own. The same `partner_id` with
+    different roles persists, resolves, analyses and compares normally; the
+    Partner Decision Matrix reports each cell's own `partner_name` and
+    `partner_role`, from the Partnership that cell resolved, so one Strategy's
+    terms never label another's;
+  - the Partnership fingerprint also records `contribution_rule` (an economic
+    field with one v1 member), alongside every field Section 17.2 lists;
+  - a Partner-matrix cell whose variant has no Partnership takes the structured
+    source fingerprint as its identity, because it has no Partnership
+    fingerprint (FP-2);
+  - Section 16.2's `portfolio_property_debt_jv` waterfall half is frozen from
+    the exact-rational oracle rather than typed by hand.
 
 Base: `main` @ `79cb524`.
 Branch: `feature/p7-9-partnership-waterfalls`.
@@ -1527,5 +1551,6 @@ Also ratified, as recorded in Section 19.1 and the body:
 - **Nothing reopened.** It changes no ratified P7.0, P7.7 or P7.8 convention
   and introduces no deferred scope (Section 18).
 - **Implementation.** Stage 1 is complete and accepted in PR #34 (`70b92e2`).
-  Stage 2 and Stage 3 (Section 17) have not started; each requires an explicit
-  start, and finishing one never starts the next.
+  Stage 2 (Section 17.2) was explicitly started and is in progress. Stage 3
+  (Section 17.3) has not started; it requires its own explicit start, and
+  finishing one stage never starts the next.

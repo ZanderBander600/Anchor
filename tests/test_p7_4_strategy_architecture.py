@@ -339,6 +339,9 @@ def test_no_scenario_operation_logic_or_registry_is_duplicated() -> None:
         "StrategyIssue", "StrategyValidationError",
         # Widened at P7.8B by exactly the Investment-root overlay contract.
         "InvestmentStrategyOverlay",
+        # Widened at P7.9 Stage 2 by exactly the PARTNERSHIP domain's explicit
+        # "no Partnership" marker, a shape with no field and no behaviour.
+        "NoPartnership",
     }
     assert not {name for name in classes if name.startswith("Scenario")}
     matches = [ast.unparse(node.subject) for node in ast.walk(_strategy_tree()) if isinstance(node, ast.Match)]
@@ -376,6 +379,11 @@ def test_the_strategy_module_imports_exactly_these_names() -> None:
         # still never imports an engine, a store or a route.
         "..capital_structure.contracts": {"CapitalStructure"},
         "..capital_structure.validation": {"validate_capital_structure"},
+        # Widened at P7.9 Stage 2 by exactly the Partnership contract the
+        # PARTNERSHIP root overlay carries and the Stage 1 validator that
+        # judges it -- both calculation-free.
+        "..partnership.contracts": {"Partnership"},
+        "..partnership.validation": {"validate_partnership"},
         "..contracts": {"AcquisitionInputs", "AcquisitionTerms", "DetailedOperatingInputs", "OperatingMode"},
         "..engine.contracts": {"AcquisitionResults", "DetailedAcquisitionResults"},
         "..leasing": {
@@ -696,13 +704,13 @@ def test_the_wrapper_collapses_only_when_it_holds_neither_scenarios_nor_strategi
     and each kind is asked for explicitly rather than inferred.
 
     P7.4 asked about Scenarios and Strategies; P7.8B added the Capital Structure
-    as the third kind a wrapper can hold, so clearing the last one is what
-    releases the Deal -- and a wrapper that still holds any of the three
-    stays."""
+    as the third kind a wrapper can hold, and P7.9 Stage 2 the Partnership as
+    the fourth, so clearing the last one is what releases the Deal -- and a
+    wrapper that still holds any of them stays."""
 
     function = _functions(ast.parse(_current(_STORE)))["_wrapper_holds_no_structure"]
     selects = sorted(re.findall(r"SELECT 1 FROM (\w+) WHERE investment_id", " ".join(_strings(function))))
-    assert selects == ["capital_structures", "scenarios", "strategies"]
+    assert selects == ["capital_structures", "partnerships", "scenarios", "strategies"]
 
 
 def test_deleting_an_investment_deletes_its_strategy_structure_and_never_a_deal() -> None:
@@ -915,14 +923,15 @@ def test_p7_4_code_names_no_later_gate_concept(path: str) -> None:
 
 def test_no_later_gate_domain_is_a_member() -> None:
     """P7.4 shipped the five Unit domains; P7.8B activated ``CAPITAL_STRUCTURE``
-    as the first Investment-root domain, under its own gate's approval. The
-    domains still deferred are still absent."""
+    as the first Investment-root domain, and P7.9 Stage 2 ``PARTNERSHIP`` as
+    the second, each under its own gate's approval. The domain still deferred
+    is still absent."""
 
     assert {domain.value for domain in StrategyDomain} == {
         "acquisition", "financing", "business_plan", "operating_outcome", "disposition",
-        "capital_structure",
+        "capital_structure", "partnership",
     }
-    assert not {"unit_selection", "partnership"} & {domain.value for domain in StrategyDomain}
+    assert not {"unit_selection"} & {domain.value for domain in StrategyDomain}
 
 
 def test_the_later_gate_guard_detects_a_unit_selection_domain() -> None:
