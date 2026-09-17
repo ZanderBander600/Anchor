@@ -1,6 +1,6 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-16
+Last synchronized: 2026-09-17
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it

@@ -527,10 +527,10 @@ class PeriodRecord:
 class TierResult:
     """One tier's audit. Hurdle fields are stated for ``HURDLE`` tiers and
     catch-up fields for ``CATCH_UP`` tiers; ``catch_up_rate`` is derived from
-    the explicit split."""
+    the explicit split. The tier's display name stays on the authored
+    ``WaterfallTier``: names never enter a financial result (FP-1)."""
 
     tier_id: str
-    name: str
     sequence: int
     kind: TierKind
     split_rule: SplitRule
@@ -550,7 +550,9 @@ class TierResult:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PartnerResult:
-    """One partner's returns (the partner-returns namespace, Section 14).
+    """One partner's returns (the partner-returns namespace, Section 14). The
+    partner's display name stays on the authored ``Partner``: names never enter
+    a financial result (FP-1).
 
     **Cash and returns.** Per-period ``contributions`` and ``distributions``;
     ``net_cash_flows``; totals, ``profit``, ``irr`` / ``irr_status`` and
@@ -574,7 +576,6 @@ class PartnerResult:
     have returned and the waterfall did not."""
 
     partner_id: str
-    name: str
     role: PartnerRole
     investor_class: str | None
     commitment_share: float
@@ -620,14 +621,15 @@ class PartnershipResult:
 
     ``UNAVAILABLE`` when the upstream Common Equity Cash Flow is not reported:
     every figure is then ``None`` (never zero-filled), with the upstream reason
-    and the unresolved requirement ids."""
+    and the unresolved requirement ids. ``cadence`` is always stated: v1
+    allocates the annual series, available or not."""
 
     status: PartnershipStatus
     unavailable_reason: PartnershipUnavailableReason | None
     unavailable_message: str | None
     upstream_reason: CommonEquityUnavailableReason | None
     upstream_requirement_ids: tuple[str, ...]
-    cadence: CashFlowCadence | None
+    cadence: CashFlowCadence
     promote_participant_ids: tuple[str, ...]
     common_equity_cash_flows: tuple[float, ...] | None
     common_equity_total_profit: float | None

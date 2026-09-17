@@ -380,6 +380,10 @@ _PERMITTED_WEB = frozenset(
         "web/src/components/CapitalStructureResults.tsx",
         "web/src/components/CapitalStructureWorkspace.tsx",
         "web/src/components/PositionDecisionMatrixPanel.tsx",
+        # PR #31 (``docs: establish current-state source of truth``, 2ea241c) --
+        # a documentation-only rewrite of the frontend README. Not a source
+        # file; ratified at the P7.9 Stage 1 review.
+        "web/README.md",
     }
 )
 

@@ -365,7 +365,8 @@ def test_an_unresolved_funding_requirement_makes_the_partnership_unavailable() -
     assert result.upstream_requirement_ids == ("mezz/hold_year/4",)
     assert "mezz/hold_year/4" in result.unavailable_message  # type: ignore[operator]
     assert (result.partners, result.tiers, result.periods) == (None, None, None)
-    assert (result.common_equity_cash_flows, result.common_equity_total_profit, result.cadence) == (None, None, None)
+    assert (result.common_equity_cash_flows, result.common_equity_total_profit) == (None, None)
+    assert result.cadence is CashFlowCadence.ANNUAL
     assert result.promote_participant_ids == ("gp",)
 
 

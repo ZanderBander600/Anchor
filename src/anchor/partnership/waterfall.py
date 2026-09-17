@@ -472,7 +472,6 @@ def _partner_result(
         by_tier.append(PartnerTierAmount(tier_id=tier_id, sequence=sequence, amount=total))
     return PartnerResult(
         partner_id=partner_id,
-        name=partner.name,
         role=partner.role,
         investor_class=partner.investor_class,
         commitment_share=partner.commitment_share,
@@ -525,7 +524,6 @@ def _tier_result(
     is_catch_up = authored.kind is TierKind.CATCH_UP
     return TierResult(
         tier_id=authored.tier_id,
-        name=authored.name,
         sequence=authored.sequence,
         kind=authored.kind,
         split_rule=SplitRule.EXPLICIT if tier.explicit is not None else SplitRule.PRO_RATA_BY_CONTRIBUTION,
@@ -566,7 +564,7 @@ def unavailable_partnership_result(
         ),
         upstream_reason=upstream_reason,
         upstream_requirement_ids=requirement_ids,
-        cadence=None,
+        cadence=CashFlowCadence.ANNUAL,
         promote_participant_ids=tuple(sorted(partnership.promote_participant_ids)),
         common_equity_cash_flows=None,
         common_equity_total_profit=None,

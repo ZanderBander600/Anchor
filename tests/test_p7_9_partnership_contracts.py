@@ -147,6 +147,21 @@ def test_ratified_result_names() -> None:
     assert not {"subordination", "promote_earned_by_tier"} & names
 
 
+def test_display_names_never_enter_a_financial_result() -> None:
+    """Names stay on the authored terms; Stage 2 keeps them out of the
+    economic fingerprint, so no result may carry them."""
+
+    for cls in (contracts.PartnerResult, contracts.TierResult, contracts.PartnershipResult, contracts.HurdleAccountRecord):
+        assert "name" not in {field.name for field in dataclasses.fields(cls)}, cls.__name__
+    assert "name" in {field.name for field in dataclasses.fields(contracts.Partner)}
+    assert "name" in {field.name for field in dataclasses.fields(contracts.WaterfallTier)}
+
+
+def test_the_result_cadence_is_always_stated() -> None:
+    (field,) = [field for field in dataclasses.fields(contracts.PartnershipResult) if field.name == "cadence"]
+    assert field.type == "CashFlowCadence"
+
+
 def test_wire_values_are_lower_case() -> None:
     for enum in (
         contracts.CashFlowCadence, contracts.PartnerRole, contracts.ContributionRule, contracts.TierKind,
