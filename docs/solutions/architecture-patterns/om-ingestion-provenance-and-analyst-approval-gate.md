@@ -17,6 +17,11 @@ related_components: [financial_engine, ai_layer]
 
 # OM Ingestion — Provenance Verification and the Analyst Approval Gate
 
+> **Predecessor-era lesson.** The provenance and analyst-approval principles
+> remain current, but package paths and phase references below may describe
+> Mini-Anchor. Verify current details against `src/anchor` and
+> `docs/CURRENT_STATE.md`.
+
 ## Context
 
 Phase 10A added Offering Memorandum (OM) PDF ingestion: Azure Document Intelligence extracts document structure, then GPT classifies that structure into candidate values for the same nine `AcquisitionInputs` fields the analyst would otherwise type by hand, plus five read-only deal-context fields. This is the highest-risk AI surface in Mini-Anchor, because unlike the AI Analyst (which only produces prose commentary), OM ingestion proposes values that could, if trusted blindly, become the literal numbers the deterministic engine runs on. The pipeline was built with three independent safeguards — deterministic provenance verification, an explicit five-state evidence model, and a mandatory analyst approval gate — and all three are worth carrying forward exactly as designed, not simplified, when this is ported to Anchor.

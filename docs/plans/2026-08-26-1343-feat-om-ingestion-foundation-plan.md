@@ -12,6 +12,12 @@ deepened: 2026-08-26
 
 # OM Ingestion Foundation - Plan
 
+> **Historical plan.** The ingestion pipeline was subsequently implemented.
+> Preserve this document for requirement provenance, but verify current paths,
+> contracts, and project status against the code and `docs/CURRENT_STATE.md`.
+> Any present-tense blocker or implementation-ready statement below describes
+> the 2026-08-26 planning baseline.
+
 ## Goal Capsule
 
 - **Objective:** An analyst can turn an uploaded Offering Memorandum (OM) PDF into a reviewable set of proposed acquisition-input and deal-context values — each carrying verifiable provenance and an explicit stated / interpreted / conflicting / unverifiable / missing status — and approve, edit, or reject them individually before any value can reach `AcquisitionInputs` or the deterministic engine.

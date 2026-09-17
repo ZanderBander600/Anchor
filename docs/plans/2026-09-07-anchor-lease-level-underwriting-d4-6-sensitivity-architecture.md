@@ -1,5 +1,10 @@
 # Anchor — Lease-Level Sensitivity Architecture (D4.6)
 
+> **Historical gate record — implemented.** D4.6B subsequently shipped in
+> Sprint D, merged in `4f8a648`; D5 product integration merged in `fd3baca`.
+> Statements below that D4.6B or D5 had not begun preserve the original gate
+> boundary and are not current status. See `docs/CURRENT_STATE.md`.
+
 **Gate:** D4.6A — architecture and documentation only.
 **Date:** 2026-09-07
 **Branch:** `feature/lease-underwriting-d4-property-integration`
@@ -1276,7 +1281,8 @@ reduces to file identity.
 Six human decisions were enumerated and **all six are now decided; none
 blocks D4.6B** (§38).
 
-**D4.6B has not begun. Nothing is merged.**
+**At the D4.6A checkpoint, D4.6B had not begun and nothing had merged.** This
+historical boundary is superseded by the closeout in Section 39.
 
 ---
 
@@ -1637,8 +1643,8 @@ override. The rule in §38.2.2 is authoritative.
 **D4.6A is financially accepted.** Six decisions taken; four approved, two
 deferred; **none blocking**.
 
-**D4.6B has not begun, and this gate does not authorise it.** Nothing is
-merged.
+**At the D4.6A checkpoint, D4.6B had not begun, this gate did not authorise it,
+and nothing had merged.** Section 39 records the later accepted implementation.
 
 ---
 
@@ -1647,8 +1653,8 @@ merged.
 **Narrow status amendment. No decision, recommendation, measurement or
 classification in Sections 0–38 changes.**
 
-Sections 37 and 38.12 close with *"D4.6B has not begun. Nothing is merged."*
-Both sentences were accurate when written, earlier on 2026-09-07. **D4.6B has
+Sections 37 and 38.12 close by recording that D4.6B was unstarted and unmerged
+at that checkpoint. That status was accurate earlier on 2026-09-07. **D4.6B has
 since shipped and been accepted** (commit `1bbd95f`), and Section 38's rulings
 were implemented as written. Those two status lines are therefore **superseded
 by this note**; everything else in this document stands unchanged.
@@ -1681,4 +1687,5 @@ register and the D5 handoff, lives in §39 of**
 `docs/plans/2026-09-05-anchor-lease-level-underwriting-d4-integration-architecture.md`,
 **which is the authoritative Sprint-D closeout document.**
 
-Nothing is merged. D5 has not begun.
+The implementation later merged with Sprint D in `4f8a648`; D5 subsequently
+completed and merged in `fd3baca`.

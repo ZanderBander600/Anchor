@@ -2,19 +2,17 @@
 
 ## Status
 
-**Gate A1 — proposed, not yet implemented.** This is a specification-only
-document, produced on `feature/owner-return-metrics-v3`, branched from `main`
-after the Detailed Operating Model V2.1 merge (`main` @ `5460afc`, tag
-`v2.1.0`; V2.1 demo freeze remains `ea67313`, tag `showcase-v2.1-2026-09-03`,
-unmoved). No `AcquisitionResults`/`AcquisitionTerms`/`DebtSchedule` contract
-change, no engine code, no validation code, no API/frontend change, and no
-test has been implemented as part of producing it. It inherits
+**Implemented and merged in `745d190` (PR #10).** This document was authored as
+the Gate A1 specification on historical branch
+`feature/owner-return-metrics-v3`. It remains the financial convention record.
+Present-tense statements below about proposed or unimplemented work describe
+the original gate unless explicitly marked deferred. See
+`docs/CURRENT_STATE.md`.
+
+It inherits
 `docs/financial_conventions.md`, `docs/underwriting_v2_financial_conventions.md`,
 and `docs/detailed_operating_model_v2_1_financial_conventions.md` unmodified;
 where this document is silent, those govern.
-
-The current V2.1 demo/production results are unaffected by this document and
-must remain unaffected until an approved implementation phase begins.
 
 ## Purpose
 

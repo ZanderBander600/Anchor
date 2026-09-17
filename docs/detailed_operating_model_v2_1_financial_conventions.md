@@ -2,24 +2,21 @@
 
 ## Status
 
-**Phase 0 — proposed, not yet implemented.** This is a specification-only
-document, produced on `docs/detailed-operating-model-v2-1-spec`, branched
-from the frozen V2 demo build (`main` @ `a9b10a9`, tagged
-`showcase-v2-2026-09-03`). No `AcquisitionInputs`/`AcquisitionResults`
-contract change, no engine code, no validation code, no Excel reader change,
-no persistence schema change, no frontend change, and no test has been
-implemented as part of producing it. It inherits and extends
+**Implemented and frozen in `5460afc` (PR #9).** This document was authored as
+the Phase 0 specification on the historical V2 baseline `a9b10a9`. It remains
+the financial authority for Detailed Operating Model V2.1. Statements below
+that call a rule proposed or not yet implemented describe that original gate,
+not the current repository. See `docs/CURRENT_STATE.md`.
+
+It inherits and extends
 `docs/financial_conventions.md` (POC V1) and
 `docs/underwriting_v2_financial_conventions.md` (Underwriting V2). Where this
 document is silent, those documents govern, and nothing in either is revised,
 relaxed, or reinterpreted here.
 
-The current demo's financial results are unaffected by this document and must
-remain unaffected until an approved implementation phase begins.
-
 ## Purpose
 
-Anchor's engine today only knows how to consume a *summarized* operating
+At the specification baseline, Anchor's engine only knew how to consume a *summarized* operating
 assumption: `current_noi` plus `noi_growth`. This is **Quick Underwrite**.
 Detailed Operating Model V2.1 introduces a second way to arrive at the same
 kind of NOI schedule — **Detailed Underwrite** — by calculating NOI from
@@ -131,11 +128,10 @@ aggressive scenario). A downside scenario as severe as `revenue_growth =
 opex reduction plan) remains fully expressible; only the sign-flipping/
 formula-breaking region at and below `-1` is excluded.
 
-**This rule is a Phase 0 recommendation, not yet implemented or validated in
-code.** It should be added to `_DOMAIN_DESCRIPTIONS`/the `in_domain` mapping
-in `src/anchor/validation.py` following the exact pattern already used for
-`noi_growth`, when Gate 1 implementation begins
-(`docs/detailed_operating_model_v2_1_architecture.md`).
+**At the Phase 0 specification baseline, this rule had not yet been implemented
+or validated in code.** The later implementation added it through the approved
+gate sequence. The paragraph is retained to record the original implementation
+instruction, not current status.
 
 ## Timing Convention
 

@@ -9,11 +9,18 @@ artifact_readiness: implementation-ready
 execution: docs-only
 sprint: D
 gate: D4.0
-status: awaiting-human-financial-review
+status: accepted-and-implemented; Sprint D merged in 4f8a648
 baseline_commit: 66cb6b7
 ---
 
 # Lease-Level Underwriting — D4 Property Integration Architecture and Financial Conventions
+
+> **Historical gate record — accepted and implemented.** Sprint D merged in
+> `4f8a648`, and D5 product integration later merged in `fd3baca`. Earlier
+> sections intentionally preserve intermediate statements such as "not begun"
+> or "nothing is merged"; they do not describe the current repository. Later
+> amendments in this document govern its conventions. See
+> `docs/CURRENT_STATE.md` for live status.
 
 ## Status
 
@@ -3621,12 +3628,14 @@ renamed one validation code to match the rule it already enforced, added scope
 and public-safety guardrails, and recorded two decisions and one mutation
 disposition.
 
-D4.6 has not begun. Nothing here is merged.
+At the D4.5B checkpoint, D4.6 had not begun and nothing in this branch had
+merged.
 
 > **SUPERSEDED 2026-09-07 (D4.7).** The two sentences above were accurate on
 > 2026-09-06, at the close of D4.5B. D4.6A (architecture) and D4.6B
 > (implementation) have since shipped and been accepted. For the current state
-> of the sprint see **§39**, which governs. Nothing is merged yet.
+> of the sprint see **§39**, which governs. The later Sprint-D merge status is
+> recorded there.
 
 ---
 
@@ -4202,4 +4211,5 @@ D4.7 changed **no production code** and **no test assertion**.
 
 **No financial defect was discovered.** No human decision is outstanding.
 
-Awaiting human approval to merge. **D5 has not begun.**
+Human approval was subsequently granted. Sprint D merged in `4f8a648`, and D5
+later completed and merged in `fd3baca`.

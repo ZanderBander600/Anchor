@@ -1,6 +1,10 @@
 # Workspace UX & Visual System V3 — Specification
 
-Sprint C, Gate C1. Status: locked for C2 implementation.
+Sprint C, Gate C1. Status: implemented and merged in `fffdf34` (PR #12).
+
+This document remains the UX/design authority for that sprint. Its description
+of the pre-C2 frontend is a historical baseline, not the current interface.
+See `docs/CURRENT_STATE.md`.
 
 Visual north star: `docs/design/Anchor Web Design.png`.
 

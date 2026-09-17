@@ -6,6 +6,27 @@ Anchor is a proof-of-concept real estate acquisition analysis application.
 
 The project must remain financially deterministic, testable, auditable, and modular.
 
+## Current State and Document Precedence
+
+Read `docs/CURRENT_STATE.md` before planning or reviewing work. It is the
+single live status record for the accepted baseline, completed gates, active
+gate, and next ratified gate.
+
+Use documents in this order:
+
+1. `AGENTS.md` and `CLAUDE.md` for agent and workflow rules.
+2. `docs/CURRENT_STATE.md` for current project status only.
+3. `docs/development/ANCHOR_DEVELOPMENT_PROTOCOL.md` for verification and gate
+   discipline.
+4. Ratified financial and architecture authorities for the assigned domain.
+5. Gate records, dated plans, and `docs/solutions/` for historical rationale
+   and implementation evidence.
+
+Historical documents preserve the state and language of their original gate.
+Their old branch names, baselines, test counts, and phrases such as "not yet
+implemented" do not describe the current repository unless
+`docs/CURRENT_STATE.md` says otherwise.
+
 ## Core Architecture Rule
 
 AI is permitted to:
@@ -72,9 +93,9 @@ Do not merge branches unless explicitly instructed.
 
 Do not rewrite existing Git history.
 
-## Current POC Scope
+## Core Quick-Underwrite Scope
 
-The core engine uses nine acquisition inputs:
+The original Quick Underwrite core uses nine acquisition inputs:
 
 1. Purchase Price
 2. Current NOI
@@ -86,9 +107,18 @@ The core engine uses nine acquisition inputs:
 8. Interest Rate
 9. Amortization
 
-Do not expand the core engine beyond these inputs without explicit approval.
+Do not expand that core contract beyond these inputs without explicit
+approval. This is not a description of the entire current product. Approved
+Detailed, Lease-Level, Business Plan, Investment, Scenario, Strategy,
+Consolidation, and Capital Structure contracts exist around or downstream of
+the core engine and are governed by their ratified documents.
 
-## Development Sequence
+## Historical POC Development Sequence
+
+The original POC sequence below is retained as history; it is not the active
+roadmap. Use `docs/CURRENT_STATE.md` and the ratified P7 architecture for
+current sequencing. The "Phase 7" label below predates and is unrelated to the
+current P7 Generalized Investment Decision Architecture.
 
 Phase 0: Financial specification
 Phase 1: Excel ingestion

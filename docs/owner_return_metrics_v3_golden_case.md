@@ -5,9 +5,10 @@
 Companion to `docs/owner_return_metrics_v3_financial_conventions.md`. Every
 number below is derived by **independent arithmetic** against the formulas
 that document defines — none of it is produced by running the production
-engine. Production code, when implemented, must derive these values from
+engine. The production implementation merged in `745d190`; it must derive
+these values from
 `AcquisitionTerms`/`AcquisitionResults` fields; it must never hardcode any
-number on this page.
+number on this page. See `docs/CURRENT_STATE.md` for live project status.
 
 Two cases are used, per the Sprint A charter (Section 9):
 
