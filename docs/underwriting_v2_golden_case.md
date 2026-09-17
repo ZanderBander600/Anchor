@@ -2,12 +2,11 @@
 
 ## Status
 
-**Frozen — Phase 0.** This is the authoritative V2 reference case, companion
+**Implemented and frozen.** This is the authoritative V2 reference case, companion
 to `docs/underwriting_v2_financial_conventions.md`, at the same frozen status
 as the existing V1 golden case in `docs/phase_2_deterministic_engine.md`. It
-exists to become the permanent V2 regression benchmark once the engine
-implementation lands (see that document's "Reference-Case and QA Strategy"
-and "Recommended Phased Implementation Sequence").
+is the permanent V2 regression benchmark for the implementation merged by
+`a9b10a9`. See `docs/CURRENT_STATE.md` for live project status.
 
 All five V2 assumptions are nonzero, so every new convention is exercised at
 once, alongside an interest-only period that spans a full DSCR-relevant

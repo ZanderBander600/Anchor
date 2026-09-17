@@ -3,10 +3,13 @@
 Status: Session A (backend financial execution) decision record. The human
 financial review approved it with three corrections -- unresolved-claim
 finality, the over-funded closing and the full-amortization payoff -- recorded
-here; awaiting re-review.
+here. Re-review completed, and the gate merged in `cf403c2` (PR #28).
 Base: `main` @ `a9f9b09` (the P7.7 merge).
-Branch: `feature/p7-8-structured-position-returns`.
+Historical branch: `feature/p7-8-structured-position-returns`.
 Risk: Tier 1 (financial / contract critical).
+
+Current-state note: this is the accepted P7.8A financial decision record, not
+an open review request. See `docs/CURRENT_STATE.md`.
 
 `docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md` is the authority
 (Sections 3, 12, 14 and 21), and

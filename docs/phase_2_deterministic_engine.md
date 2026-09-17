@@ -1,5 +1,10 @@
 # Mini-Anchor POC V1 Phase 2: Deterministic Acquisition Engine
 
+Implementation status: implemented and retained as the base deterministic
+engine specification. Statements that this was a specification-only task
+describe the original gate. Current code lives under `src/anchor`; see
+`docs/CURRENT_STATE.md` for live project status.
+
 ## Purpose and Authority
 
 This document is the authoritative Phase 2 specification for the deterministic acquisition engine that converts one validated `AcquisitionInputs` object into one `AcquisitionResults` object. It inherits every financial rule frozen in `docs/financial_conventions.md` (Phase 0) and every ingestion rule frozen in `docs/phase_1_excel_ingestion.md` (Phase 1). It does not revise, relax, or reinterpret either document.

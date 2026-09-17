@@ -16,6 +16,11 @@ related_components: [ingestion, financial_engine, testing_framework]
 
 # Feature-Branch Workflow in Practice, and the Anchor Migration Checklist
 
+> **Historical predecessor record.** The statement below that `main` stopped
+> advancing describes Mini-Anchor before the Anchor migration. Anchor now
+> merges accepted gates back to `main` under `AGENTS.md`. Do not use the old
+> branch inventory as current Git status; see `docs/CURRENT_STATE.md` and Git.
+
 ## Context
 
 `AGENTS.md`'s stated Git rule is simple: "main represents the latest stable approved version... Development occurs on feature branches... Do not commit directly to main unless explicitly instructed. Do not merge branches unless explicitly instructed." Ten phases of Mini-Anchor development followed the "work on a feature branch per phase" half of that rule consistently. The "main reflects the latest approved version" half did not hold in practice past Phase 1 — worth documenting plainly now, since Anchor should either actually restore that half of the rule or consciously replace it, rather than silently inherit a written policy the POC itself didn't follow.

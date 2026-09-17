@@ -1,9 +1,12 @@
 # One-Page Owner Summary V3 — Gate B1 Specification
 
-Sprint B, Gate B1. **Specification only.** No engine, API, persistence, AI
-prompt, frontend component, or test in this repository is modified by this
-document. Every data source cited below was confirmed by reading the actual
-current contracts (`src/anchor/engine/contracts.py`,
+Sprint B, Gate B1. **Implemented and merged in `ca4fc16` (PR #11).** This
+document was specification-only when authored and remains the product/design
+record. Statements below about what B1 had not yet implemented describe that
+historical gate. See `docs/CURRENT_STATE.md`.
+
+Every data source cited below was confirmed by reading the contracts current at
+the time (`src/anchor/engine/contracts.py`,
 `src/anchor/contracts.py`, `src/anchor/analysis/contracts.py`,
 `src/anchor/ai/contracts.py`, `src/anchor/deals/contracts.py`,
 `web/src/types.ts`, `web/src/App.tsx`, `web/src/components/ResultsPanel.tsx`)

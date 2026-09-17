@@ -1,11 +1,13 @@
 # P7.8B Capital Structure Product Integration
 
-Status: Session B implementation complete; automated backend/frontend proof and
-the browser QA are complete; **human visual acceptance is pending**
-(Section 14).
+Status: Session B implementation, automated proof, browser QA, and human visual
+acceptance are complete. P7.8 merged in `cf403c2` (PR #28).
 Base: Session A's reviewed head `f5850ad` on
 `feature/p7-8-structured-position-returns`.
 Risk: Tier 2 (state / integration), over a Tier 1 engine that does not move.
+
+Current-state note: this is the accepted P7.8B implementation record, not an
+open review request. See `docs/CURRENT_STATE.md`.
 
 `docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md` is the authority
 (Sections 7.4, 12, 14.1 and 15).
@@ -317,10 +319,10 @@ the product, and the automated proof is in the tree:
   states, the Common Equity perspective, the Unit-removal refusal, draft
   survival across a Unit save, and the 1280 and 390 passes.
 
-**Visual acceptance remains human-owned.** No automated run in this gate is a
-visual approval, and this document never claims one. Browser QA being complete
-is evidence that the product behaves as specified -- not that a human has
-accepted how it looks.
+**Visual acceptance remains human-owned.** No automated run in this gate was a
+visual approval. Human review subsequently accepted screenshots 01-20 before
+PR #28 merged. Browser QA is behavioral evidence; the recorded human review is
+the visual-acceptance evidence.
 
 ## 15. Evidence
 

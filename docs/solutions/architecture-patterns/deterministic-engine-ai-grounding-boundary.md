@@ -15,6 +15,11 @@ tags: [deterministic-engine, ai-grounding, sensitivity-analysis, break-even, fin
 
 # Deterministic Financial Engine as the Sole Calculation Authority
 
+> **Predecessor-era lesson.** The architectural rule remains current, but
+> `mini_anchor` paths and phase references below are historical examples.
+> Verify concrete implementation details against `src/anchor` and
+> `docs/CURRENT_STATE.md`.
+
 ## Context
 
 Mini-Anchor's core design constraint, stated in `AGENTS.md` and frozen in `docs/financial_conventions.md`, is that every acquisition number (IRR, equity multiple, debt service, DSCR, loan balance, exit value, NOI forecast, acquisition cash flows) must come from one deterministic Python engine, never from an LLM. Phases 7-9 added sensitivity analysis, break-even analysis, and an AI "analyst" layer on top of that engine without ever weakening this boundary. The pattern that resulted — one authoritative entry point, everything else re-derives from it rather than approximating it — is the single most load-bearing architectural decision in the codebase and is worth carrying forward unchanged into Anchor.

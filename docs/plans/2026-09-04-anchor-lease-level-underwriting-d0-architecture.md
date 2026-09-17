@@ -15,6 +15,12 @@ baseline_commit: fffdf34
 
 # Lease-Level Underwriting — D0 Architecture and Financial Conventions
 
+> **Historical gate record — implemented.** D0's ratified conventions remain
+> authoritative, while the implementation and later Lease-Level gates have
+> shipped. Baselines and "no production code" statements below describe the D0
+> architecture gate itself, not the current repository. See
+> `docs/CURRENT_STATE.md`.
+
 ## Status
 
 **Planning / architecture gate only. No production code, no engine change, no

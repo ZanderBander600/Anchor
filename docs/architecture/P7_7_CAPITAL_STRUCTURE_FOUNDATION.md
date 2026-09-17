@@ -1,10 +1,12 @@
 # P7.7 Capital Structure Foundation + Legacy Debt Adapter
 
-Status: implementation decision record for Gate P7.7, awaiting human backend
-review.
+Status: human-reviewed, accepted, and merged in `a9f9b09` (PR #27).
 Base: `main` @ `fbaa07b` (the P7.6 merge).
-Branch: `feature/p7-7-capital-structure-foundation`.
+Historical branch: `feature/p7-7-capital-structure-foundation`.
 Risk: Tier 1 (financial / contract critical).
+
+Current-state note: this is the completed P7.7 implementation decision record,
+not an open review request. See `docs/CURRENT_STATE.md`.
 
 `docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md` is the authority
 (Sections 3, 12, 14, 15 and 21). This record states only what P7.7 decided and

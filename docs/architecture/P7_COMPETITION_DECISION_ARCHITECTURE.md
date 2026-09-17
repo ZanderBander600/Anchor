@@ -2,8 +2,8 @@
 
 Status: **Ratified.** The human architecture review approved the overall
 direction, and the P7.0 ratification patch records the human decision on all 24
-questions P7.0 raised (§21). This document becomes the authoritative Phase 7
-architecture when it merges to `main`; until then it awaits final human review.
+questions P7.0 raised (§21). This document merged to `main` in `f234e4c` and is
+the authoritative Phase 7 architecture.
 Where the ratification modified an original recommendation or rejected it, the
 ratified decision governs and the text below has been corrected to match. Where
 this document restates a Phase 6 rule, the Phase 6 document stays the
@@ -11,8 +11,12 @@ authority.
 Phase: P7 - Generalized Investment Decision Architecture
 Gate: P7.0 (architecture only; no financial calculation implemented)
 Base: `main` @ `0593baa` (Phase 6 complete)
-Branch: `feature/p7-0-competition-decision-architecture`
+Historical branch: `feature/p7-0-competition-decision-architecture`
 History: proposed in commit `4cb24c6`; ratified by the P7.0 ratification patch.
+
+Current-state note: P7.1 through P7.8 are complete. Section 19 remains the
+ratified dependency and gate sequence, not a live completion tracker. See
+`docs/CURRENT_STATE.md` for the active baseline and next gate.
 
 > Phase 5 forecasts the property. Phase 6 models the cost of executing the
 > business plan. Phase 7 lets an analyst ask: *given this opportunity, what

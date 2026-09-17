@@ -1,8 +1,12 @@
 # D6 Business Plan & Capital Economics - Phase Closeout
 
-Status: Closeout candidate - awaiting human Phase 6 acceptance
+Status: Accepted and merged in `0593baa`; Phase 6 is complete
 Phase: D6 - Business Plan & Capital Economics (Gates D6.1 through D6.9)
-Branch: `feature/d6-9-phase6-closeout` (base `main` @ `9ba3383`)
+Historical branch: `feature/d6-9-phase6-closeout` (base `main` @ `9ba3383`)
+
+Current-state note: this is the completed Phase 6 closeout record. Its branch,
+baseline, and verification counts are historical evidence, not live project
+status. See `docs/CURRENT_STATE.md`.
 
 This document records what Phase 6 shipped and how it was verified. It adds
 no convention. `D6_BUSINESS_PLAN_CONVENTIONS.md` stays the single authority

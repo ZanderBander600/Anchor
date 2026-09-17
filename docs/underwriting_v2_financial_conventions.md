@@ -2,17 +2,17 @@
 
 ## Status
 
-**Frozen — Phase 0.** This document is the authoritative Underwriting V2 financial
-specification, approved for implementation planning. It inherits and extends
+**Implemented and frozen.** This document is the authoritative Underwriting V2
+financial specification. Its implementation subsequently merged and was frozen
+in the V2 showcase baseline `a9b10a9`. It inherits and extends
 `docs/financial_conventions.md` (POC V1) and `docs/phase_2_deterministic_engine.md`.
 Where this document is silent, the V1 documents govern for the nine original
 inputs and their formulas — nothing in V1 is revised, relaxed, or reinterpreted
 by this document except where explicitly stated below.
 
-This is a specification-only document. No `AcquisitionInputs`/`AcquisitionResults`
-contract change, no engine code, no validation code, no Excel reader change, no
-persistence schema change, no frontend change, and no test has been implemented
-as part of producing it.
+This document itself was authored as a specification-only gate. Any later
+present-tense implementation-status statement below refers to that original
+baseline, not the current repository. See `docs/CURRENT_STATE.md`.
 
 ## Purpose
 

@@ -1,5 +1,10 @@
 # Mini-Anchor POC V1 Phase 1: Excel Ingestion
 
+Implementation status: implemented and merged. This document remains the
+historical authority for the canonical V1 workbook contract. References to a
+specification-only task or Mini-Anchor describe its original gate, not current
+project status. See `docs/CURRENT_STATE.md`.
+
 ## Purpose and Authority
 
 This document is the authoritative Phase 1 specification for converting one canonical Mini-Anchor Excel workbook into one validated `AcquisitionInputs` object. It inherits the nine input definitions and validation domains frozen in `docs/financial_conventions.md` and does not revise them.

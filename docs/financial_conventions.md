@@ -1,5 +1,10 @@
 # Mini-Anchor POC V1 Financial Conventions
 
+Implementation status: implemented and retained as the authoritative base
+financial convention. The Mini-Anchor name and POC V1 scope are historical;
+later approved contracts extend this base without silently changing it. See
+`docs/CURRENT_STATE.md` for live project status.
+
 ## Purpose
 
 This document defines and freezes the financial conventions for Mini-Anchor POC V1. It is the Phase 0 specification for the deterministic acquisition engine. The engine, rather than AI, is the authoritative source for every financial calculation described here.

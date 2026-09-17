@@ -10,6 +10,11 @@ execution: code
 
 # Anchor Bootstrap Migration - Plan
 
+> **Historical plan — completed.** The Anchor bootstrap migration merged in
+> `cbcb874` (PR #1). The branch, path inventory, and implementation instructions
+> below describe the pre-migration baseline and must not be used as current
+> status. See `docs/CURRENT_STATE.md`.
+
 ## Goal Capsule
 
 - **Objective:** Every active code path, running API response, UI surface, launcher, and currently-maintained doc in this repo presents a single, consistent "Anchor" identity — no live reference to "Mini-Anchor" remains outside the historical record — while every previously-verified financial, ingestion, and AI behavior continues to pass its existing automated suite and manual acceptance check unchanged.

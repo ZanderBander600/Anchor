@@ -1,14 +1,23 @@
 # Anchor
 
-Read `AGENTS.md` before making changes.
+Read these files, in order, before making changes:
+
+1. `AGENTS.md`
+2. `docs/CURRENT_STATE.md`
+3. `docs/development/ANCHOR_DEVELOPMENT_PROTOCOL.md`
 
 The instructions in `AGENTS.md` define the project's architecture, development sequence, testing requirements, financial controls, and Git workflow.
 
+`docs/CURRENT_STATE.md` is the only live project-status authority. Dated plans,
+gate records, old branch names, historical test counts, and present-tense
+statements inside completed specifications describe their original baseline,
+not the current repository. Do not select a gate or infer unfinished work from
+those historical statements.
+
 ## Anchor Development Protocol
 
-All Anchor development must follow:
-
-`docs/development/ANCHOR_DEVELOPMENT_PROTOCOL.md`
+All Anchor development must follow
+`docs/development/ANCHOR_DEVELOPMENT_PROTOCOL.md`.
 
 Before each gate:
 

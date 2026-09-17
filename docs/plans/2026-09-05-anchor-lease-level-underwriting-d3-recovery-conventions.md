@@ -1,7 +1,7 @@
 ---
 title: "Lease-Level Underwriting — D3 Expense Recovery Conventions"
 gate: D3.0
-status: D3 COMPLETE -- D3.0 through D3.6 implemented and verified; ready for final human review
+status: accepted-and-implemented; merged through PR #17
 supersedes: nothing
 governed_by:
   - docs/plans/2026-09-04-anchor-lease-level-underwriting-d0-architecture.md
@@ -9,6 +9,10 @@ governed_by:
 ---
 
 # Lease-Level Underwriting — D3 Expense Recovery Conventions
+
+> **Historical gate record — accepted and implemented.** PR #17 merged the D3
+> work. The conventions remain authoritative; baselines and review language
+> below describe the gate as it progressed. See `docs/CURRENT_STATE.md`.
 
 ## Status
 

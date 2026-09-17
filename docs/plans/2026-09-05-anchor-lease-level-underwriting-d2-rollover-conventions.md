@@ -13,6 +13,11 @@ baseline_commit: 9cca23d
 
 # Lease-Level Underwriting — D2 Rollover Financial Conventions
 
+> **Historical gate record — implemented.** The accepted rollover conventions
+> remain authoritative and the corresponding implementation has shipped.
+> Baselines and forward-looking statements below describe the D2 design gate,
+> not current project status. See `docs/CURRENT_STATE.md`.
+
 ## Status
 
 **Financial-design gate only. No production code, no test, no change to

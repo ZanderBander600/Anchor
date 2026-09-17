@@ -1,32 +1,20 @@
-# React + TypeScript + Vite
+# Anchor Web
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The Anchor frontend is a React 19, TypeScript, and Vite application. It is the
+analyst-facing surface for Quick, Detailed, and Lease-Level underwriting,
+Business Plans, Investments, Scenarios, Strategies, Decision Matrices, and
+Capital Structures.
 
-Currently, two official plugins are available:
+The frontend formats and presents backend-authoritative financial results. It
+must not reproduce financial formulas.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Commands
 
-## React Compiler
+- `npm run dev` - start the Vite development server
+- `npm test` - run the Vitest suite
+- `npm run lint` - run Oxlint
+- `npm run build` - type-check and create a production build
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+For current project status and development rules, read `../AGENTS.md`,
+`../CLAUDE.md`, `../docs/CURRENT_STATE.md`, and the Anchor Development
+Protocol.

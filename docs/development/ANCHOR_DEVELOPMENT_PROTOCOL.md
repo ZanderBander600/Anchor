@@ -6,6 +6,10 @@ Ratified after: D5 Product Integration
 Initial baseline: main @ fd3baca
 Applies to: All Project Anchor development work
 
+Current-state note: this protocol is stable workflow authority, not a project
+status tracker. Read `docs/CURRENT_STATE.md` before selecting or starting a
+gate.
+
 This protocol was derived from measured Project Anchor development-session
 evidence following D5 and is intended to preserve correctness while allocating
 verification effort according to risk.

@@ -2,12 +2,11 @@
 
 ## Status
 
-**Phase 0 — proposed, not yet implemented.** No production code, test, API
-route, persistence schema, Excel format, or frontend file has been changed to
-produce this document. This document specifies the contracts, calculation
-layers, and gated implementation sequence for Detailed Operating Model V2.1,
-built on `docs/detailed_operating_model_v2_1_financial_conventions.md` and
-proven against `docs/detailed_operating_model_v2_1_golden_case.md`.
+**Implemented and merged in `5460afc` (PR #9).** This document was originally
+the Phase 0 architecture proposal and remains the design record for Detailed
+Operating Model V2.1. Present-tense statements below about routes, migrations,
+or gates not yet existing describe the audited `a9b10a9` baseline, not the
+current repository. See `docs/CURRENT_STATE.md`.
 
 ## 1. Current-State Findings
 

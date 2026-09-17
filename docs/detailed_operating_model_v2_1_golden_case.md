@@ -2,13 +2,11 @@
 
 ## Status
 
-**Phase 0 — proposed, not yet implemented.** Companion to
+**Implemented and frozen.** Companion to
 `docs/detailed_operating_model_v2_1_financial_conventions.md`, at the same
-frozen-target status as the existing V1 golden case
-(`docs/phase_2_deterministic_engine.md`) and the Underwriting V2 golden case
-(`docs/underwriting_v2_golden_case.md`). It is a *bridge* case: it exists to
-become the permanent Quick/Detailed convergence regression test once the
-engine implementation lands (Gate 4, `docs/detailed_operating_model_v2_1_architecture.md`).
+frozen status as the existing V1 and Underwriting V2 golden cases. It is the
+permanent Quick/Detailed convergence regression case for the implementation
+merged in `5460afc`. See `docs/CURRENT_STATE.md` for live project status.
 
 **Precision note.** Every figure below was independently recomputed with a
 standalone script (not copied from the Phase 0 brief) evaluating each

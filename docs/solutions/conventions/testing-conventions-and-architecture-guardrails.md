@@ -17,6 +17,11 @@ related_components: [financial_engine, ingestion]
 
 # Testing Conventions and Architecture Guardrails
 
+> **Predecessor-era lesson.** Apply the testing patterns, but treat
+> `mini_anchor` paths, phase counts, and unresolved historical workflow notes
+> as examples rather than live status. Verify current details against the
+> repository and `docs/CURRENT_STATE.md`.
+
 ## Context
 
 Mini-Anchor's testing approach isn't just "write tests for financial code" (`AGENTS.md`'s stated rule) — three specific, reusable test *shapes* recur across every phase, and a fourth item, a Windows-specific pytest temp-directory problem, recurred as friction throughout the project without ever being fully closed out. Both are worth capturing before Anchor: the shapes because they are the actual mechanism that kept the architecture boundaries in [deterministic-engine-ai-grounding-boundary](../architecture-patterns/deterministic-engine-ai-grounding-boundary.md) and [om-ingestion-provenance-and-analyst-approval-gate](../architecture-patterns/om-ingestion-provenance-and-analyst-approval-gate.md) intact, and the Windows quirk because it should be fixed properly in Anchor rather than carried forward as a recurring nuisance.
