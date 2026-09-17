@@ -101,3 +101,90 @@ def test_a_missing_scenario_or_strategy_is_reported_in_words(db: Path, client: T
     for response in (scenario, strategy):
         assert MISSING not in response.json()["detail"]
         assert visible.id not in response.json()["detail"]
+
+
+# =============================================================================
+# A rejected AI model names the setting that chose it
+# =============================================================================
+
+
+def _provider_failure(kind_name: str, status_code: int, message: str, code: str | None) -> Exception:
+    """The provider layer's own error for one SDK refusal, raised through the
+    real ``OpenAIAnalystProvider`` so the cause chain is the real one."""
+
+    import httpx
+    import openai
+
+    from anchor.ai.provider import AIProviderError, OpenAIAnalystProvider
+
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    body = {"message": message, "type": "invalid_request_error", "param": None, "code": code}
+    refusal = getattr(openai, kind_name)(
+        message, response=httpx.Response(status_code, request=request), body=body
+    )
+
+    class _Responses:
+        def create(self, **_: object) -> None:
+            raise refusal
+
+    class _Client:
+        responses = _Responses()
+
+    try:
+        OpenAIAnalystProvider(client=_Client(), model="gpt-x").generate_analysis(
+            system_prompt="s", user_prompt="u"
+        )
+    except AIProviderError as error:
+        return error
+    raise AssertionError("the provider did not refuse")
+
+
+REQUEST = {
+    "inputs": {
+        "purchase_price": 50_000_000, "current_noi": 2_500_000, "occupancy": 0.95,
+        "noi_growth": 0.03, "hold_period": 5, "exit_cap_rate": 0.055, "ltv": 0.65,
+        "interest_rate": 0.0525, "amortization": 30,
+    },
+    "target_levered_irr": 0.10,
+    "target_headline_dscr": 1.20,
+    "target_equity_multiple": 1.50,
+}
+
+MODEL_MESSAGE = (
+    "The AI model 'gpt-configured' is not available to this OpenAI API key (the provider "
+    "reports it as not found or not permitted). Set ANCHOR_AI_MODEL in .env to a model this "
+    "key can use, then restart Anchor."
+)
+
+
+@pytest.mark.parametrize(
+    ("kind_name", "status_code", "message", "code"),
+    [
+        ("NotFoundError", 404, "The model `gpt-x` does not exist or you do not have access to it.", "model_not_found"),
+        ("PermissionDeniedError", 403, "You do not have access to model gpt-x.", None),
+    ],
+)
+def test_a_rejected_model_is_reported_by_its_setting(
+    monkeypatch: pytest.MonkeyPatch, kind_name: str, status_code: int, message: str, code: str | None
+) -> None:
+    from unittest.mock import patch
+
+    monkeypatch.setenv("ANCHOR_AI_MODEL", "gpt-configured")
+    failure = _provider_failure(kind_name, status_code, message, code)
+    with patch("anchor.api.generate_ai_analysis", side_effect=failure):
+        response = TestClient(api_module.app).post("/ai/analysis", json=REQUEST)
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == MODEL_MESSAGE
+
+
+def test_any_other_provider_failure_keeps_its_sanitized_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import patch
+
+    monkeypatch.setenv("ANCHOR_AI_MODEL", "gpt-configured")
+    failure = _provider_failure("PermissionDeniedError", 403, "Country, region, or territory not supported.", None)
+    with patch("anchor.api.generate_ai_analysis", side_effect=failure):
+        response = TestClient(api_module.app).post("/ai/analysis", json=REQUEST)
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "The AI provider request failed (PermissionDeniedError)."

@@ -13,6 +13,7 @@ sensitivity math of its own.
 from __future__ import annotations
 
 import dataclasses
+import os
 from collections.abc import Mapping
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
@@ -28,6 +29,7 @@ from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .ai import (
+    DEFAULT_MODEL,
     AIAnalysis,
     AIConfigurationError,
     AIProviderError,
@@ -1318,8 +1320,36 @@ def _ai_analysis_detailed(payload: dict[str, Any]) -> AIAnalysis:
         ) from None
     except AIProviderError as error:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=_ai_provider_detail(error)
         ) from None
+
+
+def _model_unavailable(error: BaseException | None) -> bool:
+    """Whether the provider refused the configured model itself: an unknown
+    model (404 / ``model_not_found``) or one this key may not use (403 naming
+    the model). Read from the SDK error's own attributes, so the API never
+    imports the provider SDK."""
+
+    code = getattr(error, "code", None)
+    status_code = getattr(error, "status_code", None)
+    if code == "model_not_found" or status_code == 404:
+        return True
+    return status_code == 403 and "model" in str(getattr(error, "message", "")).lower()
+
+
+def _ai_provider_detail(error: AIProviderError) -> str:
+    """The analyst-facing text of a failed AI request. A rejected model names
+    the setting that chose it; every other failure keeps the provider layer's
+    own sanitized message."""
+
+    if _model_unavailable(error.__cause__):
+        model = os.environ.get("ANCHOR_AI_MODEL") or DEFAULT_MODEL
+        return (
+            f"The AI model {model!r} is not available to this OpenAI API key (the "
+            "provider reports it as not found or not permitted). Set ANCHOR_AI_MODEL "
+            "in .env to a model this key can use, then restart Anchor."
+        )
+    return str(error)
 
 
 def _ai_analysis_quick(payload: dict[str, Any]) -> AIAnalysis:
@@ -1374,7 +1404,7 @@ def _ai_analysis_quick(payload: dict[str, Any]) -> AIAnalysis:
         ) from None
     except AIProviderError as error:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=_ai_provider_detail(error)
         ) from None
 
 
@@ -1445,7 +1475,7 @@ def _ai_analysis_lease_level(payload: dict[str, Any]) -> AIAnalysis:
         ) from None
     except AIProviderError as error:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=_ai_provider_detail(error)
         ) from None
 
 
