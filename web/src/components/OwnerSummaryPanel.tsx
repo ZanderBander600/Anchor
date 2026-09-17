@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { BreakEvenMetric, BreakEvenResult, DealStory } from '../types';
+import type { BreakEvenResult, DealStory } from '../types';
 import type { OwnerSummaryData } from '../ownerSummary';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
 import { operatingModeUnderwriteLabel } from '../operatingMode';
@@ -49,11 +49,18 @@ function InfoRow({ label, value }: InfoRowProps) {
   );
 }
 
-const BREAK_EVEN_METRIC_LABEL: Record<BreakEvenMetric, string> = {
-  levered_irr: 'Target Levered IRR',
-  equity_multiple: 'Target Equity Multiple',
-  headline_dscr: 'Target DSCR',
-};
+/** "for 10.00% Levered IRR" / "for 1.50x Equity Multiple" / "for 1.20x Year 1
+ * DSCR": the hurdle a highlight was solved for, worded exactly as the
+ * Break-Even tab words it (`BreakEvenPanel`), from the result's own target. */
+function hurdleCaption(result: BreakEvenResult): string {
+  if (result.metric === 'levered_irr') {
+    return `for ${formatPercent(result.target_metric_value)} Levered IRR`;
+  }
+  if (result.metric === 'equity_multiple') {
+    return `for ${formatMultiple(result.target_metric_value)} Equity Multiple`;
+  }
+  return `for ${formatMultiple(result.target_metric_value)} Year 1 DSCR`;
+}
 
 /** Formats one break-even highlight's solved value using whichever
  * existing formatter fits its *own* fixed assumption identity (Maximum
@@ -321,17 +328,17 @@ export function OwnerSummaryPanel({
             <MiniMetric
               label="Max Purchase Price"
               value={formatBreakEvenSolvedValue(breakEvenHighlights.maxPurchasePrice, formatCurrency)}
-              caption={BREAK_EVEN_METRIC_LABEL[breakEvenHighlights.maxPurchasePrice.metric]}
+              caption={hurdleCaption(breakEvenHighlights.maxPurchasePrice)}
             />
             <MiniMetric
               label="Max Exit Cap Rate"
               value={formatBreakEvenSolvedValue(breakEvenHighlights.maxExitCapRate, formatPercent)}
-              caption={BREAK_EVEN_METRIC_LABEL[breakEvenHighlights.maxExitCapRate.metric]}
+              caption={hurdleCaption(breakEvenHighlights.maxExitCapRate)}
             />
             <MiniMetric
               label="Max Interest Rate"
               value={formatBreakEvenSolvedValue(breakEvenHighlights.maxInterestRate, formatPercent)}
-              caption={BREAK_EVEN_METRIC_LABEL[breakEvenHighlights.maxInterestRate.metric]}
+              caption={hurdleCaption(breakEvenHighlights.maxInterestRate)}
             />
           </div>
         </section>

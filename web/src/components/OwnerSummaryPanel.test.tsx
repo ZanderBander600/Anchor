@@ -535,6 +535,21 @@ describe('Break-Even Highlights', () => {
     expect(screen.getByText('8.30%')).toBeTruthy();
   });
 
+  it('names each highlight’s hurdle with its value, as the Break-Even tab does', () => {
+    const data = buildOwnerSummaryData(quickSource({ breakEven: GOLDEN_BREAK_EVEN }));
+    render(<OwnerSummaryPanel data={data} />);
+    const highlights = screen.getByRole('region', { name: 'Break-Even Highlights' });
+    const captions = Array.from(highlights.querySelectorAll('.mini-metric')).map(
+      (metric) => metric.lastElementChild?.textContent,
+    );
+    expect(captions).toEqual([
+      'for 10.00% Levered IRR',
+      'for 10.00% Levered IRR',
+      'for 1.25x Year 1 DSCR',
+    ]);
+    expect(highlights.textContent).not.toMatch(/Target (Levered IRR|Equity Multiple|DSCR)/);
+  });
+
   it('omits the break-even section entirely when null -- no N/A, no placeholder, no warning', () => {
     const data = buildOwnerSummaryData(quickSource({ breakEven: null }));
     render(<OwnerSummaryPanel data={data} />);
