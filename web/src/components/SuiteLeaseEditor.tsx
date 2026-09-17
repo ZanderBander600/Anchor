@@ -38,6 +38,7 @@ import type {
   SuiteRowFormValues,
 } from '../leaseLevelTypes';
 import type { RowIssues } from '../leaseLevelIssues';
+import { readableIssueMessage } from '../issueText';
 
 export interface SuiteLeaseEditorProps {
   row: SuiteRowFormValues;
@@ -655,7 +656,7 @@ export function SuiteLeaseEditor({
           )}
           <ul className="lease-level-issue-list">
             {banner.map((issue) => (
-              <li key={`${issue.code}-${issue.path}`}>{issue.message}</li>
+              <li key={`${issue.code}-${issue.path}`}>{readableIssueMessage(issue.message)}</li>
             ))}
           </ul>
         </div>

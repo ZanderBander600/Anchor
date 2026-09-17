@@ -54,6 +54,7 @@ import type {
   MarketLeasingFormValues,
 } from '../leaseLevelTypes';
 import type { RowIssues } from '../leaseLevelIssues';
+import { readableIssueMessage } from '../issueText';
 import type { AcquisitionTermsFormValues, ValidationIssue } from '../types';
 
 /**
@@ -523,7 +524,7 @@ export function LeaseLevelWorkspace({
           <ul className="lease-level-issue-list">
             {unanchored.map((issue) => (
               <li key={`${issue.code}-${issue.path}`}>
-                {issue.path ? <code>{issue.path}</code> : null} {issue.message}
+                {issue.path ? <code>{issue.path}</code> : null} {readableIssueMessage(issue.message)}
               </li>
             ))}
           </ul>

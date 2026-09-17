@@ -31,6 +31,7 @@ import {
 } from '../decisionMatrix';
 import type { PositionDecisionCell, PositionDecisionMatrix } from '../capitalTypes';
 import type { PositionDecisionMatrixState } from '../usePositionDecisionMatrix';
+import { readableIssueMessage } from '../issueText';
 import { StaleAnalysisNotice } from './StaleAnalysisNotice';
 
 export interface PositionDecisionMatrixPanelProps {
@@ -107,7 +108,7 @@ function PositionTable({ matrix, ids }: { matrix: PositionDecisionMatrix; ids: s
           <span className="decision-matrix-invalid">{INVALID_VARIANT}</span>
           <ul className="decision-matrix-reasons">
             {cell.issues.map((issue, index) => (
-              <li key={`${issue.code}-${index}`}>{issue.message}</li>
+              <li key={`${issue.code}-${index}`}>{readableIssueMessage(issue.message)}</li>
             ))}
           </ul>
         </td>

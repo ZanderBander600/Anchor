@@ -380,6 +380,11 @@ _PERMITTED_WEB = frozenset(
         "web/src/components/CapitalStructureResults.tsx",
         "web/src/components/CapitalStructureWorkspace.tsx",
         "web/src/components/PositionDecisionMatrixPanel.tsx",
+        # Demo polish -- display-only formatting of validator messages: the
+        # numbers a backend refusal quotes, shown as percents, currency or
+        # without float noise. It reuses `format.ts` unchanged and holds no
+        # validation logic; the message stays the backend's verdict.
+        "web/src/issueText.ts",
     }
 )
 

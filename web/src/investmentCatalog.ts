@@ -16,6 +16,7 @@
 
 import type { DecisionMatrixCopy } from './decisionMatrix';
 import type { InvestmentIssue, InvestmentVariantIssue, TransactionCostCategory, UnitKind } from './investmentTypes';
+import { readableIssueMessage } from './issueText';
 import { assertNeverMode, operatingModeLabel } from './operatingMode';
 import type { Deal, OperatingMode } from './types';
 
@@ -128,7 +129,8 @@ export function unitNames(units: readonly DecisionUnit[]): Record<string, string
   return Object.fromEntries(units.map((unit) => [unit.unitId, unitDisplayName(unit)]));
 }
 
-/** A backend message with every Unit id it quotes replaced by the Unit's name.
+/** A backend message with every Unit id it quotes replaced by the Unit's name,
+ * and its numbers shown as an analyst reads them (`readableIssueMessage`).
  * Presentation only: the backend's words are otherwise kept exactly. */
 export function withUnitNames(message: string, names: Readonly<Record<string, string>>): string {
   let text = message;
@@ -137,7 +139,7 @@ export function withUnitNames(message: string, names: Readonly<Record<string, st
       text = text.split(unitId).join(name);
     }
   }
-  return text;
+  return readableIssueMessage(text);
 }
 
 /** The element-id namespace of a decision workspace: its Risk views, its

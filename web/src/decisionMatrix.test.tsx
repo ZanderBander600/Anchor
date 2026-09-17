@@ -584,6 +584,24 @@ describe('honest cells', () => {
     expect(within(cell('Renovate', 'Levered IRR', 'worst')).getByText('N/A').getAttribute('title')).toBe(message);
   });
 
+  it('shows the numbers a validator quotes as an analyst reads them, never as float noise', async () => {
+    saved([HOLD, RENO], [DOWN, UP]);
+    const base = fullReport();
+    const raw = 'exit_cap_rate: value -0.0049999999999999975 must be greater than 0.';
+    const cells = base.matrix.cells.map((c) =>
+      c.strategy_id === 'st-reno' && c.scenario_id === 'sc-down'
+        ? cellOf({ strategy: 'st-reno', scenario: 'sc-down', invalid: [raw] })
+        : c,
+    );
+    mockAnalyze.mockResolvedValue({ ...base, matrix: { ...base.matrix, cells, matrix_fingerprint: null } });
+    renderMatrix();
+    await autoRun();
+
+    const surface = document.getElementById('decision-matrix') ?? document.body;
+    expect(surface.textContent).toContain('exit_cap_rate: value -0.50% must be greater than 0%.');
+    expect(document.body.textContent).not.toContain('0.0049999999999999975');
+  });
+
   it('shows an undefined IRR as N/A with the engine’s reason, and its Delta as N/A', async () => {
     saved([HOLD], [DOWN]);
     const base = fullReport();
