@@ -552,6 +552,18 @@ body {
   border-bottom: none;
 }
 
+/* A value the engine does not report says why, on its own line. */
+.info-row-with-note {
+  flex-wrap: wrap;
+}
+
+.info-note {
+  flex-basis: 100%;
+  margin-top: 2px;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
 .info-label {
   color: var(--color-text-muted);
 }

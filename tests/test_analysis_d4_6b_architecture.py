@@ -385,6 +385,10 @@ _PERMITTED_WEB = frozenset(
         # without float noise. It reuses `format.ts` unchanged and holds no
         # validation logic; the message stays the backend's verdict.
         "web/src/issueText.ts",
+        # Demo polish -- the Results Summary says why an IRR is N/A, with the
+        # one existing IrrStatus-to-words mapping (`capitalEconomics.ts`). A
+        # read of a status the engine returns; nothing is computed.
+        "web/src/components/ResultsSummaryPanel.tsx",
     }
 )
 

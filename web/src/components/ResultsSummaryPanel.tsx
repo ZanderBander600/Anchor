@@ -1,4 +1,5 @@
 import type { AcquisitionResults } from '../types';
+import { irrNotReportedExplanation } from '../capitalEconomics';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
 
 interface StatProps {
@@ -23,11 +24,17 @@ function StatCard({ label, value, caption }: StatCardProps) {
   );
 }
 
-function InfoRow({ label, value }: StatProps) {
+interface InfoRowProps extends StatProps {
+  /** Why the value is not reported, when it is not. */
+  note?: string;
+}
+
+function InfoRow({ label, value, note }: InfoRowProps) {
   return (
-    <div className="info-row">
+    <div className={note ? 'info-row info-row-with-note' : 'info-row'}>
       <span className="info-label">{label}</span>
       <span className="info-value">{value}</span>
+      {note && <span className="info-note">{note}</span>}
     </div>
   );
 }
@@ -46,7 +53,9 @@ interface ResultsSummaryPanelProps {
  * itself. Those are now peer views under the Results sub-navigation, so one
  * results surface is visible at a time instead of four stacked.
  *
- * Every figure is a direct read of the engine's `AcquisitionResults`.
+ * Every figure is a direct read of the engine's `AcquisitionResults`. An IRR
+ * the engine does not report says why, in the words Capital Economics uses
+ * (`irrNotReportedExplanation`, keyed on the engine's own `IrrStatus`).
  */
 export function ResultsSummaryPanel({ results }: ResultsSummaryPanelProps) {
   return (
@@ -54,7 +63,11 @@ export function ResultsSummaryPanel({ results }: ResultsSummaryPanelProps) {
       <section className="headline-stats">
         <h3 className="card-title">Key Returns</h3>
         <div className="stat-grid">
-          <StatCard label="Levered IRR" value={formatPercent(results.levered_irr)} />
+          <StatCard
+            label="Levered IRR"
+            value={formatPercent(results.levered_irr)}
+            caption={irrNotReportedExplanation('Levered IRR', results.levered_irr_status) ?? undefined}
+          />
           <StatCard label="Equity Multiple" value={formatMultiple(results.equity_multiple)} />
           <StatCard label="Going-In Cap Rate" value={formatPercent(results.going_in_cap_rate)} />
           <StatCard
@@ -87,7 +100,11 @@ export function ResultsSummaryPanel({ results }: ResultsSummaryPanelProps) {
       <div className="card-row">
         <section className="card">
           <h3 className="card-title">Property</h3>
-          <InfoRow label="Unlevered IRR" value={formatPercent(results.unlevered_irr)} />
+          <InfoRow
+            label="Unlevered IRR"
+            value={formatPercent(results.unlevered_irr)}
+            note={irrNotReportedExplanation('Unlevered IRR', results.unlevered_irr_status) ?? undefined}
+          />
           <InfoRow label="Exit NOI" value={formatCurrency(results.exit_noi)} />
           <InfoRow label="Exit Value" value={formatCurrency(results.exit_value)} />
         </section>
