@@ -2,9 +2,22 @@
 
 ## Project
 
-Anchor is a proof-of-concept real estate acquisition analysis application.
+Anchor is a local commercial real estate acquisition underwriting application:
+a deterministic Python engine behind a FastAPI API, with a React web app and
+SQLite storage.
 
 The project must remain financially deterministic, testable, auditable, and modular.
+
+## Current Authorities
+
+- `docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md` is the
+  architecture authority for Phase 7 (Scenarios, Strategies, the Decision
+  Matrix, Investments, consolidation, Capital Structure and later P7 gates),
+  together with the P7 gate records in `docs/architecture/`.
+- `docs/development/ANCHOR_DEVELOPMENT_PROTOCOL.md` governs how every gate is
+  run: risk tiers, verification, session and Git discipline, stop conditions.
+
+Where this file and those documents differ, those documents govern.
 
 ## Core Architecture Rule
 
@@ -34,6 +47,15 @@ Work only within the explicit scope of the current task.
 Do not implement future phases unless explicitly instructed.
 
 Do not silently change financial conventions.
+
+Do not expand the engine's inputs or financial contracts without explicit
+approval; each engine gate records its own engine-scope approval.
+
+Anti-overfitting (permanent): historical cases are acceptance archetypes only.
+No production identifier, module, enum member, table, route, component or copy
+string may name a case, a competition, a sponsor or a specific transaction.
+Ask "can the generic architecture represent this case?", never "how do we code
+this case?" (`tests/test_p7_0_decision_architecture.py` enforces this.)
 
 Do not modify unrelated files.
 
@@ -71,33 +93,3 @@ Do not commit directly to main unless explicitly instructed.
 Do not merge branches unless explicitly instructed.
 
 Do not rewrite existing Git history.
-
-## Current POC Scope
-
-The core engine uses nine acquisition inputs:
-
-1. Purchase Price
-2. Current NOI
-3. Occupancy
-4. NOI Growth
-5. Hold Period
-6. Exit Cap Rate
-7. LTV
-8. Interest Rate
-9. Amortization
-
-Do not expand the core engine beyond these inputs without explicit approval.
-
-## Development Sequence
-
-Phase 0: Financial specification
-Phase 1: Excel ingestion
-Phase 2: Deterministic engine
-Phase 3: Financial QA
-Phase 4: Results contract and CLI
-Phase 5: FastAPI
-Phase 6: UI/UX
-Phase 7: End-to-end web POC
-Phase 8: Azure ingestion
-Phase 9: OpenAI investment analysis
-Phase 10: Final hardening

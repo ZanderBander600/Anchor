@@ -2,7 +2,16 @@
 
 Read `AGENTS.md` before making changes.
 
-The instructions in `AGENTS.md` define the project's architecture, development sequence, testing requirements, financial controls, and Git workflow.
+The instructions in `AGENTS.md` define the project's core architecture rules, development discipline, testing requirements, financial controls, and Git workflow.
+
+## Current Authorities
+
+- Architecture: `docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md`
+  and the P7 gate records in `docs/architecture/`.
+- Process: `docs/development/ANCHOR_DEVELOPMENT_PROTOCOL.md`.
+
+AI is never the authoritative calculator; every financial figure comes from the
+deterministic engine (see `AGENTS.md`).
 
 ## Anchor Development Protocol
 
