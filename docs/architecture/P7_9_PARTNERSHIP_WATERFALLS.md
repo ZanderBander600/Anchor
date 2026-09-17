@@ -2,9 +2,9 @@
 
 Status: **Ratified.** The human review approved this contract with the
 reviewer's recommended decisions (Section 19). It is the authority for P7.9.
-**Production implementation has not started.** No P7.9 production code,
-migration, API, persistence or UI exists. Stage 1 (Section 17.1) begins only
-when it is explicitly started.
+**Stage 1 (Section 17.1) is in progress** on
+`feature/p7-9-stage-1-partnership-engine`. Stages 2 and 3 have not started: no
+P7.9 migration, persistence, fingerprint, API or UI exists.
 
 History:
 
@@ -21,6 +21,16 @@ History:
 - **The ratification patch** records the final decisions and renames two
   results: `benchmark_capital_subordination` (was `subordination`) and
   `promote_attribution_by_tier` (was `promote_earned_by_tier`).
+- **Stage 1 implementation clarifications** (Stage 1 review; no financial
+  decision changed, R-A to R-E untouched):
+  - the seam reads the whole `StructuredCapitalResult` (Sections 2, 3 and
+    17.1);
+  - `contracts.py` may import two calculation-free Capital Structure shapes
+    (Section 16.5);
+  - mutation proofs run in-process under an isolated monkeypatch (Section
+    16.6);
+  - financial results carry no display names, and
+    `PartnershipResult.cadence` is always stated (Section 12).
 
 Base: `main` @ `79cb524`.
 Branch: `feature/p7-9-partnership-waterfalls`.
@@ -101,7 +111,7 @@ There is exactly one seam, and it is the same for both analysis roots.
 | Item | Location | Role for P7.9 |
 |---|---|---|
 | `CommonEquityReturns` | `capital_structure/execution_contracts.py` | **The input.** `cash_flows` (`t = 0..H`, or `None`), `status`, `unavailable_reason`, `unavailable_message`, `total_profit`, `total_equity_invested`, `total_cash_returned`, `irr`, `irr_status`, `equity_multiple` |
-| `StructuredCapitalResult.common_equity` | same | The field that carries it; `hold_period` sits beside it |
+| `StructuredCapitalResult` | same | **The adapter's argument** (Stage 1 clarification). It carries `common_equity`, the `hold_period` the series must match, and the `funding_requirements` whose unresolved ids an unavailable Partnership reports. `CommonEquityReturns` carries neither the ids nor the hold period |
 | `execute_unit_capital_structure` / `execute_investment_capital_structure` | `capital_structure/execution.py` | The producers. With no authored position, `cash_flows` *is* `AcquisitionResults.levered_cash_flows` or `ConsolidatedResults.levered_cash_flows` (P7.7 parity oracle) |
 | `common_equity_outcome` | `capital_structure/foundation.py` | Sets `cash_flows = None` with `unresolved_funding_requirement` whenever any Funding Requirement is unresolved |
 | `common_equity_metrics` | `capital_structure/metrics.py` | `evaluate_irr`, `calculate_equity_multiple` and `calculate_project_return_totals` on the final residual. It is the definition of Common Equity Total Profit that PW-5 reconciles to |
@@ -110,8 +120,9 @@ There is exactly one seam, and it is the same for both analysis roots.
 Findings:
 
 - **Unambiguous.** Both roots, and both "no structure" and "authored
-  structure", reach the waterfall through `CommonEquityReturns.cash_flows`.
-  P7.9 never reads `levered_cash_flows` directly. Doing so would bypass the
+  structure", reach the waterfall through
+  `StructuredCapitalResult.common_equity.cash_flows`. P7.9 never reads
+  `levered_cash_flows` directly. Doing so would bypass the
   structured positions and the unresolved-funding rule.
 - **Closing sign.** P7.8 refuses a root closing flow above **+$0.01**
   (`overfunded_closing`), so `CECF_0 <= +0.01`. A fully financed closing
@@ -151,10 +162,26 @@ CommonEquityCashFlowInput
 - **Accrual periods.** For `ANNUAL`, period `0` accrues nothing and each
   period `t >= 1` accrues one year at the stated annual rate. Accrual for any
   other cadence is a separate ratification (Section 18).
-- **Adapter.** `common_equity_input(common_equity: CommonEquityReturns)`
-  builds the input, or returns an unavailable marker carrying the upstream
-  reason, message and requirement ids. It is the only P7.9 module that imports
-  `anchor.capital_structure` results. The waterfall engine imports neither
+- **Adapter (Stage 1 signatures).**
+
+  ```
+  common_equity_input(structured: StructuredCapitalResult)
+      -> CommonEquityCashFlowInput | CommonEquityUnavailable
+  execute_partnership(partnership: Partnership, structured: StructuredCapitalResult)
+      -> PartnershipResult
+  allocate_partnership(partnership: Partnership, common_equity: CommonEquityCashFlowInput)
+      -> PartnershipResult
+  ```
+
+  - `common_equity_input` passes `structured.common_equity.cash_flows` through
+    untouched after checking that its length is `structured.hold_period + 1`.
+  - When the series is unavailable, it returns a `CommonEquityUnavailable`
+    marker instead: the upstream reason and message, plus the ids of the
+    `UNRESOLVED` entries in `structured.funding_requirements`.
+  - A missing series without an unresolved-funding reason is refused
+    (`invalid_common_equity_series`).
+  - `common_equity.py` is the only P7.9 module that reads
+    `anchor.capital_structure` results. The waterfall engine imports neither
   `capital_structure` nor `deals`, which is what keeps it input-agnostic
   (§13.1). Tests may therefore drive it with literal and legacy series.
 
@@ -1244,7 +1271,8 @@ Every Section 5.1 and 5.2 code has at least one test, including:
 
 ### 16.5 Architecture guards
 
-- A production ledger for P7.9, measured from `79cb524`.
+- A production ledger for P7.9 Stage 1, measured from `5cb327d` (the
+  contract-ratification merge; Stage 1 began there).
 - **Inherited guards that P7.9 would trip (inspected at `79cb524`):**
   - `test_p7_8b_changed_exactly_its_authorized_backend_files` measures
     `f5850ad..working tree`. It is re-pinned to P7.8B's committed range
@@ -1252,16 +1280,27 @@ Every Section 5.1 and 5.2 code has at least one test, including:
     with a boundary test that `cf403c2`'s parents are `a9f9b09` and `69af6fe`.
   - `_CAPITAL_STRUCTURE_IMPORTERS` is an exact working-tree allowlist. It gains
     exactly `anchor/partnership/common_equity.py` and
-    `anchor/partnership/contracts.py` (the `AccrualConvention` shape), and
-    nothing else.
+    `anchor/partnership/contracts.py`, and nothing else.
+  - **Inherited D4.6B guard (Stage 1 review).**
+    `test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved`
+    already failed on `main`: PR #31, a documentation-only change, edited
+    `web/README.md`. `_PERMITTED_WEB` gains exactly that file, and the guard's
+    rejection test keeps its teeth.
   - The P7.8B `_FROZEN` and `_PROTECTED` guards stay as they are. P7.9 edits
     none of those paths.
   - The P7.8A ledger is already pinned to `a9f9b09..f5850ad`. The P7.2 helper
     is not invoked against the working tree.
 - Byte identity of the Section 1.2 frozen modules.
-- The waterfall engine imports neither `anchor.capital_structure` (except the
-  `AccrualConvention` shape) nor `anchor.deals`. Only `partnership/metrics.py`
-  imports `anchor.engine.returns`.
+- **Capital Structure imports (Stage 1 clarification).**
+  - `partnership/contracts.py` imports exactly two calculation-free shapes
+    from `anchor.capital_structure.contracts`: `AccrualConvention` (Q21, one
+    enum everywhere) and `CommonEquityUnavailableReason` (the typed upstream
+    reason an unavailable result carries).
+  - `partnership/common_equity.py` imports the structured result shapes.
+  - Every other module takes these shapes through `partnership.contracts`.
+  - The waterfall engine imports neither `anchor.capital_structure` nor
+    `anchor.deals`.
+  - Only `partnership/metrics.py` imports `anchor.engine.returns`.
 - **No default on any economic field** (dataclass introspection), including
   `promote_participant_ids`, `split` and `simple_distribution_order`.
 - **No role inference.** No module in the package reads `Partner.role` except
@@ -1273,8 +1312,23 @@ Every Section 5.1 and 5.2 code has at least one test, including:
 
 ### 16.6 Mutation proofs
 
-Each mutant targets one explicit invariant. Mutants run on scratch copies with
-the imported module path asserted on each run (the known `pythonpath` trap).
+Each mutant targets one explicit invariant.
+
+**Method (Stage 1 clarification).** Mutants run in-process
+(`tests/test_p7_9_mutation_proofs.py`), following the P7.8B precedent. This
+replaces scratch copies and removes the known `pythonpath` trap by
+construction. For every mutant:
+
+1. **The target is this repository's code.** The patched module's file must
+   resolve to this repository's `src/anchor/partnership`, and the patched
+   name must be a real engine function.
+2. **The fixture passes before the mutation.**
+3. **The mutant is isolated.** It is applied inside its own
+   `pytest.MonkeyPatch` context, and the fixture must fail under it: by an
+   assertion, by an unexpected refusal or, for a refusal fixture, by pytest's
+   "did not raise".
+4. **The engine is restored.** After the context exits, the fixture must
+   pass again, which proves the real engine is back.
 
 | # | Mutant | Invariant | Killed by |
 |---|---|---|---|
@@ -1287,7 +1341,7 @@ the imported module path asserted on each run (the known `pythonpath` trap).
 | M7 | `promote_earned` uses `distribution_difference` (returned capital included) | promote excludes returned capital (Q23) | F5 (none on `lp`), F7 loss case (0 vs 40,000) |
 | M8 | a `GP`-role partner is treated as a participant | no role inference | the non-participant GP boundary (N/A vs a value) |
 | M9 | the benchmark allocation reads `commitment_share` | the benchmark is independent (Q2) | F7 |
-| M10 | a zero pro-rata denominator falls back to commitment shares | a deterministic refusal, not a silent substitute | F11 |
+| M10 | a zero pro-rata denominator falls back to a substitute table (equal shares) | a deterministic refusal, not a silent substitute | F11 |
 
 A pro-rata split that reads commitment shares instead of cumulative
 contributions is an *equivalent* mutant under v1's only contribution rule. It
@@ -1310,7 +1364,7 @@ New package `src/anchor/partnership/`:
 | `waterfall.py` | the Section 7 period loop, tier execution and catch-up; `allocate_partnership` |
 | `attribution.py` | the Section 11 decomposition, Promote Earned, benchmark capital subordination and tier attribution |
 | `metrics.py` | partner returns and the derived Common Equity Total Profit; the only importer of `anchor.engine.returns` |
-| `common_equity.py` | `common_equity_input` and `execute_partnership(partnership, common_equity: CommonEquityReturns)`; the only importer of `anchor.capital_structure` results |
+| `common_equity.py` | `common_equity_input(structured: StructuredCapitalResult)` and `execute_partnership(partnership, structured: StructuredCapitalResult)`; the only reader of `anchor.capital_structure` results |
 | `__init__.py` | exports |
 
 Tests: `tests/test_p7_9_partnership_contracts.py`,
@@ -1318,7 +1372,9 @@ Tests: `tests/test_p7_9_partnership_contracts.py`,
 `test_p7_9_pro_rata_split.py`, `test_p7_9_waterfall_fixtures.py`,
 `test_p7_9_promote_attribution.py`, `test_p7_9_conservation.py`,
 `test_p7_9_oracles.py`, `test_p7_9_partnership_architecture.py`,
-`test_p7_9_mutation_proofs.py`, and `tests/_p7_9_rational_oracle.py`.
+`test_p7_9_mutation_proofs.py`, `tests/_p7_9_rational_oracle.py`, and
+`tests/_p7_9_fixtures.py` (the contract builders and fixtures F1-F12; a Stage 1
+implementation clarification).
 
 ### 17.2 Stage 2: persistence, migration, fingerprints and API (Tier 2 over a frozen Tier 1 engine)
 
