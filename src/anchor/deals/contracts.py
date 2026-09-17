@@ -67,6 +67,7 @@ from ..business_plan import BusinessPlan
 from ..capital_structure.contracts import CapitalStructure
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 from ..investment.contracts import InvestmentTransactionCost, InvestmentUnitMembership
+from ..partnership.contracts import Partnership
 
 
 # =============================================================================
@@ -592,6 +593,50 @@ class InvestmentCapitalStructures:
     investment_id: str
     base: CapitalStructure
     strategies: tuple[StrategyCapitalStructure, ...]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StrategyPartnership:
+    """One Strategy's own Partnership statement (P7.9 Stage 2): the whole
+    replacement it states.
+
+    ``partnership`` is ``None`` when the Strategy explicitly states it has **no**
+    Partnership -- not inheritance, which is a Strategy absent from the list.
+    ``name`` is that Strategy's display name, carried for messages and for the
+    Partner perspective list; it never reaches a calculation or a fingerprint
+    (FP-1)."""
+
+    strategy_id: str
+    name: str
+    partnership: Partnership | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InvestmentPartnerships:
+    """Every Partnership one Investment has authored: its Base Partnership
+    (``None`` when it states none) and every Strategy statement.
+
+    One coherent read, because the questions asked of it are cross-Partnership:
+    which partners are addressable (the Partner perspectives), whether one
+    partner id keeps one identity (P-8), and what each variant resolves to."""
+
+    investment_id: str
+    base: Partnership | None
+    strategies: tuple[StrategyPartnership, ...]
+
+
+class PartnerPerspectiveNotFoundError(LookupError):
+    """No Partnership of this Investment holds a partner with this id, so there
+    is no ``PARTNER(partner_id)`` perspective to compare.
+
+    Raised identically whether the id never existed or belongs to another
+    Investment: a caller's id never discloses another Investment's
+    Partnership."""
+
+    def __init__(self, investment_id: str, partner_id: str) -> None:
+        self.investment_id = investment_id
+        self.partner_id = partner_id
+        super().__init__(f"No partner {partner_id!r} belongs to investment {investment_id!r}.")
 
 
 class PositionPerspectiveNotFoundError(LookupError):

@@ -117,9 +117,10 @@ def test_a_fresh_store_is_schema_9_with_every_p7_table_empty(db: Path) -> None:
     connection = sqlite3.connect(db)
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     connection.close()
-    # P7.6 added schema 10's visible-Investment sidecars and P7.8B schema 11's
-    # Capital Structure tables; P7.4's own eight are still empty.
-    assert version == 11
+    # P7.6 added schema 10's visible-Investment sidecars, P7.8B schema 11's
+    # Capital Structure tables and P7.9 Stage 2 schema 12's Partnership tables;
+    # P7.4's own eight are still empty.
+    assert version == 12
     assert f4.p7_row_counts(db) == f4.P7_EMPTY
 
 

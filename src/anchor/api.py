@@ -87,6 +87,7 @@ from .analysis.strategy import (
     DispositionChoice,
     FinancingChoice,
     InvestmentStrategyOverlay,
+    NoPartnership,
     OperatingOutcome,
     OperatingOutcomeSet,
     StrategyDomain,
@@ -119,7 +120,41 @@ from .capital_structure.execution_contracts import (
     ExecutionIssueCode,
 )
 from .deals.capital_structure_codec import FundingAmountRuleKind, PositionTermsKind
+from .deals.partner_identity import PartnerIdentityConflictError
+from .deals.partnership_codec import HurdleConditionKind
+from .deals.partnership_variants import (
+    analyze_partnership_variant,
+    partner_perspectives,
+    partnership_variant_fingerprint,
+)
 from .deals.position_identity import PositionIdentityConflictError
+from .partnership import (
+    BenchmarkShare,
+    CatchUpRecipient,
+    CatchUpRecipientKind,
+    CatchUpTerms,
+    ContributionRule,
+    EconomicAccount,
+    ExplicitSplit,
+    HurdleCombinator,
+    HurdleSubject,
+    HurdleSubjectKind,
+    HurdleTerms,
+    IrrHurdle,
+    MoicHurdle,
+    Partner,
+    PartnerRole,
+    Partnership,
+    PartnershipExecutionError,
+    PartnershipValidationError,
+    ProRataByContribution,
+    PromoteBenchmark,
+    SimpleDistributionOrder,
+    SplitRule,
+    SplitShare,
+    TierKind,
+    WaterfallTier,
+)
 from .deals.structured_variants import (
     analyze_structured_variant,
     position_perspectives,
@@ -177,11 +212,12 @@ from .deals.contracts import (
     InvestmentScenario,
     InvestmentStrategy,
     InvestmentStructureError,
+    PartnerPerspectiveNotFoundError,
     PositionPerspectiveNotFoundError,
     ScenarioNotFoundError,
     StrategyNotFoundError,
 )
-from .deals.decision_matrix import analyze_position_decision_matrix
+from .deals.decision_matrix import analyze_partner_decision_matrix, analyze_position_decision_matrix
 from .deals.contracts import InvestmentUnitNotFoundError, VisibleInvestment
 from .investment import (
     InvestmentTransactionCost,
@@ -2853,7 +2889,7 @@ def _strategy_payload(record: InvestmentStrategy) -> dict[str, Any]:
     payload["strategy"].pop("root_overlays", None)
     if root_overlays:
         payload["strategy"]["root_overlays"] = [
-            {"domain": overlay.domain.value, "content": _wire(overlay.content)}
+            {"domain": overlay.domain.value, "content": _root_overlay_wire(overlay.content)}
             for overlay in root_overlays
         ]
     return payload
@@ -2896,6 +2932,8 @@ def create_deal_strategy(deal_id: str, payload: dict[str, Any] = Body(...)) -> d
         raise _strategy_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
+    except PartnerIdentityConflictError as error:
+        raise _partner_identity_conflict_response(error) from None
 
 
 @app.get("/deals/{deal_id}/strategies", response_model=None)
@@ -2945,6 +2983,8 @@ def create_investment_strategy(
         raise _strategy_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
+    except PartnerIdentityConflictError as error:
+        raise _partner_identity_conflict_response(error) from None
 
 
 @app.get("/investments/{investment_id}/strategies/{strategy_id}", response_model=None)
@@ -2985,6 +3025,8 @@ def update_investment_strategy(
         raise _strategy_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
+    except PartnerIdentityConflictError as error:
+        raise _partner_identity_conflict_response(error) from None
 
 
 @app.delete(
@@ -3593,6 +3635,13 @@ _CAPITAL_WIRE_KINDS: Mapping[type, str] = {
     PreferredEquityTerms: PositionTermsKind.PREFERRED_EQUITY.value,
     ModelMonthPeriod: TimingBasis.MODEL_MONTH.value,
     HoldYearPeriod: TimingBasis.HOLD_YEAR.value,
+    # P7.9 Stage 2: the Partnership unions, spelled by the one codec (the split
+    # rule reuses the Stage 1 ``SplitRule`` tokens). A subject and a recipient
+    # carry their own ``kind`` field already.
+    ExplicitSplit: SplitRule.EXPLICIT.value,
+    ProRataByContribution: SplitRule.PRO_RATA_BY_CONTRIBUTION.value,
+    IrrHurdle: HurdleConditionKind.IRR.value,
+    MoicHurdle: HurdleConditionKind.MOIC.value,
 }
 
 
@@ -3884,7 +3933,9 @@ def _strategy_root_overlays(payload: dict[str, Any]) -> tuple[InvestmentStrategy
     Absent or empty means the Strategy states none, which is *inherit the Base
     Capital Structure*. An overlay whose content is a structure with no position
     is the other thing entirely -- an explicit, stored "no structured capital" --
-    and the two travel differently all the way down."""
+    and the two travel differently all the way down. A ``partnership`` overlay
+    (P7.9 Stage 2) follows the same rule, with ``null`` content as its explicit
+    "no Partnership"."""
 
     raw_overlays = payload.get("root_overlays", [])
     if not isinstance(raw_overlays, list):
@@ -3894,11 +3945,7 @@ def _strategy_root_overlays(payload: dict[str, Any]) -> tuple[InvestmentStrategy
         where = f"root_overlays[{index}]"
         body = _exact_keys(raw, _STRATEGY_ROOT_OVERLAY_FIELDS, where)
         domain = _strategy_domain_token(body["domain"])
-        content = (
-            _capital_structure_request(body["content"], f"{where}.content")
-            if domain is StrategyDomain.CAPITAL_STRUCTURE
-            else body["content"]
-        )
+        content = _root_overlay_content(domain, body["content"], f"{where}.content")
         overlays.append(InvestmentStrategyOverlay(domain=domain, content=content))
     return tuple(overlays)
 
@@ -4164,6 +4211,484 @@ def analyze_investment_position_decision_matrix(
         ScenarioNotFoundError,
         DealNotFoundError,
         PositionPerspectiveNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except DecisionMatrixConflictError as error:
+        raise _structured_conflict(error) from None
+
+
+# =============================================================================
+# Phase 7 Gate P7.9 Stage 2 -- the Partnership surface
+#
+# Thin routes over ``anchor.deals.store`` (the persisted Partnerships),
+# ``anchor.deals.partnership_variants`` (the resolved Partnership, the layered
+# fingerprints and the accepted Stage 1 engine reached through the structured
+# variant) and ``anchor.deals.decision_matrix`` (the PARTNER perspective). This
+# module computes nothing, resolves nothing and adds no second analysis
+# pathway.
+#
+# **One owner, two doors**, exactly as for a Capital Structure: the ``/deals``
+# routes are the convenience door for a standalone Deal (the GET materializes
+# nothing; the first save of a Partnership materializes the hidden one-unit
+# wrapper), and a Unit of a visible Investment is refused with 409.
+#
+# **Stated, never defaulted.** Every Partnership field is stated on the wire,
+# ``null`` included: a missing ``promote_participant_ids`` is a structural 422,
+# never an empty set, and a missing split rule, subject, accrual convention or
+# SIMPLE order reaches the Stage 1 validator as absent and is refused there.
+#
+# **Kinds are explicit on the wire.** A tier split and a hurdle condition carry
+# a ``kind`` from the one codec (``anchor.deals.partnership_codec``); a subject
+# and a recipient carry their own Stage 1 ``kind``. A discriminator the codec
+# does not know is refused structurally, and every other unknown token is passed
+# to the Stage 1 validator, which refuses it by name. Nothing is inferred.
+# =============================================================================
+
+#: The keys each Partnership body may carry. Literal tuples, so an unknown key
+#: is always refused rather than silently ignored.
+_PARTNERSHIP_BODY_FIELDS = ("partnership",)
+_PARTNERSHIP_FIELDS = (
+    "partners",
+    "contribution_rule",
+    "promote_benchmark",
+    "promote_participant_ids",
+    "tiers",
+)
+_PARTNER_FIELDS = ("partner_id", "name", "role", "investor_class", "commitment_share")
+_BENCHMARK_FIELDS = ("shares",)
+_SHARE_FIELDS = ("partner_id", "share")
+_TIER_FIELDS = ("tier_id", "name", "sequence", "kind", "split", "hurdle", "catch_up")
+_EXPLICIT_SPLIT_FIELDS = ("kind", "shares")
+_PRO_RATA_SPLIT_FIELDS = ("kind",)
+_HURDLE_FIELDS = ("hurdle_subject", "conditions", "combinator")
+_SUBJECT_FIELDS = ("kind", "partner_id", "investor_class", "account")
+_IRR_CONDITION_FIELDS = (
+    "kind",
+    "condition_id",
+    "rate",
+    "accrual_convention",
+    "simple_distribution_order",
+)
+_MOIC_CONDITION_FIELDS = ("kind", "condition_id", "multiple")
+_CATCH_UP_FIELDS = ("recipient", "target_profit_share")
+_RECIPIENT_FIELDS = ("kind", "partner_id", "investor_class")
+
+
+def _wire_array(raw: Any, where: str) -> list[Any]:
+    if not isinstance(raw, list):
+        raise _structural_error(f"{where} must be an array.")
+    return raw
+
+
+def _share_row(raw: Any, where: str, row_type: type) -> Any:
+    body = _exact_keys(raw, _SHARE_FIELDS, where)
+    return row_type(partner_id=body["partner_id"], share=body["share"])
+
+
+def _share_rows(raw: Any, where: str, row_type: type) -> tuple[Any, ...]:
+    return tuple(
+        _share_row(item, f"{where}[{index}]", row_type)
+        for index, item in enumerate(_wire_array(raw, where))
+    )
+
+
+def _partner_request(raw: Any, where: str) -> Partner:
+    body = _exact_keys(raw, _PARTNER_FIELDS, where)
+    return Partner(
+        partner_id=body["partner_id"],
+        name=body["name"],
+        role=_capital_token(PartnerRole, body["role"]),
+        investor_class=body["investor_class"],
+        commitment_share=body["commitment_share"],
+    )
+
+
+def _split_request(raw: Any, where: str) -> Any:
+    """A tier split by its explicit ``kind`` -- or ``None``, which the Stage 1
+    validator refuses as a missing split rule (there is no default)."""
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise _structural_error(f"{where} must be an object or null.")
+    kind = raw.get("kind")
+    if kind == SplitRule.EXPLICIT:
+        body = _exact_keys(raw, _EXPLICIT_SPLIT_FIELDS, where)
+        return ExplicitSplit(shares=_share_rows(body["shares"], f"{where}.shares", SplitShare))
+    if kind == SplitRule.PRO_RATA_BY_CONTRIBUTION:
+        _exact_keys(raw, _PRO_RATA_SPLIT_FIELDS, where)
+        return ProRataByContribution()
+    raise _structural_error(
+        f"{where}.kind must be {SplitRule.EXPLICIT.value!r} or "
+        f"{SplitRule.PRO_RATA_BY_CONTRIBUTION.value!r}; got {kind!r}."
+    )
+
+
+def _condition_request(raw: Any, where: str) -> Any:
+    """One hurdle condition by its explicit ``kind``."""
+
+    if not isinstance(raw, dict):
+        raise _structural_error(f"{where} must be an object.")
+    kind = raw.get("kind")
+    if kind == HurdleConditionKind.IRR:
+        body = _exact_keys(raw, _IRR_CONDITION_FIELDS, where)
+        return IrrHurdle(
+            condition_id=body["condition_id"],
+            rate=body["rate"],
+            accrual_convention=_capital_token(PreferredAccrualConvention, body["accrual_convention"]),
+            simple_distribution_order=_capital_token(
+                SimpleDistributionOrder, body["simple_distribution_order"]
+            ),
+        )
+    if kind == HurdleConditionKind.MOIC:
+        body = _exact_keys(raw, _MOIC_CONDITION_FIELDS, where)
+        return MoicHurdle(condition_id=body["condition_id"], multiple=body["multiple"])
+    raise _structural_error(
+        f"{where}.kind must be {HurdleConditionKind.IRR.value!r} or "
+        f"{HurdleConditionKind.MOIC.value!r}; got {kind!r}."
+    )
+
+
+def _hurdle_request(raw: Any, where: str) -> HurdleTerms | None:
+    if raw is None:
+        return None
+    body = _exact_keys(raw, _HURDLE_FIELDS, where)
+    raw_subject = body["hurdle_subject"]
+    subject = None
+    if raw_subject is not None:
+        subject_body = _exact_keys(raw_subject, _SUBJECT_FIELDS, f"{where}.hurdle_subject")
+        subject = HurdleSubject(
+            kind=_capital_token(HurdleSubjectKind, subject_body["kind"]),
+            partner_id=subject_body["partner_id"],
+            investor_class=subject_body["investor_class"],
+            account=_capital_token(EconomicAccount, subject_body["account"]),
+        )
+    return HurdleTerms(
+        hurdle_subject=subject,  # type: ignore[arg-type]
+        conditions=tuple(
+            _condition_request(item, f"{where}.conditions[{index}]")
+            for index, item in enumerate(_wire_array(body["conditions"], f"{where}.conditions"))
+        ),
+        combinator=_capital_token(HurdleCombinator, body["combinator"]),
+    )
+
+
+def _catch_up_request(raw: Any, where: str) -> CatchUpTerms | None:
+    if raw is None:
+        return None
+    body = _exact_keys(raw, _CATCH_UP_FIELDS, where)
+    recipient = _exact_keys(body["recipient"], _RECIPIENT_FIELDS, f"{where}.recipient")
+    return CatchUpTerms(
+        recipient=CatchUpRecipient(
+            kind=_capital_token(CatchUpRecipientKind, recipient["kind"]),
+            partner_id=recipient["partner_id"],
+            investor_class=recipient["investor_class"],
+        ),
+        target_profit_share=body["target_profit_share"],
+    )
+
+
+def _tier_request(raw: Any, where: str) -> WaterfallTier:
+    body = _exact_keys(raw, _TIER_FIELDS, where)
+    return WaterfallTier(
+        tier_id=body["tier_id"],
+        name=body["name"],
+        sequence=body["sequence"],
+        kind=_capital_token(TierKind, body["kind"]),
+        split=_split_request(body["split"], f"{where}.split"),
+        hurdle=_hurdle_request(body["hurdle"], f"{where}.hurdle"),
+        catch_up=_catch_up_request(body["catch_up"], f"{where}.catch_up"),
+    )
+
+
+def _partnership_request(raw: Any, where: str) -> Partnership | None:
+    """A Partnership from its wire object, structurally -- or ``None`` for an
+    explicit ``null``. No contract rule is applied here: the Stage 1 validator
+    reports every structural problem as a structured 422."""
+
+    if raw is None:
+        return None
+    body = _exact_keys(raw, _PARTNERSHIP_FIELDS, where)
+    benchmark = _exact_keys(body["promote_benchmark"], _BENCHMARK_FIELDS, f"{where}.promote_benchmark")
+    return Partnership(
+        partners=tuple(
+            _partner_request(item, f"{where}.partners[{index}]")
+            for index, item in enumerate(_wire_array(body["partners"], f"{where}.partners"))
+        ),
+        contribution_rule=_capital_token(ContributionRule, body["contribution_rule"]),
+        promote_benchmark=PromoteBenchmark(
+            shares=_share_rows(benchmark["shares"], f"{where}.promote_benchmark.shares", BenchmarkShare)
+        ),
+        promote_participant_ids=tuple(
+            _wire_array(body["promote_participant_ids"], f"{where}.promote_participant_ids")
+        ),
+        tiers=tuple(
+            _tier_request(item, f"{where}.tiers[{index}]")
+            for index, item in enumerate(_wire_array(body["tiers"], f"{where}.tiers"))
+        ),
+    )
+
+
+def _partnership_body(payload: dict[str, Any]) -> Partnership | None:
+    body = _exact_keys(payload, _PARTNERSHIP_BODY_FIELDS, "The request body")
+    return _partnership_request(body["partnership"], "partnership")
+
+
+def _root_overlay_content(domain: Any, raw: Any, where: str) -> Any:
+    """A root overlay's content by its domain: a Capital Structure (P7.8B), or
+    a Partnership, where ``null`` is the explicit "no Partnership"."""
+
+    if domain is StrategyDomain.CAPITAL_STRUCTURE:
+        return _capital_structure_request(raw, where)
+    if domain is StrategyDomain.PARTNERSHIP:
+        partnership = _partnership_request(raw, where)
+        return NoPartnership() if partnership is None else partnership
+    return raw
+
+
+def _root_overlay_wire(content: Any) -> Any:
+    """A root overlay's content on the wire; the explicit "no Partnership" is
+    ``null``."""
+
+    return None if isinstance(content, NoPartnership) else _wire(content)
+
+
+def _partnership_validation_error_response(error: PartnershipValidationError) -> HTTPException:
+    """An invalid Partnership as a structured 422: the Stage 1 issues, in the
+    validator's own order, each with its stable code and location."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "partner_id": issue.partner_id,
+                "tier_id": issue.tier_id,
+                "field": issue.field,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _partnership_execution_error_response(error: PartnershipExecutionError) -> HTTPException:
+    """A valid Partnership the Stage 1 engine cannot run over this variant's
+    Common Equity Cash Flow, as a structured 422 -- deliberately distinct from
+    an invalid contract."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "tier_id": issue.tier_id,
+                "period": issue.period,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _partner_identity_conflict_response(error: PartnerIdentityConflictError) -> HTTPException:
+    """One partner id that would name two investors in one Investment (P-8), as
+    a structured 422."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "partner_id": issue.partner_id,
+                "field": issue.field,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+@app.get("/deals/{deal_id}/partnership", response_model=None)
+def read_deal_partnership(deal_id: str) -> dict[str, Any]:
+    """The Deal's Base Partnership, and the hidden Investment that owns it when
+    one exists. Read-only and never materializing: a Deal with no Partnership
+    reports ``null`` and no Investment."""
+
+    try:
+        investment_id, partnership = investment_store.read_deal_partnership(deal_id)
+    except DealNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"deal_id": deal_id, "investment_id": investment_id, "partnership": _wire(partnership)}
+
+
+@app.put("/deals/{deal_id}/partnership", response_model=None)
+def update_deal_partnership(deal_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Replace the Deal's Base Partnership whole; ``null`` clears it.
+
+    The first save of a Partnership materializes the hidden one-unit Investment
+    in the same transaction (Q4); clearing a Deal that has none creates nothing,
+    and clearing one that leaves the wrapper holding no structure removes the
+    wrapper."""
+
+    partnership = _partnership_body(payload)
+    try:
+        investment_id, saved = investment_store.set_deal_partnership(deal_id, partnership)
+    except DealNotFoundError as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except PartnershipValidationError as error:
+        raise _partnership_validation_error_response(error) from None
+    except PartnerIdentityConflictError as error:
+        raise _partner_identity_conflict_response(error) from None
+    return {"deal_id": deal_id, "investment_id": investment_id, "partnership": _wire(saved)}
+
+
+@app.get("/investments/{investment_id}/partnership", response_model=None)
+def read_investment_partnership(investment_id: str) -> dict[str, Any]:
+    """The Investment's Base Partnership, or ``null`` when it states none.
+    Read-only."""
+
+    try:
+        partnership = investment_store.get_base_partnership(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "partnership": _wire(partnership)}
+
+
+@app.put("/investments/{investment_id}/partnership", response_model=None)
+def update_investment_partnership(
+    investment_id: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Replace the Investment's Base Partnership whole; ``null`` clears it."""
+
+    partnership = _partnership_body(payload)
+    try:
+        saved = investment_store.set_base_partnership(investment_id, partnership)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except PartnershipValidationError as error:
+        raise _partnership_validation_error_response(error) from None
+    except PartnerIdentityConflictError as error:
+        raise _partner_identity_conflict_response(error) from None
+    return {"investment_id": investment_id, "partnership": _wire(saved)}
+
+
+@app.get(
+    "/investments/{investment_id}/partnership-variants/{strategy_id}/{scenario_id}/fingerprint",
+    response_model=None,
+)
+def read_partnership_variant_fingerprint(
+    investment_id: str, strategy_id: str, scenario_id: str
+) -> dict[str, Any]:
+    """The layered fingerprints of one Partnership variant, without executing
+    anything. The Partnership fingerprint is ``null`` when the variant has no
+    Partnership (FP-2)."""
+
+    try:
+        return _wire(partnership_variant_fingerprint(investment_id, strategy_id, scenario_id))
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+    except InvestmentVariantValidationError as error:
+        raise _investment_variant_validation_error_response(error) from None
+
+
+@app.post(
+    "/investments/{investment_id}/partnership-variants/{strategy_id}/{scenario_id}/analysis",
+    response_model=None,
+)
+def analyze_partnership_capital_variant(
+    investment_id: str, strategy_id: str, scenario_id: str
+) -> dict[str, Any]:
+    """Analyse one Partnership variant: the structured variant, then the
+    accepted Stage 1 engine on its Common Equity Cash Flow.
+
+    An unavailable Common Equity Cash Flow is a successful analysis with an
+    ``unavailable`` Partnership result, never an HTTP error; a variant with no
+    Partnership reports ``null``."""
+
+    try:
+        return _wire(analyze_partnership_variant(investment_id, strategy_id, scenario_id))
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+    except InvestmentVariantValidationError as error:
+        raise _investment_variant_validation_error_response(error) from None
+    except (CapitalStructureValidationError, UnsupportedCapitalPositionError) as error:
+        raise _capital_structure_validation_error_response(error) from None
+    except CapitalStructureExecutionError as error:
+        raise _capital_structure_execution_error_response(error) from None
+    except PartnershipValidationError as error:
+        raise _partnership_validation_error_response(error) from None
+    except PartnershipExecutionError as error:
+        raise _partnership_execution_error_response(error) from None
+
+
+@app.get("/investments/{investment_id}/partner-perspectives", response_model=None)
+def read_partner_perspectives(investment_id: str) -> dict[str, Any]:
+    """Every addressable ``PARTNER(partner_id)`` perspective: the union of the
+    stable ids the Investment's Base Partnership and its Strategies' own hold,
+    with the role each keeps everywhere. Presentation only."""
+
+    try:
+        perspectives = partner_perspectives(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "partners": _wire(perspectives)}
+
+
+@app.post(
+    "/investments/{investment_id}/partner-decision-matrix/{partner_id}", response_model=None
+)
+def analyze_investment_partner_decision_matrix(
+    investment_id: str, partner_id: str
+) -> dict[str, Any]:
+    """The Strategy x Scenario matrix of one partner, derived on request and
+    never stored. The Project and Position matrices keep their own routes and
+    fingerprints."""
+
+    try:
+        return _wire(analyze_partner_decision_matrix(investment_id, partner_id))
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+        PartnerPerspectiveNotFoundError,
     ) as error:
         raise _not_found(error) from None
     except InvestmentStructureError as error:

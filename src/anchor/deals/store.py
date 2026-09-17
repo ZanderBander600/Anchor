@@ -200,6 +200,7 @@ from ..analysis.strategy import (
     DispositionChoice,
     FinancingChoice,
     InvestmentStrategyOverlay,
+    NoPartnership,
     OperatingOutcome,
     OperatingOutcomeSet,
     StrategyDefinition,
@@ -208,6 +209,7 @@ from ..analysis.strategy import (
     StrategyOverlay,
     StrategyValidationError,
     strategy_capital_structure,
+    strategy_partnership,
     validate_investment_strategy,
     validate_strategy,
 )
@@ -250,6 +252,35 @@ from ..investment import (
     validate_unit_memberships,
     validate_variant_economics,
 )
+from ..partnership.contracts import (
+    BenchmarkShare,
+    CatchUpRecipient,
+    CatchUpRecipientKind,
+    CatchUpTerms,
+    ContributionRule,
+    EconomicAccount,
+    ExplicitSplit,
+    HurdleCombinator,
+    HurdleCondition,
+    HurdleSubject,
+    HurdleSubjectKind,
+    HurdleTerms,
+    IrrHurdle,
+    MoicHurdle,
+    Partner,
+    PartnerRole,
+    Partnership,
+    PartnershipValidationError,
+    ProRataByContribution,
+    PromoteBenchmark,
+    SimpleDistributionOrder,
+    SplitRule,
+    SplitShare,
+    TierKind,
+    TierSplit,
+    WaterfallTier,
+)
+from ..partnership.validation import validate_partnership
 from .capital_structure_codec import FundingAmountRuleKind, amount_rule_kind
 from .contracts import (
     Deal,
@@ -257,6 +288,7 @@ from .contracts import (
     Investment,
     InvestmentCapitalStructures,
     InvestmentNotFoundError,
+    InvestmentPartnerships,
     InvestmentScenario,
     InvestmentStrategy,
     InvestmentStructureError,
@@ -266,9 +298,12 @@ from .contracts import (
     ScenarioNotFoundError,
     StrategyCapitalStructure,
     StrategyNotFoundError,
+    StrategyPartnership,
     TwoWaySensitivitySnapshot,
     VisibleInvestment,
 )
+from .partner_identity import require_coherent_partner_identity
+from .partnership_codec import HurdleConditionKind, condition_kind, split_rule_kind
 from .position_identity import (
     StructureOwner,
     StructureOwnerKind,
@@ -345,7 +380,14 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # cached variant is untouched, and a Deal or Strategy gains a Capital Structure
 # only when the analyst opts in. An Investment with no structure row has the
 # neutral empty structure, which is exactly today's behaviour (P-11).
-_SCHEMA_VERSION = 11
+# Phase 7 Gate P7.9 Stage 2: schema version 12 adds eight purely additive
+# Partnership tables -- the Partnership owner marker and its partners, benchmark
+# shares, promote participants, waterfall tiers, tier splits, hurdle conditions
+# and catch-up terms -- created unconditionally by ``_connect`` exactly as
+# version 11's were. No ALTER and no existing row read or rewritten: an
+# Investment gains a Partnership only when the analyst opts in, and one with no
+# Partnership row has none -- no Partnership result, fingerprint or key (FP-2).
+_SCHEMA_VERSION = 12
 
 
 class PersistedDealDataError(RuntimeError):
@@ -389,6 +431,19 @@ class PersistedCapitalStructureDataError(PersistedDealDataError):
     silently delete a lender from the stack, and every figure downstream of it --
     the residual, the Common Equity return, the coverage of every senior
     position -- would look perfectly ordinary."""
+
+
+class PersistedPartnershipDataError(PersistedDealDataError):
+    """A stored Partnership that cannot recreate its authoritative P7.9
+    contract (Stage 2): a role, rule, kind, subject, recipient, convention or
+    order token the contract no longer recognises; a row whose columns do not
+    match the token it states; a missing or miscounted promote-participant set;
+    a child row with no parent; or a Partnership the Stage 1 validator refuses.
+
+    Raised rather than repaired, and never softened into "no Partnership". A
+    Partnership that read as absent because one row would not decode would
+    silently hand every partner's cash to nobody, and an unreadable participant
+    set read as empty would silently erase a sponsor's Promote Earned."""
 
 
 class PersistedStrategyDataError(PersistedDealDataError):
@@ -1259,6 +1314,172 @@ _BASE_OWNER_KIND = "base"
 _STRATEGY_OWNER_KIND = "strategy"
 
 
+# =============================================================================
+# Phase 7 Gate P7.9 Stage 2 -- the persisted Partnership, schema version 12.
+#
+# Eight purely additive tables, created by ``_connect`` via CREATE TABLE IF NOT
+# EXISTS exactly as every table since version 2. No ALTER, and no existing row
+# is read or rewritten.
+#
+# **One owner type: the Investment** (Section 15.1), with the same two owners as
+# a Capital Structure: ``base`` (``owner_id`` is the Investment id; the implicit
+# Base Strategy owns it) and ``strategy`` (``owner_id`` is the Strategy id).
+# ``UNIQUE (owner_kind, owner_id)`` keeps one Partnership per owner.
+#
+# **The marker is the meaning** (the same three states as a Capital Structure):
+#
+#   * no ``base`` row      -- the Investment has no Base Partnership. Reading it
+#                            creates nothing, and nothing is fingerprinted.
+#   * no ``strategy`` row  -- that Strategy INHERITS the Base Partnership.
+#   * a ``strategy`` row with ``has_partnership = 0`` -- that Strategy explicitly
+#                            has NO Partnership. A Partnership always has a
+#                            partner, so there is no "empty Partnership" to
+#                            store instead; the flag is the statement.
+#
+# A ``base`` row with ``has_partnership = 0`` is never written (clearing the
+# Base Partnership removes its row), so a database holding one is corrupt.
+#
+# **Promote participants: stated, never defaulted.** ``promote_participant_count``
+# records how many participant rows the Partnership states. ``0`` is the
+# explicitly confirmed empty set; ``NULL`` on a stated Partnership is a missing
+# set, which is corrupt and never read as empty; a count that disagrees with the
+# rows is corrupt too.
+#
+# **Relational and typed, never a JSON blob.** Every contract field is its own
+# column: REAL for shares, rates, multiples and targets (a float round-trips
+# bit-identically), INTEGER for sequences and ordinals, TEXT for the Stage 1 wire
+# tokens and the codec's condition token. A union is stored under its explicit
+# discriminator (``split_rule``, ``condition_kind``, ``subject_kind``,
+# ``recipient_kind``), and the columns a row states must be exactly those its
+# token requires. A token the contract no longer knows fails closed.
+#
+# **Ids are owner-scoped.** The same ``partner_id`` and ``tier_id`` are *meant* to
+# appear in the Base Partnership and in a Strategy's own -- that is what makes
+# ``PARTNER(partner_id)`` a coherent comparison -- so every key is
+# ``(partnership_id, ...)``. ``ordinal`` keeps the analyst's authored order for
+# presentation; no fingerprint or allocation reads it.
+#
+# No FOREIGN KEY / ON DELETE CASCADE, for the reason stated above
+# ``lease_level_suites``. Every lifecycle function deletes these rows explicitly,
+# in one transaction with their parent.
+# =============================================================================
+
+_CREATE_PARTNERSHIPS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS partnerships (
+    partnership_id             TEXT PRIMARY KEY,
+    investment_id              TEXT NOT NULL,
+    owner_kind                 TEXT NOT NULL CHECK (owner_kind IN ('base', 'strategy')),
+    owner_id                   TEXT NOT NULL,
+    has_partnership            INTEGER NOT NULL CHECK (has_partnership IN (0, 1)),
+    contribution_rule          TEXT,
+    promote_participant_count  INTEGER,
+    UNIQUE (owner_kind, owner_id)
+)
+"""
+
+_CREATE_PARTNERS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS partners (
+    partnership_id    TEXT NOT NULL,
+    partner_id        TEXT NOT NULL,
+    ordinal           INTEGER NOT NULL,
+    name              TEXT NOT NULL,
+    role              TEXT NOT NULL,
+    investor_class    TEXT,
+    commitment_share  REAL NOT NULL,
+    PRIMARY KEY (partnership_id, partner_id)
+)
+"""
+
+_CREATE_PARTNERSHIP_BENCHMARK_SHARES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS partnership_benchmark_shares (
+    partnership_id  TEXT NOT NULL,
+    partner_id      TEXT NOT NULL,
+    ordinal         INTEGER NOT NULL,
+    share           REAL NOT NULL,
+    PRIMARY KEY (partnership_id, partner_id)
+)
+"""
+
+_CREATE_PARTNERSHIP_PROMOTE_PARTICIPANTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS partnership_promote_participants (
+    partnership_id  TEXT NOT NULL,
+    partner_id      TEXT NOT NULL,
+    ordinal         INTEGER NOT NULL,
+    PRIMARY KEY (partnership_id, partner_id)
+)
+"""
+
+_CREATE_WATERFALL_TIERS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS waterfall_tiers (
+    partnership_id          TEXT NOT NULL,
+    tier_id                 TEXT NOT NULL,
+    ordinal                 INTEGER NOT NULL,
+    name                    TEXT NOT NULL,
+    sequence                INTEGER NOT NULL,
+    kind                    TEXT NOT NULL,
+    split_rule              TEXT NOT NULL,
+    subject_kind            TEXT,
+    subject_partner_id      TEXT,
+    subject_investor_class  TEXT,
+    subject_account         TEXT,
+    combinator              TEXT,
+    PRIMARY KEY (partnership_id, tier_id)
+)
+"""
+
+_CREATE_WATERFALL_TIER_SPLITS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS waterfall_tier_splits (
+    partnership_id  TEXT NOT NULL,
+    tier_id         TEXT NOT NULL,
+    partner_id      TEXT NOT NULL,
+    ordinal         INTEGER NOT NULL,
+    share           REAL NOT NULL,
+    PRIMARY KEY (partnership_id, tier_id, partner_id)
+)
+"""
+
+_CREATE_WATERFALL_HURDLE_CONDITIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS waterfall_hurdle_conditions (
+    partnership_id             TEXT NOT NULL,
+    tier_id                    TEXT NOT NULL,
+    condition_id               TEXT NOT NULL,
+    ordinal                    INTEGER NOT NULL,
+    condition_kind             TEXT NOT NULL,
+    rate                       REAL,
+    accrual_convention         TEXT,
+    simple_distribution_order  TEXT,
+    multiple                   REAL,
+    PRIMARY KEY (partnership_id, tier_id, condition_id)
+)
+"""
+
+_CREATE_WATERFALL_CATCH_UP_TERMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS waterfall_catch_up_terms (
+    partnership_id            TEXT NOT NULL,
+    tier_id                   TEXT NOT NULL,
+    recipient_kind            TEXT NOT NULL,
+    recipient_partner_id      TEXT,
+    recipient_investor_class  TEXT,
+    target_profit_share       REAL NOT NULL,
+    PRIMARY KEY (partnership_id, tier_id)
+)
+"""
+
+#: Every child table one Partnership owns, in delete order (children before the
+#: owner row itself).
+_PARTNERSHIP_CHILD_TABLES = (
+    "partners",
+    "partnership_benchmark_shares",
+    "partnership_promote_participants",
+    "waterfall_tier_splits",
+    "waterfall_hurdle_conditions",
+    "waterfall_catch_up_terms",
+    "waterfall_tiers",
+)
+
+_P7_9_TABLES = ("partnerships", *_PARTNERSHIP_CHILD_TABLES)
+
+
 _LEASE_LEVEL_CHILD_TABLES = (
     "lease_level_property_inputs",
     "lease_level_operating_inputs",
@@ -1723,6 +1944,10 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # way: no row is written for anything that already exists, no table is
     # altered, and no Investment gains a structure by being opened. A v10
     # database simply gains six empty tables.
+    # P7.9 Stage 2 -- schema version 12 adds the eight Partnership tables the
+    # same way: no row is written for anything that already exists, no table is
+    # altered, and no Investment gains a Partnership by being opened. A v11
+    # database simply gains eight empty tables.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -1791,6 +2016,14 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_CAPITAL_POSITION_FEES_TABLE_SQL)
     connection.execute(_CREATE_CAPITAL_DEBT_TERMS_TABLE_SQL)
     connection.execute(_CREATE_CAPITAL_PREFERRED_TERMS_TABLE_SQL)
+    connection.execute(_CREATE_PARTNERSHIPS_TABLE_SQL)
+    connection.execute(_CREATE_PARTNERS_TABLE_SQL)
+    connection.execute(_CREATE_PARTNERSHIP_BENCHMARK_SHARES_TABLE_SQL)
+    connection.execute(_CREATE_PARTNERSHIP_PROMOTE_PARTICIPANTS_TABLE_SQL)
+    connection.execute(_CREATE_WATERFALL_TIERS_TABLE_SQL)
+    connection.execute(_CREATE_WATERFALL_TIER_SPLITS_TABLE_SQL)
+    connection.execute(_CREATE_WATERFALL_HURDLE_CONDITIONS_TABLE_SQL)
+    connection.execute(_CREATE_WATERFALL_CATCH_UP_TERMS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -4146,6 +4379,9 @@ def _delete_investment_rows(connection: sqlite3.Connection, investment_id: str) 
     # P7.8B: every Capital Structure the Investment owns -- its Base structure
     # and each Strategy's own. An Investment with none loses nothing here.
     _delete_investment_capital_structures(connection, investment_id)
+    # P7.9 Stage 2: every Partnership statement the Investment owns -- its Base
+    # Partnership and each Strategy's own.
+    _delete_investment_partnerships(connection, investment_id)
     # P7.6: a visible Investment's sidecars. A hidden wrapper has none, so this
     # deletes nothing for it.
     for table in _P7_6_TABLES:
@@ -4169,8 +4405,9 @@ def _delete_investment_rows(connection: sqlite3.Connection, investment_id: str) 
 
 def _wrapper_holds_no_structure(connection: sqlite3.Connection, investment_id: str) -> bool:
     """Whether the hidden wrapper has no P7 structure left: no Scenario, from
-    P7.4 no Strategy, and from P7.8B no Capital Structure. A wrapper that still
-    holds any of the three never collapses, whichever was removed last."""
+    P7.4 no Strategy, from P7.8B no Capital Structure, and from P7.9 Stage 2 no
+    Partnership. A wrapper that still holds any of them never collapses,
+    whichever was removed last."""
 
     remaining_scenario = connection.execute(
         "SELECT 1 FROM scenarios WHERE investment_id = ? LIMIT 1", (investment_id,)
@@ -4181,7 +4418,15 @@ def _wrapper_holds_no_structure(connection: sqlite3.Connection, investment_id: s
     remaining_structure = connection.execute(
         "SELECT 1 FROM capital_structures WHERE investment_id = ? LIMIT 1", (investment_id,)
     ).fetchone()
-    return remaining_scenario is None and remaining_strategy is None and remaining_structure is None
+    remaining_partnership = connection.execute(
+        "SELECT 1 FROM partnerships WHERE investment_id = ? LIMIT 1", (investment_id,)
+    ).fetchone()
+    return (
+        remaining_scenario is None
+        and remaining_strategy is None
+        and remaining_structure is None
+        and remaining_partnership is None
+    )
 
 
 def _remove_hidden_wrapper_of_deal(connection: sqlite3.Connection, deal_id: str) -> None:
@@ -4728,6 +4973,8 @@ def _delete_strategy_overlay_rows(connection: sqlite3.Connection, strategy_id: s
     for table in _STRATEGY_OVERLAY_TABLES:
         connection.execute(f"DELETE FROM {table} WHERE strategy_id = ?", (strategy_id,))
     _delete_capital_structure(connection, _STRATEGY_OWNER_KIND, strategy_id)
+    # P7.9 Stage 2: the Strategy's own Partnership statement, the same way.
+    _delete_partnership(connection, _STRATEGY_OWNER_KIND, strategy_id)
 
 
 def _strategy_rows(
@@ -4904,6 +5151,9 @@ def _strategy_from_rows(
             ),
         ),
     )
+    # P7.9 Stage 2: the Strategy's own Partnership statement, after the Capital
+    # Structure. None stored means it inherits the Base Partnership.
+    strategy = _with_strategy_partnership(connection, strategy)
     issues = _strategy_contract_issues(strategy, owner)
     if issues:
         raise PersistedStrategyDataError(strategy_id, issues)
@@ -4958,6 +5208,7 @@ def _insert_strategy(
     )
     _write_strategy_overlays(connection, strategy.strategy_id, strategy.overlays)
     _write_strategy_root_overlays(connection, investment_id, strategy)
+    _write_strategy_partnership(connection, investment_id, strategy)
     _touch_investment(connection, investment_id, now=now)
 
 
@@ -5026,6 +5277,7 @@ def create_strategy_for_deal(
         if investment_id is None:
             investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
         _require_coherent_strategy_identity(connection, investment_id, strategy)
+        _require_coherent_strategy_partners(connection, investment_id, strategy)
         _insert_strategy(connection, investment_id, strategy, now=now)
 
     return get_strategy(investment_id, strategy.strategy_id, db_path=db_path)
@@ -5057,6 +5309,7 @@ def create_strategy(
         owner = _require_structure_owner(connection, investment_id)
         _require_valid_strategy(strategy, owner=owner)
         _require_coherent_strategy_identity(connection, investment_id, strategy)
+        _require_coherent_strategy_partners(connection, investment_id, strategy)
         _insert_strategy(connection, investment_id, strategy, now=now)
 
     return get_strategy(investment_id, strategy.strategy_id, db_path=db_path)
@@ -5106,9 +5359,11 @@ def update_strategy(
             (strategy.name, strategy.description, now, strategy_id, investment_id),
         )
         _require_coherent_strategy_identity(connection, investment_id, strategy)
+        _require_coherent_strategy_partners(connection, investment_id, strategy)
         _delete_strategy_overlay_rows(connection, strategy_id)
         _write_strategy_overlays(connection, strategy_id, strategy.overlays)
         _write_strategy_root_overlays(connection, investment_id, strategy)
+        _write_strategy_partnership(connection, investment_id, strategy)
         _touch_investment(connection, investment_id, now=now)
 
     return get_strategy(investment_id, strategy_id, db_path=db_path)
@@ -6922,3 +7177,886 @@ def remove_investment_unit(
         _touch_investment(connection, investment_id, now=now)
 
     return get_visible_investment(investment_id, db_path=db_path)
+
+
+# =============================================================================
+# Phase 7 Gate P7.9 Stage 2 -- Partnership persistence
+#
+# Read, written and deleted only here. Every read rebuilds the exact Stage 1
+# ``Partnership`` contract and runs the Stage 1 validator on it; nothing is
+# repaired, defaulted or dropped. Nothing here computes anything: the
+# Partnership economics are ``anchor.partnership``'s, reached only through
+# ``anchor.deals.partnership_variants``.
+# =============================================================================
+
+
+def _partnership_owner_row(
+    connection: sqlite3.Connection, owner_kind: str, owner_id: str
+) -> sqlite3.Row | None:
+    """The Partnership row one owner states, or ``None`` -- the marker itself.
+
+    ``None`` for a ``base`` owner means the Investment has no Base Partnership.
+    ``None`` for a ``strategy`` owner means that Strategy inherits the Base
+    Partnership, which is a different answer from a row with
+    ``has_partnership = 0`` (an explicit "no Partnership")."""
+
+    return connection.execute(
+        "SELECT * FROM partnerships WHERE owner_kind = ? AND owner_id = ?",
+        (owner_kind, owner_id),
+    ).fetchone()
+
+
+def _partnership_token(value: object, enum_type: type, *, path: str) -> Any:
+    """A stored Partnership token as its authoritative member, strictly: a
+    missing token or one the enum no longer recognises is corrupt."""
+
+    if value is None:
+        raise PersistedPartnershipDataError(
+            f"{path} is missing; the Partnership contract states it explicitly."
+        )
+    try:
+        return _decode_enum(value, enum_type, path=path)
+    except PersistedDealDataError as error:
+        raise PersistedPartnershipDataError(str(error)) from None
+
+
+def _require_columns(
+    row: sqlite3.Row, *, stated: tuple[str, ...], absent: tuple[str, ...], where: str
+) -> None:
+    """``row`` states exactly the ``stated`` columns of this variant and leaves
+    every ``absent`` one ``NULL``. Anything else disagrees with its own token."""
+
+    wrong = sorted(
+        [name for name in stated if row[name] is None]
+        + [name for name in absent if row[name] is not None]
+    )
+    if wrong:
+        raise PersistedPartnershipDataError(
+            f"{where} states columns that disagree with its kind: {', '.join(wrong)}."
+        )
+
+
+def _rows_by(rows: Iterable[sqlite3.Row], key: str) -> dict[str, list[sqlite3.Row]]:
+    grouped: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        grouped.setdefault(row[key], []).append(row)
+    return grouped
+
+
+def _split_from_rows(
+    tier_row: sqlite3.Row, split_rows: list[sqlite3.Row], *, where: str
+) -> TierSplit:
+    rule = _partnership_token(tier_row["split_rule"], SplitRule, path=f"{where} split_rule")
+    if rule is SplitRule.EXPLICIT:
+        return ExplicitSplit(
+            shares=tuple(
+                SplitShare(partner_id=row["partner_id"], share=row["share"]) for row in split_rows
+            )
+        )
+    if split_rows:
+        raise PersistedPartnershipDataError(
+            f"{where} splits pro rata by contribution and also holds split share rows."
+        )
+    return ProRataByContribution()
+
+
+def _condition_from_row(row: sqlite3.Row, *, where: str) -> HurdleCondition:
+    located = f"{where} condition {row['condition_id']!r}"
+    kind = _partnership_token(row["condition_kind"], HurdleConditionKind, path=f"{located} kind")
+    if kind is HurdleConditionKind.IRR:
+        _require_columns(
+            row, stated=("rate", "accrual_convention"), absent=("multiple",), where=located
+        )
+        order = row["simple_distribution_order"]
+        return IrrHurdle(
+            condition_id=row["condition_id"],
+            rate=row["rate"],
+            accrual_convention=_partnership_token(
+                row["accrual_convention"], AccrualConvention, path=f"{located} accrual_convention"
+            ),
+            simple_distribution_order=None
+            if order is None
+            else _partnership_token(
+                order, SimpleDistributionOrder, path=f"{located} simple_distribution_order"
+            ),
+        )
+    _require_columns(
+        row,
+        stated=("multiple",),
+        absent=("rate", "accrual_convention", "simple_distribution_order"),
+        where=located,
+    )
+    return MoicHurdle(condition_id=row["condition_id"], multiple=row["multiple"])
+
+
+_SUBJECT_COLUMNS = ("subject_partner_id", "subject_investor_class", "subject_account")
+
+_SUBJECT_COLUMN = {
+    HurdleSubjectKind.PARTNER: "subject_partner_id",
+    HurdleSubjectKind.INVESTOR_CLASS: "subject_investor_class",
+    HurdleSubjectKind.ECONOMIC_ACCOUNT: "subject_account",
+}
+
+
+def _hurdle_from_rows(
+    tier_row: sqlite3.Row, condition_rows: list[sqlite3.Row], *, where: str
+) -> HurdleTerms:
+    kind = _partnership_token(
+        tier_row["subject_kind"], HurdleSubjectKind, path=f"{where} subject_kind"
+    )
+    column = _SUBJECT_COLUMN[kind]
+    _require_columns(
+        tier_row,
+        stated=(column,),
+        absent=tuple(name for name in _SUBJECT_COLUMNS if name != column),
+        where=f"{where} hurdle subject",
+    )
+    return HurdleTerms(
+        hurdle_subject=HurdleSubject(
+            kind=kind,
+            partner_id=tier_row["subject_partner_id"],
+            investor_class=tier_row["subject_investor_class"],
+            account=None
+            if tier_row["subject_account"] is None
+            else _partnership_token(
+                tier_row["subject_account"], EconomicAccount, path=f"{where} subject_account"
+            ),
+        ),
+        conditions=tuple(_condition_from_row(row, where=where) for row in condition_rows),
+        combinator=_partnership_token(
+            tier_row["combinator"], HurdleCombinator, path=f"{where} combinator"
+        ),
+    )
+
+
+def _catch_up_from_row(row: sqlite3.Row, *, where: str) -> CatchUpTerms:
+    located = f"{where} catch-up recipient"
+    kind = _partnership_token(row["recipient_kind"], CatchUpRecipientKind, path=f"{located} kind")
+    stated = (
+        "recipient_partner_id"
+        if kind is CatchUpRecipientKind.PARTNER
+        else "recipient_investor_class"
+    )
+    _require_columns(
+        row,
+        stated=(stated,),
+        absent=tuple(
+            name
+            for name in ("recipient_partner_id", "recipient_investor_class")
+            if name != stated
+        ),
+        where=located,
+    )
+    return CatchUpTerms(
+        recipient=CatchUpRecipient(
+            kind=kind,
+            partner_id=row["recipient_partner_id"],
+            investor_class=row["recipient_investor_class"],
+        ),
+        target_profit_share=row["target_profit_share"],
+    )
+
+
+def _tier_from_rows(
+    tier_row: sqlite3.Row,
+    split_rows: list[sqlite3.Row],
+    condition_rows: list[sqlite3.Row],
+    catch_up_rows: list[sqlite3.Row],
+    *,
+    where: str,
+) -> WaterfallTier:
+    """One stored tier as the exact contract. The kind decides which terms rows
+    must exist, and exactly which: hurdle columns and conditions for a
+    ``HURDLE``, one catch-up row for a ``CATCH_UP``, neither for the
+    ``RESIDUAL``."""
+
+    located = f"{where} tier {tier_row['tier_id']!r}"
+    kind = _partnership_token(tier_row["kind"], TierKind, path=f"{located} kind")
+    hurdle: HurdleTerms | None = None
+    catch_up: CatchUpTerms | None = None
+    if kind is TierKind.HURDLE:
+        _require_columns(tier_row, stated=("subject_kind", "combinator"), absent=(), where=located)
+        hurdle = _hurdle_from_rows(tier_row, condition_rows, where=located)
+    else:
+        _require_columns(
+            tier_row,
+            stated=(),
+            absent=("subject_kind", *_SUBJECT_COLUMNS, "combinator"),
+            where=located,
+        )
+        if condition_rows:
+            raise PersistedPartnershipDataError(
+                f"{located} is {kind.value} and holds hurdle condition rows."
+            )
+    if kind is TierKind.CATCH_UP:
+        if len(catch_up_rows) != 1:
+            raise PersistedPartnershipDataError(
+                f"{located} is a catch-up tier and holds {len(catch_up_rows)} catch-up rows; it "
+                "holds exactly one."
+            )
+        catch_up = _catch_up_from_row(catch_up_rows[0], where=located)
+    elif catch_up_rows:
+        raise PersistedPartnershipDataError(f"{located} is {kind.value} and holds catch-up rows.")
+    return WaterfallTier(
+        tier_id=tier_row["tier_id"],
+        name=tier_row["name"],
+        sequence=tier_row["sequence"],
+        kind=kind,
+        split=_split_from_rows(tier_row, split_rows, where=located),
+        hurdle=hurdle,
+        catch_up=catch_up,
+    )
+
+
+#: The row order each child table is read in: the analyst's authored order
+#: (``ordinal``), with the stable id making it total.
+_PARTNERSHIP_CHILD_ORDER = {
+    "partners": "ordinal, partner_id",
+    "partnership_benchmark_shares": "ordinal, partner_id",
+    "partnership_promote_participants": "ordinal, partner_id",
+    "waterfall_tier_splits": "tier_id, ordinal, partner_id",
+    "waterfall_hurdle_conditions": "tier_id, ordinal, condition_id",
+    "waterfall_catch_up_terms": "tier_id",
+    "waterfall_tiers": "ordinal, tier_id",
+}
+
+
+def _partnership_children(
+    connection: sqlite3.Connection, partnership_id: str
+) -> dict[str, list[sqlite3.Row]]:
+    return {
+        table: connection.execute(
+            f"SELECT * FROM {table} WHERE partnership_id = ? "
+            f"ORDER BY {_PARTNERSHIP_CHILD_ORDER[table]}",
+            (partnership_id,),
+        ).fetchall()
+        for table in _PARTNERSHIP_CHILD_TABLES
+    }
+
+
+def _read_explicit_none(
+    row: sqlite3.Row, children: Mapping[str, list[sqlite3.Row]], *, where: str
+) -> None:
+    """Check an explicit "no Partnership" marker: a Strategy's, stating no
+    terms and owning no row."""
+
+    if row["owner_kind"] != _STRATEGY_OWNER_KIND:
+        raise PersistedPartnershipDataError(
+            f"{where} holds a Base 'no Partnership' marker. Clearing the Base Partnership "
+            "removes its marker, so one is never stored; 'no Partnership' is a Strategy's "
+            "explicit replacement, never a Base."
+        )
+    stated = [
+        name for name in ("contribution_rule", "promote_participant_count") if row[name] is not None
+    ]
+    populated = [table for table, rows in children.items() if rows]
+    if stated or populated:
+        raise PersistedPartnershipDataError(
+            f"{where} is a 'no Partnership' marker and also holds "
+            f"{', '.join([*stated, *populated])}."
+        )
+
+
+def _read_participant_ids(
+    row: sqlite3.Row, participant_rows: list[sqlite3.Row], *, where: str
+) -> tuple[str, ...]:
+    """The stated promote participants. ``NULL`` is a missing set, never the
+    confirmed empty one, and a count that disagrees with the rows is corrupt."""
+
+    count = row["promote_participant_count"]
+    if count is None:
+        raise PersistedPartnershipDataError(
+            f"{where} holds no promote-participant count, so its participant set is missing. "
+            "A missing set is never read as the explicitly empty one."
+        )
+    if isinstance(count, bool) or not isinstance(count, int) or count != len(participant_rows):
+        raise PersistedPartnershipDataError(
+            f"{where} states {count!r} promote participant(s) and holds "
+            f"{len(participant_rows)} participant row(s)."
+        )
+    return tuple(participant["partner_id"] for participant in participant_rows)
+
+
+def _read_partnership(
+    connection: sqlite3.Connection, row: sqlite3.Row, *, where: str
+) -> Partnership | None:
+    """The Partnership one marker row states -- or ``None`` for an explicit
+    "no Partnership" marker -- rebuilt strictly and refused if the Stage 1
+    validator refuses it.
+
+    Lists come back in the analyst's authored order (``ordinal``), which is
+    presentation: every consumer orders by the canonical keys."""
+
+    children = _partnership_children(connection, row["partnership_id"])
+    flag = row["has_partnership"]
+    if isinstance(flag, bool) or flag not in (0, 1):
+        raise PersistedPartnershipDataError(
+            f"{where} holds has_partnership={flag!r}; it must be 0 or 1."
+        )
+    if flag == 0:
+        _read_explicit_none(row, children, where=where)
+        return None
+
+    participant_ids = _read_participant_ids(
+        row, children["partnership_promote_participants"], where=where
+    )
+    tier_rows = children["waterfall_tiers"]
+    tier_ids = {tier["tier_id"] for tier in tier_rows}
+    splits = _rows_by(children["waterfall_tier_splits"], "tier_id")
+    conditions = _rows_by(children["waterfall_hurdle_conditions"], "tier_id")
+    catch_ups = _rows_by(children["waterfall_catch_up_terms"], "tier_id")
+    orphaned = sorted((set(splits) | set(conditions) | set(catch_ups)) - tier_ids)
+    if orphaned:
+        raise PersistedPartnershipDataError(
+            f"{where} holds split, condition or catch-up rows for tier(s) "
+            f"{', '.join(orphaned)}, which it does not hold; a child row never implies a tier."
+        )
+
+    partnership = Partnership(
+        partners=tuple(
+            Partner(
+                partner_id=partner["partner_id"],
+                name=partner["name"],
+                role=_partnership_token(
+                    partner["role"],
+                    PartnerRole,
+                    path=f"{where} partner {partner['partner_id']!r} role",
+                ),
+                investor_class=partner["investor_class"],
+                commitment_share=partner["commitment_share"],
+            )
+            for partner in children["partners"]
+        ),
+        contribution_rule=_partnership_token(
+            row["contribution_rule"], ContributionRule, path=f"{where} contribution_rule"
+        ),
+        promote_benchmark=PromoteBenchmark(
+            shares=tuple(
+                BenchmarkShare(partner_id=share["partner_id"], share=share["share"])
+                for share in children["partnership_benchmark_shares"]
+            )
+        ),
+        promote_participant_ids=participant_ids,
+        tiers=tuple(
+            _tier_from_rows(
+                tier,
+                splits.get(tier["tier_id"], []),
+                conditions.get(tier["tier_id"], []),
+                catch_ups.get(tier["tier_id"], []),
+                where=where,
+            )
+            for tier in tier_rows
+        ),
+    )
+    issues = validate_partnership(partnership)
+    if issues:
+        raise PersistedPartnershipDataError(
+            f"{where} does not validate: " + "; ".join(issue.message for issue in issues)
+        )
+    return partnership
+
+
+def _stored_partnership(
+    connection: sqlite3.Connection, owner_kind: str, owner_id: str, *, where: str
+) -> Partnership | NoPartnership | None:
+    """What one owner states: its Partnership, ``NoPartnership()`` for an
+    explicit "no Partnership" (a Strategy only), or ``None`` when it states
+    nothing at all."""
+
+    row = _partnership_owner_row(connection, owner_kind, owner_id)
+    if row is None:
+        return None
+    partnership = _read_partnership(connection, row, where=where)
+    return NoPartnership() if partnership is None else partnership
+
+
+def _stored_base_partnership(
+    connection: sqlite3.Connection, investment_id: str
+) -> Partnership | None:
+    """The Investment's Base Partnership, or ``None``. A Base marker can never
+    read as ``NoPartnership``: ``_read_partnership`` refuses one."""
+
+    stated = _stored_partnership(
+        connection, _BASE_OWNER_KIND, investment_id, where="The Base Partnership"
+    )
+    return stated if isinstance(stated, Partnership) else None
+
+
+def _write_partnership_terms(
+    connection: sqlite3.Connection, partnership_id: str, partnership: Partnership
+) -> None:
+    """Every row under one stated Partnership, in the analyst's authored
+    order."""
+
+    connection.executemany(
+        "INSERT INTO partners (partnership_id, partner_id, ordinal, name, role, investor_class, "
+        "commitment_share) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                partnership_id,
+                partner.partner_id,
+                ordinal,
+                partner.name,
+                _encode_enum(partner.role),
+                partner.investor_class,
+                float(partner.commitment_share),
+            )
+            for ordinal, partner in enumerate(partnership.partners)
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO partnership_benchmark_shares (partnership_id, partner_id, ordinal, share) "
+        "VALUES (?, ?, ?, ?)",
+        [
+            (partnership_id, share.partner_id, ordinal, float(share.share))
+            for ordinal, share in enumerate(partnership.promote_benchmark.shares)
+        ],
+    )
+    connection.executemany(
+        "INSERT INTO partnership_promote_participants (partnership_id, partner_id, ordinal) "
+        "VALUES (?, ?, ?)",
+        [
+            (partnership_id, partner_id, ordinal)
+            for ordinal, partner_id in enumerate(partnership.promote_participant_ids)
+        ],
+    )
+    for ordinal, tier in enumerate(partnership.tiers):
+        _write_tier(connection, partnership_id, ordinal, tier)
+
+
+def _write_tier(
+    connection: sqlite3.Connection, partnership_id: str, ordinal: int, tier: WaterfallTier
+) -> None:
+    """One tier: its row (split rule, hurdle subject and combinator), then its
+    split shares, hurdle conditions and catch-up terms."""
+
+    subject = None if tier.hurdle is None else tier.hurdle.hurdle_subject
+    connection.execute(
+        "INSERT INTO waterfall_tiers (partnership_id, tier_id, ordinal, name, sequence, kind, "
+        "split_rule, subject_kind, subject_partner_id, subject_investor_class, "
+        "subject_account, combinator) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            partnership_id,
+            tier.tier_id,
+            ordinal,
+            tier.name,
+            int(tier.sequence),
+            _encode_enum(tier.kind),
+            split_rule_kind(tier.split).value,
+            None if subject is None else _encode_enum(subject.kind),
+            None if subject is None else subject.partner_id,
+            None if subject is None else subject.investor_class,
+            None if subject is None else _encode_enum(subject.account),
+            None if tier.hurdle is None else _encode_enum(tier.hurdle.combinator),
+        ),
+    )
+    if isinstance(tier.split, ExplicitSplit):
+        connection.executemany(
+            "INSERT INTO waterfall_tier_splits (partnership_id, tier_id, partner_id, ordinal, "
+            "share) VALUES (?, ?, ?, ?, ?)",
+            [
+                (partnership_id, tier.tier_id, share.partner_id, index, float(share.share))
+                for index, share in enumerate(tier.split.shares)
+            ],
+        )
+    if tier.hurdle is not None:
+        connection.executemany(
+            "INSERT INTO waterfall_hurdle_conditions (partnership_id, tier_id, condition_id, "
+            "ordinal, condition_kind, rate, accrual_convention, simple_distribution_order, "
+            "multiple) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                _condition_row(partnership_id, tier.tier_id, index, condition)
+                for index, condition in enumerate(tier.hurdle.conditions)
+            ],
+        )
+    if tier.catch_up is not None:
+        recipient = tier.catch_up.recipient
+        connection.execute(
+            "INSERT INTO waterfall_catch_up_terms (partnership_id, tier_id, recipient_kind, "
+            "recipient_partner_id, recipient_investor_class, target_profit_share) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                partnership_id,
+                tier.tier_id,
+                _encode_enum(recipient.kind),
+                recipient.partner_id,
+                recipient.investor_class,
+                float(tier.catch_up.target_profit_share),
+            ),
+        )
+
+
+def _condition_row(
+    partnership_id: str, tier_id: str, ordinal: int, condition: HurdleCondition
+) -> tuple[object, ...]:
+    """One condition's row under its codec token: exactly the columns its
+    variant has, and ``NULL`` for the others."""
+
+    kind = condition_kind(condition).value
+    if isinstance(condition, IrrHurdle):
+        return (
+            partnership_id,
+            tier_id,
+            condition.condition_id,
+            ordinal,
+            kind,
+            float(condition.rate),
+            _encode_enum(condition.accrual_convention),
+            _encode_enum(condition.simple_distribution_order),
+            None,
+        )
+    return (
+        partnership_id,
+        tier_id,
+        condition.condition_id,
+        ordinal,
+        kind,
+        None,
+        None,
+        None,
+        float(condition.multiple),
+    )
+
+
+def _write_partnership(
+    connection: sqlite3.Connection,
+    *,
+    investment_id: str,
+    owner_kind: str,
+    owner_id: str,
+    partnership: Partnership | None,
+) -> None:
+    """One owner's whole Partnership statement: its marker and, for a stated
+    Partnership, every row under it. ``None`` writes the explicit
+    "no Partnership" marker alone.
+
+    Called inside the caller's transaction, after validation, and after any
+    previous statement of this owner was removed: a Partnership is replaced
+    whole, never diffed. The participant count is written beside the rows, so
+    the confirmed empty set is stated rather than implied."""
+
+    partnership_id = uuid.uuid4().hex
+    connection.execute(
+        "INSERT INTO partnerships (partnership_id, investment_id, owner_kind, owner_id, "
+        "has_partnership, contribution_rule, promote_participant_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            partnership_id,
+            investment_id,
+            owner_kind,
+            owner_id,
+            0 if partnership is None else 1,
+            None if partnership is None else _encode_enum(partnership.contribution_rule),
+            None if partnership is None else len(partnership.promote_participant_ids),
+        ),
+    )
+    if partnership is not None:
+        _write_partnership_terms(connection, partnership_id, partnership)
+
+
+def _delete_partnership(connection: sqlite3.Connection, owner_kind: str, owner_id: str) -> None:
+    """One owner's Partnership statement and every row it owns. Deleting
+    nothing is ordinary: most owners state no Partnership."""
+
+    row = _partnership_owner_row(connection, owner_kind, owner_id)
+    if row is None:
+        return
+    partnership_id = row["partnership_id"]
+    for table in _PARTNERSHIP_CHILD_TABLES:
+        connection.execute(f"DELETE FROM {table} WHERE partnership_id = ?", (partnership_id,))
+    connection.execute("DELETE FROM partnerships WHERE partnership_id = ?", (partnership_id,))
+
+
+def _delete_investment_partnerships(connection: sqlite3.Connection, investment_id: str) -> None:
+    """Every Partnership statement the Investment owns -- its Base Partnership
+    and each Strategy's own -- with every row under them."""
+
+    for table in _PARTNERSHIP_CHILD_TABLES:
+        connection.execute(
+            f"DELETE FROM {table} WHERE partnership_id IN "
+            "(SELECT partnership_id FROM partnerships WHERE investment_id = ?)",
+            (investment_id,),
+        )
+    connection.execute("DELETE FROM partnerships WHERE investment_id = ?", (investment_id,))
+
+
+def _strategy_partnerships(
+    connection: sqlite3.Connection, investment_id: str
+) -> list[tuple[str, str, Partnership | None]]:
+    """``(strategy_id, name, partnership)`` for every Strategy of the Investment
+    that states its own Partnership, in creation order -- ``partnership`` is
+    ``None`` for an explicit "no Partnership". A Strategy that inherits the Base
+    Partnership is simply absent."""
+
+    stated: list[tuple[str, str, Partnership | None]] = []
+    for row in connection.execute(
+        "SELECT id, name FROM strategies WHERE investment_id = ? ORDER BY created_at, rowid",
+        (investment_id,),
+    ).fetchall():
+        own = _stored_partnership(
+            connection,
+            _STRATEGY_OWNER_KIND,
+            row["id"],
+            where=f"Strategy {row['id']!r}'s Partnership",
+        )
+        if own is not None:
+            stated.append((row["id"], row["name"], own if isinstance(own, Partnership) else None))
+    return stated
+
+
+def _require_valid_partnership(partnership: object) -> Partnership:
+    """The Stage 1 structural authority on a Partnership about to be stored.
+    This store adds no rule of its own; whether it executes over a variant's
+    Common Equity Cash Flow is the variant's question."""
+
+    issues = validate_partnership(partnership)
+    if issues:
+        raise PartnershipValidationError(issues)
+    assert isinstance(partnership, Partnership)
+    return partnership
+
+
+def _require_coherent_partners(
+    connection: sqlite3.Connection,
+    investment_id: str,
+    *,
+    owner_kind: str,
+    owner_id: str,
+    partnership: Partnership | None,
+) -> None:
+    """P-8 across the Investment: the Partnership about to be written, beside
+    every other Partnership the Investment already states. The owner being
+    written replaces its own statement rather than being compared with it."""
+
+    if partnership is None:
+        return
+    others: list[tuple[StructureOwner, Partnership]] = []
+    if owner_kind != _BASE_OWNER_KIND:
+        base = _stored_base_partnership(connection, investment_id)
+        if base is not None:
+            others.append(
+                (
+                    _structure_owner(StructureOwnerKind.BASE, investment_id, "the Base Partnership"),
+                    base,
+                )
+            )
+    for strategy_id, name, stated in _strategy_partnerships(connection, investment_id):
+        if stated is None or (owner_kind == _STRATEGY_OWNER_KIND and strategy_id == owner_id):
+            continue
+        others.append(
+            (
+                _structure_owner(StructureOwnerKind.STRATEGY, strategy_id, f"Strategy {name!r}"),
+                stated,
+            )
+        )
+    own = (
+        _structure_owner(StructureOwnerKind.BASE, owner_id, "the Base Partnership")
+        if owner_kind == _BASE_OWNER_KIND
+        else _structure_owner(StructureOwnerKind.STRATEGY, owner_id, "this Strategy's Partnership")
+    )
+    require_coherent_partner_identity([*others, (own, partnership)])
+
+
+def _write_strategy_partnership(
+    connection: sqlite3.Connection, investment_id: str, strategy: StrategyDefinition
+) -> None:
+    """The Strategy's own Partnership statement, when it states one. The marker
+    is written even for ``NoPartnership``, because that is precisely what it
+    distinguishes from inheritance."""
+
+    own = strategy_partnership(strategy)
+    if own is None:
+        return
+    _write_partnership(
+        connection,
+        investment_id=investment_id,
+        owner_kind=_STRATEGY_OWNER_KIND,
+        owner_id=strategy.strategy_id,
+        partnership=own if isinstance(own, Partnership) else None,
+    )
+
+
+def _require_coherent_strategy_partners(
+    connection: sqlite3.Connection, investment_id: str, strategy: StrategyDefinition
+) -> None:
+    """P-8 for a Strategy about to be written: its own Partnership against every
+    other Partnership this Investment states. Inheriting, or stating none,
+    cannot conflict."""
+
+    own = strategy_partnership(strategy)
+    if not isinstance(own, Partnership):
+        return
+    _require_coherent_partners(
+        connection,
+        investment_id,
+        owner_kind=_STRATEGY_OWNER_KIND,
+        owner_id=strategy.strategy_id,
+        partnership=own,
+    )
+
+
+def _with_strategy_partnership(
+    connection: sqlite3.Connection, strategy: StrategyDefinition
+) -> StrategyDefinition:
+    """``strategy`` with its stored Partnership statement appended to its root
+    overlays, after the Capital Structure (declaration order). A Strategy that
+    states none is returned unchanged: it inherits."""
+
+    own = _stored_partnership(
+        connection,
+        _STRATEGY_OWNER_KIND,
+        strategy.strategy_id,
+        where=f"Strategy {strategy.strategy_id!r}'s Partnership",
+    )
+    if own is None:
+        return strategy
+    return dataclasses.replace(
+        strategy,
+        root_overlays=(
+            *strategy.root_overlays,
+            InvestmentStrategyOverlay(domain=StrategyDomain.PARTNERSHIP, content=own),
+        ),
+    )
+
+
+def _require_partnership_deal_wrapper(connection: sqlite3.Connection, deal_id: str) -> str | None:
+    """The hidden wrapper ``deal_id`` belongs to, or ``None`` for a standalone
+    Deal. A Unit of a visible Investment is refused: the Partnership allocates
+    the Investment's Common Equity, never one Unit's."""
+
+    investment_id = _investment_of_deal(connection, deal_id)
+    if investment_id is None:
+        return None
+    if not _decode_hidden_flag(_investment_row(connection, investment_id)):
+        raise InvestmentStructureError(
+            f"Deal {deal_id!r} is a Unit of a visible Investment, whose Partnership allocates the "
+            "Investment's Common Equity. Edit the Investment's Partnership; a Unit never holds "
+            "one of its own."
+        )
+    _require_hidden_wrapper(connection, investment_id)
+    return investment_id
+
+
+def _replace_base_partnership(
+    connection: sqlite3.Connection, investment_id: str, partnership: Partnership | None
+) -> None:
+    """Whole atomic replacement of the Base Partnership: the previous statement
+    and every row under it go, then the new one is written. ``None`` leaves no
+    marker at all."""
+
+    _delete_partnership(connection, _BASE_OWNER_KIND, investment_id)
+    if partnership is not None:
+        _write_partnership(
+            connection,
+            investment_id=investment_id,
+            owner_kind=_BASE_OWNER_KIND,
+            owner_id=investment_id,
+            partnership=partnership,
+        )
+
+
+def get_base_partnership(investment_id: str, *, db_path: Path | None = None) -> Partnership | None:
+    """The Investment's Base Partnership, or ``None`` when it states none.
+    Read-only: reading one creates nothing."""
+
+    with _connect(db_path) as connection:
+        _require_structure_owner(connection, investment_id)
+        return _stored_base_partnership(connection, investment_id)
+
+
+def set_base_partnership(
+    investment_id: str, partnership: Partnership | None, *, db_path: Path | None = None
+) -> Partnership | None:
+    """Replace the Investment's Base Partnership whole; ``None`` clears it.
+
+    One transaction: the Partnership validates, its partner identities agree
+    with every other Partnership the Investment states, and the previous and new
+    statements are swapped. A hidden wrapper left holding no structure at all is
+    removed with it, and its Deal is a plain standalone Deal again (P-11)."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        owner = _require_structure_owner(connection, investment_id)
+        stated = None if partnership is None else _require_valid_partnership(partnership)
+        _require_coherent_partners(
+            connection,
+            investment_id,
+            owner_kind=_BASE_OWNER_KIND,
+            owner_id=investment_id,
+            partnership=stated,
+        )
+        _replace_base_partnership(connection, investment_id, stated)
+        if owner.hidden and _wrapper_holds_no_structure(connection, investment_id):
+            _delete_investment_rows(connection, investment_id)
+        else:
+            _touch_investment(connection, investment_id, now=now)
+    return stated
+
+
+def read_deal_partnership(
+    deal_id: str, *, db_path: Path | None = None
+) -> tuple[str | None, Partnership | None]:
+    """The Deal's Base Partnership and the hidden Investment that owns it -- or
+    ``(None, None)`` for a standalone Deal. Read-only; it materializes
+    nothing."""
+
+    with _connect(db_path) as connection:
+        if _operating_mode_of(connection, deal_id) is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _require_partnership_deal_wrapper(connection, deal_id)
+        if investment_id is None:
+            return None, None
+        return investment_id, _stored_base_partnership(connection, investment_id)
+
+
+def set_deal_partnership(
+    deal_id: str, partnership: Partnership | None, *, db_path: Path | None = None
+) -> tuple[str | None, Partnership | None]:
+    """Replace the Deal's Base Partnership, materializing its hidden one-unit
+    Investment on the first save of a Partnership (Q4).
+
+    One transaction. Clearing a Deal that has no Investment creates nothing, and
+    clearing one that leaves the wrapper holding no structure removes the
+    wrapper. The UI keeps saying "Deal" throughout."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        if _operating_mode_of(connection, deal_id) is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _require_partnership_deal_wrapper(connection, deal_id)
+        stated = None if partnership is None else _require_valid_partnership(partnership)
+        if investment_id is None:
+            if stated is None:
+                return None, None
+            investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
+        _require_coherent_partners(
+            connection,
+            investment_id,
+            owner_kind=_BASE_OWNER_KIND,
+            owner_id=investment_id,
+            partnership=stated,
+        )
+        _replace_base_partnership(connection, investment_id, stated)
+        if _wrapper_holds_no_structure(connection, investment_id):
+            _delete_investment_rows(connection, investment_id)
+            return None, stated
+        _touch_investment(connection, investment_id, now=now)
+    return investment_id, stated
+
+
+def list_investment_partnerships(
+    investment_id: str, *, db_path: Path | None = None
+) -> InvestmentPartnerships:
+    """Every Partnership statement the Investment holds: its Base Partnership
+    and each Strategy's own, with inheriting Strategies simply absent.
+    Read-only. The Partner perspectives, the Partnership fingerprints and the
+    Partner Decision Matrix read this one coherent view."""
+
+    with _connect(db_path) as connection:
+        _require_structure_owner(connection, investment_id)
+        base = _stored_base_partnership(connection, investment_id)
+        strategies = tuple(
+            StrategyPartnership(strategy_id=strategy_id, name=name, partnership=stated)
+            for strategy_id, name, stated in _strategy_partnerships(connection, investment_id)
+        )
+    return InvestmentPartnerships(investment_id=investment_id, base=base, strategies=strategies)

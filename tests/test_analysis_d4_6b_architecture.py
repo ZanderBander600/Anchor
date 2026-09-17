@@ -1821,6 +1821,22 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "src/anchor/deals/capital_structure_codec.py",
         "src/anchor/deals/position_identity.py",
         "src/anchor/deals/structured_variants.py",
+        # P7.9 Stage 2 -- the Partnership pathway beside them, three modules and
+        # no financial logic in any of them
+        # (``tests/test_p7_9_stage_2_architecture.py``):
+        #
+        # - ``partnership_codec.py`` names the wire and storage discriminator of
+        #   each Partnership union. It decides nothing economic.
+        # - ``partner_identity.py`` holds P-8 for partners: one partner id keeps
+        #   one role across an Investment's Partnerships. It compares identity,
+        #   never money.
+        # - ``partnership_variants.py`` is persistence orchestration: it resolves
+        #   which Partnership a variant allocates with and hands it, with the
+        #   completed structured result, to the *accepted* Stage 1 engine. The
+        #   Stage 1 package is byte-identical to its merge.
+        "src/anchor/deals/partnership_codec.py",
+        "src/anchor/deals/partner_identity.py",
+        "src/anchor/deals/partnership_variants.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
                  "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):

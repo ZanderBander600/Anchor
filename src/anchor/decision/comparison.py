@@ -73,6 +73,14 @@ from ..capital_structure.execution_contracts import (
 )
 from ..consolidation.contracts import ConsolidatedResults
 from ..engine.contracts import AcquisitionResults, IrrStatus
+from ..partnership.contracts import (
+    MoicUnavailableReason,
+    PartnerResult,
+    PartnerRole,
+    PartnershipResult,
+    PartnershipStatus,
+    PartnershipUnavailableReason,
+)
 
 #: What one cell's Project results are: a Unit's ``AcquisitionResults`` (the
 #: hidden one-unit Investment) or, from P7.6, a visible Investment's
@@ -91,11 +99,13 @@ class DecisionPerspective(StrEnum):
     upstream one. ``POSITION`` (P7.8B) compares **one capital position**, named
     by its stable id, across the same Strategy x Scenario variants: a different
     metric catalog over a different result contract, which is the whole point of
-    a typed perspective -- a debt investor is not compared on project IRR. The
-    partner perspective belongs to P7.9."""
+    a typed perspective -- a debt investor is not compared on project IRR.
+    ``PARTNER`` (P7.9 Stage 2) compares **one partner's** returns from the
+    Partnership waterfall, named by its stable ``partner_id``."""
 
     PROJECT = "project"
     POSITION = "position"
+    PARTNER = "partner"
 
 
 class DecisionMetric(StrEnum):
@@ -147,10 +157,25 @@ class PositionMetric(StrEnum):
     TOTAL_PROFIT = "total_profit"
 
 
-#: What a matrix cell can report, whichever perspective it belongs to. The two
+class PartnerMetric(StrEnum):
+    """The ``PARTNER(partner_id)`` metrics (P7.9 Stage 2), each one existing
+    Stage 1 ``PartnerResult`` field of the same meaning: the partner-returns
+    namespace (Section 14), never a Project or position figure (NS-1)."""
+
+    CONTRIBUTIONS = "total_contributions"
+    DISTRIBUTIONS = "total_distributions"
+    IRR = "partner_irr"
+    MOIC = "partner_moic"
+    PROFIT = "partner_profit"
+    DISTRIBUTION_DIFFERENCE = "distribution_difference"
+    PROMOTE_EARNED = "promote_earned"
+    BENCHMARK_CAPITAL_SUBORDINATION = "benchmark_capital_subordination"
+
+
+#: What a matrix cell can report, whichever perspective it belongs to. The
 #: metric namespaces stay separate types: a Project metric is never selected
-#: from a position result, and a position metric never from a Project one.
-AnyDecisionMetric = DecisionMetric | PositionMetric
+#: from a position or partner result, and the reverse.
+AnyDecisionMetric = DecisionMetric | PositionMetric | PartnerMetric
 
 
 class MetricDirection(StrEnum):
@@ -322,13 +347,16 @@ class CellIssueSource(StrEnum):
     ``CAPITAL_STRUCTURE`` (P7.8B) is the structured layer's own refusal: a
     structure that is not a valid contract for this analysis, or a valid one
     this Project state cannot execute. It is deliberately distinct from the
-    Project validators above, because the analyst fixes it somewhere else."""
+    Project validators above, because the analyst fixes it somewhere else.
+    ``PARTNERSHIP`` (P7.9 Stage 2) is the Partnership engine's own refusal of a
+    Partnership it cannot run over the variant's Common Equity Cash Flow."""
 
     STRATEGY = "strategy"
     SCENARIO = "scenario"
     LEASE_LEVEL = "lease_level"
     INVESTMENT = "investment"
     CAPITAL_STRUCTURE = "capital_structure"
+    PARTNERSHIP = "partnership"
 
 
 class CellStatus(StrEnum):
@@ -421,11 +449,60 @@ class PositionCellInput:
     issues: tuple[CellIssue, ...] = ()
 
 
-#: A cell of either perspective. The cross-cell helpers -- Delta, Worst Case and
-#: Range -- read only the three fields both shapes share (the two axis ids and
-#: the source fingerprint), so one implementation serves both perspectives and
+class PartnerApplicability(StrEnum):
+    """Whether the selected partner took part in one cell (P7.9 Stage 2).
+
+    - ``PRESENT``: the variant is valid and its resolved Partnership holds the
+      partner. Its metrics are reported, or N/A with the Partnership's reason
+      while the upstream Common Equity Cash Flow is unavailable.
+    - ``NOT_PRESENT``: the variant is valid and has no Partnership, or its
+      Partnership does not hold the partner.
+    - ``NOT_ANALYSED``: the variant is invalid -- a Project, Capital Structure
+      or Partnership refusal -- so nothing was analysed to be present in."""
+
+    PRESENT = "present"
+    NOT_PRESENT = "not_present"
+    NOT_ANALYSED = "not_analysed"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PartnerCellInput:
+    """One completed Partnership variant, as the orchestration hands it over
+    (P7.9 Stage 2).
+
+    ``source_fingerprint`` is the cell's identity in this matrix: the
+    **Partnership** source fingerprint when a Partnership resolves, and the
+    structured source fingerprint when the variant has none (a variant with no
+    Partnership has no Partnership fingerprint, FP-2).
+    ``partnership_source_fingerprint`` says which it is. ``partnership`` is the
+    Stage 1 result (``None`` when the variant has no Partnership), and
+    ``partner`` the selected partner's own result when the Partnership is
+    complete and holds it. An invalid variant carries its ``issues`` and no
+    fingerprint."""
+
+    strategy_id: str
+    scenario_id: str
+    applicability: PartnerApplicability
+    partnership: PartnershipResult | None = None
+    partner: PartnerResult | None = None
+    project_source_fingerprint: str | None = None
+    structured_source_fingerprint: str | None = None
+    partnership_source_fingerprint: str | None = None
+    source_fingerprint: str | None = None
+    hold_period: int | None = None
+    issues: tuple[CellIssue, ...] = ()
+
+
+#: A cell of any perspective. The cross-cell helpers -- Delta, Worst Case and
+#: Range -- read only the three fields every shape shares (the two axis ids and
+#: the source fingerprint), so one implementation serves every perspective and
 #: their semantics can never drift apart.
-AnyCellInput = CellInput | PositionCellInput
+AnyCellInput = CellInput | PositionCellInput | PartnerCellInput
+
+#: The row message when the selected position is absent from a Strategy.
+_POSITION_NOT_APPLICABLE = (
+    "Not available: the selected position is not in this Strategy's Capital Structure."
+)
 
 
 # =============================================================================
@@ -740,9 +817,12 @@ def _row_availability(
     spec: MetricSpec,
     ordered_scenarios: Sequence[AxisMember],
     values: Mapping[tuple[str, str], MetricValue],
+    not_applicable_message: str = _POSITION_NOT_APPLICABLE,
 ) -> tuple[FigureReason | None, str | None, tuple[str, ...]]:
     """Whether every Scenario cell of the row is valid and reports the metric
-    -- the completeness Worst Case and Range require. Nothing is skipped."""
+    -- the completeness Worst Case and Range require. Nothing is skipped.
+    ``not_applicable_message`` names what is absent in the perspective's own
+    words."""
 
     absent = tuple(
         scenario.id
@@ -756,7 +836,7 @@ def _row_availability(
         # compare a position with its own absence.
         return (
             FigureReason.NOT_APPLICABLE_TO_PERSPECTIVE,
-            "Not available: the selected position is not in this Strategy's Capital Structure.",
+            not_applicable_message,
             absent,
         )
     invalid = tuple(
@@ -792,8 +872,11 @@ def _worst_case(
     ordered_scenarios: Sequence[AxisMember],
     cells: Mapping[tuple[str, str], AnyCellInput],
     values: Mapping[tuple[str, str], MetricValue],
+    not_applicable_message: str = _POSITION_NOT_APPLICABLE,
 ) -> WorstCase:
-    reason, message, unavailable = _row_availability(strategy_id, spec, ordered_scenarios, values)
+    reason, message, unavailable = _row_availability(
+        strategy_id, spec, ordered_scenarios, values, not_applicable_message
+    )
     if reason is not None:
         return WorstCase(
             metric=spec.metric,
@@ -839,8 +922,11 @@ def _range(
     ordered_scenarios: Sequence[AxisMember],
     cells: Mapping[tuple[str, str], AnyCellInput],
     values: Mapping[tuple[str, str], MetricValue],
+    not_applicable_message: str = _POSITION_NOT_APPLICABLE,
 ) -> ScenarioRange:
-    reason, message, unavailable = _row_availability(strategy_id, spec, ordered_scenarios, values)
+    reason, message, unavailable = _row_availability(
+        strategy_id, spec, ordered_scenarios, values, not_applicable_message
+    )
     if reason is not None:
         return ScenarioRange(
             metric=spec.metric,
@@ -1641,11 +1727,512 @@ def compare_position_decision_matrix(
     )
 
 
+# =============================================================================
+# Phase 7 Gate P7.9 Stage 2 -- the PARTNER perspective (DC-3)
+#
+# The same comparison, over one partner of the Partnership waterfall. Every
+# cross-cell rule above is reused unchanged -- Delta vs the same Strategy's Base
+# Scenario, Worst Case and Range across that Strategy's Scenarios, ties to the
+# first cell in canonical order, and a figure that needs every Scenario cell.
+#
+# What differs is only what a cell *is*:
+#
+# - its results are the Stage 1 ``PartnerResult`` of the selected partner, the
+#   partner-returns namespace (Section 14), never ``AcquisitionResults`` or a
+#   position result (NS-1);
+# - its source fingerprint is the PARTNERSHIP one, so a Partnership edit moves
+#   this matrix and leaves the Project and Position matrices where they were;
+# - a cell may be **not applicable to this perspective**: the variant has no
+#   Partnership, or its Partnership does not hold the partner. For Promote
+#   Earned, a partner that is not a stated promote participant is not
+#   applicable either (R-E): its Promote Earned is ``None``, never zero;
+# - a cell whose upstream Common Equity Cash Flow is unavailable reports every
+#   metric N/A with the Partnership's own reason -- the P7.8B unresolved-funding
+#   state -- never zero-filled.
+#
+# Nothing here computes a financial figure of its own: every value is one
+# Stage 1 result field, selected.
+# =============================================================================
+
+
+#: The Partner catalog (Section 17.2), in display order. Contributions are
+#: "lower is better" for Worst Case only in the sense Total Equity Invested is:
+#: more capital called is more exposure. Benchmark capital subordination is
+#: adverse when higher. Distributions, like Total Cash Returned, depend on the
+#: horizon.
+PARTNER_METRIC_CATALOG: tuple[MetricSpec, ...] = (
+    MetricSpec(
+        metric=PartnerMetric.CONTRIBUTIONS,
+        label="Contributions",
+        unit=MetricUnit.CURRENCY,
+        direction=MetricDirection.LOWER_IS_BETTER,
+        horizon_dependent=False,
+    ),
+    MetricSpec(
+        metric=PartnerMetric.DISTRIBUTIONS,
+        label="Distributions",
+        unit=MetricUnit.CURRENCY,
+        direction=MetricDirection.HIGHER_IS_BETTER,
+        horizon_dependent=True,
+    ),
+    MetricSpec(
+        metric=PartnerMetric.IRR,
+        label="Partner IRR",
+        unit=MetricUnit.RATE,
+        direction=MetricDirection.HIGHER_IS_BETTER,
+        horizon_dependent=False,
+    ),
+    MetricSpec(
+        metric=PartnerMetric.MOIC,
+        label="Partner MOIC",
+        unit=MetricUnit.MULTIPLE,
+        direction=MetricDirection.HIGHER_IS_BETTER,
+        horizon_dependent=False,
+    ),
+    MetricSpec(
+        metric=PartnerMetric.PROFIT,
+        label="Partner Profit",
+        unit=MetricUnit.CURRENCY,
+        direction=MetricDirection.HIGHER_IS_BETTER,
+        horizon_dependent=False,
+    ),
+    MetricSpec(
+        metric=PartnerMetric.DISTRIBUTION_DIFFERENCE,
+        label="Distribution Difference vs Benchmark",
+        unit=MetricUnit.CURRENCY,
+        direction=MetricDirection.HIGHER_IS_BETTER,
+        horizon_dependent=False,
+    ),
+    MetricSpec(
+        metric=PartnerMetric.PROMOTE_EARNED,
+        label="Promote Earned",
+        unit=MetricUnit.CURRENCY,
+        direction=MetricDirection.HIGHER_IS_BETTER,
+        horizon_dependent=False,
+    ),
+    MetricSpec(
+        metric=PartnerMetric.BENCHMARK_CAPITAL_SUBORDINATION,
+        label="Benchmark Capital Subordination",
+        unit=MetricUnit.CURRENCY,
+        direction=MetricDirection.LOWER_IS_BETTER,
+        horizon_dependent=False,
+    ),
+)
+
+_PARTNER_NOT_APPLICABLE = "Not available: the selected partner is not in this Strategy's Partnership."
+_PROMOTE_NOT_APPLICABLE = (
+    "Not available: the selected partner is not in this Strategy's Partnership, or is not one "
+    "of its promote participants."
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PartnerDecisionCell:
+    """One Strategy x Scenario cell of a Partner matrix.
+
+    ``partnership_status`` and the unavailable fields are the Stage 1 result's
+    own, and ``is_promote_participant`` is the partner's own flag, so the UI can
+    say *why* a figure is N/A without deriving anything."""
+
+    strategy_id: str
+    scenario_id: str
+    status: CellStatus
+    applicability: PartnerApplicability
+    issues: tuple[CellIssue, ...]
+    project_source_fingerprint: str | None
+    structured_source_fingerprint: str | None
+    partnership_source_fingerprint: str | None
+    source_fingerprint: str | None
+    hold_period: int | None
+    partnership_status: PartnershipStatus | None
+    unavailable_reason: PartnershipUnavailableReason | None
+    unavailable_message: str | None
+    is_promote_participant: bool | None
+    metrics: tuple[MetricValue, ...]
+    deltas: tuple[DeltaVsBase, ...]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PartnerDecisionMatrix:
+    """The whole Partner comparison package: the axes, the Partner catalog, the
+    cells and the cross-Scenario figures.
+
+    ``matrix_fingerprint`` includes the selected ``partner_id`` and every
+    cell's source fingerprint, so two partners over the same variants never
+    share one."""
+
+    perspective: DecisionPerspective
+    partner_id: str
+    partner_name: str
+    role: PartnerRole
+    strategies: tuple[StrategyRow, ...]
+    scenarios: tuple[ScenarioColumn, ...]
+    metrics: tuple[MetricSpec, ...]
+    omitted_metrics: tuple[OmittedMetric, ...]
+    hold_periods: tuple[int, ...]
+    cross_scenario_figures: bool
+    cells: tuple[PartnerDecisionCell, ...]
+    strategy_figures: tuple[StrategyFigures, ...]
+    matrix_fingerprint: str | None
+    matrix_fingerprint_reason: str | None
+
+
+def _partner_reported(
+    partner: PartnerResult, metric: AnyDecisionMetric
+) -> tuple[float | None, IrrStatus | None]:
+    """One Partner metric's Stage 1 result field, and the IRR status where there
+    is one. Explicit per metric: no reflection."""
+
+    match metric:
+        case PartnerMetric.CONTRIBUTIONS:
+            return partner.total_contributions, None
+        case PartnerMetric.DISTRIBUTIONS:
+            return partner.total_distributions, None
+        case PartnerMetric.IRR:
+            return partner.irr, partner.irr_status
+        case PartnerMetric.MOIC:
+            return partner.moic, None
+        case PartnerMetric.PROFIT:
+            return partner.profit, None
+        case PartnerMetric.DISTRIBUTION_DIFFERENCE:
+            return partner.distribution_difference, None
+        case PartnerMetric.PROMOTE_EARNED:
+            return partner.promote_earned, None
+        case PartnerMetric.BENCHMARK_CAPITAL_SUBORDINATION:
+            return partner.benchmark_capital_subordination, None
+        case _:
+            raise DecisionComparisonError(f"{metric} is not a Partner metric.")
+
+
+def _partner_metric_value(cell: PartnerCellInput, spec: MetricSpec) -> MetricValue:
+    """One cell's value for one Partner metric, or ``None`` with the reason
+    that names the state it is actually in."""
+
+    if cell.applicability is PartnerApplicability.NOT_ANALYSED:
+        return _unavailable(
+            spec,
+            FigureReason.INVALID_VARIANT,
+            f"{spec.label} is not available because this variant is invalid.",
+        )
+    if cell.applicability is PartnerApplicability.NOT_PRESENT:
+        return _unavailable(
+            spec,
+            FigureReason.NOT_APPLICABLE_TO_PERSPECTIVE,
+            "This Strategy has no Partnership."
+            if cell.partnership is None
+            else "Not present in this Strategy's Partnership.",
+        )
+    partnership = cell.partnership
+    if partnership is None:
+        raise DecisionComparisonError(
+            f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) is present but carries no "
+            "Partnership result."
+        )
+    if partnership.status is not PartnershipStatus.COMPLETE:
+        return _unavailable(
+            spec,
+            FigureReason.UNRESOLVED_FUNDING_REQUIREMENT,
+            partnership.unavailable_message
+            or f"{spec.label} is not available while the Common Equity Cash Flow is unavailable.",
+        )
+    partner = cell.partner
+    if partner is None:
+        raise DecisionComparisonError(
+            f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) is present in a complete "
+            "Partnership but carries no partner result."
+        )
+    if spec.metric is PartnerMetric.PROMOTE_EARNED and partner.promote_earned is None:
+        return _unavailable(
+            spec,
+            FigureReason.NOT_APPLICABLE_TO_PERSPECTIVE,
+            "Not a promote participant in this Strategy's Partnership.",
+        )
+    value, irr_status = _partner_reported(partner, spec.metric)
+    if irr_status is not None and (irr_status is not IrrStatus.DEFINED or value is None):
+        return MetricValue(
+            metric=spec.metric,
+            value=None,
+            irr_status=irr_status,
+            reason=FigureReason.IRR_NOT_DEFINED,
+            message=f"{spec.label} is not reported for this partner ({irr_status.value}).",
+        )
+    if value is None:
+        no_contributions = (
+            spec.metric is PartnerMetric.MOIC
+            and partner.moic_unavailable_reason is MoicUnavailableReason.NO_CONTRIBUTIONS
+        )
+        return MetricValue(
+            metric=spec.metric,
+            value=None,
+            irr_status=irr_status,
+            reason=FigureReason.NOT_REPORTED,
+            message=f"{spec.label} is not reported: this partner made no contributions."
+            if no_contributions
+            else f"{spec.label} is not reported for this partner.",
+        )
+    return MetricValue(
+        metric=spec.metric, value=value, irr_status=irr_status, reason=None, message=None
+    )
+
+
+def _require_partner_cell(cell: PartnerCellInput) -> None:
+    """One cell's shape must match the state it claims: an analysed cell carries
+    a source fingerprint and a hold period and no issue; an unanalysed one
+    carries its issues and nothing else; a present cell carries its Partnership
+    result, and its partner result exactly when that Partnership is complete."""
+
+    if cell.applicability is PartnerApplicability.NOT_ANALYSED:
+        if not cell.issues:
+            raise DecisionComparisonError(
+                f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) was not analysed and has no "
+                "issues."
+            )
+        return
+    if cell.issues or cell.source_fingerprint is None or cell.hold_period is None:
+        raise DecisionComparisonError(
+            f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) was analysed but does not carry "
+            "exactly a source fingerprint and a hold period with no issues."
+        )
+    if cell.applicability is PartnerApplicability.NOT_PRESENT:
+        if cell.partner is not None:
+            raise DecisionComparisonError(
+                f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) is not present and carries a "
+                "partner result."
+            )
+        return
+    if cell.partnership is None:
+        raise DecisionComparisonError(
+            f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) is present and carries no "
+            "Partnership result."
+        )
+    complete = cell.partnership.status is PartnershipStatus.COMPLETE
+    if complete is not (cell.partner is not None):
+        raise DecisionComparisonError(
+            f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) carries a partner result that "
+            "does not match its Partnership's status."
+        )
+
+
+def _index_partner_cells(
+    cells: Iterable[PartnerCellInput],
+    strategies: Sequence[AxisMember],
+    scenarios: Sequence[AxisMember],
+) -> dict[tuple[str, str], PartnerCellInput]:
+    indexed: dict[tuple[str, str], PartnerCellInput] = {}
+    for cell in cells:
+        key = (cell.strategy_id, cell.scenario_id)
+        if key in indexed:
+            raise DecisionComparisonError(f"Cell {key!r} is given twice.")
+        _require_partner_cell(cell)
+        indexed[key] = cell
+    expected = {(strategy.id, scenario.id) for strategy in strategies for scenario in scenarios}
+    if set(indexed) != expected:
+        raise DecisionComparisonError(
+            "The cells must be exactly one per Strategy x Scenario pair of the axes."
+        )
+    return indexed
+
+
+def partner_decision_matrix_fingerprint(
+    partner_id: str, identities: Iterable[tuple[str, str, str]]
+) -> str:
+    """The Partner Decision Comparison fingerprint: sha256 of canonical JSON
+    over the perspective, the **selected partner id** and every cell's source
+    fingerprint, sorted. Two partners compared over the very same variants are
+    two different comparisons."""
+
+    payload = {
+        "perspective": DecisionPerspective.PARTNER.value,
+        "partner_id": partner_id,
+        "cells": sorted(
+            [strategy_id, scenario_id, fingerprint]
+            for strategy_id, scenario_id, fingerprint in identities
+        ),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _partner_matrix_fingerprint(
+    partner_id: str,
+    cells: Mapping[tuple[str, str], PartnerCellInput],
+    ordered_strategies: Sequence[AxisMember],
+    ordered_scenarios: Sequence[AxisMember],
+) -> tuple[str | None, str | None]:
+    unavailable = [cell for cell in cells.values() if cell.source_fingerprint is None]
+    if unavailable:
+        count = len(unavailable)
+        noun = "variant is" if count == 1 else "variants are"
+        return None, (
+            f"No matrix fingerprint: {count} {noun} invalid, and every cell needs a current "
+            "source fingerprint."
+        )
+    identities = []
+    for strategy in ordered_strategies:
+        for scenario in ordered_scenarios:
+            cell = cells[(strategy.id, scenario.id)]
+            assert cell.source_fingerprint is not None
+            identities.append((strategy.id, scenario.id, cell.source_fingerprint))
+    return partner_decision_matrix_fingerprint(partner_id, identities), None
+
+
+def _partner_not_applicable_message(spec: MetricSpec) -> str:
+    return (
+        _PROMOTE_NOT_APPLICABLE
+        if spec.metric is PartnerMetric.PROMOTE_EARNED
+        else _PARTNER_NOT_APPLICABLE
+    )
+
+
+def compare_partner_decision_matrix(
+    *,
+    partner_id: str,
+    partner_name: str,
+    role: PartnerRole,
+    strategies: Sequence[AxisMember],
+    scenarios: Sequence[AxisMember],
+    cells: Iterable[PartnerCellInput],
+    catalog: tuple[MetricSpec, ...] = PARTNER_METRIC_CATALOG,
+) -> PartnerDecisionMatrix:
+    """The Strategy x Scenario comparison of one partner.
+
+    Raises ``DecisionComparisonError`` for an incoherent matrix -- never for an
+    invalid variant, a variant without the partner, or a non-participant's
+    Promote Earned, each of which is a cell state of its own."""
+
+    _require_axis(strategies, "Strategy")
+    _require_axis(scenarios, "Scenario")
+    indexed = _index_partner_cells(cells, strategies, scenarios)
+    ordered_strategies = sorted(strategies, key=_canonical_key)
+    ordered_scenarios = sorted(scenarios, key=_canonical_key)
+    base_scenario = ordered_scenarios[0]
+
+    hold_periods = tuple(
+        sorted({cell.hold_period for cell in indexed.values() if cell.hold_period is not None})
+    )
+    applicable, omitted = _applicable_metrics(hold_periods, catalog)
+    per_metric = {
+        spec.metric: {key: _partner_metric_value(cell, spec) for key, cell in indexed.items()}
+        for spec in applicable
+    }
+
+    decision_cells: list[PartnerDecisionCell] = []
+    for strategy in strategies:
+        base_cell = indexed[(strategy.id, base_scenario.id)]
+        for scenario in scenarios:
+            cell = indexed[(strategy.id, scenario.id)]
+            partnership = cell.partnership
+            decision_cells.append(
+                PartnerDecisionCell(
+                    strategy_id=strategy.id,
+                    scenario_id=scenario.id,
+                    status=CellStatus.INVALID
+                    if cell.applicability is PartnerApplicability.NOT_ANALYSED
+                    else CellStatus.VALID,
+                    applicability=cell.applicability,
+                    issues=cell.issues,
+                    project_source_fingerprint=cell.project_source_fingerprint,
+                    structured_source_fingerprint=cell.structured_source_fingerprint,
+                    partnership_source_fingerprint=cell.partnership_source_fingerprint,
+                    source_fingerprint=cell.source_fingerprint,
+                    hold_period=cell.hold_period,
+                    partnership_status=None if partnership is None else partnership.status,
+                    unavailable_reason=None if partnership is None else partnership.unavailable_reason,
+                    unavailable_message=None
+                    if partnership is None
+                    else partnership.unavailable_message,
+                    is_promote_participant=None
+                    if cell.partner is None
+                    else cell.partner.is_promote_participant,
+                    metrics=tuple(
+                        per_metric[spec.metric][(strategy.id, scenario.id)] for spec in applicable
+                    ),
+                    deltas=tuple(
+                        _delta(cell, base_cell, spec, per_metric[spec.metric])
+                        for spec in applicable
+                    ),
+                )
+            )
+
+    cross_scenario_figures = len(scenarios) > 1
+    strategy_figures = tuple(
+        StrategyFigures(
+            strategy_id=strategy.id,
+            worst_cases=tuple(
+                _worst_case(
+                    strategy.id,
+                    spec,
+                    ordered_scenarios,
+                    indexed,
+                    per_metric[spec.metric],
+                    _partner_not_applicable_message(spec),
+                )
+                for spec in applicable
+            )
+            if cross_scenario_figures
+            else (),
+            ranges=tuple(
+                _range(
+                    strategy.id,
+                    spec,
+                    ordered_scenarios,
+                    indexed,
+                    per_metric[spec.metric],
+                    _partner_not_applicable_message(spec),
+                )
+                for spec in applicable
+            )
+            if cross_scenario_figures
+            else (),
+        )
+        for strategy in strategies
+    )
+
+    fingerprint, fingerprint_reason = _partner_matrix_fingerprint(
+        partner_id, indexed, ordered_strategies, ordered_scenarios
+    )
+    return PartnerDecisionMatrix(
+        perspective=DecisionPerspective.PARTNER,
+        partner_id=partner_id,
+        partner_name=partner_name,
+        role=role,
+        strategies=tuple(
+            StrategyRow(
+                strategy_id=strategy.id,
+                name=strategy.name,
+                is_base=strategy.is_base,
+                hold_period=_row_hold(strategy.id, indexed),
+            )
+            for strategy in strategies
+        ),
+        scenarios=tuple(
+            ScenarioColumn(scenario_id=scenario.id, name=scenario.name, is_base=scenario.is_base)
+            for scenario in scenarios
+        ),
+        metrics=applicable,
+        omitted_metrics=omitted,
+        hold_periods=hold_periods,
+        cross_scenario_figures=cross_scenario_figures,
+        cells=tuple(decision_cells),
+        strategy_figures=strategy_figures,
+        matrix_fingerprint=fingerprint,
+        matrix_fingerprint_reason=fingerprint_reason,
+    )
+
+
 __all__ = [
     "CLAIM_BEARING_POSITION_METRIC_CATALOG",
     "COMMON_EQUITY_POSITION_METRIC_CATALOG",
     "INVESTMENT_PROJECT_METRIC_CATALOG",
+    "PARTNER_METRIC_CATALOG",
     "PROJECT_METRIC_CATALOG",
+    "PartnerApplicability",
+    "PartnerCellInput",
+    "PartnerDecisionCell",
+    "PartnerDecisionMatrix",
+    "PartnerMetric",
+    "compare_partner_decision_matrix",
+    "partner_decision_matrix_fingerprint",
     "AnyCellInput",
     "AnyDecisionMetric",
     "PositionApplicability",

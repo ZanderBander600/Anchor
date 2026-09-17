@@ -41,15 +41,23 @@ os.environ["ANCHOR_DB_PATH"] = str(db_path)
 import anchor  # noqa: E402
 
 assert Path(anchor.__file__).resolve().is_relative_to(root / "src"), anchor.__file__
-#: Which tree this is: the P7.6 merge by default (P7.7's oracle), or the P7.7
-#: merge when an optional fourth argument ``p7_7`` says so (P7.8's oracle).
+#: Which tree this is: the P7.6 merge by default (P7.7's oracle), the P7.7
+#: merge when an optional fourth argument ``p7_7`` says so (P7.8's oracle), or
+#: the schema-v11 tree of ``main`` at P7.9 Stage 1 when it says ``v11`` (P7.9
+#: Stage 2's oracle).
 baseline_gate = sys.argv[4] if len(sys.argv) > 4 else "p7_6"
 _package = root / "src" / "anchor" / "capital_structure"
 if baseline_gate == "p7_6":
     assert not _package.exists(), "the baseline tree already has P7.7"
-else:
-    assert baseline_gate == "p7_7", baseline_gate
+elif baseline_gate == "p7_7":
     assert _package.exists() and not (_package / "execution.py").exists(), "the baseline tree is not the P7.7 merge"
+else:
+    assert baseline_gate == "v11", baseline_gate
+    assert (_package / "execution.py").exists(), "the baseline tree has no P7.8 executor"
+    assert (root / "src" / "anchor" / "partnership").exists(), "the baseline tree has no P7.9 Stage 1 engine"
+    assert not (root / "src" / "anchor" / "deals" / "partnership_variants.py").exists(), (
+        "the baseline tree already has P7.9 Stage 2"
+    )
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -81,7 +89,10 @@ from anchor.investment import (  # noqa: E402
     UnitKind,
 )
 
-assert store._SCHEMA_VERSION == 10, f"expected the v10 tree, got {store._SCHEMA_VERSION}"
+_expected_version = 11 if baseline_gate == "v11" else 10
+assert store._SCHEMA_VERSION == _expected_version, (
+    f"expected the v{_expected_version} tree, got {store._SCHEMA_VERSION}"
+)
 
 PLAN = BusinessPlan(
     capital_items=(
