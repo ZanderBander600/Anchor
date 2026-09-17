@@ -3,10 +3,10 @@
 Status: **Ratified.** The human review approved this contract with the
 reviewer's recommended decisions (Section 19). It is the authority for P7.9.
 **Stage 1 (Section 17.1) is complete and accepted** in PR #34 (`70b92e2`).
-**Stage 2 (Section 17.2) has started and is in progress** on
-`feature/p7-9-stage-2-partnership-integration` from `main` @ `1df2760`; the
-Stage 1 package is frozen at `70b92e2`. Stage 3 has not started: no P7.9 UI
-exists.
+**Stage 2 (Section 17.2) is complete and accepted** in PR #35 (`543c1b2`);
+the Stage 1 package remains frozen at `70b92e2`. **Stage 3 (Section 17.3) has
+been explicitly started** from `main` @ `543c1b2`; implementation has not yet
+been committed, and no P7.9 UI exists yet.
 
 History:
 
@@ -1551,6 +1551,7 @@ Also ratified, as recorded in Section 19.1 and the body:
 - **Nothing reopened.** It changes no ratified P7.0, P7.7 or P7.8 convention
   and introduces no deferred scope (Section 18).
 - **Implementation.** Stage 1 is complete and accepted in PR #34 (`70b92e2`).
-  Stage 2 (Section 17.2) was explicitly started and is in progress. Stage 3
-  (Section 17.3) has not started; it requires its own explicit start, and
-  finishing one stage never starts the next.
+  Stage 2 is complete and accepted in PR #35 (`543c1b2`). Stage 3
+  (Section 17.3) was explicitly started from that accepted baseline;
+  implementation has not yet been committed. Finishing one stage never starts
+  the next.

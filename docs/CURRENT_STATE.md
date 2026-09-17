@@ -9,8 +9,8 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `1df2760` (documentation of the P7.9 Stage 1
-  completion, on top of the PR #34 merge).
+- Accepted baseline: `main` at `543c1b2` (PR #35, P7.9 Stage 2 persistence,
+  migration, fingerprints, API and Partner Decision Matrix).
 - Last accepted financial implementation merge: `70b92e2` (PR #34, P7.9
   Stage 1 deterministic contracts and engine).
 - Active gate: **P7.9 Partnership Waterfalls + Investor Returns**. The ratified
@@ -18,10 +18,10 @@ whenever an accepted gate merges or the active gate changes.
   - **Stage 1** (deterministic contracts and engine): **complete and accepted**
     in PR #34 (`70b92e2`).
   - **Stage 2** (persistence, migration, fingerprints, API, Partner Decision
-    Matrix; Section 17.2): **started and in progress** on
-    `feature/p7-9-stage-2-partnership-integration` from `1df2760`. Tier 2 over
-    the frozen Stage 1 engine.
-  - **Stage 3** (product UI, browser QA): not started.
+    Matrix; Section 17.2): **complete and accepted** in PR #35 (`543c1b2`).
+    Tier 2 is integrated over the frozen Stage 1 engine.
+  - **Stage 3** (product UI, browser QA; Section 17.3): **explicitly started**
+    from `main` at `543c1b2`; implementation has not yet been committed.
 - Open PR: none at the time of this synchronization.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active
@@ -51,6 +51,8 @@ accepted merge before updating this file.
 - P7.8 Structured Position Cash Flows, Position Returns, persistence, product
   integration, Position Decision Matrix, browser QA, and human visual acceptance
 - P7.9 Stage 1 deterministic Partnership Waterfall contracts and engine
+- P7.9 Stage 2 Partnership persistence, migration, fingerprints, API and
+  Partner Decision Matrix
 
 ## Next Work
 
@@ -62,8 +64,9 @@ stages, each started explicitly:
 1. Stage 1: deterministic contracts and engine. **Complete and accepted in
    PR #34 (`70b92e2`).**
 2. Stage 2: persistence, migration, fingerprints, API and the Partner
-   Decision Matrix. **Started and in progress.**
-3. Stage 3: product UI with browser QA. Not started.
+   Decision Matrix. **Complete and accepted in PR #35 (`543c1b2`).**
+3. Stage 3: product UI with browser QA. **Explicitly started from `main` at
+   `543c1b2`; implementation has not yet been committed.**
 
 Finishing one stage never starts the next.
 
@@ -103,8 +106,7 @@ sub-gate.
   `docs/architecture/P7_7_CAPITAL_STRUCTURE_FOUNDATION.md`,
   `docs/architecture/P7_8_STRUCTURED_POSITION_ECONOMICS.md`, and
   `docs/architecture/P7_8_PRODUCT_INTEGRATION.md`
-- P7.9 ratified contract (Stage 1 complete; Stage 2 in progress; Stage 3 not
-  started):
+- P7.9 ratified contract (Stages 1 and 2 complete; Stage 3 started):
   `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`
 
 ## Historical-Document Rule
