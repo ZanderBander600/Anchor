@@ -1546,7 +1546,10 @@ describe('Break-even analysis workflow', () => {
     await screen.findByText('Break-Even Analysis');
     await goTo(user, 'Risk');
     await user.click(screen.getByRole('tab', { name: 'Break-Even' }));
-    expect(screen.getAllByText('for 10.00% Levered IRR').length).toBe(3);
+    // Scoped to the Break-Even view: Overview's highlights (mounted, hidden)
+    // name their hurdle the same way.
+    const breakEven = within(riskViewPanel('break-even'));
+    expect(breakEven.getAllByText('for 10.00% Levered IRR').length).toBe(3);
 
     mockFetchBreakEvenAnalysis.mockResolvedValueOnce(
       makeBreakEvenAnalysis({
@@ -1594,13 +1597,13 @@ describe('Break-even analysis workflow', () => {
     expect(mockFetchSensitivityPresets).toHaveBeenCalledTimes(1);
 
     expect((await screen.findAllByText('$44,120,000')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('for 1.50x Equity Multiple').length).toBe(3);
-    expect(screen.queryByText('for 10.00% Levered IRR')).toBeNull();
+    expect(breakEven.getAllByText('for 1.50x Equity Multiple').length).toBe(3);
+    expect(breakEven.queryByText('for 10.00% Levered IRR')).toBeNull();
 
     // DSCR cards remain unaffected -- same values, same subtitle.
     expect(screen.getByText('Maximum Interest Rate')).toBeTruthy();
     expect(screen.getByText('Minimum Current NOI')).toBeTruthy();
-    expect(screen.getAllByText('for 1.20x Year 1 DSCR').length).toBe(2);
+    expect(breakEven.getAllByText('for 1.20x Year 1 DSCR').length).toBe(2);
   });
 
   it('shows "Not found in tested range" and never claims impossibility', async () => {
