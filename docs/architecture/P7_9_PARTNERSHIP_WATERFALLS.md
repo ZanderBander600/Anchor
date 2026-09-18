@@ -1568,3 +1568,49 @@ Also ratified, as recorded in Section 19.1 and the body:
   (Section 17.3) is implemented and merged in PR #36 (`3f23ba4`), with final
   hands-on human product acceptance pending. P7.9 remains active until that
   acceptance is recorded; P7.10 has not started.
+
+---
+
+## 20. Closeout QA correction record
+
+Stage 3 merged in PR #36 (`3f23ba4`). Hands-on browser QA of the merged product
+then found presentation defects, which the closeout branch
+`fix/p7-9-closeout-and-am1-qa-corrections` (from `main` at `c637d1e`)
+corrects. The Stage 3 record in the History above is left as it was written;
+this section records what that record got wrong and what changed. **P7.9 is
+not accepted by this record**: the correction awaits independent review, merge
+and hands-on human acceptance, and P7.10 has not started.
+
+- **Tier Audit period mapping (a presentation defect, not an engine one).**
+  `TierResult.amounts` is dense by period (index `0` is closing) while
+  `shares_by_period` lists only the periods a tier paid, each with its own
+  `period`. The Tier Audit read `amounts` by row position, so it printed
+  another period's cash. On the P7.9 QA Deal it showed a Year 1 Preferred
+  Return of $0 (the engine: $1,720,000), a Year 5 Preferred Return of
+  $1,751,644 ($17,896,458), and Year 5 Catch-Up and Residual of $0
+  ($3,812,088 and $18,070,737). It now reads each amount by the row's own
+  period. Every figure shown now matches the backend response.
+- **Condition identifiers.** The Stage 3 record says internal condition
+  identifiers remained non-visible; the Tier Audit in fact rendered them
+  (`tier-1-condition-1`). Each hurdle account is now titled from the saved
+  Partnership contract by its kind and stated terms, including a SIMPLE
+  condition's distribution order (`IRR Condition · 9.00% Simple · Accrued
+  Return First`, `MOIC Condition · 1.50x`), so same-kind conditions are told
+  apart by their economics and no ordinal is implied. Condition ids remain only
+  as internal identity: React keys and `data-condition` attributes.
+- **Readability.** The audit groups each account under its own heading
+  (Distributions by Period, Hurdle Account, Catch-Up Account) and its tables
+  carry a scoped, role-based treatment: figures right-aligned in tabular
+  numerals, period and status words on the left, padded cells and row
+  separators. No column, figure or audit detail was removed.
+- **Mobile overflow.** At 390px the Partnership workspace measured 508px wide.
+  The cause was the Acquisitions shell's operating-mode switch, not the
+  Partnership surface. It now wraps within the viewport, and wide Partnership
+  tables and the Partner matrix scroll inside their own regions.
+- **Stale guards.** The Stage 2 production ledger measured `1df2760` against
+  the working tree and so failed on `main` once Stage 3 and AM1 landed. It is
+  pinned to Stage 2's committed range `1df2760..acdf28a`. The D4.6B G37
+  frontend allowlist records Stage 3's nine production modules by name.
+- **No backend or financial change.** No engine, contract, validation,
+  persistence, fingerprint, API or financial convention changed. Every figure
+  still comes from the backend, and the no-arithmetic guard is unchanged.

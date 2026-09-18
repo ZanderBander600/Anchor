@@ -109,7 +109,28 @@ export function ManagedAssetWorkspace({
         <div className="am-asset-identity">
           <h2 className="am-asset-name">{asset.name}</h2>
           <span className="am-owned-badge">Owned Asset</span>
+          {/* The operating workflow leads and the destructive action comes
+            * last: on a phone the actions stack, and the first one is the one
+            * a thumb meets. Delete stays visibly destructive and still asks
+            * first. */}
           <div className="am-asset-actions">
+            <button
+              type="button"
+              className="am-primary-button"
+              onClick={() => {
+                setSaveError(null);
+                setEditing(selectedReport === null ? 'new' : 'existing');
+              }}
+            >
+              {selectedReport === null ? 'Add Monthly Report' : 'Edit Actuals'}
+            </button>
+            <button
+              type="button"
+              className="am-quiet-button"
+              onClick={() => onViewAcquisitionBasis(asset.source_deal_id)}
+            >
+              View Acquisition Basis
+            </button>
             {!isConfirmingDelete && (
               <button
                 ref={deleteButton}
@@ -123,23 +144,6 @@ export function ManagedAssetWorkspace({
                 Delete Asset
               </button>
             )}
-            <button
-              type="button"
-              className="am-quiet-button"
-              onClick={() => onViewAcquisitionBasis(asset.source_deal_id)}
-            >
-              View Acquisition Basis
-            </button>
-            <button
-              type="button"
-              className="am-primary-button"
-              onClick={() => {
-                setSaveError(null);
-                setEditing(selectedReport === null ? 'new' : 'existing');
-              }}
-            >
-              {selectedReport === null ? 'Add Monthly Report' : 'Edit Actuals'}
-            </button>
           </div>
         </div>
         {meta !== '' && <p className="am-asset-meta">{meta}</p>}

@@ -87,6 +87,65 @@ _D4_6A_COMMIT = "15e910d"
 _D5_BASE_COMMIT = "4f8a648"
 
 
+#: Phase 7 P7.9 Stage 3 -- the Partnership product UI, merged in PR #36
+#: (3f23ba4; reviewed branch 825a60a..ce70d79). Nine new production modules:
+#: the wire contracts (`partnershipTypes.ts`), the editor's form model and its
+#: labels (`partnershipForm.ts`), the Project / Position / Partner
+#: decision-state tokens (`decisionStateTokens.ts`), two hooks and four
+#: components. None computes economics: `web/src/partnershipArchitecture.test.ts`
+#: parses all nine and allows only the display-scale conversions and the editor
+#: id sequence. Every shipped file Stage 3 edits -- App.tsx, api.ts
+#: (addition-only), index.css, RiskDecisionWorkspace.tsx, InvestmentWorkspace.tsx
+#: and the P7.5 / P7.8B decision modules -- is already in ``_PERMITTED_WEB``.
+#: Ratified at the P7.9 closeout, which found this clause stale on ``main``.
+_P7_9_STAGE_3_WEB = frozenset(
+    {
+        "web/src/partnershipTypes.ts",
+        "web/src/partnershipForm.ts",
+        "web/src/decisionStateTokens.ts",
+        "web/src/usePartnership.ts",
+        "web/src/usePartnerDecisionMatrix.ts",
+        "web/src/components/PartnershipEditor.tsx",
+        "web/src/components/PartnershipResults.tsx",
+        "web/src/components/PartnershipWorkspace.tsx",
+        "web/src/components/PartnerDecisionMatrixPanel.tsx",
+    }
+)
+
+#: AM1 -- Managed Assets and Monthly Performance, merged in PR #38 (3048976;
+#: reviewed branch 63c2ac0..1e7fe3d). Ten new production modules: the wire
+#: contracts, formatting and labels, the recorded engine response, the state
+#: hook and six components. None computes a figure: ``test_am1_architecture.py``
+#: scans each for arithmetic on a computed name and for any local favorability
+#: rule. Its shipped edits -- App.tsx, api.ts, index.css and AppSidebar.tsx --
+#: are already in ``_PERMITTED_WEB``. Ratified at the P7.9 closeout.
+#:
+#: Two later scopes add nothing here, and are recorded so a reader finds every
+#: accepted or reviewed frontend change accounted for:
+#:
+#: - the AM1 deletion extension (PR #39, 60be780) edited `api.ts`, `index.css`,
+#:   `useManagedAssets.ts`, `AssetManagementShell.tsx` and
+#:   `ManagedAssetWorkspace.tsx` and added only test sources;
+#: - the P7.9 / AM1 closeout (fix/p7-9-closeout-and-am1-qa-corrections) edits
+#:   `PartnershipResults.tsx`, `PartnershipWorkspace.tsx`, `partnershipForm.ts`,
+#:   `AssetManagementShell.tsx`, `ManagedAssetWorkspace.tsx`,
+#:   `NoiTrendChart.tsx` and `index.css`, and adds only test sources.
+_AM1_WEB = frozenset(
+    {
+        "web/src/assetManagementTypes.ts",
+        "web/src/assetManagementFormat.ts",
+        "web/src/assetManagementFixture.ts",
+        "web/src/useManagedAssets.ts",
+        "web/src/components/AssetManagementShell.tsx",
+        "web/src/components/ManagedAssetWorkspace.tsx",
+        "web/src/components/MonthlyPerformancePanel.tsx",
+        "web/src/components/MonthlyReportEditor.tsx",
+        "web/src/components/NoiTrendChart.tsx",
+        "web/src/components/CreateManagedAssetPanel.tsx",
+    }
+)
+
+
 #: The frontend files a completed D5 gate has ratified, and the only ones
 #: permitted to differ from ``_D4_6A_COMMIT``.
 #:
@@ -385,7 +444,17 @@ _PERMITTED_WEB = frozenset(
         # file; ratified at the P7.9 Stage 1 review.
         "web/README.md",
     }
-)
+) | _P7_9_STAGE_3_WEB | _AM1_WEB
+
+#: Each later gate's group, by the committed range that added it: the proof, in
+#: ``test_g37_each_later_gate_entry_was_added_by_its_gate``, that no entry was
+#: admitted merely to turn the guard green.
+_GATE_ADDED_WEB = {
+    # P7.9 Stage 3's reviewed branch, merged by PR #36 as 3f23ba4.
+    ("825a60a84185b978a001ed4f8c648f40ef6d7491", "ce70d79bdf5f1503f4b4a09faa98c1b102f3dd1d"): _P7_9_STAGE_3_WEB,
+    # AM1's reviewed branch, merged by PR #38 as 3048976.
+    ("63c2ac0fc0e7c62f4059a1b3b4ff4f2c020b2cff", "1e7fe3ddc084c889a289200e1b7d7ee99ee38672"): _AM1_WEB,
+}
 
 
 def _unexpected_web(changed: Iterable[str]) -> set[str]:
@@ -1917,6 +1986,44 @@ def test_g37_the_web_allowlist_would_reject_an_unratified_file() -> None:
     quick = "web/src/components/SensitivityPanel.tsx"
     assert quick not in _PERMITTED_WEB
     assert _unexpected_web([quick]) == {quick}
+
+
+def test_g37_each_later_gate_entry_was_added_by_its_gate() -> None:
+    """**P7.9 closeout.** The P7.9 Stage 3 and AM1 entries are each a file that
+    gate's own committed range added -- not files admitted to turn G37 green.
+    The ranges are the reviewed branches their merges joined, and both merges
+    are in this repository's history."""
+
+    for (base, head), entries in _GATE_ADDED_WEB.items():
+        added = set(
+            _git(["diff", "--name-only", "--no-renames", "--diff-filter=A", base, head, "--", "web"]).split()
+        )
+        assert sorted(entries - added) == [], f"not added by {base[:7]}..{head[:7]}"
+        # Exactly the production files the range added: every other addition
+        # is a test source, which the extension filter already excuses.
+        assert _unexpected_web(added - entries) == set()
+        assert entries <= _PERMITTED_WEB
+    for merge in ("3f23ba4", "3048976"):
+        assert _git(["merge-base", "--is-ancestor", merge, "HEAD"]) == ""
+
+
+def test_g37_the_later_gate_entries_admit_no_neighbour() -> None:
+    """**P7.9 closeout.** Adding the Stage 3 and AM1 files widened the set by
+    exactly their names: a new Partnership or Asset Management production
+    module beside them is still rejected, as is any new component."""
+
+    for intruder in (
+        "web/src/partnershipWaterfall.ts",
+        "web/src/components/PartnershipCalculator.tsx",
+        "web/src/assetManagementCalculations.ts",
+        "web/src/components/ManagedAssetValuation.tsx",
+        "web/src/components/UnratifiedPanel.tsx",
+    ):
+        assert _unexpected_web([*_PERMITTED_WEB, intruder]) == {intruder}
+    for entry in _P7_9_STAGE_3_WEB | _AM1_WEB:
+        assert not entry.endswith((".test.ts", ".test.tsx")), entry
+        assert not set(entry) & set("*?[]"), entry
+        assert entry.endswith((".ts", ".tsx")), entry
 
 
 def test_g37_detects_a_real_difference_rather_than_reporting_none() -> None:

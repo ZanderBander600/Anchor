@@ -19,6 +19,9 @@
  *
  * jsdom has no layout, so (2) and (3) are guarded at the exact rules that
  * caused them; actual `scrollWidth <= clientWidth` is measured in browser QA.
+ *
+ * The final review pass adds (5) the Tier Audit's scoped, role-based table
+ * styles and (6) the Managed Asset header's action order, destructive last.
  */
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -292,5 +295,93 @@ describe('the NOI trend’s accessible table never widens the page', () => {
     expect(table.classList.contains('am-visually-hidden')).toBe(false);
     expect(table.parentElement?.classList.contains('am-visually-hidden')).toBe(true);
     expect(table.parentElement?.tagName).toBe('DIV');
+  });
+});
+
+// =============================================================================
+// 5. The Tier Audit styles are scoped, role-based and pattern-free
+// =============================================================================
+
+describe('the Tier Audit table styles touch only the audit', () => {
+  it('right-aligns figures in tabular numerals and keeps words on the left', () => {
+    const figure = ruleBody(CSS, '.partnership-audit-table .partnership-audit-figure');
+    expect(figure).toContain('text-align: right;');
+    expect(figure).toContain('font-variant-numeric: tabular-nums;');
+    const words = CSS.match(
+      /\.partnership-audit-table \.partnership-audit-period,\n\.partnership-audit-table \.partnership-audit-status,\n\.partnership-audit-table \.partnership-audit-text,\n\.partnership-audit-table \.partnership-audit-shares \{([^}]*)\}/,
+    );
+    expect(words?.[1]).toContain('text-align: left;');
+  });
+
+  it('pads each cell, separates rows and gives the header its own band', () => {
+    const cells = ruleBody(CSS, '.partnership-audit-table th,\n.partnership-audit-table td');
+    expect(cells).toMatch(/padding: \d+px 1\dpx;/);
+    expect(cells).toContain('border-bottom: 1px solid var(--border);');
+    const header = ruleBody(CSS, '.partnership-audit-table thead th');
+    expect(header).toContain('background: var(--surface-muted);');
+    expect(header).toContain('border-bottom: 1px solid var(--border-strong);');
+  });
+
+  it('scopes every audit rule to the audit table and positions nothing by index', () => {
+    const uncommented = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const selectors = [
+      ...uncommented.matchAll(/([^{}]*partnership-audit-(?:figure|period|status|text|shares)[^{}]*)\{/g),
+    ].map((match) => match[1].trim());
+    expect(selectors.length).toBeGreaterThan(0);
+    for (const selector of selectors) {
+      for (const part of selector.split(',')) {
+        expect(part.trim().startsWith('.partnership-audit-table ')).toBe(true);
+      }
+    }
+    const auditRules = CSS.slice(CSS.indexOf('.partnership-audit-table {'));
+    expect(auditRules.slice(0, auditRules.indexOf('/* --- The PARTNER matrix'))).not.toMatch(
+      /nth-child|nth-of-type|first-child|last-child/,
+    );
+    // The shared `.data-table` class the other Partnership tables use is still
+    // unstyled: fixing the audit did not restyle them.
+    expect(CSS).not.toMatch(/(^|\n)\s*\.data-table[\s,{.]/);
+  });
+});
+
+// =============================================================================
+// 6. The Managed Asset header leads with the operating workflow
+// =============================================================================
+
+describe('the Managed Asset header puts the destructive action last', () => {
+  it('orders Edit Actuals, View Acquisition Basis, then Delete Asset', () => {
+    const { container } = render(
+      <ManagedAssetWorkspace
+        asset={DEMO_ASSET}
+        state={performanceState()}
+        onViewAcquisitionBasis={vi.fn()}
+        onDelete={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    const actions = [...container.querySelectorAll('.am-asset-actions button')];
+    expect(actions.map((button) => button.textContent)).toEqual([
+      'Edit Actuals',
+      'View Acquisition Basis',
+      'Delete Asset',
+    ]);
+    // Still visibly destructive.
+    expect(actions[2].classList.contains('am-danger-button')).toBe(true);
+  });
+
+  it('still confirms inline, focuses Cancel, deletes nothing on cancel and returns focus', async () => {
+    const onDelete = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ManagedAssetWorkspace
+        asset={DEMO_ASSET}
+        state={performanceState()}
+        onViewAcquisitionBasis={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Asset' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByText(/deletes the managed asset and all of its monthly reports/i)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete Asset' }));
   });
 });

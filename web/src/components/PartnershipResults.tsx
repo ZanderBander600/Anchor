@@ -731,15 +731,21 @@ function TierAudit({
 
           <h6 className="partnership-audit-subtitle">Distributions by Period</h6>
           <div className="table-scroll">
-            <table className="data-table partnership-table">
+            <table className="data-table partnership-table partnership-audit-table">
               <caption className="visually-hidden">
                 {`${tierLabel(tier.tier_id, tierNames)}: the cash it distributed in each period and the shares it applied`}
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">Period</th>
-                  <th scope="col">Tier Distribution</th>
-                  <th scope="col">Applied Shares</th>
+                  <th scope="col" className="partnership-audit-period">
+                    Period
+                  </th>
+                  <th scope="col" className="partnership-audit-figure">
+                    Tier Distribution
+                  </th>
+                  <th scope="col" className="partnership-audit-shares">
+                    Applied Shares
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -749,8 +755,10 @@ function TierAudit({
                   * period, never by the row's position in this sparse list. */}
                 {tier.shares_by_period.map((row) => (
                   <tr key={row.period} data-period={row.period}>
-                    <th scope="row">{periodLabel(row.period)}</th>
-                    <td data-field="tier_amount">
+                    <th scope="row" className="partnership-audit-period">
+                      {periodLabel(row.period)}
+                    </th>
+                    <td className="partnership-audit-figure" data-field="tier_amount">
                       <Figure
                         value={
                           tier.amounts[row.period] === undefined
@@ -760,7 +768,7 @@ function TierAudit({
                         reason={null}
                       />
                     </td>
-                    <td>
+                    <td className="partnership-audit-shares">
                       <ul className="partnership-share-list">
                         {row.shares.map((share) => (
                           <li key={share.partner_id}>
@@ -790,20 +798,36 @@ function TierAudit({
               >
                 <h6 className="partnership-audit-subtitle">{`Hurdle Account: ${label}`}</h6>
                 <div className="table-scroll">
-                  <table className="data-table partnership-table">
+                  <table className="data-table partnership-table partnership-audit-table">
                     <caption className="visually-hidden">
                       {`${tierLabel(tier.tier_id, tierNames)}: the ${label} account by period`}
                     </caption>
                     <thead>
                       <tr>
-                        <th scope="col">Period</th>
-                        <th scope="col">Opening Balance</th>
-                        <th scope="col">Accrual</th>
-                        <th scope="col">Subject Contributions</th>
-                        <th scope="col">Distributions From Tier</th>
-                        <th scope="col">Closing Balance</th>
-                        <th scope="col">Satisfied</th>
-                        <th scope="col">Distribution Order</th>
+                        <th scope="col" className="partnership-audit-period">
+                          Period
+                        </th>
+                        <th scope="col" className="partnership-audit-figure">
+                          Opening Balance
+                        </th>
+                        <th scope="col" className="partnership-audit-figure">
+                          Accrual
+                        </th>
+                        <th scope="col" className="partnership-audit-figure">
+                          Subject Contributions
+                        </th>
+                        <th scope="col" className="partnership-audit-figure">
+                          Distributions From Tier
+                        </th>
+                        <th scope="col" className="partnership-audit-figure">
+                          Closing Balance
+                        </th>
+                        <th scope="col" className="partnership-audit-status">
+                          Satisfied
+                        </th>
+                        <th scope="col" className="partnership-audit-text">
+                          Distribution Order
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -813,14 +837,18 @@ function TierAudit({
                           data-condition={record.condition_id}
                           data-period={record.period}
                         >
-                          <th scope="row">{periodLabel(record.period)}</th>
-                          <td>{formatCurrency(record.opening_balance)}</td>
-                          <td>{formatCurrency(record.accrual)}</td>
-                          <td>{formatCurrency(record.subject_contributions)}</td>
-                          <td>{formatCurrency(record.subject_distributions_from_tier)}</td>
-                          <td>{formatCurrency(record.closing_balance)}</td>
-                          <td>{record.satisfied_at_close ? 'Yes' : 'No'}</td>
-                          <td>
+                          <th scope="row" className="partnership-audit-period">
+                            {periodLabel(record.period)}
+                          </th>
+                          <td className="partnership-audit-figure">{formatCurrency(record.opening_balance)}</td>
+                          <td className="partnership-audit-figure">{formatCurrency(record.accrual)}</td>
+                          <td className="partnership-audit-figure">{formatCurrency(record.subject_contributions)}</td>
+                          <td className="partnership-audit-figure">
+                            {formatCurrency(record.subject_distributions_from_tier)}
+                          </td>
+                          <td className="partnership-audit-figure">{formatCurrency(record.closing_balance)}</td>
+                          <td className="partnership-audit-status">{record.satisfied_at_close ? 'Yes' : 'No'}</td>
+                          <td className="partnership-audit-text">
                             {record.simple_distribution_order === null
                               ? NOT_AVAILABLE
                               : SIMPLE_ORDER_LABELS[record.simple_distribution_order]}
@@ -838,31 +866,51 @@ function TierAudit({
             <div className="partnership-audit-condition">
               <h6 className="partnership-audit-subtitle">Catch-Up Account</h6>
               <div className="table-scroll">
-                <table className="data-table partnership-table">
+                <table className="data-table partnership-table partnership-audit-table">
                   <caption className="visually-hidden">
                     {`${tierLabel(tier.tier_id, tierNames)}: the catch-up account by period`}
                   </caption>
                   <thead>
                     <tr>
-                      <th scope="col">Period</th>
-                      <th scope="col">Partnership Profit at Entry</th>
-                      <th scope="col">Recipient Profit at Entry</th>
-                      <th scope="col">Profit Domain Open</th>
-                      <th scope="col">Capacity at Entry</th>
-                      <th scope="col">Paid</th>
-                      <th scope="col">Caught Up</th>
+                      <th scope="col" className="partnership-audit-period">
+                        Period
+                      </th>
+                      <th scope="col" className="partnership-audit-figure">
+                        Partnership Profit at Entry
+                      </th>
+                      <th scope="col" className="partnership-audit-figure">
+                        Recipient Profit at Entry
+                      </th>
+                      <th scope="col" className="partnership-audit-status">
+                        Profit Domain Open
+                      </th>
+                      <th scope="col" className="partnership-audit-figure">
+                        Capacity at Entry
+                      </th>
+                      <th scope="col" className="partnership-audit-figure">
+                        Paid
+                      </th>
+                      <th scope="col" className="partnership-audit-status">
+                        Caught Up
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {tier.catch_up_records.map((record) => (
                       <tr key={record.period}>
-                        <th scope="row">{periodLabel(record.period)}</th>
-                        <td>{formatCurrency(record.partnership_profit_at_entry)}</td>
-                        <td>{formatCurrency(record.recipient_profit_at_entry)}</td>
-                        <td>{record.profit_domain_open ? 'Yes' : 'No'}</td>
-                        <td>{formatCurrency(record.capacity_at_entry)}</td>
-                        <td>{formatCurrency(record.paid)}</td>
-                        <td>{record.caught_up ? 'Yes' : 'No'}</td>
+                        <th scope="row" className="partnership-audit-period">
+                          {periodLabel(record.period)}
+                        </th>
+                        <td className="partnership-audit-figure">
+                          {formatCurrency(record.partnership_profit_at_entry)}
+                        </td>
+                        <td className="partnership-audit-figure">
+                          {formatCurrency(record.recipient_profit_at_entry)}
+                        </td>
+                        <td className="partnership-audit-status">{record.profit_domain_open ? 'Yes' : 'No'}</td>
+                        <td className="partnership-audit-figure">{formatCurrency(record.capacity_at_entry)}</td>
+                        <td className="partnership-audit-figure">{formatCurrency(record.paid)}</td>
+                        <td className="partnership-audit-status">{record.caught_up ? 'Yes' : 'No'}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -724,7 +724,7 @@ describe('the Partnership result surface shows only backend figures', () => {
     expect(screen.getByText('$600,000')).toBeTruthy();
     // A hurdle account, named by its kind and terms -- never its opaque id.
     expect(
-      screen.getByRole('heading', { name: 'Hurdle Account: IRR Condition · 8.00% Simple' }),
+      screen.getByRole('heading', { name: 'Hurdle Account: IRR Condition · 8.00% Simple · Accrued Return First' }),
     ).toBeTruthy();
     expect(screen.queryByText('cond-1')).toBeNull();
     expect(screen.getByText('Accrued Return First')).toBeTruthy();

@@ -427,7 +427,7 @@ describe('the Tier Audit names hurdle conditions, never by their opaque id', () 
     const labels = conditionAuditLabels(partnershipWith([IRR_CONDITION, higher]))['tier-1'];
     expect(labels).toEqual({
       'tier-1-condition-1': 'IRR Condition · 8.00% Annual Compound',
-      'tier-1-condition-2': 'IRR Condition · 12.00% Simple',
+      'tier-1-condition-2': 'IRR Condition · 12.00% Simple · Capital First',
     });
     renderAudit(
       partnershipWith([IRR_CONDITION, higher]),
@@ -436,7 +436,46 @@ describe('the Tier Audit names hurdle conditions, never by their opaque id', () 
     expect(
       screen.getByRole('heading', { name: 'Hurdle Account: IRR Condition · 8.00% Annual Compound' }),
     ).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Hurdle Account: IRR Condition · 12.00% Simple' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Hurdle Account: IRR Condition · 12.00% Simple · Capital First' })).toBeTruthy();
+  });
+
+  it('tells apart two SIMPLE conditions that differ only by distribution order', () => {
+    // Same rate, same accrual convention: the distribution order is the only
+    // economic difference, so it must be in the heading (Section 8.2).
+    const accruedFirst: HurdleCondition = {
+      kind: 'irr',
+      condition_id: 'tier-1-condition-1',
+      rate: 0.09,
+      accrual_convention: 'simple',
+      simple_distribution_order: 'accrued_return_first',
+    };
+    const capitalFirst: HurdleCondition = {
+      ...accruedFirst,
+      condition_id: 'tier-1-condition-2',
+      simple_distribution_order: 'capital_first',
+    };
+    const partnership = partnershipWith([accruedFirst, capitalFirst]);
+    const { container } = renderAudit(
+      partnership,
+      resultWith([accruedFirst.condition_id, capitalFirst.condition_id]),
+    );
+    const headings = [...container.querySelectorAll('.partnership-audit-condition h6')].map(
+      (heading) => heading.textContent,
+    );
+    expect(headings).toEqual([
+      'Hurdle Account: IRR Condition · 9.00% Simple · Accrued Return First',
+      'Hurdle Account: IRR Condition · 9.00% Simple · Capital First',
+    ]);
+    expect(new Set(headings).size).toBe(2);
+    // Distinguished by terms, not by an ordinal or an id.
+    expect(container.textContent).not.toMatch(/condition-\d/);
+    expect(container.textContent).not.toMatch(/\(\d of \d\)/);
+  });
+
+  it('states no distribution order for an Annual Compound condition', () => {
+    const labels = conditionAuditLabels(partnershipWith([IRR_CONDITION]))['tier-1'];
+    expect(labels['tier-1-condition-1']).toBe('IRR Condition · 8.00% Annual Compound');
+    expect(labels['tier-1-condition-1']).not.toMatch(/First/);
   });
 
   it('still tells apart two conditions that state identical terms', () => {
@@ -470,5 +509,101 @@ describe('the Tier Audit names hurdle conditions, never by their opaque id', () 
     renderAudit(partnershipWith([relabelled]), resultWith([IRR_CONDITION.condition_id]));
     expect(screen.getByRole('heading', { name: 'Hurdle Account: MOIC Condition · 2.00x' })).toBeTruthy();
     expect(screen.queryByText(/IRR Condition/)).toBeNull();
+  });
+});
+
+// =============================================================================
+// 3. The audit tables state each column's role, and only they are restyled
+// =============================================================================
+
+const ROLE_CLASSES = [
+  'partnership-audit-period',
+  'partnership-audit-figure',
+  'partnership-audit-status',
+  'partnership-audit-text',
+  'partnership-audit-shares',
+];
+
+function roleOf(cell: Element): string | null {
+  const roles = ROLE_CLASSES.filter((name) => cell.classList.contains(name));
+  return roles.length === 1 ? roles[0] : null;
+}
+
+describe('the Tier Audit tables align by stated column role', () => {
+  function withCatchUpRecord(): PartnershipResult {
+    const base = resultWith([IRR_CONDITION.condition_id]);
+    return {
+      ...base,
+      tiers: (base.tiers ?? []).map((entry) =>
+        entry.tier_id === 'tier-2'
+          ? {
+              ...entry,
+              catch_up_records: [
+                {
+                  period: 5,
+                  partnership_profit_at_entry: 1000,
+                  recipient_profit_at_entry: 100,
+                  profit_domain_open: true,
+                  capacity_at_entry: 250,
+                  paid: 250,
+                  partnership_profit_at_exit: 1250,
+                  recipient_profit_at_exit: 250,
+                  caught_up: true,
+                },
+              ],
+            }
+          : entry,
+      ),
+    };
+  }
+
+  it('gives every header and cell exactly one role, the same down each column', () => {
+    const { container } = renderAudit(partnershipWith([IRR_CONDITION]), withCatchUpRecord());
+    const tables = [...container.querySelectorAll('table.partnership-audit-table')];
+    // Five: one Distributions by Period table per tier, one hurdle account and
+    // one catch-up account.
+    expect(tables).toHaveLength(5);
+    for (const table of tables) {
+      const header = [...table.querySelectorAll('thead tr > *')].map(roleOf);
+      expect(header).not.toContain(null);
+      expect(header[0]).toBe('partnership-audit-period');
+      for (const row of table.querySelectorAll('tbody tr')) {
+        expect([...row.children].map(roleOf)).toEqual(header);
+      }
+    }
+  });
+
+  it('marks every currency figure as a figure, and every word as text or status', () => {
+    const { container } = renderAudit(partnershipWith([IRR_CONDITION]), withCatchUpRecord());
+    for (const cell of container.querySelectorAll('table.partnership-audit-table tbody td')) {
+      const text = cell.textContent ?? '';
+      if (/^-?\$[\d,]+$/.test(text)) {
+        expect(roleOf(cell)).toBe('partnership-audit-figure');
+      }
+      if (text === 'Yes' || text === 'No') {
+        expect(roleOf(cell)).toBe('partnership-audit-status');
+      }
+    }
+    const hurdle = container.querySelector('.partnership-audit-condition table') as HTMLElement;
+    expect(
+      [...hurdle.querySelectorAll('thead th')].map((cell) => [cell.textContent?.trim(), roleOf(cell)]),
+    ).toEqual([
+      ['Period', 'partnership-audit-period'],
+      ['Opening Balance', 'partnership-audit-figure'],
+      ['Accrual', 'partnership-audit-figure'],
+      ['Subject Contributions', 'partnership-audit-figure'],
+      ['Distributions From Tier', 'partnership-audit-figure'],
+      ['Closing Balance', 'partnership-audit-figure'],
+      ['Satisfied', 'partnership-audit-status'],
+      ['Distribution Order', 'partnership-audit-text'],
+    ]);
+  });
+
+  it('restyles only the audit: no other Partnership result table carries the class', () => {
+    const { container } = renderAudit(partnershipWith([IRR_CONDITION]), withCatchUpRecord());
+    for (const table of container.querySelectorAll('table')) {
+      const inAudit = table.closest('article.partnership-tier') !== null;
+      expect(table.classList.contains('partnership-audit-table')).toBe(inAudit);
+    }
   });
 });

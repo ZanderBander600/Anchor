@@ -7309,6 +7309,66 @@ body {
   margin-top: var(--sp-2);
 }
 
+/* The Tier Audit's tables. Scoped to `.partnership-audit-table`, which only
+   the audit's three account tables carry -- the other Partnership result
+   tables and every AM1 table are untouched. Each header and cell states its
+   column's role in a class, so alignment never depends on column position:
+   figures right-aligned in tabular numerals, the period and the words (a
+   status, a distribution order, the applied shares) on the left. The treatment
+   -- a muted uppercase header band, a firmer rule beneath it and hairline row
+   separators -- is the one the Asset Management lists use. A wide account
+   scrolls inside its own `.table-scroll`; no column is hidden or shortened. */
+.partnership-audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.partnership-audit-table th,
+.partnership-audit-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.partnership-audit-table thead th {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.partnership-audit-table tbody th {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.partnership-audit-table .partnership-audit-figure {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.partnership-audit-table .partnership-audit-period,
+.partnership-audit-table .partnership-audit-status,
+.partnership-audit-table .partnership-audit-text,
+.partnership-audit-table .partnership-audit-shares {
+  text-align: left;
+}
+
+/* The applied shares are a short list of partner and percentage. The list
+   sizes to its content rather than stretching across a wide column, so each
+   percentage stays beside its partner, right-aligned in its own short run. */
+.partnership-audit-table .partnership-audit-shares .partnership-share-list {
+  display: inline-block;
+  min-width: 12rem;
+  vertical-align: top;
+}
+
 .partnership-share-list {
   margin: 0;
   padding: 0;

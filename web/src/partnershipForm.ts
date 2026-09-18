@@ -129,11 +129,18 @@ export const SIMPLE_ORDER_LABELS: Readonly<Record<SimpleDistributionOrder, strin
 };
 
 /** One authored condition described by its kind and its own stated terms:
- * "IRR Condition · 8.00% Annual Compound", "MOIC Condition · 1.50x". The terms
- * are the analyst's own inputs, formatted for display; nothing is derived. */
+ * "IRR Condition · 8.00% Annual Compound", "IRR Condition · 9.00% Simple ·
+ * Accrued Return First", "MOIC Condition · 1.50x". A SIMPLE condition's
+ * distribution order is part of its economics -- two SIMPLE conditions at one
+ * rate differ by it alone -- so it is stated whenever the contract states one,
+ * and never invented for a convention that has none. The terms are the
+ * analyst's own inputs, formatted for display; nothing is derived. */
 function conditionTermsLabel(condition: HurdleCondition): string {
   if (condition.kind === 'irr') {
-    return `${conditionLabel('irr')} · ${formatPercent(condition.rate)} ${ACCRUAL_CONVENTION_LABELS[condition.accrual_convention]}`;
+    const rateAndAccrual = `${conditionLabel('irr')} · ${formatPercent(condition.rate)} ${ACCRUAL_CONVENTION_LABELS[condition.accrual_convention]}`;
+    return condition.simple_distribution_order === null
+      ? rateAndAccrual
+      : `${rateAndAccrual} · ${SIMPLE_ORDER_LABELS[condition.simple_distribution_order]}`;
   }
   return `${conditionLabel('moic')} · ${formatMultiple(condition.multiple)}`;
 }

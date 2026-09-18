@@ -688,3 +688,40 @@ Deletion-extension verification on 2026-09-18:
 
 P7.9 final human acceptance remains pending and is unaffected by this gate.
 P7.10 has not started.
+
+## 13. Closeout QA correction record
+
+Hands-on browser QA of the merged AM1 product found presentation defects. The
+P7.9 / AM1 closeout branch `fix/p7-9-closeout-and-am1-qa-corrections` (from
+`main` at `c637d1e`) corrects them. **AM1 is not accepted by this record**: the
+correction awaits independent review, merge and hands-on human acceptance.
+
+- **List alignment.** The Managed Assets and Monthly Reporting headers
+  inherited the browser's centred `th` default above left-aligned values. Each
+  column now states one alignment class on its header and its cells. The
+  classes are scoped to `.am-list-table`, so the monthly statement's
+  right-aligned figures are unchanged.
+- **Accessible action headers.** The empty action-column header is now a
+  visually hidden "Actions".
+- **Mobile header actions.** At 390px the asset header measured 461px wide and
+  clipped "Edit Actuals". The actions now wrap, and they are ordered by the
+  operating workflow: Edit Actuals (or Add Monthly Report), View Acquisition
+  Basis, then Delete Asset. Delete stays visibly destructive, and its inline
+  confirmation, warning, Cancel focus and focus return are unchanged.
+- **Hidden trend-table overflow.** Monthly Performance measured 411px at 390px
+  because the NOI trend's visually hidden data table still laid out at full
+  width. A table sizes to its content regardless of its `width`, so the hiding
+  class moved to a wrapping element. The table and its figures are still
+  available to assistive technology.
+- **Acquisition date.** The Overview shows the acquisition date as the rest of
+  Asset Management does ("Sep 2026") rather than the raw ISO string.
+- **Duplicate acquisition-basis action.** "View Acquisition Basis" appears
+  once, in the asset header, where both tabs can reach it. The Overview's
+  provenance panel keeps its explanation.
+- **Stale guards.** The AM1 production ledger measured `63c2ac0` against the
+  working tree. It is pinned to AM1's committed range `63c2ac0..366b31b` (the
+  feature and its deletion extension). The D4.6B G37 frontend allowlist records
+  AM1's ten production modules by name.
+- **No calculation, schema or lifecycle change.** `performance.py`, the v13
+  schema, the budget freeze, the deletion lifecycle and every API route are
+  unchanged.
