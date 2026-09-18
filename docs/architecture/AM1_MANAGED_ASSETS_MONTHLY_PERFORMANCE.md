@@ -533,7 +533,7 @@ production seed and no database is tracked.
 
 ## 10. Architecture controls
 
-`tests/test_am1_architecture.py` (58 guards) proves:
+`tests/test_am1_architecture.py` (59 guards) proves:
 
 - the production ledger, backend and frontend;
 - no AM1 financial arithmetic in TypeScript, and no local favorability
@@ -560,6 +560,61 @@ production seed and no database is tracked.
 expense direction, giving CapEx a direction, returning zero instead of
 unavailable, folding CapEx into operating expenses, summing occupancy year to
 date, and removing the budget conflict each produce a visibly different result.
+
+---
+
+## 10.1 Independent-review corrections
+
+Five defects found by independent review after the initial implementation, each
+now carrying a regression test.
+
+**Stale results under the wrong asset or month.** `useAssetPerformance` retained
+the previous asset's reports and performance across a change of asset, and the
+previous month's performance across a change of month — so Asset A's financials
+could render beneath Asset B's header, or March's while February was selected.
+Every returned value is now *derived from the key that produced it*: each request
+stores its outcome tagged with the asset (and month) it was made for, and the
+hook returns it only while that tag matches what is on screen. Stale rendering is
+no longer a race to win but a state the model cannot represent. The shared
+`isLoading` boolean, which either request could clear for both, is replaced by
+two derived statuses (`reportsStatus`, `performanceStatus`); "loading" now means
+"no settled outcome for the current key", which is true synchronously from the
+moment the key changes. While reports are unresolved the workspace says it is
+loading rather than asserting "No reporting yet", which is a claim about the
+asset that is not yet known to be true.
+
+**An echoed budget was compared before it was validated.**
+`update_monthly_report_actuals` validated the frozen budget and the actuals but
+not a caller-supplied `budget`, then called `float()` on each of its fields — so
+an echoed `payroll: null` raised an uncaught `TypeError` and surfaced as a 500
+for what is plainly a bad request. The supplied budget is now validated through
+the same AM1 contract before any comparison reads it, producing the structured
+422 and writing nothing. A valid-but-changed budget remains the typed
+`budget_immutable` 409, and an identical valid budget remains accepted.
+
+**Exact-plan occupancy claimed a direction.** An occupancy variance assessed
+`on_plan` rendered "0.0 pts below plan · On Plan" — a direction that does not
+exist, contradicting the verdict beside it. The percent case was formatted at the
+call site and skipped the on-plan branch; both units now go through
+`summaryDelta`, which returns plain "On plan" with no magnitude, no direction
+word and no direction marker.
+
+**The Create Managed Asset form could carry a draft between Deals.** It
+initialized its name from `dealName` once, so a draft authored for Deal A could
+remain and be submitted for Deal B. The form's open-state is now the Deal's
+identity rather than a boolean, and the panel is keyed by it — navigating to
+another Deal unmounts the form and discards the draft, deterministically during
+render and with no set-state-in-effect.
+
+**Internal and misleading provenance.** The raw `acquisition_fingerprint` was
+rendered to the analyst; it stays on the contract and the wire, where it is what
+actually freezes the basis, but a digest is not something an asset manager can
+act on, and showing it invites comparing two hashes by eye. "View Acquisition
+Basis" remains the human-facing provenance action. The month bar's "Approved
+Acquisition Plan · captured <acquisition date>" was wrong twice — that date is
+not when the basis was captured, and a monthly budget is never derived from an
+acquisition plan — and now reads "Monthly budgets are entered explicitly and
+lock after first save."
 
 ---
 

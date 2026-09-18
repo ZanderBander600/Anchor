@@ -8469,8 +8469,19 @@ def update_monthly_report_actuals(
             raise MonthlyReportNotFoundError((managed_asset_id, month))
 
         frozen = _figures_from_row(row, "budget")
+        # When the caller echoes a budget back, *that* is the budget validated
+        # here -- not the frozen one. A malformed echoed field is the caller's
+        # error to fix, so it must be refused as a structured 422 before the
+        # comparison below tries to read it as a number: ``float(None)`` is a
+        # TypeError, which would surface as a 500 for what is plainly a bad
+        # request. The frozen budget is valid by construction (``create_monthly_report``
+        # validated it, and no statement in this module can change it), so it is
+        # validated only when there is no supplied budget to check instead.
         require_valid_monthly_report(
-            reporting_month=month, budget=frozen, actual=actual, commentary=commentary
+            reporting_month=month,
+            budget=frozen if budget is None else budget,
+            actual=actual,
+            commentary=commentary,
         )
         if budget is not None:
             changed = tuple(

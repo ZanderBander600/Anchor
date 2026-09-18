@@ -65,11 +65,13 @@ function SummaryCard({ label, value, planLabel, line }: SummaryCardProps) {
         <p className={`am-card-delta ${assessmentClass(line.assessment)}`}>
           <DirectionMark line={line} />
           <span>
-            {line.unit === 'percent'
-              ? `${formatPoints(line.variance_points)} ${line.variance > 0 ? 'above' : 'below'} plan`
-              : summaryDelta(line)}
-            {' · '}
-            {ASSESSMENT_LABELS[line.assessment]}
+            {summaryDelta(line)}
+            {line.assessment !== 'on_plan' && (
+              <>
+                {' · '}
+                {ASSESSMENT_LABELS[line.assessment]}
+              </>
+            )}
           </span>
         </p>
       )}
@@ -79,10 +81,19 @@ function SummaryCard({ label, value, planLabel, line }: SummaryCardProps) {
 
 /** A summary card's one-line delta, in words. Reads "over plan" for a line
  * where more is worse and "above plan" where more is better, so the phrasing
- * never implies a verdict opposite to the assessment beside it. */
+ * never implies a verdict opposite to the assessment beside it.
+ *
+ * **Both units go through here.** The percent case used to be formatted inline
+ * at the call site, which skipped the on-plan check below and rendered an
+ * occupancy that landed exactly on plan as "0.0 pts below plan" -- a direction
+ * that does not exist, contradicting the "On Plan" verdict printed beside it. */
 function summaryDelta(line: LineVariance): string {
   if (line.assessment === 'on_plan') {
+    // Exactly on plan has no direction, and needs no magnitude.
     return 'On plan';
+  }
+  if (line.unit === 'percent') {
+    return `${formatPoints(line.variance_points)} ${line.variance > 0 ? 'above' : 'below'} plan`;
   }
   const magnitude = formatMoney(Math.abs(line.variance));
   if (line.variance === 0) {

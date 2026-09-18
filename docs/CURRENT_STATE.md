@@ -9,8 +9,9 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `3f23ba4` (PR #36, P7.9 Stage 3 Partnership
-  product UI, Partner Decision Matrix integration and browser QA).
+- Accepted baseline: `main` at `63c2ac0` (PR #37, Acquisition Loans table
+  header alignment, merged on top of PR #36's P7.9 Stage 3 Partnership product
+  UI, Partner Decision Matrix integration and browser QA).
 - Last accepted financial implementation merge: `70b92e2` (PR #34, P7.9
   Stage 1 deterministic contracts and engine).
 - Active gate: **P7.9 Partnership Waterfalls + Investor Returns**. The ratified
@@ -123,6 +124,11 @@ sub-gate.
 - P7.9 ratified contract (Stages 1 and 2 accepted; Stage 3 merged, with final
   hands-on human acceptance pending):
   `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`
+- AM1 Managed Assets + Monthly Performance:
+  `docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md` --
+  **implemented on `feature/am1-managed-assets-monthly-performance`, pending
+  human acceptance.** Not pushed, not merged, not accepted. It is an
+  independent post-acquisition feature and is not P7.10.
 
 ## Historical-Document Rule
 

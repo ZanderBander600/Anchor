@@ -460,6 +460,108 @@ def test_a_refused_budget_change_leaves_the_actuals_untouched_too(db: Path) -> N
     assert reread.actual == am.MARCH_ACTUAL
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [None, "6000", float("nan"), float("inf"), -1.0, True],
+    ids=["null", "string", "nan", "inf", "negative", "bool"],
+)
+def test_a_malformed_echoed_budget_is_a_validation_error_not_a_crash(db: Path, bad) -> None:
+    """A caller that echoes a budget back may echo it badly. That is a bad
+    request, not an internal failure: before this was validated, the field-by-
+    field comparison called ``float(None)`` and raised an uncaught TypeError."""
+
+    _, asset = _asset(db)
+    store.create_monthly_report(
+        managed_asset_id=asset.id,
+        reporting_month=am.MARCH,
+        budget=am.MARCH_BUDGET,
+        actual=am.MARCH_ACTUAL,
+        commentary=am.MARCH_COMMENTARY,
+        db_path=db,
+    )
+    with pytest.raises(AssetReportValidationError) as raised:
+        store.update_monthly_report_actuals(
+            managed_asset_id=asset.id,
+            reporting_month=am.MARCH,
+            actual=am.MARCH_ACTUAL,
+            budget=am.figures(payroll=bad),
+            db_path=db,
+        )
+    assert [issue.field for issue in raised.value.issues] == ["payroll"]
+    assert raised.value.issues[0].scope == "budget"
+
+
+def test_a_malformed_echoed_budget_is_never_the_frozen_budget_conflict(db: Path) -> None:
+    """Shape and authority are different refusals. A malformed echoed budget is
+    the caller's to fix; it must not be reported as "this is no longer yours to
+    change"."""
+
+    _, asset = _asset(db)
+    store.create_monthly_report(
+        managed_asset_id=asset.id,
+        reporting_month=am.MARCH,
+        budget=am.MARCH_BUDGET,
+        actual=am.MARCH_ACTUAL,
+        db_path=db,
+    )
+    with pytest.raises(AssetReportValidationError) as raised:
+        store.update_monthly_report_actuals(
+            managed_asset_id=asset.id,
+            reporting_month=am.MARCH,
+            actual=am.MARCH_ACTUAL,
+            budget=am.figures(payroll=None),
+            db_path=db,
+        )
+    assert not isinstance(raised.value, BudgetImmutableError)
+
+
+def test_a_malformed_echoed_budget_writes_nothing(db: Path) -> None:
+    _, asset = _asset(db)
+    before = store.create_monthly_report(
+        managed_asset_id=asset.id,
+        reporting_month=am.MARCH,
+        budget=am.MARCH_BUDGET,
+        actual=am.MARCH_ACTUAL,
+        commentary=am.MARCH_COMMENTARY,
+        db_path=db,
+    )
+    with pytest.raises(AssetReportValidationError):
+        store.update_monthly_report_actuals(
+            managed_asset_id=asset.id,
+            reporting_month=am.MARCH,
+            actual=am.figures(utilities=99_000.0),
+            commentary="Should not be stored.",
+            budget=am.figures(payroll=None),
+            db_path=db,
+        )
+    after = store.get_monthly_report(asset.id, am.MARCH, db_path=db)
+    assert after.budget == before.budget
+    assert after.actual == before.actual
+    assert after.commentary == before.commentary
+
+
+def test_a_malformed_actual_is_still_refused_when_a_budget_is_echoed(db: Path) -> None:
+    """Validating the supplied budget must not stop the actuals being checked."""
+
+    _, asset = _asset(db)
+    store.create_monthly_report(
+        managed_asset_id=asset.id,
+        reporting_month=am.MARCH,
+        budget=am.MARCH_BUDGET,
+        actual=am.MARCH_ACTUAL,
+        db_path=db,
+    )
+    with pytest.raises(AssetReportValidationError) as raised:
+        store.update_monthly_report_actuals(
+            managed_asset_id=asset.id,
+            reporting_month=am.MARCH,
+            actual=am.figures(utilities=-1.0),
+            budget=am.MARCH_BUDGET,
+            db_path=db,
+        )
+    assert [(issue.scope, issue.field) for issue in raised.value.issues] == [("actual", "utilities")]
+
+
 def test_resubmitting_the_identical_budget_is_not_a_conflict(db: Path) -> None:
     _, asset = _asset(db)
     store.create_monthly_report(

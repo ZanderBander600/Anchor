@@ -160,12 +160,12 @@ export function ManagedAssetWorkspace({
                 was captured when the asset was created; later edits to that deal do not
                 change this asset, its approved budgets or its saved reports.
               </p>
-              <dl className="am-detail-list">
-                <div>
-                  <dt>Acquisition Fingerprint</dt>
-                  <dd className="am-fingerprint">{asset.acquisition_fingerprint}</dd>
-                </div>
-              </dl>
+              {/* The acquisition fingerprint stays on the contract and in the
+                * wire response, where it is what actually freezes the basis --
+                * but it is an internal digest, not something an asset manager
+                * can act on. "View Acquisition Basis" is the human-facing
+                * provenance action; a raw hash on screen is noise that invites
+                * someone to compare two strings by eye. */}
               <button
                 type="button"
                 className="am-quiet-button"
@@ -193,7 +193,16 @@ export function ManagedAssetWorkspace({
                   error={saveError}
                 />
               </section>
-            ) : state.reports.length === 0 ? (
+            ) : state.reportsStatus === 'loading' ? (
+              // Honest while unresolved: "No reporting yet" is a statement
+              // about this asset, and we do not yet know whether it is true.
+              <section className="am-panel">
+                <h3 className="am-panel-title">Loading monthly reports</h3>
+                <p className="am-empty" role="status">
+                  Loading this asset&rsquo;s reporting history&hellip;
+                </p>
+              </section>
+            ) : state.reportsStatus === 'ready' && state.reports.length === 0 ? (
               <section className="am-panel">
                 <h3 className="am-panel-title">No reporting yet</h3>
                 <p className="am-empty">
@@ -226,8 +235,14 @@ export function ManagedAssetWorkspace({
                       ))}
                     </select>
                   </label>
+                  {/* Plain language about how budgets actually work here. The
+                    * previous wording named an "Approved Acquisition Plan"
+                    * captured on the acquisition date, which was wrong twice:
+                    * the acquisition date is not when the basis was captured,
+                    * and a monthly budget is never derived from an acquisition
+                    * plan -- it is typed in and then frozen. */}
                   <p className="am-plan-note">
-                    Approved Acquisition Plan · captured {formatAcquiredOn(asset.acquisition_date)}
+                    Monthly budgets are entered explicitly and lock after first save.
                   </p>
                   <button
                     type="button"
@@ -240,6 +255,15 @@ export function ManagedAssetWorkspace({
                     Add Month
                   </button>
                 </div>
+
+                {state.performanceStatus === 'loading' && (
+                  <section className="am-panel">
+                    <p className="am-empty" role="status">
+                      Loading {state.selectedMonth === null ? 'monthly' : formatMonth(state.selectedMonth)}{' '}
+                      performance&hellip;
+                    </p>
+                  </section>
+                )}
 
                 {state.performance !== null && (
                   <MonthlyPerformancePanel

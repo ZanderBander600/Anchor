@@ -12,6 +12,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { AssetManagementShell } from './components/AssetManagementShell';
+import { CreateManagedAssetPanel } from './components/CreateManagedAssetPanel';
 import { MonthlyPerformancePanel } from './components/MonthlyPerformancePanel';
 import { MonthlyReportEditor } from './components/MonthlyReportEditor';
 import { ManagedAssetWorkspace } from './components/ManagedAssetWorkspace';
@@ -30,6 +31,7 @@ import {
   formatRate,
   formatVariancePct,
 } from './assetManagementFormat';
+import type { AssetPerformanceResponse } from './assetManagementTypes';
 import type { AssetPerformanceState } from './useManagedAssets';
 
 // The repository's convention: Testing Library does not auto-clean here, and a
@@ -39,9 +41,10 @@ afterEach(cleanup);
 function performanceState(overrides: Partial<AssetPerformanceState> = {}): AssetPerformanceState {
   return {
     reports: [DEMO_REPORT],
+    reportsStatus: 'ready',
     performance: DEMO_PERFORMANCE,
+    performanceStatus: 'ready',
     selectedMonth: '2027-03-01',
-    isLoading: false,
     error: null,
     selectMonth: vi.fn(),
     reload: vi.fn(),
@@ -180,6 +183,46 @@ describe('Monthly Performance', () => {
     for (const word of ['Unfavorable', 'Favorable', 'On Plan', 'Neutral']) {
       expect(screen.getAllByText(word).length).toBeGreaterThan(0);
     }
+  });
+
+  it('says only "On plan" when occupancy lands exactly on plan', () => {
+    // "0.0 pts below plan" asserts a direction that does not exist, and
+    // contradicted the "On Plan" verdict printed beside it.
+    const onPlan: AssetPerformanceResponse = {
+      ...DEMO_PERFORMANCE,
+      result: {
+        ...DEMO_PERFORMANCE.result,
+        monthly: {
+          ...DEMO_PERFORMANCE.result.monthly,
+          lines: DEMO_PERFORMANCE.result.monthly.lines.map((line) =>
+            line.line === 'occupancy'
+              ? {
+                  ...line,
+                  actual: line.budget,
+                  variance: 0,
+                  variance_pct: 0,
+                  variance_points: 0,
+                  assessment: 'on_plan' as const,
+                }
+              : line,
+          ),
+        },
+      },
+    };
+    render(
+      <MonthlyPerformancePanel
+        performance={onPlan}
+        view="monthly"
+        onViewChange={vi.fn()}
+        onEditActuals={vi.fn()}
+      />,
+    );
+    const card = screen.getByRole('region', { name: 'Occupancy' });
+    const delta = card.querySelector('.am-card-delta');
+    expect(delta?.textContent?.trim()).toBe('On plan');
+    expect(card.textContent).not.toMatch(/below plan|above plan|pts/i);
+    // The direction marker is a claim about direction, and there is none.
+    expect(card.querySelector('.am-direction')).toBeNull();
   });
 
   it('lists the deterministic attention items in words', () => {
@@ -461,7 +504,30 @@ describe('Managed asset workspace', () => {
     expect(
       screen.getByText(/later edits to that deal do not change this asset/i),
     ).toBeTruthy();
-    expect(screen.getByText(DEMO_ASSET.acquisition_fingerprint)).toBeTruthy();
+  });
+
+  it('never renders the raw acquisition fingerprint', async () => {
+    // It stays on the contract and the wire, where it is what actually freezes
+    // the basis -- but it is an internal digest, not something an asset manager
+    // can act on. "View Acquisition Basis" is the human-facing provenance.
+    renderWorkspace();
+    await userEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(document.body.textContent).not.toContain(DEMO_ASSET.acquisition_fingerprint);
+    expect(screen.queryByText(/Acquisition Fingerprint/i)).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'View Acquisition Basis' }).length)
+      .toBeGreaterThan(0);
+  });
+
+  it('describes how budgets actually work, not a plan they are not derived from', () => {
+    // The old note named an "Approved Acquisition Plan · captured <acquisition
+    // date>", which was wrong twice over: that date is not when the basis was
+    // captured, and a monthly budget is never derived from an acquisition plan.
+    renderWorkspace();
+    expect(
+      screen.getByText('Monthly budgets are entered explicitly and lock after first save.'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Approved Acquisition Plan/i)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/captured Oct 2026/);
   });
 
   it('offers the reporting month picker over the months that have reports', () => {
@@ -501,13 +567,110 @@ describe('Managed asset workspace', () => {
     }
   });
 
+  it('shows an honest loading state instead of claiming no reporting yet', () => {
+    renderWorkspace(
+      performanceState({
+        reports: [],
+        reportsStatus: 'loading',
+        performance: null,
+        performanceStatus: 'idle',
+        selectedMonth: null,
+      }),
+    );
+    expect(screen.queryByText('No reporting yet')).toBeNull();
+    expect(screen.getByText(/Loading this asset.s reporting history/i)).toBeTruthy();
+  });
+
   it('guides the analyst when nothing has been reported yet', () => {
     renderWorkspace(
-      performanceState({ reports: [], performance: null, selectedMonth: null }),
+      performanceState({
+        reports: [],
+        reportsStatus: 'ready',
+        performance: null,
+        performanceStatus: 'idle',
+        selectedMonth: null,
+      }),
     );
     expect(screen.getByText(/budgets are entered explicitly/i)).toBeTruthy();
     // Offered both in the header and in the empty-state panel: an analyst
     // arriving at a blank asset should not have to hunt for the one way in.
     expect(screen.getAllByRole('button', { name: 'Add Monthly Report' })).toHaveLength(2);
+  });
+});
+
+// ===========================================================================
+// The Create Managed Asset form
+// ===========================================================================
+
+describe('Create Managed Asset form', () => {
+  const renderPanel = (dealName: string, key: string, onCreate = vi.fn()) =>
+    render(
+      <CreateManagedAssetPanel
+        key={key}
+        dealName={dealName}
+        isOpen
+        onCancel={vi.fn()}
+        onCreate={onCreate}
+        error={null}
+      />,
+    );
+
+  it('initializes its name from the deal it is opened on', () => {
+    renderPanel('Harbor Point Apartments', 'deal-a');
+    expect((screen.getByLabelText('Asset Name') as HTMLInputElement).value).toBe(
+      'Harbor Point Apartments',
+    );
+  });
+
+  it('does not let one deal inherit another deal’s draft', async () => {
+    // App keys this panel by the active deal's identity, so moving to another
+    // deal remounts it and every field re-initializes. Without that, Deal A's
+    // authored name, dates and market stayed on screen and could be submitted
+    // for Deal B.
+    const view = renderPanel('Harbor Point Apartments', 'deal-a');
+
+    await userEvent.clear(screen.getByLabelText('Asset Name'));
+    await userEvent.type(screen.getByLabelText('Asset Name'), 'Renamed While On Deal A');
+    await userEvent.type(screen.getByLabelText('Property Type (optional)'), 'Multifamily');
+    await userEvent.type(screen.getByLabelText('Market (optional)'), 'Toronto, ON');
+
+    view.rerender(
+      <CreateManagedAssetPanel
+        key="deal-b"
+        dealName="Westlake Industrial"
+        isOpen
+        onCancel={vi.fn()}
+        onCreate={vi.fn()}
+        error={null}
+      />,
+    );
+
+    expect((screen.getByLabelText('Asset Name') as HTMLInputElement).value).toBe(
+      'Westlake Industrial',
+    );
+    expect((screen.getByLabelText('Property Type (optional)') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Market (optional)') as HTMLInputElement).value).toBe('');
+  });
+
+  it('submits the deal it is currently keyed to', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const view = renderPanel('Harbor Point Apartments', 'deal-a');
+    await userEvent.clear(screen.getByLabelText('Asset Name'));
+    await userEvent.type(screen.getByLabelText('Asset Name'), 'Draft For A');
+
+    view.rerender(
+      <CreateManagedAssetPanel
+        key="deal-b"
+        dealName="Westlake Industrial"
+        isOpen
+        onCancel={vi.fn()}
+        onCreate={onCreate}
+        error={null}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Create Managed Asset' }));
+
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(onCreate.mock.calls[0][0].name).toBe('Westlake Industrial');
   });
 });

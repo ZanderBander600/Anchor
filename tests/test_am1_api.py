@@ -307,6 +307,89 @@ def test_echoing_the_identical_budget_is_accepted(client: TestClient, db: Path) 
     assert response.json()["actual"]["payroll"] == 6_100.0
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [None, "6000", True],
+    ids=["null", "string", "bool"],
+)
+def test_a_malformed_echoed_budget_is_a_422_and_never_a_500(
+    client: TestClient, db: Path, bad
+) -> None:
+    """A bad request, not an internal failure. Before the supplied budget was
+    validated, the comparison called ``float(None)`` and the route raised an
+    uncaught TypeError."""
+
+    asset = _create_asset(client, db)
+    _create_report(client, asset["id"])
+    response = client.put(
+        f"/managed-assets/{asset['id']}/reports/2027-03-01",
+        json={
+            "actual": _wire_figures(am.MARCH_ACTUAL),
+            "commentary": None,
+            "budget": {**_wire_figures(am.MARCH_BUDGET), "payroll": bad},
+        },
+    )
+    assert response.status_code == 422, response.text
+    issue = response.json()["detail"][0]
+    assert issue["scope"] == "budget"
+    assert issue["field"] == "payroll"
+
+
+def test_a_malformed_echoed_budget_is_not_reported_as_the_frozen_conflict(
+    client: TestClient, db: Path
+) -> None:
+    """422 says "fix this number"; 409 says "this is not yours to change". A
+    malformed echo is the former."""
+
+    asset = _create_asset(client, db)
+    _create_report(client, asset["id"])
+    response = client.put(
+        f"/managed-assets/{asset['id']}/reports/2027-03-01",
+        json={
+            "actual": _wire_figures(am.MARCH_ACTUAL),
+            "commentary": None,
+            "budget": {**_wire_figures(am.MARCH_BUDGET), "payroll": None},
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["code"] != "budget_immutable"
+
+
+def test_a_malformed_echoed_budget_leaves_the_report_untouched(
+    client: TestClient, db: Path
+) -> None:
+    asset = _create_asset(client, db)
+    before = _create_report(client, asset["id"]).json()
+    client.put(
+        f"/managed-assets/{asset['id']}/reports/2027-03-01",
+        json={
+            "actual": _wire_figures(am.figures(utilities=99_000.0)),
+            "commentary": "Should not be stored.",
+            "budget": {**_wire_figures(am.MARCH_BUDGET), "payroll": None},
+        },
+    )
+    assert client.get(f"/managed-assets/{asset['id']}/reports/2027-03-01").json() == before
+
+
+def test_a_valid_changed_budget_is_still_the_typed_409(client: TestClient, db: Path) -> None:
+    """Validating the echo must not turn an authority refusal into a shape
+    one."""
+
+    asset = _create_asset(client, db)
+    _create_report(client, asset["id"])
+    response = client.put(
+        f"/managed-assets/{asset['id']}/reports/2027-03-01",
+        json={
+            "actual": _wire_figures(am.MARCH_ACTUAL),
+            "commentary": None,
+            "budget": _wire_figures(am.figures(payroll=9_000.0)),
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "budget_immutable"
+    assert response.json()["detail"]["changed_fields"] == ["payroll"]
+
+
 def test_a_refused_budget_change_persists_nothing(client: TestClient, db: Path) -> None:
     asset = _create_asset(client, db)
     before = _create_report(client, asset["id"]).json()

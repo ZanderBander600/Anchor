@@ -1224,8 +1224,14 @@ export default function App() {
   // application-level, above every Deal workspace tab rather than beside them.
   const [surface, setSurface] = useState<'acquisitions' | 'asset-management'>('acquisitions');
   const managedAssets = useManagedAssets();
-  /** Whether the Deal workspace is showing the Create Managed Asset form. */
-  const [isCreatingManagedAsset, setIsCreatingManagedAsset] = useState(false);
+  /** The Deal the Create Managed Asset form is open for, or `null`.
+   *
+   * The Deal's *identity* rather than a boolean, so the form is open only for
+   * the Deal it was opened on. Navigating to another Deal makes the condition
+   * false, which unmounts the form and discards its draft -- deterministically,
+   * during render, with no effect that could let Deal A's authored name and
+   * dates be submitted for Deal B. */
+  const [creatingAssetForDealId, setCreatingAssetForDealId] = useState<string | null>(null);
   const [createManagedAssetError, setCreateManagedAssetError] = useState<string | null>(null);
   // Phase 7 Gate P7.6: which visible Investment is open, the way back from one
   // of its Units, and whether it holds unsaved changes. Everything else about
@@ -2298,7 +2304,7 @@ export default function App() {
     setCreateManagedAssetError(null);
     try {
       await managedAssets.create({ ...request, source_deal_id: activeDealId });
-      setIsCreatingManagedAsset(false);
+      setCreatingAssetForDealId(null);
       setSurface('asset-management');
     } catch (caught: unknown) {
       setCreateManagedAssetError(
@@ -3558,8 +3564,11 @@ export default function App() {
                         Open in Asset Management
                       </button>
                     </p>
-                  ) : isCreatingManagedAsset ? (
+                  ) : creatingAssetForDealId === activeDealId ? (
                     <CreateManagedAssetPanel
+                      // Remount on any change of Deal identity, so every field
+                      // re-initializes from the Deal now on screen.
+                      key={activeDealId}
                       dealName={byMode(operatingMode, {
                         quick: dealName,
                         detailed: detailedDealName,
@@ -3567,7 +3576,7 @@ export default function App() {
                       })}
                       isOpen
                       onCancel={() => {
-                        setIsCreatingManagedAsset(false);
+                        setCreatingAssetForDealId(null);
                         setCreateManagedAssetError(null);
                       }}
                       onCreate={handleCreateManagedAsset}
@@ -3579,7 +3588,7 @@ export default function App() {
                       className="am-quiet-button"
                       onClick={() => {
                         setCreateManagedAssetError(null);
-                        setIsCreatingManagedAsset(true);
+                        setCreatingAssetForDealId(activeDealId);
                       }}
                     >
                       Create Managed Asset
