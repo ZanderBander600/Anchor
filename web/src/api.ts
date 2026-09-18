@@ -30,6 +30,14 @@ import type {
   LeaseLevelTwoWaySensitivityResult,
   LeaseLevelTwoWaySensitivitySnapshot,
 } from './leaseLevelSensitivityTypes';
+import type {
+  AssetPerformanceResponse,
+  AssetReportIssue,
+  BudgetImmutableConflict,
+  ManagedAsset,
+  MonthlyAssetReport,
+  OperatingFigures,
+} from './assetManagementTypes';
 import { isBusinessPlanApiIssue } from './businessPlan';
 import type { BusinessPlanApiIssue, BusinessPlanInput } from './businessPlan';
 import type {
@@ -3030,4 +3038,239 @@ export async function analyzePartnerDecisionMatrix(
     'The partner decision matrix could not be completed',
   );
   return (await response.json()) as PartnerDecisionMatrixReport;
+}
+
+
+// ===========================================================================
+// Gate AM1 -- Managed Assets and Monthly Performance.
+//
+// Transport only. Nothing here computes a financial result: every total,
+// variance, percentage, assessment, attention item and trend point arrives
+// already computed by `anchor.asset_management.performance`.
+//
+// Two refusals are told apart deliberately, because the product must react to
+// them differently:
+//
+//   * `AssetManagementError` carries structural issues (422) -- "fix these
+//     numbers";
+//   * `BudgetImmutableError` carries the frozen-budget conflict (409) -- the
+//     submitted budget may be perfectly well-formed, and what is refused is the
+//     authority to change it.
+// ===========================================================================
+
+/** A structural refusal, carrying the API's own issues in its own order. */
+export class AssetManagementError extends Error {
+  readonly issues: AssetReportIssue[];
+
+  constructor(message: string, issues: AssetReportIssue[] = []) {
+    super(message);
+    this.name = 'AssetManagementError';
+    this.issues = issues;
+  }
+}
+
+/** The typed frozen-budget conflict. Never a subclass of
+ * `AssetManagementError`: a caller that treats every failure as "invalid input"
+ * would tell the analyst to correct a budget that is not theirs to correct. */
+export class BudgetImmutableError extends Error {
+  readonly changedFields: string[];
+  readonly reportingMonth: string;
+
+  constructor(conflict: BudgetImmutableConflict) {
+    super(conflict.message);
+    this.name = 'BudgetImmutableError';
+    this.changedFields = conflict.changed_fields;
+    this.reportingMonth = conflict.reporting_month;
+  }
+}
+
+/** A Managed Asset already exists for this Deal. Carries the existing asset's
+ * id so the product can open it rather than report a dead end. */
+export class ManagedAssetExistsError extends Error {
+  readonly managedAssetId: string;
+
+  constructor(message: string, managedAssetId: string) {
+    super(message);
+    this.name = 'ManagedAssetExistsError';
+    this.managedAssetId = managedAssetId;
+  }
+}
+
+function assetIssues(detail: unknown): AssetReportIssue[] {
+  if (!Array.isArray(detail)) {
+    return [];
+  }
+  return detail.filter(
+    (issue): issue is AssetReportIssue =>
+      typeof issue === 'object' && issue !== null && typeof (issue as AssetReportIssue).code === 'string',
+  );
+}
+
+async function assetFetch(
+  path: string,
+  init: RequestInit,
+  failureMessage: string,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, init);
+  } catch {
+    throw new AssetManagementError(NETWORK_ERROR_MESSAGE);
+  }
+  if (response.ok) {
+    return response;
+  }
+
+  let detail: unknown = null;
+  try {
+    detail = ((await response.json()) as { detail?: unknown }).detail ?? null;
+  } catch {
+    detail = null;
+  }
+
+  if (detail !== null && typeof detail === 'object' && !Array.isArray(detail)) {
+    const conflict = detail as { code?: string };
+    if (conflict.code === 'budget_immutable') {
+      throw new BudgetImmutableError(detail as BudgetImmutableConflict);
+    }
+    if (conflict.code === 'managed_asset_exists') {
+      const existing = detail as { message?: string; managed_asset_id?: string };
+      throw new ManagedAssetExistsError(
+        existing.message ?? failureMessage,
+        existing.managed_asset_id ?? '',
+      );
+    }
+    if (conflict.code === 'monthly_report_exists') {
+      throw new AssetManagementError((detail as { message?: string }).message ?? failureMessage);
+    }
+  }
+
+  const issues = assetIssues(detail);
+  if (issues.length > 0) {
+    throw new AssetManagementError(issues.map((issue) => issue.message).join('\n'), issues);
+  }
+  throw new AssetManagementError(typeof detail === 'string' ? detail : failureMessage);
+}
+
+function jsonBody(method: string, body: unknown): RequestInit {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
+/** `POST /managed-assets`. */
+export async function createManagedAsset(request: {
+  source_deal_id: string;
+  name: string | null;
+  acquisition_date: string;
+  property_type: string | null;
+  market: string | null;
+}): Promise<ManagedAsset> {
+  const response = await assetFetch(
+    '/managed-assets',
+    jsonBody('POST', request),
+    'The managed asset could not be created',
+  );
+  return (await response.json()) as ManagedAsset;
+}
+
+/** `GET /managed-assets`. */
+export async function listManagedAssets(): Promise<ManagedAsset[]> {
+  const response = await assetFetch(
+    '/managed-assets',
+    { method: 'GET' },
+    'The managed assets could not be loaded',
+  );
+  return (await response.json()) as ManagedAsset[];
+}
+
+/** `GET /managed-assets/{id}`. */
+export async function readManagedAsset(managedAssetId: string): Promise<ManagedAsset> {
+  const response = await assetFetch(
+    `/managed-assets/${encodeURIComponent(managedAssetId)}`,
+    { method: 'GET' },
+    'The managed asset could not be loaded',
+  );
+  return (await response.json()) as ManagedAsset;
+}
+
+/** `GET /managed-assets/{id}/reports`. */
+export async function listMonthlyReports(
+  managedAssetId: string,
+): Promise<MonthlyAssetReport[]> {
+  const response = await assetFetch(
+    `/managed-assets/${encodeURIComponent(managedAssetId)}/reports`,
+    { method: 'GET' },
+    'The monthly reports could not be loaded',
+  );
+  return (await response.json()) as MonthlyAssetReport[];
+}
+
+/** `GET /managed-assets/{id}/reports/{month}`. */
+export async function readMonthlyReport(
+  managedAssetId: string,
+  reportingMonth: string,
+): Promise<MonthlyAssetReport> {
+  const response = await assetFetch(
+    `/managed-assets/${encodeURIComponent(managedAssetId)}/reports/${encodeURIComponent(reportingMonth)}`,
+    { method: 'GET' },
+    'The monthly report could not be loaded',
+  );
+  return (await response.json()) as MonthlyAssetReport;
+}
+
+/** `POST /managed-assets/{id}/reports` -- the only call that writes a budget. */
+export async function createMonthlyReport(
+  managedAssetId: string,
+  request: {
+    reporting_month: string;
+    budget: OperatingFigures;
+    actual: OperatingFigures;
+    commentary: string | null;
+  },
+): Promise<MonthlyAssetReport> {
+  const response = await assetFetch(
+    `/managed-assets/${encodeURIComponent(managedAssetId)}/reports`,
+    jsonBody('POST', request),
+    'The monthly report could not be saved',
+  );
+  return (await response.json()) as MonthlyAssetReport;
+}
+
+/** `PUT /managed-assets/{id}/reports/{month}`.
+ *
+ * `budget` is sent as `null` on the ordinary path: the frozen budget is not
+ * this call's to change, and asserting nothing about it is how the product says
+ * so. It is echoed back only by a caller that deliberately wants the typed
+ * conflict when it differs. */
+export async function updateMonthlyReportActuals(
+  managedAssetId: string,
+  reportingMonth: string,
+  request: {
+    actual: OperatingFigures;
+    commentary: string | null;
+    budget: OperatingFigures | null;
+  },
+): Promise<MonthlyAssetReport> {
+  const response = await assetFetch(
+    `/managed-assets/${encodeURIComponent(managedAssetId)}/reports/${encodeURIComponent(reportingMonth)}`,
+    jsonBody('PUT', request),
+    'The actual results could not be saved',
+  );
+  return (await response.json()) as MonthlyAssetReport;
+}
+
+/** `GET /managed-assets/{id}/performance/{month}` -- the authoritative result. */
+export async function readAssetPerformance(
+  managedAssetId: string,
+  reportingMonth: string,
+): Promise<AssetPerformanceResponse> {
+  const response = await assetFetch(
+    `/managed-assets/${encodeURIComponent(managedAssetId)}/performance/${encodeURIComponent(reportingMonth)}`,
+    { method: 'GET' },
+    'The monthly performance could not be loaded',
+  );
+  return (await response.json()) as AssetPerformanceResponse;
 }

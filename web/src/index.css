@@ -7396,3 +7396,921 @@ body {
 .capital-result-table.capital-loan-table thead th:first-child {
   text-align: left;
 }
+
+/* =====================================================================
+   Gate AM1 -- Asset Management.
+   docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md Section 7.
+
+   Built entirely on the existing Sprint C token set: the dark navy nav
+   chrome, the light workspace surfaces and the semantic colours are the
+   ones the acquisition product already uses, so Asset Management reads as
+   the same application rather than a second visual language.
+
+   Colour is never the sole carrier of meaning. Every assessment colour is
+   paired with its word ("Unfavorable"), and every attention item states its
+   direction in prose.
+
+   Figures use tabular numerals throughout, so a column of numbers aligns
+   digit for digit regardless of value.
+   ===================================================================== */
+
+.am-shell {
+  min-height: 100vh;
+}
+
+/* The primary workspace switch, in both shells. A rule beneath it separates
+   "which product am I in" from "where am I inside it". */
+.sidebar-workspace-switch,
+.am-workspace-switch {
+  border-bottom: 1px solid var(--nav-border);
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+}
+
+.sidebar-nav-count {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--nav-active);
+  color: var(--nav-active-text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.am-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* --- Pages --------------------------------------------------------- */
+
+.am-page {
+  padding: 24px 28px 40px;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.am-page-head {
+  margin-bottom: 20px;
+}
+
+.am-page-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.am-page-subtitle {
+  margin: 6px 0 0;
+  max-width: 68ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* --- The asset workspace ------------------------------------------- */
+
+.am-workspace {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+}
+
+.am-asset-header {
+  padding: 18px 28px 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.am-breadcrumb {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.am-breadcrumb span {
+  margin: 0 6px;
+}
+
+.am-asset-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.am-asset-name {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+
+.am-owned-badge {
+  padding: 3px 9px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.am-asset-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.am-asset-meta {
+  margin: 4px 0 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* --- Tabs ----------------------------------------------------------- */
+
+.am-tabs {
+  display: flex;
+  gap: 22px;
+  padding: 0 28px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.am-tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 10px 0 12px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.am-tab:hover {
+  color: var(--text);
+}
+
+.am-tab-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.am-tab:focus-visible,
+.am-view-button:focus-visible,
+.am-quiet-button:focus-visible,
+.am-primary-button:focus-visible,
+.am-secondary-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-control);
+}
+
+.am-workspace-scroll {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 20px 28px 40px;
+}
+
+/* --- Buttons -------------------------------------------------------- */
+
+.am-primary-button,
+.am-secondary-button,
+.am-quiet-button {
+  appearance: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-control);
+  padding: 7px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.am-primary-button {
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  color: #fff;
+}
+
+.am-primary-button:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+
+.am-primary-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.am-secondary-button,
+.am-quiet-button {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.am-secondary-button:hover,
+.am-quiet-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- Summary cards -------------------------------------------------- */
+
+.am-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.am-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: 14px 16px 15px;
+  min-width: 0;
+}
+
+.am-card-label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.am-card-value {
+  margin: 6px 0 2px;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.am-card-plan,
+.am-card-delta {
+  margin: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.am-card-delta {
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+}
+
+.am-card-note {
+  color: var(--text-muted);
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.am-direction {
+  width: 11px;
+  height: 11px;
+  flex: none;
+}
+
+/* --- Panels --------------------------------------------------------- */
+
+.am-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: 16px 18px 18px;
+  margin-bottom: 16px;
+  min-width: 0;
+}
+
+.am-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.am-panel-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.am-panel-head .am-panel-title {
+  margin: 0;
+}
+
+.am-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 2.1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.am-side {
+  min-width: 0;
+}
+
+.am-empty {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.am-commentary {
+  margin: 0 0 12px;
+  padding: 11px 13px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.am-provenance {
+  margin: 0 0 12px;
+  max-width: 72ch;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.am-fingerprint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  word-break: break-all;
+  color: var(--text-muted);
+}
+
+.am-detail-list {
+  margin: 0 0 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 20px;
+}
+
+.am-detail-list div {
+  min-width: 0;
+}
+
+.am-detail-list dt {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.am-detail-list dd {
+  margin: 3px 0 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.am-asset-links {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* --- The statement table -------------------------------------------- */
+
+/* Horizontal scrolling stays inside the card, so a narrow viewport never
+   makes the page itself scroll sideways. */
+.am-table-scroll {
+  overflow-x: auto;
+  margin: 0 -2px;
+  padding: 0 2px;
+}
+
+.am-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  /* Tabular numerals: a column of figures aligns digit for digit. */
+  font-variant-numeric: tabular-nums;
+}
+
+.am-table th,
+.am-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--color-divider);
+  white-space: nowrap;
+}
+
+.am-table thead th {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface-muted);
+}
+
+/* Every numeric header sits over its own figures: both are right-aligned,
+   so the header edge and the digits share one edge. */
+.am-col-figure {
+  text-align: right;
+}
+
+.am-col-line {
+  text-align: left;
+  font-weight: 400;
+  color: var(--text);
+  white-space: normal;
+  min-width: 160px;
+}
+
+.am-col-assessment {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.am-table tbody tr:hover {
+  background: var(--surface-muted);
+}
+
+.am-row-total > th,
+.am-row-total > td {
+  font-weight: 600;
+  background: var(--surface-muted);
+  border-bottom-color: var(--border-strong);
+}
+
+.am-unit {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* --- Assessment ------------------------------------------------------ */
+
+.am-assessment {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+}
+
+.am-assessment-favorable {
+  color: var(--success);
+}
+
+.am-assessment-unfavorable {
+  color: var(--danger);
+}
+
+.am-assessment-on-plan {
+  color: var(--text-secondary);
+}
+
+/* Neutral is a statement, not an absence: CapEx and debt service have no
+   favorable direction at all, and the muted treatment says so without
+   implying "nothing happened". */
+.am-assessment-neutral {
+  color: var(--text-muted);
+}
+
+/* --- Attention ------------------------------------------------------- */
+
+.am-attention-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.am-attention-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.am-attention-item:last-child {
+  border-bottom: 0;
+}
+
+.am-attention-text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+/* --- Month bar and view toggle --------------------------------------- */
+
+.am-month-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.am-plan-note {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.am-performance-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.am-view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+
+.am-view-button {
+  appearance: none;
+  border: 0;
+  background: var(--surface);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 14px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.am-view-button + .am-view-button {
+  border-left: 1px solid var(--border-strong);
+}
+
+.am-view-button-active {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.am-ytd-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* --- Fields ---------------------------------------------------------- */
+
+.am-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.am-field-inline {
+  min-width: 190px;
+}
+
+.am-field-block {
+  display: block;
+  margin: 14px 0;
+}
+
+.am-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.am-select,
+.am-text-input,
+.am-month-input,
+.am-textarea,
+.am-input {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  width: 100%;
+  min-width: 0;
+}
+
+.am-input {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  min-width: 108px;
+}
+
+.am-textarea {
+  resize: vertical;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.am-select:focus-visible,
+.am-text-input:focus-visible,
+.am-month-input:focus-visible,
+.am-textarea:focus-visible,
+.am-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+/* --- Editor ---------------------------------------------------------- */
+
+.am-editor-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.am-editor-month {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.am-editor-note {
+  margin: 0 0 14px;
+  max-width: 76ch;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.am-editor-table .am-col-figure {
+  min-width: 128px;
+}
+
+/* A locked budget is a figure of record, not a field that happens to be
+   unavailable -- so it reads as text, with a rule beneath it rather than a
+   greyed-out input box. */
+.am-locked-figure {
+  display: inline-block;
+  padding: 7px 9px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border-strong);
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+  min-width: 108px;
+  text-align: right;
+}
+
+.am-lock-note {
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.am-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.am-create-asset {
+  max-width: 720px;
+}
+
+.am-create-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px 16px;
+}
+
+.am-deal-action {
+  margin-bottom: 16px;
+}
+
+.am-deal-action-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.am-error {
+  margin: 0 0 14px;
+  padding: 10px 13px;
+  border-radius: var(--radius-control);
+  background: var(--danger-soft);
+  border: 1px solid rgba(167, 43, 43, 0.28);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* --- NOI trend -------------------------------------------------------- */
+
+.am-trend-plot {
+  overflow-x: auto;
+}
+
+.am-trend-svg {
+  display: block;
+  width: 100%;
+  min-width: 460px;
+  height: auto;
+}
+
+.am-trend-grid {
+  stroke: var(--color-divider);
+  stroke-width: 1;
+}
+
+.am-trend-axis {
+  fill: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.am-trend-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* Budget is the plan: dashed and grey, so it reads as the reference line
+   rather than as a second result. */
+.am-trend-line-budget {
+  stroke: var(--text-muted);
+  stroke-dasharray: 5 4;
+}
+
+.am-trend-line-actual {
+  stroke: var(--accent);
+}
+
+.am-trend-dot-budget {
+  fill: var(--text-muted);
+}
+
+.am-trend-dot-actual {
+  fill: var(--accent);
+}
+
+.am-trend-legend {
+  display: flex;
+  gap: 18px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.am-trend-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.am-trend-key {
+  width: 18px;
+  height: 0;
+  border-top-width: 2px;
+  border-top-style: solid;
+}
+
+.am-trend-key-budget {
+  border-top-style: dashed;
+  border-top-color: var(--text-muted);
+}
+
+.am-trend-key-actual {
+  border-top-color: var(--accent);
+}
+
+/* The chart's figures, available to a screen reader without being drawn
+   twice on screen. */
+.am-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --- Narrow viewports -------------------------------------------------
+   390px is a supported layout, not a desktop design squeezed. The columns
+   stack, the identity block wraps, actions drop to their own row, and the
+   statement keeps its own horizontal scroll so the page never scrolls
+   sideways.
+   --------------------------------------------------------------------- */
+
+@media (max-width: 1100px) {
+  .am-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .am-page,
+  .am-workspace-scroll {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .am-asset-header,
+  .am-tabs {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .am-asset-name {
+    font-size: 21px;
+  }
+
+  .am-asset-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .am-asset-actions button {
+    flex: 1;
+  }
+
+  .am-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .am-card-value {
+    font-size: 23px;
+  }
+
+  .am-month-bar,
+  .am-performance-controls {
+    gap: 10px;
+  }
+
+  .am-field-inline {
+    width: 100%;
+  }
+
+  .am-view-toggle {
+    width: 100%;
+  }
+
+  .am-view-button {
+    flex: 1;
+  }
+
+  .am-editor-actions button,
+  .am-panel-head .am-secondary-button {
+    flex: 1;
+  }
+
+  .am-col-line {
+    min-width: 132px;
+  }
+}

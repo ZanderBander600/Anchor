@@ -1,0 +1,437 @@
+/** Gate AM1 -- the Asset Management product surface.
+ *
+ * `docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md` Section 7. The
+ * claims that matter: the authorized figures reach the screen unchanged, the
+ * frozen budget is visibly locked after creation, assessments are words and not
+ * only colour, and no acquisition control is reachable from inside Asset
+ * Management.
+ */
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+import { MonthlyPerformancePanel } from './components/MonthlyPerformancePanel';
+import { MonthlyReportEditor } from './components/MonthlyReportEditor';
+import { ManagedAssetWorkspace } from './components/ManagedAssetWorkspace';
+import { NoiTrendChart } from './components/NoiTrendChart';
+import {
+  DEMO_ASSET,
+  DEMO_BUDGET,
+  DEMO_COMMENTARY,
+  DEMO_PERFORMANCE,
+  DEMO_REPORT,
+} from './assetManagementFixture';
+import {
+  formatMoney,
+  formatMonth,
+  formatPoints,
+  formatRate,
+  formatVariancePct,
+} from './assetManagementFormat';
+import type { AssetPerformanceState } from './useManagedAssets';
+
+// The repository's convention: Testing Library does not auto-clean here, and a
+// leaked render makes every later query ambiguous.
+afterEach(cleanup);
+
+function performanceState(overrides: Partial<AssetPerformanceState> = {}): AssetPerformanceState {
+  return {
+    reports: [DEMO_REPORT],
+    performance: DEMO_PERFORMANCE,
+    selectedMonth: '2027-03-01',
+    isLoading: false,
+    error: null,
+    selectMonth: vi.fn(),
+    reload: vi.fn(),
+    saveReport: vi.fn().mockResolvedValue(undefined),
+    saveActuals: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+/** The cells of the statement row for `label`. */
+function statementRow(label: string): string[] {
+  const row = screen.getByRole('row', { name: new RegExp(`^${label}`) });
+  return within(row)
+    .getAllByRole('cell')
+    .map((cell) => cell.textContent ?? '');
+}
+
+// ===========================================================================
+// Formatting
+// ===========================================================================
+
+describe('Asset Management formatting', () => {
+  it('renders an unavailable value as an em dash, never as zero', () => {
+    expect(formatMoney(null)).toBe('—');
+    expect(formatVariancePct(null)).toBe('—');
+    expect(formatPoints(null)).toBe('—');
+    expect(formatRate(null)).toBe('—');
+  });
+
+  it('uses accounting parentheses for negative figures', () => {
+    expect(formatMoney(-5500)).toBe('($5,500)');
+    expect(formatMoney(24500)).toBe('$24,500');
+    expect(formatVariancePct(-0.08208955223880597)).toBe('(8.2%)');
+    expect(formatPoints(-2.4999999999999911)).toBe('(2.5 pts)');
+  });
+
+  it('renders a month without applying the viewer timezone', () => {
+    // `new Date("2027-03-01")` is UTC midnight, which is February 28th for
+    // anyone west of UTC. The month label must not depend on where you are.
+    expect(formatMonth('2027-03-01')).toBe('March 2027');
+    expect(formatMonth('2027-01-01')).toBe('January 2027');
+  });
+});
+
+// ===========================================================================
+// The monthly statement
+// ===========================================================================
+
+describe('Monthly Performance', () => {
+  const renderPanel = (view: 'monthly' | 'year_to_date' = 'monthly') =>
+    render(
+      <MonthlyPerformancePanel
+        performance={DEMO_PERFORMANCE}
+        view={view}
+        onViewChange={vi.fn()}
+        onEditActuals={vi.fn()}
+      />,
+    );
+
+  it('shows the four authorized summary cards with their plan figures', () => {
+    renderPanel();
+    const noi = screen.getByRole('region', { name: 'Net Operating Income' });
+    expect(within(noi).getByText('$61,500')).toBeTruthy();
+    expect(within(noi).getByText('Budget $67,000')).toBeTruthy();
+
+    const occupancy = screen.getByRole('region', { name: 'Occupancy' });
+    expect(within(occupancy).getByText('92.5%')).toBeTruthy();
+    expect(within(occupancy).getByText('Plan 95.0%')).toBeTruthy();
+
+    const expenses = screen.getByRole('region', { name: 'Operating Expenses' });
+    expect(within(expenses).getByText('$41,000')).toBeTruthy();
+    expect(within(expenses).getByText('Budget $38,000')).toBeTruthy();
+
+    const cashFlow = screen.getByRole('region', { name: 'Net Cash Flow' });
+    expect(within(cashFlow).getByText('$19,000')).toBeTruthy();
+    expect(within(cashFlow).getByText('Budget $24,500')).toBeTruthy();
+  });
+
+  it('renders the authorized NOI row exactly', () => {
+    renderPanel();
+    expect(statementRow('Net Operating Income')).toEqual([
+      '$67,000',
+      '$61,500',
+      '($5,500)',
+      '(8.2%)',
+      'Unfavorable',
+    ]);
+  });
+
+  it('renders the authorized revenue and expense totals', () => {
+    renderPanel();
+    expect(statementRow('Total Revenue')).toEqual([
+      '$105,000',
+      '$102,500',
+      '($2,500)',
+      '(2.4%)',
+      'Unfavorable',
+    ]);
+    expect(statementRow('Total Operating Expenses')).toEqual([
+      '$38,000',
+      '$41,000',
+      '$3,000',
+      '7.9%',
+      'Unfavorable',
+    ]);
+    expect(statementRow('Net Cash Flow')).toEqual([
+      '$24,500',
+      '$19,000',
+      '($5,500)',
+      '(22.4%)',
+      'Unfavorable',
+    ]);
+  });
+
+  it('reports occupancy in percentage points', () => {
+    renderPanel();
+    expect(statementRow('Occupancy')).toEqual([
+      '95.0%',
+      '92.5%',
+      '(2.5 pts)',
+      '(2.6%)',
+      'Unfavorable',
+    ]);
+  });
+
+  it('shows CapEx and debt service as neutral, never as favorable', () => {
+    renderPanel();
+    expect(statementRow('Capital Expenditures')[4]).toBe('Neutral');
+    expect(statementRow('Debt Service')[4]).toBe('Neutral');
+    expect(statementRow('Cash Flow After CapEx')[4]).toBe('Neutral');
+  });
+
+  it('states every assessment in words, not only in colour', () => {
+    renderPanel();
+    // Each assessment cell carries its word; the colour class is reinforcement.
+    for (const word of ['Unfavorable', 'Favorable', 'On Plan', 'Neutral']) {
+      expect(screen.getAllByText(word).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('lists the deterministic attention items in words', () => {
+    renderPanel();
+    const attention = screen.getByRole('region', { name: 'Attention Required' });
+    expect(within(attention).getByText('Occupancy is 2.5 pts below plan')).toBeTruthy();
+    expect(
+      within(attention).getByText('Repairs and Maintenance is $2,000 over budget'),
+    ).toBeTruthy();
+    expect(within(attention).getByText('Net Operating Income is 8.2% below plan')).toBeTruthy();
+  });
+
+  it('never lists a neutral or favorable line as needing attention', () => {
+    renderPanel();
+    const attention = screen.getByRole('region', { name: 'Attention Required' });
+    expect(within(attention).queryByText(/Capital Expenditures/)).toBeNull();
+    expect(within(attention).queryByText(/Debt Service/)).toBeNull();
+    expect(within(attention).queryByText(/Other Income/)).toBeNull();
+  });
+
+  it('shows the management commentary', () => {
+    renderPanel();
+    const panel = screen.getByRole('region', { name: 'Management Commentary' });
+    expect(within(panel).getByText(DEMO_COMMENTARY)).toBeTruthy();
+  });
+
+  it('reports no occupancy year to date, and says why', () => {
+    renderPanel('year_to_date');
+    const occupancy = screen.getByRole('region', { name: 'Occupancy' });
+    expect(within(occupancy).getByText('—')).toBeTruthy();
+    expect(
+      within(occupancy).getByText(/sum of monthly occupancy rates is not a meaningful figure/i),
+    ).toBeTruthy();
+    expect(screen.queryByRole('row', { name: /^Occupancy/ })).toBeNull();
+  });
+
+  it('switches period when the toggle is used', async () => {
+    const onViewChange = vi.fn();
+    render(
+      <MonthlyPerformancePanel
+        performance={DEMO_PERFORMANCE}
+        view="monthly"
+        onViewChange={onViewChange}
+        onEditActuals={vi.fn()}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Year to Date' }));
+    expect(onViewChange).toHaveBeenCalledWith('year_to_date');
+  });
+});
+
+// ===========================================================================
+// The NOI trend
+// ===========================================================================
+
+describe('NOI trend', () => {
+  it('draws both series without a charting dependency', () => {
+    const { container } = render(<NoiTrendChart points={DEMO_PERFORMANCE.result.noi_trend} />);
+    expect(container.querySelectorAll('polyline').length).toBe(2);
+    expect(screen.getByRole('img', { name: /budget noi compared with actual noi/i })).toBeTruthy();
+  });
+
+  it('states every plotted figure in an accessible table too', () => {
+    render(<NoiTrendChart points={DEMO_PERFORMANCE.result.noi_trend} />);
+    const table = screen.getByRole('table', {
+      name: /budget and actual net operating income by month/i,
+    });
+    expect(within(table).getByText('$67,000')).toBeTruthy();
+    expect(within(table).getByText('$61,500')).toBeTruthy();
+  });
+
+  it('says so plainly when nothing has been reported', () => {
+    render(<NoiTrendChart points={[]} />);
+    expect(screen.getByText(/no months have been reported yet/i)).toBeTruthy();
+  });
+});
+
+// ===========================================================================
+// The frozen budget
+// ===========================================================================
+
+describe('Monthly report editor', () => {
+  it('lets both columns be entered when a month is first reported', () => {
+    render(
+      <MonthlyReportEditor
+        report={null}
+        month="2027-03-01"
+        onMonthChange={vi.fn()}
+        onCancel={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+        onUpdate={vi.fn().mockResolvedValue(undefined)}
+        error={null}
+      />,
+    );
+    expect(screen.getByLabelText('Budget Rental Revenue')).toBeTruthy();
+    expect(screen.getByLabelText('Actual Rental Revenue')).toBeTruthy();
+  });
+
+  it('locks every budget field once the report exists', () => {
+    render(
+      <MonthlyReportEditor
+        report={DEMO_REPORT}
+        month="2027-03-01"
+        onMonthChange={vi.fn()}
+        onCancel={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+        onUpdate={vi.fn().mockResolvedValue(undefined)}
+        error={null}
+      />,
+    );
+    // No budget input exists at all -- not merely a disabled one.
+    expect(screen.queryByLabelText('Budget Rental Revenue')).toBeNull();
+    expect(screen.getByLabelText('Budget Rental Revenue, locked')).toBeTruthy();
+    // The actuals remain editable.
+    expect(screen.getByLabelText('Actual Rental Revenue')).toBeTruthy();
+    expect(screen.getByText(/frozen when this report was created and cannot be changed/i))
+      .toBeTruthy();
+  });
+
+  it('sends only actuals and commentary when editing an existing report', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MonthlyReportEditor
+        report={DEMO_REPORT}
+        month="2027-03-01"
+        onMonthChange={vi.fn()}
+        onCancel={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+        onUpdate={onUpdate}
+        error={null}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Save Actual Results' }));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    const [request] = onUpdate.mock.calls[0];
+    expect(Object.keys(request).sort()).toEqual(['actual', 'commentary']);
+    expect(request.actual.rental_revenue).toBe(96000);
+  });
+
+  it('converts occupancy between percent on screen and a fraction on the wire', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MonthlyReportEditor
+        report={null}
+        month="2027-03-01"
+        onMonthChange={vi.fn()}
+        onCancel={vi.fn()}
+        onCreate={onCreate}
+        onUpdate={vi.fn().mockResolvedValue(undefined)}
+        error={null}
+      />,
+    );
+    await userEvent.type(screen.getByLabelText('Budget Occupancy'), '95');
+    await userEvent.type(screen.getByLabelText('Actual Occupancy'), '92.5');
+    await userEvent.click(screen.getByRole('button', { name: 'Save Monthly Report' }));
+
+    const [request] = onCreate.mock.calls[0];
+    expect(request.budget.occupancy).toBeCloseTo(0.95, 10);
+    expect(request.actual.occupancy).toBeCloseTo(0.925, 10);
+  });
+
+  it('shows the existing budget figures as read-only values', () => {
+    render(
+      <MonthlyReportEditor
+        report={DEMO_REPORT}
+        month="2027-03-01"
+        onMonthChange={vi.fn()}
+        onCancel={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+        onUpdate={vi.fn().mockResolvedValue(undefined)}
+        error={null}
+      />,
+    );
+    const locked = screen.getByLabelText('Budget Payroll, locked');
+    expect(locked.textContent).toContain(String(DEMO_BUDGET.payroll));
+  });
+});
+
+// ===========================================================================
+// The asset workspace
+// ===========================================================================
+
+describe('Managed asset workspace', () => {
+  const renderWorkspace = (state = performanceState(), onView = vi.fn()) =>
+    render(
+      <ManagedAssetWorkspace
+        asset={DEMO_ASSET}
+        state={state}
+        onViewAcquisitionBasis={onView}
+      />,
+    );
+
+  it('identifies the building as an owned asset', () => {
+    renderWorkspace();
+    expect(screen.getByRole('heading', { name: 'Harbor Point Apartments' })).toBeTruthy();
+    expect(screen.getByText('Owned Asset')).toBeTruthy();
+    expect(screen.getByText(/Multifamily · Acquired Oct 2026 · Toronto, ON/)).toBeTruthy();
+  });
+
+  it('renders only the two functional tabs, with no dead future tabs', () => {
+    renderWorkspace();
+    const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
+    expect(tabs).toEqual(['Overview', 'Monthly Performance']);
+    for (const absent of ['Business Plan', 'Debt & Covenants', 'Documents']) {
+      expect(screen.queryByRole('tab', { name: absent })).toBeNull();
+    }
+  });
+
+  it('exposes no acquisition control while inside Asset Management', () => {
+    renderWorkspace();
+    for (const forbidden of [
+      /quick underwrite/i,
+      /detailed underwrite/i,
+      /^analyze/i,
+      /analyze deal/i,
+      /new deal/i,
+      /deal library/i,
+    ]) {
+      expect(screen.queryByRole('button', { name: forbidden })).toBeNull();
+    }
+  });
+
+  it('offers the acquisition only as quiet provenance', async () => {
+    const onView = vi.fn();
+    renderWorkspace(performanceState(), onView);
+    await userEvent.click(screen.getAllByRole('button', { name: 'View Acquisition Basis' })[0]);
+    expect(onView).toHaveBeenCalledWith(DEMO_ASSET.source_deal_id);
+  });
+
+  it('explains on Overview that later deal edits do not change the asset', async () => {
+    renderWorkspace();
+    await userEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(
+      screen.getByText(/later edits to that deal do not change this asset/i),
+    ).toBeTruthy();
+    expect(screen.getByText(DEMO_ASSET.acquisition_fingerprint)).toBeTruthy();
+  });
+
+  it('offers the reporting month picker over the months that have reports', () => {
+    renderWorkspace();
+    const picker = screen.getByLabelText('Reporting Month');
+    expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'March 2027',
+    ]);
+  });
+
+  it('guides the analyst when nothing has been reported yet', () => {
+    renderWorkspace(
+      performanceState({ reports: [], performance: null, selectedMonth: null }),
+    );
+    expect(screen.getByText(/budgets are entered explicitly/i)).toBeTruthy();
+    // Offered both in the header and in the empty-state panel: an analyst
+    // arriving at a blank asset should not have to hunt for the one way in.
+    expect(screen.getAllByRole('button', { name: 'Add Monthly Report' })).toHaveLength(2);
+  });
+});

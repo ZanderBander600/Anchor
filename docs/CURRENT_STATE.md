@@ -24,6 +24,15 @@ whenever an accepted gate merges or the active gate changes.
     complete and merged** in PR #36 (`3f23ba4`). Final hands-on human product
     acceptance is pending before P7.9 closes.
 - Open PR: none at the time of this synchronization.
+- **AM1 Managed Assets + Monthly Performance** was explicitly started from
+  `main` at `63c2ac0`, on branch
+  `feature/am1-managed-assets-monthly-performance`. It is an independent
+  post-acquisition feature: it is not P7.10 and is not part of P7.10. Its
+  authority is `docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`.
+  Implementation is complete on that branch and is not pushed, merged or
+  accepted.
+- P7.9 final hands-on human acceptance remains pending.
+- P7.10 has not started.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active
 - Autonomous merge: not authorized

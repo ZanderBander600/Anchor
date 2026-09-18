@@ -1,0 +1,530 @@
+# AM1 — Managed Assets and Monthly Performance
+
+Status: Implemented, pending human product acceptance
+Gate: AM1
+Started from: `main` at `63c2ac0`
+Branch: `feature/am1-managed-assets-monthly-performance`
+Schema: v12 → v13 (additive)
+Risk tier: Tier 1 financial/contract critical, with Tier 2 persistence and
+Tier 3 product behavior
+
+AM1 is an independent post-acquisition feature. It is **not** P7.10, it is not
+part of P7.10, and it does not advance the P7 competition sequence. P7.9 final
+human acceptance remains pending and is unaffected by this gate.
+
+---
+
+## 1. Purpose and scope
+
+### 1.1 The lifecycle AM1 completes
+
+```
+Acquisition Deal
+  → approved acquisition basis
+    → Managed Asset
+      → monthly operating reports
+        → actual performance versus the frozen approved budget
+```
+
+Anchor until now underwrote purchases. AM1 adds the other half: reporting on a
+building the owner already holds. The two are different products over the same
+asset, which is why Asset Management is a **separate primary workspace** rather
+than another Deal workspace tab beside Underwrite, Risk and AI Analyst.
+
+AM1 changes no acquisition, Capital Structure, Partnership or underwriting
+calculation. Every one of those modules is consumed as-is or not consumed at
+all.
+
+### 1.2 Production ledger
+
+Backend, exactly:
+
+| File | Change |
+| --- | --- |
+| `src/anchor/asset_management/__init__.py` | new — package exports |
+| `src/anchor/asset_management/contracts.py` | new — identity, inputs, errors, results |
+| `src/anchor/asset_management/validation.py` | new — structural validation |
+| `src/anchor/asset_management/performance.py` | new — **the sole financial authority** |
+| `src/anchor/deals/store.py` | schema v13, two tables, the AM1 lifecycle |
+| `src/anchor/api.py` | the eight AM1 routes |
+
+Frontend, exactly:
+
+| File | Change |
+| --- | --- |
+| `web/src/assetManagementTypes.ts` | new — wire contracts |
+| `web/src/assetManagementFormat.ts` | new — formatting and labels only |
+| `web/src/assetManagementFixture.ts` | new — the recorded engine response |
+| `web/src/useManagedAssets.ts` | new — Asset Management state |
+| `web/src/components/AssetManagementShell.tsx` | new — the separate workspace |
+| `web/src/components/ManagedAssetWorkspace.tsx` | new — one owned asset |
+| `web/src/components/MonthlyPerformancePanel.tsx` | new — the monthly view |
+| `web/src/components/MonthlyReportEditor.tsx` | new — budget and actuals entry |
+| `web/src/components/NoiTrendChart.tsx` | new — inline-SVG trend |
+| `web/src/components/CreateManagedAssetPanel.tsx` | new — the Deal-side action |
+| `web/src/api.ts` | AM1 client, appended |
+| `web/src/App.tsx` | the primary workspace switch |
+| `web/src/components/AppSidebar.tsx` | Acquisitions / Asset Management |
+| `web/src/index.css` | AM1 styles |
+
+`tests/test_am1_architecture.py` holds this ledger and fails if anything else
+changed.
+
+---
+
+## 2. The Managed Asset contract
+
+### 2.1 What it is
+
+A Managed Asset is an owned building. It is **not** a Deal: it has its own id,
+its own name, its own lifecycle, and no acquisition assumption of any kind.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | server-generated, opaque |
+| `source_deal_id` | provenance, not ownership |
+| `name` | copied from the Deal at creation |
+| `acquisition_date` | authored |
+| `property_type` | optional; `None` is "not stated" |
+| `market` | optional; `None` is "not stated" |
+| `acquisition_fingerprint` | the Deal's authoritative analysis fingerprint, frozen at creation |
+| `created_at` / `updated_at` | timestamps |
+
+### 2.2 Rules
+
+- A saved Deal creates **at most one** Managed Asset, enforced by
+  `UNIQUE (source_deal_id)` in the database rather than by a check a future
+  write path could forget.
+- Creating the asset requires a current saved Deal analysis (see 2.3).
+- The Deal's authoritative fingerprint is captured once, by
+  `create_managed_asset`, and written by no other statement.
+- Later Deal edits do not rewrite the asset, its budgets or its historical
+  reports. The divergence between the Deal's current fingerprint and the
+  asset's frozen copy is provenance the product may show — never a trigger to
+  rewrite anything.
+- The original Deal is never modified. No AM1 write path issues an `INSERT`,
+  `UPDATE` or `DELETE` against `deals`, `detailed_deals`,
+  `detailed_operating_inputs` or `lease_level_deals`.
+- AM1 adds **no** general acquisition lifecycle or status model.
+- AM1 has **no** delete workflow, for an asset or a report. The absence of the
+  route is the proof.
+
+### 2.3 Resolution: the current-analysis requirement is mode-aware
+
+**Decision.** Quick and Detailed Deals must have a current cached analysis
+snapshot. Lease-Level Deals are exempt.
+
+**Why.** `lease_level_deals` has no `analysis_snapshot` column at all — D5.4
+gave that table family `ai_snapshot` only. A Lease-Level Deal therefore
+*structurally cannot* carry a cached deterministic analysis, and applying the
+check uniformly would bar an entire operating mode from Asset Management as a
+side effect of an unrelated persistence gap, not because anything about its
+basis is less trustworthy.
+
+What AM1 actually freezes is the fingerprint, and
+`_deal_analysis_fingerprint` produces one from a Lease-Level Deal's own stored
+rows exactly as it does for the other two modes. A saved Lease-Level Deal
+qualifies on the same evidence the other modes' snapshots stand on: assumptions
+that are on file and reassemble into the contracts the engine consumes.
+
+This is recorded as an explicit resolution because it is a real product
+asymmetry, and it is pinned by
+`test_lease_level_is_exempt_from_the_snapshot_check_by_storage_not_by_policy`.
+
+---
+
+## 3. Monthly report inputs
+
+A report is identified by `(managed_asset_id, reporting_month)`. The month is
+normalized to the **first day of the month** at every boundary, so two
+spellings of March cannot become two rows that each freeze a different budget.
+
+Each report carries an **Approved Budget** and **Actual Results**, each stating
+all thirteen authored values:
+
+occupancy, rental revenue, other income, property taxes, insurance, utilities,
+repairs and maintenance, payroll, management fees, other operating expenses,
+capital expenditures, debt service — plus optional management commentary.
+
+### 3.1 Validation
+
+- Every monetary value is **finite and non-negative**. Nothing is clamped or
+  repaired: a clamp would put a number the analyst never entered into a frozen
+  budget.
+- Occupancy is a **fraction in `[0, 1]`**, matching the repository's existing
+  occupancy convention (`anchor.validation`'s `0 <= value <= 1`). It is
+  presented in percent and its variance in percentage points; both are display
+  conversions, never a second stored scale.
+- `True` is not a number. A boolean in a money field is refused.
+- Commentary is optional. `None` is "none written"; a whitespace-only string is
+  refused rather than stored.
+- Every issue is reported in one round trip, in deterministic statement order,
+  each naming its scope (`budget` / `actual`) and its exact field.
+
+### 3.2 The frozen budget
+
+The first save creates both the approved budget and the initial actuals. After
+that:
+
+- Budget fields are **immutable**.
+- Actuals and commentary may be updated.
+- A budget change attempt fails with a **typed conflict**
+  (`BudgetImmutableError` → HTTP 409, code `budget_immutable`), naming every
+  changed field.
+- A budget is never silently replaced or revised.
+
+**The conflict is deliberately not a validation error.** The submitted budget
+may be perfectly well-formed; what is refused is the *authority* to change it.
+A 422 would tell the product "fix these numbers", which is exactly the wrong
+instruction. `BudgetImmutableError` subclasses `Exception`, not `ValueError`,
+so a caller catching validation failures cannot swallow it.
+
+**The freeze is structural, not merely checked.** `create_monthly_report` holds
+the only statement that writes a `budget_*` column.
+`update_monthly_report_actuals` names only `actual_*`, `commentary` and
+`updated_at` in its `SET` clause — there is no SQL in the module capable of
+revising a budget.
+
+### 3.3 Budgets are entered, never derived
+
+A monthly budget is always the budget the analyst explicitly entered. AM1 never
+divides an annual underwriting result by twelve, and never implies that an
+annual forecast is a monthly plan. The engine has no entry point that would
+accept an annual figure, and
+`test_no_monthly_figure_is_derived_from_an_annual_one` measures this over
+executable code with docstrings stripped, so the explanation of the rule cannot
+be what satisfies it.
+
+---
+
+## 4. The deterministic financial contract
+
+**All calculations belong in Python.** `anchor.asset_management.performance` is
+the sole authority. React formats and displays; it never calculates.
+
+### 4.1 Totals
+
+For both budget and actual:
+
+```
+total_revenue            = rental_revenue + other_income
+
+total_operating_expenses = property_taxes
+                         + insurance
+                         + utilities
+                         + repairs_and_maintenance
+                         + payroll
+                         + management_fees
+                         + other_operating_expenses
+
+net_operating_income     = total_revenue - total_operating_expenses
+cash_flow_after_capex    = net_operating_income - capital_expenditures
+net_cash_flow            = cash_flow_after_capex - debt_service
+```
+
+Capital expenditures and debt service are **not** operating expenses. Including
+either would silently change NOI — the single most consequential way this
+contract could be got wrong, and the subject of a dedicated mutation proof.
+
+### 4.2 NOI margin
+
+```
+noi_margin = net_operating_income / total_revenue
+```
+
+When total revenue is zero, the margin is **unavailable** (`None`) — not zero
+and not infinite. A zero margin would assert that the asset earned nothing on
+revenue it did earn.
+
+### 4.3 Variance
+
+```
+variance     = actual - budget
+variance_pct = variance / abs(budget)
+```
+
+When the budget is zero, `variance_pct` is **unavailable**. The variance itself
+is always present: the difference is well defined even when the ratio is not.
+
+`abs(budget)` is deliberate — the percentage states how far actual landed from
+plan as a share of the plan's magnitude, so its sign must come from the
+variance alone. A signed divisor would flip the reported sign whenever the
+budget was negative.
+
+### 4.4 Assessment
+
+| Lines | Positive variance | Negative variance | Zero |
+| --- | --- | --- | --- |
+| Revenue, occupancy, NOI, net cash flow | Favorable | Unfavorable | On plan |
+| Each operating-expense line, and their total | Unfavorable | Favorable | On plan |
+| Capital expenditures, debt service | Neutral | Neutral | Neutral |
+
+`neutral` is a statement, not an absence: the line has no favorable direction
+at all, which is why it is never confused with `on_plan` (a line that has a
+direction and landed on it).
+
+AM1 **never** infers that lower CapEx is favorable. Underspending CapEx is
+deferred work, often the opposite of good news, and debt service is
+contractual.
+
+Direction is declared once, in `_LINE_DIRECTION`, and carried on every
+`LineVariance` as `direction`, so the frontend never re-derives favorability
+from a line's name — the one place that could quietly disagree with the engine.
+
+**Resolution: `cash_flow_after_capex` is neutral.** The authorized assessment
+rules name revenue, occupancy, NOI and net cash flow as directional and are
+silent on this subtotal. It embeds capital expenditures, whose variance carries
+no favorability at all, so giving it a direction would launder a neutral line
+into a verdict. Net cash flow is explicitly authorized as higher-is-favorable
+and keeps that. Where the contract is silent, AM1 does not infer.
+
+### 4.5 Occupancy
+
+Occupancy variance is reported in **percentage points**
+(`variance_points`), on the percent line only. It is `None` on every currency
+line — percentage points are not a thing a dollar line has.
+
+### 4.6 Year to date
+
+YTD monetary totals sum January through the selected reporting month, over the
+saved reports of that calendar year. A month with no saved report contributes
+nothing; it is never a zero month that would read as an asset earning nothing.
+
+**Occupancy is not summed, and not reported year to date at all.** Three months
+at 95% is not 285% occupancy, and no average is invented either. Rather than
+report a meaningless number, the year-to-date line set omits occupancy
+entirely, and the product says why.
+
+### 4.7 Attention items
+
+Derived **only** from deterministically unfavorable `LineVariance` values the
+engine already computed. No model is consulted, no threshold is tuned, and no
+favorable, on-plan or neutral line can appear. Each message states its
+direction in words ("2.5 pts below plan", "$2,000 over budget"), so the item is
+complete to a reader who cannot distinguish red from green.
+
+### 4.8 Result contracts
+
+`PeriodTotals`, `LineVariance`, `AttentionItem`, `NoiTrendPoint`,
+`PeriodPerformance`, `AssetPerformanceResult`.
+
+---
+
+## 5. Persistence
+
+### 5.1 Schema v13, additive
+
+Two tables, created by `_connect` via `CREATE TABLE IF NOT EXISTS` exactly as
+every table since version 2. `_migrate` records the version and touches no
+existing row. A v12 database simply gains two empty tables.
+
+### 5.2 `managed_assets`
+
+Typed columns; `UNIQUE (source_deal_id)` enforces one asset per Deal.
+
+### 5.3 `monthly_asset_reports`
+
+`PRIMARY KEY (managed_asset_id, reporting_month)` enforces one report per asset
+per month. `FOREIGN KEY (managed_asset_id) REFERENCES managed_assets (id)`.
+
+Both statements are stored as **twelve typed `REAL` columns each**, prefixed
+`budget_` / `actual_` — never a JSON financial blob. A figure is queryable,
+typed, and cannot acquire a field no contract declares. The column list is
+derived from `MONETARY_FIELDS` itself, so a field added to the contract is a
+schema change the module notices at import rather than silently drops on write.
+
+### 5.4 Nothing computed is persisted
+
+No total, variance, percentage, assessment, attention item or trend point has a
+column. Every one is derived on read by the engine.
+
+### 5.5 Compatibility oracle
+
+`tests/test_am1_compatibility_oracle.py` builds a real schema-v12 database from
+`main` at `63c2ac0` (exported with `git archive` — objects only, no stash and no
+second checkout, per protocol 11.1/11.2) holding Deals in all three operating
+modes, a Business Plan, a visible Investment, a Scenario, a Strategy, a Capital
+Structure and a Partnership. It proves:
+
+- the v12 → v13 migration adds exactly two empty tables, alters nothing,
+  rewrites no row, and is idempotent under repeated connections and a direct
+  `_migrate` call;
+- every response that tree recorded — including its refusals — is answered byte
+  for byte identically;
+- replaying every read writes nothing and materializes no Managed Asset.
+
+---
+
+## 6. API
+
+| Method | Path |
+| --- | --- |
+| POST | `/managed-assets` |
+| GET | `/managed-assets` |
+| GET | `/managed-assets/{id}` |
+| GET | `/managed-assets/{id}/reports` |
+| GET | `/managed-assets/{id}/reports/{month}` |
+| POST | `/managed-assets/{id}/reports` |
+| PUT | `/managed-assets/{id}/reports/{month}` |
+| GET | `/managed-assets/{id}/performance/{month}` |
+
+Eight routes, and deliberately no ninth: there is no DELETE for either an asset
+or a report.
+
+Bodies use the repository's `_exact_keys` contract — every field is stated
+explicitly, including the ones that are `null`, so nothing a request does not
+say can be filled in from anywhere else. Responses use `_wire`. Refusals follow
+the established contracts: 404 for a missing entity, structured 422 for a
+contract refusal, 409 for a conflict.
+
+**No AI endpoint and no paid AI call is part of AM1.**
+
+---
+
+## 7. Frontend
+
+### 7.1 A separate workspace
+
+The primary application-level distinction is Acquisitions / Asset Management,
+in the dark navy rail, above every Deal workspace tab. Asset Management
+replaces the whole shell rather than nesting inside it: sharing the
+Acquisitions sidebar would keep New Deal, the Deal Library and every
+underwriting entry point one click away while the analyst is reporting on a
+building they already own.
+
+Asset Management provides Portfolio Overview, Managed Assets, Monthly
+Reporting, a managed-asset list, and an individual owned-asset workspace. The
+asset workspace has **Overview** and **Monthly Performance**, and nothing else:
+the concept's Business Plan, Debt & Covenants and Documents tabs are
+deliberately absent, because AM1 renders no dead future tabs.
+
+The acquisition appears only as quiet provenance, through **View Acquisition
+Basis**. No Quick Underwrite, Detailed Underwrite, Analyze or other acquisition
+control is reachable from inside Asset Management.
+
+### 7.2 The monthly view
+
+1. Summary cards: Net Operating Income, Occupancy, Operating Expenses, Net Cash
+   Flow.
+2. Actual-versus-budget table: Financial Line, Approved Budget, Actual,
+   Variance, Variance %, Assessment.
+3. Attention Required: explicit unfavorable items, in words as well as colour.
+4. Management Commentary.
+5. A restrained Budget NOI versus Actual NOI trend, **implemented as inline SVG
+   with no charting dependency**. Its figures also appear in a visually hidden
+   table, so a chart is never the only place a number exists.
+6. Monthly and Year-to-Date views.
+
+### 7.3 Presentation rules
+
+- Numeric headers and values are both right-aligned, so a header edge and its
+  digits share one edge; figures use `font-variant-numeric: tabular-nums`.
+- `null` renders as an em dash — never `0`, never `N/A`.
+- Negative figures use accounting parentheses.
+- Colour is never the sole carrier of meaning: every assessment is also a word.
+- On initial creation Budget and Actual are both editable. After saving, the
+  budget column is rendered as read-only text — not a disabled input, because a
+  locked budget is a figure of record rather than a field that happens to be
+  unavailable.
+- In-card horizontal scrolling is preserved on narrow screens, so the page
+  itself never scrolls sideways. The 390px layout stacks rather than shrinking
+  a desktop design.
+
+### 7.4 No financial arithmetic in TypeScript
+
+`test_am1_architecture.py` scans every AM1 TypeScript file for arithmetic
+applied to a name this contract computes, and for any local favorability
+classification. Both are forbidden.
+
+---
+
+## 8. Out of scope (deferred)
+
+Accounting/general-ledger integration; CSV or Excel import; account mapping;
+Investment-level or portfolio consolidation calculations; asset deletion;
+report deletion; reforecasting; budget revisions; approvals or permissions;
+multiple currencies; leasing workflows; capital-project tracking; valuation
+marks; dispositions; AI-generated calculations or commentary; P7.10 work.
+
+No dependency was added.
+
+---
+
+## 9. The authorized demo case
+
+March 2027, Harbor Point Apartments.
+
+| Line | Budget | Actual |
+| --- | ---: | ---: |
+| Occupancy | 95.0% | 92.5% |
+| Rental revenue | $100,000 | $96,000 |
+| Other income | $5,000 | $6,500 |
+| Property taxes | $10,000 | $10,000 |
+| Insurance | $5,000 | $5,000 |
+| Utilities | $5,000 | $6,000 |
+| Repairs and maintenance | $6,000 | $8,000 |
+| Payroll | $6,000 | $6,000 |
+| Management fees | $4,000 | $4,000 |
+| Other operating expenses | $2,000 | $2,000 |
+| Capital expenditures | $10,000 | $10,000 |
+| Debt service | $32,500 | $32,500 |
+
+Commentary: "Two renewals moved into April. Repairs were elevated by an
+unplanned HVAC replacement."
+
+Expected results, all reproduced exactly:
+
+| Figure | Budget | Actual |
+| --- | ---: | ---: |
+| Total revenue | $105,000 | $102,500 |
+| Total operating expenses | $38,000 | $41,000 |
+| Net operating income | $67,000 | $61,500 |
+| Net cash flow | $24,500 | $19,000 |
+
+NOI variance −$5,500 / −8.2%, unfavorable. Occupancy 2.5 percentage points
+below plan. CapEx and debt service neutral.
+
+This data exists only in tests and in ignored local QA data. It is not a
+production seed and no database is tracked.
+
+---
+
+## 10. Architecture controls
+
+`tests/test_am1_architecture.py` (58 guards) proves:
+
+- the production ledger, backend and frontend;
+- no AM1 financial arithmetic in TypeScript, and no local favorability
+  classification;
+- a Managed Asset is not a Deal: the package imports no acquisition, Scenario,
+  Strategy, Capital Structure, Partnership, decision or AI module, declares no
+  acquisition assumption, and has its own identity;
+- monthly reports cannot mutate acquisition underwriting: no AM1 write path
+  names a deal table in an `INSERT`/`UPDATE`/`DELETE`, and creating an asset
+  performs exactly one write;
+- budget updates fail after creation, with the typed conflict, and the update
+  path contains no budget SQL;
+- zero-budget percentages and zero-revenue margins return `None`, never `0.0`;
+- expense favorability is directionally correct, every reportable line declares
+  a direction, and CapEx / debt service / cash flow after CapEx are neutral;
+- the schema migration is additive and idempotent, and nothing computed has a
+  column;
+- no AM1 module imports or invokes AI, and no AM1 route reaches one;
+- the route surface is exactly the eight authorized routes, with no delete;
+- no P7.9 engine or Partnership module changed, and no earlier financial module
+  changed.
+
+`tests/test_am1_mutation_proofs.py` (7 proofs) confirms these bite: flipping an
+expense direction, giving CapEx a direction, returning zero instead of
+unavailable, folding CapEx into operating expenses, summing occupancy year to
+date, and removing the budget conflict each produce a visibly different result.
+
+---
+
+## 11. Implementation status
+
+Implemented and verified on `feature/am1-managed-assets-monthly-performance`.
+Not pushed, not merged, not accepted. Human product acceptance is pending.
+
+P7.9 final human acceptance remains pending and is unaffected by this gate.
+P7.10 has not started.
