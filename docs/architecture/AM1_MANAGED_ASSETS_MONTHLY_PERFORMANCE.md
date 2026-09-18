@@ -666,10 +666,10 @@ then merged to `main` in PR #38 (`3048976`). Human product acceptance is
 pending, so AM1 is not yet accepted.
 
 The user-authorized Managed Asset deletion extension is implemented on
-`feature/am1-delete-managed-asset` and remains pending review and merge. It
-does not change the schema or any financial calculation: it adds one
+`feature/am1-delete-managed-asset` and merged to `main` in PR #39 (`60be780`).
+It does not change the schema or any financial calculation: it adds one
 transactional asset-level lifecycle action, an inline confirmation, and no
-report-level delete action.
+report-level delete action. Hands-on AM1 product acceptance remains pending.
 
 Deletion-extension verification on 2026-09-18:
 
