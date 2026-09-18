@@ -344,3 +344,53 @@ describe('the Capital Structure styles rank nothing and never widen the page', (
     expect(results.match(/className="table-scroll"/g)?.length).toBeGreaterThan(0);
   });
 });
+
+describe('the Acquisition Loans table aligns its headers over its figures', () => {
+  /** The shared rule, as every Capital Structure table still reads it. */
+  function sharedHeaderRule(): string {
+    const start = CSS.indexOf('.capital-result-table thead th,');
+    expect(start).toBeGreaterThan(-1);
+    return CSS.slice(start, CSS.indexOf('}', start) + 1);
+  }
+
+  it('keeps the shared header rule left-aligned for the other tables', () => {
+    // Three of the four Capital Structure tables carry genuine text columns --
+    // Scope, Period, Status -- whose headers belong over left-aligned text. The
+    // correction must not reach them, so the shared rule is unchanged.
+    const shared = sharedHeaderRule();
+    expect(shared).toContain('.capital-result-table thead th,');
+    expect(shared).toContain('.capital-result-table tbody th');
+    expect(shared).toContain('text-align: left;');
+    expect(shared).not.toContain('text-align: right;');
+  });
+
+  it('right-aligns the numeric headers through a scoped hook, not the shared rule', () => {
+    // Scoped by naming both classes, so the rule wins on specificity rather
+    // than on where in the stylesheet it happens to sit.
+    expect(CSS).toContain('.capital-result-table.capital-loan-table thead th {');
+    const rule = CSS.slice(CSS.indexOf('.capital-result-table.capital-loan-table thead th {'));
+    expect(rule.slice(0, rule.indexOf('}'))).toContain('text-align: right;');
+    // The Unit column is the one label column, and keeps its header on the
+    // left over the row labels the shared `tbody th` rule already left-aligns.
+    expect(CSS).toContain('.capital-result-table.capital-loan-table thead th:first-child {');
+    const first = CSS.slice(
+      CSS.indexOf('.capital-result-table.capital-loan-table thead th:first-child {'),
+    );
+    expect(first.slice(0, first.indexOf('}'))).toContain('text-align: left;');
+  });
+
+  it('gives the hook to the Acquisition Loans table alone', () => {
+    const results = sourceOf('components/CapitalStructureResults.tsx');
+    // One table carries it; the other three keep the shared class by itself,
+    // so no other Capital Structure result table can be moved by this rule.
+    expect(results.match(/capital-loan-table/g)).toHaveLength(1);
+    expect(results).toContain(
+      'className="capital-result-table capital-loan-table"',
+    );
+    expect(results.match(/className="capital-result-table"/g)).toHaveLength(3);
+    // The hook is presentation only: it changes no figure and no formatter.
+    const loans = results.slice(results.indexOf('function LegacyLoans'));
+    expect(loans).toContain('formatCurrency(loan.loan_amount)');
+    expect(loans).toContain('formatPercent(loan.interest_rate)');
+  });
+});
