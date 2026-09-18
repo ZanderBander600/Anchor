@@ -1,7 +1,7 @@
 """Gate AM1 -- the Managed Asset and Monthly Performance routes.
 
 ``docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`` Section 6. The
-eight routes, their refusals, and the one claim that matters most on the wire:
+nine routes, their refusals, and the one claim that matters most on the wire:
 every number in a performance response comes from the deterministic engine.
 """
 
@@ -527,12 +527,29 @@ def test_monthly_reporting_cannot_mutate_the_source_deal(client: TestClient, db:
     assert client.get(f"/deals/{asset['source_deal_id']}").json() == before
 
 
-def test_there_is_no_delete_route_for_an_asset_or_a_report(
+def test_deleting_an_asset_removes_its_reports_but_not_its_source_deal(
     client: TestClient, db: Path
 ) -> None:
-    """AM1 has no deletion workflow, and an absent route is the proof."""
-
     asset = _create_asset(client, db)
     _create_report(client, asset["id"])
-    assert client.delete(f"/managed-assets/{asset['id']}").status_code == 405
+    source_before = client.get(f"/deals/{asset['source_deal_id']}").json()
+
+    response = client.delete(f"/managed-assets/{asset['id']}")
+
+    assert response.status_code == 204
+    assert client.get(f"/managed-assets/{asset['id']}").status_code == 404
+    assert client.get(f"/managed-assets/{asset['id']}/reports").status_code == 404
+    assert client.get(f"/deals/{asset['source_deal_id']}").json() == source_before
+    assert client.get("/managed-assets").json() == []
+
+
+def test_deleting_an_unknown_asset_is_404(client: TestClient) -> None:
+    assert client.delete("/managed-assets/nope").status_code == 404
+
+
+def test_there_is_no_independent_delete_route_for_a_report(
+    client: TestClient, db: Path
+) -> None:
+    asset = _create_asset(client, db)
+    _create_report(client, asset["id"])
     assert client.delete(f"/managed-assets/{asset['id']}/reports/2027-03-01").status_code == 405

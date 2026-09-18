@@ -12,6 +12,7 @@ import {
   AssetManagementError,
   createManagedAsset,
   createMonthlyReport,
+  deleteManagedAsset,
   listManagedAssets,
   listMonthlyReports,
   readAssetPerformance,
@@ -36,6 +37,7 @@ export interface ManagedAssetsState {
     property_type: string | null;
     market: string | null;
   }) => Promise<ManagedAsset>;
+  remove: (managedAssetId: string) => Promise<void>;
 }
 
 /** The managed-asset list, loaded once and refreshed on demand. */
@@ -87,7 +89,19 @@ export function useManagedAssets(): ManagedAssetsState {
     [],
   );
 
-  return { assets, isLoading, error, reload, create };
+  const remove = useCallback(async (managedAssetId: string) => {
+    setError(null);
+    try {
+      await deleteManagedAsset(managedAssetId);
+      setAssets((current) => current.filter((asset) => asset.id !== managedAssetId));
+    } catch (caught: unknown) {
+      const reason = message(caught, 'The managed asset could not be deleted');
+      setError(reason);
+      throw caught;
+    }
+  }, []);
+
+  return { assets, isLoading, error, reload, create, remove };
 }
 
 /** How a keyed request stands for the asset and month currently on screen. */

@@ -8117,8 +8117,9 @@ def list_investment_partnerships(
 # Gate AM1 -- the Managed Asset and Monthly Asset Report lifecycle.
 #
 # ``docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`` Sections 2, 3
-# and 5. Six functions, and deliberately no seventh: AM1 has no delete path for
-# either an asset or a report (Section 8), so none is written here.
+# and 5. The bounded deletion extension removes a Managed Asset and its owned
+# reports in one transaction. It never deletes or mutates the source Deal, and
+# there remains no independent report-deletion path.
 #
 # Nothing in this section performs a financial calculation or imports a module
 # that does. Reads return stored figures; every total, variance and assessment
@@ -8334,6 +8335,27 @@ def get_managed_asset(managed_asset_id: str, *, db_path: Path | None = None) -> 
 
     with _connect(db_path) as connection:
         return _row_to_managed_asset(_require_managed_asset(connection, managed_asset_id))
+
+
+def delete_managed_asset(managed_asset_id: str, *, db_path: Path | None = None) -> None:
+    """Permanently delete one Managed Asset and every report it owns.
+
+    The source Deal and all acquisition underwriting remain untouched. Reports
+    are deleted explicitly before their parent because this store does not
+    enable SQLite foreign-key enforcement on every connection and therefore
+    does not rely on ``ON DELETE CASCADE`` for correctness.
+
+    Raises ``ManagedAssetNotFoundError`` without writing anything when the
+    asset does not exist.
+    """
+
+    with _connect(db_path) as connection:
+        _require_managed_asset(connection, managed_asset_id)
+        connection.execute(
+            "DELETE FROM monthly_asset_reports WHERE managed_asset_id = ?",
+            (managed_asset_id,),
+        )
+        connection.execute("DELETE FROM managed_assets WHERE id = ?", (managed_asset_id,))
 
 
 def list_monthly_reports(

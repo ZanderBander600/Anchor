@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 
 import { formatAcquiredOn } from '../assetManagementFormat';
 import type { ManagedAsset } from '../assetManagementTypes';
@@ -70,6 +71,8 @@ export function AssetManagementShell({
 }: AssetManagementShellProps) {
   const [section, setSection] = useState<AssetManagementSection>('assets');
   const [openAssetId, setOpenAssetId] = useState<string | null>(null);
+  const managedAssetsHeading = useRef<HTMLHeadingElement>(null);
+  const focusManagedAssetsAfterDelete = useRef(false);
 
   const openAsset = state.assets.find((asset) => asset.id === openAssetId) ?? null;
   const performance = useAssetPerformance(openAsset?.id ?? null);
@@ -78,6 +81,27 @@ export function AssetManagementShell({
     setOpenAssetId(asset.id);
     setSection('assets');
   };
+
+  const deleteOpenAsset = async () => {
+    if (openAsset === null) {
+      return;
+    }
+    await state.remove(openAsset.id);
+    focusManagedAssetsAfterDelete.current = true;
+    setOpenAssetId(null);
+    setSection('assets');
+  };
+
+  useEffect(() => {
+    if (
+      focusManagedAssetsAfterDelete.current &&
+      openAssetId === null &&
+      section === 'assets'
+    ) {
+      managedAssetsHeading.current?.focus();
+      focusManagedAssetsAfterDelete.current = false;
+    }
+  }, [openAssetId, section, state.assets.length]);
 
   return (
     <div className="app-shell am-shell">
@@ -185,6 +209,7 @@ export function AssetManagementShell({
             asset={openAsset}
             state={performance}
             onViewAcquisitionBasis={onViewAcquisitionBasis}
+            onDelete={deleteOpenAsset}
           />
         ) : section === 'portfolio' ? (
           <PortfolioOverview assets={state.assets} onOpen={openManagedAsset} />
@@ -197,6 +222,7 @@ export function AssetManagementShell({
             dealCount={dealCount}
             onOpen={openManagedAsset}
             onOpenAcquisitions={onOpenAcquisitions}
+            headingRef={managedAssetsHeading}
           />
         )}
       </div>
@@ -210,17 +236,21 @@ function ManagedAssetList({
   dealCount,
   onOpen,
   onOpenAcquisitions,
+  headingRef,
 }: {
   assets: ManagedAsset[];
   isLoading: boolean;
   dealCount: number;
   onOpen: (asset: ManagedAsset) => void;
   onOpenAcquisitions: () => void;
+  headingRef: RefObject<HTMLHeadingElement | null>;
 }) {
   return (
     <div className="am-page">
       <header className="am-page-head">
-        <h2 className="am-page-title">Managed Assets</h2>
+        <h2 ref={headingRef} className="am-page-title" tabIndex={-1}>
+          Managed Assets
+        </h2>
         <p className="am-page-subtitle">
           Buildings under management. Each one was created from an approved acquisition and
           reports its own monthly results.

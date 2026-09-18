@@ -148,8 +148,14 @@ its own name, its own lifecycle, and no acquisition assumption of any kind.
   `UPDATE` or `DELETE` against `deals`, `detailed_deals`,
   `detailed_operating_inputs` or `lease_level_deals`.
 - AM1 adds **no** general acquisition lifecycle or status model.
-- AM1 has **no** delete workflow, for an asset or a report. The absence of the
-  route is the proof.
+- A Managed Asset may be deleted only through the explicit asset-level
+  workflow added after the initial AM1 merge. Deletion permanently removes the
+  asset and all monthly reports it owns in one transaction, while leaving the
+  source Deal and every acquisition-underwriting row unchanged. The product
+  must name both consequences and require inline confirmation before sending
+  the request.
+- There is no independent monthly-report deletion workflow. A frozen report is
+  removed only as a dependent of a deleted Managed Asset.
 
 ### 2.3 Resolution: the current-analysis requirement is mode-aware
 
@@ -404,14 +410,16 @@ Structure and a Partnership. It proves:
 | POST | `/managed-assets` |
 | GET | `/managed-assets` |
 | GET | `/managed-assets/{id}` |
+| DELETE | `/managed-assets/{id}` |
 | GET | `/managed-assets/{id}/reports` |
 | GET | `/managed-assets/{id}/reports/{month}` |
 | POST | `/managed-assets/{id}/reports` |
 | PUT | `/managed-assets/{id}/reports/{month}` |
 | GET | `/managed-assets/{id}/performance/{month}` |
 
-Eight routes, and deliberately no ninth: there is no DELETE for either an asset
-or a report.
+Nine routes. The single DELETE is the bounded Managed Asset lifecycle action:
+it removes the asset and its reports, never the source Deal. There is no DELETE
+for an individual report.
 
 Bodies use the repository's `_exact_keys` contract — every field is stated
 explicitly, including the ones that are `null`, so nothing a request does not
@@ -483,8 +491,8 @@ classification. Both are forbidden.
 ## 8. Out of scope (deferred)
 
 Accounting/general-ledger integration; CSV or Excel import; account mapping;
-Investment-level or portfolio consolidation calculations; asset deletion;
-report deletion; reforecasting; budget revisions; approvals or permissions;
+Investment-level or portfolio consolidation calculations; independent report
+deletion; reforecasting; budget revisions; approvals or permissions;
 multiple currencies; leasing workflows; capital-project tracking; valuation
 marks; dispositions; AI-generated calculations or commentary; P7.10 work.
 
@@ -533,7 +541,7 @@ production seed and no database is tracked.
 
 ## 10. Architecture controls
 
-`tests/test_am1_architecture.py` (59 guards) proves:
+`tests/test_am1_architecture.py` (61 guards) proves:
 
 - the production ledger, backend and frontend;
 - no AM1 financial arithmetic in TypeScript, and no local favorability
@@ -552,7 +560,8 @@ production seed and no database is tracked.
 - the schema migration is additive and idempotent, and nothing computed has a
   column;
 - no AM1 module imports or invokes AI, and no AM1 route reaches one;
-- the route surface is exactly the eight authorized routes, with no delete;
+- the route surface is exactly the nine authorized routes, with one bounded
+  asset DELETE and no independent report DELETE;
 - no P7.9 engine or Partnership module changed, and no earlier financial module
   changed.
 
@@ -655,6 +664,27 @@ answered with repeated full-suite attempts (protocol 7.3).
 Implemented and verified on `feature/am1-managed-assets-monthly-performance`,
 then merged to `main` in PR #38 (`3048976`). Human product acceptance is
 pending, so AM1 is not yet accepted.
+
+The user-authorized Managed Asset deletion extension is implemented on
+`feature/am1-delete-managed-asset` and remains pending review and merge. It
+does not change the schema or any financial calculation: it adds one
+transactional asset-level lifecycle action, an inline confirmation, and no
+report-level delete action.
+
+Deletion-extension verification on 2026-09-18:
+
+- 145 focused backend persistence, API and architecture tests passed;
+- 53 focused frontend API, state, interaction and staleness tests passed;
+- TypeScript and the production build are clean; lint has zero errors and the
+  same five pre-existing effect warnings;
+- the changed Python modules have the unchanged 42-error pyright baseline
+  (2 in `api.py`, 40 in `store.py`), with no error on the deletion code;
+- browser QA at 1280x720 and 390x844 verified the inline disclosure, safe-focus
+  default, cancellation focus return, responsive layout and zero console
+  errors. The live QA database was left unchanged; destructive success is
+  covered by the persistence, API, client-state and shell tests;
+- the final backend suite reported 9,597 passed and the same three inherited
+  architecture-ledger failures already present after the AM1 merge.
 
 P7.9 final human acceptance remains pending and is unaffected by this gate.
 P7.10 has not started.

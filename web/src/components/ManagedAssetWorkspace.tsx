@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { formatAcquiredOn, formatMonth } from '../assetManagementFormat';
 import type { ManagedAsset, PerformanceView } from '../assetManagementTypes';
@@ -29,12 +29,15 @@ export interface ManagedAssetWorkspaceProps {
   state: AssetPerformanceState;
   /** Opens the source Deal in the Acquisitions workspace. Provenance only. */
   onViewAcquisitionBasis: (dealId: string) => void;
+  /** Permanently removes this asset and its reports, but not its source Deal. */
+  onDelete: () => Promise<void>;
 }
 
 export function ManagedAssetWorkspace({
   asset,
   state,
   onViewAcquisitionBasis,
+  onDelete,
 }: ManagedAssetWorkspaceProps) {
   const [tab, setTab] = useState<AssetTab>('performance');
   const [view, setView] = useState<PerformanceView>('monthly');
@@ -44,6 +47,21 @@ export function ManagedAssetWorkspace({
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
   });
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deleteButton = useRef<HTMLButtonElement>(null);
+  const cancelDeleteButton = useRef<HTMLButtonElement>(null);
+  const wasConfirmingDelete = useRef(false);
+
+  useEffect(() => {
+    if (isConfirmingDelete) {
+      cancelDeleteButton.current?.focus();
+    } else if (wasConfirmingDelete.current) {
+      deleteButton.current?.focus();
+    }
+    wasConfirmingDelete.current = isConfirmingDelete;
+  }, [isConfirmingDelete]);
 
   const meta = [asset.property_type, `Acquired ${formatAcquiredOn(asset.acquisition_date)}`, asset.market]
     .filter((part): part is string => part !== null && part !== '')
@@ -69,6 +87,19 @@ export function ManagedAssetWorkspace({
     }
   };
 
+  const confirmDelete = async () => {
+    setDeleteError(null);
+    setIsDeleting(true);
+    try {
+      await onDelete();
+      setIsConfirmingDelete(false);
+    } catch (caught: unknown) {
+      setDeleteError(caught instanceof Error ? caught.message : 'The managed asset could not be deleted.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div className="am-workspace">
       <header className="am-asset-header">
@@ -79,6 +110,19 @@ export function ManagedAssetWorkspace({
           <h2 className="am-asset-name">{asset.name}</h2>
           <span className="am-owned-badge">Owned Asset</span>
           <div className="am-asset-actions">
+            {!isConfirmingDelete && (
+              <button
+                ref={deleteButton}
+                type="button"
+                className="am-danger-button"
+                onClick={() => {
+                  setDeleteError(null);
+                  setIsConfirmingDelete(true);
+                }}
+              >
+                Delete Asset
+              </button>
+            )}
             <button
               type="button"
               className="am-quiet-button"
@@ -99,6 +143,48 @@ export function ManagedAssetWorkspace({
           </div>
         </div>
         {meta !== '' && <p className="am-asset-meta">{meta}</p>}
+        {isConfirmingDelete && (
+          <div
+            className="am-delete-confirm"
+            role="group"
+            aria-label={`Confirm deleting ${asset.name}`}
+          >
+            <div>
+              <p className="am-delete-question">Permanently delete {asset.name}?</p>
+              <p className="am-delete-message">
+                This deletes the managed asset and all of its monthly reports. The source
+                acquisition and its underwriting will remain. This cannot be undone.
+              </p>
+              {deleteError !== null && (
+                <p className="am-delete-error" role="alert">
+                  {deleteError}
+                </p>
+              )}
+            </div>
+            <div className="am-delete-actions">
+              <button
+                type="button"
+                className="am-danger-button"
+                onClick={() => void confirmDelete()}
+                disabled={isDeleting}
+              >
+                {isDeleting ? 'Deleting…' : 'Delete Asset'}
+              </button>
+              <button
+                ref={cancelDeleteButton}
+                type="button"
+                className="am-secondary-button"
+                onClick={() => {
+                  setDeleteError(null);
+                  setIsConfirmingDelete(false);
+                }}
+                disabled={isDeleting}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </header>
 
       <nav className="am-tabs" aria-label="Managed asset sections">

@@ -452,12 +452,17 @@ describe('Monthly report editor', () => {
 // ===========================================================================
 
 describe('Managed asset workspace', () => {
-  const renderWorkspace = (state = performanceState(), onView = vi.fn()) =>
+  const renderWorkspace = (
+    state = performanceState(),
+    onView = vi.fn(),
+    onDelete = vi.fn().mockResolvedValue(undefined),
+  ) =>
     render(
       <ManagedAssetWorkspace
         asset={DEMO_ASSET}
         state={state}
         onViewAcquisitionBasis={onView}
+        onDelete={onDelete}
       />,
     );
 
@@ -496,6 +501,52 @@ describe('Managed asset workspace', () => {
     renderWorkspace(performanceState(), onView);
     await userEvent.click(screen.getAllByRole('button', { name: 'View Acquisition Basis' })[0]);
     expect(onView).toHaveBeenCalledWith(DEMO_ASSET.source_deal_id);
+  });
+
+  it('requires an inline confirmation that names what deletion preserves and removes', async () => {
+    const onDelete = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace(performanceState(), vi.fn(), onDelete);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Asset' }));
+
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.getByText('Permanently delete Harbor Point Apartments?')).toBeTruthy();
+    expect(screen.getByText(/deletes the managed asset and all of its monthly reports/i)).toBeTruthy();
+    expect(screen.getByText(/source acquisition and its underwriting will remain/i)).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
+  });
+
+  it('cancels without deleting and returns focus to the opening control', async () => {
+    const onDelete = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace(performanceState(), vi.fn(), onDelete);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Asset' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Permanently delete/)).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete Asset' }));
+  });
+
+  it('sends exactly one delete only after confirmation', async () => {
+    const onDelete = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace(performanceState(), vi.fn(), onDelete);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Asset' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Asset' }));
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the confirmation open and explains a failed deletion', async () => {
+    const onDelete = vi.fn().mockRejectedValue(new Error('The asset is still in use.'));
+    renderWorkspace(performanceState(), vi.fn(), onDelete);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Asset' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Asset' }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('The asset is still in use.');
+    expect(screen.getByText('Permanently delete Harbor Point Apartments?')).toBeTruthy();
   });
 
   it('explains on Overview that later deal edits do not change the asset', async () => {
@@ -550,6 +601,7 @@ describe('Managed asset workspace', () => {
           error: null,
           reload: vi.fn(),
           create: vi.fn(),
+          remove: vi.fn().mockResolvedValue(undefined),
         }}
         dealCount={1}
         onViewAcquisitionBasis={vi.fn()}
@@ -565,6 +617,35 @@ describe('Managed asset workspace', () => {
     ]) {
       expect(screen.getAllByRole('button', { name }).length).toBeGreaterThan(0);
     }
+  });
+
+  it('returns to the Managed Assets list with reachable focus after deletion', async () => {
+    const remove = vi.fn().mockResolvedValue(undefined);
+    render(
+      <AssetManagementShell
+        state={{
+          assets: [DEMO_ASSET],
+          isLoading: false,
+          error: null,
+          reload: vi.fn(),
+          create: vi.fn(),
+          remove,
+        }}
+        dealCount={1}
+        onViewAcquisitionBasis={vi.fn()}
+        onOpenAcquisitions={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /Harbor Point Apartments.*Multifamily/i }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Asset' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete Asset' }));
+
+    expect(remove).toHaveBeenCalledWith(DEMO_ASSET.id);
+    const heading = screen.getByRole('heading', { name: 'Managed Assets' });
+    expect(document.activeElement).toBe(heading);
   });
 
   it('shows an honest loading state instead of claiming no reporting yet', () => {

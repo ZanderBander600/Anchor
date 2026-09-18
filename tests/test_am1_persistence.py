@@ -658,6 +658,86 @@ def test_listing_assets_is_most_recently_updated_first(db: Path) -> None:
 
 
 # =============================================================================
+# Deleting a Managed Asset
+# =============================================================================
+
+
+def test_deleting_an_asset_removes_its_reports_and_preserves_its_source_deal(db: Path) -> None:
+    deal, asset = _asset(db)
+    source_before = tuple(_rows(db, "SELECT * FROM deals WHERE id = ?", deal.id)[0])
+    for month in (date(2027, 2, 1), date(2027, 3, 1)):
+        store.create_monthly_report(
+            managed_asset_id=asset.id,
+            reporting_month=month,
+            budget=am.MARCH_BUDGET,
+            actual=am.MARCH_ACTUAL,
+            db_path=db,
+        )
+
+    store.delete_managed_asset(asset.id, db_path=db)
+
+    assert _rows(db, "SELECT * FROM managed_assets WHERE id = ?", asset.id) == []
+    assert _rows(db, "SELECT * FROM monthly_asset_reports WHERE managed_asset_id = ?", asset.id) == []
+    assert tuple(_rows(db, "SELECT * FROM deals WHERE id = ?", deal.id)[0]) == source_before
+    assert store.get_deal(deal.id, db_path=db) == deal
+    with pytest.raises(ManagedAssetNotFoundError):
+        store.get_managed_asset(asset.id, db_path=db)
+
+
+def test_a_deleted_assets_source_deal_can_create_a_replacement_asset(db: Path) -> None:
+    deal, asset = _asset(db)
+    store.delete_managed_asset(asset.id, db_path=db)
+
+    replacement = store.create_managed_asset(
+        source_deal_id=deal.id,
+        acquisition_date=date(2026, 10, 1),
+        db_path=db,
+    )
+
+    assert replacement.id != asset.id
+    assert replacement.source_deal_id == deal.id
+
+
+def test_deleting_one_asset_leaves_other_assets_and_reports_untouched(db: Path) -> None:
+    _, deleted = _asset(db)
+    other_deal = _analyzed_deal("detailed", db, name="Westlake Industrial")
+    kept = store.create_managed_asset(
+        source_deal_id=other_deal.id,
+        acquisition_date=date(2026, 11, 1),
+        db_path=db,
+    )
+    kept_report = store.create_monthly_report(
+        managed_asset_id=kept.id,
+        reporting_month=am.MARCH,
+        budget=am.MARCH_BUDGET,
+        actual=am.MARCH_ACTUAL,
+        db_path=db,
+    )
+
+    store.delete_managed_asset(deleted.id, db_path=db)
+
+    assert store.get_managed_asset(kept.id, db_path=db) == kept
+    assert store.get_monthly_report(kept.id, am.MARCH, db_path=db) == kept_report
+
+
+def test_deleting_an_unknown_asset_refuses_before_any_write(db: Path) -> None:
+    _, asset = _asset(db)
+    report = store.create_monthly_report(
+        managed_asset_id=asset.id,
+        reporting_month=am.MARCH,
+        budget=am.MARCH_BUDGET,
+        actual=am.MARCH_ACTUAL,
+        db_path=db,
+    )
+
+    with pytest.raises(ManagedAssetNotFoundError):
+        store.delete_managed_asset("nope", db_path=db)
+
+    assert store.get_managed_asset(asset.id, db_path=db) == asset
+    assert store.get_monthly_report(asset.id, am.MARCH, db_path=db) == report
+
+
+# =============================================================================
 # The stored report drives the authoritative result
 # =============================================================================
 

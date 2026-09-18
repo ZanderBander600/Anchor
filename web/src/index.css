@@ -7635,6 +7635,74 @@ body {
   color: var(--accent);
 }
 
+.am-danger-button {
+  appearance: none;
+  padding: 7px 14px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-control);
+  background: var(--danger);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.am-danger-button:hover:not(:disabled) {
+  filter: brightness(0.9);
+}
+
+.am-danger-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.am-danger-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.am-delete-confirm {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(167, 43, 43, 0.32);
+  border-radius: var(--radius-control);
+  background: var(--danger-soft);
+}
+
+.am-delete-question {
+  margin: 0 0 3px;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.am-delete-message,
+.am-delete-error {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.am-delete-error {
+  margin-top: 6px;
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.am-delete-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
 /* --- Summary cards -------------------------------------------------- */
 
 .am-cards {
@@ -8255,6 +8323,18 @@ body {
 }
 
 @media (max-width: 720px) {
+  .am-delete-confirm {
+    flex-direction: column;
+  }
+
+  .am-delete-actions {
+    width: 100%;
+  }
+
+  .am-delete-actions button {
+    flex: 1;
+  }
+
   .am-page,
   .am-workspace-scroll {
     padding-left: 16px;
