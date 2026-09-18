@@ -3196,6 +3196,15 @@ export async function readManagedAsset(managedAssetId: string): Promise<ManagedA
   return (await response.json()) as ManagedAsset;
 }
 
+/** `DELETE /managed-assets/{id}` -- also removes that asset's monthly reports. */
+export async function deleteManagedAsset(managedAssetId: string): Promise<void> {
+  await assetFetch(
+    `/managed-assets/${encodeURIComponent(managedAssetId)}`,
+    { method: 'DELETE' },
+    'The managed asset could not be deleted',
+  );
+}
+
 /** `GET /managed-assets/{id}/reports`. */
 export async function listMonthlyReports(
   managedAssetId: string,

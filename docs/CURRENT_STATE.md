@@ -30,6 +30,10 @@ whenever an accepted gate merges or the active gate changes.
   post-acquisition feature: it is not P7.10 and is not part of P7.10. Its
   authority is `docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`.
   Implementation is merged; hands-on human product acceptance is pending.
+- A bounded AM1 Managed Asset deletion extension is active on
+  `feature/am1-delete-managed-asset`. It deletes an asset and its owned monthly
+  reports only after inline confirmation, preserves the source acquisition,
+  changes no financial calculation or schema, and is not yet merged.
 - P7.9 final hands-on human acceptance remains pending.
 - P7.10 has not started.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge

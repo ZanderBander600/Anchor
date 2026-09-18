@@ -117,7 +117,12 @@ const ASSET_B_PERFORMANCE = withActualNoi(DEMO_PERFORMANCE, 12345, { managed_ass
 function Harness({ asset }: { asset: ManagedAsset }) {
   const state = useAssetPerformance(asset.id);
   return (
-    <ManagedAssetWorkspace asset={asset} state={state} onViewAcquisitionBasis={vi.fn()} />
+    <ManagedAssetWorkspace
+      asset={asset}
+      state={state}
+      onViewAcquisitionBasis={vi.fn()}
+      onDelete={vi.fn().mockResolvedValue(undefined)}
+    />
   );
 }
 

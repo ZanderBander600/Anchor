@@ -4690,7 +4690,7 @@ def analyze_investment_partner_decision_matrix(
 # Gate AM1 -- Managed Assets and Monthly Performance.
 #
 # ``docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`` Section 6.
-# Eight routes, using the repository's established contracts: ``_exact_keys``
+# Nine routes, using the repository's established contracts: ``_exact_keys``
 # for a body that must state every field it carries, ``_wire`` for the response,
 # ``_not_found`` for a missing entity, ``_structural_error`` for a malformed
 # body, a structured 422 for a contract refusal, and 409 for a conflict.
@@ -4704,7 +4704,8 @@ def analyze_investment_partner_decision_matrix(
 # are derived from the deterministic result, and commentary is analyst prose
 # that reaches no model.
 #
-# There is deliberately no DELETE for either an asset or a report (Section 8).
+# Asset deletion removes its owned monthly reports but leaves its source Deal
+# unchanged. There is deliberately no independent DELETE for a report.
 # =============================================================================
 
 #: Every field a monthly statement states, exactly. A body must carry all of
@@ -4843,6 +4844,16 @@ def read_managed_asset(managed_asset_id: str) -> dict[str, Any]:
 
     try:
         return _wire(investment_store.get_managed_asset(managed_asset_id))
+    except ManagedAssetNotFoundError as error:
+        raise _not_found(error) from None
+
+
+@app.delete("/managed-assets/{managed_asset_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_managed_asset(managed_asset_id: str) -> None:
+    """Delete one Managed Asset and its reports, never its source Deal."""
+
+    try:
+        investment_store.delete_managed_asset(managed_asset_id)
     except ManagedAssetNotFoundError as error:
         raise _not_found(error) from None
 

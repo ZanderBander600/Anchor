@@ -372,6 +372,7 @@ def test_the_managed_asset_has_its_own_identity() -> None:
 #: Every AM1 write path in the store.
 _AM1_WRITE_FUNCTIONS = (
     "create_managed_asset",
+    "delete_managed_asset",
     "create_monthly_report",
     "update_monthly_report_actuals",
 )
@@ -420,6 +421,15 @@ def test_creating_an_asset_only_reads_the_deal() -> None:
     ]
     assert len(writes) == 1
     assert "INSERT INTO managed_assets" in writes[0]
+
+
+def test_deleting_an_asset_explicitly_removes_reports_then_the_asset() -> None:
+    delete = _function(_STORE, "delete_managed_asset")
+    deletes = [sql for sql in _sql_strings(delete) if "DELETE FROM" in sql.upper()]
+    assert deletes == [
+        "DELETE FROM monthly_asset_reports WHERE managed_asset_id = ?",
+        "DELETE FROM managed_assets WHERE id = ?",
+    ]
 
 
 # =============================================================================
@@ -600,8 +610,7 @@ def test_no_am1_route_reaches_an_ai_module() -> None:
 
 
 def test_the_am1_routes_are_exactly_the_authorized_surface() -> None:
-    """Eight routes, and in particular no DELETE for either an asset or a
-    report: AM1 has no deletion workflow, and an absent route is the proof."""
+    """Nine routes: one bounded asset DELETE and no report DELETE."""
 
     source = _current(_API)
     start = source.index("# Gate AM1 -- Managed Assets and Monthly Performance.")
@@ -611,19 +620,22 @@ def test_the_am1_routes_are_exactly_the_authorized_surface() -> None:
         ("post", "/managed-assets"),
         ("get", "/managed-assets"),
         ("get", "/managed-assets/{managed_asset_id}"),
+        ("delete", "/managed-assets/{managed_asset_id}"),
         ("get", "/managed-assets/{managed_asset_id}/reports"),
         ("get", "/managed-assets/{managed_asset_id}/reports/{reporting_month}"),
         ("post", "/managed-assets/{managed_asset_id}/reports"),
         ("put", "/managed-assets/{managed_asset_id}/reports/{reporting_month}"),
         ("get", "/managed-assets/{managed_asset_id}/performance/{reporting_month}"),
     }
-    assert not any(verb == "delete" for verb, _ in routes)
+    assert {path for verb, path in routes if verb == "delete"} == {
+        "/managed-assets/{managed_asset_id}"
+    }
 
 
-def test_the_store_has_no_am1_delete_function() -> None:
+def test_the_store_has_no_independent_report_delete_function() -> None:
     source = _current(_STORE)
-    for absent in ("def delete_managed_asset", "def delete_monthly_report"):
-        assert absent not in source, absent
+    assert "def delete_managed_asset" in source
+    assert "def delete_monthly_report" not in source
 
 
 # =============================================================================
