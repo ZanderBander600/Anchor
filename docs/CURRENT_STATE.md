@@ -1,6 +1,6 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-17
+Last synchronized: 2026-09-18
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -9,9 +9,8 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `3048976` (PR #38, AM1 Managed Assets + Monthly
-  Performance implementation, merged pending hands-on human product
-  acceptance).
+- Accepted baseline: `main` at `60be780` (PR #39, AM1 Managed Asset deletion
+  extension, merged pending hands-on human product acceptance).
 - Last accepted financial implementation merge: `70b92e2` (PR #34, P7.9
   Stage 1 deterministic contracts and engine).
 - Active gate: **P7.9 Partnership Waterfalls + Investor Returns**. The ratified
@@ -30,10 +29,11 @@ whenever an accepted gate merges or the active gate changes.
   post-acquisition feature: it is not P7.10 and is not part of P7.10. Its
   authority is `docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`.
   Implementation is merged; hands-on human product acceptance is pending.
-- A bounded AM1 Managed Asset deletion extension is active on
-  `feature/am1-delete-managed-asset`. It deletes an asset and its owned monthly
-  reports only after inline confirmation, preserves the source acquisition,
-  changes no financial calculation or schema, and is not yet merged.
+- The bounded AM1 Managed Asset deletion extension merged in PR #39
+  (`60be780`). It deletes an asset and its owned monthly reports only after
+  inline confirmation, preserves the source acquisition, and changes no
+  financial calculation or schema. It remains part of the pending AM1 hands-on
+  product acceptance.
 - P7.9 final hands-on human acceptance remains pending.
 - P7.10 has not started.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
