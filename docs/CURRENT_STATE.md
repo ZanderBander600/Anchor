@@ -9,8 +9,8 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `543c1b2` (PR #35, P7.9 Stage 2 persistence,
-  migration, fingerprints, API and Partner Decision Matrix).
+- Accepted baseline: `main` at `3f23ba4` (PR #36, P7.9 Stage 3 Partnership
+  product UI, Partner Decision Matrix integration and browser QA).
 - Last accepted financial implementation merge: `70b92e2` (PR #34, P7.9
   Stage 1 deterministic contracts and engine).
 - Active gate: **P7.9 Partnership Waterfalls + Investor Returns**. The ratified
@@ -20,8 +20,9 @@ whenever an accepted gate merges or the active gate changes.
   - **Stage 2** (persistence, migration, fingerprints, API, Partner Decision
     Matrix; Section 17.2): **complete and accepted** in PR #35 (`543c1b2`).
     Tier 2 is integrated over the frozen Stage 1 engine.
-  - **Stage 3** (product UI, browser QA; Section 17.3): **explicitly started**
-    from `main` at `543c1b2`; implementation has not yet been committed.
+  - **Stage 3** (product UI, browser QA; Section 17.3): **implementation
+    complete and merged** in PR #36 (`3f23ba4`). Final hands-on human product
+    acceptance is pending before P7.9 closes.
 - Open PR: none at the time of this synchronization.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active
@@ -53,6 +54,8 @@ accepted merge before updating this file.
 - P7.9 Stage 1 deterministic Partnership Waterfall contracts and engine
 - P7.9 Stage 2 Partnership persistence, migration, fingerprints, API and
   Partner Decision Matrix
+- P7.9 Stage 3 Partnership product UI, Partner Decision Matrix integration and
+  browser QA implementation (PR #36; final hands-on human acceptance pending)
 
 ## Next Work
 
@@ -65,10 +68,12 @@ stages, each started explicitly:
    PR #34 (`70b92e2`).**
 2. Stage 2: persistence, migration, fingerprints, API and the Partner
    Decision Matrix. **Complete and accepted in PR #35 (`543c1b2`).**
-3. Stage 3: product UI with browser QA. **Explicitly started from `main` at
-   `543c1b2`; implementation has not yet been committed.**
+3. Stage 3: product UI with browser QA. **Implementation complete and merged
+   in PR #36 (`3f23ba4`); final hands-on human product acceptance is pending.**
 
-Finishing one stage never starts the next.
+The next action is the human workflow test of the merged Stage 3 product.
+P7.9 remains active until that acceptance is recorded. P7.10 has not started,
+and finishing P7.9 will not start it automatically.
 
 A bounded stabilization sweep remains available for separate human
 authorization. It is not automatically active. Its source issues are:
@@ -106,7 +111,8 @@ sub-gate.
   `docs/architecture/P7_7_CAPITAL_STRUCTURE_FOUNDATION.md`,
   `docs/architecture/P7_8_STRUCTURED_POSITION_ECONOMICS.md`, and
   `docs/architecture/P7_8_PRODUCT_INTEGRATION.md`
-- P7.9 ratified contract (Stages 1 and 2 complete; Stage 3 started):
+- P7.9 ratified contract (Stages 1 and 2 accepted; Stage 3 merged, with final
+  hands-on human acceptance pending):
   `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`
 
 ## Historical-Document Rule

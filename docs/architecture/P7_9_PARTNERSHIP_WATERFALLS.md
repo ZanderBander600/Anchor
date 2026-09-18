@@ -4,9 +4,9 @@ Status: **Ratified.** The human review approved this contract with the
 reviewer's recommended decisions (Section 19). It is the authority for P7.9.
 **Stage 1 (Section 17.1) is complete and accepted** in PR #34 (`70b92e2`).
 **Stage 2 (Section 17.2) is complete and accepted** in PR #35 (`543c1b2`);
-the Stage 1 package remains frozen at `70b92e2`. **Stage 3 (Section 17.3) has
-been explicitly started** from `main` @ `543c1b2`; implementation has not yet
-been committed, and no P7.9 UI exists yet.
+the Stage 1 package remains frozen at `70b92e2`. **Stage 3 (Section 17.3) is
+implemented and merged** in PR #36 (`3f23ba4`). Final hands-on human product
+acceptance is pending; P7.9 remains active and P7.10 has not started.
 
 History:
 
@@ -55,6 +55,19 @@ History:
     fingerprint (FP-2);
   - Section 16.2's `portfolio_property_debt_jv` waterfall half is frozen from
     the exact-rational oracle rather than typed by hand.
+- **Stage 3 implementation record** (Section 17.3; no backend or financial
+  engine file changed):
+  - Partnership editing and backend-authored results are available on Deal and
+    Investment Risk surfaces, and Partner is available in the Decision Matrix;
+  - Project, Position and Partner decision-state tokens preserve the P-4
+    invalidation boundary, including distinct inherit, explicit-none and
+    replacement Partnership states;
+  - benchmark-share differences are disclosed without deriving economics in
+    the browser, and internal condition identifiers remain non-visible;
+  - Partnership removal uses an inline confirmation with tested keyboard-focus
+    recovery on success, failure and cancellation;
+  - automated frontend, architecture and browser QA is complete. Final
+    hands-on human product acceptance remains to be recorded.
 
 Base: `main` @ `79cb524`.
 Branch: `feature/p7-9-partnership-waterfalls`.
@@ -1552,6 +1565,6 @@ Also ratified, as recorded in Section 19.1 and the body:
   and introduces no deferred scope (Section 18).
 - **Implementation.** Stage 1 is complete and accepted in PR #34 (`70b92e2`).
   Stage 2 is complete and accepted in PR #35 (`543c1b2`). Stage 3
-  (Section 17.3) was explicitly started from that accepted baseline;
-  implementation has not yet been committed. Finishing one stage never starts
-  the next.
+  (Section 17.3) is implemented and merged in PR #36 (`3f23ba4`), with final
+  hands-on human product acceptance pending. P7.9 remains active until that
+  acceptance is recorded; P7.10 has not started.
