@@ -7,6 +7,7 @@ import type {
   MonthlyAssetReport,
   OperatingFigures,
 } from '../assetManagementTypes';
+import { groupDigits } from '../numberFormat';
 import { NumericInput } from './NumericInput';
 
 /** Gate AM1 -- entering a month's approved budget and actual results.
@@ -211,8 +212,13 @@ export function MonthlyReportEditor({
                       // Read-only text, not a disabled input: a locked budget is
                       // a figure of record, and rendering it as a greyed-out
                       // field would suggest it is merely unavailable right now.
+                      // Grouped exactly as the editable column groups on blur,
+                      // so the locked figure reads as the same kind of number
+                      // rather than as raw digits beside a formatted one.
                       <span className="am-locked-figure" aria-label={`Budget ${FIELD_LABELS[field]}, locked`}>
-                        {frozenBudget?.[field]}
+                        {PERCENT_FIELDS.has(field)
+                          ? frozenBudget?.[field]
+                          : groupDigits(frozenBudget?.[field] ?? '')}
                         <span className="am-unit"> {suffix === '%' ? '%' : ''}</span>
                       </span>
                     )}

@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
+import { AssetManagementShell } from './components/AssetManagementShell';
 import { MonthlyPerformancePanel } from './components/MonthlyPerformancePanel';
 import { MonthlyReportEditor } from './components/MonthlyReportEditor';
 import { ManagedAssetWorkspace } from './components/ManagedAssetWorkspace';
@@ -250,6 +251,41 @@ describe('NOI trend', () => {
     expect(within(table).getByText('$61,500')).toBeTruthy();
   });
 
+  it('anchors the first and last month labels inward so neither is clipped', () => {
+    // Browser QA found "Mar 2027" rendered as "Mar 202": a centred label on an
+    // edge point extends past the viewBox and is cut off.
+    const { container } = render(
+      <NoiTrendChart
+        points={[
+          {
+            reporting_month: '2027-02-01',
+            budget_net_operating_income: 67000,
+            actual_net_operating_income: 66000,
+          },
+          {
+            reporting_month: '2027-03-01',
+            budget_net_operating_income: 67000,
+            actual_net_operating_income: 61500,
+          },
+        ]}
+      />,
+    );
+    const labels = [...container.querySelectorAll('text')].filter((node) =>
+      /^[A-Z][a-z]{2} \d{4}$/.test(node.textContent ?? ''),
+    );
+    expect(labels.map((node) => node.textContent)).toEqual(['Feb 2027', 'Mar 2027']);
+    expect(labels[0].getAttribute('text-anchor')).toBe('start');
+    expect(labels[1].getAttribute('text-anchor')).toBe('end');
+  });
+
+  it('centres a lone month label', () => {
+    const { container } = render(<NoiTrendChart points={DEMO_PERFORMANCE.result.noi_trend} />);
+    const label = [...container.querySelectorAll('text')].find((node) =>
+      /^[A-Z][a-z]{2} \d{4}$/.test(node.textContent ?? ''),
+    );
+    expect(label?.getAttribute('text-anchor')).toBe('middle');
+  });
+
   it('says so plainly when nothing has been reported', () => {
     render(<NoiTrendChart points={[]} />);
     expect(screen.getByText(/no months have been reported yet/i)).toBeTruthy();
@@ -352,8 +388,19 @@ describe('Monthly report editor', () => {
         error={null}
       />,
     );
+    // Grouped exactly as the editable column groups on blur, so the locked
+    // figure reads as the same kind of number rather than as raw digits.
     const locked = screen.getByLabelText('Budget Payroll, locked');
-    expect(locked.textContent).toContain(String(DEMO_BUDGET.payroll));
+    expect(DEMO_BUDGET.payroll).toBe(6000);
+    expect(locked.textContent).toContain('6,000');
+
+    const rental = screen.getByLabelText('Budget Rental Revenue, locked');
+    expect(rental.textContent).toContain('100,000');
+
+    // Occupancy is a percentage, not a grouped amount.
+    const occupancy = screen.getByLabelText('Budget Occupancy, locked');
+    expect(occupancy.textContent).toContain('95');
+    expect(occupancy.textContent).not.toContain(',');
   });
 });
 
@@ -423,6 +470,35 @@ describe('Managed asset workspace', () => {
     expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
       'March 2027',
     ]);
+  });
+
+  it('names every icon-only navigation button for the collapsed rail', () => {
+    // Below 1024px the rail collapses and `.sidebar-nav-label` is hidden, which
+    // removes it from the accessibility tree. Browser QA at 390px found these
+    // five buttons with no accessible name at all.
+    render(
+      <AssetManagementShell
+        state={{
+          assets: [DEMO_ASSET],
+          isLoading: false,
+          error: null,
+          reload: vi.fn(),
+          create: vi.fn(),
+        }}
+        dealCount={1}
+        onViewAcquisitionBasis={vi.fn()}
+        onOpenAcquisitions={vi.fn()}
+      />,
+    );
+    for (const name of [
+      'Acquisitions',
+      'Asset Management',
+      'Portfolio Overview',
+      'Managed Assets',
+      'Monthly Reporting',
+    ]) {
+      expect(screen.getAllByRole('button', { name }).length).toBeGreaterThan(0);
+    }
   });
 
   it('guides the analyst when nothing has been reported yet', () => {

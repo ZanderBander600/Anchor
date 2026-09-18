@@ -105,11 +105,21 @@ export function NoiTrendChart({ points }: NoiTrendChartProps) {
                 cy={y(point.actual_net_operating_income)}
                 r={3.5}
               />
+              {/* The first and last labels are anchored inward rather than
+                * centred: a centred label on an edge point extends past the
+                * viewBox and is clipped, which silently truncated "Mar 2027"
+                * to "Mar 202". */}
               <text
                 className="am-trend-axis"
                 x={x(index)}
                 y={VIEW_HEIGHT - 8}
-                textAnchor="middle"
+                textAnchor={
+                  points.length > 1 && index === 0
+                    ? 'start'
+                    : points.length > 1 && index === points.length - 1
+                      ? 'end'
+                      : 'middle'
+                }
               >
                 {formatMonthShort(point.reporting_month)}
               </text>

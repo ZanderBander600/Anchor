@@ -204,11 +204,17 @@ export function AppSidebar({
             type="button"
             className="sidebar-nav-item sidebar-nav-item-active"
             aria-current="page"
+            aria-label="Acquisitions"
           >
             <IconLibrary />
             <span className="sidebar-nav-label">Acquisitions</span>
           </button>
-          <button type="button" className="sidebar-nav-item" onClick={onOpenAssetManagement}>
+          <button
+            type="button"
+            className="sidebar-nav-item"
+            aria-label="Asset Management"
+            onClick={onOpenAssetManagement}
+          >
             <IconAssetManagement />
             <span className="sidebar-nav-label">Asset Management</span>
             {managedAssetCount > 0 && (

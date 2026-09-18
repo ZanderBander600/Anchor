@@ -89,7 +89,12 @@ export function AssetManagementShell({
 
         {/* The primary application-level distinction. */}
         <div className="sidebar-section am-workspace-switch">
-          <button type="button" className="sidebar-nav-item" onClick={onOpenAcquisitions}>
+          <button
+            type="button"
+            className="sidebar-nav-item"
+            aria-label="Acquisitions"
+            onClick={onOpenAcquisitions}
+          >
             <IconAssets />
             <span className="sidebar-nav-label">Acquisitions</span>
           </button>
@@ -97,6 +102,7 @@ export function AssetManagementShell({
             type="button"
             className="sidebar-nav-item sidebar-nav-item-active"
             aria-current="page"
+            aria-label="Asset Management"
           >
             <IconPortfolioPie />
             <span className="sidebar-nav-label">Asset Management</span>
@@ -114,6 +120,9 @@ export function AssetManagementShell({
                   : 'sidebar-nav-item'
               }
               aria-current={section === candidate.id && openAssetId === null ? 'page' : undefined}
+              // The label is hidden in the collapsed rail below 1024px, so the
+              // icon-only button needs a name of its own.
+              aria-label={candidate.label}
               onClick={() => {
                 setSection(candidate.id);
                 setOpenAssetId(null);
