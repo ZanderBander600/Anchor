@@ -303,14 +303,16 @@ describe('the Investment header and workspaces', () => {
     renderWorkspace();
     await user.click(await screen.findByRole('tab', { name: 'Risk' }));
     const views = within(screen.getByRole('tablist', { name: 'Investment risk views' })).getAllByRole('tab');
-    // Re-pinned at P7.8B: Capital Structure joins the decision tools at
-    // Investment level. Sensitivity and break-even stay Unit-level, which is
-    // what this test is actually about, and are still absent.
+    // Re-pinned at P7.8B, when Capital Structure joined the decision tools at
+    // Investment level, and again at P7.9 Stage 3, when Partnership did.
+    // Sensitivity and break-even stay Unit-level, which is what this test is
+    // actually about, and are still absent.
     expect(views.map((tab) => tab.textContent)).toEqual([
       'Decision Matrix',
       'Strategies',
       'Scenarios',
       'Capital Structure',
+      'Partnership',
     ]);
     await waitFor(() => expect(listInvestmentStrategies).toHaveBeenCalledWith('inv-1'));
   });

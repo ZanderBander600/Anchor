@@ -49,6 +49,7 @@ import type { StrategyDomain, StrategyTargetEntry } from '../strategyTypes';
 import type { StrategiesState } from '../useStrategies';
 import { BusinessPlanEditor } from './BusinessPlanEditor';
 import { CapitalStructureEditor } from './CapitalStructureEditor';
+import { PartnershipEditor } from './PartnershipEditor';
 import { NumericInput } from './NumericInput';
 
 export interface StrategyEditorProps {
@@ -113,6 +114,15 @@ function ModeChoice<T extends string>({
 
 const INHERIT_OR_SPECIFIC: ModeOption<'inherit' | 'specific'>[] = [
   { value: 'inherit', label: 'Inherit Base' },
+  { value: 'specific', label: 'Strategy-specific' },
+];
+
+/** The Partnership domain's three states. "No Partnership" is its own choice
+ * rather than an empty contract, because a Partnership always has at least one
+ * partner and so can never be empty (P7.9 Stage 3). */
+const PARTNERSHIP_OPTIONS: ModeOption<'inherit' | 'none' | 'specific'>[] = [
+  { value: 'inherit', label: 'Inherit Base' },
+  { value: 'none', label: 'No Partnership' },
   { value: 'specific', label: 'Strategy-specific' },
 ];
 
@@ -746,6 +756,58 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
                 unitId: unit.unitId,
                 name: unitDisplayName(unit),
               }))}
+              embedded
+            />
+          </>
+        )}
+      </fieldset>
+
+      {/* The second whole-transaction domain. Three states, never collapsed:
+        * Inherit Base resolves to the Investment's Base Partnership, No
+        * Partnership states that this strategy deliberately has none, and
+        * Strategy-specific replaces the Base one whole. A Partnership cannot be
+        * empty -- it always has a partner -- so "none" needs its own choice,
+        * where an empty structure says the same thing for capital. */}
+      <fieldset className="strategy-domain strategy-root-domain">
+        <legend className="strategy-domain-legend">
+          {domainPresentation('partnership').label}
+        </legend>
+        <div className="strategy-domain-head">
+          <p className="strategy-domain-replaces">
+            {domainPresentation('partnership').replaces}
+          </p>
+          <ModeChoice
+            name={`${ids}strategy-partnership-mode`}
+            label="Partnership"
+            value={editor.partnership.choice}
+            options={PARTNERSHIP_OPTIONS}
+            disabled={locked}
+            onChange={(value) => state.setPartnershipChoice(value)}
+          />
+        </div>
+        {editor.partnership.choice === 'inherit' ? (
+          <Inherited summary="Every partner and tier is Base’s." />
+        ) : editor.partnership.choice === 'none' ? (
+          <p className="strategy-domain-note">
+            This strategy has no partnership. Its Common Equity Cash Flow is reported whole, and no
+            partner-level returns are produced for it.
+          </p>
+        ) : (
+          <>
+            <p className="strategy-domain-note">
+              A complete replacement partnership. Where Base states one it starts as a copy of it
+              for convenience; once saved it is this strategy&apos;s own, and later changes to Base
+              do not reach it. A partner keeps its id, so the Partner matrix still compares the same
+              partner — though this strategy may describe it by a different name or role.
+            </p>
+            <PartnershipEditor
+              id={`${ids}strategy-partnership`}
+              prefix={`${ids}strategy-partnership`}
+              form={editor.partnership.form}
+              onChange={(form) => state.setPartnership(form)}
+              issues={[]}
+              locked={locked}
+              lockedReason={null}
               embedded
             />
           </>

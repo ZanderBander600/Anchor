@@ -34,11 +34,11 @@ export interface UsePositionDecisionMatrixOptions {
   isDirty: boolean;
   /** The saved economic state token the Project matrix is keyed by. */
   stateToken: string;
-  /** Whether the surface is on screen. Nothing is requested before it is. */
+  /** Whether this perspective is on screen and selected. Nothing is requested
+   * before it is: the owner of the perspective choice decides, because more
+   * than one perspective now shares the surface. */
   isActive: boolean;
 }
-
-export type PerspectiveChoice = 'project' | 'position';
 
 type RunState =
   | { status: 'idle' }
@@ -47,9 +47,6 @@ type RunState =
   | { status: 'error'; token: string; message: string };
 
 export interface PositionDecisionMatrixState {
-  /** Which perspective is on screen. */
-  perspective: PerspectiveChoice;
-  choosePerspective: (perspective: PerspectiveChoice) => void;
   /** The addressable positions, once read. */
   positions: PositionPerspective[];
   listStatus: 'idle' | 'loading' | 'ready' | 'error';
@@ -77,7 +74,6 @@ export function usePositionDecisionMatrix({
   stateToken,
   isActive,
 }: UsePositionDecisionMatrixOptions): PositionDecisionMatrixState {
-  const [perspective, setPerspective] = useState<PerspectiveChoice>('project');
   const [positions, setPositions] = useState<PositionPerspective[]>([]);
   const [listStatus, setListStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [listError, setListError] = useState<string | null>(null);
@@ -92,10 +88,10 @@ export function usePositionDecisionMatrix({
     [investmentId, stateToken, selectedPositionId],
   );
 
-  // The addressable positions are read only once the analyst asks for the
-  // Position perspective: a Deal that never opted into structured capital pays
-  // for nothing.
-  const wantsList = isActive && perspective === 'position' && investmentId !== null;
+  // The addressable positions are read only once the analyst asks for this
+  // perspective -- which `isActive` already says -- so a Deal that never opted
+  // into structured capital pays for nothing.
+  const wantsList = isActive && investmentId !== null;
 
   // An effect, not a memo: this reads from the network and sets state, which is
   // synchronising with an external system rather than computing a value. Stated
@@ -157,8 +153,6 @@ export function usePositionDecisionMatrix({
   }
 
   return {
-    perspective,
-    choosePerspective: setPerspective,
     positions,
     listStatus,
     listError,

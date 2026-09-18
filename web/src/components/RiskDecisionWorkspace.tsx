@@ -21,7 +21,7 @@
  * ids are namespaced (`decisionIdScope`) and never collide with the Deal's.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   decisionIdScope,
@@ -33,6 +33,8 @@ import {
 } from '../investmentCatalog';
 import type { InvestmentDecisionScope } from '../investmentCatalog';
 import { useCapitalStructure } from '../useCapitalStructure';
+import { usePartnership } from '../usePartnership';
+import { usePartnerDecisionMatrix } from '../usePartnerDecisionMatrix';
 import { usePositionDecisionMatrix } from '../usePositionDecisionMatrix';
 import { useDecisionMatrix } from '../useDecisionMatrix';
 import { useScenarios } from '../useScenarios';
@@ -41,6 +43,8 @@ import type { OperatingMode } from '../types';
 import { CapitalStructureWorkspace } from './CapitalStructureWorkspace';
 import type { ScopeUnit } from './CapitalStructureEditor';
 import { DecisionMatrixPanel } from './DecisionMatrixPanel';
+import { PartnerDecisionMatrixPanel } from './PartnerDecisionMatrixPanel';
+import { PartnershipWorkspace } from './PartnershipWorkspace';
 import { PositionDecisionMatrixPanel } from './PositionDecisionMatrixPanel';
 import { ScenarioWorkspace } from './ScenarioWorkspace';
 import { StrategyManager } from './StrategyManager';
@@ -59,11 +63,27 @@ const SAVE_BEFORE_CAPITAL_MESSAGE =
 const DIRTY_BEFORE_CAPITAL_MESSAGE =
   'Base underwriting has unsaved changes. Save the deal, then edit the capital structure.';
 
+// prettier-ignore
+const SAVE_BEFORE_PARTNERSHIP_MESSAGE =
+  'Save this deal before adding a partnership.';
+
+// prettier-ignore
+const DIRTY_BEFORE_PARTNERSHIP_MESSAGE =
+  'Base underwriting has unsaved changes. Save the deal, then edit the partnership.';
+
 /** The visible Investment a Deal belongs to, when it is one of its Units. */
 export interface InvestmentMembership {
   investmentName: string;
   onOpen: () => void;
 }
+
+/** Which typed perspective the Decision Matrix is showing (DC-3).
+ *
+ * `project` is the deal's own economics and stays the default and the upstream
+ * one. `position` is one capital position's and `partner` is one partner's, over
+ * the same variants. The choice lives here, with the surface that shows all
+ * three, rather than inside any one perspective's hook. */
+export type DecisionPerspectiveChoice = 'project' | 'position' | 'partner';
 
 /** Which decision editors are open, each holding an unsaved draft. */
 export interface DecisionDrafts {
@@ -71,6 +91,8 @@ export interface DecisionDrafts {
   scenario: boolean;
   /** P7.8B: the Base Capital Structure editor. */
   capitalStructure: boolean;
+  /** P7.9 Stage 3: the Base Partnership editor. */
+  partnership: boolean;
 }
 
 export interface RiskDecisionWorkspaceProps {
@@ -122,12 +144,24 @@ export function RiskDecisionWorkspace({
   onDraftsChange,
 }: RiskDecisionWorkspaceProps) {
   const requests = isActive && memberOf === null;
+  const [perspective, setPerspective] = useState<DecisionPerspectiveChoice>('project');
   // P7.8B: the Base Capital Structure of this Deal, or of this Investment. It
   // is the Investment's own contract, so a Deal reaches it through the Deal
   // route, which materializes the hidden one-unit Investment on the first
   // non-empty save (Q4) -- and the UI keeps saying "Deal". Read before the
   // Strategies, which copy it when a Strategy states its own structure.
   const capital = useCapitalStructure({
+    dealId,
+    investmentId: investment?.investmentId ?? null,
+    isDirty,
+    savedAt,
+    isActive: requests,
+  });
+  // P7.9 Stage 3: the Base Partnership of this Deal, or of this Investment. It
+  // is the Investment's own contract, reached the same way the Capital
+  // Structure is, and it allocates the Common Equity Cash Flow the structure
+  // leaves behind -- so it is read beside it, and downstream of it.
+  const partnership = usePartnership({
     dealId,
     investmentId: investment?.investmentId ?? null,
     isDirty,
@@ -143,6 +177,7 @@ export function RiskDecisionWorkspace({
     isActive: requests,
     investment,
     baseCapitalStructure: capital.saved,
+    basePartnership: partnership.saved,
   });
   const matrix = useDecisionMatrix({
     dealId,
@@ -159,6 +194,7 @@ export function RiskDecisionWorkspace({
   const hasStrategyDraft = strategies.editor !== null;
   const hasScenarioDraft = scenarios.editor !== null;
   const hasCapitalDraft = capital.hasDraft;
+  const hasPartnershipDraft = partnership.hasDraft;
 
   /** The Units a position may be scoped to. A standalone Deal has exactly one,
    * so the editor offers no choice; an Investment offers each Unit by name. */
@@ -189,6 +225,20 @@ export function RiskDecisionWorkspace({
           ? DIRTY_BEFORE_CAPITAL_MESSAGE
           : null;
 
+  /** Why the analyst cannot change the Partnership right now, or `null`. It is
+   * authored against the *saved* underwriting for the same reason the structure
+   * is. */
+  const partnershipBlockedReason =
+    investment !== null
+      ? isDirty
+        ? INVESTMENT_DIRTY_MESSAGE
+        : null
+      : dealId === null
+        ? SAVE_BEFORE_PARTNERSHIP_MESSAGE
+        : isDirty
+          ? DIRTY_BEFORE_PARTNERSHIP_MESSAGE
+          : null;
+
   /** The saved economic state a Position matrix belongs to. A structured cell
    * is invalidated by the capital structure it ran, by a Strategy's overlays --
    * its root overlays included, which is where a Strategy states its own
@@ -211,7 +261,21 @@ export function RiskDecisionWorkspace({
     investmentId: investment?.investmentId ?? capital.investmentId,
     isDirty,
     stateToken: positionStateToken,
-    isActive: requests && view === 'matrix',
+    isActive: requests && view === 'matrix' && perspective === 'position',
+  });
+
+  /** The saved economic state a Partner matrix belongs to: everything a
+   * structured cell is invalidated by, plus the saved Base Partnership. A
+   * Strategy's own Partnership already travels in its root overlays above. */
+  const partnerStateToken = JSON.stringify([positionStateToken, partnership.saved]);
+
+  // The partners belong to the Investment: a visible one, or the Deal's hidden
+  // wrapper once a Partnership, structure, Strategy or Scenario has created it.
+  const partnerMatrix = usePartnerDecisionMatrix({
+    investmentId: investment?.investmentId ?? partnership.investmentId ?? capital.investmentId,
+    isDirty,
+    stateToken: partnerStateToken,
+    isActive: requests && view === 'matrix' && perspective === 'partner',
   });
 
   useEffect(() => {
@@ -219,11 +283,18 @@ export function RiskDecisionWorkspace({
       strategy: hasStrategyDraft,
       scenario: hasScenarioDraft,
       capitalStructure: hasCapitalDraft,
+      partnership: hasPartnershipDraft,
     });
-  }, [hasStrategyDraft, hasScenarioDraft, hasCapitalDraft, onDraftsChange]);
+  }, [
+    hasStrategyDraft,
+    hasScenarioDraft,
+    hasCapitalDraft,
+    hasPartnershipDraft,
+    onDraftsChange,
+  ]);
 
   function panel(
-    id: 'matrix' | 'strategies' | 'scenarios' | 'capital-structure',
+    id: 'matrix' | 'strategies' | 'scenarios' | 'capital-structure' | 'partnership',
     content: ReactNode,
   ) {
     return (
@@ -238,11 +309,12 @@ export function RiskDecisionWorkspace({
       {panel(
         'matrix',
         <>
-          {/* DC-3: one comparison surface, two typed perspectives. PROJECT is
+          {/* DC-3: one comparison surface, three typed perspectives. PROJECT is
             * the deal's own economics; POSITION(position_id) is one capital
-            * position's, over the same variants. They are never mixed in one
-            * table -- a Project IRR and a mezzanine IRR are different claims on
-            * different cash. */}
+            * position's; PARTNER(partner_id) is one partner's share of the
+            * Common Equity the structure leaves behind. They are never mixed in
+            * one table -- a Project IRR, a mezzanine IRR and an LP's IRR are
+            * different claims on different cash (NS-1). */}
           <div
             className="strategy-mode decision-perspective"
             role="radiogroup"
@@ -252,12 +324,13 @@ export function RiskDecisionWorkspace({
               [
                 { value: 'project', label: 'Project' },
                 { value: 'position', label: 'Position' },
+                { value: 'partner', label: 'Partner' },
               ] as const
             ).map((option) => (
               <label
                 key={option.value}
                 className={
-                  positionMatrix.perspective === option.value
+                  perspective === option.value
                     ? 'strategy-mode-option strategy-mode-option-active'
                     : 'strategy-mode-option'
                 }
@@ -266,14 +339,16 @@ export function RiskDecisionWorkspace({
                   type="radio"
                   name={`${ids}decision-perspective`}
                   value={option.value}
-                  checked={positionMatrix.perspective === option.value}
-                  onChange={() => positionMatrix.choosePerspective(option.value)}
+                  checked={perspective === option.value}
+                  onChange={() => setPerspective(option.value)}
                 />
                 <span>{option.label}</span>
               </label>
             ))}
           </div>
-          {positionMatrix.perspective === 'position' ? (
+          {perspective === 'partner' ? (
+            <PartnerDecisionMatrixPanel state={partnerMatrix} ids={ids} isDirty={isDirty} />
+          ) : perspective === 'position' ? (
             <PositionDecisionMatrixPanel state={positionMatrix} ids={ids} isDirty={isDirty} />
           ) : (
         <DecisionMatrixPanel
@@ -313,6 +388,15 @@ export function RiskDecisionWorkspace({
           units={capitalUnits}
           unitNames={capitalUnitNames}
           blockedReason={capitalBlockedReason}
+          isInvestment={investment !== null}
+        />,
+      )}
+      {panel(
+        'partnership',
+        <PartnershipWorkspace
+          state={partnership}
+          prefix={ids}
+          blockedReason={partnershipBlockedReason}
           isInvestment={investment !== null}
         />,
       )}

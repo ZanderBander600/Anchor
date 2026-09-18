@@ -445,11 +445,13 @@ describe('a visible Investment reaches the backend by its own routes', () => {
       expect(shown.filter((token) => /^(Duplicate|Copy|Clone)\b/.test(token.trim())), relative).toEqual([]);
     }
     const workspace = sourceOf('components/InvestmentWorkspace.tsx');
-    // Re-pinned at P7.8B, the gate that publishes Capital Structure at
-    // Investment level. Until then the words were banned here for the reason
-    // every unreached capability is: naming it would have been half-wiring.
-    // Sensitivity and Break-Even stay Unit-level and stay banned, and
-    // Partnership still belongs to no shipped gate.
+    // Re-pinned at P7.8B, the gate that published Capital Structure at
+    // Investment level, and again at P7.9 Stage 3, the gate that publishes
+    // Partnership there. Until each shipped, its word was banned here for the
+    // reason every unreached capability is: naming it would have been
+    // half-wiring. Sensitivity and Break-Even stay Unit-level and stay banned,
+    // and so do AI Analyst and Documents, which belong to no shipped gate --
+    // which is what keeps this guard's teeth.
     expect(workspace).toContain(
       [
         "const RISK_VIEWS = [",
@@ -457,10 +459,11 @@ describe('a visible Investment reaches the backend by its own routes', () => {
         "  { id: 'strategies', label: 'Strategies' },",
         "  { id: 'scenarios', label: 'Scenarios' },",
         "  { id: 'capital-structure', label: 'Capital Structure' },",
+        "  { id: 'partnership', label: 'Partnership' },",
         '];',
       ].join('\n'),
     );
-    expect(textTokens('components/InvestmentWorkspace.tsx', workspace).filter((token) => /^(Sensitivity|Break-Even|AI Analyst|Documents|Partnership)$/.test(token.trim()))).toEqual([]);
+    expect(textTokens('components/InvestmentWorkspace.tsx', workspace).filter((token) => /^(Sensitivity|Break-Even|AI Analyst|Documents)$/.test(token.trim()))).toEqual([]);
   });
 
   it('shows no Quick / Detailed / Lease-Level toggle at Investment level', () => {

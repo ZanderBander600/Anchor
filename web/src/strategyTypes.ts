@@ -19,21 +19,27 @@
 
 import type { BusinessPlanInput } from './businessPlan';
 import type { CapitalStructure } from './capitalTypes';
+import type { Partnership } from './partnershipTypes';
 import type { OperatingMode } from './types';
 
 /** Mirrors `StrategyDomain`, in its declaration order: the five P7.4 Unit
- * domains, then the P7.8B Investment-root domain. */
+ * domains, then the two Investment-root domains (P7.8B, then P7.9 Stage 2). */
 export type StrategyDomain =
   | 'acquisition'
   | 'financing'
   | 'business_plan'
   | 'operating_outcome'
   | 'disposition'
-  | 'capital_structure';
+  | 'capital_structure'
+  | 'partnership';
 
-/** The domains one Unit overlay may carry. `capital_structure` is deliberately
- * absent: it replaces an Investment-level contract and is stated at the root. */
-export type UnitStrategyDomain = Exclude<StrategyDomain, 'capital_structure'>;
+/** The domains one Unit overlay may carry. `capital_structure` and
+ * `partnership` are deliberately absent: each replaces an Investment-level
+ * contract and is stated at the root. */
+export type UnitStrategyDomain = Exclude<
+  StrategyDomain,
+  'capital_structure' | 'partnership'
+>;
 
 /** Mirrors `AcquisitionChoice`: the bid package, whole. */
 export interface AcquisitionChoice {
@@ -74,20 +80,28 @@ export type StrategyOverlay =
   | { unit_id: string; domain: 'operating_outcome'; content: OperatingOutcomeSet }
   | { unit_id: string; domain: 'disposition'; content: DispositionChoice };
 
-/** Mirrors `InvestmentStrategyOverlay` (P7.8B): one whole Investment-root
- * domain, addressed by its domain alone -- a root overlay carries no `unit_id`,
- * because the positions inside it carry their own scope. */
-export interface InvestmentStrategyOverlay {
-  domain: 'capital_structure';
-  content: CapitalStructure;
-}
+/** Mirrors `InvestmentStrategyOverlay`: one whole Investment-root domain,
+ * addressed by its domain alone -- a root overlay carries no `unit_id`, because
+ * the positions or partners inside it carry their own identity.
+ *
+ * A `partnership` overlay's content is `null` for the explicit **no
+ * Partnership** (P7.9 Stage 2). It has to be spelled that way rather than as an
+ * empty contract, because a Partnership always has at least one partner and so
+ * can never be empty -- unlike a Capital Structure, whose empty positions list
+ * *is* its "no structured capital". */
+export type InvestmentStrategyOverlay =
+  | { domain: 'capital_structure'; content: CapitalStructure }
+  | { domain: 'partnership'; content: Partnership | null };
 
 /** Mirrors the `StrategyDefinition`. Overlays arrive in canonical order.
  *
- * `root_overlays` is present **only when the Strategy states one** (P7.8B):
- * its absence is the Strategy inheriting the Investment's Base Capital
- * Structure, and an overlay whose content has no position is the different,
- * explicit choice of using no structured capital. */
+ * A root overlay is present **only when the Strategy states that domain**: its
+ * absence is the Strategy inheriting the Investment's Base contract. For
+ * `capital_structure` (P7.8B) an overlay whose content has no position is the
+ * different, explicit choice of using no structured capital; for `partnership`
+ * (P7.9 Stage 2) a `null` content is the equivalent explicit "no Partnership".
+ * Inherit, replace and explicitly-none are three distinct states, and none of
+ * them is ever collapsed into another. */
 export interface StrategyDefinition {
   strategy_id: string;
   name: string;

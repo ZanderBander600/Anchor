@@ -52,6 +52,9 @@ import { businessPlanDraftFromInput, placeBusinessPlanApiIssues } from './busine
 import type { BusinessPlanDraft } from './businessPlan';
 import { formFromStructure } from './capitalStructureForm';
 import type { CapitalStructureForm } from './capitalStructureForm';
+import { formFromPartnership } from './partnershipForm';
+import type { PartnershipForm } from './partnershipForm';
+import type { Partnership } from './partnershipTypes';
 import type { CapitalStructure } from './capitalTypes';
 import { unitNames, withUnitNames } from './investmentCatalog';
 import type { DecisionUnit, InvestmentDecisionScope } from './investmentCatalog';
@@ -97,6 +100,11 @@ export interface UseStrategiesOptions {
    * position keeping its id (P-8), exactly as a Custom Business Plan starts
    * from a copy of the Base plan. */
   baseCapitalStructure?: CapitalStructure;
+  /** P7.9 Stage 3: the saved Base Partnership, or `null` when there is none.
+   * Making that domain strategy-specific for the first time starts from a copy
+   * of it, every partner and tier keeping its id (P-8), exactly as the Capital
+   * Structure domain does. */
+  basePartnership?: Partnership | null;
 }
 
 type ListState =
@@ -160,6 +168,8 @@ export interface StrategiesState {
    * Strategy's own. Stated once, never per Unit. */
   setCapitalStructureChoice: (choice: 'inherit' | 'specific') => void;
   setCapitalStructure: (form: CapitalStructureForm) => void;
+  setPartnershipChoice: (choice: 'inherit' | 'none' | 'specific') => void;
+  setPartnership: (form: PartnershipForm) => void;
   setAcquisitionEnabled: (unitId: string, enabled: boolean) => void;
   setAcquisitionField: (unitId: string, field: AcquisitionField, value: string) => void;
   setFinancingEnabled: (unitId: string, enabled: boolean) => void;
@@ -306,6 +316,7 @@ export function useStrategies({
   isActive,
   investment = null,
   baseCapitalStructure = NO_CAPITAL_STRUCTURE,
+  basePartnership = null,
 }: UseStrategiesOptions): StrategiesState {
   const [list, setList] = useState<ListState>({ status: 'idle' });
   const [catalog, setCatalog] = useState<CatalogState>({ status: 'idle' });
@@ -654,6 +665,29 @@ export function useStrategies({
       }),
     setCapitalStructure: (form) =>
       editDraft((draft) => ({ ...draft, capitalStructure: { ...draft.capitalStructure, form } })),
+    setPartnershipChoice: (choice) =>
+      editDraft((draft) => {
+        if (draft.partnership.choice === choice) {
+          return draft;
+        }
+        // The first switch to strategy-specific copies the Base Partnership, so
+        // the analyst edits a real waterfall rather than building one from
+        // nothing -- and every partner and tier keeps the id the Partner matrix
+        // addresses it by. A form already typed into is kept exactly as typed:
+        // moving between the three choices does not discard the analyst's work.
+        //
+        // With no Base Partnership to copy there is nothing to prefill, and the
+        // analyst authors one from scratch; the copy invents nothing.
+        const form =
+          choice === 'specific' &&
+          draft.partnership.form.partners.length === 0 &&
+          basePartnership !== null
+            ? formFromPartnership(basePartnership)
+            : draft.partnership.form;
+        return { ...draft, partnership: { choice, form } };
+      }),
+    setPartnership: (form) =>
+      editDraft((draft) => ({ ...draft, partnership: { ...draft.partnership, form } })),
     setAcquisitionEnabled: (unitId, enabled) => enableFromBase(unitId, 'acquisition', enabled),
     setAcquisitionField: (unitId, field, value) =>
       editUnit(unitId, (unit) => ({ ...unit, acquisition: { ...unit.acquisition, [field]: value } })),
