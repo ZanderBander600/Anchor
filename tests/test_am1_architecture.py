@@ -3,7 +3,10 @@
 ``docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`` Sections 1.2 and
 10. Every git query reads objects only (protocol 11.2). The guards hold:
 
-1. **the AM1 production ledger**, measured from ``main`` at ``63c2ac0``;
+1. **the AM1 production ledger**, measured over AM1's own committed range
+   ``63c2ac0..366b31b`` (the feature, merged as ``3048976``, and its deletion
+   extension, merged as ``60be780``) -- never against the working tree, which
+   later accepted work legitimately changes;
 2. **no AM1 financial arithmetic in TypeScript** -- every total, variance,
    percentage and assessment is computed in Python;
 3. **a Managed Asset is not a Deal**, and no AM1 module imports an acquisition
@@ -30,6 +33,21 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 #: ``main`` when AM1 began: P7.9 Stage 3 merged, schema v12.
 _AM1_BASE = "63c2ac0"
+
+#: AM1's committed production history ends at the deletion extension's reviewed
+#: head, merged by PR #39 as ``60be780`` (parents ``7ec824c`` and ``366b31b``);
+#: the feature itself merged by PR #38 as ``3048976`` (parents ``63c2ac0`` and
+#: ``1e7fe3d``). Re-pinned at the P7.9 closeout: measured against the working
+#: tree, the ledger read any later accepted frontend change as an AM1 change.
+_AM1_HEAD = "366b31bc615bc00deb152505b3f4e2137c262ecb"
+_AM1_FEATURE_MERGE = "3048976d66d9804f262bce65bd0ae348299560f0"
+_AM1_FEATURE_HEAD = "1e7fe3ddc084c889a289200e1b7d7ee99ee38672"
+_AM1_DELETION_MERGE = "60be780c3bfb0b37311f04710f97069b2f13a7b1"
+
+#: A committed range that is genuinely not AM1: P7.9 Stage 3's reviewed branch
+#: (PR #36, merged as ``3f23ba4``). The ledger must reject it.
+_STAGE_3_BASE = "825a60a84185b978a001ed4f8c648f40ef6d7491"
+_STAGE_3_HEAD = "ce70d79bdf5f1503f4b4a09faa98c1b102f3dd1d"
 
 _PACKAGE = "src/anchor/asset_management"
 _STORE = "src/anchor/deals/store.py"
@@ -138,14 +156,51 @@ def _am1_package_sources() -> dict[str, str]:
 # =============================================================================
 
 
+def _changes_between(base: str, head: str, *paths: str) -> set[str]:
+    """The paths a committed range changed. Objects only: no working tree, no
+    index (protocol 11.2)."""
+    return {
+        path
+        for path in _git("diff", "--name-only", "--no-renames", base, head, "--", *paths).split()
+        if path
+    }
+
+
 def test_am1_changes_exactly_the_declared_backend_files() -> None:
-    changed = {path for path in _changes_since(_AM1_BASE, "src") if _is_production(path)}
+    changed = {path for path in _changes_between(_AM1_BASE, _AM1_HEAD, "src") if _is_production(path)}
     assert changed == _AM1_BACKEND_FILES
 
 
 def test_am1_changes_exactly_the_declared_frontend_files() -> None:
-    changed = {path for path in _changes_since(_AM1_BASE, "web/src") if _is_production(path)}
+    changed = {
+        path for path in _changes_between(_AM1_BASE, _AM1_HEAD, "web/src") if _is_production(path)
+    }
     assert changed == _AM1_FRONTEND_FILES
+
+
+def _parents(commit: str) -> list[str]:
+    return _git("rev-list", "--parents", "-n", "1", commit).split()[1:]
+
+
+def test_the_ledger_range_is_exactly_am1s_merged_history() -> None:
+    assert _parents(_AM1_FEATURE_MERGE) == [_git("rev-parse", _AM1_BASE).strip(), _AM1_FEATURE_HEAD]
+    assert _parents(_AM1_DELETION_MERGE)[1] == _AM1_HEAD
+    # The deletion extension descends from the feature merge, so the range is
+    # one continuous AM1 history, and it is the history this repository holds.
+    for ancestor, descendant in ((_AM1_FEATURE_MERGE, _AM1_HEAD), (_AM1_DELETION_MERGE, "HEAD")):
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant], check=True, cwd=_PROJECT_ROOT
+        )
+    # Nothing between the range's end and the deletion merge touched production.
+    assert _changes_between(_AM1_HEAD, _AM1_DELETION_MERGE, "src", "web") == set()
+
+
+def test_the_ledger_rejects_a_production_file_am1_did_not_declare() -> None:
+    declared = _AM1_BACKEND_FILES | _AM1_FRONTEND_FILES
+    stage_3 = {
+        path for path in _changes_between(_STAGE_3_BASE, _STAGE_3_HEAD, "src", "web/src") if _is_production(path)
+    }
+    assert "web/src/components/PartnershipResults.tsx" in stage_3 - declared
 
 
 @pytest.mark.parametrize("path", _UNCHANGED)

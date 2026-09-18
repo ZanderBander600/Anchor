@@ -3,7 +3,9 @@
 ``docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`` Sections 1.2, 16.5 and
 17.2. Every git query reads objects only (protocol 11.2). The guards hold:
 
-1. **the Stage 2 production ledger**, measured from ``main`` at ``1df2760``;
+1. **the Stage 2 production ledger**, measured over Stage 2's own committed
+   range ``1df2760..acdf28a`` (merged as ``543c1b2``) -- never against the
+   working tree, which later accepted gates (Stage 3, AM1) legitimately change;
 2. **the accepted Stage 1 package frozen** byte for byte at its merge
    ``70b92e2``, and every P7.0 / P7.7 / P7.8 financial and Project-pathway
    module unchanged; no frontend file changed;
@@ -31,6 +33,24 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 #: ``main`` when Stage 2 began, and its first parent: the Stage 1 merge.
 _STAGE_2_BASE = "1df2760"
 _STAGE_1_MERGE = "70b92e2cdde29d2d2a1c5a19240bef91622a2219"
+
+#: Stage 2's committed range ends at its reviewed head, merged into ``main`` by
+#: PR #35 as ``543c1b2`` (parents ``1df2760`` and ``acdf28a``). The ledger is
+#: re-pinned to that range at the P7.9 closeout: measured against the working
+#: tree it read Stage 3's and AM1's accepted frontend and API changes as
+#: unauthorized Stage 2 changes. The historical proof inspects only the
+#: completed Stage 2 range, and the boundary tests below keep it from silently
+#: measuring nothing.
+_STAGE_2_HEAD = "acdf28acf0ef70f8496a991a314dc924a3c9988f"
+_STAGE_2_MERGE = "543c1b29c47d57ca8f3cf8967f4f771d343e1051"
+_STAGE_2_COMMITS = ("82fd7ed", "acdf28a")
+
+#: A later, genuinely non-Stage-2 committed range: Stage 3's reviewed branch,
+#: merged by PR #36 as ``3f23ba4`` (parents ``825a60a`` and ``ce70d79``). It
+#: changes frontend production files, so the ledger must reject it -- the proof
+#: that the re-pinned guard still bites.
+_STAGE_3_BASE = "825a60a84185b978a001ed4f8c648f40ef6d7491"
+_STAGE_3_HEAD = "ce70d79bdf5f1503f4b4a09faa98c1b102f3dd1d"
 
 _PACKAGE = "src/anchor/partnership"
 _STRATEGY = "src/anchor/analysis/strategy.py"
@@ -91,10 +111,23 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
-def _changes_since(base: str, *paths: str) -> set[str]:
+def _changes_between(base: str, head: str, *paths: str) -> set[str]:
+    """The paths a committed range changed. Objects only: no working tree, no
+    index (protocol 11.2)."""
+    return {path for path in _git("diff", "--name-only", "--no-renames", base, head, "--", *paths).split() if path}
+
+
+def _working_tree_changes_since(base: str, *paths: str) -> set[str]:
+    """The paths the working tree (tracked and untracked) differs in from
+    ``base``. Used only for the Stage 1 package, which stays frozen now, not
+    merely at Stage 2."""
     tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
     untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
     return {path for path in (*tracked, *untracked) if path}
+
+
+def _unauthorized(changed: set[str]) -> list[str]:
+    return sorted({path for path in changed if _is_production(path)} - _STAGE_2_PRODUCTION_FILES)
 
 
 def _current(path: str) -> str:
@@ -150,13 +183,48 @@ def _imports(tree: ast.Module) -> set[str]:
 
 
 def test_stage_2_changed_exactly_its_authorized_production_files() -> None:
-    changed = {path for path in _changes_since(_STAGE_2_BASE, "src", "web") if _is_production(path)}
-    assert sorted(changed - _STAGE_2_PRODUCTION_FILES) == []
+    changed = {path for path in _changes_between(_STAGE_2_BASE, _STAGE_2_HEAD, "src", "web") if _is_production(path)}
+    assert _unauthorized(changed) == []
     assert sorted(_STAGE_2_PRODUCTION_FILES - changed) == []
 
 
 def test_the_ledger_base_follows_the_stage_1_merge() -> None:
     assert _git("rev-list", "--parents", "-n", "1", _STAGE_2_BASE).split()[1:] == [_STAGE_1_MERGE]
+
+
+def test_the_ledger_range_is_exactly_the_merged_stage_2_branch() -> None:
+    # PR #35's merge joins the ledger base (first parent) and the ledger head.
+    assert _git("rev-list", "--parents", "-n", "1", _STAGE_2_MERGE).split()[1:] == [
+        _git("rev-parse", _STAGE_2_BASE).strip(),
+        _STAGE_2_HEAD,
+    ]
+    # The range holds exactly Stage 2's two reviewed commits, so it is neither
+    # empty nor stretched over a later gate.
+    commits = _git("rev-list", "--reverse", "--abbrev-commit", f"{_STAGE_2_BASE}..{_STAGE_2_HEAD}").split()
+    assert tuple(commits) == _STAGE_2_COMMITS
+    # And it is the history this repository is built on.
+    subprocess.run(
+        ["git", "merge-base", "--is-ancestor", _STAGE_2_MERGE, "HEAD"], check=True, cwd=_PROJECT_ROOT
+    )
+
+
+def test_the_ledger_range_is_not_a_no_op() -> None:
+    # Every authorized file really changes inside the range, so the ledger is
+    # measuring real history rather than an empty diff.
+    changed = _changes_between(_STAGE_2_BASE, _STAGE_2_HEAD, "src", "web")
+    assert changed == set(_STAGE_2_PRODUCTION_FILES)
+
+
+def test_the_ledger_rejects_an_unauthorized_production_file() -> None:
+    # A real later range that changed frontend production files: the ledger
+    # names them rather than passing them.
+    stage_3 = _changes_between(_STAGE_3_BASE, _STAGE_3_HEAD, "src", "web")
+    rejected = _unauthorized(stage_3)
+    assert "web/src/components/PartnershipResults.tsx" in rejected
+    assert all(path.startswith("web/") for path in rejected)
+    # A test file is not production, and an authorized file is not rejected.
+    assert _unauthorized({"web/src/x.test.tsx", _API}) == []
+    assert _unauthorized({"src/anchor/engine/returns.py"}) == ["src/anchor/engine/returns.py"]
 
 
 def test_the_new_modules_are_new_at_this_stage() -> None:
@@ -189,12 +257,17 @@ def test_each_stage_1_module_is_byte_identical_to_its_merge(path: str) -> None:
 
 
 def test_the_stage_1_package_is_unchanged_since_its_merge() -> None:
-    assert _changes_since(_STAGE_1_MERGE, _PACKAGE) == set()
+    assert _working_tree_changes_since(_STAGE_1_MERGE, _PACKAGE) == set()
 
 
 @pytest.mark.parametrize("path", _UNCHANGED)
 def test_an_upstream_or_frontend_path_is_unchanged(path: str) -> None:
-    assert _changes_since(_STAGE_2_BASE, path) == set(), path
+    assert _changes_between(_STAGE_2_BASE, _STAGE_2_HEAD, path) == set(), path
+
+
+def test_the_unchanged_guard_has_teeth() -> None:
+    # The same query over Stage 3's range does see its frontend changes.
+    assert _changes_between(_STAGE_3_BASE, _STAGE_3_HEAD, "web") != set()
 
 
 def test_the_frozen_guard_has_teeth() -> None:
