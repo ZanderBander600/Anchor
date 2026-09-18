@@ -9,9 +9,9 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `63c2ac0` (PR #37, Acquisition Loans table
-  header alignment, merged on top of PR #36's P7.9 Stage 3 Partnership product
-  UI, Partner Decision Matrix integration and browser QA).
+- Accepted baseline: `main` at `3048976` (PR #38, AM1 Managed Assets + Monthly
+  Performance implementation, merged pending hands-on human product
+  acceptance).
 - Last accepted financial implementation merge: `70b92e2` (PR #34, P7.9
   Stage 1 deterministic contracts and engine).
 - Active gate: **P7.9 Partnership Waterfalls + Investor Returns**. The ratified
@@ -26,12 +26,10 @@ whenever an accepted gate merges or the active gate changes.
     acceptance is pending before P7.9 closes.
 - Open PR: none at the time of this synchronization.
 - **AM1 Managed Assets + Monthly Performance** was explicitly started from
-  `main` at `63c2ac0`, on branch
-  `feature/am1-managed-assets-monthly-performance`. It is an independent
+  `main` at `63c2ac0` and merged in PR #38 (`3048976`). It is an independent
   post-acquisition feature: it is not P7.10 and is not part of P7.10. Its
   authority is `docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`.
-  Implementation is complete on that branch and is not pushed, merged or
-  accepted.
+  Implementation is merged; hands-on human product acceptance is pending.
 - P7.9 final hands-on human acceptance remains pending.
 - P7.10 has not started.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
@@ -85,6 +83,9 @@ The next action is the human workflow test of the merged Stage 3 product.
 P7.9 remains active until that acceptance is recorded. P7.10 has not started,
 and finishing P7.9 will not start it automatically.
 
+AM1 is also merged and awaits hands-on human product acceptance. That parallel
+post-acquisition feature does not change the P7 phase sequence or close P7.9.
+
 A bounded stabilization sweep remains available for separate human
 authorization. It is not automatically active. Its source issues are:
 
@@ -126,9 +127,9 @@ sub-gate.
   `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`
 - AM1 Managed Assets + Monthly Performance:
   `docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md` --
-  **implemented on `feature/am1-managed-assets-monthly-performance`, pending
-  human acceptance.** Not pushed, not merged, not accepted. It is an
-  independent post-acquisition feature and is not P7.10.
+  **implemented and merged in PR #38 (`3048976`), pending human acceptance.**
+  It is not yet accepted, is an independent post-acquisition feature and is not
+  P7.10.
 
 ## Historical-Document Rule
 

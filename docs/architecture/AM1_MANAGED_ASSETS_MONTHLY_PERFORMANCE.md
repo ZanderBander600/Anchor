@@ -1,6 +1,6 @@
 # AM1 — Managed Assets and Monthly Performance
 
-Status: Implemented, pending human product acceptance
+Status: Implemented and merged in PR #38 (`3048976`), pending human product acceptance
 Gate: AM1
 Started from: `main` at `63c2ac0`
 Branch: `feature/am1-managed-assets-monthly-performance`
@@ -652,8 +652,9 @@ answered with repeated full-suite attempts (protocol 7.3).
 
 ## 12. Implementation status
 
-Implemented and verified on `feature/am1-managed-assets-monthly-performance`.
-Not pushed, not merged, not accepted. Human product acceptance is pending.
+Implemented and verified on `feature/am1-managed-assets-monthly-performance`,
+then merged to `main` in PR #38 (`3048976`). Human product acceptance is
+pending, so AM1 is not yet accepted.
 
 P7.9 final human acceptance remains pending and is unaffected by this gate.
 P7.10 has not started.
