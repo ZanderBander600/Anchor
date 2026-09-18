@@ -285,16 +285,20 @@ describe('Deal Context is never called a Strategy', () => {
 describe('the Risk workspace', () => {
   it('leads with the Decision Matrix, Strategies and Scenarios, and opens on the matrix in every mode', () => {
     const app = sourceOf('App.tsx');
-    // Re-pinned at P7.8B, which adds Capital Structure as the fourth decision
-    // view. Its position is part of the claim: the decision views stay
-    // together, ahead of Sensitivity and Break-Even, so the analyst reads
-    // "what I choose" before "how it moves".
+    // Re-pinned at P7.8B, which added Capital Structure as the fourth decision
+    // view, and again at P7.9 Stage 3, which adds Partnership as the fifth --
+    // the gate that ships it. Its position is part of the claim: the decision
+    // views stay together, ahead of Sensitivity and Break-Even, so the analyst
+    // reads "what I choose" before "how it moves". Partnership sits after
+    // Capital Structure because it allocates the Common Equity the structure
+    // leaves behind.
     expect(app).toContain(
       [
         "  { id: 'matrix', label: 'Decision Matrix' },",
         "  { id: 'strategies', label: 'Strategies' },",
         "  { id: 'scenarios', label: 'Scenarios' },",
         "  { id: 'capital-structure', label: 'Capital Structure' },",
+        "  { id: 'partnership', label: 'Partnership' },",
         "  { id: 'sensitivity', label: 'Sensitivity' },",
         "  { id: 'break-even', label: 'Break-Even' },",
       ].join('\n'),
@@ -305,6 +309,7 @@ describe('the Risk workspace', () => {
         "  { id: 'strategies', label: 'Strategies' },",
         "  { id: 'scenarios', label: 'Scenarios' },",
         "  { id: 'capital-structure', label: 'Capital Structure' },",
+        "  { id: 'partnership', label: 'Partnership' },",
         "  { id: 'sensitivity', label: 'Sensitivity' },",
         '];',
       ].join('\n'),

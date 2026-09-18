@@ -8290,14 +8290,17 @@ describe('Phase 7 Gates P7.3 / P7.5 -- the decision views in Risk', () => {
     await goTo(user, 'Risk');
 
     const nav = within(document.querySelector('[aria-label="Risk views"]') as HTMLElement);
-    // Re-pinned at P7.8B, which adds Capital Structure as the fourth decision
-    // view. Its position is part of the claim: the decision views stay
-    // together, ahead of Sensitivity and Break-Even.
+    // Re-pinned at P7.8B, which added Capital Structure as the fourth decision
+    // view, and again at P7.9 Stage 3, which adds Partnership as the fifth.
+    // Their positions are part of the claim: the decision views stay together,
+    // ahead of Sensitivity and Break-Even, and Partnership sits after Capital
+    // Structure because it allocates the Common Equity the structure leaves.
     expect(nav.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       'Decision Matrix',
       'Strategies',
       'Scenarios',
       'Capital Structure',
+      'Partnership',
       'Sensitivity',
       'Break-Even',
     ]);

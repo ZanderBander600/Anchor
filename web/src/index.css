@@ -6917,3 +6917,450 @@ body {
     max-width: 100%;
   }
 }
+
+/* ==========================================================================
+   Phase 7 Gate P7.9 Stage 3 -- Partnership
+   ========================================================================== */
+
+/* Nothing here ranks an outcome. A partner that did better than the benchmark
+   and one that did worse are typeset identically: the figures say which, and
+   the words beside them say why. The only tinted states are a refusal and a
+   value the engine did not report -- and both are written as well as coloured,
+   so neither depends on seeing a hue. */
+
+/* --- The workspace -------------------------------------------------------- */
+
+.partnership-workspace {
+  min-width: 0;
+}
+
+.partnership-saved-list {
+  min-width: 0;
+}
+
+.partnership-saved-count {
+  margin-top: var(--sp-1);
+}
+
+/* --- The editor ----------------------------------------------------------- */
+
+.partnership-editor {
+  min-width: 0;
+}
+
+.partnership-editor-title {
+  margin: 0 0 var(--sp-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.partnership-editor-section {
+  min-width: 0;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.partnership-editor-section > * + * {
+  margin-top: var(--sp-2);
+}
+
+.partnership-editor-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.partnership-editor-section-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.partnership-add-tiers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+/* One partner and one tier: the same hairline-separated block a Strategy
+   domain and a capital position use, so an authored decision looks like an
+   authored decision wherever it is made. */
+.partnership-partner,
+.partnership-tier-card,
+.partnership-condition {
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-3) 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.partnership-partner > * + *,
+.partnership-tier-card > * + *,
+.partnership-condition > * + * {
+  margin-top: var(--sp-2);
+}
+
+.partnership-partner-error,
+.partnership-tier-card-error {
+  border-left: 2px solid var(--danger);
+  padding-left: var(--sp-2);
+}
+
+.partnership-partner-legend,
+.partnership-tier-legend,
+.partnership-condition-legend {
+  padding: 0;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Every grid wraps rather than widening the page. */
+.partnership-partner-grid,
+.partnership-tier-grid,
+.partnership-condition-grid,
+.partnership-share-grid,
+.partnership-tier-terms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.partnership-split-shares {
+  min-width: 0;
+}
+
+.partnership-split-shares > * + * {
+  margin-top: var(--sp-2);
+}
+
+.partnership-conditions {
+  min-width: 0;
+}
+
+.partnership-conditions > * + * {
+  margin-top: var(--sp-2);
+}
+
+.partnership-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.partnership-participant-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.partnership-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* The promote-participant confirmation is its own line, not one of the
+   partners: it confirms the whole set, including an empty one. */
+.partnership-confirm {
+  display: flex;
+  align-items: flex-start;
+  margin-top: var(--sp-2);
+}
+
+/* What the analyst has not stated yet. Informational, not a refusal: the
+   contract is simply incomplete, and the backend has not been asked. */
+.partnership-unstated {
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.partnership-unstated-title {
+  margin: 0 0 var(--sp-1);
+  font-weight: 650;
+}
+
+.partnership-unstated-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+/* --- The results ---------------------------------------------------------- */
+
+.partnership-results {
+  min-width: 0;
+}
+
+.partnership-results > * + * {
+  margin-top: var(--sp-4);
+}
+
+.partnership-status {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.partnership-section {
+  min-width: 0;
+}
+
+.partnership-section > * + * {
+  margin-top: var(--sp-2);
+}
+
+.partnership-section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* An explanation, not a caption on a figure: the three benchmark comparisons
+   mean different things and each says so in its own words. */
+.partnership-section-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.partnership-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--sp-2);
+  margin: 0;
+  min-width: 0;
+}
+
+.partnership-summary-item dt {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.partnership-summary-item dd {
+  margin: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.partnership-table {
+  min-width: 0;
+}
+
+.partner-result-figure {
+  font-variant-numeric: tabular-nums;
+}
+
+.partner-result-name {
+  display: block;
+  font-weight: 600;
+}
+
+.partner-result-class {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* A figure the engine did not report, and the reason beneath it. Written, not
+   tinted: "N/A" plus the engine's own sentence. */
+.partner-result-na {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.partner-result-reason {
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  white-space: normal;
+}
+
+/* The benchmark differs from the commitment (R-A). The full explanation is
+   stated once above the table; each affected figure carries only this short
+   marker, so the disclosure is still at the figure it concerns without burying
+   the column it qualifies. */
+.partner-result-mismatch {
+  display: block;
+  margin-top: var(--sp-1);
+  font-size: 11.5px;
+  line-height: 1.35;
+  white-space: normal;
+  color: var(--text-muted);
+}
+
+/* The one full notice, above the table it qualifies. */
+.partnership-benchmark-notice {
+  max-width: 60ch;
+}
+
+/* Removing a Partnership discards a whole authored contract, so it is confirmed
+   inline, in the product's own words, beside the thing being removed. */
+.partnership-remove-confirm {
+  min-width: 0;
+  max-width: 60ch;
+}
+
+.partnership-remove-confirm > * + * {
+  margin-top: var(--sp-1);
+}
+
+.partnership-remove-question {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.partnership-tier {
+  min-width: 0;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.partnership-tier > * + * {
+  margin-top: var(--sp-2);
+}
+
+.partnership-tier-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.partnership-tier-sequence {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.partnership-tier-name {
+  font-weight: 650;
+}
+
+.partnership-tier-kind {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.partnership-share-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.partnership-share-list li {
+  display: flex;
+  gap: var(--sp-2);
+  justify-content: space-between;
+}
+
+.partnership-share-name {
+  white-space: normal;
+}
+
+.partnership-share-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.partnership-unavailable {
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.partnership-unavailable > * + * {
+  margin-top: var(--sp-1);
+}
+
+.partnership-unavailable-status {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+/* --- The PARTNER matrix --------------------------------------------------- */
+
+.partnership-partner-matrix {
+  min-width: 0;
+}
+
+.partnership-partner-picker {
+  max-width: 22rem;
+}
+
+/* Each cell names the partner as its own strategy's partnership describes it,
+   so one strategy's terms never label another's (P-8). */
+.partner-cell-identity {
+  display: block;
+  margin-bottom: var(--sp-1);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-muted);
+  white-space: normal;
+}
+
+.partner-cell-name {
+  font-weight: 600;
+}
+
+.partner-cell-role::before {
+  content: ' · ';
+}
+
+/* A partner absent from a strategy's partnership. Written in words rather than
+   tinted, and never shown as a zero. */
+.partner-cell-absent {
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+/* The benchmark copy action names in full what it does -- which is longer than
+   a phone-width column. It wraps rather than forcing its section wider, so the
+   words stay complete and the page still does not widen. */
+.partnership-copy-benchmark {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+  text-align: left;
+}
+
+@media (max-width: 720px) {
+  .partnership-partner-grid,
+  .partnership-tier-grid,
+  .partnership-condition-grid,
+  .partnership-share-grid,
+  .partnership-tier-terms,
+  .partnership-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .partnership-partner-picker {
+    max-width: 100%;
+  }
+
+  .partnership-editor-section-head {
+    align-items: stretch;
+  }
+}

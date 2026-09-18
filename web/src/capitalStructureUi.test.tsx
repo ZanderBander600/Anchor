@@ -456,8 +456,6 @@ function positionState(
   overrides: Partial<PositionDecisionMatrixState> = {},
 ): PositionDecisionMatrixState {
   return {
-    perspective: 'position',
-    choosePerspective: vi.fn(),
     positions: [PERSPECTIVE],
     listStatus: 'ready',
     listError: null,

@@ -246,10 +246,11 @@ describe('a visible Investment’s decision set lives on its own routes', () => 
       />,
     );
     // Every decision view says so; only the one on screen is reachable. Four
-    // since P7.8B, which adds Capital Structure beside the other three: a Unit
-    // of a visible Investment states its structure on the Investment, exactly
-    // as it states its strategies and scenarios there.
-    expect(screen.getAllByText(UNIT_OF_INVESTMENT_NOTICE)).toHaveLength(4);
+    // since P7.8B, which added Capital Structure beside the other three, and
+    // five since P7.9 Stage 3, which adds Partnership: a Unit of a visible
+    // Investment states its structure and its partnership on the Investment,
+    // exactly as it states its strategies and scenarios there.
+    expect(screen.getAllByText(UNIT_OF_INVESTMENT_NOTICE)).toHaveLength(5);
     await user.click(screen.getByRole('button', { name: 'Open Harbor Portfolio' }));
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(listDealStrategies).not.toHaveBeenCalled();

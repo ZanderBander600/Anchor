@@ -73,6 +73,7 @@ type RiskViewId =
   | 'strategies'
   | 'scenarios'
   | 'capital-structure'
+  | 'partnership'
   | 'sensitivity'
   | 'break-even';
 const RISK_VIEWS: { id: RiskViewId; label: string }[] = [
@@ -80,6 +81,7 @@ const RISK_VIEWS: { id: RiskViewId; label: string }[] = [
   { id: 'strategies', label: 'Strategies' },
   { id: 'scenarios', label: 'Scenarios' },
   { id: 'capital-structure', label: 'Capital Structure' },
+  { id: 'partnership', label: 'Partnership' },
   { id: 'sensitivity', label: 'Sensitivity' },
   { id: 'break-even', label: 'Break-Even' },
 ];
@@ -98,22 +100,29 @@ type LeaseLevelRiskViewId =
   | 'strategies'
   | 'scenarios'
   | 'capital-structure'
+  | 'partnership'
   | 'sensitivity';
 const LEASE_LEVEL_RISK_VIEWS: { id: LeaseLevelRiskViewId; label: string }[] = [
   { id: 'matrix', label: 'Decision Matrix' },
   { id: 'strategies', label: 'Strategies' },
   { id: 'scenarios', label: 'Scenarios' },
   { id: 'capital-structure', label: 'Capital Structure' },
+  { id: 'partnership', label: 'Partnership' },
   { id: 'sensitivity', label: 'Sensitivity' },
 ];
 
-/** The four views `RiskDecisionWorkspace` owns. They resolve against the saved
- * Deal, never the last Analyze. P7.8B adds Capital Structure beside them: it is
- * authored against the saved Deal and analysed on demand, so it is on offer
- * before any Analyze exactly as the other three are. */
+/** The five views `RiskDecisionWorkspace` owns. They resolve against the saved
+ * Deal, never the last Analyze. P7.8B added Capital Structure beside them and
+ * P7.9 Stage 3 adds Partnership: both are authored against the saved Deal and
+ * analysed on demand, so they are on offer before any Analyze exactly as the
+ * other three are. */
 function isDecisionView(id: string): boolean {
   return (
-    id === 'matrix' || id === 'strategies' || id === 'scenarios' || id === 'capital-structure'
+    id === 'matrix' ||
+    id === 'strategies' ||
+    id === 'scenarios' ||
+    id === 'capital-structure' ||
+    id === 'partnership'
   );
 }
 

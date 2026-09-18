@@ -60,6 +60,16 @@ import type {
   StructuredVariantFingerprint,
 } from './capitalTypes';
 import type {
+  DealPartnership,
+  InvestmentPartnership,
+  PartnerDecisionMatrixReport,
+  PartnerPerspectives,
+  Partnership,
+  PartnershipIssue,
+  PartnershipVariantAnalysis,
+  PartnershipVariantFingerprint,
+} from './partnershipTypes';
+import type {
   InvestmentAddUnitRequest,
   InvestmentCreateRequest,
   InvestmentDecisionMatrixReport,
@@ -2794,4 +2804,230 @@ export async function saveInvestmentStrategy(
     throw await investmentStrategyRequestError(response, 'The strategy could not be saved');
   }
   return (await response.json()) as InvestmentStrategy;
+}
+
+// =============================================================================
+// Phase 7 Gate P7.9 Stage 3 -- the Partnership client.
+//
+// The Stage 2 routes: the persisted Base Partnership of a Deal or of a visible
+// Investment, one Partnership variant's fingerprints and analysis, the
+// addressable Partner perspectives and the PARTNER Decision Matrix. Each
+// function sends a typed body and returns what the backend returned.
+//
+// **Nothing here calculates.** Every contribution, distribution, IRR, MOIC,
+// profit, distribution difference, Promote Earned and benchmark capital
+// subordination figure is the Stage 1 engine's; this client carries JSON.
+//
+// **`null` is sent and read as a statement.** A `partnership` of `null` is the
+// explicit "this owner states no Partnership", which the backend stores as such.
+// It is never conflated with an empty object: a Partnership always has at least
+// one partner, so there is no empty Partnership to mean it with.
+//
+// **Refusals keep their structure.** A refused Partnership carries the issues
+// that refused it -- the Stage 1 contract rules, or the Stage 1 execution rules
+// over this variant's Common Equity Cash Flow -- so the editor can show them
+// against the partner or tier they concern instead of one flattened sentence.
+// =============================================================================
+
+/** A refused Partnership request, with the backend's own issues. */
+export class PartnershipError extends Error {
+  readonly issues: PartnershipIssue[];
+
+  constructor(message: string, issues: PartnershipIssue[] = []) {
+    super(message);
+    this.name = 'PartnershipError';
+    this.issues = issues;
+  }
+}
+
+/** The issues of a structured 422, normalized to one shape.
+ *
+ * A Stage 1 *validation* issue carries `partner_id`, `tier_id` and `field`; a
+ * Stage 1 *execution* issue carries `tier_id` and `period`. Each is read for
+ * what it states, and the fields the other kind does not carry are `null` --
+ * absent, never invented. */
+function partnershipIssues(detail: unknown): PartnershipIssue[] {
+  if (!Array.isArray(detail)) {
+    return [];
+  }
+  return detail.flatMap((entry) => {
+    if (typeof entry !== 'object' || entry === null || !('message' in entry)) {
+      return [];
+    }
+    const issue = entry as Partial<PartnershipIssue>;
+    return [
+      {
+        code: typeof issue.code === 'string' ? issue.code : '',
+        message: String(issue.message),
+        partner_id: typeof issue.partner_id === 'string' ? issue.partner_id : null,
+        tier_id: typeof issue.tier_id === 'string' ? issue.tier_id : null,
+        field: typeof issue.field === 'string' ? issue.field : null,
+        period: typeof issue.period === 'number' ? issue.period : null,
+      },
+    ];
+  });
+}
+
+function partnershipMessage(
+  detail: unknown,
+  issues: PartnershipIssue[],
+  failureMessage: string,
+): string {
+  if (typeof detail === 'string' && detail !== '') {
+    return detail;
+  }
+  return issues.length === 0 ? failureMessage : issues.map((issue) => issue.message).join('\n');
+}
+
+async function partnershipFetch(
+  path: string,
+  init: RequestInit,
+  failureMessage: string,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, init);
+  } catch {
+    throw new PartnershipError(NETWORK_ERROR_MESSAGE);
+  }
+  if (!response.ok) {
+    let detail: unknown = null;
+    try {
+      detail = ((await response.json()) as { detail?: unknown }).detail ?? null;
+    } catch {
+      detail = null;
+    }
+    const issues = partnershipIssues(detail);
+    throw new PartnershipError(partnershipMessage(detail, issues, failureMessage), issues);
+  }
+  return response;
+}
+
+/** The PUT body. `null` is sent as `null`: the explicit "no Partnership". */
+function partnershipRequestBody(partnership: Partnership | null): RequestInit {
+  return {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ partnership }),
+  };
+}
+
+/** `GET /deals/{id}/partnership`. Read-only: a Deal with no Partnership reports
+ * `null` and no Investment, and asking gives it neither. */
+export async function readDealPartnership(dealId: string): Promise<DealPartnership> {
+  const response = await partnershipFetch(
+    `/deals/${encodeURIComponent(dealId)}/partnership`,
+    { method: 'GET' },
+    'The partnership could not be loaded',
+  );
+  return (await response.json()) as DealPartnership;
+}
+
+/** `PUT /deals/{id}/partnership`. The first save of a Partnership materializes
+ * the Deal's hidden one-unit Investment; saving `null` clears it and releases
+ * the Deal when nothing else is held. */
+export async function saveDealPartnership(
+  dealId: string,
+  partnership: Partnership | null,
+): Promise<DealPartnership> {
+  const response = await partnershipFetch(
+    `/deals/${encodeURIComponent(dealId)}/partnership`,
+    partnershipRequestBody(partnership),
+    'The partnership could not be saved',
+  );
+  return (await response.json()) as DealPartnership;
+}
+
+/** `GET /investments/{id}/partnership`. */
+export async function readInvestmentPartnership(
+  investmentId: string,
+): Promise<InvestmentPartnership> {
+  const response = await partnershipFetch(
+    `/investments/${encodeURIComponent(investmentId)}/partnership`,
+    { method: 'GET' },
+    'The partnership could not be loaded',
+  );
+  return (await response.json()) as InvestmentPartnership;
+}
+
+/** `PUT /investments/{id}/partnership`. */
+export async function saveInvestmentPartnership(
+  investmentId: string,
+  partnership: Partnership | null,
+): Promise<InvestmentPartnership> {
+  const response = await partnershipFetch(
+    `/investments/${encodeURIComponent(investmentId)}/partnership`,
+    partnershipRequestBody(partnership),
+    'The partnership could not be saved',
+  );
+  return (await response.json()) as InvestmentPartnership;
+}
+
+function partnershipVariantPath(
+  investmentId: string,
+  strategyId: string,
+  scenarioId: string,
+): string {
+  return `/investments/${encodeURIComponent(investmentId)}/partnership-variants/${encodeURIComponent(
+    strategyId,
+  )}/${encodeURIComponent(scenarioId)}`;
+}
+
+/** The variant's three layered fingerprints, without executing anything. The
+ * Partnership fingerprint is `null` when the variant resolves none (FP-2). */
+export async function readPartnershipVariantFingerprint(
+  investmentId: string,
+  strategyId: string,
+  scenarioId: string,
+): Promise<PartnershipVariantFingerprint> {
+  const response = await partnershipFetch(
+    `${partnershipVariantPath(investmentId, strategyId, scenarioId)}/fingerprint`,
+    { method: 'GET' },
+    'The partnership fingerprint could not be read',
+  );
+  return (await response.json()) as PartnershipVariantFingerprint;
+}
+
+/** The Partnership analysis: the structured variant, then the accepted Stage 1
+ * engine on its Common Equity Cash Flow. An unavailable Common Equity Cash Flow
+ * is a successful analysis with an `unavailable` result, never an error. */
+export async function analyzePartnershipVariant(
+  investmentId: string,
+  strategyId: string,
+  scenarioId: string,
+): Promise<PartnershipVariantAnalysis> {
+  const response = await partnershipFetch(
+    `${partnershipVariantPath(investmentId, strategyId, scenarioId)}/analysis`,
+    { method: 'POST' },
+    'The partnership analysis could not be completed',
+  );
+  return (await response.json()) as PartnershipVariantAnalysis;
+}
+
+/** `GET /investments/{id}/partner-perspectives` -- the addressable partners, by
+ * their stable ids, for the Partner matrix selector. */
+export async function listPartnerPerspectives(
+  investmentId: string,
+): Promise<PartnerPerspectives> {
+  const response = await partnershipFetch(
+    `/investments/${encodeURIComponent(investmentId)}/partner-perspectives`,
+    { method: 'GET' },
+    'The partners could not be loaded',
+  );
+  return (await response.json()) as PartnerPerspectives;
+}
+
+/** `POST /investments/{id}/partner-decision-matrix/{partner_id}`. */
+export async function analyzePartnerDecisionMatrix(
+  investmentId: string,
+  partnerId: string,
+): Promise<PartnerDecisionMatrixReport> {
+  const response = await partnershipFetch(
+    `/investments/${encodeURIComponent(investmentId)}/partner-decision-matrix/${encodeURIComponent(
+      partnerId,
+    )}`,
+    { method: 'POST' },
+    'The partner decision matrix could not be completed',
+  );
+  return (await response.json()) as PartnerDecisionMatrixReport;
 }

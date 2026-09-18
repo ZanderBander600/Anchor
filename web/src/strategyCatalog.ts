@@ -55,6 +55,11 @@ export const STRATEGY_DOMAINS: readonly StrategyDomainPresentation[] = [
     label: 'Capital Structure',
     replaces: 'The whole capital structure: every position above Common Equity.',
   },
+  {
+    domain: 'partnership',
+    label: 'Partnership',
+    replaces: 'The whole partnership: every partner, the benchmark and every waterfall tier.',
+  },
 ];
 
 export function strategyDomainLabel(domain: string): string {

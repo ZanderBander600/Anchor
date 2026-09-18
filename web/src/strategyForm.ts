@@ -37,6 +37,12 @@ import type { BusinessPlanDraft, BusinessPlanFieldIssue, BusinessPlanInput } fro
 import { EMPTY_FORM, formFromStructure, structureFromForm } from './capitalStructureForm';
 import type { CapitalStructureForm } from './capitalStructureForm';
 import {
+  EMPTY_PARTNERSHIP_FORM,
+  formFromPartnership,
+  partnershipFromForm,
+} from './partnershipForm';
+import type { PartnershipForm } from './partnershipForm';
+import {
   buildDetailedTermsFormValuesFromRequest,
   formatDisplayNumber,
   FormValidationError,
@@ -102,6 +108,18 @@ export interface StrategyEditorDraft {
    * structured capital at all. The two are different wire bodies because they
    * are different decisions. */
   capitalStructure: { choice: 'inherit' | 'specific'; form: CapitalStructureForm };
+  /** The Partnership domain, stated once rather than per Unit (P7.9 Stage 3).
+   *
+   * Three distinct states, never collapsed into one another. `inherit` sends no
+   * overlay and resolves to the Investment's Base Partnership. `none` sends an
+   * overlay whose content is `null`: this Strategy deliberately has **no**
+   * Partnership. `specific` sends an overlay carrying a whole authored
+   * Partnership, replacing the Base one entirely.
+   *
+   * A Partnership cannot be empty -- it always has at least one partner -- so
+   * "no Partnership" needs its own state here, where a Capital Structure can
+   * say the same thing with an empty positions list. */
+  partnership: { choice: 'inherit' | 'none' | 'specific'; form: PartnershipForm };
   /** One section per Unit, in presentation order. A Deal's Strategy has one. */
   units: StrategyUnitDraft[];
 }
@@ -202,6 +220,7 @@ export function blankStrategyDraft(unitIds: readonly string[]): StrategyEditorDr
     name: '',
     description: '',
     capitalStructure: { choice: 'inherit', form: EMPTY_FORM },
+    partnership: { choice: 'inherit', form: EMPTY_PARTNERSHIP_FORM },
     units: unitIds.map(blankUnitDraft),
   };
 }
@@ -288,6 +307,14 @@ export function draftFromStrategy(
   const root = record.strategy.root_overlays?.find(
     (overlay) => overlay.domain === 'capital_structure',
   );
+  // The same three-way reading for the Partnership, except that its explicit
+  // "none" is a `null` content rather than an empty contract: an absent overlay
+  // inherits the Base Partnership, a `null` content is this Strategy having
+  // none, and a stated one is its own -- every partner and tier keeping the id
+  // the Partner matrix addresses it by (P-8).
+  const partnershipRoot = record.strategy.root_overlays?.find(
+    (overlay) => overlay.domain === 'partnership',
+  );
   return {
     strategyId: record.strategy.strategy_id,
     name: record.strategy.name,
@@ -296,6 +323,12 @@ export function draftFromStrategy(
       root === undefined
         ? { choice: 'inherit', form: EMPTY_FORM }
         : { choice: 'specific', form: formFromStructure(root.content) },
+    partnership:
+      partnershipRoot === undefined
+        ? { choice: 'inherit', form: EMPTY_PARTNERSHIP_FORM }
+        : partnershipRoot.content === null
+          ? { choice: 'none', form: EMPTY_PARTNERSHIP_FORM }
+          : { choice: 'specific', form: formFromPartnership(partnershipRoot.content) },
     units: ids.map((unitId) =>
       unitDraftFrom(
         unitId,
@@ -321,9 +354,14 @@ export function unitHasEconomicContent(unit: StrategyUnitDraft): boolean {
  * that states none is valid; it resolves to Base. */
 export function draftHasEconomicContent(draft: StrategyEditorDraft): boolean {
   // Stating a whole-transaction domain is economic content even when every Unit
-  // inherits Base: replacing the structure with no structured capital is a real
-  // decision, and it resolves differently from Base.
-  return draft.capitalStructure.choice === 'specific' || draft.units.some(unitHasEconomicContent);
+  // inherits Base: replacing the structure with no structured capital, or the
+  // partnership with none at all, is a real decision, and each resolves
+  // differently from Base.
+  return (
+    draft.capitalStructure.choice === 'specific' ||
+    draft.partnership.choice !== 'inherit' ||
+    draft.units.some(unitHasEconomicContent)
+  );
 }
 
 /** Whether making ``domain`` strategy-specific on this Unit must first copy in
@@ -363,6 +401,12 @@ export function domainNeedsBase(unit: StrategyUnitDraft, domain: StrategyDomain)
       // its prefill is a copy of the Base *structure*, made in `useStrategies`.
       // Stated explicitly rather than left to fall off the end of the switch,
       // which would answer `undefined` to a question that has an answer.
+      return false;
+    case 'partnership':
+      // Not a Unit domain either, and for the same reason: it replaces a
+      // whole-transaction contract whose partners carry their own stable ids.
+      // Its prefill is a copy of the Base *Partnership*, made in
+      // `useStrategies`, and only where one exists to copy.
       return false;
   }
 }
@@ -517,21 +561,43 @@ export function buildStrategyRequest(
     }
   }
 
-  let rootOverlays: InvestmentStrategyOverlay[] | undefined;
-  if (editor.capitalStructure.choice === 'specific') {
+  const stated: InvestmentStrategyOverlay[] = [];
+  let rootFailed = false;
+  /** A root domain's content, or a general refusal: it is not a Unit domain, so
+   * it belongs with the editor rather than on a Unit's section. */
+  const readRoot = (build: () => InvestmentStrategyOverlay) => {
     try {
-      rootOverlays = [
-        { domain: 'capital_structure', content: structureFromForm(editor.capitalStructure.form) },
-      ];
+      stated.push(build());
     } catch (error) {
-      if (!(error instanceof FormValidationError)) {
+      if (!(error instanceof FormValidationError) && !(error instanceof Error)) {
         throw error;
       }
-      // Not a Unit domain, so it belongs with the editor rather than on a
-      // Unit's section.
+      rootFailed = true;
       feedback.general.push(error.message);
     }
+  };
+
+  if (editor.capitalStructure.choice === 'specific') {
+    readRoot(() => ({
+      domain: 'capital_structure',
+      content: structureFromForm(editor.capitalStructure.form),
+    }));
   }
+
+  // The explicit "no Partnership" is a stated overlay with a `null` content, not
+  // an omitted one: omitting it would inherit the Base Partnership, which is a
+  // different decision.
+  if (editor.partnership.choice === 'none') {
+    stated.push({ domain: 'partnership', content: null });
+  } else if (editor.partnership.choice === 'specific') {
+    readRoot(() => ({
+      domain: 'partnership',
+      content: partnershipFromForm(editor.partnership.form),
+    }));
+  }
+
+  const rootOverlays: InvestmentStrategyOverlay[] | undefined =
+    stated.length === 0 && !rootFailed ? undefined : stated;
 
   if (
     feedback.general.length > 0 ||
