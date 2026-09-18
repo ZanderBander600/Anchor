@@ -109,9 +109,9 @@ export const DEMO_PERFORMANCE: AssetPerformanceResponse = {
           direction: 'higher_is_favorable',
           budget: 0.95,
           actual: 0.925,
-          variance: -0.024999999999999911,
-          variance_pct: -0.026315789473684116,
-          variance_points: -2.4999999999999911,
+          variance: -0.02499999999999991,
+          variance_pct: -0.02631578947368412,
+          variance_points: -2.499999999999991,
           assessment: 'unfavorable',
         },
         {

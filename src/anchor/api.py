@@ -82,6 +82,7 @@ from .asset_management import (
     OperatingFigures,
     analyze_asset_performance,
     normalize_reporting_month,
+    parse_iso_date,
 )
 from .contracts import (
     AcquisitionInputs,
@@ -4754,25 +4755,26 @@ def _budget_immutable_response(error: BudgetImmutableError) -> HTTPException:
     )
 
 
+def _am1_date(raw: Any, where: str) -> date:
+    """A calendar date from the wire.
+
+    Parsing lives in ``anchor.asset_management.validation``, which reports a
+    malformed string by returning ``None`` rather than raising. That keeps this
+    module from having to catch ``ValueError`` at all: every validation error in
+    the repository subclasses it, so such a catch here would be one refactor
+    away from turning a typed domain refusal into a generic "bad date".
+    """
+
+    parsed = parse_iso_date(raw)
+    if parsed is None:
+        raise _structural_error(f"{where} must be an ISO-8601 date string.")
+    return parsed
+
+
 def _am1_month(raw: Any, where: str) -> date:
     """A reporting month from the wire, normalized to the first of the month."""
 
-    if not isinstance(raw, str):
-        raise _structural_error(f"{where} must be an ISO-8601 date string.")
-    try:
-        parsed = date.fromisoformat(raw)
-    except ValueError:
-        raise _structural_error(f"{where} is not a valid ISO-8601 date: {raw!r}.") from None
-    return normalize_reporting_month(parsed)
-
-
-def _am1_date(raw: Any, where: str) -> date:
-    if not isinstance(raw, str):
-        raise _structural_error(f"{where} must be an ISO-8601 date string.")
-    try:
-        return date.fromisoformat(raw)
-    except ValueError:
-        raise _structural_error(f"{where} is not a valid ISO-8601 date: {raw!r}.") from None
+    return normalize_reporting_month(_am1_date(raw, where))
 
 
 def _am1_figures(raw: Any, where: str) -> OperatingFigures:

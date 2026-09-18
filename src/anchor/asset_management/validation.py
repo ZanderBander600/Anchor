@@ -56,6 +56,26 @@ def _is_text(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
+def parse_iso_date(raw: object) -> date | None:
+    """``raw`` as a calendar date, or ``None`` if it is not one.
+
+    Returns rather than raises, deliberately. ``date.fromisoformat`` signals a
+    malformed string with ``ValueError``, and every validation error in this
+    repository subclasses ``ValueError`` -- so a ``try/except ValueError`` at the
+    transport boundary is one refactor away from silently converting a typed
+    domain refusal into a generic "bad date" message. Keeping the catch here,
+    around a single call that can raise nothing else, means the boundary never
+    needs one at all.
+    """
+
+    if not isinstance(raw, str):
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
 def normalize_reporting_month(value: date) -> date:
     """The first day of ``value``'s month.
 

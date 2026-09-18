@@ -240,6 +240,49 @@ def test_the_frontend_never_recomputes_a_variance_or_an_assessment() -> None:
             ), f"{path} pairs {match.group(1)} with a favorability verdict"
 
 
+def test_the_frontend_fixture_is_the_engines_own_output() -> None:
+    """Every float in the frontend's demo fixture is a value the engine actually
+    produces, spelled exactly as JSON would encode it.
+
+    The fixture claims to be a recorded engine response, and the frontend tests
+    assert the screen against it -- so if it drifted, those tests would keep
+    passing while agreeing with nothing. It did drift once: a hand-transcribed
+    ``variance_pct`` differed from the engine's in its last two digits, which is
+    precisely the failure this guard now prevents.
+    """
+
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from anchor.api import _wire
+    from anchor.asset_management import analyze_asset_performance
+
+    import _am1_fixtures as am  # type: ignore[import-not-found]
+
+    result = _wire(
+        analyze_asset_performance(
+            managed_asset_id="asset-1", reporting_month=am.MARCH, reports=[am.report()]
+        )
+    )
+
+    def floats(node: object, path: str = "") -> list[tuple[str, str]]:
+        if isinstance(node, dict):
+            return [item for key, value in node.items() for item in floats(value, f"{path}.{key}")]
+        if isinstance(node, list):
+            return [item for i, value in enumerate(node) for item in floats(value, f"{path}[{i}]")]
+        if isinstance(node, float):
+            return [(path, repr(node))]
+        return []
+
+    fixture = _current("web/src/assetManagementFixture.ts")
+    # Only the long values are checked: a short one like `0.95` appears for many
+    # unrelated reasons and proves nothing.
+    drifted = [
+        (path, value) for path, value in floats(result) if len(value) > 8 and value not in fixture
+    ]
+    assert drifted == []
+
+
 def test_the_formatter_only_formats() -> None:
     """`assetManagementFormat.ts` converts scales and picks labels. It must not
     combine two figures."""

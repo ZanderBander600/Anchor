@@ -70,6 +70,48 @@ Frontend, exactly:
 `tests/test_am1_architecture.py` holds this ledger and fails if anything else
 changed.
 
+### 1.3 Re-pinned prior-gate guards
+
+A schema bump moves version assertions that earlier gates pinned to their own
+era. AM1 re-pins them exactly as P7.9 Stage 2 did when it bumped v11 → v12
+(commit `82fd7ed`): the version literal advances and the comment names the new
+gate's tables. No behavioural assertion was weakened, and nothing was deleted.
+
+Version and table-inventory pins: `test_analysis_d4_5b_architecture.py`,
+`test_d5_4_migration_and_fingerprint.py`,
+`test_d5_8a_deal_analysis_persistence.py`,
+`test_d6_5_business_plan_migration.py`,
+`test_p7_2_scenario_persistence.py`, `test_p7_2_compatibility_oracle.py`,
+`test_p7_4_strategy_persistence.py`, `test_p7_4_compatibility_oracle.py`,
+`test_p7_6_investment_persistence.py`, `test_p7_6_compatibility_oracle.py`,
+`test_p7_8b_capital_structure_persistence.py`,
+`test_p7_9_stage_2_persistence.py`, `test_p7_9_stage_2_compatibility_oracle.py`,
+`test_p7_9_stage_2_architecture.py`, and `_p7_2_fixtures.py` (which gains an
+`AM1_TABLES` constant beside the existing per-gate ones).
+
+Two guards needed a correction rather than a re-pin, because each measured more
+than it claimed to:
+
+- `test_d6_5_business_plan_persistence_architecture.py`'s inventory of
+  plan-aware store calls gains AM1's two. The behavioural guard beside it
+  (`test_the_store_threads_the_stored_plan_everywhere`) passed unchanged:
+  `_deal_analysis_fingerprint` does pass `business_plan=` in every mode.
+- `web/src/investmentArchitecture.test.ts`'s "P7.6 styles free of good / bad
+  colour" check sliced the stylesheet from the P7.6 marker to **end of file**,
+  so it silently covered every stylesheet appended after P7.6. It is now bounded
+  to the P7.6 section it names. AM1's assessment column is meant to carry a
+  favorable/unfavorable colour, and it is the first later gate to use a token
+  that slice forbade.
+
+One AM1 change was made in response to a guard rather than by re-pinning it:
+`test_p7_9_stage_2_architecture.py`'s "api.py catches no `ValueError`" tripped on
+two narrow `date.fromisoformat` guards AM1 had added. Rather than re-pin it, the
+parsing moved into `asset_management.validation.parse_iso_date`, which reports a
+malformed string by returning `None`. `api.py` is back to its original count and
+that guard passes untouched — the right outcome, since every validation error in
+the repository subclasses `ValueError` and a catch at the transport boundary is
+one refactor away from swallowing a typed domain refusal.
+
 ---
 
 ## 2. The Managed Asset contract
@@ -521,7 +563,39 @@ date, and removing the budget conflict each produce a visibly different result.
 
 ---
 
-## 11. Implementation status
+## 11. Pre-existing failures, not caused by AM1
+
+A full backend suite run against `main` at `63c2ac0` in a separate worktree
+(protocol 11.1 — `git worktree`, never `git stash`) reports **3 failed, 9336
+passed** before AM1 exists:
+
+- `test_analysis_d4_6b_architecture.py::test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved`
+- `test_p7_9_stage_2_architecture.py::test_stage_2_changed_exactly_its_authorized_production_files`
+- `test_p7_9_stage_2_architecture.py::test_an_upstream_or_frontend_path_is_unchanged[web]`
+
+The two P7.9 Stage 2 failures are stale-ledger debt: Stage 2's ledger is measured
+from `main` at `1df2760` and declares `web/` unchanged, but **Stage 3** then
+changed `web/src/components/PartnershipWorkspace.tsx`,
+`web/src/partnershipApi.test.ts` and others without re-pinning it. AM1
+deliberately does **not** re-pin that ledger: doing so would erase the signal
+that Stage 3 left it stale, and P7.9 has not yet been accepted. It belongs to
+P7.9's closeout.
+
+These three remain failing on the AM1 branch, unchanged and for the same
+reasons.
+
+### 11.1 One environmental frontend flake
+
+The final full frontend run reported `1 failed | 1949 passed`, in
+`src/leaseLevelSensitivity.test.tsx` — a file AM1 does not touch and which is
+not in its ledger. Re-run in isolation it passes **60/60**. An earlier full run
+had failed a *different* untouched file instead. Both are consistent with
+per-test timeouts under fully parallel load rather than a regression (protocol
+5.4, 7.2): the host was on AC power with 4.2 GB of 15.8 GB free, and the suite
+runs ~356s with heavy worker parallelism. Diagnosed and recorded rather than
+answered with repeated full-suite attempts (protocol 7.3).
+
+## 12. Implementation status
 
 Implemented and verified on `feature/am1-managed-assets-monthly-performance`.
 Not pushed, not merged, not accepted. Human product acceptance is pending.

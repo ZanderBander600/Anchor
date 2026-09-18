@@ -464,7 +464,10 @@ def test_the_eight_tables_hold_authored_terms_only() -> None:
     assert "target_profit_share" in columns  # the catch-up term itself, authored
     for forbidden in (r"irr", r"moic", r"(?<!target_)profit", r"promote_earned", r"distribution(?!_order)", r"amount", r"result", r"snapshot", r"json", r"blob"):
         assert not {column for column in columns if re.search(forbidden, column)}, forbidden
-    assert "_SCHEMA_VERSION = 12" in text
+    # AM1 advanced the store to schema 13. Stage 2's eight Partnership tables
+    # are unchanged by it; what this line pins is that the store still
+    # declares one version, and that Stage 2's tables were added under 12.
+    assert "_SCHEMA_VERSION = 13" in text
 
 
 def test_the_new_services_never_write_the_store() -> None:
