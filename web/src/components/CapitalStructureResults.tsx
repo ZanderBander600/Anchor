@@ -409,7 +409,12 @@ function LegacyLoans({
       </h4>
       <p className="capital-result-helper">{LEGACY_LOAN_MESSAGE}</p>
       <div className="table-scroll">
-        <table className="capital-result-table" aria-labelledby={titleId}>
+        {/* Every column but the Unit is a figure, so this table -- and only
+          * this table -- right-aligns its column headers over the values they
+          * describe. The other Capital Structure tables carry text columns
+          * (Scope, Period, Status) whose headers belong on the left, which is
+          * why the shared rule stays as it is and this is a scoped hook. */}
+        <table className="capital-result-table capital-loan-table" aria-labelledby={titleId}>
           <thead>
             <tr>
               <th scope="col">Unit</th>

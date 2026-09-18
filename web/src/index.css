@@ -7364,3 +7364,35 @@ body {
     align-items: stretch;
   }
 }
+
+/* ==========================================================================
+   P7.9 human-QA correction -- the Acquisition Loans table
+   ========================================================================== */
+
+/* Every column of the Acquisition Loans table except the Unit is a figure, and
+   the shared `.capital-result-table` rule puts *all* column headers on the
+   left. That left a header sitting over the left edge of a right-aligned
+   number, so the eye had to travel to work out which column a figure belonged
+   to -- the thing a financial table exists to make immediate.
+
+   The fix is scoped to this one table rather than applied to the shared rule,
+   because the other Capital Structure tables carry genuine text columns --
+   Scope, Period, Status -- whose headers belong on the left, above text that
+   is itself left-aligned. Right-aligning the shared header rule would fix one
+   table by breaking three.
+
+   Both classes are named in the selector so this wins on specificity rather
+   than on source order: it must not depend on where in the stylesheet it
+   happens to sit. Alignment is all that changes -- the padding, borders,
+   nowrap, type scale and the `.table-scroll` container are the shared rules'
+   and stay exactly as they are, so the table still scrolls inside its own
+   region at narrow widths rather than compressing or clipping its figures. */
+.capital-result-table.capital-loan-table thead th {
+  text-align: right;
+}
+
+/* The Unit is the one label column: its header stays over its row labels,
+   which the shared `tbody th` rule already keeps on the left. */
+.capital-result-table.capital-loan-table thead th:first-child {
+  text-align: left;
+}

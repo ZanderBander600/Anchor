@@ -47,6 +47,7 @@ import type { CapitalStructureForm } from './capitalStructureForm';
 import type {
   CommonEquityReturns,
   FundingRequirement,
+  LegacyAcquisitionLoan,
   PositionDecisionCell,
   PositionDecisionMatrixReport,
   PositionPerspective,
@@ -535,5 +536,90 @@ describe('the POSITION perspective of the Decision Matrix', () => {
       />,
     );
     expect(screen.getByText(NO_POSITIONS_MESSAGE)).toBeTruthy();
+  });
+});
+
+describe('the Acquisition Loans table puts each header over its figures', () => {
+  const LOAN: LegacyAcquisitionLoan = {
+    position_id: 'deal-a-acquisition-loan',
+    position_class: 'senior_debt',
+    scope: { kind: 'unit', unit_id: 'deal-a' },
+    priority: 1,
+    shortfall_resolution: 'common_equity_contribution',
+    loan_amount: 6_500_000,
+    annual_debt_service: [420_000, 420_000],
+    remaining_loan_balance: 6_012_450,
+    modeled_payoff_month: 60,
+    interest_rate: 0.0625,
+    amortization: 30,
+    io_period: 2,
+    hold_period: 5,
+  };
+
+  function loansTable(): HTMLTableElement {
+    render(
+      <CapitalStructureResults
+        result={result({ legacy_acquisition_loans: [LOAN] })}
+        unitNames={{ 'deal-a': 'Harbor One' }}
+      />,
+    );
+    const heading = screen.getByRole('heading', { name: 'Acquisition Loans' });
+    const section = heading.closest('section') as HTMLElement;
+    return within(section).getByRole('table') as HTMLTableElement;
+  }
+
+  it('carries its own alignment hook beside the shared table class', () => {
+    // The hook is what lets the stylesheet right-align these headers without
+    // touching the three tables that carry text columns.
+    const table = loansTable();
+    expect(table.classList.contains('capital-result-table')).toBe(true);
+    expect(table.classList.contains('capital-loan-table')).toBe(true);
+  });
+
+  it('leads with Unit and then names only figures', () => {
+    // The alignment rule turns on the column order: the one label column first,
+    // every numeric column after it. A text column added in the middle would
+    // silently be right-aligned, so the order is pinned here.
+    const headers = [...loansTable().querySelectorAll('thead th')].map(
+      (cell) => cell.textContent?.trim(),
+    );
+    expect(headers).toEqual([
+      'Unit',
+      'Priority',
+      'Loan Amount',
+      'Interest Rate',
+      'Amortization',
+      'Interest-Only',
+      'Remaining Balance',
+    ]);
+  });
+
+  it('keeps the Unit label column on the left and every figure on the right', () => {
+    const table = loansTable();
+    const row = within(table).getByRole('row', { name: /Harbor One/ });
+    // The Unit is a row header, which the shared rule left-aligns; the figures
+    // are ordinary cells, which the shared rule right-aligns. The header rule
+    // added by this correction is what puts the column headings over them.
+    expect(within(row).getByRole('rowheader').textContent).toContain('Harbor One');
+    const figures = [...row.querySelectorAll('td')].map((cell) => cell.textContent?.trim());
+    expect(figures).toEqual(['1', '$6,500,000', '6.25%', '30 yrs', '2 yrs', '$6,012,450']);
+  });
+
+  it('leaves the other Capital Structure tables on the shared class alone', () => {
+    render(
+      <CapitalStructureResults
+        result={result({ legacy_acquisition_loans: [LOAN] })}
+        unitNames={{ 'deal-a': 'Harbor One' }}
+      />,
+    );
+    const tables = [...document.querySelectorAll('table.capital-result-table')];
+    expect(tables.length).toBeGreaterThan(1);
+    const hooked = tables.filter((table) => table.classList.contains('capital-loan-table'));
+    expect(hooked).toHaveLength(1);
+  });
+
+  it('still scrolls inside its own region rather than widening the page', () => {
+    const table = loansTable();
+    expect(table.closest('.table-scroll')).not.toBeNull();
   });
 });
