@@ -230,7 +230,7 @@ export function ManagedAssetWorkspace({
                 </div>
                 <div>
                   <dt>Acquired</dt>
-                  <dd>{asset.acquisition_date}</dd>
+                  <dd>{formatAcquiredOn(asset.acquisition_date)}</dd>
                 </div>
                 <div>
                   <dt>Months Reported</dt>
@@ -244,21 +244,16 @@ export function ManagedAssetWorkspace({
               <p className="am-provenance">
                 This asset was created from a saved acquisition analysis. The approved basis
                 was captured when the asset was created; later edits to that deal do not
-                change this asset, its approved budgets or its saved reports.
+                change this asset, its approved budgets or its saved reports. Open it with
+                View Acquisition Basis above.
               </p>
               {/* The acquisition fingerprint stays on the contract and in the
                 * wire response, where it is what actually freezes the basis --
                 * but it is an internal digest, not something an asset manager
                 * can act on. "View Acquisition Basis" is the human-facing
-                * provenance action; a raw hash on screen is noise that invites
-                * someone to compare two strings by eye. */}
-              <button
-                type="button"
-                className="am-quiet-button"
-                onClick={() => onViewAcquisitionBasis(asset.source_deal_id)}
-              >
-                View Acquisition Basis
-              </button>
+                * provenance action. It lives once, in the asset header, where it
+                * is reachable from both tabs; a second copy here repeated the
+                * same route. */}
             </section>
           </div>
         )}

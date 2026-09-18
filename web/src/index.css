@@ -2229,6 +2229,23 @@ body {
   .deal-header-name-field {
     flex: 1 1 100%;
   }
+
+  /* The operating-mode switch was the one shell element wider than a phone:
+     three no-wrap labels, 428px at 390. It takes its own row and divides it
+     evenly, and a label wraps to two lines rather than widening the page, so
+     all three modes stay visible and reachable without a nested scroll. */
+  .mode-switch {
+    display: flex;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .mode-switch-tab {
+    flex: 1 1 0;
+    min-width: 0;
+    white-space: normal;
+    line-height: 1.25;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -7262,23 +7279,6 @@ body {
   color: var(--text-muted);
 }
 
-.partnership-share-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.partnership-share-list li {
-  display: flex;
-  gap: var(--sp-2);
-  justify-content: space-between;
-}
-
-.partnership-share-name {
-  white-space: normal;
-}
-
-.partnership-share-value {
 /* The Tier Audit's hierarchy: a tier, then each account it keeps -- its
    distributions by period, each hurdle condition's account, the catch-up
    account -- under its own small heading, with room between them, so one
@@ -7309,6 +7309,23 @@ body {
   margin-top: var(--sp-2);
 }
 
+.partnership-share-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.partnership-share-list li {
+  display: flex;
+  gap: var(--sp-2);
+  justify-content: space-between;
+}
+
+.partnership-share-name {
+  white-space: normal;
+}
+
+.partnership-share-value {
   font-variant-numeric: tabular-nums;
 }
 
@@ -7559,8 +7576,10 @@ body {
 .am-asset-actions {
   margin-left: auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .am-asset-meta {
@@ -7957,6 +7976,21 @@ body {
 .am-col-assessment {
   text-align: left;
   white-space: nowrap;
+}
+
+/* The Managed Assets and Monthly Reporting lists hold text, not figures. Each
+   header states the same alignment as the values beneath it, rather than
+   inheriting the browser's centred `th` default over left-aligned text. The
+   action column sits at the row's trailing edge, header and control alike,
+   and shrinks to its control. Scoped to `.am-list-table`, so the monthly
+   statement table's right-aligned figures are untouched. */
+.am-list-table .am-col-text {
+  text-align: left;
+}
+
+.am-list-table .am-col-action {
+  width: 1%;
+  text-align: right;
 }
 
 .am-table tbody tr:hover {
@@ -8386,8 +8420,11 @@ body {
     width: 100%;
   }
 
+  /* Each action keeps its full label and wraps to a new row rather than
+     pushing the last one past the viewport edge. */
   .am-asset-actions button {
-    flex: 1;
+    flex: 1 1 9.5rem;
+    min-width: 0;
   }
 
   .am-cards {

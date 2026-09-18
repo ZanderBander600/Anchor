@@ -275,16 +275,24 @@ function ManagedAssetList({
 
       {assets.length > 0 && (
         <div className="am-table-scroll">
-          <table className="am-table">
+          <table className="am-table am-list-table">
             <thead>
               <tr>
                 <th scope="col" className="am-col-line">
                   Asset
                 </th>
-                <th scope="col">Property Type</th>
-                <th scope="col">Market</th>
-                <th scope="col">Acquired</th>
-                <th scope="col" />
+                <th scope="col" className="am-col-text">
+                  Property Type
+                </th>
+                <th scope="col" className="am-col-text">
+                  Market
+                </th>
+                <th scope="col" className="am-col-text">
+                  Acquired
+                </th>
+                <th scope="col" className="am-col-action">
+                  <span className="visually-hidden">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -293,10 +301,10 @@ function ManagedAssetList({
                   <th scope="row" className="am-col-line">
                     {asset.name}
                   </th>
-                  <td>{asset.property_type ?? '—'}</td>
-                  <td>{asset.market ?? '—'}</td>
-                  <td>{formatAcquiredOn(asset.acquisition_date)}</td>
-                  <td>
+                  <td className="am-col-text">{asset.property_type ?? '—'}</td>
+                  <td className="am-col-text">{asset.market ?? '—'}</td>
+                  <td className="am-col-text">{formatAcquiredOn(asset.acquisition_date)}</td>
+                  <td className="am-col-action">
                     <button
                       type="button"
                       className="am-quiet-button"
@@ -381,14 +389,18 @@ function MonthlyReportingIndex({
         <p className="am-empty">No managed assets yet.</p>
       ) : (
         <div className="am-table-scroll">
-          <table className="am-table">
+          <table className="am-table am-list-table">
             <thead>
               <tr>
                 <th scope="col" className="am-col-line">
                   Asset
                 </th>
-                <th scope="col">Market</th>
-                <th scope="col" />
+                <th scope="col" className="am-col-text">
+                  Market
+                </th>
+                <th scope="col" className="am-col-action">
+                  <span className="visually-hidden">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -397,8 +409,8 @@ function MonthlyReportingIndex({
                   <th scope="row" className="am-col-line">
                     {asset.name}
                   </th>
-                  <td>{asset.market ?? '—'}</td>
-                  <td>
+                  <td className="am-col-text">{asset.market ?? '—'}</td>
+                  <td className="am-col-action">
                     <button
                       type="button"
                       className="am-quiet-button"

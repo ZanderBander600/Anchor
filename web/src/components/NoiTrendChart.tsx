@@ -141,26 +141,30 @@ export function NoiTrendChart({ points }: NoiTrendChartProps) {
 
       {/* The same figures as a real table, for a reader who cannot see the
         * plot. Visually hidden rather than omitted: a chart must never be the
-        * only place a number exists. */}
-      <table className="am-visually-hidden">
-        <caption>Budget and actual net operating income by month</caption>
-        <thead>
-          <tr>
-            <th scope="col">Month</th>
-            <th scope="col">Budget NOI</th>
-            <th scope="col">Actual NOI</th>
-          </tr>
-        </thead>
-        <tbody>
-          {points.map((point) => (
-            <tr key={point.reporting_month}>
-              <th scope="row">{formatMonthShort(point.reporting_month)}</th>
-              <td>{formatMoney(point.budget_net_operating_income)}</td>
-              <td>{formatMoney(point.actual_net_operating_income)}</td>
+        * only place a number exists. The hiding is on a wrapper, not the
+        * table: a table sizes to its content whatever its width says, so a
+        * "hidden" table still widened a 390px page by its full width. */}
+      <div className="am-visually-hidden">
+        <table>
+          <caption>Budget and actual net operating income by month</caption>
+          <thead>
+            <tr>
+              <th scope="col">Month</th>
+              <th scope="col">Budget NOI</th>
+              <th scope="col">Actual NOI</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {points.map((point) => (
+              <tr key={point.reporting_month}>
+                <th scope="row">{formatMonthShort(point.reporting_month)}</th>
+                <td>{formatMoney(point.budget_net_operating_income)}</td>
+                <td>{formatMoney(point.actual_net_operating_income)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
