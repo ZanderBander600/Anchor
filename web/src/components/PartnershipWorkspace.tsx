@@ -112,12 +112,21 @@ export function PartnershipWorkspace({
   const wasEditing = useRef(false);
   const removeButton = useRef<HTMLButtonElement>(null);
   const cancelRemoveButton = useRef<HTMLButtonElement>(null);
-  /** Whether the analyst has asked to remove the Partnership and not yet
-   * confirmed. Removal clears a whole authored contract, so it is confirmed
-   * inline -- in the product's own words, where the thing being removed is
-   * still on screen -- rather than through a browser dialog that steals focus
-   * and cannot say what is lost. */
-  const [isConfirmingRemove, setIsConfirmingRemove] = useState(false);
+  /** **Which** Partnership the analyst has asked to remove and not yet
+   * confirmed, rather than merely *that* one was asked about. Removal clears a
+   * whole authored contract, so it is confirmed inline -- in the product's own
+   * words, where the thing being removed is still on screen -- rather than
+   * through a browser dialog that steals focus and cannot say what is lost.
+   *
+   * Holding the subject, not a boolean, is what makes the confirmation
+   * self-invalidating: a question about a Partnership that is no longer on
+   * screen is not a question any more. A successful removal drops `saved` to
+   * `null` and the confirmation closes with it, and loading a *different*
+   * Partnership -- another Deal opened into this same mounted workspace --
+   * closes it too, so a question asked about one contract can never be answered
+   * against another. A failed removal leaves `saved` exactly as it was, so the
+   * confirmation stays open and the analyst can try again or cancel. */
+  const [confirmingRemovalOf, setConfirmingRemovalOf] = useState<Partnership | null>(null);
   const wasConfirmingRemove = useRef(false);
 
   // Focus returns to the opening control when the editor closes, rather than
@@ -129,20 +138,28 @@ export function PartnershipWorkspace({
     wasEditing.current = state.hasDraft;
   }, [state.hasDraft]);
 
-  // Opening the confirmation moves focus to Cancel -- the safe choice -- and
-  // closing it without removing returns focus to the control that opened it,
-  // rather than dropping it on the page.
+  const saved = state.saved;
+  const isEmpty = saved === null;
+
+  /** Whether the confirmation is on screen: only while the Partnership it asks
+   * about is still the one loaded. */
+  const isConfirmingRemove = confirmingRemovalOf !== null && confirmingRemovalOf === saved;
+
+  // Opening the confirmation moves focus to Cancel -- the safe choice. Closing
+  // it hands focus to whichever control the analyst can now act on: the Remove
+  // control that opened it when they cancelled, or -- when the removal
+  // succeeded and took that control with it -- the Add Partnership control that
+  // replaced it. React nulls the ref of an unmounted button, so the fallback is
+  // the transition, not a guess about it. Focus is never left on a detached
+  // node, which would drop a keyboard analyst back to the top of the document.
   useEffect(() => {
     if (isConfirmingRemove) {
       cancelRemoveButton.current?.focus();
     } else if (wasConfirmingRemove.current) {
-      removeButton.current?.focus();
+      (removeButton.current ?? addButton.current)?.focus();
     }
     wasConfirmingRemove.current = isConfirmingRemove;
   }, [isConfirmingRemove]);
-
-  const saved = state.saved;
-  const isEmpty = saved === null;
   const analysis = state.analysis;
   const { partnerNames, tierNames } = namesOf(analysis?.partnership ?? saved);
 
@@ -163,10 +180,8 @@ export function PartnershipWorkspace({
             type="button"
             className="btn btn-primary btn-sm"
             onClick={() => {
-              // Opening the editor is not removing: a confirmation left over
-              // from a Partnership that has since been removed must never greet
-              // the next one.
-              setIsConfirmingRemove(false);
+              // Opening the editor is not removing.
+              setConfirmingRemovalOf(null);
               if (isEmpty) {
                 state.add();
               } else {
@@ -271,7 +286,7 @@ export function PartnershipWorkspace({
                       ref={cancelRemoveButton}
                       type="button"
                       className="btn btn-ghost btn-xs"
-                      onClick={() => setIsConfirmingRemove(false)}
+                      onClick={() => setConfirmingRemovalOf(null)}
                       disabled={state.isSaving}
                     >
                       Cancel
@@ -283,7 +298,7 @@ export function PartnershipWorkspace({
                   ref={removeButton}
                   type="button"
                   className="btn btn-ghost btn-xs"
-                  onClick={() => setIsConfirmingRemove(true)}
+                  onClick={() => setConfirmingRemovalOf(saved)}
                   disabled={blockedReason !== null || state.isSaving}
                 >
                   Remove Partnership

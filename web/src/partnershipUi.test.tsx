@@ -18,6 +18,7 @@
  * (P-3, P-5).
  */
 
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -1224,4 +1225,139 @@ describe('removing a Partnership is confirmed inline', () => {
     expect(remove).toHaveBeenCalledTimes(1);
   });
 
+});
+
+// =============================================================================
+// Removing a Partnership, as the workspace actually rerenders
+// =============================================================================
+
+describe('focus survives a successful removal', () => {
+  /** The workspace over *state that moves*.
+   *
+   * The prop-driven tests above hand the component one fixed `state`, so a
+   * removal never changes what is on screen and the transition that matters --
+   * the confirmation's buttons unmounting under the analyst's focus -- never
+   * happens. This harness holds the Partnership itself and lets `remove` clear
+   * it, exactly as `usePartnership` does on a successful save. */
+  function StatefulWorkspace({ succeeds }: { succeeds: boolean }) {
+    const [saved, setSaved] = useState<Partnership | null>(PARTNERSHIP);
+    const [saveError, setSaveError] = useState<string | null>(null);
+    const remove = async () => {
+      if (succeeds) {
+        // What the hook does: the saved Partnership becomes the explicit "none".
+        setSaved(null);
+      } else {
+        // What the hook does on a refused save: the Partnership stands.
+        setSaveError('The partnership could not be saved.');
+      }
+    };
+    return (
+      <PartnershipWorkspace
+        state={partnershipState({ saved, saveError, remove })}
+        prefix=""
+        blockedReason={null}
+        isInvestment={false}
+      />
+    );
+  }
+
+  async function confirmRemoval(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole('button', { name: 'Remove Partnership' }));
+    const group = screen.getByRole('group', { name: 'Confirm removing the partnership' });
+    await user.click(within(group).getByRole('button', { name: 'Remove Partnership' }));
+  }
+
+  it('moves focus to Add Partnership once the Partnership is gone', async () => {
+    const user = userEvent.setup();
+    render(<StatefulWorkspace succeeds />);
+
+    await confirmRemoval(user);
+
+    // The confirmation and the control that opened it have both unmounted with
+    // the Partnership. Focus must land on what the analyst can now act on,
+    // never on a detached node or the document body.
+    const add = screen.getByRole('button', { name: 'Add Partnership' });
+    expect(document.activeElement).toBe(add);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it('closes the confirmation and shows the empty state after removal', async () => {
+    const user = userEvent.setup();
+    render(<StatefulWorkspace succeeds />);
+
+    await confirmRemoval(user);
+
+    expect(screen.queryByText(REMOVE_CONFIRM_QUESTION)).toBeNull();
+    expect(
+      screen.queryByRole('group', { name: 'Confirm removing the partnership' }),
+    ).toBeNull();
+    expect(screen.getByText(NO_PARTNERSHIP_MESSAGE)).toBeTruthy();
+    expect(screen.queryByLabelText('Saved partners')).toBeNull();
+  });
+
+  it('keeps the confirmation, and a control to act on, when removal fails', async () => {
+    const user = userEvent.setup();
+    render(<StatefulWorkspace succeeds={false} />);
+
+    await confirmRemoval(user);
+
+    // The Partnership is still there, so the question still stands: it must not
+    // close as though the removal had happened.
+    expect(screen.getByText(REMOVE_CONFIRM_QUESTION)).toBeTruthy();
+    expect(screen.getByLabelText('Saved partners')).toBeTruthy();
+    expect(screen.getByText('The partnership could not be saved.')).toBeTruthy();
+
+    // And a keyboard analyst still has both ways out, reachable and enabled.
+    const group = screen.getByRole('group', { name: 'Confirm removing the partnership' });
+    const retry = within(group).getByRole('button', { name: 'Remove Partnership' });
+    const cancel = within(group).getByRole('button', { name: 'Cancel' });
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+    expect((cancel as HTMLButtonElement).disabled).toBe(false);
+    expect(group.contains(document.activeElement)).toBe(true);
+  });
+
+  it('cancelling after a failed removal still returns focus to the trigger', async () => {
+    const user = userEvent.setup();
+    render(<StatefulWorkspace succeeds={false} />);
+
+    await confirmRemoval(user);
+    const group = screen.getByRole('group', { name: 'Confirm removing the partnership' });
+    await user.click(within(group).getByRole('button', { name: 'Cancel' }));
+
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'Remove Partnership' }),
+    );
+  });
+
+  it('never carries a question about one Partnership over to another', async () => {
+    const user = userEvent.setup();
+    const OTHER: Partnership = { ...PARTNERSHIP, promote_participant_ids: ['lp'] };
+
+    function SwitchingWorkspace() {
+      const [saved, setSaved] = useState<Partnership | null>(PARTNERSHIP);
+      return (
+        <>
+          <button type="button" onClick={() => setSaved(OTHER)}>
+            Open another deal
+          </button>
+          <PartnershipWorkspace
+            state={partnershipState({ saved })}
+            prefix=""
+            blockedReason={null}
+            isInvestment={false}
+          />
+        </>
+      );
+    }
+
+    render(<SwitchingWorkspace />);
+    await user.click(screen.getByRole('button', { name: 'Remove Partnership' }));
+    expect(screen.getByText(REMOVE_CONFIRM_QUESTION)).toBeTruthy();
+
+    // A different Partnership loads into the same mounted workspace. The
+    // pending question was about the previous one, so it must not be left
+    // standing over this one.
+    await user.click(screen.getByRole('button', { name: 'Open another deal' }));
+    expect(screen.queryByText(REMOVE_CONFIRM_QUESTION)).toBeNull();
+  });
 });
