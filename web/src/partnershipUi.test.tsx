@@ -47,7 +47,11 @@ import {
   rootOverlaysOfDomain,
 } from './decisionStateTokens';
 import { STALE_LABEL } from './components/StaleAnalysisNotice';
-import { EMPTY_PARTNERSHIP_FORM, formFromPartnership } from './partnershipForm';
+import {
+  conditionAuditLabels,
+  EMPTY_PARTNERSHIP_FORM,
+  formFromPartnership,
+} from './partnershipForm';
 import type { PartnershipForm } from './partnershipForm';
 import { investmentLeaveWarning } from './investmentCatalog';
 import {
@@ -329,8 +333,9 @@ const COMPLETE: PartnershipResult = {
       recipient_partner_ids: null,
       catch_up_rate: null,
       target_profit_share: null,
-      amounts: [300000],
-      partner_amounts: [{ partner_id: 'gp', amounts: [300000] }],
+      // The engine's dense per-period series: index 0 is closing.
+      amounts: [0, 300000],
+      partner_amounts: [{ partner_id: 'gp', amounts: [0, 300000] }],
       conditions: [],
       catch_up_records: [],
     },
@@ -602,7 +607,12 @@ describe('the Partnership editor states nothing the analyst has not', () => {
 describe('the Partnership result surface shows only backend figures', () => {
   function renderResults(result: PartnershipResult) {
     render(
-      <PartnershipResults result={result} partnerNames={PARTNER_NAMES} tierNames={TIER_NAMES} />,
+      <PartnershipResults
+        result={result}
+        partnerNames={PARTNER_NAMES}
+        tierNames={TIER_NAMES}
+        conditionLabels={conditionAuditLabels(PARTNERSHIP)}
+      />,
     );
   }
 
@@ -712,8 +722,11 @@ describe('the Partnership result surface shows only backend figures', () => {
     expect(screen.getByRole('heading', { name: 'Common Equity Cash Flow' })).toBeTruthy();
     // The engine's derived Common Equity Total Profit, echoed.
     expect(screen.getByText('$600,000')).toBeTruthy();
-    // A hurdle account row, by its own condition id.
-    expect(screen.getByText('cond-1')).toBeTruthy();
+    // A hurdle account, named by its kind and terms -- never its opaque id.
+    expect(
+      screen.getByRole('heading', { name: 'Hurdle Account: IRR Condition · 8.00% Simple · Accrued Return First' }),
+    ).toBeTruthy();
+    expect(screen.queryByText('cond-1')).toBeNull();
     expect(screen.getByText('Accrued Return First')).toBeTruthy();
   });
 

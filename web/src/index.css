@@ -2229,6 +2229,23 @@ body {
   .deal-header-name-field {
     flex: 1 1 100%;
   }
+
+  /* The operating-mode switch was the one shell element wider than a phone:
+     three no-wrap labels, 428px at 390. It takes its own row and divides it
+     evenly, and a label wraps to two lines rather than widening the page, so
+     all three modes stay visible and reachable without a nested scroll. */
+  .mode-switch {
+    display: flex;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .mode-switch-tab {
+    flex: 1 1 0;
+    min-width: 0;
+    white-space: normal;
+    line-height: 1.25;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -7245,7 +7262,7 @@ body {
   align-items: baseline;
   gap: var(--sp-2);
   margin: 0;
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 
 .partnership-tier-sequence {
@@ -7260,6 +7277,96 @@ body {
 .partnership-tier-kind {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* The Tier Audit's hierarchy: a tier, then each account it keeps -- its
+   distributions by period, each hurdle condition's account, the catch-up
+   account -- under its own small heading, with room between them, so one
+   account's periods are never read as another's. Spacing and type only; every
+   figure and column is unchanged. */
+.partnership-section > .partnership-tier + .partnership-tier {
+  margin-top: var(--sp-4);
+}
+
+.partnership-tier > .partnership-summary {
+  padding-bottom: var(--sp-1);
+}
+
+.partnership-audit-subtitle {
+  margin: var(--sp-3) 0 0;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.partnership-audit-condition {
+  min-width: 0;
+}
+
+.partnership-audit-condition > * + * {
+  margin-top: var(--sp-2);
+}
+
+/* The Tier Audit's tables. Scoped to `.partnership-audit-table`, which only
+   the audit's three account tables carry -- the other Partnership result
+   tables and every AM1 table are untouched. Each header and cell states its
+   column's role in a class, so alignment never depends on column position:
+   figures right-aligned in tabular numerals, the period and the words (a
+   status, a distribution order, the applied shares) on the left. The treatment
+   -- a muted uppercase header band, a firmer rule beneath it and hairline row
+   separators -- is the one the Asset Management lists use. A wide account
+   scrolls inside its own `.table-scroll`; no column is hidden or shortened. */
+.partnership-audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.partnership-audit-table th,
+.partnership-audit-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.partnership-audit-table thead th {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.partnership-audit-table tbody th {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.partnership-audit-table .partnership-audit-figure {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.partnership-audit-table .partnership-audit-period,
+.partnership-audit-table .partnership-audit-status,
+.partnership-audit-table .partnership-audit-text,
+.partnership-audit-table .partnership-audit-shares {
+  text-align: left;
+}
+
+/* The applied shares are a short list of partner and percentage. The list
+   sizes to its content rather than stretching across a wide column, so each
+   percentage stays beside its partner, right-aligned in its own short run. */
+.partnership-audit-table .partnership-audit-shares .partnership-share-list {
+  display: inline-block;
+  min-width: 12rem;
+  vertical-align: top;
 }
 
 .partnership-share-list {
@@ -7529,8 +7636,10 @@ body {
 .am-asset-actions {
   margin-left: auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .am-asset-meta {
@@ -7927,6 +8036,21 @@ body {
 .am-col-assessment {
   text-align: left;
   white-space: nowrap;
+}
+
+/* The Managed Assets and Monthly Reporting lists hold text, not figures. Each
+   header states the same alignment as the values beneath it, rather than
+   inheriting the browser's centred `th` default over left-aligned text. The
+   action column sits at the row's trailing edge, header and control alike,
+   and shrinks to its control. Scoped to `.am-list-table`, so the monthly
+   statement table's right-aligned figures are untouched. */
+.am-list-table .am-col-text {
+  text-align: left;
+}
+
+.am-list-table .am-col-action {
+  width: 1%;
+  text-align: right;
 }
 
 .am-table tbody tr:hover {
@@ -8356,8 +8480,11 @@ body {
     width: 100%;
   }
 
+  /* Each action keeps its full label and wraps to a new row rather than
+     pushing the last one past the viewport edge. */
   .am-asset-actions button {
-    flex: 1;
+    flex: 1 1 9.5rem;
+    min-width: 0;
   }
 
   .am-cards {
