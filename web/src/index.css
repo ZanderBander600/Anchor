@@ -7245,7 +7245,7 @@ body {
   align-items: baseline;
   gap: var(--sp-2);
   margin: 0;
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 
 .partnership-tier-sequence {
@@ -7279,6 +7279,36 @@ body {
 }
 
 .partnership-share-value {
+/* The Tier Audit's hierarchy: a tier, then each account it keeps -- its
+   distributions by period, each hurdle condition's account, the catch-up
+   account -- under its own small heading, with room between them, so one
+   account's periods are never read as another's. Spacing and type only; every
+   figure and column is unchanged. */
+.partnership-section > .partnership-tier + .partnership-tier {
+  margin-top: var(--sp-4);
+}
+
+.partnership-tier > .partnership-summary {
+  padding-bottom: var(--sp-1);
+}
+
+.partnership-audit-subtitle {
+  margin: var(--sp-3) 0 0;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.partnership-audit-condition {
+  min-width: 0;
+}
+
+.partnership-audit-condition > * + * {
+  margin-top: var(--sp-2);
+}
+
   font-variant-numeric: tabular-nums;
 }
 

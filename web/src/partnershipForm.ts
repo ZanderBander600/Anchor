@@ -36,6 +36,7 @@
  */
 
 import { formatDisplayNumber, parseNumber, parsePercent, parseWholeNumber } from './convert';
+import { formatMultiple, formatPercent } from './format';
 import type {
   CatchUpRecipientKind,
   ContributionRule,
@@ -126,6 +127,55 @@ export const SIMPLE_ORDER_LABELS: Readonly<Record<SimpleDistributionOrder, strin
   accrued_return_first: 'Accrued Return First',
   capital_first: 'Capital First',
 };
+
+/** One authored condition described by its kind and its own stated terms:
+ * "IRR Condition · 8.00% Annual Compound", "MOIC Condition · 1.50x". The terms
+ * are the analyst's own inputs, formatted for display; nothing is derived. */
+function conditionTermsLabel(condition: HurdleCondition): string {
+  if (condition.kind === 'irr') {
+    return `${conditionLabel('irr')} · ${formatPercent(condition.rate)} ${ACCRUAL_CONVENTION_LABELS[condition.accrual_convention]}`;
+  }
+  return `${conditionLabel('moic')} · ${formatMultiple(condition.multiple)}`;
+}
+
+/** What the Tier Audit calls each hurdle condition, by `tier_id` then
+ * `condition_id`, resolved from the saved Partnership contract the analysis
+ * ran on -- never from the shape of the opaque id, which is not shown.
+ *
+ * Two conditions in one tier are told apart by their terms, which is what an
+ * analyst reading the audit needs to know anyway, and which implies no order
+ * between them. Only when two conditions state *identical* terms -- valid, if
+ * unusual -- does a label add "(1 of 2)", in the contract's own order, so they
+ * still read as distinct. That position is a count of the conditions already
+ * named, not arithmetic on anything the contract states. */
+export function conditionAuditLabels(
+  partnership: Partnership | null,
+): Record<string, Record<string, string>> {
+  const labels: Record<string, Record<string, string>> = {};
+  if (partnership === null) {
+    return labels;
+  }
+  for (const tier of partnership.tiers) {
+    const byTerms = new Map<string, string[]>();
+    for (const condition of tier.hurdle?.conditions ?? []) {
+      const terms = conditionTermsLabel(condition);
+      const ids = byTerms.get(terms) ?? [];
+      ids.push(condition.condition_id);
+      byTerms.set(terms, ids);
+    }
+    const byCondition: Record<string, string> = {};
+    for (const [terms, ids] of byTerms) {
+      const named: string[] = [];
+      for (const conditionId of ids) {
+        named.push(conditionId);
+        byCondition[conditionId] =
+          ids.length === 1 ? terms : `${terms} (${named.length} of ${ids.length})`;
+      }
+    }
+    labels[tier.tier_id] = byCondition;
+  }
+  return labels;
+}
 
 /** The catch-up recipient kinds. There is deliberately **no** economic-account
  * member: an all-partners recipient would make the target share meaningless,

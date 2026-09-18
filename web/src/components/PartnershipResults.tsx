@@ -47,6 +47,7 @@ import {
   TIER_KIND_LABELS,
 } from '../partnershipForm';
 import type {
+  HurdleAccountRecord,
   HurdleSubject,
   CatchUpRecipient,
   PartnerResult,
@@ -63,6 +64,10 @@ export interface PartnershipResultsProps {
   partnerNames: Record<string, string>;
   /** The authored tier names, by id, for the same reason. */
   tierNames: Record<string, string>;
+  /** Each hurdle condition's analyst-facing label, by `tier_id` then
+   * `condition_id`, resolved from the same Partnership. The opaque
+   * `condition_id` keys rows and elements but is never shown. */
+  conditionLabels: Record<string, Record<string, string>>;
 }
 
 /** Each message is one string literal, never joined with `+`: this module is
@@ -136,6 +141,33 @@ function partnerLabel(partnerId: string, names: Record<string, string>): string 
 function tierLabel(tierId: string, names: Record<string, string>): string {
   const name = names[tierId];
   return name === undefined || name.trim() === '' ? tierId : name;
+}
+
+/** A hurdle condition's label. It never falls back to the opaque id: a
+ * condition the contract cannot name is simply "Condition". */
+function auditConditionLabel(
+  tierId: string,
+  conditionId: string,
+  labels: Record<string, Record<string, string>>,
+): string {
+  return labels[tierId]?.[conditionId] ?? 'Condition';
+}
+
+/** A tier's account records grouped by condition, in the backend's own order,
+ * so each condition's periods read as one account rather than interleaved. */
+function recordsByCondition(
+  records: HurdleAccountRecord[],
+): { conditionId: string; records: HurdleAccountRecord[] }[] {
+  const groups: { conditionId: string; records: HurdleAccountRecord[] }[] = [];
+  for (const record of records) {
+    const group = groups.find((entry) => entry.conditionId === record.condition_id);
+    if (group === undefined) {
+      groups.push({ conditionId: record.condition_id, records: [record] });
+    } else {
+      group.records.push(record);
+    }
+  }
+  return groups;
 }
 
 /** A backend figure, or `N/A` with the backend's own reason beneath it. */
@@ -639,10 +671,12 @@ function TierAudit({
   tiers,
   names,
   tierNames,
+  conditionLabels,
 }: {
   tiers: TierResult[];
   names: Record<string, string>;
   tierNames: Record<string, string>;
+  conditionLabels: Record<string, Record<string, string>>;
 }) {
   return (
     <section className="partnership-section" aria-labelledby="partnership-tiers-title">
@@ -695,6 +729,7 @@ function TierAudit({
             )}
           </dl>
 
+          <h6 className="partnership-audit-subtitle">Distributions by Period</h6>
           <div className="table-scroll">
             <table className="data-table partnership-table">
               <caption className="visually-hidden">
@@ -708,15 +743,19 @@ function TierAudit({
                 </tr>
               </thead>
               <tbody>
-                {tier.shares_by_period.map((row, index) => (
-                  <tr key={row.period}>
+                {/* `amounts` is the engine's dense per-period series (index 0 is
+                  * closing), while `shares_by_period` lists only the periods the
+                  * tier paid. The amount is therefore read by the row's own
+                  * period, never by the row's position in this sparse list. */}
+                {tier.shares_by_period.map((row) => (
+                  <tr key={row.period} data-period={row.period}>
                     <th scope="row">{periodLabel(row.period)}</th>
-                    <td>
+                    <td data-field="tier_amount">
                       <Figure
                         value={
-                          tier.amounts[index] === undefined
+                          tier.amounts[row.period] === undefined
                             ? null
-                            : formatCurrency(tier.amounts[index])
+                            : formatCurrency(tier.amounts[row.period])
                         }
                         reason={null}
                       />
@@ -741,79 +780,94 @@ function TierAudit({
             </table>
           </div>
 
-          {tier.conditions.length > 0 && (
-            <div className="table-scroll">
-              <table className="data-table partnership-table">
-                <caption className="visually-hidden">
-                  {`${tierLabel(tier.tier_id, tierNames)}: each hurdle condition’s account by period`}
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Condition</th>
-                    <th scope="col">Period</th>
-                    <th scope="col">Opening Balance</th>
-                    <th scope="col">Accrual</th>
-                    <th scope="col">Subject Contributions</th>
-                    <th scope="col">Distributions From Tier</th>
-                    <th scope="col">Closing Balance</th>
-                    <th scope="col">Satisfied</th>
-                    <th scope="col">Distribution Order</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tier.conditions.map((record) => (
-                    <tr key={`${record.condition_id}|${record.period}`}>
-                      <th scope="row">{record.condition_id}</th>
-                      <td>{periodLabel(record.period)}</td>
-                      <td>{formatCurrency(record.opening_balance)}</td>
-                      <td>{formatCurrency(record.accrual)}</td>
-                      <td>{formatCurrency(record.subject_contributions)}</td>
-                      <td>{formatCurrency(record.subject_distributions_from_tier)}</td>
-                      <td>{formatCurrency(record.closing_balance)}</td>
-                      <td>{record.satisfied_at_close ? 'Yes' : 'No'}</td>
-                      <td>
-                        {record.simple_distribution_order === null
-                          ? NOT_AVAILABLE
-                          : SIMPLE_ORDER_LABELS[record.simple_distribution_order]}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {recordsByCondition(tier.conditions).map((group) => {
+            const label = auditConditionLabel(tier.tier_id, group.conditionId, conditionLabels);
+            return (
+              <div
+                key={group.conditionId}
+                className="partnership-audit-condition"
+                data-condition={group.conditionId}
+              >
+                <h6 className="partnership-audit-subtitle">{`Hurdle Account: ${label}`}</h6>
+                <div className="table-scroll">
+                  <table className="data-table partnership-table">
+                    <caption className="visually-hidden">
+                      {`${tierLabel(tier.tier_id, tierNames)}: the ${label} account by period`}
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Period</th>
+                        <th scope="col">Opening Balance</th>
+                        <th scope="col">Accrual</th>
+                        <th scope="col">Subject Contributions</th>
+                        <th scope="col">Distributions From Tier</th>
+                        <th scope="col">Closing Balance</th>
+                        <th scope="col">Satisfied</th>
+                        <th scope="col">Distribution Order</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.records.map((record) => (
+                        <tr
+                          key={`${record.condition_id}|${record.period}`}
+                          data-condition={record.condition_id}
+                          data-period={record.period}
+                        >
+                          <th scope="row">{periodLabel(record.period)}</th>
+                          <td>{formatCurrency(record.opening_balance)}</td>
+                          <td>{formatCurrency(record.accrual)}</td>
+                          <td>{formatCurrency(record.subject_contributions)}</td>
+                          <td>{formatCurrency(record.subject_distributions_from_tier)}</td>
+                          <td>{formatCurrency(record.closing_balance)}</td>
+                          <td>{record.satisfied_at_close ? 'Yes' : 'No'}</td>
+                          <td>
+                            {record.simple_distribution_order === null
+                              ? NOT_AVAILABLE
+                              : SIMPLE_ORDER_LABELS[record.simple_distribution_order]}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
 
           {tier.catch_up_records.length > 0 && (
-            <div className="table-scroll">
-              <table className="data-table partnership-table">
-                <caption className="visually-hidden">
-                  {`${tierLabel(tier.tier_id, tierNames)}: the catch-up account by period`}
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Period</th>
-                    <th scope="col">Partnership Profit at Entry</th>
-                    <th scope="col">Recipient Profit at Entry</th>
-                    <th scope="col">Profit Domain Open</th>
-                    <th scope="col">Capacity at Entry</th>
-                    <th scope="col">Paid</th>
-                    <th scope="col">Caught Up</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tier.catch_up_records.map((record) => (
-                    <tr key={record.period}>
-                      <th scope="row">{periodLabel(record.period)}</th>
-                      <td>{formatCurrency(record.partnership_profit_at_entry)}</td>
-                      <td>{formatCurrency(record.recipient_profit_at_entry)}</td>
-                      <td>{record.profit_domain_open ? 'Yes' : 'No'}</td>
-                      <td>{formatCurrency(record.capacity_at_entry)}</td>
-                      <td>{formatCurrency(record.paid)}</td>
-                      <td>{record.caught_up ? 'Yes' : 'No'}</td>
+            <div className="partnership-audit-condition">
+              <h6 className="partnership-audit-subtitle">Catch-Up Account</h6>
+              <div className="table-scroll">
+                <table className="data-table partnership-table">
+                  <caption className="visually-hidden">
+                    {`${tierLabel(tier.tier_id, tierNames)}: the catch-up account by period`}
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Period</th>
+                      <th scope="col">Partnership Profit at Entry</th>
+                      <th scope="col">Recipient Profit at Entry</th>
+                      <th scope="col">Profit Domain Open</th>
+                      <th scope="col">Capacity at Entry</th>
+                      <th scope="col">Paid</th>
+                      <th scope="col">Caught Up</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {tier.catch_up_records.map((record) => (
+                      <tr key={record.period}>
+                        <th scope="row">{periodLabel(record.period)}</th>
+                        <td>{formatCurrency(record.partnership_profit_at_entry)}</td>
+                        <td>{formatCurrency(record.recipient_profit_at_entry)}</td>
+                        <td>{record.profit_domain_open ? 'Yes' : 'No'}</td>
+                        <td>{formatCurrency(record.capacity_at_entry)}</td>
+                        <td>{formatCurrency(record.paid)}</td>
+                        <td>{record.caught_up ? 'Yes' : 'No'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </article>
@@ -830,6 +884,7 @@ export function PartnershipResults({
   result,
   partnerNames,
   tierNames,
+  conditionLabels,
 }: PartnershipResultsProps) {
   if (result.status === 'unavailable' || result.partners === null) {
     return (
@@ -856,7 +911,12 @@ export function PartnershipResults({
         names={partnerNames}
         tierNames={tierNames}
       />
-      <TierAudit tiers={tiers} names={partnerNames} tierNames={tierNames} />
+      <TierAudit
+        tiers={tiers}
+        names={partnerNames}
+        tierNames={tierNames}
+        conditionLabels={conditionLabels}
+      />
     </div>
   );
 }

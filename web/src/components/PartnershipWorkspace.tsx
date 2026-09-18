@@ -24,7 +24,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { PARTNER_ROLE_LABELS, TIER_KIND_LABELS } from '../partnershipForm';
+import { PARTNER_ROLE_LABELS, TIER_KIND_LABELS, conditionAuditLabels } from '../partnershipForm';
 import type { Partnership } from '../partnershipTypes';
 import type { PartnershipState } from '../usePartnership';
 import { PartnershipEditor } from './PartnershipEditor';
@@ -161,7 +161,9 @@ export function PartnershipWorkspace({
     wasConfirmingRemove.current = isConfirmingRemove;
   }, [isConfirmingRemove]);
   const analysis = state.analysis;
-  const { partnerNames, tierNames } = namesOf(analysis?.partnership ?? saved);
+  const resolvedPartnership = analysis?.partnership ?? saved;
+  const { partnerNames, tierNames } = namesOf(resolvedPartnership);
+  const conditionLabels = conditionAuditLabels(resolvedPartnership);
 
   return (
     <div className="scenario-workspace partnership-workspace">
@@ -380,6 +382,7 @@ export function PartnershipWorkspace({
                 result={analysis.result}
                 partnerNames={partnerNames}
                 tierNames={tierNames}
+                conditionLabels={conditionLabels}
               />
             )}
           </>
