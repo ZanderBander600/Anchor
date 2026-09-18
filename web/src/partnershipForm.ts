@@ -104,6 +104,19 @@ export const CONDITION_KIND_LABELS: Readonly<Record<ConditionKind, string>> = {
   moic: 'MOIC',
 };
 
+/** What one condition is called on screen.
+ *
+ * A `condition_id` is a stable, opaque identity: it keys React, names the
+ * element ids and travels in the contract, and it is deliberately **not** shown
+ * to the analyst, who never authored it and cannot act on it. An unstated
+ * condition is simply "Condition" until its kind says more; nothing is
+ * numbered, because a number would imply an order the combinator does not give
+ * conditions. Where one message could name two conditions of the same kind, the
+ * `conditionId` on the choice -- not its wording -- is what locates it. */
+export function conditionLabel(kind: ConditionKind | ''): string {
+  return kind === '' ? 'Condition' : `${CONDITION_KIND_LABELS[kind]} Condition`;
+}
+
 export const ACCRUAL_CONVENTION_LABELS: Readonly<Record<PartnershipAccrualConvention, string>> = {
   simple: 'Simple',
   annual_compound: 'Annual Compound',
@@ -535,7 +548,7 @@ function hurdleOf(tier: TierForm): WaterfallTier['hurdle'] {
           : null,
     },
     conditions: tier.conditions.map((condition) =>
-      conditionOf(condition, `${where} condition ${condition.conditionId}`),
+      conditionOf(condition, `${where} ${conditionLabel(condition.kind)}`),
     ),
     combinator: tier.combinator,
   };
@@ -688,7 +701,7 @@ export function unstatedPartnershipChoices(form: PartnershipForm): UnstatedPartn
       }
       for (const condition of tier.conditions) {
         const where = { tierId: tier.tierId, conditionId: condition.conditionId };
-        const label = `${name} condition ${condition.conditionId}`;
+        const label = `${name} ${conditionLabel(condition.kind)}`;
         if (condition.kind === '') {
           at('condition_kind', `${label}: select a condition type.`, where);
           continue;

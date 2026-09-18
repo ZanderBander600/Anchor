@@ -73,6 +73,7 @@ beforeAll(async () => {
 const PARTNERSHIP_MODULES = [
   'partnershipTypes.ts',
   'partnershipForm.ts',
+  'decisionStateTokens.ts',
   'usePartnership.ts',
   'usePartnerDecisionMatrix.ts',
   'components/PartnershipEditor.tsx',
@@ -155,6 +156,14 @@ function identifiers(fileName: string, text: string): Set<string> {
   return found;
 }
 
+/** One module's source with every comment removed, for claims about what the
+ * code does rather than what its prose says about itself. */
+function withoutComments(text: string): string {
+  // `.` already stops at a line break, so a line comment needs no explicit
+  // newline class. The `[^:]` guard keeps a `://` inside a URL intact.
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*/g, '$1');
+}
+
 /** A module's string literals, template text and JSX text. */
 function textTokens(fileName: string, text: string): string[] {
   const tokens: string[] = [];
@@ -183,6 +192,8 @@ describe('the Partnership UI computes nothing', () => {
     );
     expect(sites).toEqual({
       'partnershipTypes.ts': [],
+      // Pure serialization of already-saved contracts.
+      'decisionStateTokens.ts': [],
       // The id sequence, and the four display-scale conversions: a share, a
       // rate and a target profit share are typed as percentages and sent as
       // decimals. Nothing here is a financial figure.
@@ -433,6 +444,126 @@ describe('the Partner matrix compares without judging', () => {
     const workspace = sourceOf('components/PartnershipWorkspace.tsx');
     expect(workspace).toContain('StaleAnalysisNotice');
     expect(workspace).toContain('!state.isAnalysisCurrent');
+  });
+});
+
+describe('the P-4 boundary between the downstream matrices holds', () => {
+  const TOKENS = 'decisionStateTokens.ts';
+  const WORKSPACE = 'components/RiskDecisionWorkspace.tsx';
+
+  /** The body of one exported token builder. */
+  function functionBody(name: string): string {
+    const text = sourceOf(TOKENS);
+    const start = text.indexOf(`export function ${name}`);
+    expect(start, name).toBeGreaterThan(-1);
+    // Bounded at the next exported declaration, so one builder's body is never
+    // measured against the next one's.
+    const rest = text.slice(start + 1);
+    const next = rest.indexOf('export function ');
+    return text.slice(start, next === -1 ? text.length : start + 1 + next);
+  }
+
+  it('reads a Strategy’s root overlays only through the domain filter', () => {
+    // `root_overlays` is a set of *different* economic domains at different
+    // depths of the dependency chain. Handing the whole set to the Position
+    // token is what made a Partnership-only edit invalidate a Position report
+    // that could not have moved. Only the filter may read the raw field, so
+    // every occurrence outside it -- in code, not in prose -- is a regression.
+    // Across both the builders and the workspace that calls them.
+    const outside = withoutComments(sourceOf(TOKENS))
+      .replace(withoutComments(functionBody('rootOverlaysOfDomain')), '')
+      .concat(withoutComments(sourceOf(WORKSPACE)));
+    expect(outside).not.toContain('root_overlays');
+    expect(withoutComments(functionBody('rootOverlaysOfDomain'))).toContain('root_overlays');
+  });
+
+  it('keeps the Partnership domain out of the Position token entirely', () => {
+    // Measured on code with the comments stripped: prose explaining *why* the
+    // Partnership is excluded is not including it.
+    const position = withoutComments(functionBody('positionStateTokenOf'));
+    expect(position).toContain("rootOverlaysOfDomain(record.strategy, 'capital_structure')");
+    expect(position).not.toContain('partnership');
+    expect(position).not.toContain('Partnership');
+    expect(position).not.toContain('root_overlays');
+  });
+
+  it('builds the Partner token from the whole Position state plus the Partnership', () => {
+    const partner = functionBody('partnerStateTokenOf');
+    // Everything that moves a Position cell moves a Partner cell, because a
+    // Partner cell is a Position cell's Common Equity allocated.
+    expect(partner).toContain('input.positionStateToken');
+    expect(partner).toContain("rootOverlaysOfDomain(record.strategy, 'partnership')");
+    expect(partner).toContain('input.basePartnership');
+  });
+
+  it('leaves the Project matrix reading no root overlay at all', () => {
+    // The Project matrix is upstream of both downstream domains, so neither a
+    // Capital Structure nor a Partnership may move it (P-4). Its identity is
+    // built in its own P7.5 hook, from the Unit overlays only.
+    const project = withoutComments(sourceOf('useDecisionMatrix.ts'));
+    expect(project).toContain('record.strategy.overlays');
+    expect(project).not.toContain('root_overlays');
+    expect(project).not.toContain('partnership');
+    expect(project).not.toContain('capital_structure');
+  });
+
+  it('gives each matrix its own token, and the Project matrix neither', () => {
+    const text = sourceOf(WORKSPACE);
+    expect(text).toContain('stateToken: positionStateToken');
+    expect(text).toContain('stateToken: partnerStateToken');
+    // The Project matrix is upstream of both and takes no structured or
+    // Partnership state at all (P-4).
+    const projectMatrix = text.slice(text.indexOf('const matrix = useDecisionMatrix('));
+    const projectArgs = projectMatrix.slice(0, projectMatrix.indexOf('});'));
+    expect(projectArgs).not.toContain('positionStateToken');
+    expect(projectArgs).not.toContain('partnerStateToken');
+    expect(projectArgs).not.toContain('partnership');
+  });
+});
+
+describe('the Partnership UI shows no internal identifier and no browser dialog', () => {
+  it('labels a condition by its kind, never by its opaque id', () => {
+    const form = sourceOf('partnershipForm.ts');
+    expect(form).toContain('export function conditionLabel');
+    // The id keys React and names the element ids; it is never rendered.
+    const editor = sourceOf('components/PartnershipEditor.tsx');
+    const legend = editor.slice(editor.indexOf('partnership-condition-legend'));
+    expect(legend.slice(0, 200)).toContain('conditionLabel(condition.kind)');
+    expect(legend.slice(0, 200)).not.toContain('condition.conditionId');
+    // Nor does any analyst-facing message carry one.
+    expect(form).not.toContain('${condition.conditionId}');
+    // And no ordinal is invented to number them instead.
+    expect(computationSites('partnershipForm.ts', form)).not.toContain('index + 1');
+  });
+
+  it('confirms a removal in the product’s own words, never with a native dialog', () => {
+    const workspace = sourceOf('components/PartnershipWorkspace.tsx');
+    // A native confirm cannot say what is lost, cannot be styled, and cannot be
+    // read by the same rules as the rest of the product.
+    for (const relative of PARTNERSHIP_MODULES) {
+      expect(sourceOf(relative), relative).not.toMatch(/(^|[^.\w])(confirm|alert|prompt)\(/m);
+    }
+    expect(workspace).toContain('REMOVE_CONFIRM_QUESTION');
+    expect(workspace).toContain('REMOVE_CONFIRM_MESSAGE');
+    expect(workspace).toContain('isConfirmingRemove');
+    // The destructive action is only reachable from inside the confirmation.
+    const confirming = workspace.slice(workspace.indexOf('{isConfirmingRemove ? ('));
+    expect(confirming.slice(0, confirming.indexOf(') : ('))).toContain('void state.remove()');
+  });
+
+  it('states the benchmark disclosure once, and marks each figure compactly (R-A)', () => {
+    const results = sourceOf('components/PartnershipResults.tsx');
+    // The full explanation is rendered once, gated on the backend's own flag
+    // across the partner set -- never repeated into every cell.
+    expect(results).toContain('partners.some((partner) => !partner.benchmark_equals_commitment)');
+    expect(results).toContain('BENCHMARK_MISMATCH_NOTICE');
+    expect(results).toContain('BENCHMARK_MISMATCH_MARKER');
+    const cell = results.slice(results.indexOf('data-field="benchmark_share"'));
+    const cellEnd = cell.slice(0, cell.indexOf('</td>'));
+    expect(cellEnd).toContain('BENCHMARK_MISMATCH_MARKER');
+    expect(cellEnd).not.toContain('BENCHMARK_MISMATCH_NOTICE');
+    // Still the backend boolean, and still no comparison of its own.
+    expect(cellEnd).toContain('!partner.benchmark_equals_commitment');
   });
 });
 

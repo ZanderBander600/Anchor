@@ -70,7 +70,14 @@ export interface PartnershipResultsProps {
  * browser math cannot tell a concatenated sentence from a sum. */
 // prettier-ignore
 export const BENCHMARK_MISMATCH_NOTICE =
-  'This partner’s benchmark share differs from its commitment share. The benchmark is a separate, explicitly stated table; it is never derived from the commitments.';
+  'At least one partner’s benchmark share differs from its commitment share. The benchmark is a separate, explicitly stated table; it is never derived from the commitments, and a later change to a commitment does not follow into it.';
+
+/** The compact marker on an affected Benchmark Share cell. The full notice is
+ * stated once above the table; repeating it in every cell buried the figures it
+ * was meant to qualify. */
+// prettier-ignore
+export const BENCHMARK_MISMATCH_MARKER =
+  'Differs from commitment';
 
 // prettier-ignore
 export const BENCHMARK_EXPLAINER =
@@ -285,6 +292,14 @@ function PartnerReturnsTable({
       <h4 id="partnership-returns-title" className="partnership-section-title">
         Partner Returns
       </h4>
+      {/* Stated once, and only when the engine reports at least one mismatch.
+        * `benchmark_equals_commitment` is the backend's own per-partner flag
+        * (Q2): this reads it and compares nothing itself. */}
+      {partners.some((partner) => !partner.benchmark_equals_commitment) && (
+        <p className="partnership-section-note partnership-benchmark-notice" role="note">
+          {BENCHMARK_MISMATCH_NOTICE}
+        </p>
+      )}
       <div className="table-scroll">
         <table className="data-table partnership-table">
           <caption className="visually-hidden">
@@ -320,8 +335,8 @@ function PartnerReturnsTable({
                 <td data-field="benchmark_share">
                   {formatPercent(partner.benchmark_share)}
                   {!partner.benchmark_equals_commitment && (
-                    <span className="partner-result-mismatch" role="note">
-                      {BENCHMARK_MISMATCH_NOTICE}
+                    <span className="partner-result-mismatch">
+                      {BENCHMARK_MISMATCH_MARKER}
                     </span>
                   )}
                 </td>

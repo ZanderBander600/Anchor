@@ -23,7 +23,7 @@
  * analyst's actions; it computes nothing.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PARTNER_ROLE_LABELS, TIER_KIND_LABELS } from '../partnershipForm';
 import type { Partnership } from '../partnershipTypes';
 import type { PartnershipState } from '../usePartnership';
@@ -68,6 +68,10 @@ export const ANALYSIS_ABSENT_MESSAGE =
 export const REMOVE_CONFIRM_MESSAGE =
   'Removing the partnership clears it entirely. The deal keeps its Common Equity Cash Flow and reports no partner-level returns.';
 
+// prettier-ignore
+export const REMOVE_CONFIRM_QUESTION =
+  'Remove this partnership?';
+
 function partnerCount(count: number): string {
   return count === 1 ? '1 partner' : `${count} partners`;
 }
@@ -106,6 +110,15 @@ export function PartnershipWorkspace({
   const blockedReasonId = `${prefix}partnership-blocked-reason`;
   const addButton = useRef<HTMLButtonElement>(null);
   const wasEditing = useRef(false);
+  const removeButton = useRef<HTMLButtonElement>(null);
+  const cancelRemoveButton = useRef<HTMLButtonElement>(null);
+  /** Whether the analyst has asked to remove the Partnership and not yet
+   * confirmed. Removal clears a whole authored contract, so it is confirmed
+   * inline -- in the product's own words, where the thing being removed is
+   * still on screen -- rather than through a browser dialog that steals focus
+   * and cannot say what is lost. */
+  const [isConfirmingRemove, setIsConfirmingRemove] = useState(false);
+  const wasConfirmingRemove = useRef(false);
 
   // Focus returns to the opening control when the editor closes, rather than
   // being dropped on the page.
@@ -115,6 +128,18 @@ export function PartnershipWorkspace({
     }
     wasEditing.current = state.hasDraft;
   }, [state.hasDraft]);
+
+  // Opening the confirmation moves focus to Cancel -- the safe choice -- and
+  // closing it without removing returns focus to the control that opened it,
+  // rather than dropping it on the page.
+  useEffect(() => {
+    if (isConfirmingRemove) {
+      cancelRemoveButton.current?.focus();
+    } else if (wasConfirmingRemove.current) {
+      removeButton.current?.focus();
+    }
+    wasConfirmingRemove.current = isConfirmingRemove;
+  }, [isConfirmingRemove]);
 
   const saved = state.saved;
   const isEmpty = saved === null;
@@ -137,7 +162,17 @@ export function PartnershipWorkspace({
             ref={addButton}
             type="button"
             className="btn btn-primary btn-sm"
-            onClick={isEmpty ? state.add : state.edit}
+            onClick={() => {
+              // Opening the editor is not removing: a confirmation left over
+              // from a Partnership that has since been removed must never greet
+              // the next one.
+              setIsConfirmingRemove(false);
+              if (isEmpty) {
+                state.add();
+              } else {
+                state.edit();
+              }
+            }}
             disabled={blockedReason !== null || state.hasDraft || state.listStatus !== 'ready'}
             aria-expanded={state.hasDraft}
             aria-controls={state.hasDraft ? editorId : undefined}
@@ -215,15 +250,45 @@ export function PartnershipWorkspace({
             </p>
 
             <div className="partnership-card-actions">
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                onClick={() => void state.remove()}
-                disabled={blockedReason !== null || state.isSaving}
-                title={REMOVE_CONFIRM_MESSAGE}
-              >
-                Remove Partnership
-              </button>
+              {isConfirmingRemove ? (
+                <div
+                  className="partnership-remove-confirm"
+                  role="group"
+                  aria-label="Confirm removing the partnership"
+                >
+                  <span className="partnership-remove-question">{REMOVE_CONFIRM_QUESTION}</span>
+                  <p className="partnership-section-note">{REMOVE_CONFIRM_MESSAGE}</p>
+                  <div className="partnership-card-actions">
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-xs"
+                      onClick={() => void state.remove()}
+                      disabled={blockedReason !== null || state.isSaving}
+                    >
+                      {state.isSaving ? 'Removing…' : 'Remove Partnership'}
+                    </button>
+                    <button
+                      ref={cancelRemoveButton}
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => setIsConfirmingRemove(false)}
+                      disabled={state.isSaving}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  ref={removeButton}
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => setIsConfirmingRemove(true)}
+                  disabled={blockedReason !== null || state.isSaving}
+                >
+                  Remove Partnership
+                </button>
+              )}
             </div>
           </>
         )}

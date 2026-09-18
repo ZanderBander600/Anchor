@@ -42,6 +42,7 @@ import {
   CATCH_UP_RECIPIENT_KIND_LABELS,
   COMBINATOR_LABELS,
   CONDITION_KIND_LABELS,
+  conditionLabel,
   CONTRIBUTION_RULE_LABELS,
   ECONOMIC_ACCOUNT_LABELS,
   HURDLE_SUBJECT_KIND_LABELS,
@@ -454,7 +455,9 @@ function ConditionCard({
 
   return (
     <fieldset className="partnership-condition">
-      <legend className="partnership-condition-legend">{condition.conditionId}</legend>
+      <legend className="partnership-condition-legend">
+        {conditionLabel(condition.kind)}
+      </legend>
 
       <div className="partnership-condition-grid">
         <ChoiceField

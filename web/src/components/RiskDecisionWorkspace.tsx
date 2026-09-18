@@ -32,6 +32,7 @@ import {
   unitNames,
 } from '../investmentCatalog';
 import type { InvestmentDecisionScope } from '../investmentCatalog';
+import { partnerStateTokenOf, positionStateTokenOf } from '../decisionStateTokens';
 import { useCapitalStructure } from '../useCapitalStructure';
 import { usePartnership } from '../usePartnership';
 import { usePartnerDecisionMatrix } from '../usePartnerDecisionMatrix';
@@ -239,21 +240,13 @@ export function RiskDecisionWorkspace({
           ? DIRTY_BEFORE_PARTNERSHIP_MESSAGE
           : null;
 
-  /** The saved economic state a Position matrix belongs to. A structured cell
-   * is invalidated by the capital structure it ran, by a Strategy's overlays --
-   * its root overlays included, which is where a Strategy states its own
-   * structure -- and by a Scenario's overrides. A rename moves none of them. */
-  const positionStateToken = JSON.stringify([
-    investment === null ? dealId : investment.investmentId,
-    investment === null ? savedAt : investment.stateToken,
-    strategies.strategies.map((record) => [
-      record.strategy.strategy_id,
-      record.strategy.overlays,
-      record.strategy.root_overlays ?? null,
-    ]),
-    scenarios.scenarios.map((record) => [record.scenario.scenario_id, record.scenario.overrides]),
-    capital.saved.positions,
-  ]);
+  const positionStateToken = positionStateTokenOf({
+    scopeId: investment === null ? dealId : investment.investmentId,
+    scopeToken: investment === null ? savedAt : investment.stateToken,
+    strategies: strategies.strategies,
+    scenarios: scenarios.scenarios,
+    baseCapitalStructure: capital.saved,
+  });
 
   // The positions belong to the Investment: a visible one, or the Deal's hidden
   // wrapper once a structure, Strategy or Scenario has created it.
@@ -264,10 +257,11 @@ export function RiskDecisionWorkspace({
     isActive: requests && view === 'matrix' && perspective === 'position',
   });
 
-  /** The saved economic state a Partner matrix belongs to: everything a
-   * structured cell is invalidated by, plus the saved Base Partnership. A
-   * Strategy's own Partnership already travels in its root overlays above. */
-  const partnerStateToken = JSON.stringify([positionStateToken, partnership.saved]);
+  const partnerStateToken = partnerStateTokenOf({
+    positionStateToken,
+    strategies: strategies.strategies,
+    basePartnership: partnership.saved,
+  });
 
   // The partners belong to the Investment: a visible one, or the Deal's hidden
   // wrapper once a Partnership, structure, Strategy or Scenario has created it.

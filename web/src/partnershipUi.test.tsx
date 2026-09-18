@@ -36,8 +36,15 @@ import {
   ANALYSIS_ABSENT_MESSAGE,
   NO_PARTNERSHIP_MESSAGE,
   PartnershipWorkspace,
+  REMOVE_CONFIRM_MESSAGE,
+  REMOVE_CONFIRM_QUESTION,
   STALE_PARTNERSHIP_MESSAGE,
 } from './components/PartnershipWorkspace';
+import {
+  partnerStateTokenOf,
+  positionStateTokenOf,
+  rootOverlaysOfDomain,
+} from './decisionStateTokens';
 import { STALE_LABEL } from './components/StaleAnalysisNotice';
 import { EMPTY_PARTNERSHIP_FORM, formFromPartnership } from './partnershipForm';
 import type { PartnershipForm } from './partnershipForm';
@@ -56,6 +63,9 @@ import type {
   PartnershipVariantAnalysis,
 } from './partnershipTypes';
 import type { PartnershipState } from './usePartnership';
+import type { CapitalStructure } from './capitalTypes';
+import type { InvestmentScenario } from './scenarioTypes';
+import type { InvestmentStrategy, InvestmentStrategyOverlay } from './strategyTypes';
 
 afterEach(cleanup);
 
@@ -1005,4 +1015,213 @@ describe('an open Partnership editor is an unsaved draft', () => {
       }),
     ).toBeNull();
   });
+});
+
+// =============================================================================
+// The P-4 boundary between the two downstream matrices
+// =============================================================================
+
+describe('a Partnership edit moves only what is downstream of it (P-4)', () => {
+  const BASE_INPUTS = {
+    scopeId: 'deal-1',
+    scopeToken: 'saved-1',
+    scenarios: [] as InvestmentScenario[],
+    baseCapitalStructure: { positions: [] } as CapitalStructure,
+  };
+
+  /** One saved Strategy, with whichever root overlays it states. */
+  function strategy(rootOverlays?: InvestmentStrategyOverlay[]): InvestmentStrategy {
+    return {
+      investment_id: 'inv-1',
+      strategy: {
+        strategy_id: 's1',
+        name: 'Alternative',
+        description: null,
+        overlays: [],
+        ...(rootOverlays === undefined ? {} : { root_overlays: rootOverlays }),
+      },
+      created_at: '',
+      updated_at: '',
+    };
+  }
+
+  const STRUCTURE: CapitalStructure = {
+    positions: [
+      {
+        position_id: 'mezz-1',
+        name: 'Mezzanine',
+        position_class: 'mezzanine_debt',
+        priority: 2,
+        scope: { kind: 'unit', unit_id: 'deal-1' },
+        funding: [],
+        terms: null,
+        shortfall_resolution: 'unresolved',
+      },
+    ],
+  };
+
+  const CAPITAL_OVERLAY: InvestmentStrategyOverlay = {
+    domain: 'capital_structure',
+    content: STRUCTURE,
+  };
+  const PARTNERSHIP_OVERLAY: InvestmentStrategyOverlay = {
+    domain: 'partnership',
+    content: PARTNERSHIP,
+  };
+
+  function tokens(strategies: InvestmentStrategy[], basePartnership: Partnership | null = null) {
+    const position = positionStateTokenOf({ ...BASE_INPUTS, strategies });
+    return {
+      position,
+      partner: partnerStateTokenOf({
+        positionStateToken: position,
+        strategies,
+        basePartnership,
+      }),
+    };
+  }
+
+  it('leaves the Position state untouched when only a Strategy Partnership changes', () => {
+    const before = tokens([strategy([CAPITAL_OVERLAY])]);
+    // The same Strategy now also states its own Partnership. Nothing about the
+    // structured capital moved.
+    const after = tokens([strategy([CAPITAL_OVERLAY, PARTNERSHIP_OVERLAY])]);
+
+    expect(after.position).toBe(before.position);
+    // ...and the Partner matrix does move, because that is what changed.
+    expect(after.partner).not.toBe(before.partner);
+  });
+
+  it('leaves the Position state untouched when only the Base Partnership changes', () => {
+    const before = tokens([strategy([CAPITAL_OVERLAY])], null);
+    const after = tokens([strategy([CAPITAL_OVERLAY])], PARTNERSHIP);
+
+    expect(after.position).toBe(before.position);
+    expect(after.partner).not.toBe(before.partner);
+  });
+
+  it('moves both downstream matrices when the Capital Structure changes', () => {
+    const before = tokens([strategy([CAPITAL_OVERLAY])], PARTNERSHIP);
+
+    // A Strategy's own structure.
+    const stratChanged = tokens([strategy([])], PARTNERSHIP);
+    expect(stratChanged.position).not.toBe(before.position);
+    expect(stratChanged.partner).not.toBe(before.partner);
+
+    // The Base structure. Everything downstream of it moves too.
+    const basePosition = positionStateTokenOf({
+      ...BASE_INPUTS,
+      strategies: [strategy([CAPITAL_OVERLAY])],
+      baseCapitalStructure: STRUCTURE,
+    });
+    expect(basePosition).not.toBe(before.position);
+    expect(
+      partnerStateTokenOf({
+        positionStateToken: basePosition,
+        strategies: [strategy([CAPITAL_OVERLAY])],
+        basePartnership: PARTNERSHIP,
+      }),
+    ).not.toBe(before.partner);
+  });
+
+  it('keeps inherit, explicit “no Partnership” and a replacement distinguishable', () => {
+    // The three states must never collapse into one another, in either token.
+    const inherit = tokens([strategy([])], PARTNERSHIP);
+    const none = tokens([strategy([{ domain: 'partnership', content: null }])], PARTNERSHIP);
+    const replaced = tokens([strategy([PARTNERSHIP_OVERLAY])], PARTNERSHIP);
+
+    const partners = [inherit.partner, none.partner, replaced.partner];
+    expect(new Set(partners).size).toBe(3);
+    // None of the three touches the Position state.
+    expect(new Set([inherit.position, none.position, replaced.position]).size).toBe(1);
+  });
+
+  it('selects root overlays by domain, keeping each state’s own shape', () => {
+    expect(rootOverlaysOfDomain({}, 'partnership')).toEqual([]);
+    expect(
+      rootOverlaysOfDomain({ root_overlays: [CAPITAL_OVERLAY] }, 'partnership'),
+    ).toEqual([]);
+    expect(
+      rootOverlaysOfDomain(
+        { root_overlays: [CAPITAL_OVERLAY, { domain: 'partnership', content: null }] },
+        'partnership',
+      ),
+    ).toEqual([{ domain: 'partnership', content: null }]);
+    expect(
+      rootOverlaysOfDomain({ root_overlays: [CAPITAL_OVERLAY, PARTNERSHIP_OVERLAY] }, 'capital_structure'),
+    ).toEqual([CAPITAL_OVERLAY]);
+  });
+});
+
+// =============================================================================
+// Removing a Partnership is confirmed, not immediate
+// =============================================================================
+
+describe('removing a Partnership is confirmed inline', () => {
+  function renderSaved(overrides: Partial<PartnershipState> = {}) {
+    const remove = vi.fn(async () => {});
+    render(
+      <PartnershipWorkspace
+        state={partnershipState({ saved: PARTNERSHIP, remove, ...overrides })}
+        prefix=""
+        blockedReason={null}
+        isInvestment={false}
+      />,
+    );
+    return remove;
+  }
+
+  it('asks before removing anything, in the product’s own words', async () => {
+    const user = userEvent.setup();
+    const remove = renderSaved();
+
+    await user.click(screen.getByRole('button', { name: 'Remove Partnership' }));
+
+    // Nothing has been saved yet: the question is asked first.
+    expect(remove).not.toHaveBeenCalled();
+    expect(screen.getByText(REMOVE_CONFIRM_QUESTION)).toBeTruthy();
+    expect(screen.getByText(REMOVE_CONFIRM_MESSAGE)).toBeTruthy();
+    expect(
+      screen.getByRole('group', { name: 'Confirm removing the partnership' }),
+    ).toBeTruthy();
+  });
+
+  it('moves focus to Cancel, the safe choice, when the question opens', async () => {
+    const user = userEvent.setup();
+    renderSaved();
+    await user.click(screen.getByRole('button', { name: 'Remove Partnership' }));
+
+    const group = screen.getByRole('group', { name: 'Confirm removing the partnership' });
+    expect(document.activeElement).toBe(within(group).getByRole('button', { name: 'Cancel' }));
+  });
+
+  it('Cancel keeps the Partnership and returns focus to the control that asked', async () => {
+    const user = userEvent.setup();
+    const remove = renderSaved();
+
+    await user.click(screen.getByRole('button', { name: 'Remove Partnership' }));
+    const group = screen.getByRole('group', { name: 'Confirm removing the partnership' });
+    await user.click(within(group).getByRole('button', { name: 'Cancel' }));
+
+    // No request was made, the Partnership is still listed, and focus is back
+    // on the control the analyst opened the question from.
+    expect(remove).not.toHaveBeenCalled();
+    expect(screen.queryByText(REMOVE_CONFIRM_QUESTION)).toBeNull();
+    expect(screen.getByLabelText('Saved partners')).toBeTruthy();
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'Remove Partnership' }),
+    );
+  });
+
+  it('confirming removes exactly once', async () => {
+    const user = userEvent.setup();
+    const remove = renderSaved();
+
+    await user.click(screen.getByRole('button', { name: 'Remove Partnership' }));
+    const group = screen.getByRole('group', { name: 'Confirm removing the partnership' });
+    await user.click(within(group).getByRole('button', { name: 'Remove Partnership' }));
+
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
 });
