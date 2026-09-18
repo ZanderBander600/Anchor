@@ -56,6 +56,10 @@ import { InvestmentWorkspace } from './components/InvestmentWorkspace';
 import { NewInvestmentPanel } from './components/NewInvestmentPanel';
 import type { VisibleInvestment } from './investmentTypes';
 import { useInvestments } from './useInvestments';
+// Gate AM1: Asset Management is a separate primary workspace, not a Deal tab.
+import { AssetManagementShell } from './components/AssetManagementShell';
+import { CreateManagedAssetPanel } from './components/CreateManagedAssetPanel';
+import { useManagedAssets } from './useManagedAssets';
 import { buildOwnerSummaryData } from './ownerSummary';
 import { buildDetailedSections, buildQuickSections } from './underwrite';
 import type { ResultsViewId, UnderwriteTabId } from './underwrite';
@@ -1214,6 +1218,21 @@ export default function App() {
   // (set). No AcquisitionResults is ever part of this state -- reopening a
   // deal always means resubmitting its inputs to the existing /analyze.
   const [view, setView] = useState<AppView>('workspace');
+  // Gate AM1: which primary workspace is showing. Acquisitions and Asset
+  // Management are different products over the same building -- one underwrites
+  // a purchase, the other reports on what is already owned -- so the switch is
+  // application-level, above every Deal workspace tab rather than beside them.
+  const [surface, setSurface] = useState<'acquisitions' | 'asset-management'>('acquisitions');
+  const managedAssets = useManagedAssets();
+  /** The Deal the Create Managed Asset form is open for, or `null`.
+   *
+   * The Deal's *identity* rather than a boolean, so the form is open only for
+   * the Deal it was opened on. Navigating to another Deal makes the condition
+   * false, which unmounts the form and discards its draft -- deterministically,
+   * during render, with no effect that could let Deal A's authored name and
+   * dates be submitted for Deal B. */
+  const [creatingAssetForDealId, setCreatingAssetForDealId] = useState<string | null>(null);
+  const [createManagedAssetError, setCreateManagedAssetError] = useState<string | null>(null);
   // Phase 7 Gate P7.6: which visible Investment is open, the way back from one
   // of its Units, and whether it holds unsaved changes. Everything else about
   // an Investment lives in its own hooks.
@@ -2262,6 +2281,51 @@ export default function App() {
   /** P7.3: Scenarios request nothing until the Risk workspace is on screen. */
   const isRiskVisible = view === 'workspace' && workspace === 'risk';
 
+  /** Gate AM1: the Managed Asset this Deal already has, if any. One Deal
+   * creates at most one, so the action becomes "Open Managed Asset" once it
+   * exists rather than offering a second creation the server would refuse. */
+  const managedAssetOfDeal =
+    activeDealId === null
+      ? undefined
+      : managedAssets.assets.find((asset) => asset.source_deal_id === activeDealId);
+
+  /** Creates the Managed Asset and moves to the Asset Management workspace.
+   * The Deal is not modified: the server captures its fingerprint and writes
+   * nothing back to it. */
+  async function handleCreateManagedAsset(request: {
+    name: string | null;
+    acquisition_date: string;
+    property_type: string | null;
+    market: string | null;
+  }) {
+    if (activeDealId === null) {
+      return;
+    }
+    setCreateManagedAssetError(null);
+    try {
+      await managedAssets.create({ ...request, source_deal_id: activeDealId });
+      setCreatingAssetForDealId(null);
+      setSurface('asset-management');
+    } catch (caught: unknown) {
+      setCreateManagedAssetError(
+        caught instanceof Error ? caught.message : 'The managed asset could not be created.',
+      );
+    }
+  }
+
+  /** Returns from Asset Management to the Deal an asset came from. Provenance
+   * only -- it opens the saved acquisition exactly as the Deal Library does. */
+  function handleViewAcquisitionBasis(dealId: string) {
+    const deal = savedDeals.find((candidate) => candidate.id === dealId);
+    setSurface('acquisitions');
+    if (deal !== undefined) {
+      setUnitReturnId(null);
+      void handleOpenDeal(deal);
+    } else {
+      handleOpenLibrary();
+    }
+  }
+
   /** Whether each mode's sensitivity and break-even views have anything to
    * show: the same conditions the Risk workspace has always used. */
   const quickRiskOutputs: RiskOutputsState = !results
@@ -3293,6 +3357,21 @@ export default function App() {
     </>
   );
 
+  // Gate AM1: Asset Management replaces the whole shell rather than nesting
+  // inside it. Sharing the Acquisitions sidebar would keep New Deal, the Deal
+  // Library and every underwriting entry point one click away while the analyst
+  // is reporting on a building they already own.
+  if (surface === 'asset-management') {
+    return (
+      <AssetManagementShell
+        state={managedAssets}
+        dealCount={savedDeals.length}
+        onViewAcquisitionBasis={handleViewAcquisitionBasis}
+        onOpenAcquisitions={() => setSurface('acquisitions')}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <AppSidebar
@@ -3318,6 +3397,8 @@ export default function App() {
         onOpenInvestmentLibrary={handleOpenInvestmentLibrary}
         onNewInvestment={handleNewInvestment}
         onOpenInvestment={openInvestment}
+        onOpenAssetManagement={() => setSurface('asset-management')}
+        managedAssetCount={managedAssets.assets.length}
       />
 
       <div className="app-main">
@@ -3463,6 +3544,57 @@ export default function App() {
 
               {dealsError && (
                 <div className="error-banner workspace-error">{dealsError}</div>
+              )}
+
+              {/* Gate AM1 -- the one crossing point from Acquisitions into
+                * Asset Management. Offered on Overview only, and only for a
+                * saved Deal: an asset is created from an acquisition that is
+                * actually on file, never from an unsaved working deal. */}
+              {workspace === 'overview' && activeDealId !== null && (
+                <div className="am-deal-action">
+                  {managedAssetOfDeal !== undefined ? (
+                    <p className="am-deal-action-note">
+                      This deal is under management as{' '}
+                      <strong>{managedAssetOfDeal.name}</strong>.{' '}
+                      <button
+                        type="button"
+                        className="am-quiet-button"
+                        onClick={() => setSurface('asset-management')}
+                      >
+                        Open in Asset Management
+                      </button>
+                    </p>
+                  ) : creatingAssetForDealId === activeDealId ? (
+                    <CreateManagedAssetPanel
+                      // Remount on any change of Deal identity, so every field
+                      // re-initializes from the Deal now on screen.
+                      key={activeDealId}
+                      dealName={byMode(operatingMode, {
+                        quick: dealName,
+                        detailed: detailedDealName,
+                        lease_level: leaseLevel.dealName,
+                      })}
+                      isOpen
+                      onCancel={() => {
+                        setCreatingAssetForDealId(null);
+                        setCreateManagedAssetError(null);
+                      }}
+                      onCreate={handleCreateManagedAsset}
+                      error={createManagedAssetError}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="am-quiet-button"
+                      onClick={() => {
+                        setCreateManagedAssetError(null);
+                        setCreatingAssetForDealId(activeDealId);
+                      }}
+                    >
+                      Create Managed Asset
+                    </button>
+                  )}
+                </div>
               )}
 
               {byMode(operatingMode, {

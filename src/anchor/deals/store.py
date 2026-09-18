@@ -281,6 +281,28 @@ from ..partnership.contracts import (
     WaterfallTier,
 )
 from ..partnership.validation import validate_partnership
+
+# Gate AM1. Contracts and range-checking only -- no calculation module is
+# imported here, exactly as this store imports no engine calculation module.
+# ``anchor.asset_management.performance`` (the sole authority for every AM1
+# financial result) is deliberately absent: nothing computed is persisted, so
+# the store has no reason to reach it.
+from ..asset_management.contracts import (
+    MONETARY_FIELDS as AM1_MONETARY_FIELDS,
+    BudgetImmutableError,
+    ManagedAsset,
+    ManagedAssetExistsError,
+    ManagedAssetNotFoundError,
+    MonthlyAssetReport,
+    MonthlyReportExistsError,
+    MonthlyReportNotFoundError,
+    OperatingFigures,
+)
+from ..asset_management.validation import (
+    normalize_reporting_month,
+    require_valid_managed_asset,
+    require_valid_monthly_report,
+)
 from .capital_structure_codec import FundingAmountRuleKind, amount_rule_kind
 from .contracts import (
     Deal,
@@ -386,7 +408,13 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # version 11's were. No ALTER and no existing row read or rewritten: an
 # Investment gains a Partnership only when the analyst opts in, and one with no
 # Partnership row has none -- no Partnership result, fingerprint or key (FP-2).
-_SCHEMA_VERSION = 12
+#
+# Gate AM1 -- schema version 13 adds the two Asset Management tables,
+# ``managed_assets`` and ``monthly_asset_reports`` -- created unconditionally by
+# ``_connect`` exactly as version 12's were. No ALTER and no existing row read
+# or rewritten: a Deal gains a Managed Asset only when the analyst explicitly
+# creates one, and a v12 database simply gains two empty tables.
+_SCHEMA_VERSION = 13
 
 
 class PersistedDealDataError(RuntimeError):
@@ -1479,6 +1507,97 @@ _PARTNERSHIP_CHILD_TABLES = (
 _P7_9_TABLES = ("partnerships", *_PARTNERSHIP_CHILD_TABLES)
 
 
+# =============================================================================
+# Gate AM1 -- the persisted Managed Asset and Monthly Asset Report, schema
+# version 13.
+#
+# Two purely additive tables, created by ``_connect`` via CREATE TABLE IF NOT
+# EXISTS exactly as every table since version 2. No ALTER, and no existing row
+# is read or rewritten -- in particular no ``deals`` row is touched when a
+# Managed Asset is created from it.
+#
+# **A Managed Asset is not a Deal.** It has its own id space, its own name and
+# its own lifecycle. ``source_deal_id`` is provenance, not ownership: the Deal
+# it came from remains an acquisition analysis that can still be edited,
+# re-analyzed and saved, and none of that reaches this table. The FOREIGN KEY
+# (declared, and unlike the pre-P7 tables actually enforceable here because
+# neither table predates ``PRAGMA foreign_keys``) records that provenance;
+# ``UNIQUE (source_deal_id)`` is the one-asset-per-Deal rule, enforced by the
+# database rather than by a check a future write path could forget.
+#
+# **The fingerprint is a frozen copy, captured once.** ``acquisition_fingerprint``
+# is the Deal's authoritative analysis fingerprint at the moment the asset was
+# created. It is written by ``create_managed_asset`` and by nothing else -- no
+# UPDATE statement in this module sets it -- so a later Deal edit changes that
+# Deal's current fingerprint and leaves this column exactly as it was. The
+# divergence between the two is the product's provenance signal, never a
+# trigger to rewrite anything.
+#
+# **The approved budget is frozen in typed columns.** Both statements are stored
+# as twelve REAL columns each, prefixed ``budget_``/``actual_`` -- never a JSON
+# financial blob, so a figure is queryable, typed, and cannot acquire a field
+# that no contract declares. The budget columns are written once, by the INSERT
+# in ``create_monthly_report``; ``update_monthly_report_actuals`` names only
+# ``actual_*``, ``commentary`` and ``updated_at`` in its SET clause, so a budget
+# change is not merely refused at the contract boundary -- there is no SQL in
+# this module capable of performing one.
+#
+# **One report per asset per month.** ``reporting_month`` is stored as an
+# ISO-8601 date string already normalized to the first of the month by the
+# caller, and ``PRIMARY KEY (managed_asset_id, reporting_month)`` makes a second
+# report for one month impossible. Two spellings of March cannot become two rows
+# that each freeze a different budget.
+#
+# Nothing computed is persisted: no total, variance, percentage, assessment,
+# attention item or trend point has a column. Every one of them is derived on
+# read by ``anchor.asset_management.performance``, which is the sole authority.
+# =============================================================================
+
+#: The twelve REAL columns one statement occupies, in ``OperatingFigures``
+#: field order. Derived from the contract itself rather than restated, so a
+#: field added to ``OperatingFigures`` is a schema change this module notices at
+#: import rather than silently drops on write.
+_AM1_FIGURE_FIELDS: tuple[str, ...] = ("occupancy", *AM1_MONETARY_FIELDS)
+
+
+def _am1_figure_columns(prefix: str) -> str:
+    """The DDL fragment for one statement's twelve columns."""
+
+    return ",\n    ".join(f"{prefix}_{field} REAL NOT NULL" for field in _AM1_FIGURE_FIELDS)
+
+
+_CREATE_MANAGED_ASSETS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS managed_assets (
+    id                      TEXT PRIMARY KEY,
+    source_deal_id          TEXT NOT NULL,
+    name                    TEXT NOT NULL,
+    acquisition_date        TEXT NOT NULL,
+    property_type           TEXT,
+    market                  TEXT,
+    acquisition_fingerprint TEXT NOT NULL,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    UNIQUE (source_deal_id)
+)
+"""
+
+_CREATE_MONTHLY_ASSET_REPORTS_TABLE_SQL = f"""
+CREATE TABLE IF NOT EXISTS monthly_asset_reports (
+    managed_asset_id TEXT NOT NULL,
+    reporting_month  TEXT NOT NULL,
+    {_am1_figure_columns("budget")},
+    {_am1_figure_columns("actual")},
+    commentary       TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    PRIMARY KEY (managed_asset_id, reporting_month),
+    FOREIGN KEY (managed_asset_id) REFERENCES managed_assets (id)
+)
+"""
+
+_AM1_TABLES = ("managed_assets", "monthly_asset_reports")
+
+
 _LEASE_LEVEL_CHILD_TABLES = (
     "lease_level_property_inputs",
     "lease_level_operating_inputs",
@@ -1947,6 +2066,12 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # same way: no row is written for anything that already exists, no table is
     # altered, and no Investment gains a Partnership by being opened. A v11
     # database simply gains eight empty tables.
+    # Gate AM1 -- schema version 13 adds ``managed_assets`` and
+    # ``monthly_asset_reports`` the same way: no row is written for anything
+    # that already exists, no table is altered, and no Deal gains a Managed
+    # Asset by being opened or edited. A v12 database simply gains two empty
+    # tables, and every pre-existing Deal keeps loading and responding exactly
+    # as it did.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -2023,6 +2148,8 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_WATERFALL_TIER_SPLITS_TABLE_SQL)
     connection.execute(_CREATE_WATERFALL_HURDLE_CONDITIONS_TABLE_SQL)
     connection.execute(_CREATE_WATERFALL_CATCH_UP_TERMS_TABLE_SQL)
+    connection.execute(_CREATE_MANAGED_ASSETS_TABLE_SQL)
+    connection.execute(_CREATE_MONTHLY_ASSET_REPORTS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -7984,3 +8111,411 @@ def list_investment_partnerships(
             for strategy_id, name, stated in _strategy_partnerships(connection, investment_id)
         )
     return InvestmentPartnerships(investment_id=investment_id, base=base, strategies=strategies)
+
+
+# =============================================================================
+# Gate AM1 -- the Managed Asset and Monthly Asset Report lifecycle.
+#
+# ``docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`` Sections 2, 3
+# and 5. Six functions, and deliberately no seventh: AM1 has no delete path for
+# either an asset or a report (Section 8), so none is written here.
+#
+# Nothing in this section performs a financial calculation or imports a module
+# that does. Reads return stored figures; every total, variance and assessment
+# is derived by ``anchor.asset_management.performance`` above the store.
+# =============================================================================
+
+
+def _deal_analysis_fingerprint(connection: sqlite3.Connection, deal_id: str) -> str:
+    """The canonical analysis fingerprint of ``deal_id`` **as it is currently
+    stored**, in whichever mode actually holds it.
+
+    Calls exactly the same three ``fingerprint_*`` functions the read and
+    snapshot-write paths call, over the same contracts, so a Managed Asset's
+    frozen acquisition basis is certified against the identical definition of
+    "these assumptions" that the rest of Anchor already uses -- never a second,
+    AM1-private notion of what a Deal fingerprints to.
+
+    Raises ``DealNotFoundError`` if the deal is in none of the three tables.
+    """
+
+    quick_row = connection.execute("SELECT * FROM deals WHERE id = ?", (deal_id,)).fetchone()
+    if quick_row is not None:
+        return fingerprint_quick_inputs(
+            _inputs_from_row(quick_row),
+            business_plan=_read_business_plan(connection, deal_id),
+        )
+
+    detailed_row = connection.execute(
+        "SELECT * FROM detailed_deals WHERE id = ?", (deal_id,)
+    ).fetchone()
+    if detailed_row is not None:
+        operating_row = connection.execute(
+            "SELECT * FROM detailed_operating_inputs WHERE deal_id = ?", (deal_id,)
+        ).fetchone()
+        if operating_row is None:
+            raise DealNotFoundError(deal_id)
+        return fingerprint_detailed_inputs(
+            _terms_from_row(detailed_row),
+            _detailed_operating_inputs_from_row(operating_row),
+            business_plan=_read_business_plan(connection, deal_id),
+        )
+
+    lease_level_row = connection.execute(
+        "SELECT * FROM lease_level_deals WHERE id = ?", (deal_id,)
+    ).fetchone()
+    if lease_level_row is None:
+        raise DealNotFoundError(deal_id)
+    return _lease_level_input_fingerprint(connection, lease_level_row)
+
+
+def _figures_from_row(row: sqlite3.Row, prefix: str) -> OperatingFigures:
+    """One statement, rebuilt from its twelve prefixed columns.
+
+    Field-driven from ``_AM1_FIGURE_FIELDS``, exactly as the DDL and the write
+    path are, so the three can never disagree about which columns exist.
+    """
+
+    return OperatingFigures(
+        **{field: row[f"{prefix}_{field}"] for field in _AM1_FIGURE_FIELDS}  # type: ignore[arg-type]
+    )
+
+
+def _figure_values(figures: OperatingFigures, prefix: str) -> dict[str, float]:
+    """One statement's twelve bind parameters, keyed by prefixed column name."""
+
+    return {f"{prefix}_{field}": float(getattr(figures, field)) for field in _AM1_FIGURE_FIELDS}
+
+
+def _row_to_managed_asset(row: sqlite3.Row) -> ManagedAsset:
+    return ManagedAsset(
+        id=row["id"],
+        source_deal_id=row["source_deal_id"],
+        name=row["name"],
+        acquisition_date=date.fromisoformat(row["acquisition_date"]),
+        property_type=row["property_type"],
+        market=row["market"],
+        acquisition_fingerprint=row["acquisition_fingerprint"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _row_to_monthly_report(row: sqlite3.Row) -> MonthlyAssetReport:
+    return MonthlyAssetReport(
+        managed_asset_id=row["managed_asset_id"],
+        reporting_month=date.fromisoformat(row["reporting_month"]),
+        budget=_figures_from_row(row, "budget"),
+        actual=_figures_from_row(row, "actual"),
+        commentary=row["commentary"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _require_managed_asset(connection: sqlite3.Connection, managed_asset_id: str) -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT * FROM managed_assets WHERE id = ?", (managed_asset_id,)
+    ).fetchone()
+    if row is None:
+        raise ManagedAssetNotFoundError(managed_asset_id)
+    return row
+
+
+def create_managed_asset(
+    *,
+    source_deal_id: str,
+    name: str | None = None,
+    acquisition_date: date,
+    property_type: str | None = None,
+    market: str | None = None,
+    db_path: Path | None = None,
+) -> ManagedAsset:
+    """Create the Managed Asset for a saved Deal, once.
+
+    ``name`` defaults to the Deal's own name -- a copy taken at creation, not a
+    live reference. Renaming the Deal afterwards does not rename the asset, and
+    renaming the asset does not rename the Deal.
+
+    The Deal must have a **current** saved analysis, in every mode that can
+    store one. ``_read_deal`` returns ``analysis_snapshot=None`` whenever the
+    stored snapshot does not match the deal's currently-stored assumptions, so
+    requiring it means an asset can only be created from an acquisition whose
+    approved basis was actually computed from the assumptions on file. Refusing
+    this is the point: an "approved basis" nobody has analyzed is not a basis.
+
+    **Lease-Level is deliberately exempt from the snapshot check**, and this is
+    a storage fact rather than a financial one: ``lease_level_deals`` has no
+    ``analysis_snapshot`` column (D5.4 gave that family ``ai_snapshot`` only), so
+    a Lease-Level deal *structurally cannot* carry a cached deterministic
+    analysis. Applying the check to it would bar an entire operating mode from
+    Asset Management as a side effect of an unrelated persistence gap, not
+    because anything about its basis is less trustworthy. What AM1 actually
+    freezes is the fingerprint, and ``_deal_analysis_fingerprint`` produces one
+    from a Lease-Level deal's own stored rows exactly as it does for the other
+    two modes. A saved Lease-Level deal therefore qualifies on the strength of
+    the same evidence the other modes' snapshots stand on: assumptions that are
+    on file and reassemble into the contracts the engine consumes.
+
+    Raises ``DealNotFoundError`` if the Deal does not exist,
+    ``InvestmentStructureError`` if it has no current analysis,
+    ``ManagedAssetExistsError`` if it already has an asset, and
+    ``AssetReportValidationError`` if the authored identity is invalid.
+    """
+
+    managed_asset_id = uuid.uuid4().hex
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        deal = _read_deal(connection, source_deal_id)
+        if (
+            deal.operating_mode is not OperatingMode.LEASE_LEVEL
+            and deal.analysis_snapshot is None
+        ):
+            raise InvestmentStructureError(
+                f"Deal {source_deal_id} has no current saved analysis. Analyze and "
+                "save it before creating a Managed Asset, so the approved "
+                "acquisition basis is the one actually on file."
+            )
+        existing = connection.execute(
+            "SELECT id FROM managed_assets WHERE source_deal_id = ?", (source_deal_id,)
+        ).fetchone()
+        if existing is not None:
+            raise ManagedAssetExistsError(
+                source_deal_id=source_deal_id, managed_asset_id=existing["id"]
+            )
+
+        resolved_name = name if name is not None else deal.name
+        require_valid_managed_asset(
+            name=resolved_name,
+            acquisition_date=acquisition_date,
+            property_type=property_type,
+            market=market,
+        )
+        # Captured once, here, and written by no other statement in this module.
+        # A later Deal edit changes the Deal's current fingerprint and leaves
+        # this frozen copy exactly as it is.
+        fingerprint = _deal_analysis_fingerprint(connection, source_deal_id)
+        connection.execute(
+            """
+            INSERT INTO managed_assets (
+                id, source_deal_id, name, acquisition_date, property_type,
+                market, acquisition_fingerprint, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                managed_asset_id,
+                source_deal_id,
+                resolved_name,
+                acquisition_date.isoformat(),
+                property_type,
+                market,
+                fingerprint,
+                now,
+                now,
+            ),
+        )
+        row = _require_managed_asset(connection, managed_asset_id)
+        return _row_to_managed_asset(row)
+
+
+def list_managed_assets(*, db_path: Path | None = None) -> list[ManagedAsset]:
+    """Every Managed Asset, most recently updated first -- the same ordering the
+    Deal and Investment libraries already use."""
+
+    with _connect(db_path) as connection:
+        rows = connection.execute(
+            "SELECT * FROM managed_assets ORDER BY updated_at DESC, id ASC"
+        ).fetchall()
+    return [_row_to_managed_asset(row) for row in rows]
+
+
+def get_managed_asset(managed_asset_id: str, *, db_path: Path | None = None) -> ManagedAsset:
+    """One Managed Asset. Raises ``ManagedAssetNotFoundError``."""
+
+    with _connect(db_path) as connection:
+        return _row_to_managed_asset(_require_managed_asset(connection, managed_asset_id))
+
+
+def list_monthly_reports(
+    managed_asset_id: str, *, db_path: Path | None = None
+) -> list[MonthlyAssetReport]:
+    """Every saved report for one asset, in month order. Raises
+    ``ManagedAssetNotFoundError`` if the asset does not exist -- an empty list
+    means "no reports yet", and must never also mean "no such asset"."""
+
+    with _connect(db_path) as connection:
+        _require_managed_asset(connection, managed_asset_id)
+        rows = connection.execute(
+            "SELECT * FROM monthly_asset_reports WHERE managed_asset_id = ? "
+            "ORDER BY reporting_month ASC",
+            (managed_asset_id,),
+        ).fetchall()
+    return [_row_to_monthly_report(row) for row in rows]
+
+
+def get_monthly_report(
+    managed_asset_id: str, reporting_month: date, *, db_path: Path | None = None
+) -> MonthlyAssetReport:
+    """One report. The month is normalized before lookup, so any day in March
+    finds March's report. Raises ``MonthlyReportNotFoundError``."""
+
+    month = normalize_reporting_month(reporting_month)
+    with _connect(db_path) as connection:
+        _require_managed_asset(connection, managed_asset_id)
+        row = connection.execute(
+            "SELECT * FROM monthly_asset_reports WHERE managed_asset_id = ? "
+            "AND reporting_month = ?",
+            (managed_asset_id, month.isoformat()),
+        ).fetchone()
+    if row is None:
+        raise MonthlyReportNotFoundError((managed_asset_id, month))
+    return _row_to_monthly_report(row)
+
+
+def create_monthly_report(
+    *,
+    managed_asset_id: str,
+    reporting_month: date,
+    budget: OperatingFigures,
+    actual: OperatingFigures,
+    commentary: str | None = None,
+    db_path: Path | None = None,
+) -> MonthlyAssetReport:
+    """Create one month's report, freezing its approved budget.
+
+    The only statement in this module that writes a ``budget_*`` column. After
+    it commits, the budget is immutable: ``update_monthly_report_actuals`` names
+    only ``actual_*``, ``commentary`` and ``updated_at``, so there is no SQL
+    here capable of revising one.
+
+    Raises ``ManagedAssetNotFoundError``, ``AssetReportValidationError`` and
+    ``MonthlyReportExistsError``. A second create for a month that already has a
+    report is refused rather than merged -- merging would be an undeclared
+    budget revision.
+    """
+
+    month = normalize_reporting_month(reporting_month)
+    require_valid_monthly_report(
+        reporting_month=month, budget=budget, actual=actual, commentary=commentary
+    )
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        _require_managed_asset(connection, managed_asset_id)
+        existing = connection.execute(
+            "SELECT 1 FROM monthly_asset_reports WHERE managed_asset_id = ? "
+            "AND reporting_month = ?",
+            (managed_asset_id, month.isoformat()),
+        ).fetchone()
+        if existing is not None:
+            raise MonthlyReportExistsError(
+                managed_asset_id=managed_asset_id, reporting_month=month
+            )
+
+        values: dict[str, object] = {
+            "managed_asset_id": managed_asset_id,
+            "reporting_month": month.isoformat(),
+            **_figure_values(budget, "budget"),
+            **_figure_values(actual, "actual"),
+            "commentary": commentary,
+            "created_at": now,
+            "updated_at": now,
+        }
+        columns = ", ".join(values)
+        placeholders = ", ".join(f":{name}" for name in values)
+        connection.execute(
+            f"INSERT INTO monthly_asset_reports ({columns}) VALUES ({placeholders})", values
+        )
+        row = connection.execute(
+            "SELECT * FROM monthly_asset_reports WHERE managed_asset_id = ? "
+            "AND reporting_month = ?",
+            (managed_asset_id, month.isoformat()),
+        ).fetchone()
+    return _row_to_monthly_report(row)
+
+
+def update_monthly_report_actuals(
+    *,
+    managed_asset_id: str,
+    reporting_month: date,
+    actual: OperatingFigures,
+    commentary: str | None = None,
+    budget: OperatingFigures | None = None,
+    db_path: Path | None = None,
+) -> MonthlyAssetReport:
+    """Update one report's actual results and commentary. The approved budget is
+    not updatable.
+
+    ``budget`` is accepted only so a caller that round-trips a whole report can
+    be told precisely what it got wrong. When supplied, it is compared field by
+    field against the frozen budget and any difference raises
+    ``BudgetImmutableError`` naming every changed field -- a typed conflict,
+    deliberately distinct from ``AssetReportValidationError``, because the
+    submitted budget may be perfectly well-formed and the refusal is about
+    authority rather than shape. A budget is never silently replaced or revised.
+
+    Passing ``None`` asserts nothing about the budget and is the ordinary path.
+    """
+
+    month = normalize_reporting_month(reporting_month)
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        _require_managed_asset(connection, managed_asset_id)
+        row = connection.execute(
+            "SELECT * FROM monthly_asset_reports WHERE managed_asset_id = ? "
+            "AND reporting_month = ?",
+            (managed_asset_id, month.isoformat()),
+        ).fetchone()
+        if row is None:
+            raise MonthlyReportNotFoundError((managed_asset_id, month))
+
+        frozen = _figures_from_row(row, "budget")
+        # When the caller echoes a budget back, *that* is the budget validated
+        # here -- not the frozen one. A malformed echoed field is the caller's
+        # error to fix, so it must be refused as a structured 422 before the
+        # comparison below tries to read it as a number: ``float(None)`` is a
+        # TypeError, which would surface as a 500 for what is plainly a bad
+        # request. The frozen budget is valid by construction (``create_monthly_report``
+        # validated it, and no statement in this module can change it), so it is
+        # validated only when there is no supplied budget to check instead.
+        require_valid_monthly_report(
+            reporting_month=month,
+            budget=frozen if budget is None else budget,
+            actual=actual,
+            commentary=commentary,
+        )
+        if budget is not None:
+            changed = tuple(
+                field
+                for field in _AM1_FIGURE_FIELDS
+                if float(getattr(budget, field)) != float(getattr(frozen, field))
+            )
+            if changed:
+                raise BudgetImmutableError(
+                    managed_asset_id=managed_asset_id,
+                    reporting_month=month,
+                    changed_fields=changed,
+                )
+
+        values: dict[str, object] = {
+            **_figure_values(actual, "actual"),
+            "commentary": commentary,
+            "updated_at": now,
+            "key_asset": managed_asset_id,
+            "key_month": month.isoformat(),
+        }
+        assignments = ", ".join(
+            f"{name} = :{name}"
+            for name in values
+            if name not in ("key_asset", "key_month")
+        )
+        connection.execute(
+            f"UPDATE monthly_asset_reports SET {assignments} "
+            "WHERE managed_asset_id = :key_asset AND reporting_month = :key_month",
+            values,
+        )
+        updated = connection.execute(
+            "SELECT * FROM monthly_asset_reports WHERE managed_asset_id = ? "
+            "AND reporting_month = ?",
+            (managed_asset_id, month.isoformat()),
+        ).fetchone()
+    return _row_to_monthly_report(updated)

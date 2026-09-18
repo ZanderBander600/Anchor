@@ -111,6 +111,7 @@ _P7_8_TABLES = {
     "capital_debt_terms",
     "capital_preferred_terms",
 }
+#: AM1 (schema 13) adds the two Asset Management tables the same way, and
 #: P7.9 Stage 2 (schema 12) adds the eight Partnership tables the same way,
 #: all empty for a legacy deal; ``tests/test_p7_9_stage_2_compatibility_oracle.py``
 #: holds the v11 -> v12 step on its own.
@@ -124,8 +125,13 @@ _P7_9_TABLES = {
     "waterfall_hurdle_conditions",
     "waterfall_catch_up_terms",
 }
+#: AM1 (schema 13) adds the two Asset Management tables.
+_AM1_TABLES = {
+    "managed_assets",
+    "monthly_asset_reports",
+}
 #: The schema version the current store migrates a v6 database to.
-_CURRENT_VERSION = 12
+_CURRENT_VERSION = 13
 
 
 @pytest.fixture(scope="module")
@@ -274,6 +280,7 @@ def test_the_version_advances_to_7_exactly_once_and_only_the_plan_tables_appear(
         | _P7_6_TABLES
         | _P7_8_TABLES
         | _P7_9_TABLES
+        | _AM1_TABLES
     )
     assert migrated["deal_capital_plan_items"] == []
     assert migrated["deal_owner_expense_items"] == []

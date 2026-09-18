@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping
+from datetime import date
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -66,6 +67,23 @@ from .analysis import (
     run_two_way_sensitivity,
 )
 from .business_plan import BusinessPlan, BusinessPlanValidationError, parse_business_plan
+
+# Gate AM1. ``analyze_asset_performance`` is the sole authority for every AM1
+# financial result; this module serializes what it returns and computes nothing
+# of its own. No AI module is reachable from any AM1 route.
+from .asset_management import (
+    MONETARY_FIELDS as AM1_MONETARY_FIELDS,
+    AssetReportValidationError,
+    BudgetImmutableError,
+    ManagedAssetExistsError,
+    ManagedAssetNotFoundError,
+    MonthlyReportExistsError,
+    MonthlyReportNotFoundError,
+    OperatingFigures,
+    analyze_asset_performance,
+    normalize_reporting_month,
+    parse_iso_date,
+)
 from .contracts import (
     AcquisitionInputs,
     AcquisitionTerms,
@@ -4666,3 +4684,287 @@ def analyze_investment_partner_decision_matrix(
         raise _investment_structure_conflict(error) from None
     except DecisionMatrixConflictError as error:
         raise _structured_conflict(error) from None
+
+
+# =============================================================================
+# Gate AM1 -- Managed Assets and Monthly Performance.
+#
+# ``docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`` Section 6.
+# Eight routes, using the repository's established contracts: ``_exact_keys``
+# for a body that must state every field it carries, ``_wire`` for the response,
+# ``_not_found`` for a missing entity, ``_structural_error`` for a malformed
+# body, a structured 422 for a contract refusal, and 409 for a conflict.
+#
+# **No route computes anything.** ``anchor.asset_management.performance`` is the
+# sole authority for every total, variance, percentage, assessment, attention
+# item and trend point; these routes read stored figures, hand them to it, and
+# serialize what it returns.
+#
+# There is no AI route here and no paid AI call anywhere in AM1: attention items
+# are derived from the deterministic result, and commentary is analyst prose
+# that reaches no model.
+#
+# There is deliberately no DELETE for either an asset or a report (Section 8).
+# =============================================================================
+
+#: Every field a monthly statement states, exactly. A body must carry all of
+#: them: a missing ``payroll`` is a body that forgot a line, never a zero.
+_AM1_FIGURE_FIELDS = ("occupancy", *AM1_MONETARY_FIELDS)
+
+_MANAGED_ASSET_FIELDS = ("source_deal_id", "name", "acquisition_date", "property_type", "market")
+_MONTHLY_REPORT_FIELDS = ("reporting_month", "budget", "actual", "commentary")
+_ACTUALS_FIELDS = ("actual", "commentary", "budget")
+
+
+def _am1_validation_error_response(error: AssetReportValidationError) -> HTTPException:
+    """A structurally invalid Managed Asset or report as a structured 422: every
+    issue, in the validator's own order, each with its stable code, the
+    statement it belongs to and the exact field."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "scope": issue.scope,
+                "field": issue.field,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _budget_immutable_response(error: BudgetImmutableError) -> HTTPException:
+    """A frozen-budget conflict as a 409, deliberately not a 422.
+
+    The submitted budget may be perfectly well-formed; what is refused is the
+    authority to change it. A 422 would tell the product "fix these numbers",
+    which is exactly the wrong instruction -- so the status, the code and the
+    named fields all say "this is no longer yours to change" instead.
+    """
+
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "budget_immutable",
+            "message": str(error),
+            "reporting_month": error.reporting_month.isoformat(),
+            "changed_fields": list(error.changed_fields),
+        },
+    )
+
+
+def _am1_date(raw: Any, where: str) -> date:
+    """A calendar date from the wire.
+
+    Parsing lives in ``anchor.asset_management.validation``, which reports a
+    malformed string by returning ``None`` rather than raising. That keeps this
+    module from having to catch ``ValueError`` at all: every validation error in
+    the repository subclasses it, so such a catch here would be one refactor
+    away from turning a typed domain refusal into a generic "bad date".
+    """
+
+    parsed = parse_iso_date(raw)
+    if parsed is None:
+        raise _structural_error(f"{where} must be an ISO-8601 date string.")
+    return parsed
+
+
+def _am1_month(raw: Any, where: str) -> date:
+    """A reporting month from the wire, normalized to the first of the month."""
+
+    return normalize_reporting_month(_am1_date(raw, where))
+
+
+def _am1_figures(raw: Any, where: str) -> OperatingFigures:
+    """One statement from the wire. Structure only: the range rules
+    (finite, non-negative, occupancy in 0..1) belong to
+    ``anchor.asset_management.validation`` and are applied by the store, so
+    there is one definition of a valid figure rather than two."""
+
+    body = _exact_keys(raw, _AM1_FIGURE_FIELDS, where)
+    return OperatingFigures(**{field: body[field] for field in _AM1_FIGURE_FIELDS})
+
+
+def _am1_commentary(raw: Any, where: str) -> str | None:
+    if raw is None or isinstance(raw, str):
+        return raw
+    raise _structural_error(f"{where} must be text or null.")
+
+
+@app.post("/managed-assets", response_model=None)
+def create_managed_asset(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Create the Managed Asset for a saved Deal.
+
+    One per Deal. The Deal's authoritative analysis fingerprint is captured here
+    as the frozen approved acquisition basis; the Deal itself is not modified,
+    and no later Deal edit reaches the asset.
+    """
+
+    body = _exact_keys(payload, _MANAGED_ASSET_FIELDS, "The request body")
+    try:
+        asset = investment_store.create_managed_asset(
+            source_deal_id=body["source_deal_id"],
+            name=body["name"],
+            acquisition_date=_am1_date(body["acquisition_date"], "acquisition_date"),
+            property_type=body["property_type"],
+            market=body["market"],
+        )
+    except DealNotFoundError as error:
+        raise _not_found(error) from None
+    except ManagedAssetExistsError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "managed_asset_exists",
+                "message": str(error),
+                "managed_asset_id": error.managed_asset_id,
+            },
+        ) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except AssetReportValidationError as error:
+        raise _am1_validation_error_response(error) from None
+    return _wire(asset)
+
+
+@app.get("/managed-assets", response_model=None)
+def list_managed_assets() -> list[dict[str, Any]]:
+    """Every Managed Asset, most recently updated first."""
+
+    return [_wire(asset) for asset in investment_store.list_managed_assets()]
+
+
+@app.get("/managed-assets/{managed_asset_id}", response_model=None)
+def read_managed_asset(managed_asset_id: str) -> dict[str, Any]:
+    """One Managed Asset, including the frozen acquisition fingerprint and the
+    source Deal id the product shows as provenance."""
+
+    try:
+        return _wire(investment_store.get_managed_asset(managed_asset_id))
+    except ManagedAssetNotFoundError as error:
+        raise _not_found(error) from None
+
+
+@app.get("/managed-assets/{managed_asset_id}/reports", response_model=None)
+def list_monthly_asset_reports(managed_asset_id: str) -> list[dict[str, Any]]:
+    """Every saved monthly report for one asset, in month order. Figures only:
+    no total, variance or assessment is included, because none is stored."""
+
+    try:
+        reports = investment_store.list_monthly_reports(managed_asset_id)
+    except ManagedAssetNotFoundError as error:
+        raise _not_found(error) from None
+    return [_wire(report) for report in reports]
+
+
+@app.get("/managed-assets/{managed_asset_id}/reports/{reporting_month}", response_model=None)
+def read_monthly_asset_report(managed_asset_id: str, reporting_month: str) -> dict[str, Any]:
+    """One month's saved report."""
+
+    month = _am1_month(reporting_month, "reporting_month")
+    try:
+        return _wire(investment_store.get_monthly_report(managed_asset_id, month))
+    except (ManagedAssetNotFoundError, MonthlyReportNotFoundError) as error:
+        raise _not_found(error) from None
+
+
+@app.post("/managed-assets/{managed_asset_id}/reports", response_model=None)
+def create_monthly_asset_report(
+    managed_asset_id: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Create one month's report, freezing its approved budget.
+
+    The only route that ever writes a budget. A second create for a month that
+    already has a report is a 409, never a merge -- merging would be an
+    undeclared budget revision.
+    """
+
+    body = _exact_keys(payload, _MONTHLY_REPORT_FIELDS, "The request body")
+    try:
+        report = investment_store.create_monthly_report(
+            managed_asset_id=managed_asset_id,
+            reporting_month=_am1_month(body["reporting_month"], "reporting_month"),
+            budget=_am1_figures(body["budget"], "budget"),
+            actual=_am1_figures(body["actual"], "actual"),
+            commentary=_am1_commentary(body["commentary"], "commentary"),
+        )
+    except ManagedAssetNotFoundError as error:
+        raise _not_found(error) from None
+    except MonthlyReportExistsError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "monthly_report_exists", "message": str(error)},
+        ) from None
+    except AssetReportValidationError as error:
+        raise _am1_validation_error_response(error) from None
+    return _wire(report)
+
+
+@app.put("/managed-assets/{managed_asset_id}/reports/{reporting_month}", response_model=None)
+def update_monthly_asset_report_actuals(
+    managed_asset_id: str, reporting_month: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Update one report's actual results and commentary.
+
+    ``budget`` may be echoed back so a client that round-trips a whole report is
+    told precisely which fields it tried to change; any difference from the
+    frozen budget is a 409. Sending ``null`` asserts nothing about the budget and
+    is the ordinary path.
+    """
+
+    body = _exact_keys(payload, _ACTUALS_FIELDS, "The request body")
+    raw_budget = body["budget"]
+    try:
+        report = investment_store.update_monthly_report_actuals(
+            managed_asset_id=managed_asset_id,
+            reporting_month=_am1_month(reporting_month, "reporting_month"),
+            actual=_am1_figures(body["actual"], "actual"),
+            commentary=_am1_commentary(body["commentary"], "commentary"),
+            budget=None if raw_budget is None else _am1_figures(raw_budget, "budget"),
+        )
+    except (ManagedAssetNotFoundError, MonthlyReportNotFoundError) as error:
+        raise _not_found(error) from None
+    except BudgetImmutableError as error:
+        raise _budget_immutable_response(error) from None
+    except AssetReportValidationError as error:
+        raise _am1_validation_error_response(error) from None
+    return _wire(report)
+
+
+@app.get("/managed-assets/{managed_asset_id}/performance/{reporting_month}", response_model=None)
+def read_monthly_asset_performance(
+    managed_asset_id: str, reporting_month: str
+) -> dict[str, Any]:
+    """The authoritative monthly and year-to-date performance for one asset at
+    one month, derived on request and never stored.
+
+    Every number in the response comes from
+    ``anchor.asset_management.performance``. Nothing here is computed, cached or
+    reconciled against a second source.
+    """
+
+    month = _am1_month(reporting_month, "reporting_month")
+    try:
+        asset = investment_store.get_managed_asset(managed_asset_id)
+        reports = investment_store.list_monthly_reports(managed_asset_id)
+    except ManagedAssetNotFoundError as error:
+        raise _not_found(error) from None
+    try:
+        result = analyze_asset_performance(
+            managed_asset_id=managed_asset_id, reporting_month=month, reports=reports
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No report has been saved for {month.isoformat()}, so there is no "
+                "performance to report for it."
+            ),
+        ) from None
+    return {
+        "managed_asset": _wire(asset),
+        "result": _wire(result),
+        "reported_months": [report.reporting_month.isoformat() for report in reports],
+    }

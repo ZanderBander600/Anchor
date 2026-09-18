@@ -39,7 +39,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from _p7_2_fixtures import P7_9_TABLES, rows, table_names  # type: ignore[import-not-found]
+from _p7_2_fixtures import AM1_TABLES, P7_9_TABLES, rows, table_names  # type: ignore[import-not-found]
 from anchor import api as api_module
 from anchor.deals import store
 
@@ -170,27 +170,32 @@ def test_the_migration_adds_exactly_eight_empty_tables_and_rewrites_nothing(lega
     store.list_deals(db_path=db)  # any store call migrates
     migrated_schema, migrated_rows = _schema(db), _every_row(db)
 
-    assert _version(db) == 12
+    assert _version(db) == 13
     added = {name: migrated_schema[name] for name in set(migrated_schema) - set(before_schema)}
-    assert {name for name, (kind, _, _) in added.items() if kind == "table"} == set(P7_9_TABLES)
+    # A v11 database now also gains AM1's two schema-13 Asset Management tables,
+    # which are empty and additive in exactly the way Stage 2's eight are. This
+    # test still measures Stage 2's own eight; the AM1 pair is named so the set
+    # comparison stays exact rather than being loosened to a subset check.
+    expected_tables = set(P7_9_TABLES) | set(AM1_TABLES)
+    assert {name for name, (kind, _, _) in added.items() if kind == "table"} == expected_tables
     # Every other new object is one of those tables' own key indexes.
-    assert {table for _, table, _ in added.values()} == set(P7_9_TABLES)
+    assert {table for _, table, _ in added.values()} == expected_tables
     assert {kind for kind, _, _ in added.values()} == {"table", "index"}
     assert set(before_schema) <= set(migrated_schema)
     # No table, index or column that existed was altered.
     assert {name: migrated_schema[name] for name in before_schema} == before_schema
-    assert {table: migrated_rows[table] for table in P7_9_TABLES} == dict.fromkeys(P7_9_TABLES, [])
+    assert {table: migrated_rows[table] for table in expected_tables} == dict.fromkeys(expected_tables, [])
     assert {table: migrated_rows[table] for table in before_rows} == before_rows
 
     for _ in range(3):
         store.list_deals(db_path=db)
-        assert (_version(db), _schema(db), _every_row(db)) == (12, migrated_schema, migrated_rows)
+        assert (_version(db), _schema(db), _every_row(db)) == (13, migrated_schema, migrated_rows)
     connection = sqlite3.connect(db)
     connection.row_factory = sqlite3.Row
     store._migrate(connection)
     connection.commit()
     connection.close()
-    assert (_version(db), _schema(db), _every_row(db)) == (12, migrated_schema, migrated_rows)
+    assert (_version(db), _schema(db), _every_row(db)) == (13, migrated_schema, migrated_rows)
 
 
 def test_every_new_table_is_typed_and_holds_no_json_blob(legacy: tuple[Path, dict[str, Any]]) -> None:
@@ -220,7 +225,7 @@ def test_every_recorded_response_is_identical(client: TestClient, legacy: tuple[
     db, manifest = legacy
     replayed = _replay(client, manifest["exchanges"])
 
-    assert _version(db) == 12
+    assert _version(db) == 13
     mismatched = [
         (exchange["method"], exchange["path"])
         for exchange, now in zip(manifest["exchanges"], replayed, strict=True)

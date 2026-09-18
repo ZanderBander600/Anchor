@@ -501,6 +501,11 @@ _STORE_PLAN_CALLS = sorted(
         ("_row_to_lease_level_deal", "fingerprint_lease_level_inputs"),
         ("_row_to_deal", "fingerprint_quick_inputs"),
         ("_row_to_detailed_deal", "fingerprint_detailed_inputs"),
+        # AM1: the Managed Asset's frozen acquisition basis is the Deal's own
+        # authoritative fingerprint, so this reads the stored plan in every mode
+        # exactly as the snapshot write paths do.
+        ("_deal_analysis_fingerprint", "fingerprint_quick_inputs"),
+        ("_deal_analysis_fingerprint", "fingerprint_detailed_inputs"),
         # P7.6: ``get_deal``'s read moved, unchanged, into ``_read_deal`` so a
         # visible Investment write can read its Units in its own transaction.
         ("_read_deal", "_row_to_deal"),

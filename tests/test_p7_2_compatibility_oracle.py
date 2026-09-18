@@ -43,6 +43,7 @@ from _p7_2_fixtures import (  # type: ignore[import-not-found]
     P7_6_TABLES,
     P7_8_TABLES,
     P7_9_TABLES,
+    AM1_TABLES,
     legacy_rows,
     row_counts,
     rows,
@@ -153,14 +154,14 @@ def test_the_migration_adds_exactly_five_empty_tables_and_rewrites_no_row(legacy
     store.list_deals(db_path=db)  # any store call migrates
     migrated_schema, migrated_rows = _schema(db), legacy_rows(db)
 
-    assert _version(db) == 12  # P7.4, P7.6, P7.8B and P7.9 Stage 2 migrate the same v7 database on to schema 12
+    assert _version(db) == 13  # P7.4, P7.6, P7.8B and P7.9 Stage 2 migrate the same v7 database on to schema 12
     assert table_names(db) == (
         before_tables
         | set(P7_2_TABLES)
         | set(P7_4_TABLES)
         | set(P7_6_TABLES)
         | set(P7_8_TABLES)
-        | set(P7_9_TABLES)
+        | set(P7_9_TABLES) | set(AM1_TABLES)
     )
     assert {table: rows(db, table) for table in P7_9_TABLES} == dict.fromkeys(P7_9_TABLES, [])
     assert {table: rows(db, table) for table in P7_8_TABLES} == dict.fromkeys(P7_8_TABLES, [])
@@ -170,14 +171,14 @@ def test_the_migration_adds_exactly_five_empty_tables_and_rewrites_no_row(legacy
     assert migrated_rows == before_rows
     for _ in range(3):
         store.list_deals(db_path=db)
-        assert (_version(db), _schema(db), legacy_rows(db)) == (12, migrated_schema, migrated_rows)
+        assert (_version(db), _schema(db), legacy_rows(db)) == (13, migrated_schema, migrated_rows)
 
     connection = sqlite3.connect(db)
     connection.row_factory = sqlite3.Row
     store._migrate(connection)
     connection.commit()
     connection.close()
-    assert (_version(db), _schema(db), legacy_rows(db)) == (12, migrated_schema, migrated_rows)
+    assert (_version(db), _schema(db), legacy_rows(db)) == (13, migrated_schema, migrated_rows)
 
 
 # =============================================================================
@@ -196,7 +197,7 @@ def test_every_legacy_response_is_identical_after_migration(
     db, manifest = legacy
     replayed = _replay(client, manifest["exchanges"])
 
-    assert _version(db) == 12  # P7.4, P7.6, P7.8B and P7.9 Stage 2 migrate the same v7 database on to schema 12
+    assert _version(db) == 13  # P7.4, P7.6, P7.8B and P7.9 Stage 2 migrate the same v7 database on to schema 12
     mismatched = [
         (exchange["method"], exchange["path"])
         for exchange, now in zip(manifest["exchanges"], replayed, strict=True)

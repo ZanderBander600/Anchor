@@ -280,6 +280,12 @@ P7_9_TABLES = (
     "waterfall_catch_up_terms",
 )
 
+#: The two tables schema v13 adds (Gate AM1).
+AM1_TABLES = (
+    "managed_assets",
+    "monthly_asset_reports",
+)
+
 
 def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
     """Every row of every table that is not a P7 table, in rowid order."""
@@ -293,6 +299,7 @@ def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
             - set(P7_6_TABLES)
             - set(P7_8_TABLES)
             - set(P7_9_TABLES)
+            - set(AM1_TABLES)
         )
         if not table.startswith("sqlite_")
     }

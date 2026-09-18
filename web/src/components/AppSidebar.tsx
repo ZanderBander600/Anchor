@@ -116,6 +116,23 @@ export interface AppSidebarProps {
   onOpenInvestmentLibrary?: () => void;
   onNewInvestment?: () => void;
   onOpenInvestment?: (investmentId: string) => void;
+  /** Gate AM1: switches to the Asset Management workspace. Optional so every
+   * existing render site of this component keeps working unchanged; the
+   * workspace switch simply does not appear when it is absent. */
+  onOpenAssetManagement?: () => void;
+  /** How many buildings are under management, shown beside the switch so the
+   * analyst can see there is something there before going. */
+  managedAssetCount?: number;
+}
+
+/** Gate AM1: the owned-asset side of the product. */
+function IconAssetManagement() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8 2.2 A5.8 5.8 0 0 1 13.8 8 L8 8 Z" fill="currentColor" />
+    </svg>
+  );
 }
 
 function investmentMeta(investment: VisibleInvestment): string {
@@ -151,6 +168,8 @@ export function AppSidebar({
   onOpenInvestmentLibrary,
   onNewInvestment,
   onOpenInvestment,
+  onOpenAssetManagement,
+  managedAssetCount = 0,
 }: AppSidebarProps) {
   const recentInvestments = investments.slice(0, RECENT_INVESTMENT_LIMIT);
   const activeInvestment = investments.find((investment) => investment.id === activeInvestmentId);
@@ -173,6 +192,37 @@ export function AppSidebar({
         <img className="sidebar-brand-mark" src="/anchor-mark.png" alt="" />
         <span className="sidebar-brand-word">Anchor</span>
       </div>
+
+      {/* Gate AM1 -- the primary application-level distinction. Acquisitions
+        * and Asset Management are different products over the same building:
+        * one underwrites a purchase, the other reports on what is already
+        * owned. The switch sits above every Deal workspace tab, never beside
+        * Underwrite/Risk/AI Analyst. */}
+      {onOpenAssetManagement !== undefined && (
+        <div className="sidebar-section sidebar-workspace-switch">
+          <button
+            type="button"
+            className="sidebar-nav-item sidebar-nav-item-active"
+            aria-current="page"
+            aria-label="Acquisitions"
+          >
+            <IconLibrary />
+            <span className="sidebar-nav-label">Acquisitions</span>
+          </button>
+          <button
+            type="button"
+            className="sidebar-nav-item"
+            aria-label="Asset Management"
+            onClick={onOpenAssetManagement}
+          >
+            <IconAssetManagement />
+            <span className="sidebar-nav-label">Asset Management</span>
+            {managedAssetCount > 0 && (
+              <span className="sidebar-nav-count">{managedAssetCount}</span>
+            )}
+          </button>
+        </div>
+      )}
 
       <div className="sidebar-section">
         <button

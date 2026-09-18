@@ -509,7 +509,17 @@ describe('the Investment tables never widen the page', () => {
   });
 
   it('keeps the P7.6 styles free of good / bad / winner colour', () => {
-    const section = CSS.slice(CSS.indexOf('Phase 7 Gate P7.6 -- the visible Investment workspace.'));
+    // Bounded to the P7.6 section itself, not to the end of the file. Slicing
+    // to EOF only measured P7.6 while P7.6 was the last section; every gate
+    // that appended a stylesheet afterwards was silently pulled into this
+    // assertion, and AM1 -- whose assessment column is *meant* to carry a
+    // favorable/unfavorable colour -- is the first one to use a token it
+    // forbids. The rule is about P7.6, so it now reads only P7.6.
+    const start = CSS.indexOf('Phase 7 Gate P7.6 -- the visible Investment workspace.');
+    expect(start).toBeGreaterThan(-1);
+    const next = CSS.indexOf('Phase 7 Gate P7.8B -- Capital Structure', start);
+    expect(next).toBeGreaterThan(start);
+    const section = CSS.slice(start, next);
     expect(section.length).toBeGreaterThan(0);
     expect(section).not.toMatch(/--(success|positive|gain|loss)|heat|winner|best|gradient/i);
   });

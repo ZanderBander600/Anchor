@@ -83,9 +83,10 @@ def test_a_fresh_store_is_schema_8_with_the_five_tables_empty(db: Path) -> None:
     connection.close()
     # P7.4 added schema 9's Strategy tables, P7.6 schema 10's Investment
     # sidecars, P7.8B schema 11's Capital Structure tables, and P7.9 Stage 2
-    # schema 12's Partnership tables. P7.2's own five are still empty in a
+    # schema 12's Partnership tables, and AM1 schema 13's two Asset Management
+    # tables. P7.2's own five are still empty in a
     # fresh store, which is what this test is about.
-    assert version == 12
+    assert version == 13
     assert row_counts(db) == EMPTY
 
 
