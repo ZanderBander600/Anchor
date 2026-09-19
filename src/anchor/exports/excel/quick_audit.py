@@ -615,7 +615,7 @@ class _QuickAuditWorkbook:
         oe_o, oe_w = self.bp_rows["owner_expenses"]
         for offset in range(self.hold):
             col = first_col + offset
-            _write_formula(ws, 
+            _write_formula(ws,
                 row, col,
                 f'=IF(AND({_cell(pc_w, col)}={_cell(pc_o, col)},{_cell(oe_w, col)}={_cell(oe_o, col)}),"","Modified")',
                 self.fmt.get(align="right"), "",
@@ -1010,7 +1010,7 @@ class _QuickAuditWorkbook:
             m = _cell(r, 0)
             ws.write_number(r, 0, month, month_format)
             ws.write_number(r, 1, (month - 1) // 12 + 1, year_format)
-            _write_formula(ws, 
+            _write_formula(ws,
                 r, 2,
                 f'=IF({m}<={T["io_months"]},"Interest-only",IF({m}<={T["maturity"]},"Amortizing","Repaid"))',
                 phase_format, "",
@@ -1768,7 +1768,7 @@ class _QuickAuditWorkbook:
             bare = source.lstrip("-")
             excel_formula = f'=IF(ISBLANK({bare}),"Missing",{source})'
         _write_formula(ws, row, 2, excel_formula, self.fmt.value("link", check.number_format), "")
-        _write_formula(ws, 
+        _write_formula(ws,
             row, 3, f'=IF(AND(ISNUMBER({b}),ISNUMBER({c})),{c}-{b},"n/a")',
             self.fmt.value("calc", NUM_SCIENTIFIC), "",
         )
@@ -1781,7 +1781,7 @@ class _QuickAuditWorkbook:
                 comparison = f'IF(AND(ISNUMBER({b}),ISNUMBER({c})),IF({b}={c},"{PASS}","{FAIL}"),"{FAIL}")'
         else:
             if check.kind == "currency":
-                _write_formula(ws, 
+                _write_formula(ws,
                     row, 4,
                     f"=MAX({CURRENCY_ABSOLUTE_TOLERANCE},{CURRENCY_RELATIVE_TOLERANCE}*ABS(N({b})))",
                     tolerance_format, "",
@@ -1792,7 +1792,7 @@ class _QuickAuditWorkbook:
                 f'IF(AND(ISNUMBER({b}),ISNUMBER({c})),IF(ABS({c}-{b})<={e},"{PASS}","{FAIL}"),'
                 f'IF(AND({b}="{UNAVAILABLE}",{c}="{UNAVAILABLE}"),"{PASS_BOTH_UNAVAILABLE}","{FAIL}"))'
             )
-        _write_formula(ws, 
+        _write_formula(ws,
             row, 5,
             f'=IF(ISERROR({c}),"{EXCEL_ERROR}",IF({modified}="Yes","{NOT_LIKE_FOR_LIKE}",{comparison}))',
             self.fmt.status(), NOT_RECALCULATED,
@@ -2019,4 +2019,3 @@ def build_quick_audit_workbook(source: QuickAuditSource) -> bytes:
     analysis does not reconcile with the saved inputs and Business Plan."""
 
     return _QuickAuditWorkbook(source).build()
-
