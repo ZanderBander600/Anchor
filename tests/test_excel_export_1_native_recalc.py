@@ -154,18 +154,19 @@ def test_excel_values_read_back_directly_match_anchor(recalculated, case) -> Non
     ecf_row = row_of(equity, "Total equity cash flow")
     excel_ecf = [equity.cell(ecf_row, 3 + t).value for t in range(hold + 1)]
     for excel, anchor in zip(excel_ecf, results.levered_cash_flows, strict=True):
-        assert math.isclose(excel, anchor, rel_tol=1e-10, abs_tol=1e-6), (excel, anchor)
-    assert math.isclose(equity.cell(row_of(equity, "Net sale proceeds"), 3 + hold).value, results.net_sale_proceeds, rel_tol=1e-10, abs_tol=1e-6)
+        assert isinstance(excel, (int, float)) and math.isclose(excel, anchor, rel_tol=1e-10, abs_tol=1e-6), (excel, anchor)
+    nsp = equity.cell(row_of(equity, "Net sale proceeds"), 3 + hold).value
+    assert isinstance(nsp, (int, float)) and math.isclose(nsp, results.net_sale_proceeds, rel_tol=1e-10, abs_tol=1e-6)
     em = equity.cell(row_of(equity, "Equity multiple  (returned / invested)"), 3).value
     if results.equity_multiple is None:
         assert em == "Unavailable"
     else:
-        assert math.isclose(em, results.equity_multiple, rel_tol=1e-10, abs_tol=1e-12)
+        assert isinstance(em, (int, float)) and math.isclose(em, results.equity_multiple, rel_tol=1e-10, abs_tol=1e-12)
     irr = equity.cell(row_of(equity, "Levered IRR"), 3).value
     if results.levered_irr is None and case.name != "outside_anchor_search_domain":
         assert irr == "Unavailable"
     elif results.levered_irr is not None:
-        assert abs(irr - results.levered_irr) <= 1e-7, (irr, results.levered_irr)
+        assert isinstance(irr, (int, float)) and abs(irr - results.levered_irr) <= 1e-7, (irr, results.levered_irr)
 
 
 @pytest.mark.parametrize("case", GOLDEN_CASES, ids=lambda case: case.name)
@@ -221,7 +222,8 @@ def test_corrupting_a_formula_fails_the_check_that_guards_it(recalculated, mutan
     assert _status(recalculated, name, guarded) == "FAIL"
     assert _status(recalculated, name, unaffected) == "Pass"
     block = status_block(_values(recalculated, name))
-    assert block["Not passed"] >= 1
+    not_passed = block["Not passed"]
+    assert isinstance(not_passed, (int, float)) and not_passed >= 1
     assert block["First check not passed"] != "None"
     assert str(block["Its location"]).startswith("Checks!F")
 

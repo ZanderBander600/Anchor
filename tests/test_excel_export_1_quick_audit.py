@@ -114,7 +114,8 @@ def _defined_names(wb: openpyxl.Workbook) -> dict[str, str]:
 def test_sheets_are_exactly_the_contract_in_order(base: openpyxl.Workbook) -> None:
     assert base.sheetnames == EXPECTED_SHEETS
     assert list(SHEET_ORDER) == EXPECTED_SHEETS
-    assert base.active.title == "Summary"
+    active = base.active
+    assert active is not None and active.title == "Summary"
 
 
 @pytest.mark.parametrize("case", GOLDEN_CASES, ids=lambda case: case.name)
@@ -402,14 +403,14 @@ def test_representative_formulas_implement_the_quick_contract(base: openpyxl.Wor
     assert op.cell(year_row, 8).value == 6  # forward column is Year H+1
 
     debt = base["Debt Schedule"]
-    pmt = debt.cell(row_of(debt, "Amortizing payment  L x r / (1 - (1 + r)^-N)"), 3).value
+    pmt = str(debt.cell(row_of(debt, "Amortizing payment  L x r / (1 - (1 + r)^-N)"), 3).value)
     assert "^(-" in pmt and "IF(" in pmt
     header = row_of(debt, "Month", start=row_of(debt, "Monthly schedule"))
     first = header + 1
     rate_row = row_of(debt, "Monthly rate  (annual rate / 12)")
     assert debt.cell(first, 6).value == f"=D{first}*$C${rate_row}"  # interest = balance x monthly rate
     assert debt.cell(first, 7).value == f"=E{first}-F{first}"  # principal = payment - interest
-    assert debt.cell(first, 8).value.startswith(f"=IF(A{first}=$C$")  # zero at maturity
+    assert str(debt.cell(first, 8).value).startswith(f"=IF(A{first}=$C$")  # zero at maturity
     assert debt.cell(header + 60, 1).value == 60 and debt.cell(header + 61, 1).value is None
 
     eq = base["Equity Cash Flow"]
@@ -417,7 +418,7 @@ def test_representative_formulas_implement_the_quick_contract(base: openpyxl.Wor
     assert gross == "=$C$12/$C$8"
     assert eq.cell(row_of(eq, "Year 6 NOI (exit NOI)"), 3).value == f"='Operating Projection'!$H${noi_row}"
     ecf_row = row_of(eq, "Total equity cash flow")
-    irr = eq.cell(row_of(eq, "Levered IRR"), 3).value
+    irr = str(eq.cell(row_of(eq, "Levered IRR"), 3).value)
     assert f"IRR($C${ecf_row}:$H${ecf_row}," in irr
     assert irr.startswith('=IF($C$') and '"Unavailable"' in irr
     em = eq.cell(row_of(eq, "Equity multiple  (returned / invested)"), 3).value
@@ -428,7 +429,7 @@ def test_representative_formulas_implement_the_quick_contract(base: openpyxl.Wor
 
 def test_checks_cover_every_material_calculation(base: openpyxl.Workbook) -> None:
     ws = base["Checks"]
-    metrics = {ws.cell(row, 1).value for row in range(1, ws.max_row + 1)}
+    metrics = {str(ws.cell(row, 1).value) for row in range(1, ws.max_row + 1)}
     required = [
         *(f"Net operating income, Year {y}" for y in range(1, 6)),
         *(f"CapEx reserve, Year {y}" for y in range(1, 6)),
@@ -491,12 +492,12 @@ def test_tolerances_are_explicit_and_narrow(base: openpyxl.Workbook) -> None:
     header = row_of(ws, "Metric")
     kinds: dict[str, Any] = {}
     for row in range(header + 1, ws.max_row + 1):
-        metric = ws.cell(row, 1).value
+        metric = str(ws.cell(row, 1).value)
         if metric in ("Levered IRR", "Equity multiple", "Net sale proceeds", "Hold period (years)"):
             kinds[metric] = ws.cell(row, 5).value
     assert kinds["Levered IRR"] == 1e-7
     assert kinds["Equity multiple"] == 1e-10
-    assert kinds["Net sale proceeds"].startswith("=MAX(1e-06,1e-10*ABS(N(")
+    assert str(kinds["Net sale proceeds"]).startswith("=MAX(1e-06,1e-10*ABS(N(")
     assert kinds["Hold period (years)"] == "Exact"
 
 
@@ -508,7 +509,7 @@ def test_an_unrecalculated_workbook_never_passes_a_check(base_bytes: bytes) -> N
     formulas = load(base_bytes)
     for ws in formulas.worksheets:
         for cell in _formula_cells(formulas, ws.title):
-            cached = values[ws.title][cell.coordinate].value
+            cached = values[ws.title].cell(cell.row, cell.column).value
             assert cached in (None, "", "Not recalculated"), (ws.title, cell.coordinate, cached)
     rows = check_rows(values)
     assert rows and {status for *_, status in rows.values()} == {"Not recalculated"}
@@ -730,6 +731,7 @@ def test_provenance_distinguishes_current_missing_and_stale(tmp_path: Path) -> N
     deal = _save_quick(db)
     current = get_quick_analysis_provenance(deal.id, db_path=db)
     assert current.analysis_state is QuickAnalysisState.CURRENT
+    assert deal.inputs is not None
     assert current.analysis_fingerprint == fingerprint_quick_inputs(deal.inputs, business_plan=deal.business_plan)
 
     assert deal.inputs is not None
