@@ -151,7 +151,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import UnionType
-from typing import Any, Union, get_args, get_origin, get_type_hints
+from typing import Any, NamedTuple, Union, get_args, get_origin, get_type_hints
 
 from ..ai.contracts import AIAnalysis
 from ..business_plan import (
@@ -3613,11 +3613,15 @@ class QuickAnalysisState(Enum):
     STALE = "stale"
 
 
-@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
-class QuickAnalysisProvenance:
+class QuickAnalysisProvenance(NamedTuple):
     """A Quick Deal as stored, with its analysis state and its canonical
     analysis fingerprint -- read in one connection so the three cannot
-    describe different moments."""
+    describe different moments.
+
+    A ``NamedTuple`` rather than a dataclass: immutable all the same, and it
+    never resolves its annotations through ``sys.modules``, so this module can
+    still be executed as a fresh, unregistered copy
+    (``tests/test_d5_8a_deal_analysis_persistence.py``)."""
 
     deal: Deal
     analysis_state: QuickAnalysisState
