@@ -51,6 +51,7 @@ function performanceState(overrides: Partial<AssetPerformanceState> = {}): Asset
     reload: vi.fn(),
     saveReport: vi.fn().mockResolvedValue(undefined),
     saveActuals: vi.fn().mockResolvedValue(undefined),
+    saveCommentary: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }

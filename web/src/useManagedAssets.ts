@@ -18,6 +18,7 @@ import {
   MonthlyReportExistsError,
   readAssetPerformance,
   updateMonthlyReportActuals,
+  updateMonthlyReportCommentary,
 } from './api';
 import type {
   AssetPerformanceResponse,
@@ -146,6 +147,10 @@ export interface AssetPerformanceState {
     month: string,
     request: { actual: OperatingFigures; commentary: string | null },
   ) => Promise<void>;
+  /** Saves one month's commentary alone, through the commentary-only route:
+   * no figure is read or sent, so a note can never overwrite actual results
+   * saved elsewhere since this report was loaded. */
+  saveCommentary: (month: string, commentary: string | null) => Promise<void>;
 }
 
 /** One request's settled outcome, tagged with the key that produced it. */
@@ -374,6 +379,17 @@ export function useAssetPerformance(managedAssetId: string | null): AssetPerform
     [managedAssetId],
   );
 
+  const saveCommentary = useCallback(
+    async (month: string, commentary: string | null) => {
+      if (managedAssetId === null) {
+        throw new AssetManagementError('No managed asset is open.');
+      }
+      await updateMonthlyReportCommentary(managedAssetId, month, commentary);
+      setRefreshId((current) => current + 1);
+    },
+    [managedAssetId],
+  );
+
   return {
     reports,
     reportsStatus,
@@ -386,5 +402,6 @@ export function useAssetPerformance(managedAssetId: string | null): AssetPerform
     reload,
     saveReport,
     saveActuals,
+    saveCommentary,
   };
 }

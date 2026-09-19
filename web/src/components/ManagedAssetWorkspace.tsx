@@ -105,14 +105,15 @@ export function ManagedAssetWorkspace({
     }
   };
 
-  /** Commentary alone. The one write route takes the month's actual figures
-   * too, so it is sent the report's own saved figures, unchanged, and -- like
-   * every edit -- no budget. */
+  /** Commentary alone, through the commentary-only route. Nothing here reads
+   * or sends a figure: a note saved from this screen can never write back
+   * actual results that another session has changed since this report was
+   * loaded. */
   const saveCommentary = async (commentary: string | null) => {
-    if (state.selectedMonth === null || selectedReport === null) {
+    if (state.selectedMonth === null) {
       throw new Error('No saved report is selected.');
     }
-    await state.saveActuals(state.selectedMonth, { actual: selectedReport.actual, commentary });
+    await state.saveCommentary(state.selectedMonth, commentary);
   };
 
   const confirmDelete = async () => {

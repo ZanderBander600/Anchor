@@ -217,6 +217,7 @@ function performanceState(): AssetPerformanceState {
     reload: vi.fn(),
     saveReport: vi.fn().mockResolvedValue(undefined),
     saveActuals: vi.fn().mockResolvedValue(undefined),
+    saveCommentary: vi.fn().mockResolvedValue(undefined),
   };
 }
 

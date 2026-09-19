@@ -289,6 +289,7 @@ from ..partnership.validation import validate_partnership
 # the store has no reason to reach it.
 from ..asset_management.contracts import (
     MONETARY_FIELDS as AM1_MONETARY_FIELDS,
+    AssetReportValidationError,
     BudgetImmutableError,
     ManagedAsset,
     ManagedAssetExistsError,
@@ -302,6 +303,7 @@ from ..asset_management.validation import (
     normalize_reporting_month,
     require_valid_managed_asset,
     require_valid_monthly_report,
+    validate_commentary,
 )
 from .capital_structure_codec import FundingAmountRuleKind, amount_rule_kind
 from .contracts import (
@@ -8534,6 +8536,55 @@ def update_monthly_report_actuals(
             f"UPDATE monthly_asset_reports SET {assignments} "
             "WHERE managed_asset_id = :key_asset AND reporting_month = :key_month",
             values,
+        )
+        updated = connection.execute(
+            "SELECT * FROM monthly_asset_reports WHERE managed_asset_id = ? "
+            "AND reporting_month = ?",
+            (managed_asset_id, month.isoformat()),
+        ).fetchone()
+    return _row_to_monthly_report(updated)
+
+
+def update_monthly_report_commentary(
+    *,
+    managed_asset_id: str,
+    reporting_month: date,
+    commentary: str | None,
+    db_path: Path | None = None,
+) -> MonthlyAssetReport:
+    """Update one report's management commentary, and nothing else.
+
+    The commentary-only write. Its one statement assigns ``commentary`` and
+    ``updated_at`` and names no ``actual_*`` or ``budget_*`` column, nor the
+    report's identity -- so a commentary save cannot overwrite actual results
+    another session saved after this caller loaded the report, and cannot touch
+    the frozen budget at all. ``update_monthly_report_actuals`` remains the only
+    write that moves an actual figure.
+
+    ``commentary`` follows the monthly report's commentary rule
+    (``validate_commentary``): ``None`` is "none written"; a blank or overlong
+    string is refused with ``AssetReportValidationError``. A missing asset or
+    report raises ``ManagedAssetNotFoundError`` / ``MonthlyReportNotFoundError``.
+    """
+
+    month = normalize_reporting_month(reporting_month)
+    issues = validate_commentary(commentary)
+    if issues:
+        raise AssetReportValidationError(issues)
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        _require_managed_asset(connection, managed_asset_id)
+        exists = connection.execute(
+            "SELECT 1 FROM monthly_asset_reports WHERE managed_asset_id = ? "
+            "AND reporting_month = ?",
+            (managed_asset_id, month.isoformat()),
+        ).fetchone()
+        if exists is None:
+            raise MonthlyReportNotFoundError((managed_asset_id, month))
+        connection.execute(
+            "UPDATE monthly_asset_reports SET commentary = ?, updated_at = ? "
+            "WHERE managed_asset_id = ? AND reporting_month = ?",
+            (commentary, now, managed_asset_id, month.isoformat()),
         )
         updated = connection.execute(
             "SELECT * FROM monthly_asset_reports WHERE managed_asset_id = ? "

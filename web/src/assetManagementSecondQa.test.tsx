@@ -9,8 +9,9 @@
  *    stayed on screen after the analyst picked another month. It now clears the
  *    moment the month changes -- and only that refusal does.
  * 2. **Update Commentary opened the whole actuals form.** It now opens a focused
- *    commentary editor that cannot change a figure, with sensible focus on open,
- *    cancel and save.
+ *    commentary editor with sensible focus on open, cancel and save, and saves
+ *    through the commentary-only route: the request carries the note and
+ *    nothing else, so it can never write back stale actual figures.
  * 3. **The dashboard collapsed while a save was re-read.** The last confirmed
  *    dashboard now stays, marked busy, until the re-read settles; a failed
  *    re-read shows its error instead of leaving old figures looking current.
@@ -28,6 +29,7 @@ import type {
   MonthlyAssetReport,
 } from './assetManagementTypes';
 import { useAssetPerformance } from './useManagedAssets';
+import { withLfLineEndings } from './testSourceText';
 
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');
@@ -37,6 +39,7 @@ vi.mock('./api', async () => {
     readAssetPerformance: vi.fn(),
     createMonthlyReport: vi.fn(),
     updateMonthlyReportActuals: vi.fn(),
+    updateMonthlyReportCommentary: vi.fn(),
   };
 });
 
@@ -45,6 +48,7 @@ const listMonthlyReports = vi.mocked(api.listMonthlyReports);
 const readAssetPerformance = vi.mocked(api.readAssetPerformance);
 const createMonthlyReport = vi.mocked(api.createMonthlyReport);
 const updateMonthlyReportActuals = vi.mocked(api.updateMonthlyReportActuals);
+const updateMonthlyReportCommentary = vi.mocked(api.updateMonthlyReportCommentary);
 
 afterEach(cleanup);
 
@@ -203,6 +207,7 @@ describe('Update Commentary edits the commentary and nothing else', () => {
     await userEvent.type(screen.getByRole('textbox', { name: 'Management Commentary' }), ' Draft.');
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
+    expect(updateMonthlyReportCommentary).not.toHaveBeenCalled();
     expect(updateMonthlyReportActuals).not.toHaveBeenCalled();
     expect(screen.queryByRole('form', { name: 'Commentary for March 2027' })).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Update Commentary' }));
@@ -212,25 +217,29 @@ describe('Update Commentary edits the commentary and nothing else', () => {
     await renderLoaded();
     await userEvent.click(screen.getByRole('button', { name: 'Update Commentary' }));
     await userEvent.keyboard('{Escape}');
+    expect(updateMonthlyReportCommentary).not.toHaveBeenCalled();
     expect(updateMonthlyReportActuals).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Update Commentary' }));
   });
 
-  it('saves only the commentary, with the saved figures unchanged and no budget', async () => {
+  it('saves the commentary alone, through the commentary-only route', async () => {
     await renderLoaded();
-    updateMonthlyReportActuals.mockResolvedValue({ ...REPORT, commentary: 'Leasing recovered.' });
+    updateMonthlyReportCommentary.mockResolvedValue({ ...REPORT, commentary: 'Leasing recovered.' });
     await userEvent.click(screen.getByRole('button', { name: 'Update Commentary' }));
     const field = screen.getByRole('textbox', { name: 'Management Commentary' });
     await userEvent.clear(field);
     await userEvent.type(field, '  Leasing recovered.  ');
     await userEvent.click(screen.getByRole('button', { name: 'Save Commentary' }));
 
-    expect(updateMonthlyReportActuals).toHaveBeenCalledTimes(1);
-    expect(updateMonthlyReportActuals).toHaveBeenCalledWith('asset-a', MARCH, {
-      actual: REPORT.actual,
-      commentary: 'Leasing recovered.',
-      budget: null,
-    });
+    // The request is the asset, the month and the note -- no actual or budget
+    // object travels, and the actual-results route is never called.
+    expect(updateMonthlyReportCommentary).toHaveBeenCalledTimes(1);
+    expect(updateMonthlyReportCommentary.mock.calls[0]).toEqual([
+      'asset-a',
+      MARCH,
+      'Leasing recovered.',
+    ]);
+    expect(updateMonthlyReportActuals).not.toHaveBeenCalled();
     expect(createMonthlyReport).not.toHaveBeenCalled();
     // Closed, with focus on a stable target: the section heading.
     expect(screen.queryByRole('form', { name: 'Commentary for March 2027' })).toBeNull();
@@ -241,18 +250,18 @@ describe('Update Commentary edits the commentary and nothing else', () => {
 
   it('sends an emptied commentary as none written, never as whitespace', async () => {
     await renderLoaded();
-    updateMonthlyReportActuals.mockResolvedValue({ ...REPORT, commentary: null });
+    updateMonthlyReportCommentary.mockResolvedValue({ ...REPORT, commentary: null });
     await userEvent.click(screen.getByRole('button', { name: 'Update Commentary' }));
     const field = screen.getByRole('textbox', { name: 'Management Commentary' });
     await userEvent.clear(field);
     await userEvent.type(field, '   ');
     await userEvent.click(screen.getByRole('button', { name: 'Save Commentary' }));
-    expect(updateMonthlyReportActuals.mock.calls[0][2].commentary).toBeNull();
+    expect(updateMonthlyReportCommentary.mock.calls[0][2]).toBeNull();
   });
 
   it('keeps the editor and the draft open, with the reason, when the save fails', async () => {
     await renderLoaded();
-    updateMonthlyReportActuals.mockRejectedValue(
+    updateMonthlyReportCommentary.mockRejectedValue(
       new api.AssetManagementError('The monthly report could not be saved.'),
     );
     await userEvent.click(screen.getByRole('button', { name: 'Update Commentary' }));
@@ -270,14 +279,14 @@ describe('Update Commentary edits the commentary and nothing else', () => {
   it('cannot be submitted twice while its save is pending', async () => {
     await renderLoaded();
     const pending = deferred<MonthlyAssetReport>();
-    updateMonthlyReportActuals.mockReturnValue(pending.promise);
+    updateMonthlyReportCommentary.mockReturnValue(pending.promise);
     await userEvent.click(screen.getByRole('button', { name: 'Update Commentary' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save Commentary' }));
 
     const saving = screen.getByRole('button', { name: 'Saving…' }) as HTMLButtonElement;
     expect(saving.disabled).toBe(true);
     await userEvent.click(saving);
-    expect(updateMonthlyReportActuals).toHaveBeenCalledTimes(1);
+    expect(updateMonthlyReportCommentary).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('form', { name: 'Commentary for March 2027' }).getAttribute('aria-busy')).toBe(
       'true',
     );
@@ -316,13 +325,13 @@ describe('a save keeps the confirmed dashboard while the month is re-read', () =
 
   it('never drops to an empty or "no report" state between the save and the re-read', async () => {
     const { container } = await renderLoaded();
-    updateMonthlyReportActuals.mockResolvedValue({ ...REPORT, commentary: 'Recovered.' });
+    updateMonthlyReportCommentary.mockResolvedValue({ ...REPORT, commentary: 'Recovered.' });
     const reRead = holdTheReRead();
 
     await saveCommentary('Recovered.');
 
     // The save is confirmed; its re-read is still in flight.
-    expect(updateMonthlyReportActuals).toHaveBeenCalledTimes(1);
+    expect(updateMonthlyReportCommentary).toHaveBeenCalledTimes(1);
     expect(noiOnScreen()).toBe('$61,500');
     expect(screen.getByRole('heading', { name: 'March 2027 Operating Statement' })).toBeTruthy();
     expect(screen.queryByText('Loading monthly reports')).toBeNull();
@@ -372,7 +381,7 @@ describe('a save keeps the confirmed dashboard while the month is re-read', () =
 
   it('shows a failed re-read as an error and drops the old figures', async () => {
     await renderLoaded();
-    updateMonthlyReportActuals.mockResolvedValue(REPORT);
+    updateMonthlyReportCommentary.mockResolvedValue(REPORT);
     const reRead = holdTheReRead();
 
     await saveCommentary('Recovered.');
@@ -385,5 +394,43 @@ describe('a save keeps the confirmed dashboard while the month is re-read', () =
     expect(screen.getByRole('alert').textContent).toContain('The server is unavailable.');
     // Not left on screen looking current.
     expect(noiOnScreen()).toBeNull();
+  });
+});
+
+// =============================================================================
+// 4. The focused commentary path never reads or sends a figure
+// =============================================================================
+
+describe('the commentary path is distinct from the actual-results path', () => {
+  const SOURCES = Object.fromEntries(
+    Object.entries(
+      import.meta.glob(['./useManagedAssets.ts', './components/ManagedAssetWorkspace.tsx'], {
+        query: '?raw',
+        eager: true,
+        import: 'default',
+      }) as Record<string, string>,
+    ).map(([path, text]) => [path, withLfLineEndings(text)]),
+  );
+
+  /** The body of `const name = ...` up to the first line closing it. */
+  function constBody(source: string, name: string): string {
+    const start = source.indexOf(`const ${name} =`);
+    expect(start, name).toBeGreaterThan(-1);
+    const end = source.indexOf('\n  };', start);
+    return source.slice(start, end);
+  }
+
+  it('the workspace saves commentary without reading any report figure', () => {
+    const body = constBody(SOURCES['./components/ManagedAssetWorkspace.tsx'], 'saveCommentary');
+    expect(body).toContain('state.saveCommentary(');
+    expect(body).not.toMatch(/\.actual\b|\.budget\b|saveActuals|selectedReport/);
+  });
+
+  it('the hook sends it through the commentary-only client, not the actuals one', () => {
+    const hook = SOURCES['./useManagedAssets.ts'];
+    const start = hook.indexOf('const saveCommentary = useCallback(');
+    const body = hook.slice(start, hook.indexOf('[managedAssetId],', start));
+    expect(body).toContain('updateMonthlyReportCommentary(managedAssetId, month, commentary)');
+    expect(body).not.toMatch(/updateMonthlyReportActuals|actual|budget/);
   });
 });

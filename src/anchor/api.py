@@ -4715,6 +4715,9 @@ _AM1_FIGURE_FIELDS = ("occupancy", *AM1_MONETARY_FIELDS)
 _MANAGED_ASSET_FIELDS = ("source_deal_id", "name", "acquisition_date", "property_type", "market")
 _MONTHLY_REPORT_FIELDS = ("reporting_month", "budget", "actual", "commentary")
 _ACTUALS_FIELDS = ("actual", "commentary", "budget")
+#: The commentary-only update states exactly one field. No figure can travel
+#: in it, so it cannot overwrite an actual result or name a budget.
+_COMMENTARY_FIELDS = ("commentary",)
 
 
 def _am1_validation_error_response(error: AssetReportValidationError) -> HTTPException:
@@ -4939,6 +4942,37 @@ def update_monthly_asset_report_actuals(
         raise _not_found(error) from None
     except BudgetImmutableError as error:
         raise _budget_immutable_response(error) from None
+    except AssetReportValidationError as error:
+        raise _am1_validation_error_response(error) from None
+    return _wire(report)
+
+
+@app.put(
+    "/managed-assets/{managed_asset_id}/reports/{reporting_month}/commentary",
+    response_model=None,
+)
+def update_monthly_asset_report_commentary(
+    managed_asset_id: str, reporting_month: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Update one report's management commentary, and nothing else.
+
+    The body states exactly ``commentary`` (text, or ``null`` for none written).
+    Unlike the actual-results route it carries no figures, so a commentary save
+    cannot overwrite actual results saved by another session after this client
+    loaded the report, and names no budget. Commentary is validated by the
+    report's own rule -- a blank or overlong note is the structured 422 -- and
+    a missing asset or report is a 404. Returns the updated report.
+    """
+
+    body = _exact_keys(payload, _COMMENTARY_FIELDS, "The request body")
+    try:
+        report = investment_store.update_monthly_report_commentary(
+            managed_asset_id=managed_asset_id,
+            reporting_month=_am1_month(reporting_month, "reporting_month"),
+            commentary=_am1_commentary(body["commentary"], "commentary"),
+        )
+    except (ManagedAssetNotFoundError, MonthlyReportNotFoundError) as error:
+        raise _not_found(error) from None
     except AssetReportValidationError as error:
         raise _am1_validation_error_response(error) from None
     return _wire(report)

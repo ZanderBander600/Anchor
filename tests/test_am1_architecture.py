@@ -430,6 +430,7 @@ _AM1_WRITE_FUNCTIONS = (
     "delete_managed_asset",
     "create_monthly_report",
     "update_monthly_report_actuals",
+    "update_monthly_report_commentary",
 )
 
 #: The tables an acquisition lives in. No AM1 write path may name one in an
@@ -665,7 +666,10 @@ def test_no_am1_route_reaches_an_ai_module() -> None:
 
 
 def test_the_am1_routes_are_exactly_the_authorized_surface() -> None:
-    """Nine routes: one bounded asset DELETE and no report DELETE."""
+    """Ten routes: one bounded asset DELETE and no report DELETE. The tenth, the
+    commentary-only PUT, was added by the second P7.9 / AM1 QA pass so a
+    commentary save cannot overwrite actual results; it carries no figures and
+    is held to that in ``tests/test_am1_commentary_update.py``."""
 
     source = _current(_API)
     start = source.index("# Gate AM1 -- Managed Assets and Monthly Performance.")
@@ -680,6 +684,7 @@ def test_the_am1_routes_are_exactly_the_authorized_surface() -> None:
         ("get", "/managed-assets/{managed_asset_id}/reports/{reporting_month}"),
         ("post", "/managed-assets/{managed_asset_id}/reports"),
         ("put", "/managed-assets/{managed_asset_id}/reports/{reporting_month}"),
+        ("put", "/managed-assets/{managed_asset_id}/reports/{reporting_month}/commentary"),
         ("get", "/managed-assets/{managed_asset_id}/performance/{reporting_month}"),
     }
     assert {path for verb, path in routes if verb == "delete"} == {

@@ -3285,6 +3285,26 @@ export async function updateMonthlyReportActuals(
   return (await response.json()) as MonthlyAssetReport;
 }
 
+/** `PUT /managed-assets/{id}/reports/{month}/commentary` -- the commentary
+ * alone.
+ *
+ * The body is exactly `{ commentary }`. It carries no figures, so saving a note
+ * can never write back actual results this client loaded earlier over newer
+ * ones another session saved since, and it names no budget. Actual results are
+ * saved only through `updateMonthlyReportActuals`. */
+export async function updateMonthlyReportCommentary(
+  managedAssetId: string,
+  reportingMonth: string,
+  commentary: string | null,
+): Promise<MonthlyAssetReport> {
+  const response = await assetFetch(
+    `/managed-assets/${encodeURIComponent(managedAssetId)}/reports/${encodeURIComponent(reportingMonth)}/commentary`,
+    jsonBody('PUT', { commentary }),
+    'The commentary could not be saved',
+  );
+  return (await response.json()) as MonthlyAssetReport;
+}
+
 /** `GET /managed-assets/{id}/performance/{month}` -- the authoritative result. */
 export async function readAssetPerformance(
   managedAssetId: string,
