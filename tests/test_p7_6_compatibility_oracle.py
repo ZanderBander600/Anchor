@@ -37,9 +37,11 @@ from _p7_2_fixtures import (  # type: ignore[import-not-found]
     P7_8_TABLES,
     P7_9_TABLES,
     AM1_TABLES,
+    ASSET_TYPES_1_TABLES,
     rows,
     table_names,
 )
+from _p7_2_fixtures import without_unstated_classification  # type: ignore[import-not-found]
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _BUILDER = Path(__file__).resolve().parent / "_p7_6_v9_database_builder.py"
@@ -108,14 +110,22 @@ def _every_row(db: Path) -> dict[str, list[tuple[Any, ...]]]:
 
     return {
         table: rows(db, table)
-        for table in sorted(table_names(db) - set(P7_6_TABLES) - set(P7_8_TABLES) - set(P7_9_TABLES) - set(AM1_TABLES))
+        for table in sorted(table_names(db) - set(P7_6_TABLES) - set(P7_8_TABLES) - set(P7_9_TABLES) - set(AM1_TABLES)
+            - set(ASSET_TYPES_1_TABLES))
         if not table.startswith("sqlite_")
     }
 
 
 def _replay(client: TestClient, exchanges: list[dict[str, Any]]) -> list[tuple[int, Any]]:
+    # Asset Types 1 (schema 14): every Deal body now also states its
+    # classification, and a legacy record states it as null ("Not specified").
+    # Only those null keys, absent from the recorded response, are set aside;
+    # every other byte must still match.
     return [
-        ((response := client.request(e["method"], e["path"], json=e["body"])).status_code, response.json())
+        (
+            (response := client.request(e["method"], e["path"], json=e["body"])).status_code,
+            without_unstated_classification(response.json(), e["json"]),
+        )
         for e in exchanges
     ]
 
@@ -143,21 +153,25 @@ def test_the_migration_adds_exactly_five_empty_sidecars_and_rewrites_no_row(lega
     store.list_deals(db_path=db)
     migrated_schema, migrated_rows = _schema(db), _every_row(db)
 
-    assert _version(db) == 13  # P7.8B and P7.9 Stage 2 migrate the same v9 database on to schema 12
-    assert table_names(db) == before_tables | set(P7_6_TABLES) | set(P7_8_TABLES) | set(P7_9_TABLES) | set(AM1_TABLES)
+    assert _version(db) == 14  # P7.8B, P7.9 Stage 2, AM1 and Asset Types 1 migrate the same v9 database on to schema 14
+    assert table_names(db) == (
+        before_tables | set(P7_6_TABLES) | set(P7_8_TABLES) | set(P7_9_TABLES) | set(AM1_TABLES)
+        | set(ASSET_TYPES_1_TABLES)
+    )
     assert {table: rows(db, table) for table in P7_9_TABLES} == dict.fromkeys(P7_9_TABLES, [])
+    assert {table: rows(db, table) for table in ASSET_TYPES_1_TABLES} == dict.fromkeys(ASSET_TYPES_1_TABLES, [])
     assert {table: rows(db, table) for table in P7_8_TABLES} == dict.fromkeys(P7_8_TABLES, [])
     assert {table: rows(db, table) for table in P7_6_TABLES} == dict.fromkeys(P7_6_TABLES, [])
     assert migrated_rows == before_rows
     for _ in range(3):
         store.list_deals(db_path=db)
-        assert (_version(db), _schema(db), _every_row(db)) == (13, migrated_schema, migrated_rows)
+        assert (_version(db), _schema(db), _every_row(db)) == (14, migrated_schema, migrated_rows)
     connection = sqlite3.connect(db)
     connection.row_factory = sqlite3.Row
     store._migrate(connection)
     connection.commit()
     connection.close()
-    assert (_version(db), _schema(db), _every_row(db)) == (13, migrated_schema, migrated_rows)
+    assert (_version(db), _schema(db), _every_row(db)) == (14, migrated_schema, migrated_rows)
 
 
 def test_every_recorded_response_is_identical_after_migration(client: TestClient, legacy: tuple[Path, dict[str, Any]]) -> None:
@@ -173,7 +187,7 @@ def test_every_recorded_response_is_identical_after_migration(client: TestClient
     db, manifest = legacy
     replayed = _replay(client, manifest["exchanges"])
 
-    assert _version(db) == 13
+    assert _version(db) == 14
     mismatched = [
         (exchange["method"], exchange["path"])
         for exchange, now in zip(manifest["exchanges"], replayed, strict=True)

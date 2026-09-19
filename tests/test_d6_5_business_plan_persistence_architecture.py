@@ -629,11 +629,15 @@ _STORE_MUTANTS = {
         "                deal_context=original.deal_context,\n",
         "store.duplicate_deal calls create_deal without business_plan=",
     ),
+    # Asset Types 1 reshaped the three call and signature sites below (each
+    # now also names ``classification``); the mutants are unchanged in intent.
     "reopen-hands-the-deal-an-empty-plan": (
         "        return _row_to_deal(\n"
-        "            quick_row, business_plan=_read_business_plan(connection, deal_id)\n"
-        "        )",
-        "        return _row_to_deal(quick_row, business_plan=BusinessPlan())",
+        "            quick_row,\n"
+        "            business_plan=_read_business_plan(connection, deal_id),\n",
+        "        return _row_to_deal(\n"
+        "            quick_row,\n"
+        "            business_plan=BusinessPlan(),\n",
         "store._read_deal passes business_plan=BusinessPlan() to _row_to_deal",
     ),
     "provenance-ignores-the-plan": (
@@ -653,16 +657,22 @@ _STORE_MUTANTS = {
         "store.update_deal writes the plan without first deleting the old one",
     ),
     "delete-orphans-the-plan": (
-        "        _delete_business_plan(connection, deal_id)\n\n"
-        '        cursor = connection.execute("DELETE FROM deals WHERE id = ?", (deal_id,))',
-        '        cursor = connection.execute("DELETE FROM deals WHERE id = ?", (deal_id,))',
+        "        _delete_business_plan(connection, deal_id)\n"
+        "        # Asset Types 1: the mode-blind classification row",
+        "        # Asset Types 1: the mode-blind classification row",
         "store.delete_deal never deletes the plan rows",
     ),
     "row-builder-gains-a-default": (
-        "    row: sqlite3.Row, *, business_plan: BusinessPlan, include_snapshots: bool = True\n"
-        ") -> Deal:",
-        "    row: sqlite3.Row, *, business_plan: BusinessPlan = BusinessPlan(),\n"
-        "    include_snapshots: bool = True\n) -> Deal:",
+        "def _row_to_deal(\n"
+        "    row: sqlite3.Row,\n"
+        "    *,\n"
+        "    business_plan: BusinessPlan,\n"
+        "    classification: AssetClassification | None,\n",
+        "def _row_to_deal(\n"
+        "    row: sqlite3.Row,\n"
+        "    *,\n"
+        "    business_plan: BusinessPlan = BusinessPlan(),\n"
+        "    classification: AssetClassification | None,\n",
         "store._row_to_deal must require business_plan",
     ),
     "write-skips-validation": (

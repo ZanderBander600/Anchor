@@ -130,8 +130,14 @@ _AM1_TABLES = {
     "managed_assets",
     "monthly_asset_reports",
 }
+#: Asset Types 1 (schema 14) adds the two classification tables, empty for a
+#: legacy deal: no migration or read assigns a type.
+_ASSET_TYPES_1_TABLES = {
+    "deal_asset_classifications",
+    "managed_asset_classifications",
+}
 #: The schema version the current store migrates a v6 database to.
-_CURRENT_VERSION = 13
+_CURRENT_VERSION = 14
 
 
 @pytest.fixture(scope="module")
@@ -281,12 +287,18 @@ def test_the_version_advances_to_7_exactly_once_and_only_the_plan_tables_appear(
         | _P7_8_TABLES
         | _P7_9_TABLES
         | _AM1_TABLES
+        | _ASSET_TYPES_1_TABLES
     )
     assert migrated["deal_capital_plan_items"] == []
     assert migrated["deal_owner_expense_items"] == []
     assert all(
         migrated[table] == []
-        for table in _P7_2_TABLES | _P7_4_TABLES | _P7_6_TABLES | _P7_8_TABLES | _P7_9_TABLES
+        for table in _P7_2_TABLES
+        | _P7_4_TABLES
+        | _P7_6_TABLES
+        | _P7_8_TABLES
+        | _P7_9_TABLES
+        | _ASSET_TYPES_1_TABLES
     )
 
     for _ in range(3):

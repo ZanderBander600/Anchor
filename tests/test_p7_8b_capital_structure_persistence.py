@@ -185,7 +185,7 @@ def test_a_fresh_store_is_schema_11_with_six_empty_capital_tables(db: Path) -> N
     }
     connection.close()
 
-    assert version == 13  # P7.9 Stage 2 added schema 12's Partnership tables; AM1 added schema 13's Asset Management tables
+    assert version == 14  # P7.9 Stage 2 added schema 12's Partnership tables; AM1 added schema 13's Asset Management tables; Asset Types 1 schema 14's classification tables
     assert set(P7_8_TABLES) <= table_names(db)
     assert capital_rows(db) == EMPTY_ROWS
     assert columns == {
