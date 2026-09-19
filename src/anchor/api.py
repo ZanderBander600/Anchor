@@ -4762,7 +4762,7 @@ def analyze_investment_partner_decision_matrix(
 # Gate AM1 -- Managed Assets and Monthly Performance.
 #
 # ``docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`` Section 6.
-# Nine routes, using the repository's established contracts: ``_exact_keys``
+# Ten routes, using the repository's established contracts: ``_exact_keys``
 # for a body that must state every field it carries, ``_wire`` for the response,
 # ``_not_found`` for a missing entity, ``_structural_error`` for a malformed
 # body, a structured 422 for a contract refusal, and 409 for a conflict.

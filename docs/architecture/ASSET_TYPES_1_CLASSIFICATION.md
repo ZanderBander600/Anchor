@@ -1,7 +1,7 @@
 # Asset Types 1: Controlled Classification and Analyst-Authored Subtypes
 
-Status: **implemented on `feature/asset-types-1-classification`, pending human
-acceptance.** Not accepted. Baseline: `main` at `2e6ca8e` (PR #42), schema v13.
+Status: **implemented and merged in PR #43, pending human acceptance.** Not
+accepted. Baseline: `main` at `2e6ca8e` (PR #42), schema v13.
 Risk tier: Tier 2 (schema, API contract, fingerprint boundary, persistence),
 with Tier 3 product UI.
 

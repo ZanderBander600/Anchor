@@ -26,8 +26,8 @@ whenever an accepted gate merges or the active gate changes.
   - **Stage 3** (product UI, browser QA; Section 17.3): **implementation
     complete and merged** in PR #36 (`3f23ba4`). Final hands-on human product
     acceptance is pending before P7.9 closes.
-- Open PR: **Asset Types 1** (`feature/asset-types-1-classification`),
-  implemented and awaiting independent review and hands-on human acceptance.
+- **Asset Types 1** is implemented and merged in PR #43, pending hands-on
+  human acceptance.
 - **AM1 Managed Assets + Monthly Performance** was explicitly started from
   `main` at `63c2ac0` and merged in PR #38 (`3048976`). It is an independent
   post-acquisition feature: it is not P7.10 and is not part of P7.10. Its
@@ -39,7 +39,7 @@ whenever an accepted gate merges or the active gate changes.
   financial calculation or schema. It remains part of the pending AM1 hands-on
   product acceptance.
 - **Asset Types 1: controlled classification and analyst-authored subtypes**
-  is implemented on `feature/asset-types-1-classification` (schema v14),
+  is implemented and merged in PR #43 (schema v14),
   **pending human acceptance -- not accepted.** It adds classification only: a
   controlled Asset Type and an analyst-authored subtype on Deals in all three
   modes, an honest multi-type view of Investments, and a creation-time
@@ -103,9 +103,9 @@ and finishing P7.9 will not start it automatically.
 AM1 is also merged and awaits hands-on human product acceptance. That parallel
 post-acquisition feature does not change the P7 phase sequence or close P7.9.
 
-Asset Types 1 is implemented and awaits review and hands-on human acceptance.
-It is a classification feature outside the P7 sequence and starts no later
-asset-type phase.
+Asset Types 1 is merged and awaits hands-on human acceptance. It is a
+classification feature outside the P7 sequence and starts no later asset-type
+phase.
 
 A bounded stabilization sweep remains available for separate human
 authorization. It is not automatically active. Its source issues are:
@@ -152,9 +152,9 @@ sub-gate.
   It is not yet accepted, is an independent post-acquisition feature and is not
   P7.10.
 - Asset Types 1 classification:
-  `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md` -- **implemented on
-  `feature/asset-types-1-classification`, pending human acceptance.** It is not
-  yet accepted and is not P7.10.
+  `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md` -- **implemented and
+  merged in PR #43, pending human acceptance.** It is not yet accepted and is
+  not P7.10.
 
 ## Historical-Document Rule
 
