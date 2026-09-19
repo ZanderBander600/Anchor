@@ -156,7 +156,8 @@ describe('the Asset Management lists align each header with its own values', () 
     const table = screen.getByRole('table');
     expect(table.classList.contains('am-list-table')).toBe(true);
     const { header, rows } = columnAlignments(table);
-    expect(header).toEqual(['am-col-line', 'am-col-text', 'am-col-action']);
+    // Asset Types 1 adds the Asset Type column beside Market.
+    expect(header).toEqual(['am-col-line', 'am-col-text', 'am-col-text', 'am-col-action']);
     for (const row of rows) {
       expect(row).toEqual(header);
     }

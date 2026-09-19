@@ -78,6 +78,15 @@ import type { LeaseLevelSensitivityViewId } from './components/LeaseLevelSensiti
 import type { OperatingPeriodView } from './components/LeaseLevelOperatingStatement';
 import type { ResultsViewId } from './underwrite';
 import type { SaveStatus } from './components/DealHeader';
+import {
+  BLANK_CLASSIFICATION_DRAFT,
+  classificationDraftOf,
+  classificationIssues,
+  classificationRequest,
+  hasClassificationIssues,
+  isSameClassificationDraft,
+} from './assetTypes';
+import type { AssetClassificationDraft, AssetClassificationIssues } from './assetTypes';
 import type {
   InitialVacancyFormValues,
   LeaseFormValues,
@@ -103,6 +112,14 @@ export interface LeaseLevelDealState {
   values: LeaseLevelFormValues;
   dealName: string;
   dealContext: string;
+  /** Asset Types 1: the classification as the strip shows it, the one saved
+   * with the deal (what a Managed Asset would copy), the issues to mark once a
+   * Save has been attempted, and a signal that opens the strip. */
+  classification: AssetClassificationDraft;
+  savedClassification: AssetClassificationDraft;
+  classificationIssues: AssetClassificationIssues;
+  classificationRevealSignal: object | null;
+  onClassificationChange: (draft: AssetClassificationDraft) => void;
   currentDealId: string | null;
   saveStatus: SaveStatus;
   lastSavedAt: string | null;
@@ -352,6 +369,9 @@ interface LeaseLevelSnapshot {
   /** D6.6: part of the one dirty comparison, like every other assumption. */
   businessPlan: BusinessPlanDraft;
   dealContext: string;
+  /** Asset Types 1: part of the dirty comparison and nothing else -- it is in
+   * no analytical provenance, so editing it never stales a result. */
+  classification: AssetClassificationDraft;
 }
 
 /**
@@ -407,6 +427,7 @@ function blankSnapshot(): LeaseLevelSnapshot {
     values: BLANK_LEASE_LEVEL_FORM_VALUES,
     businessPlan: blankBusinessPlanDraft(),
     dealContext: '',
+    classification: BLANK_CLASSIFICATION_DRAFT,
   };
 }
 
@@ -419,6 +440,9 @@ function blankSnapshot(): LeaseLevelSnapshot {
  */
 function isSameSnapshot(a: LeaseLevelSnapshot, b: LeaseLevelSnapshot): boolean {
   if (a.dealName !== b.dealName || a.dealContext !== b.dealContext) {
+    return false;
+  }
+  if (!isSameClassificationDraft(a.classification, b.classification)) {
     return false;
   }
   return (
@@ -688,10 +712,19 @@ export function useLeaseLevelDeal(options: {
   /** D6.6: called when Analyze or Save is stopped by the Business Plan, so the
    * shell can put Underwrite -- where the marked rows are -- on screen. */
   onRevealBusinessPlan: () => void;
+  /** Asset Types 1: called when Save is stopped by the classification, so the
+   * shell can put Underwrite -- where the strip is -- on screen. */
+  onRevealClassification?: () => void;
 }): LeaseLevelDealState {
   const [values, setValues] = useState<LeaseLevelFormValues>(BLANK_LEASE_LEVEL_FORM_VALUES);
   const [dealName, setDealName] = useState('');
   const [dealContext, setDealContext] = useState('');
+  // Asset Types 1 -- non-economic metadata. It joins the dirty comparison and
+  // no analytical provenance, so editing it never touches a result.
+  const [classification, setClassification] =
+    useState<AssetClassificationDraft>(BLANK_CLASSIFICATION_DRAFT);
+  const [showClassificationIssues, setShowClassificationIssues] = useState(false);
+  const [classificationRevealSignal, setClassificationRevealSignal] = useState<object | null>(null);
   const [currentDealId, setCurrentDealId] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState<LeaseLevelSnapshot>(blankSnapshot);
@@ -753,9 +786,13 @@ export function useLeaseLevelDeal(options: {
   const [submitted, setSubmitted] = useState<SubmittedRentRoll>(EMPTY_SUBMITTED_RENT_ROLL);
 
   const isDirty = !isSameSnapshot(
-    { dealName, values, businessPlan: businessPlanState.draft, dealContext },
+    { dealName, values, businessPlan: businessPlanState.draft, dealContext, classification },
     savedSnapshot,
   );
+  // A new deal must be classified; a legacy "Not specified" one need not be.
+  const classificationIssueSet = classificationIssues(classification, {
+    requireType: currentDealId === null,
+  });
   const saveStatus: SaveStatus =
     currentDealId === null ? 'unsaved-deal' : isDirty ? 'unsaved-changes' : 'saved';
 
@@ -1410,20 +1447,31 @@ export function useLeaseLevelDeal(options: {
       // renamed the deal -- an absent plan would be read as an empty one.
       const { terms, inputs, businessPlan } = prepared.request;
       submittedPlan = businessPlan;
+      if (hasClassificationIssues(classificationIssueSet)) {
+        setShowClassificationIssues(true);
+        setSaveError(classificationIssueSet.assetType ?? classificationIssueSet.assetSubtype ?? null);
+        setClassificationRevealSignal({});
+        options.onRevealClassification?.();
+        return;
+      }
       const name = dealName.trim() || 'Untitled Deal';
       const context = dealContext.trim() || null;
+      const classified = classificationRequest(classification);
       const deal = currentDealId
-        ? await updateLeaseLevelDeal(currentDealId, name, terms, inputs, businessPlan, context)
-        : await createLeaseLevelDeal(name, terms, inputs, businessPlan, context);
+        ? await updateLeaseLevelDeal(currentDealId, name, terms, inputs, businessPlan, context, classified)
+        : await createLeaseLevelDeal(name, terms, inputs, businessPlan, context, classified);
       setCurrentDealId(deal.id);
       setDealName(deal.name);
       setDealContext(deal.deal_context ?? '');
+      setClassification(classificationDraftOf(deal));
+      setShowClassificationIssues(false);
       setLastSavedAt(deal.updated_at);
       setSavedSnapshot({
         dealName: deal.name,
         values,
         businessPlan: businessPlanState.draft,
         dealContext: deal.deal_context ?? '',
+        classification: classificationDraftOf(deal),
       });
       // D5.8A -- attach whatever analytical work is currently on screen to the
       // deal that has just become its saved form.
@@ -1572,6 +1620,8 @@ export function useLeaseLevelDeal(options: {
     setValues(opened);
     setDealName(deal.name);
     setDealContext(deal.deal_context ?? '');
+    setClassification(classificationDraftOf(deal));
+    setShowClassificationIssues(false);
     setCurrentDealId(deal.id);
     setLastSavedAt(deal.updated_at);
     setSavedSnapshot({
@@ -1579,6 +1629,7 @@ export function useLeaseLevelDeal(options: {
       values: opened,
       businessPlan: openedPlan,
       dealContext: deal.deal_context ?? '',
+      classification: classificationDraftOf(deal),
     });
     setActiveSection('acquisition');
     setEditorRowId(null);
@@ -1645,6 +1696,8 @@ export function useLeaseLevelDeal(options: {
     businessPlanState.reset();
     setDealName('');
     setDealContext('');
+    setClassification(BLANK_CLASSIFICATION_DRAFT);
+    setShowClassificationIssues(false);
     setCurrentDealId(null);
     setLastSavedAt(null);
     setSavedSnapshot(blankSnapshot());
@@ -1859,6 +1912,11 @@ export function useLeaseLevelDeal(options: {
     values,
     dealName,
     dealContext,
+    classification,
+    savedClassification: savedSnapshot.classification,
+    classificationIssues: showClassificationIssues ? classificationIssueSet : {},
+    classificationRevealSignal,
+    onClassificationChange: setClassification,
     currentDealId,
     saveStatus,
     lastSavedAt,

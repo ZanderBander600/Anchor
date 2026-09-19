@@ -44,6 +44,8 @@ export function savedDeal(): Deal {
     id: 'deal-1',
     name: 'Fulton Exchange',
     operating_mode: 'lease_level',
+    asset_type: null,
+    asset_subtype: null,
     inputs: null,
     detailed_operating_inputs: null,
     terms: {

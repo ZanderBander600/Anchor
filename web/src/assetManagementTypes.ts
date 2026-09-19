@@ -11,6 +11,8 @@
  * every line that is not a percentage.
  */
 
+import type { AssetType } from './assetTypes';
+
 /** A Managed Asset: an owned building, created once from a saved Deal. */
 export interface ManagedAsset {
   id: string;
@@ -18,7 +20,14 @@ export interface ManagedAsset {
   source_deal_id: string;
   name: string;
   acquisition_date: string;
+  /** Legacy analyst text from before Asset Types 1, when it was typed by hand at
+   * creation. Preserved and shown as what it is; never authored now and never
+   * treated as a classification. */
   property_type: string | null;
+  /** Asset Types 1: the source Deal's classification, copied once at creation.
+   * A later Deal edit does not change it. Both `null` is "Not specified". */
+  asset_type: AssetType | null;
+  asset_subtype: string | null;
   market: string | null;
   /** The Deal's authoritative analysis fingerprint, frozen at creation. */
   acquisition_fingerprint: string;

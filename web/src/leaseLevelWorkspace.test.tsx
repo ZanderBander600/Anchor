@@ -216,6 +216,8 @@ function savedLeaseLevelDeal(overrides: Partial<Deal> = {}): Deal {
     market_leasing: MARKET_LEASING,
     suites: SUITES,
     leases: LEASES,
+    asset_type: null,
+    asset_subtype: null,
     deal_context: 'Value-add reposition of a 1990s suburban office park.',
     business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,
@@ -1073,5 +1075,60 @@ describe('mutation kills', () => {
       'property_inputs',
       'suites',
     ]);
+  });
+});
+
+// =============================================================================
+// Asset Types 1 -- the Lease-Level deal carries its classification
+// =============================================================================
+
+describe('Asset Types 1 -- Lease-Level classification', () => {
+  it('hydrates, edits and saves the classification without touching the rent roll', async () => {
+    const classified = savedLeaseLevelDeal({ asset_type: 'retail', asset_subtype: 'Neighborhood center' });
+    mockListDeals.mockResolvedValue([classified]);
+    mockGetDeal.mockResolvedValue(classified);
+    mockUpdate.mockResolvedValue({ ...classified, asset_type: 'other', asset_subtype: 'Outlet mall' });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Fulton Exchange');
+    await user.click(screen.getByText('Fulton Exchange'));
+    await waitFor(() => expect(field(TERMS_PURCHASE_PRICE).value).toBe('42,500,000'));
+
+    const strip = screen.getByRole('region', { name: 'Deal classification' });
+    expect(within(strip).getByText('Retail · Neighborhood center')).toBeTruthy();
+    await user.click(within(strip).getByRole('button', { name: 'Edit' }));
+    await user.selectOptions(within(strip).getByRole('combobox', { name: /^Asset Type/ }), 'other');
+    // Other needs its own description: the old subtype is still there, so the
+    // analyst replaces it rather than being refused.
+    const description = within(strip).getByRole('textbox', { name: 'Describe the Asset Type (required)' });
+    await user.clear(description);
+    await user.click(saveButton());
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(description.getAttribute('aria-invalid')).toBe('true');
+
+    await user.type(description, 'Outlet mall');
+    expect(document.querySelector('.save-status')?.textContent).toMatch(/Unsaved changes/i);
+    await user.click(saveButton());
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    const [, , , inputs, , , classification] = mockUpdate.mock.calls[0];
+    expect(classification).toEqual({ asset_type: 'other', asset_subtype: 'Outlet mall' });
+    // The rent roll travels whole and unchanged beside it.
+    expect(inputs.suites).toHaveLength(classified.suites?.length ?? 0);
+    expect(inputs.leases).toHaveLength(classified.leases?.length ?? 0);
+  });
+
+  it('reads the classification on Overview', async () => {
+    const classified = savedLeaseLevelDeal({ asset_type: 'office', asset_subtype: 'Medical office' });
+    mockListDeals.mockResolvedValue([classified]);
+    mockGetDeal.mockResolvedValue(classified);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText('Fulton Exchange');
+    await user.click(screen.getByText('Fulton Exchange'));
+    await waitFor(() => expect(mockGetDeal).toHaveBeenCalledWith('deal-ll-1'));
+    await user.click(screen.getByRole('tab', { name: 'Overview' }));
+    const summary = screen.getByRole('region', { name: 'Asset classification' });
+    expect(within(summary).getByText('Office')).toBeTruthy();
+    expect(within(summary).getByText('Medical office')).toBeTruthy();
   });
 });

@@ -713,6 +713,20 @@ function fillGoldenDeal() {
 /** Fills AssumptionsForm with the frozen Underwriting V2 golden-case
  * fixture values (Gate 6) -- all fourteen fields, including nonzero V2
  * assumptions. */
+/** Asset Types 1: a new Deal must be classified before its first Save. */
+function chooseAssetType(assetType = 'multifamily') {
+  // Underwrite may be the hidden panel (Analyze lands on Overview); the strip
+  // is still mounted there, so the choice is made where it lives.
+  fireEvent.change(screen.getByRole('combobox', { name: /^Asset Type/, hidden: true }), {
+    target: { value: assetType },
+  });
+}
+
+/** The classification argument a Deal write carries: the type chosen for a new
+ * Deal, or "Not specified" for a legacy Deal opened and saved unclassified. */
+const MULTIFAMILY = { asset_type: 'multifamily', asset_subtype: null };
+const NOT_SPECIFIED = { asset_type: null, asset_subtype: null };
+
 function fillV2GoldenDeal() {
   fireEvent.change(screen.getByLabelText(/^Purchase Price/), {
     target: { value: V2_GOLDEN_FORM_VALUES.purchasePrice },
@@ -994,6 +1008,7 @@ describe('App workflow', () => {
     await user.clear(screen.getByLabelText(/^Annual CapEx Reserve/));
     await user.type(screen.getByLabelText('Deal Name'), 'V2 Deal');
 
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     expect(await screen.findByText('Annual CapEx Reserve is required.')).toBeTruthy();
@@ -2470,6 +2485,8 @@ function makeDeal(overrides: Partial<Deal> = {}): Deal {
     market_leasing: null,
     suites: null,
     leases: null,
+    asset_type: null,
+    asset_subtype: null,
     deal_context: null,
     business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,
@@ -2517,6 +2534,8 @@ function makeDetailedDeal(overrides: Partial<Deal> = {}): Deal {
       revenue_growth: 0.03,
       expense_growth: 0.03,
     },
+    asset_type: null,
+    asset_subtype: null,
     deal_context: null,
     business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,
@@ -2558,10 +2577,17 @@ describe('Deal persistence workflow', () => {
     fillGoldenDeal();
 
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, EMPTY_PLAN, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith(
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      EMPTY_PLAN,
+      null,
+      MULTIFAMILY,
+    );
     expect(mockUpdateDeal).not.toHaveBeenCalled();
     expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
     expect(await screen.findByText(/^Saved/)).toBeTruthy();
@@ -2588,6 +2614,7 @@ describe('Deal persistence workflow', () => {
       GOLDEN_DEAL_REQUEST,
       EMPTY_PLAN,
       null,
+      NOT_SPECIFIED,
     );
     expect(mockCreateDeal).not.toHaveBeenCalled();
   });
@@ -2730,6 +2757,7 @@ describe('Deal persistence workflow', () => {
       },
       EMPTY_PLAN,
       null,
+      NOT_SPECIFIED,
     );
   });
 
@@ -2788,10 +2816,17 @@ describe('Deal persistence workflow', () => {
     await screen.findByText(/Excel assumptions approved and loaded/);
 
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, EMPTY_PLAN, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith(
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      EMPTY_PLAN,
+      null,
+      MULTIFAMILY,
+    );
   });
 });
 
@@ -3134,6 +3169,7 @@ describe('Deal persistence workflow -- Phase C', () => {
 
       expect(screen.getByText('Unsaved deal')).toBeTruthy();
 
+      chooseAssetType();
       await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
       expect(await screen.findByText(/^Saved/)).toBeTruthy();
@@ -4071,6 +4107,7 @@ describe('Detailed Excel ingestion workflow (Gate 10)', () => {
     render(<App />);
     fillGoldenDeal();
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(/^Saved/)).toBeTruthy();
@@ -4228,6 +4265,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
     await user.click(screen.getByRole('tab', { name: 'Detailed Underwrite' }));
     fillDetailedGoldenDeal();
     await user.type(screen.getByLabelText('Deal Name'), 'Golden Detailed Deal');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDetailedDeal).toHaveBeenCalledTimes(1));
@@ -4237,6 +4275,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
       GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
       EMPTY_PLAN,
       null,
+      MULTIFAMILY,
     );
     expect(mockUpdateDetailedDeal).not.toHaveBeenCalled();
     expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
@@ -4376,6 +4415,7 @@ describe('Detailed deal persistence workflow (Gate 11)', () => {
       GOLDEN_DETAILED_OPERATING_INPUTS_REQUEST,
       EMPTY_PLAN,
       null,
+      NOT_SPECIFIED,
     );
   });
 
@@ -5023,6 +5063,7 @@ describe('Deal Context (Gate A4)', () => {
     fireEvent.change(screen.getByLabelText('Deal Context'), {
       target: { value: 'Value-add play.' },
     });
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
@@ -5031,6 +5072,7 @@ describe('Deal Context (Gate A4)', () => {
       GOLDEN_DEAL_REQUEST,
       EMPTY_PLAN,
       'Value-add play.',
+      MULTIFAMILY,
     );
   });
 
@@ -5151,10 +5193,17 @@ describe('Deal Context (Gate A4)', () => {
     fillGoldenDeal();
 
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, EMPTY_PLAN, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith(
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      EMPTY_PLAN,
+      null,
+      MULTIFAMILY,
+    );
     expect(screen.queryByText(/error/i)).toBeNull();
   });
 
@@ -5516,6 +5565,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     await waitFor(() => expect(aiSectionHeading('Investment View')).not.toBeNull());
 
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     // Owner Return Metrics V3 Gate A7: `createDeal` persists assumptions
@@ -5523,7 +5573,13 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
     // provenance-validated dedicated endpoints against the newly-created
     // deal's id.
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, EMPTY_PLAN, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith(
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      EMPTY_PLAN,
+      null,
+      MULTIFAMILY,
+    );
     await waitFor(() =>
       expect(mockUpdateDealAnalysisSnapshot).toHaveBeenCalledWith(
         'deal-1',
@@ -6193,6 +6249,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     expect(screen.getByText('Unsaved deal')).toBeTruthy();
 
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     expect(await screen.findByText(/^Saved/)).toBeTruthy();
@@ -6210,10 +6267,17 @@ describe('Sprint C Gate C2 -- app shell', () => {
     fillGoldenDeal();
 
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
-    expect(mockCreateDeal).toHaveBeenCalledWith('111 Main St', GOLDEN_DEAL_REQUEST, EMPTY_PLAN, null);
+    expect(mockCreateDeal).toHaveBeenCalledWith(
+      '111 Main St',
+      GOLDEN_DEAL_REQUEST,
+      EMPTY_PLAN,
+      null,
+      MULTIFAMILY,
+    );
     expect(await screen.findByRole('button', { name: 'Update Deal' })).toBeTruthy();
   });
 
@@ -7114,6 +7178,7 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
     render(<App />);
     fillGoldenDeal();
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
     await screen.findByText(/^Saved/);
 
@@ -7255,6 +7320,7 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
     render(<App />);
     fillGoldenDeal();
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
     await screen.findByText(/^Saved/);
 
@@ -8022,6 +8088,7 @@ describe('Sprint C Gate C5 -- polish and accessibility', () => {
 
     fillGoldenDeal();
     await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+    chooseAssetType();
     await user.click(screen.getByRole('button', { name: 'Save Deal' }));
 
     expect(await screen.findByText(/^Saved/)).toBeTruthy();
@@ -8364,5 +8431,165 @@ describe('Phase 7 Gates P7.3 / P7.5 -- the decision views in Risk', () => {
     expect(
       (within(scenarios).getByRole('button', { name: 'Add Scenario' }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+});
+
+// =============================================================================
+// Asset Types 1 -- Deal classification in the Quick and Detailed workspaces
+// =============================================================================
+
+describe('Asset Types 1 -- Deal classification', () => {
+  const typeSelect = () =>
+    screen.getByRole('combobox', { name: /^Asset Type/, hidden: true }) as HTMLSelectElement;
+
+  it('stops the first Save of a new deal until a type is chosen, and says so at the field', async () => {
+    const user = userEvent.setup();
+    mockCreateDeal.mockResolvedValue(makeDeal({ asset_type: 'office' }));
+    render(<App />);
+    fillGoldenDeal();
+    await user.type(screen.getByLabelText('Deal Name'), '111 Main St');
+
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+    expect(mockCreateDeal).not.toHaveBeenCalled();
+    // Once in the header, once at the field -- the field copy is announced.
+    expect(screen.getAllByText('Choose an Asset Type.')).toHaveLength(2);
+    expect(
+      screen.getAllByRole('alert').some((alert) => alert.textContent === 'Choose an Asset Type.'),
+    ).toBe(true);
+    expect(typeSelect().getAttribute('aria-invalid')).toBe('true');
+    await waitFor(() => expect(document.activeElement).toBe(typeSelect()));
+
+    await user.selectOptions(typeSelect(), 'office');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+    await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
+    expect(mockCreateDeal.mock.calls[0][4]).toEqual({ asset_type: 'office', asset_subtype: null });
+  });
+
+  it('asks Other for a description, and sends it trimmed in the analyst’s own words', async () => {
+    const user = userEvent.setup();
+    mockCreateDeal.mockResolvedValue(makeDeal({ asset_type: 'other', asset_subtype: 'Cold storage campus' }));
+    render(<App />);
+    fillGoldenDeal();
+
+    await user.selectOptions(typeSelect(), 'other');
+    const description = screen.getByRole('textbox', { name: 'Describe the Asset Type (required)' });
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+    expect(mockCreateDeal).not.toHaveBeenCalled();
+    expect(description.getAttribute('aria-invalid')).toBe('true');
+
+    await user.type(description, '  Cold storage campus  ');
+    await user.click(screen.getByRole('button', { name: 'Save Deal' }));
+    await waitFor(() => expect(mockCreateDeal).toHaveBeenCalledTimes(1));
+    expect(mockCreateDeal.mock.calls[0][4]).toEqual({
+      asset_type: 'other',
+      asset_subtype: 'Cold storage campus',
+    });
+  });
+
+  it('reclassifying a saved deal marks it dirty and leaves its analysis and AI in place', async () => {
+    const user = userEvent.setup();
+    const saved = makeDeal({
+      asset_type: 'retail',
+      asset_subtype: 'Grocery-anchored center',
+      analysis_snapshot: makeResults(),
+      ai_snapshot: makeAiAnalysis(),
+    });
+    mockListDeals.mockResolvedValue([saved]);
+    mockGetDeal.mockResolvedValue(saved);
+    mockUpdateDeal.mockResolvedValue({ ...saved, asset_type: 'mixed_use' });
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+
+    // Overview reads the classification above the Owner Summary.
+    const summary = screen.getByRole('region', { name: 'Asset classification' });
+    expect(within(summary).getByText('Retail')).toBeTruthy();
+    expect(within(summary).getByText('Grocery-anchored center')).toBeTruthy();
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
+
+    await goTo(user, 'Underwrite');
+    expect(screen.getByText('Retail · Grocery-anchored center')).toBeTruthy();
+    await user.click(
+      within(screen.getByRole('region', { name: 'Deal classification' })).getByRole('button', {
+        name: 'Edit',
+      }),
+    );
+    await user.selectOptions(typeSelect(), 'mixed_use');
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+    // Nothing re-ran and nothing was cleared: classification is not an input.
+    expect(mockAnalyze).not.toHaveBeenCalled();
+    await goTo(user, 'Overview');
+    expect(screen.getAllByText('Key Returns').length).toBeGreaterThanOrEqual(1);
+    expect(within(screen.getByRole('region', { name: 'Asset classification' })).getByText('Mixed-Use')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+    await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
+    expect(mockUpdateDeal.mock.calls[0][5]).toEqual({
+      asset_type: 'mixed_use',
+      asset_subtype: 'Grocery-anchored center',
+    });
+  });
+
+  it('opens a legacy deal as Not specified and never invents a type for it', async () => {
+    const user = userEvent.setup();
+    const legacy = makeDeal();
+    mockListDeals.mockResolvedValue([legacy]);
+    mockGetDeal.mockResolvedValue(legacy);
+    mockUpdateDeal.mockResolvedValue(legacy);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+    await goTo(user, 'Overview');
+    expect(
+      within(screen.getByRole('region', { name: 'Asset classification' })).getByText('Not specified'),
+    ).toBeTruthy();
+
+    // A subtype alone is not a classification.
+    await goTo(user, 'Underwrite');
+    await user.type(screen.getByRole('textbox', { name: 'Asset Subtype (optional)' }), 'Garden');
+    await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+    expect(mockUpdateDeal).not.toHaveBeenCalled();
+    expect(screen.getAllByText('Choose an Asset Type before describing a subtype.').length).toBe(2);
+
+    await user.clear(screen.getByRole('textbox', { name: 'Asset Subtype (optional)' }));
+    await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+    await waitFor(() => expect(mockUpdateDeal).toHaveBeenCalledTimes(1));
+    expect(mockUpdateDeal.mock.calls[0][5]).toEqual({ asset_type: null, asset_subtype: null });
+  });
+
+  it('carries a Detailed deal’s classification through open, edit and update', async () => {
+    const user = userEvent.setup();
+    const saved = makeDetailedDeal({ asset_type: 'industrial', asset_subtype: 'Flex' });
+    mockListDeals.mockResolvedValue([saved]);
+    mockGetDeal.mockResolvedValue(saved);
+    mockUpdateDetailedDeal.mockResolvedValue(saved);
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Deal Library' }));
+    await user.click(await screen.findByRole('button', { name: 'Open' }));
+    await screen.findByText(/^Saved/);
+    await goTo(user, 'Underwrite');
+    expect(screen.getByText('Industrial · Flex')).toBeTruthy();
+
+    await user.click(
+      within(screen.getByRole('region', { name: 'Deal classification' })).getByRole('button', {
+        name: 'Edit',
+      }),
+    );
+    const subtype = screen.getByRole('textbox', { name: 'Asset Subtype (optional)' });
+    await user.clear(subtype);
+    await user.type(subtype, 'Last-mile warehouse');
+    await user.click(screen.getByRole('button', { name: 'Update Deal' }));
+
+    await waitFor(() => expect(mockUpdateDetailedDeal).toHaveBeenCalledTimes(1));
+    expect(mockUpdateDetailedDeal.mock.calls[0][6]).toEqual({
+      asset_type: 'industrial',
+      asset_subtype: 'Last-mile warehouse',
+    });
   });
 });

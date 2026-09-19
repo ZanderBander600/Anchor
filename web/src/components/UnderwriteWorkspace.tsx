@@ -15,6 +15,10 @@ export interface UnderwriteWorkspaceProps {
   sections: Record<UnderwriteTabId, FieldSection[]>;
   dealContext: string;
   onDealContextChange: (value: string) => void;
+  /** Asset Types 1: the classification strip, already bound to this mode's
+   * own draft by the caller. Rendered above Deal Context on every tab, so the
+   * required choice for a new Deal is never behind a tab. */
+  classificationStrip?: ReactNode;
   isSubmitting: boolean;
 
   activeTab: UnderwriteTabId;
@@ -76,6 +80,7 @@ export function UnderwriteWorkspace({
   sections,
   dealContext,
   onDealContextChange,
+  classificationStrip,
   isSubmitting,
   activeTab,
   onTabChange,
@@ -99,6 +104,7 @@ export function UnderwriteWorkspace({
 
   return (
     <div className="underwrite">
+      {classificationStrip}
       <DealContextStrip value={dealContext} onChange={onDealContextChange} />
 
       <SubNav

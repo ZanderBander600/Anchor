@@ -60,6 +60,16 @@ import { useInvestments } from './useInvestments';
 import { AssetManagementShell } from './components/AssetManagementShell';
 import { CreateManagedAssetPanel } from './components/CreateManagedAssetPanel';
 import { useManagedAssets } from './useManagedAssets';
+import { DealClassificationStrip, DealClassificationSummary } from './components/AssetClassification';
+import {
+  BLANK_CLASSIFICATION_DRAFT,
+  classificationDraftOf,
+  classificationIssues,
+  classificationRequest,
+  hasClassificationIssues,
+  isSameClassificationDraft,
+} from './assetTypes';
+import type { AssetClassificationDraft } from './assetTypes';
 import { buildOwnerSummaryData } from './ownerSummary';
 import { buildDetailedSections, buildQuickSections } from './underwrite';
 import type { ResultsViewId, UnderwriteTabId } from './underwrite';
@@ -574,6 +584,15 @@ export default function App() {
   // and `values` -- editing it marks the deal dirty and Save persists it,
   // with zero separate plumbing.
   const [detailedDealContext, setDetailedDealContext] = useState('');
+  // Asset Types 1: non-economic classification metadata. Joins the dirty
+  // comparison exactly like Deal Context, and -- unlike Deal Context -- clears
+  // nothing: it reaches no analysis, fingerprint or AI grounding.
+  const [detailedClassification, setDetailedClassification] =
+    useState<AssetClassificationDraft>(BLANK_CLASSIFICATION_DRAFT);
+  const [showDetailedClassificationIssues, setShowDetailedClassificationIssues] = useState(false);
+  const [detailedClassificationReveal, setDetailedClassificationReveal] = useState<object | null>(
+    null,
+  );
 
   interface DetailedDealSnapshot {
     dealName: string;
@@ -581,18 +600,24 @@ export default function App() {
     /** D6.6: part of the one dirty comparison, like every other assumption. */
     businessPlan: BusinessPlanDraft;
     dealContext: string;
+    /** Asset Types 1: part of the dirty comparison, and nothing else. */
+    classification: AssetClassificationDraft;
   }
   const BLANK_DETAILED_SNAPSHOT: DetailedDealSnapshot = {
     dealName: '',
     values: BLANK_DETAILED_FORM_VALUES,
     businessPlan: blankBusinessPlanDraft(),
     dealContext: '',
+    classification: BLANK_CLASSIFICATION_DRAFT,
   };
   const [detailedSavedSnapshot, setDetailedSavedSnapshot] =
     useState<DetailedDealSnapshot>(BLANK_DETAILED_SNAPSHOT);
 
   function isSameDetailedSnapshot(a: DetailedDealSnapshot, b: DetailedDealSnapshot): boolean {
     if (a.dealName !== b.dealName || a.dealContext !== b.dealContext) {
+      return false;
+    }
+    if (!isSameClassificationDraft(a.classification, b.classification)) {
       return false;
     }
     if (!isSameBusinessPlanDraft(a.businessPlan, b.businessPlan)) {
@@ -612,9 +637,14 @@ export default function App() {
       values: detailedValues,
       businessPlan: detailedBusinessPlan.draft,
       dealContext: detailedDealContext,
+      classification: detailedClassification,
     },
     detailedSavedSnapshot,
   );
+  // A new Deal must be classified; a legacy "Not specified" one need not be.
+  const detailedClassificationIssueSet = classificationIssues(detailedClassification, {
+    requireType: currentDetailedDealId === null,
+  });
   const detailedSaveStatus: SaveStatus =
     currentDetailedDealId === null
       ? 'unsaved-deal'
@@ -674,6 +704,8 @@ export default function App() {
     detailedBusinessPlan.reset();
     setDetailedDealName('');
     setDetailedDealContext('');
+    setDetailedClassification(BLANK_CLASSIFICATION_DRAFT);
+    setShowDetailedClassificationIssues(false);
     setCurrentDetailedDealId(null);
     setLastDetailedSavedAt(null);
     setDetailedSavedSnapshot(BLANK_DETAILED_SNAPSHOT);
@@ -709,9 +741,19 @@ export default function App() {
       return;
     }
 
+    if (hasClassificationIssues(detailedClassificationIssueSet)) {
+      setShowDetailedClassificationIssues(true);
+      setSaveDetailedDealError(
+        detailedClassificationIssueSet.assetType ?? detailedClassificationIssueSet.assetSubtype ?? null,
+      );
+      revealClassification(setDetailedClassificationReveal);
+      return;
+    }
+
     const name = detailedDealName.trim() || 'Untitled Deal';
 
     const dealContext = detailedDealContext.trim() || null;
+    const classified = classificationRequest(detailedClassification);
 
     setIsSavingDetailedDeal(true);
     setSaveDetailedDealError(null);
@@ -729,17 +771,28 @@ export default function App() {
             detailedOperatingInputs,
             businessPlan,
             dealContext,
+            classified,
           )
-        : await createDetailedDeal(name, terms, detailedOperatingInputs, businessPlan, dealContext);
+        : await createDetailedDeal(
+            name,
+            terms,
+            detailedOperatingInputs,
+            businessPlan,
+            dealContext,
+            classified,
+          );
       setCurrentDetailedDealId(deal.id);
       setDetailedDealName(deal.name);
       setDetailedDealContext(deal.deal_context ?? '');
+      setDetailedClassification(classificationDraftOf(deal));
+      setShowDetailedClassificationIssues(false);
       setLastDetailedSavedAt(deal.updated_at);
       setDetailedSavedSnapshot({
         dealName: deal.name,
         values: detailedValues,
         businessPlan: detailedBusinessPlan.draft,
         dealContext: deal.deal_context ?? '',
+        classification: classificationDraftOf(deal),
       });
       // Sprint C Gate C2 -- see handleSaveDeal.
       void loadSavedDeals();
@@ -823,6 +876,14 @@ export default function App() {
   function revealBusinessPlan() {
     setWorkspace('underwrite');
     setUnderwriteTab('acquisition');
+  }
+
+  /** Asset Types 1: a Save stopped by the classification puts Underwrite --
+   * where the strip sits above every tab -- on screen, and asks the strip to
+   * open and focus the Asset Type select. */
+  function revealClassification(request: (signal: object) => void) {
+    setWorkspace('underwrite');
+    request({});
   }
 
   /** Detailed Operating Model V2.1 Gate 14: the Detailed counterpart of
@@ -1249,6 +1310,11 @@ export default function App() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   // Owner Return Metrics V3 Gate A4: mirrors detailedDealContext exactly.
   const [dealContext, setDealContext] = useState('');
+  // Asset Types 1: mirrors detailedClassification exactly.
+  const [classification, setClassification] =
+    useState<AssetClassificationDraft>(BLANK_CLASSIFICATION_DRAFT);
+  const [showClassificationIssues, setShowClassificationIssues] = useState(false);
+  const [classificationReveal, setClassificationReveal] = useState<object | null>(null);
 
   const [savedDeals, setSavedDeals] = useState<Deal[]>([]);
   const [isDealsLoading, setIsDealsLoading] = useState(false);
@@ -1269,17 +1335,23 @@ export default function App() {
     /** D6.6: part of the one dirty comparison, like every other assumption. */
     businessPlan: BusinessPlanDraft;
     dealContext: string;
+    /** Asset Types 1: part of the dirty comparison, and nothing else. */
+    classification: AssetClassificationDraft;
   }
   const BLANK_SNAPSHOT: DealSnapshot = {
     dealName: '',
     values: BLANK_FORM_VALUES,
     businessPlan: blankBusinessPlanDraft(),
     dealContext: '',
+    classification: BLANK_CLASSIFICATION_DRAFT,
   };
   const [savedSnapshot, setSavedSnapshot] = useState<DealSnapshot>(BLANK_SNAPSHOT);
 
   function isSameSnapshot(a: DealSnapshot, b: DealSnapshot): boolean {
     if (a.dealName !== b.dealName || a.dealContext !== b.dealContext) {
+      return false;
+    }
+    if (!isSameClassificationDraft(a.classification, b.classification)) {
       return false;
     }
     if (!isSameBusinessPlanDraft(a.businessPlan, b.businessPlan)) {
@@ -1290,9 +1362,12 @@ export default function App() {
   }
 
   const isDirty = !isSameSnapshot(
-    { dealName, values, businessPlan: quickBusinessPlan.draft, dealContext },
+    { dealName, values, businessPlan: quickBusinessPlan.draft, dealContext, classification },
     savedSnapshot,
   );
+  const classificationIssueSet = classificationIssues(classification, {
+    requireType: currentDealId === null,
+  });
   const saveStatus: SaveStatus =
     currentDealId === null ? 'unsaved-deal' : isDirty ? 'unsaved-changes' : 'saved';
 
@@ -1511,6 +1586,8 @@ export default function App() {
     quickBusinessPlan.reset();
     setDealName('');
     setDealContext('');
+    setClassification(BLANK_CLASSIFICATION_DRAFT);
+    setShowClassificationIssues(false);
     setCurrentDealId(null);
     setLastSavedAt(null);
     setSavedSnapshot(BLANK_SNAPSHOT);
@@ -1539,8 +1616,16 @@ export default function App() {
       return;
     }
 
+    if (hasClassificationIssues(classificationIssueSet)) {
+      setShowClassificationIssues(true);
+      setSaveDealError(classificationIssueSet.assetType ?? classificationIssueSet.assetSubtype ?? null);
+      revealClassification(setClassificationReveal);
+      return;
+    }
+
     const name = dealName.trim() || 'Untitled Deal';
     const dealContextToSave = dealContext.trim() || null;
+    const classified = classificationRequest(classification);
 
     setIsSavingDeal(true);
     setSaveDealError(null);
@@ -1557,17 +1642,20 @@ export default function App() {
       // only an unrelated field -- an absent plan would be read as an empty
       // one and clear what is stored.
       const deal = currentDealId
-        ? await updateDeal(currentDealId, name, request, businessPlan, dealContextToSave)
-        : await createDeal(name, request, businessPlan, dealContextToSave);
+        ? await updateDeal(currentDealId, name, request, businessPlan, dealContextToSave, classified)
+        : await createDeal(name, request, businessPlan, dealContextToSave, classified);
       setCurrentDealId(deal.id);
       setDealName(deal.name);
       setDealContext(deal.deal_context ?? '');
+      setClassification(classificationDraftOf(deal));
+      setShowClassificationIssues(false);
       setLastSavedAt(deal.updated_at);
       setSavedSnapshot({
         dealName: deal.name,
         values,
         businessPlan: quickBusinessPlan.draft,
         dealContext: deal.deal_context ?? '',
+        classification: classificationDraftOf(deal),
       });
       // Sprint C Gate C2: refresh the shared deal list so the sidebar's
       // Recent Deals reflects the save. Read-only; never blocks the save.
@@ -1652,6 +1740,10 @@ export default function App() {
   const leaseLevel = useLeaseLevelDeal({
     onDealsChanged: () => {
       void loadSavedDeals();
+    },
+    // Asset Types 1: the strip sits above every Underwrite tab.
+    onRevealClassification: () => {
+      setWorkspace('underwrite');
     },
     // Lease-Level persists no analysis snapshot (decision D5), so a reopened
     // deal has nothing for Overview to show and lands where the work is.
@@ -1752,6 +1844,8 @@ export default function App() {
       setDetailedValues(openedValues);
       setDetailedDealName(fullDeal.name);
       setDetailedDealContext(fullDeal.deal_context ?? '');
+      setDetailedClassification(classificationDraftOf(fullDeal));
+      setShowDetailedClassificationIssues(false);
       setCurrentDetailedDealId(fullDeal.id);
       setLastDetailedSavedAt(fullDeal.updated_at);
       setDetailedSavedSnapshot({
@@ -1759,6 +1853,7 @@ export default function App() {
         values: openedValues,
         businessPlan: openedBusinessPlan,
         dealContext: fullDeal.deal_context ?? '',
+        classification: classificationDraftOf(fullDeal),
       });
       resetDetailedDownstreamAnalysisState();
       // Owner Return Metrics V3 Gate A6: hydrate the SAME state a live
@@ -1826,6 +1921,8 @@ export default function App() {
       setValues(openedValues);
       setDealName(fullDeal.name);
       setDealContext(fullDeal.deal_context ?? '');
+      setClassification(classificationDraftOf(fullDeal));
+      setShowClassificationIssues(false);
       setCurrentDealId(fullDeal.id);
       setLastSavedAt(fullDeal.updated_at);
       setSavedSnapshot({
@@ -1833,6 +1930,7 @@ export default function App() {
         values: openedValues,
         businessPlan: openedBusinessPlan,
         dealContext: fullDeal.deal_context ?? '',
+        classification: classificationDraftOf(fullDeal),
       });
       resetDownstreamAnalysisState();
       // Owner Return Metrics V3 Gate A6: mirrors the Detailed branch above
@@ -2295,7 +2393,6 @@ export default function App() {
   async function handleCreateManagedAsset(request: {
     name: string | null;
     acquisition_date: string;
-    property_type: string | null;
     market: string | null;
   }) {
     if (activeDealId === null) {
@@ -2544,6 +2641,7 @@ export default function App() {
         title="Overview"
         subtitle="A concise view of the investment, key returns, and what drives the story."
       >
+        <DealClassificationSummary draft={detailedClassification} />
         {detailedResults && lastDetailedRequest ? (
           <OwnerSummaryPanel
             data={buildOwnerSummaryData({
@@ -2577,6 +2675,17 @@ export default function App() {
           sections={detailedSections}
           dealContext={detailedDealContext}
           onDealContextChange={handleDetailedDealContextChange}
+          classificationStrip={
+            <DealClassificationStrip
+              key={currentDetailedDealId ?? 'new-detailed-deal'}
+              draft={detailedClassification}
+              onChange={setDetailedClassification}
+              issues={showDetailedClassificationIssues ? detailedClassificationIssueSet : {}}
+              isTypeRequired={currentDetailedDealId === null}
+              revealSignal={detailedClassificationReveal}
+              disabled={isDetailedSubmitting}
+            />
+          }
           isSubmitting={isDetailedSubmitting}
           activeTab={underwriteTab}
           onTabChange={setUnderwriteTab}
@@ -2854,6 +2963,7 @@ export default function App() {
         title="Overview"
         subtitle="A concise view of the investment, key returns, and what drives the story."
       >
+        <DealClassificationSummary draft={classification} />
         {results && lastRequest ? (
           <OwnerSummaryPanel
             data={buildOwnerSummaryData({
@@ -2886,6 +2996,17 @@ export default function App() {
           sections={quickSections}
           dealContext={dealContext}
           onDealContextChange={handleDealContextChange}
+          classificationStrip={
+            <DealClassificationStrip
+              key={currentDealId ?? 'new-quick-deal'}
+              draft={classification}
+              onChange={setClassification}
+              issues={showClassificationIssues ? classificationIssueSet : {}}
+              isTypeRequired={currentDealId === null}
+              revealSignal={classificationReveal}
+              disabled={isSubmitting}
+            />
+          }
           isSubmitting={isSubmitting}
           activeTab={underwriteTab}
           onTabChange={setUnderwriteTab}
@@ -3166,6 +3287,7 @@ export default function App() {
         title="Overview"
         subtitle="A concise view of the investment, key returns, and what drives the story."
       >
+        <DealClassificationSummary draft={leaseLevel.classification} />
         <div className="empty-state">
           Lease-Level results are on Underwrite, under Results: Summary, Operating
           Statement and Cash Flow. Enter the rent roll there and click Analyze.
@@ -3191,6 +3313,17 @@ export default function App() {
           onMarketFieldChange={leaseLevel.onMarketFieldChange}
           dealContext={leaseLevel.dealContext}
           onDealContextChange={leaseLevel.onDealContextChange}
+          classificationStrip={
+            <DealClassificationStrip
+              key={leaseLevel.currentDealId ?? 'new-lease-level-deal'}
+              draft={leaseLevel.classification}
+              onChange={leaseLevel.onClassificationChange}
+              issues={leaseLevel.classificationIssues}
+              isTypeRequired={leaseLevel.currentDealId === null}
+              revealSignal={leaseLevel.classificationRevealSignal}
+              disabled={leaseLevel.isAnalyzing || leaseLevel.isSaving}
+            />
+          }
           isSubmitting={leaseLevel.isAnalyzing || leaseLevel.isSaving}
           leaseIssues={leaseLevel.leaseIssues}
           termsIssues={leaseLevel.termsIssues}
@@ -3423,6 +3556,7 @@ export default function App() {
           <div className="library-view investment-page">
             <InvestmentLibraryPanel
               investments={investments.investments}
+              deals={savedDeals}
               isLoading={investments.isLoading}
               error={investments.error}
               onOpen={openInvestment}
@@ -3574,6 +3708,28 @@ export default function App() {
                         detailed: detailedDealName,
                         lease_level: leaseLevel.dealName,
                       })}
+                      // Asset Types 1: the classification the server will
+                      // copy is the one saved with the Deal, not an unsaved
+                      // edit on screen -- the panel says which it is.
+                      savedClassification={byMode(operatingMode, {
+                        quick: savedSnapshot.classification,
+                        detailed: detailedSavedSnapshot.classification,
+                        lease_level: leaseLevel.savedClassification,
+                      })}
+                      hasUnsavedClassification={
+                        !isSameClassificationDraft(
+                          byMode(operatingMode, {
+                            quick: classification,
+                            detailed: detailedClassification,
+                            lease_level: leaseLevel.classification,
+                          }),
+                          byMode(operatingMode, {
+                            quick: savedSnapshot.classification,
+                            detailed: detailedSavedSnapshot.classification,
+                            lease_level: leaseLevel.savedClassification,
+                          }),
+                        )
+                      }
                       isOpen
                       onCancel={() => {
                         setCreatingAssetForDealId(null);

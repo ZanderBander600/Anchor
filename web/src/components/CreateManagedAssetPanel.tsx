@@ -1,12 +1,19 @@
 import { useState } from 'react';
 
+import type { AssetClassificationDraft } from '../assetTypes';
+import { AssetClassificationText } from './AssetClassification';
+
 /** Gate AM1 -- the Deal-side action that creates a Managed Asset.
  *
  * The one crossing point from Acquisitions into Asset Management. It collects
  * only what a Managed Asset states that the Deal does not: an acquisition date,
- * and optionally a property type and market. The name defaults to the Deal's
- * own, copied at creation -- renaming the Deal afterwards does not rename the
- * asset.
+ * and optionally a market. The name defaults to the Deal's own, copied at
+ * creation -- renaming the Deal afterwards does not rename the asset.
+ *
+ * Asset Types 1: the classification is not typed here. The server copies the
+ * source Deal's saved Asset Type and subtype into the asset, once, so there is
+ * one classification source and no hand-typed alternative that could disagree
+ * with it. This panel shows what will be copied, read-only.
  *
  * It performs no calculation and captures no fingerprint of its own: the server
  * reads the Deal's authoritative analysis fingerprint and freezes it. The
@@ -16,12 +23,15 @@ import { useState } from 'react';
 
 export interface CreateManagedAssetPanelProps {
   dealName: string;
+  /** The classification saved with the Deal -- what the server will copy. */
+  savedClassification: AssetClassificationDraft;
+  /** The Deal on screen has a classification edit that is not saved yet. */
+  hasUnsavedClassification: boolean;
   isOpen: boolean;
   onCancel: () => void;
   onCreate: (request: {
     name: string | null;
     acquisition_date: string;
-    property_type: string | null;
     market: string | null;
   }) => Promise<void>;
   error: string | null;
@@ -36,6 +46,8 @@ function today(): string {
 
 export function CreateManagedAssetPanel({
   dealName,
+  savedClassification,
+  hasUnsavedClassification,
   isOpen,
   onCancel,
   onCreate,
@@ -43,7 +55,6 @@ export function CreateManagedAssetPanel({
 }: CreateManagedAssetPanelProps) {
   const [name, setName] = useState(dealName);
   const [acquisitionDate, setAcquisitionDate] = useState(today);
-  const [propertyType, setPropertyType] = useState('');
   const [market, setMarket] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
@@ -62,7 +73,6 @@ export function CreateManagedAssetPanel({
         void onCreate({
           name: optional(name),
           acquisition_date: acquisitionDate,
-          property_type: optional(propertyType),
           market: optional(market),
         }).finally(() => setIsSaving(false));
       }}
@@ -99,15 +109,18 @@ export function CreateManagedAssetPanel({
             required
           />
         </label>
-        <label className="am-field">
-          <span className="am-field-label">Property Type (optional)</span>
-          <input
-            className="am-text-input"
-            value={propertyType}
-            onChange={(event) => setPropertyType(event.target.value)}
-            placeholder="Multifamily"
+        <div className="am-field am-create-classification">
+          <span className="am-field-label">Asset Type (from the Deal)</span>
+          <AssetClassificationText
+            assetType={savedClassification.assetType === '' ? null : savedClassification.assetType}
+            assetSubtype={savedClassification.assetSubtype.trim() || null}
           />
-        </label>
+          <span className="am-editor-note">
+            {hasUnsavedClassification
+              ? 'Copied from the saved Deal. Save the Deal first to include your latest classification change.'
+              : 'Copied from the Deal when the asset is created. Later Deal edits do not change it.'}
+          </span>
+        </div>
         <label className="am-field">
           <span className="am-field-label">Market (optional)</span>
           <input

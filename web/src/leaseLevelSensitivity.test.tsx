@@ -231,6 +231,8 @@ function savedDeal(suites: SuiteRequest[] = PLAIN_SUITES): Deal {
     market_leasing: MARKET_LEASING,
     suites,
     leases: LEASES,
+    asset_type: null,
+    asset_subtype: null,
     deal_context: null,
     business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,

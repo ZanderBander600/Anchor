@@ -40,6 +40,8 @@ import type {
 } from './assetManagementTypes';
 import { isBusinessPlanApiIssue } from './businessPlan';
 import type { BusinessPlanApiIssue, BusinessPlanInput } from './businessPlan';
+// Asset Types 1: the two classification wire fields the Deal writes carry.
+import type { AssetClassificationFields } from './assetTypes';
 import type {
   DealScenarios,
   InvestmentScenario,
@@ -835,6 +837,7 @@ export async function createDeal(
   inputs: AcquisitionRequest,
   businessPlan: BusinessPlanInput,
   dealContext?: string | null,
+  classification?: AssetClassificationFields,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -846,6 +849,7 @@ export async function createDeal(
         inputs,
         business_plan: businessPlan,
         deal_context: dealContext ?? null,
+        ...classification,
       }),
     });
   } catch {
@@ -873,6 +877,7 @@ export async function updateDeal(
   inputs: AcquisitionRequest,
   businessPlan: BusinessPlanInput,
   dealContext?: string | null,
+  classification?: AssetClassificationFields,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -884,6 +889,7 @@ export async function updateDeal(
         inputs,
         business_plan: businessPlan,
         deal_context: dealContext ?? null,
+        ...classification,
       }),
     });
   } catch {
@@ -911,6 +917,7 @@ export async function createDetailedDeal(
   detailedOperatingInputs: DetailedOperatingInputsRequest,
   businessPlan: BusinessPlanInput,
   dealContext?: string | null,
+  classification?: AssetClassificationFields,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -924,6 +931,7 @@ export async function createDetailedDeal(
         detailed_operating_inputs: detailedOperatingInputs,
         business_plan: businessPlan,
         deal_context: dealContext ?? null,
+        ...classification,
       }),
     });
   } catch {
@@ -945,6 +953,7 @@ export async function updateDetailedDeal(
   detailedOperatingInputs: DetailedOperatingInputsRequest,
   businessPlan: BusinessPlanInput,
   dealContext?: string | null,
+  classification?: AssetClassificationFields,
 ): Promise<Deal> {
   let response: Response;
   try {
@@ -958,6 +967,7 @@ export async function updateDetailedDeal(
         detailed_operating_inputs: detailedOperatingInputs,
         business_plan: businessPlan,
         deal_context: dealContext ?? null,
+        ...classification,
       }),
     });
   } catch {
@@ -1370,6 +1380,7 @@ export async function createLeaseLevelDeal(
   inputs: LeaseLevelInputsRequest,
   businessPlan: BusinessPlanInput,
   dealContext: string | null,
+  classification?: AssetClassificationFields,
 ): Promise<Deal> {
   const response = await postJson('/deals', {
     operating_mode: 'lease_level',
@@ -1378,6 +1389,7 @@ export async function createLeaseLevelDeal(
     ...inputs,
     business_plan: businessPlan,
     ...(dealContext === null ? {} : { deal_context: dealContext }),
+    ...classification,
   });
   return (await response.json()) as Deal;
 }
@@ -1394,6 +1406,7 @@ export async function updateLeaseLevelDeal(
   inputs: LeaseLevelInputsRequest,
   businessPlan: BusinessPlanInput,
   dealContext: string | null,
+  classification?: AssetClassificationFields,
 ): Promise<Deal> {
   const response = await sendJson('PUT', `/deals/${dealId}`, {
     operating_mode: 'lease_level',
@@ -1402,6 +1415,7 @@ export async function updateLeaseLevelDeal(
     ...inputs,
     business_plan: businessPlan,
     ...(dealContext === null ? {} : { deal_context: dealContext }),
+    ...classification,
   });
   return (await response.json()) as Deal;
 }
@@ -3179,7 +3193,6 @@ export async function createManagedAsset(request: {
   source_deal_id: string;
   name: string | null;
   acquisition_date: string;
-  property_type: string | null;
   market: string | null;
 }): Promise<ManagedAsset> {
   const response = await assetFetch(

@@ -52,7 +52,11 @@ export const DEMO_ASSET: ManagedAsset = {
   source_deal_id: 'deal-1',
   name: 'Harbor Point Apartments',
   acquisition_date: '2026-10-01',
-  property_type: 'Multifamily',
+  // Asset Types 1: a post-classification asset -- the Deal's snapshot, and no
+  // hand-typed property type.
+  property_type: null,
+  asset_type: 'multifamily',
+  asset_subtype: 'Garden apartments',
   market: 'Toronto, ON',
   acquisition_fingerprint: 'a1b2c3d4e5f6',
   created_at: '2027-03-01T00:00:00+00:00',

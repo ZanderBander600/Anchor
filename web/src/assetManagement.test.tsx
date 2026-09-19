@@ -475,7 +475,10 @@ describe('Managed asset workspace', () => {
     renderWorkspace();
     expect(screen.getByRole('heading', { name: 'Harbor Point Apartments' })).toBeTruthy();
     expect(screen.getByText('Owned Asset')).toBeTruthy();
-    expect(screen.getByText(/Multifamily · Acquired Oct 2026 · Toronto, ON/)).toBeTruthy();
+    // Asset Types 1: the asset's own classification snapshot leads the line.
+    expect(
+      screen.getByText(/Multifamily · Garden apartments · Acquired Oct 2026 · Toronto, ON/),
+    ).toBeTruthy();
   });
 
   it('renders only the two functional tabs, with no dead future tabs', () => {
@@ -689,11 +692,16 @@ describe('Managed asset workspace', () => {
 // ===========================================================================
 
 describe('Create Managed Asset form', () => {
+  // Asset Types 1: the classification is the saved Deal's, shown read-only.
+  const GARDEN = { assetType: 'multifamily', assetSubtype: 'Garden apartments' } as const;
+  const WAREHOUSE = { assetType: 'industrial', assetSubtype: 'Last-mile warehouse' } as const;
   const renderPanel = (dealName: string, key: string, onCreate = vi.fn()) =>
     render(
       <CreateManagedAssetPanel
         key={key}
         dealName={dealName}
+        savedClassification={GARDEN}
+        hasUnsavedClassification={false}
         isOpen
         onCancel={vi.fn()}
         onCreate={onCreate}
@@ -717,13 +725,15 @@ describe('Create Managed Asset form', () => {
 
     await userEvent.clear(screen.getByLabelText('Asset Name'));
     await userEvent.type(screen.getByLabelText('Asset Name'), 'Renamed While On Deal A');
-    await userEvent.type(screen.getByLabelText('Property Type (optional)'), 'Multifamily');
     await userEvent.type(screen.getByLabelText('Market (optional)'), 'Toronto, ON');
+    expect(screen.getByText('Garden apartments')).toBeTruthy();
 
     view.rerender(
       <CreateManagedAssetPanel
         key="deal-b"
         dealName="Westlake Industrial"
+        savedClassification={WAREHOUSE}
+        hasUnsavedClassification={false}
         isOpen
         onCancel={vi.fn()}
         onCreate={vi.fn()}
@@ -734,8 +744,11 @@ describe('Create Managed Asset form', () => {
     expect((screen.getByLabelText('Asset Name') as HTMLInputElement).value).toBe(
       'Westlake Industrial',
     );
-    expect((screen.getByLabelText('Property Type (optional)') as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText('Market (optional)') as HTMLInputElement).value).toBe('');
+    // The classification shown is Deal B's own, never Deal A's.
+    expect(screen.getByText('Industrial')).toBeTruthy();
+    expect(screen.getByText('Last-mile warehouse')).toBeTruthy();
+    expect(screen.queryByText('Garden apartments')).toBeNull();
   });
 
   it('submits the deal it is currently keyed to', async () => {
@@ -748,6 +761,8 @@ describe('Create Managed Asset form', () => {
       <CreateManagedAssetPanel
         key="deal-b"
         dealName="Westlake Industrial"
+        savedClassification={WAREHOUSE}
+        hasUnsavedClassification={false}
         isOpen
         onCancel={vi.fn()}
         onCreate={onCreate}
@@ -758,5 +773,33 @@ describe('Create Managed Asset form', () => {
 
     expect(onCreate).toHaveBeenCalledTimes(1);
     expect(onCreate.mock.calls[0][0].name).toBe('Westlake Industrial');
+  });
+
+  it('offers no hand-typed property type and sends none (Asset Types 1)', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    renderPanel('Harbor Point Apartments', 'deal-a', onCreate);
+
+    expect(screen.queryByLabelText(/Property Type/)).toBeNull();
+    expect(screen.getByText('Multifamily')).toBeTruthy();
+    expect(screen.getByText(/Later Deal edits do not change it/)).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create Managed Asset' }));
+    expect(Object.keys(onCreate.mock.calls[0][0]).sort()).toEqual(['acquisition_date', 'market', 'name']);
+  });
+
+  it('says when the Deal on screen has an unsaved classification change', () => {
+    render(
+      <CreateManagedAssetPanel
+        dealName="Harbor Point Apartments"
+        savedClassification={{ assetType: '', assetSubtype: '' }}
+        hasUnsavedClassification
+        isOpen
+        onCancel={vi.fn()}
+        onCreate={vi.fn()}
+        error={null}
+      />,
+    );
+    expect(screen.getByText('Not specified')).toBeTruthy();
+    expect(screen.getByText(/Save the Deal first/)).toBeTruthy();
   });
 });

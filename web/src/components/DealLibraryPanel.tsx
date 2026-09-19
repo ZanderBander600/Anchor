@@ -1,6 +1,11 @@
+import { useState } from 'react';
+
 import { formatCurrency } from '../format';
 import type { Deal } from '../types';
 import { assertNeverMode, operatingModeLabel } from '../operatingMode';
+import { matchesAssetTypeFilter } from '../assetTypes';
+import type { AssetTypeFilterValue } from '../assetTypes';
+import { AssetClassificationText, AssetTypeFilter } from './AssetClassification';
 
 export interface DealLibraryPanelProps {
   deals: Deal[];
@@ -57,6 +62,11 @@ function purchasePriceOf(deal: Deal): number | null {
  * asks for the one required confirmation before a delete (`window.confirm`,
  * per the app's existing convention of no custom confirmation component)
  * and otherwise renders what `/deals` returned.
+ *
+ * Asset Types 1: each row shows the deal's classification on its meta line --
+ * one line, so rows stay the height they were -- and an Asset Type filter
+ * narrows the list, including to the legacy "Not specified" deals. Filtering is
+ * presentation only: it hides rows and writes nothing.
  */
 export function DealLibraryPanel({
   deals,
@@ -67,6 +77,9 @@ export function DealLibraryPanel({
   onDelete,
   onClose,
 }: DealLibraryPanelProps) {
+  const [filter, setFilter] = useState<AssetTypeFilterValue>('all');
+  const shown = deals.filter((deal) => matchesAssetTypeFilter([deal.asset_type], filter));
+
   function handleDeleteClick(deal: Deal) {
     if (window.confirm(`Delete "${deal.name}"? This cannot be undone.`)) {
       onDelete(deal);
@@ -96,8 +109,27 @@ export function DealLibraryPanel({
       )}
 
       {!isLoading && !error && deals.length > 0 && (
+        <AssetTypeFilter
+          value={filter}
+          onChange={setFilter}
+          shown={shown.length}
+          total={deals.length}
+          noun="deals"
+        />
+      )}
+
+      {!isLoading && !error && deals.length > 0 && shown.length === 0 && (
+        <div className="empty-state asset-type-filter-empty">
+          No saved deals match this asset type.{' '}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFilter('all')}>
+            Show all asset types
+          </button>
+        </div>
+      )}
+
+      {!isLoading && !error && shown.length > 0 && (
         <ul className="deal-library-list">
-          {deals.map((deal) => (
+          {shown.map((deal) => (
             <li className="deal-library-row" key={deal.id}>
               <div className="deal-library-row-info">
                 <span className="deal-library-row-name-line">
@@ -109,7 +141,12 @@ export function DealLibraryPanel({
                   </span>
                 </span>
                 <span className="deal-library-row-meta">
-                  Updated {formatUpdatedAt(deal.updated_at)} &middot; Purchase Price{' '}
+                  <AssetClassificationText
+                    assetType={deal.asset_type}
+                    assetSubtype={deal.asset_subtype}
+                    layout="inline"
+                  />{' '}
+                  &middot; Updated {formatUpdatedAt(deal.updated_at)} &middot; Purchase Price{' '}
                   {formatCurrency(purchasePriceOf(deal))}
                 </span>
               </div>
