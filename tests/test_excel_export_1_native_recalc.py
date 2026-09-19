@@ -1,0 +1,284 @@
+"""Excel Export 1 -- native spreadsheet recalculation: formula parity and
+mutation proofs.
+
+Every golden workbook is recalculated by desktop Excel (one COM session for
+the whole module), reopened in values mode, and judged by what Excel computed
+-- never by cached values, which the generator deliberately leaves blank.
+
+Opt-in (``ANCHOR_EXCEL_NATIVE_RECALC=1``) and Windows-only: see
+``tests/excel_native_recalc.py``. Skipped rather than faked elsewhere.
+
+The mutation proofs corrupt one representative formula each, in a copy of a
+generated workbook, and require the specific reconciliation row that guards
+that invariant to fail after Excel recalculates -- while an unrelated row
+still passes. A test that only searched formula text could not show that.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Callable
+from pathlib import Path
+
+import openpyxl
+import pytest
+
+from excel_export_golden_cases import (
+    CASES_BY_NAME,
+    GOLDEN_CASES,
+    analyze,
+    blank_cell,
+    build,
+    check_rows,
+    load,
+    read_formula,
+    replace_formula,
+    row_of,
+    set_number,
+    status_block,
+)
+from excel_native_recalc import native_recalc_enabled, recalculate_with_excel
+
+pytestmark = pytest.mark.skipif(
+    not native_recalc_enabled(),
+    reason="native Excel recalculation is opt-in: set ANCHOR_EXCEL_NATIVE_RECALC=1 on Windows with Excel",
+)
+
+MUTATION_CASE = "interest_only_with_fees"  # H = 5: IO, amortization, every fee
+
+
+def _mutations(base: bytes) -> dict[str, bytes]:
+    """name -> mutated workbook bytes, each changing one formula or input."""
+
+    wb = load(base)
+    equity, operating, debt, inputs = (wb[name] for name in ("Equity Cash Flow", "Operating Projection", "Debt Schedule", "Inputs"))
+    exit_noi_row = row_of(equity, "Year 6 NOI (exit NOI)")
+    nsp_row = row_of(equity, "Net sale proceeds")
+    gross_row = row_of(equity, "Gross sale price  (exit NOI / exit cap rate)")
+    payoff_equity_row = row_of(equity, "Debt payoff")
+    ecf_row = row_of(equity, "Total equity cash flow")
+    irr_row = row_of(equity, "Levered IRR")
+    em_row = row_of(equity, "Equity multiple  (returned / invested)")
+    invested_row = row_of(equity, "Total equity invested  (sum of negative periods)")
+    profit_row = row_of(equity, "Total profit")
+    payoff_row = row_of(debt, "Loan payoff at sale (end of Year 5)")
+    month_header = row_of(debt, "Month", start=row_of(debt, "Monthly schedule"))
+    month_30 = month_header + 30
+    # The first match is the section bar of the same name; the NOI row follows it.
+    noi_row = row_of(operating, "Net operating income", start=row_of(operating, "Net operating income") + 1)
+    price_row = row_of(inputs, "Purchase price")
+    ltv_row = row_of(inputs, "Loan-to-value")
+
+    def edit(sheet: str, ref: str, change: Callable[[str], str]) -> bytes:
+        original = read_formula(base, sheet, ref)
+        changed = change(original)
+        assert changed != original, (sheet, ref, original)
+        return replace_formula(base, sheet, ref, changed)
+
+    return {
+        # Exit value must use Year H+1 NOI, not Year H.
+        "exit_noi_period": edit("Equity Cash Flow", f"C{exit_noi_row}", lambda f: f.replace("$H$", "$G$")),
+        # Net sale proceeds must deduct selling costs.
+        "sale_proceeds": edit("Equity Cash Flow", f"H{nsp_row}", lambda f: f"H{gross_row}+H{payoff_equity_row}"),
+        # The balance recurrence must subtract principal every month.
+        "debt_ending_balance": edit("Debt Schedule", f"H{month_30}", lambda f: f.replace(f"-G{month_30}", "")),
+        # The payoff must be the balance at the end of the final hold year.
+        "debt_payoff": edit("Debt Schedule", f"C{payoff_row}", lambda f: f.replace("$G$", "$F$")),
+        # Year 0 is an equity outflow.
+        "equity_cash_flow_sign": edit("Equity Cash Flow", f"C{ecf_row}", lambda f: f.replace("=", "=-", 1) if f.startswith("=") else "-" + f),
+        # The IRR must span Year 0 through Year H.
+        "irr_range": edit("Equity Cash Flow", f"C{irr_row}", lambda f: f.replace(f":$H${ecf_row}", f":$G${ecf_row}")),
+        # The multiple divides by equity invested, not by profit.
+        "equity_multiple_denominator": edit("Equity Cash Flow", f"C{em_row}", lambda f: f.replace(f"/C{invested_row})", f"/C{profit_row})")),
+        # A deleted formula must read as missing, never as zero.
+        "missing_formula": blank_cell(base, "Operating Projection", f"D{noi_row}"),
+        # Editing a Working Input makes a modified model.
+        "working_input_modified": set_number(base, "Inputs", f"C{price_row}", 11_000_000.0),
+        # Tampering with an Original Export value is detected.
+        "original_tampered": set_number(base, "Inputs", f"B{ltv_row}", 0.7),
+    }
+
+
+@pytest.fixture(scope="module")
+def recalculated(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[bytes, bytes]]:
+    """name -> (generated bytes, Excel-recalculated bytes), for every golden
+    case and every mutant, recalculated in one Excel session."""
+
+    work = tmp_path_factory.mktemp("excel_native")
+    generated: dict[str, bytes] = {f"golden:{case.name}": build(case) for case in GOLDEN_CASES}
+    base = generated[f"golden:{MUTATION_CASE}"]
+    generated.update({f"mutant:{name}": data for name, data in _mutations(base).items()})
+    pairs = []
+    for name, data in generated.items():
+        source = work / f"{name.replace(':', '_')}.xlsx"
+        source.write_bytes(data)
+        pairs.append((source, work / f"{name.replace(':', '_')}.recalc.xlsx"))
+    recalculate_with_excel(pairs, work)
+    return {
+        name: (generated[name], destination.read_bytes())
+        for name, (_, destination) in zip(generated, pairs, strict=True)
+    }
+
+
+def _values(recalculated: dict[str, tuple[bytes, bytes]], name: str) -> openpyxl.Workbook:
+    return load(recalculated[name][1], values=True)
+
+
+@pytest.mark.parametrize("case", GOLDEN_CASES, ids=lambda case: case.name)
+def test_every_reconciliation_row_passes_after_native_recalculation(recalculated, case) -> None:  # noqa: ANN001
+    values = _values(recalculated, f"golden:{case.name}")
+    rows = check_rows(values)
+    assert len(rows) > 40
+    failures = {metric for metric, (_, _, _, status) in rows.items() if not status.startswith("Pass")}
+    assert failures == set(case.expected_failures), failures
+    for metric in case.expected_failures:
+        assert rows[metric][3] == "FAIL", (metric, rows[metric])
+    block = status_block(values)
+    assert block["Excel formulas recalculated"] == "Yes"
+    assert block["Workbook modified since export"] == "No"
+    assert block["Original inputs unchanged"] == "Yes"
+    assert block["Anchor reconciliation available"] == "Yes"
+    assert block["Not passed"] == len(case.expected_failures)
+    assert block["Passed"] == len(rows) - len(case.expected_failures)
+
+
+@pytest.mark.parametrize("case", GOLDEN_CASES, ids=lambda case: case.name)
+def test_excel_values_read_back_directly_match_anchor(recalculated, case) -> None:  # noqa: ANN001
+    """Independent of the Checks sheet: read Excel's own model cells and compare
+    them with the engine result in Python."""
+
+    results = analyze(case)
+    values = _values(recalculated, f"golden:{case.name}")
+    equity = values["Equity Cash Flow"]
+    hold = case.inputs.hold_period
+    ecf_row = row_of(equity, "Total equity cash flow")
+    excel_ecf = [equity.cell(ecf_row, 3 + t).value for t in range(hold + 1)]
+    for excel, anchor in zip(excel_ecf, results.levered_cash_flows, strict=True):
+        assert isinstance(excel, (int, float)) and math.isclose(excel, anchor, rel_tol=1e-10, abs_tol=1e-6), (excel, anchor)
+    nsp = equity.cell(row_of(equity, "Net sale proceeds"), 3 + hold).value
+    assert isinstance(nsp, (int, float)) and math.isclose(nsp, results.net_sale_proceeds, rel_tol=1e-10, abs_tol=1e-6)
+    em = equity.cell(row_of(equity, "Equity multiple  (returned / invested)"), 3).value
+    if results.equity_multiple is None:
+        assert em == "Unavailable"
+    else:
+        assert isinstance(em, (int, float)) and math.isclose(em, results.equity_multiple, rel_tol=1e-10, abs_tol=1e-12)
+    irr = equity.cell(row_of(equity, "Levered IRR"), 3).value
+    if results.levered_irr is None and case.name != "outside_anchor_search_domain":
+        assert irr == "Unavailable"
+    elif results.levered_irr is not None:
+        assert isinstance(irr, (int, float)) and abs(irr - results.levered_irr) <= 1e-7, (irr, results.levered_irr)
+
+
+@pytest.mark.parametrize("case", GOLDEN_CASES, ids=lambda case: case.name)
+def test_no_excel_error_values_and_formulas_stay_formulas(recalculated, case) -> None:  # noqa: ANN001
+    generated, native = recalculated[f"golden:{case.name}"]
+    values = load(native, values=True)
+    errors = [
+        (ws.title, cell.coordinate, cell.value)
+        for ws in values.worksheets
+        for row in ws.iter_rows()
+        for cell in row
+        if isinstance(cell.value, str) and cell.value.startswith("#")
+    ]
+    assert errors == []
+
+    def formula_cells(data: bytes) -> set[tuple[str, str]]:
+        wb = load(data)
+        return {
+            (ws.title, cell.coordinate)
+            for ws in wb.worksheets
+            for row in ws.iter_rows()
+            for cell in row
+            if cell.data_type == "f"
+        }
+
+    before, after = formula_cells(generated), formula_cells(native)
+    assert before, "the generated workbook has no formulas"
+    assert before == after
+
+
+def _status(recalculated, name: str, metric: str) -> str:  # noqa: ANN001
+    return check_rows(_values(recalculated, name))[metric][3]
+
+
+@pytest.mark.parametrize(
+    ("mutant", "guarded", "unaffected"),
+    [
+        ("exit_noi_period", "Exit value (gross sale price)", "Net operating income, Year 5"),
+        ("sale_proceeds", "Net sale proceeds", "Exit value (gross sale price)"),
+        ("debt_ending_balance", "Ending loan balance, Year 3", "Ending loan balance, Year 2"),
+        ("debt_payoff", "Debt payoff at sale", "Ending loan balance, Year 5"),
+        ("equity_cash_flow_sign", "Equity cash flow, Year 0", "Equity cash flow, Year 1"),
+        ("equity_cash_flow_sign", "Levered IRR availability", "Unlevered IRR"),
+        ("irr_range", "Levered IRR", "Levered IRR availability"),
+        ("equity_multiple_denominator", "Equity multiple", "Total profit"),
+        ("missing_formula", "Net operating income, Year 2", "Net operating income, Year 1"),
+    ],
+)
+def test_corrupting_a_formula_fails_the_check_that_guards_it(recalculated, mutant, guarded, unaffected) -> None:  # noqa: ANN001
+    base = f"golden:{MUTATION_CASE}"
+    name = f"mutant:{mutant}"
+    assert _status(recalculated, base, guarded) == "Pass"
+    assert _status(recalculated, name, guarded) == "FAIL"
+    assert _status(recalculated, name, unaffected) == "Pass"
+    block = status_block(_values(recalculated, name))
+    not_passed = block["Not passed"]
+    assert isinstance(not_passed, (int, float)) and not_passed >= 1
+    assert block["First check not passed"] != "None"
+    assert str(block["Its location"]).startswith("Checks!F")
+
+
+def test_missing_formula_reads_as_missing_not_zero(recalculated) -> None:  # noqa: ANN001
+    anchor, excel, _, status = check_rows(_values(recalculated, "mutant:missing_formula"))["Net operating income, Year 2"]
+    assert excel == "Missing"
+    assert status == "FAIL"
+    assert isinstance(anchor, (int, float)) and anchor > 0
+
+
+def test_working_input_edit_makes_a_modified_model_and_moves_only_its_dependents(recalculated) -> None:  # noqa: ANN001
+    base = _values(recalculated, f"golden:{MUTATION_CASE}")
+    modified = _values(recalculated, "mutant:working_input_modified")
+    block = status_block(modified)
+    assert block["Workbook modified since export"] == "Yes"
+    assert block["Working inputs that differ from the export"] == 1
+    assert block["Anchor reconciliation available"] == "No: Working Inputs modified"
+    assert str(block["What the comparison means"]).startswith("MODIFIED MODEL")
+    rows = check_rows(modified)
+    assert {status for *_, status in rows.values()} == {"Not like-for-like"}
+    # Frozen Anchor values are untouched by the edit.
+    assert {metric: row[0] for metric, row in check_rows(base).items()} == {metric: row[0] for metric, row in rows.items()}
+    # Downstream of purchase price: moved. Unrelated NOI: unchanged.
+    base_rows = check_rows(base)
+    assert rows["Loan amount"][1] == pytest.approx(11_000_000.0 * 0.65)
+    assert rows["Loan amount"][1] != base_rows["Loan amount"][1]
+    assert rows["Equity cash flow, Year 0"][1] != base_rows["Equity cash flow, Year 0"][1]
+    for year in range(1, 6):
+        metric = f"Net operating income, Year {year}"
+        assert rows[metric][1] == base_rows[metric][1]
+    assert rows["Exit NOI (Year H+1)"][1] == base_rows["Exit NOI (Year H+1)"][1]
+    # The Summary and Inputs say so.
+    inputs = modified["Inputs"]
+    assert inputs.cell(row_of(inputs, "Purchase price"), 5).value == "Modified"
+    assert str(inputs.cell(row_of(inputs, "Model state"), 2).value).startswith("MODIFIED MODEL")
+    summary = modified["Summary"]
+    assert summary.cell(row_of(summary, "Model state"), 2).value == "Yes"
+
+
+def test_restoring_the_input_restores_the_reconciliation(recalculated) -> None:  # noqa: ANN001
+    """The unmodified workbook is the restored state: identical inputs, and
+    every row passes again."""
+
+    block = status_block(_values(recalculated, f"golden:{MUTATION_CASE}"))
+    assert block["Anchor reconciliation available"] == "Yes"
+    assert block["Not passed"] == 0
+
+
+def test_tampering_with_an_original_export_value_is_reported(recalculated) -> None:  # noqa: ANN001
+    block = status_block(_values(recalculated, "mutant:original_tampered"))
+    assert block["Original inputs unchanged"] == "No"
+    assert block["Workbook modified since export"] == "Yes"
+
+
+def test_mutation_case_is_the_one_documented() -> None:
+    assert CASES_BY_NAME[MUTATION_CASE].inputs.hold_period == 5
+    assert Path(__file__).name.startswith("test_excel_export_1")

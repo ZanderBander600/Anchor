@@ -4,10 +4,11 @@
 git query reads objects only (protocol 11.2). The guards hold:
 
 1. **the Asset Types 1 production ledger** -- exactly the declared backend and
-   frontend files changed since ``main`` at ``2e6ca8e``. Measured against the
-   working tree while the gate is open, including untracked files; the next
-   gate re-pins it to the merged, committed range exactly as the AM1 ledger was
-   re-pinned at the P7.9 closeout;
+   frontend files changed from ``main`` at ``2e6ca8e`` to the reviewed branch
+   head ``3337a88``, merged by PR #43 as ``51c5bf1``. Measured against the
+   working tree while the gate was open; **re-pinned at Excel Export 1** to that
+   committed range, exactly as the AM1 ledger was re-pinned at the P7.9
+   closeout, so a later gate's own files are judged by its own ledger;
 2. **no financial module changed** -- no engine, analysis, leasing, Business
    Plan, Capital Structure, Partnership, consolidation, Investment, decision,
    AI, ingestion or fingerprint module, and not the AM1 performance engine;
@@ -36,6 +37,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 #: ``main`` when Asset Types 1 began: PR #42 merged, schema v13.
 _BASE = "2e6ca8e"
+#: The reviewed branch head PR #43 merged, and the merge itself.
+_HEAD = "3337a8873185d2727557f72b1ca7f2e55c73d5a3"
+_MERGE = "51c5bf1973bca6d66ee76ba67927b3ed58da9378"
 
 _STORE = "src/anchor/deals/store.py"
 _API = "src/anchor/api.py"
@@ -135,10 +139,15 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/src/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
-def _changes_since(base: str, *paths: str) -> set[str]:
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+def _changes_between(base: str, head: str, *paths: str) -> set[str]:
+    """The paths a committed range changed. Objects only: no working tree, no
+    index (protocol 11.2)."""
+
+    return {
+        path
+        for path in _git("diff", "--name-only", "--no-renames", base, head, "--", *paths).split()
+        if path
+    }
 
 
 def _current(path: str) -> str:
@@ -177,13 +186,30 @@ def _sql_strings(node: ast.AST) -> list[str]:
 
 
 def test_asset_types_1_changes_exactly_the_declared_backend_files() -> None:
-    changed = {path for path in _changes_since(_BASE, "src") if _is_production(path)}
+    changed = {path for path in _changes_between(_BASE, _HEAD, "src") if _is_production(path)}
     assert changed == _BACKEND_FILES
 
 
 def test_asset_types_1_changes_exactly_the_declared_frontend_files() -> None:
-    changed = {path for path in _changes_since(_BASE, "web/src") if _is_production(path)}
+    changed = {path for path in _changes_between(_BASE, _HEAD, "web/src") if _is_production(path)}
     assert changed == _FRONTEND_FILES
+
+
+def test_the_re_pinned_range_is_the_one_pr_43_merged() -> None:
+    """The committed range is the merged one: ``51c5bf1``'s parents are the
+    base and the reviewed head, both are ancestors of ``HEAD``, and the merge
+    itself changed no production file beyond the head."""
+
+    parents = _git("log", "-1", "--format=%P", _MERGE).split()
+    assert parents == [_git("rev-parse", _BASE).strip(), _HEAD]
+    for ancestor in (_HEAD, _MERGE):
+        completed = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, "HEAD"],
+            cwd=_PROJECT_ROOT,
+            check=False,
+        )
+        assert completed.returncode == 0, ancestor
+    assert _changes_between(_HEAD, _MERGE, "src", "web/src") == set()
 
 
 def test_the_ledger_would_reject_an_undeclared_file() -> None:
@@ -196,7 +222,7 @@ def test_the_ledger_would_reject_an_undeclared_file() -> None:
 
 @pytest.mark.parametrize("path", _UNCHANGED)
 def test_no_financial_or_ai_module_changed(path: str) -> None:
-    assert _changes_since(_BASE, path) == set()
+    assert _changes_between(_BASE, _HEAD, path) == set()
 
 
 # =============================================================================

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime, timezone
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -25,7 +25,7 @@ from fastapi import Body, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import TypeAdapter
 from starlette.datastructures import Headers
-from starlette.responses import PlainTextResponse
+from starlette.responses import PlainTextResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .ai import (
@@ -188,6 +188,16 @@ from .deals.structured_variants import (
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError, SnapshotValidationError
 from .deals import store as investment_store
+from .exports.excel import (
+    XLSX_MEDIA_TYPE,
+    QuickAuditExportError,
+    QuickAuditRefusalCode,
+    build_quick_audit_workbook,
+    content_disposition,
+    quick_audit_filename,
+    quick_audit_source,
+)
+from .exports.excel.provenance import anchor_version, source_commit
 from .deals.variants import (
     ScenarioVariantAnalysis,
     ScenarioVariantFingerprint,
@@ -382,6 +392,9 @@ app.add_middleware(
     ],
     allow_methods=["*"],
     allow_headers=["*"],
+    # Excel Export 1: lets the web client read the server-chosen, sanitized
+    # download filename of a cross-origin attachment response.
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -2356,6 +2369,93 @@ def update_deal_two_way_sensitivity_snapshot(
         ) from None
     except SnapshotValidationError as error:
         raise _snapshot_validation_error_response(error) from None
+
+# =============================================================================
+# Excel Export 1 -- Quick Underwrite formula-audit workbook
+#
+# The one export route. It reads the saved Deal and its saved analysis, refuses
+# with a typed reason when they cannot be exported, and otherwise returns the
+# workbook built by ``anchor.exports.excel``. It writes nothing: no Deal, no
+# snapshot and no fingerprint is touched. The workbook never feeds any result
+# back into Anchor.
+# =============================================================================
+
+_EXPORT_REFUSAL_STATUS: dict[QuickAuditRefusalCode, int] = {
+    QuickAuditRefusalCode.DEAL_NOT_FOUND: status.HTTP_404_NOT_FOUND,
+    QuickAuditRefusalCode.UNSUPPORTED_OPERATING_MODE: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    QuickAuditRefusalCode.ANALYSIS_MISSING: status.HTTP_409_CONFLICT,
+    QuickAuditRefusalCode.ANALYSIS_STALE: status.HTTP_409_CONFLICT,
+    QuickAuditRefusalCode.ANALYSIS_INCONSISTENT: status.HTTP_409_CONFLICT,
+    QuickAuditRefusalCode.HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    QuickAuditRefusalCode.EXPORT_GENERATION_FAILED: status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+_EXPORT_MODE_LABELS: dict[OperatingMode, str] = {
+    OperatingMode.QUICK: "Quick Underwrite",
+    OperatingMode.DETAILED: "Detailed Underwrite",
+    OperatingMode.LEASE_LEVEL: "Lease-Level Underwrite",
+}
+
+
+def _export_refusal(code: QuickAuditRefusalCode, message: str) -> HTTPException:
+    """A typed refusal: a stable ``code`` and an analyst-facing ``message``.
+    Never an exception string, a path or a stack trace."""
+
+    return HTTPException(
+        status_code=_EXPORT_REFUSAL_STATUS[code],
+        detail={"code": code.value, "message": message},
+    )
+
+
+@app.get("/deals/{deal_id}/exports/quick-underwrite.xlsx", response_model=None)
+def export_quick_underwrite_workbook(deal_id: str) -> Response:
+    """Excel Export 1: the saved, currently analysed Quick Deal as a
+    formula-audit workbook. Read-only.
+
+    Eligibility is enforced here, independently of the client: the Deal must
+    exist, be a Quick Underwrite Deal, and carry a saved analysis whose
+    fingerprint matches its saved inputs and Business Plan."""
+
+    try:
+        provenance = investment_store.get_quick_analysis_provenance(deal_id)
+    except DealNotFoundError:
+        raise _export_refusal(
+            QuickAuditRefusalCode.DEAL_NOT_FOUND,
+            "This Deal could not be found. It may have been deleted; refresh the Deal "
+            "Library and try again.",
+        ) from None
+    except UnsupportedOperatingModeError as error:
+        raise _export_refusal(
+            QuickAuditRefusalCode.UNSUPPORTED_OPERATING_MODE,
+            "The audit workbook supports Quick Underwrite Deals only. This Deal uses "
+            f"{_EXPORT_MODE_LABELS.get(error.operating_mode, 'another mode')}.",
+        ) from None
+
+    try:
+        source = quick_audit_source(
+            provenance,
+            generated_at=datetime.now(timezone.utc),
+            anchor_version=anchor_version(),
+            source_commit=source_commit(),
+        )
+        workbook = build_quick_audit_workbook(source)
+    except QuickAuditExportError as error:
+        raise _export_refusal(error.code, error.message) from None
+    except Exception:
+        raise _export_refusal(
+            QuickAuditRefusalCode.EXPORT_GENERATION_FAILED,
+            "The workbook could not be generated. No file was produced; try again.",
+        ) from None
+
+    return Response(
+        content=workbook,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": content_disposition(quick_audit_filename(source.deal_name)),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # =============================================================================

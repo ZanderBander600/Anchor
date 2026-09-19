@@ -1010,6 +1010,12 @@ _BUSINESS_PLAN_IMPORTS = {
     # (``tests/test_p7_6_consolidation_architecture.py``).
     "anchor/deals/investment_variants.py": {"BusinessPlan", "resolve_business_plan"},
     "anchor/investment/validation.py": {"BusinessPlan", "validate_business_plan"},
+    # Widened at Excel Export 1 by exactly one file, which names the contract
+    # only: the workbook source carries the saved Deal's plan so the workbook
+    # can list its items for reference. Nothing in the export resolves a plan;
+    # the annual totals it shows are the saved analysis's own
+    # (``tests/test_excel_export_1_architecture.py``).
+    "anchor/exports/excel/source.py": {"BusinessPlan"},
     "anchor/deals/store.py": {
         "BusinessPlan",
         "CapitalItemCategory",

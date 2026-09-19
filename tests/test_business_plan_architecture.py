@@ -334,6 +334,11 @@ def test_exactly_one_module_outside_the_package_imports_anchor_business_plan() -
         # (``tests/test_p7_6_consolidation_architecture.py``).
         "anchor/deals/investment_variants.py",
         "anchor/deals/store.py",
+        # **Narrowed at Excel Export 1 -- by exactly one named file.** The
+        # workbook source names ``BusinessPlan`` to carry the saved Deal's plan
+        # for display; it resolves nothing
+        # (``tests/test_excel_export_1_architecture.py``).
+        "anchor/exports/excel/source.py",
         "anchor/investment/validation.py",
     ], f"anchor.business_plan is imported by {importers}"
 

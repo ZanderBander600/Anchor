@@ -41,6 +41,19 @@ function formatLastSaved(iso: string): string | null {
   return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+/** Excel Export 1 -- the Quick Underwrite audit-workbook action. The caller
+ * decides availability from its own saved/dirty/analysed state; the server
+ * enforces eligibility again from what is stored. */
+export interface WorkbookExportAction {
+  /** Null when the action is available; otherwise what the analyst must do
+   * first, shown beside the disabled menu item. */
+  blockedReason: string | null;
+  isExporting: boolean;
+  onExport: () => void;
+  /** The outcome of the last attempt, if any. */
+  message: { tone: 'status' | 'error'; text: string } | null;
+}
+
 export interface DealHeaderProps {
   dealName: string;
   onDealNameChange: (value: string) => void;
@@ -57,6 +70,8 @@ export interface DealHeaderProps {
   /** Overflow actions, enabled only for an already-saved deal. */
   onDuplicateDeal: () => void;
   onDeleteDeal: () => void;
+  /** Present only for a mode that offers the audit workbook (Quick). */
+  workbookExport?: WorkbookExportAction | null;
 }
 
 /**
@@ -89,6 +104,7 @@ export function DealHeader({
   isAnalyzing,
   onDuplicateDeal,
   onDeleteDeal,
+  workbookExport = null,
 }: DealHeaderProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -194,6 +210,30 @@ export function DealHeader({
 
             {isMenuOpen && (
               <div className="deal-header-menu-popover" role="menu">
+                {workbookExport && (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="deal-header-menu-item"
+                      disabled={workbookExport.blockedReason !== null || workbookExport.isExporting}
+                      aria-describedby={
+                        workbookExport.blockedReason !== null ? 'workbook-export-note' : undefined
+                      }
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        workbookExport.onExport();
+                      }}
+                    >
+                      {workbookExport.isExporting ? 'Exporting Excel audit…' : 'Export Excel audit (.xlsx)'}
+                    </button>
+                    {workbookExport.blockedReason !== null && (
+                      <p className="deal-header-menu-note" id="workbook-export-note">
+                        {workbookExport.blockedReason}
+                      </p>
+                    )}
+                  </>
+                )}
                 <button
                   type="button"
                   role="menuitem"
@@ -252,6 +292,16 @@ export function DealHeader({
       </div>
 
       {error && <div className="error-banner deal-header-error">{error}</div>}
+      {workbookExport?.message &&
+        (workbookExport.message.tone === 'error' ? (
+          <div className="error-banner deal-header-error" role="alert">
+            {workbookExport.message.text}
+          </div>
+        ) : (
+          <p className="deal-header-export-status" role="status">
+            {workbookExport.message.text}
+          </p>
+        ))}
     </header>
   );
 }
