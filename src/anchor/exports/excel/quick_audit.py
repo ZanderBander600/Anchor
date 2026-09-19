@@ -120,6 +120,12 @@ IRR_TOLERANCE = 1e-7
 FONT = "Arial"
 NAVY = "#1F3864"
 HEADER_FILL = "#DCE3EE"
+#: The vertical rule between one column header and the next. Header labels are
+#: aligned to their own column's data -- a number's header right, a text
+#: column's header left -- so a right-aligned header and the left-aligned one
+#: beside it meet at their shared cell boundary and read as a single run of
+#: words. The rule is what keeps every header its own.
+HEADER_RULE = "#8FA0BC"
 SUBSECTION_FILL = "#EEF1F6"
 INPUT_BLUE = "#0000FF"
 INPUT_FILL = "#FFF7DC"
@@ -144,6 +150,14 @@ NUM_DATETIME = "yyyy-mm-dd hh:mm:ss"
 LABEL_WIDTH = 58
 UNITS_WIDTH = 21
 PERIOD_WIDTH = 14
+#: Excel's own width for a column whose width this workbook never sets.
+DEFAULT_COLUMN_WIDTH = 8.43
+#: A column width counts characters of the body font; a bold header character
+#: is wider, and the cell keeps a character of padding. A header longer than
+#: its column's allowance wraps rather than being clipped by its neighbour.
+HEADER_CHARS_PER_WIDTH = 0.92
+#: Row height, in points, for one line of a wrapped header.
+HEADER_LINE_HEIGHT = 13.5
 
 _PROTECTION = {
     "select_locked_cells": True,
@@ -243,8 +257,24 @@ class _Formats:
     def subsection(self) -> Format:
         return self.get(bold=True, bg_color=SUBSECTION_FILL)
 
-    def header(self, *, align: str = "right") -> Format:
-        return self.get(bold=True, bg_color=HEADER_FILL, bottom=1, align=align)
+    def header(self, *, align: str = "right", wrap: bool = False) -> Format:
+        """One column header: the band's fill, its rule underneath, and a
+        vertical rule on its right edge separating it from the next header."""
+
+        properties: dict[str, Any] = {
+            "bold": True,
+            "bg_color": HEADER_FILL,
+            "bottom": 1,
+            "right": 1,
+            "right_color": HEADER_RULE,
+            "align": align,
+            # Bottom, not centred: a wrapped header's last line then sits on
+            # the same baseline as the single-line headers beside it.
+            "valign": "bottom",
+        }
+        if wrap:
+            properties["text_wrap"] = True
+        return self.get(**properties)
 
     def label(self, *, bold: bool = False, indent: int = 0) -> Format:
         properties: dict[str, Any] = {"bold": bold} if bold else {}
@@ -315,6 +345,8 @@ class _QuickAuditWorkbook:
         self.sheets: dict[str, Worksheet] = {
             name: self.book.add_worksheet(name) for name in SHEET_ORDER
         }
+        #: Column widths as they are set, so a header knows its own room.
+        self.column_width: dict[str, dict[int, float]] = {name: {} for name in SHEET_ORDER}
         #: Excel-model cells by key, for Checks and Summary.
         self.excel: dict[str, str] = {}
         #: Anchor constants by the same keys.
@@ -427,14 +459,60 @@ class _QuickAuditWorkbook:
         ws.write_string(1, 0, note, self.fmt.note())
         ws.set_row(0, 22)
 
-    def _period_header(
-        self, sheet: str, row: int, first_col: int, labels: Sequence[str], left: str = "Period"
-    ) -> None:
+    def _set_column(self, sheet: str, first: int, last: int, width: float) -> None:
+        """Set a column width and remember it: ``_headers`` wraps a header
+        that is too long for the column it sits in, so every width must be
+        known before that sheet's headers are written."""
+
+        self.sheets[sheet].set_column(first, last, width)
+        widths = self.column_width[sheet]
+        for col in range(first, last + 1):
+            widths[col] = width
+
+    def _header_lines(self, sheet: str, col: int, text: str) -> int:
+        width = self.column_width[sheet].get(col, DEFAULT_COLUMN_WIDTH)
+        per_line = max(1, int((width - 1) * HEADER_CHARS_PER_WIDTH))
+        return max(1, -(-len(text) // per_line))
+
+    def _headers(self, sheet: str, row: int, cells: Sequence[tuple[int, str, str]]) -> None:
+        """Write one band of column headers, as ``(column, text, alignment)``.
+
+        Every header carries the band's vertical rule, so two headers never
+        read as one label however they are aligned. A header longer than its
+        column wraps instead of being clipped by the header beside it, and the
+        row grows to hold the tallest one. An empty text writes the band
+        across a column that has no header of its own."""
+
         ws = self.sheets[sheet]
-        ws.write_string(row, 0, left, self.fmt.header(align="left"))
-        ws.write_blank(row, 1, None, self.fmt.header())
-        for offset, text in enumerate(labels):
-            ws.write_string(row, first_col + offset, text, self.fmt.header())
+        lines = {col: self._header_lines(sheet, col, text) for col, text, _ in cells}
+        for col, text, align in cells:
+            cell_format = self.fmt.header(align=align, wrap=lines[col] > 1)
+            if text:
+                ws.write_string(row, col, text, cell_format)
+            else:
+                ws.write_blank(row, col, None, cell_format)
+        tallest = max(lines.values(), default=1)
+        if tallest > 1:
+            ws.set_row(row, HEADER_LINE_HEIGHT * tallest)
+
+    def _period_header(
+        self,
+        sheet: str,
+        row: int,
+        first_col: int,
+        labels: Sequence[str],
+        left: str = "Period",
+        second: str = "",
+    ) -> None:
+        self._headers(
+            sheet,
+            row,
+            [
+                (0, left, "left"),
+                (1, second, "right"),
+                *((first_col + offset, text, "right") for offset, text in enumerate(labels)),
+            ],
+        )
 
     def _frozen(self, sheet: str, row: int, col: int, value: float | str | None, number_format: str) -> str:
         """Write one Anchor constant: a number, or ``Unavailable``."""
@@ -450,12 +528,15 @@ class _QuickAuditWorkbook:
         return _xref(sheet, row, col)
 
     def _base_layout(self, sheet: str, period_columns: int) -> None:
+        """The sheet's page and column layout. Called before the sheet is
+        filled, so every header can be measured against its column."""
+
         ws = self.sheets[sheet]
         ws.hide_gridlines(2)
-        ws.set_column(0, 0, LABEL_WIDTH)
-        ws.set_column(1, 1, UNITS_WIDTH)
+        self._set_column(sheet, 0, 0, LABEL_WIDTH)
+        self._set_column(sheet, 1, 1, UNITS_WIDTH)
         if period_columns:
-            ws.set_column(2, 1 + period_columns, PERIOD_WIDTH)
+            self._set_column(sheet, 2, 1 + period_columns, PERIOD_WIDTH)
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
         ws.protect("", _PROTECTION)
@@ -544,6 +625,7 @@ class _QuickAuditWorkbook:
     def _build_inputs(self) -> None:
         sheet = INPUTS
         ws = self.sheets[sheet]
+        self._inputs_layout()
         self._title(
             sheet,
             "Inputs",
@@ -560,11 +642,17 @@ class _QuickAuditWorkbook:
         ws.write_string(3, 0, "Model state", self.fmt.label(bold=True))
         _write_formula(ws, 3, 1, "=Model_State", self.fmt.status("link"), NOT_RECALCULATED)
         header_row = 5
-        ws.write_string(header_row, 0, "Assumption", self.fmt.header(align="left"))
-        ws.write_string(header_row, 1, "Original Export", self.fmt.header())
-        ws.write_string(header_row, 2, "Working Input", self.fmt.header())
-        ws.write_string(header_row, 3, "Units", self.fmt.header(align="left"))
-        ws.write_string(header_row, 4, "Status", self.fmt.header(align="left"))
+        self._headers(
+            sheet,
+            header_row,
+            [
+                (0, "Assumption", "left"),
+                (1, "Original Export", "right"),
+                (2, "Working Input", "right"),
+                (3, "Units", "left"),
+                (4, "Status", "left"),
+            ],
+        )
 
         row = header_row + 1
         self.inputs_first_row = row
@@ -584,8 +672,10 @@ class _QuickAuditWorkbook:
         row += 1
         first_col = 2
         last_col = first_col + self.hold - 1
-        self._period_header(sheet, row, first_col, [f"Year {year}" for year in self.years], left="Business Plan by year")
-        ws.write_string(row, 1, "Units", self.fmt.header())
+        self._period_header(
+            sheet, row, first_col, [f"Year {year}" for year in self.years],
+            left="Business Plan by year", second="Units",
+        )
         row += 1
         self.bp_rows: dict[str, tuple[int, int]] = {}
         series = (
@@ -624,15 +714,21 @@ class _QuickAuditWorkbook:
         row += 2
 
         self._build_business_plan_items(row)
-
-        ws.hide_gridlines(2)
-        ws.set_column(0, 0, LABEL_WIDTH)
-        ws.set_column(1, 2, UNITS_WIDTH)
-        ws.set_column(3, 3, 30)
-        ws.set_column(4, 4, 36)
-        if self.hold > 3:
-            ws.set_column(5, first_col + self.hold - 1, PERIOD_WIDTH)
         ws.freeze_panes(header_row + 1, 1)
+
+    def _inputs_layout(self) -> None:
+        """Inputs has its own column widths (two value columns, then Units and
+        Status), set before anything is written so the headers can wrap."""
+
+        sheet = INPUTS
+        ws = self.sheets[sheet]
+        ws.hide_gridlines(2)
+        self._set_column(sheet, 0, 0, LABEL_WIDTH)
+        self._set_column(sheet, 1, 2, UNITS_WIDTH)
+        self._set_column(sheet, 3, 3, 30)
+        self._set_column(sheet, 4, 4, 36)
+        if self.hold > 3:
+            self._set_column(sheet, 5, 1 + self.hold, PERIOD_WIDTH)
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
         ws.protect("", _PROTECTION)
@@ -676,11 +772,17 @@ class _QuickAuditWorkbook:
 
         frozen_text = self.fmt.get(font_color=FROZEN_GRAY, bg_color=FROZEN_FILL)
         if plan.capital_items:
-            ws.write_string(row, 0, "Capital item", self.fmt.header(align="left"))
-            ws.write_string(row, 1, "Model month", self.fmt.header())
-            ws.write_string(row, 2, "Amount", self.fmt.header())
-            ws.write_string(row, 3, "Category", self.fmt.header(align="left"))
-            ws.write_blank(row, 4, None, self.fmt.header())
+            self._headers(
+                sheet,
+                row,
+                [
+                    (0, "Capital item", "left"),
+                    (1, "Model month", "right"),
+                    (2, "Amount", "right"),
+                    (3, "Category", "left"),
+                    (4, "", "left"),
+                ],
+            )
             row += 1
             first = row
             for item in plan.capital_items:
@@ -693,11 +795,17 @@ class _QuickAuditWorkbook:
             ws.write_string(row, 0, "Month 0 is closing; months 1 to 12H fall in hold year ((month - 1) / 12) + 1; later months are post-hold.", self.fmt.note())
             row += 2
         if plan.owner_expense_items:
-            ws.write_string(row, 0, "Owner-expense item", self.fmt.header(align="left"))
-            ws.write_string(row, 1, "First year", self.fmt.header())
-            ws.write_string(row, 2, "Annual amount", self.fmt.header())
-            ws.write_string(row, 3, "Last year (blank = through hold)", self.fmt.header(align="left"))
-            ws.write_string(row, 4, "Category", self.fmt.header(align="left"))
+            self._headers(
+                sheet,
+                row,
+                [
+                    (0, "Owner-expense item", "left"),
+                    (1, "First year", "right"),
+                    (2, "Annual amount", "right"),
+                    (3, "Last year (blank = through hold)", "left"),
+                    (4, "Category", "left"),
+                ],
+            )
             row += 1
             first = row
             for item in plan.owner_expense_items:
@@ -714,8 +822,10 @@ class _QuickAuditWorkbook:
             row += 1
 
         # Excel's own resolution of the items, reconciled against Anchor's.
-        self._period_header(sheet, row, self.bp_first_col, [f"Year {year}" for year in self.years], left="Items resolved by Excel")
-        ws.write_string(row, 1, "Year 0", self.fmt.header())
+        self._period_header(
+            sheet, row, self.bp_first_col, [f"Year {year}" for year in self.years],
+            left="Items resolved by Excel", second="Year 0",
+        )
         row += 1
         self._label(sheet, row, "Project capital from items")
         self._label(sheet, row + 1, "Owner expenses from items")
@@ -758,6 +868,7 @@ class _QuickAuditWorkbook:
         first_col = 2
         forward_col = first_col + hold
         last_col = forward_col
+        self._base_layout(sheet, hold + 1)
         self._title(
             sheet,
             "Operating Projection",
@@ -858,7 +969,6 @@ class _QuickAuditWorkbook:
         self.excel["going_in_cap_rate"] = self._formula(
             sheet, row, 2, f"={_cell(noi_row, first_col)}/{a['purchase_price']}", "calc", NUM_PERCENT
         )
-        self._base_layout(sheet, hold + 1)
         ws.freeze_panes(0, 2)
 
     # ----------------------------------------------------------- Debt Schedule
@@ -869,6 +979,7 @@ class _QuickAuditWorkbook:
         hold = self.hold
         first_col = 2
         last_col = max(first_col + hold - 1, 7)
+        self._base_layout(sheet, max(hold, 6))
         self._title(
             sheet,
             "Debt Schedule",
@@ -1000,8 +1111,11 @@ class _QuickAuditWorkbook:
         # Monthly schedule.
         self._section(sheet, monthly_section, "Monthly schedule", last_col)
         headers = ("Month", "Hold year", "Phase", "Beginning balance", "Payment", "Interest", "Principal", "Ending balance")
-        for col, text in enumerate(headers):
-            ws.write_string(monthly_header, col, text, self.fmt.header(align="left" if col in (0, 2) else "right"))
+        self._headers(
+            sheet,
+            monthly_header,
+            [(col, text, "left" if col in (0, 2) else "right") for col, text in enumerate(headers)],
+        )
         phase_format = self.fmt.get(font_color=NOTE_GRAY)
         month_format = self.fmt.get(align="left", num_format="0")
         year_format = self.fmt.value("calc", NUM_INTEGER)
@@ -1025,7 +1139,6 @@ class _QuickAuditWorkbook:
             self._formula(sheet, r, 5, f"={_cell(r, 3)}*{T['r']}", "calc", NUM_CURRENCY_CENTS)
             self._formula(sheet, r, 6, f"={_cell(r, 4)}-{_cell(r, 5)}", "calc", NUM_CURRENCY_CENTS)
             self._formula(sheet, r, 7, f"=IF({m}={T['maturity']},0,{_cell(r, 3)}-{_cell(r, 6)})", "calc", NUM_CURRENCY_CENTS)
-        self._base_layout(sheet, max(hold, 6))
         ws.freeze_panes(0, 2)
 
     # -------------------------------------------------------- Equity Cash Flow
@@ -1037,6 +1150,7 @@ class _QuickAuditWorkbook:
         c0 = 2  # Year 0
         cH = c0 + hold
         last_col = cH
+        self._base_layout(sheet, hold + 1)
         self._title(
             sheet,
             "Equity Cash Flow",
@@ -1231,7 +1345,6 @@ class _QuickAuditWorkbook:
             )
         row = r_yield + 1
         row = self._irr_block(sheet, row, r_ucf, c0, cH, "unlevered", "Unlevered IRR", hold=a["hold"])
-        self._base_layout(sheet, hold + 1)
         ws.freeze_panes(0, 2)
 
     def _irr_block(
@@ -1349,6 +1462,7 @@ class _QuickAuditWorkbook:
         hold = self.hold
         c0 = 2
         last_col = c0 + hold
+        self._base_layout(sheet, hold + 1)
         self._title(
             sheet,
             "Anchor Results (frozen at export)",
@@ -1358,9 +1472,7 @@ class _QuickAuditWorkbook:
         row = 3
         self._section(sheet, row, "Headline and summary results", last_col)
         row += 1
-        ws.write_string(row, 0, "Result", self.fmt.header(align="left"))
-        ws.write_string(row, 1, "Units", self.fmt.header(align="left"))
-        ws.write_string(row, 2, "Anchor", self.fmt.header())
+        self._headers(sheet, row, [(0, "Result", "left"), (1, "Units", "left"), (2, "Anchor", "right")])
         row += 1
         scalars: tuple[tuple[str, str, str, float | str | None, str], ...] = (
             ("hold_period", "Hold period", "years", float(len(results.noi_by_year)), NUM_INTEGER),
@@ -1467,7 +1579,6 @@ class _QuickAuditWorkbook:
                 self._frozen(sheet, row, c0 + 1 + offset, value, NUM_CURRENCY)
             self.record_bp_rows[key] = row
             row += 1
-        self._base_layout(sheet, hold + 1)
         ws.freeze_panes(0, 2)
 
     # ----------------------------------------------------------------- Checks
@@ -1598,6 +1709,7 @@ class _QuickAuditWorkbook:
     def _build_checks(self) -> None:
         sheet = CHECKS
         ws = self.sheets[sheet]
+        self._checks_layout()
         self._title(
             sheet,
             "Checks",
@@ -1674,8 +1786,11 @@ class _QuickAuditWorkbook:
         self._section(sheet, row, "Reconciliation", last_col)
         row += 1
         headers = ("Metric", "Anchor Result", "Excel Result", "Difference", "Tolerance", "Status", "Excel location", "Open")
-        for col, text in enumerate(headers):
-            ws.write_string(row, col, text, self.fmt.header(align="left" if col in (0, 5, 6) else "right"))
+        self._headers(
+            sheet,
+            row,
+            [(col, text, "left" if col in (0, 5, 6) else "right") for col, text in enumerate(headers)],
+        )
         header_row = row
         row += 1
         first_check_row = row
@@ -1743,14 +1858,22 @@ class _QuickAuditWorkbook:
                 {"type": "text", "criteria": criteria, "value": text, "format": cell_format},
             )
 
-        ws.hide_gridlines(2)
-        ws.set_column(0, 0, LABEL_WIDTH)
-        ws.set_column(1, 2, 18)
-        ws.set_column(3, 4, 12)
-        ws.set_column(5, 5, 24)
-        ws.set_column(6, 6, 34)
-        ws.set_column(7, 7, 7)
         ws.freeze_panes(header_row + 1, 1)
+
+    def _checks_layout(self) -> None:
+        """Checks has its own column widths (two value columns, a difference
+        and a tolerance, the status, the location and the open flag), set
+        before anything is written so the headers can wrap."""
+
+        sheet = CHECKS
+        ws = self.sheets[sheet]
+        ws.hide_gridlines(2)
+        self._set_column(sheet, 0, 0, LABEL_WIDTH)
+        self._set_column(sheet, 1, 2, 18)
+        self._set_column(sheet, 3, 4, 12)
+        self._set_column(sheet, 5, 5, 24)
+        self._set_column(sheet, 6, 6, 34)
+        self._set_column(sheet, 7, 7, 7)
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
         ws.protect("", _PROTECTION)
@@ -1810,6 +1933,7 @@ class _QuickAuditWorkbook:
         sheet = SUMMARY
         ws = self.sheets[sheet]
         source = self.source
+        self._summary_layout()
         ws.write_string(0, 0, "Quick Underwrite Audit", self.fmt.title())
         ws.set_row(0, 22)
         ws.write_string(1, 0, source.deal_name, self.fmt.get(bold=True, font_size=12))
@@ -1848,8 +1972,14 @@ class _QuickAuditWorkbook:
 
         self._section(sheet, row, "Key metrics", 3)
         row += 1
-        for col, text in enumerate(("Metric", "Excel model", "Anchor (exported)", "Check")):
-            ws.write_string(row, col, text, self.fmt.header(align="left" if col in (0, 3) else "right"))
+        self._headers(
+            sheet,
+            row,
+            [
+                (col, text, "left" if col in (0, 3) else "right")
+                for col, text in enumerate(("Metric", "Excel model", "Anchor (exported)", "Check"))
+            ],
+        )
         row += 1
         metrics = (
             ("Purchase price", self.excel["input:purchase_price"], self.excel["original:purchase_price"], None, NUM_CURRENCY),
@@ -1935,10 +2065,16 @@ class _QuickAuditWorkbook:
         ws.write_number(row, 2, 0, self.fmt.value("calc", NUM_CURRENCY))
         ws.write_string(row, 3, UNAVAILABLE, self.fmt.get(align="left"))
 
+    def _summary_layout(self) -> None:
+        """Summary is a four-column sheet (metric, Excel, Anchor, check), laid
+        out before anything is written so the headers can wrap."""
+
+        sheet = SUMMARY
+        ws = self.sheets[sheet]
         ws.hide_gridlines(2)
-        ws.set_column(0, 0, 40)
-        ws.set_column(1, 2, 20)
-        ws.set_column(3, 3, 44)
+        self._set_column(sheet, 0, 0, 40)
+        self._set_column(sheet, 1, 2, 20)
+        self._set_column(sheet, 3, 3, 44)
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
         ws.protect("", _PROTECTION)
@@ -2005,8 +2141,8 @@ class _QuickAuditWorkbook:
             ws.write_string(row, 1, value, self.fmt.text(wrap=True))
             row += 1
         ws.hide_gridlines(2)
-        ws.set_column(0, 0, 36)
-        ws.set_column(1, 1, 110)
+        self._set_column(sheet, 0, 0, 36)
+        self._set_column(sheet, 1, 1, 110)
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
         ws.protect("", _PROTECTION)

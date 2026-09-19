@@ -536,6 +536,253 @@ def test_business_plan_items_are_listed_and_resolved_independently(plan_bytes: b
 
 
 # =============================================================================
+# Column headers: one header, one column
+# =============================================================================
+#
+# Headers are aligned to the data they label -- a number column's header right,
+# a text column's header left -- so a right-aligned header and the left-aligned
+# one beside it meet at their shared cell boundary and read as a single run of
+# words ("Working InputUnits"). Every header therefore carries a vertical rule
+# on its right edge, and a header too long for its column wraps instead of
+# being clipped by its neighbour.
+
+
+HEADER_FILL = "FFDCE3EE"
+HEADER_RULE = "FF8FA0BC"
+#: One line of a wrapped header, in points.
+HEADER_LINE_HEIGHT = 13.5
+
+
+def _is_header(cell: Any) -> bool:
+    return (
+        cell.fill is not None
+        and cell.fill.fgColor is not None
+        and cell.fill.fgColor.rgb == HEADER_FILL
+        and cell.font is not None
+        and bool(cell.font.bold)
+    )
+
+
+def _header_bands(ws: Worksheet) -> dict[int, list[Any]]:
+    """Every row of column headers on ``ws``, as row -> its header cells."""
+
+    bands: dict[int, list[Any]] = {}
+    for row in ws.iter_rows():
+        headers: list[Any] = [cell for cell in row if _is_header(cell)]
+        if headers:
+            bands[int(headers[0].row)] = headers
+    return bands
+
+
+def _column_widths(data: bytes, sheet: str) -> dict[int, float]:
+    """Stored width per 1-based column. Read from the sheet part because
+    openpyxl registers only the first column of a width span."""
+
+    part = f"xl/worksheets/sheet{EXPECTED_SHEETS.index(sheet) + 1}.xml"
+    xml = zipfile.ZipFile(io.BytesIO(data)).read(part).decode()
+    widths: dict[int, float] = {}
+    for attrs in re.findall(r"<col ([^>]*?)/?>", xml):
+        found = dict(re.findall(r'(\w+)="([^"]*)"', attrs))
+        if "width" not in found:
+            continue
+        for col in range(int(found["min"]), int(found["max"]) + 1):
+            widths[col] = float(found["width"])
+    return widths
+
+
+def _lines_needed(text: str, width: float) -> int:
+    """How many lines this header needs, counting one character per unit of
+    column width -- an independently generous reading of Excel's own unit."""
+
+    return max(1, -(-len(text) // max(1, int(width))))
+
+
+def _band_cells(data: bytes, sheet: str, row: int) -> list[tuple[int, str, str, bool, float]]:
+    """``(column, text, alignment, wrapped, width)`` for one header band."""
+
+    ws = load(data)[sheet]
+    widths = _column_widths(data, sheet)
+    return [
+        (
+            int(cell.column),
+            str(cell.value) if cell.value is not None else "",
+            cell.alignment.horizontal or "general",
+            bool(cell.alignment.wrap_text),
+            widths[int(cell.column)],
+        )
+        for cell in _header_bands(ws)[row]
+    ]
+
+
+def _every_band(data: bytes) -> list[tuple[str, int, list[Any]]]:
+    wb = load(data)
+    return [(ws.title, row, cells) for ws in wb.worksheets for row, cells in _header_bands(ws).items()]
+
+
+def test_every_column_header_is_ruled_off_from_the_one_beside_it(plan_bytes: bytes) -> None:
+    bands = _every_band(plan_bytes)
+    # Seven sheets carry column headers; Audit Metadata is label-and-value rows.
+    assert {sheet for sheet, _, _ in bands} == set(EXPECTED_SHEETS) - {"Audit Metadata"}
+    for sheet, row, cells in bands:
+        columns = [cell.column for cell in cells]
+        assert columns == list(range(columns[0], columns[0] + len(columns))), (sheet, row)
+        for cell in cells:
+            right = cell.border.right
+            assert right is not None and right.style == "thin", (sheet, cell.coordinate)
+            assert right.color is not None and right.color.rgb == HEADER_RULE, (sheet, cell.coordinate)
+            assert cell.border.bottom is not None and cell.border.bottom.style == "thin", (sheet, cell.coordinate)
+
+
+#: The header pairs reported as running together, located by their own text.
+#: Each is a right-aligned header immediately followed by a left-aligned one.
+REPORTED_COLLISIONS = (
+    ("Inputs", "Assumption", "Working Input", "Units"),
+    ("Inputs", "Capital item", "Amount", "Category"),
+    ("Inputs", "Owner-expense item", "Annual amount", "Last year (blank = through hold)"),
+    ("Debt Schedule", "Month", "Hold year", "Phase"),
+    ("Checks", "Metric", "Tolerance", "Status"),
+    # Found on the same sweep: Summary's key-metric table has the same pair.
+    ("Summary", "Metric", "Anchor (exported)", "Check"),
+)
+
+
+@pytest.mark.parametrize(
+    ("sheet", "anchor_label", "right_header", "left_header"),
+    REPORTED_COLLISIONS,
+    ids=[f"{sheet}:{right}|{left}" for sheet, _, right, left in REPORTED_COLLISIONS],
+)
+def test_each_reported_header_pair_is_adjacent_right_then_left_and_separated(
+    plan_bytes: bytes, sheet: str, anchor_label: str, right_header: str, left_header: str
+) -> None:
+    """The defect and its correction in one assertion: the two headers really
+    do meet at a shared boundary with opposite alignments, and the rule between
+    them is what keeps them apart. Located by the band's own first label, never
+    by a row number."""
+
+    ws = load(plan_bytes)[sheet]
+    start = row_of(ws, "Monthly schedule") if anchor_label == "Month" else 1
+    row = row_of(ws, anchor_label, start=start)
+    band = {text: (col, align, wrapped, width) for col, text, align, wrapped, width in _band_cells(plan_bytes, sheet, row)}
+    right_col, right_align, _, _ = band[right_header]
+    left_col, left_align, _, _ = band[left_header]
+    assert left_col == right_col + 1, (sheet, right_header, left_header)
+    assert (right_align, left_align) == ("right", "left"), (sheet, right_header, left_header)
+    for cell in (ws.cell(row, right_col), ws.cell(row, left_col)):
+        assert cell.border.right.style == "thin" and cell.border.right.color.rgb == HEADER_RULE, cell.coordinate
+
+
+def test_no_header_is_clipped_by_its_neighbour(plan_bytes: bytes) -> None:
+    """A header either fits its own column or wraps, and a row holding a
+    wrapped header is tall enough to show every line of it."""
+
+    wb = load(plan_bytes)
+    wrapped: list[tuple[str, str]] = []
+    for sheet in EXPECTED_SHEETS:
+        ws = wb[sheet]
+        widths = _column_widths(plan_bytes, sheet)
+        for row, cells in _header_bands(ws).items():
+            height = ws.row_dimensions[row].height
+            for cell in cells:
+                text = str(cell.value) if cell.value is not None else ""
+                width = widths[int(cell.column)]
+                if cell.alignment.wrap_text:
+                    wrapped.append((sheet, text))
+                    lines = _lines_needed(text, width)
+                    assert height is not None and height >= HEADER_LINE_HEIGHT * lines, (sheet, cell.coordinate, height)
+                    continue
+                # Unwrapped, so it must fit: one character per unit of column
+                # width is a generous reading of Excel's unit (a bold header
+                # character is wider), so failing it means certain clipping.
+                assert len(text) <= width, (sheet, cell.coordinate, text, width)
+    # Only genuinely long headers wrap: the rest keep the default row height.
+    assert sorted(wrapped) == [
+        ("Debt Schedule", "Beginning balance"),
+        ("Debt Schedule", "Ending balance"),
+        ("Inputs", "Last year (blank = through hold)"),
+    ]
+
+
+def test_only_a_sheet_title_or_a_wrapped_header_sets_a_row_height(plan_bytes: bytes) -> None:
+    """The correction grew two header rows and nothing else."""
+
+    wb = load(plan_bytes)
+    heights = {
+        (ws.title, row): dimension.height
+        for ws in wb.worksheets
+        for row, dimension in ws.row_dimensions.items()
+        if dimension.height is not None
+    }
+    titles = {(sheet, 1): 22.0 for sheet in EXPECTED_SHEETS}
+    grown = {key: height for key, height in heights.items() if key not in titles}
+    assert {key: height for key, height in heights.items() if key in titles} == titles
+    assert sorted(grown) == [("Debt Schedule", 38), ("Inputs", 45)]
+    assert set(grown.values()) == {2 * HEADER_LINE_HEIGHT}
+
+
+def _effective_alignment(cell: Any) -> str:
+    """Excel's General alignment resolved the way it renders: text left,
+    numbers right."""
+
+    if cell.alignment.horizontal:
+        return cell.alignment.horizontal
+    return "right" if isinstance(cell.value, (int, float)) else "left"
+
+
+@pytest.mark.parametrize(
+    ("sheet", "anchor_label", "header"),
+    [
+        ("Debt Schedule", "Month", "Hold year"),
+        ("Debt Schedule", "Month", "Phase"),
+        ("Debt Schedule", "Month", "Beginning balance"),
+        ("Checks", "Metric", "Tolerance"),
+        ("Checks", "Metric", "Status"),
+        ("Checks", "Metric", "Excel location"),
+        ("Inputs", "Assumption", "Working Input"),
+        ("Inputs", "Assumption", "Units"),
+    ],
+)
+def test_a_header_keeps_the_alignment_of_the_column_it_labels(
+    plan_bytes: bytes, sheet: str, anchor_label: str, header: str
+) -> None:
+    """Separation comes from the rule, not from moving headers away from their
+    own data: each header is still aligned like the first value beneath it."""
+
+    ws = load(plan_bytes)[sheet]
+    start = row_of(ws, "Monthly schedule") if anchor_label == "Month" else 1
+    row = row_of(ws, anchor_label, start=start)
+    band = {text: col for col, text, _, _, _ in _band_cells(plan_bytes, sheet, row)}
+    column = band[header]
+    first_value = next(
+        ws.cell(r, column)
+        for r in range(row + 1, ws.max_row + 1)
+        if ws.cell(r, column).value is not None and not _is_header(ws.cell(r, column))
+    )
+    assert ws.cell(row, column).alignment.horizontal == _effective_alignment(first_value), header
+
+
+def test_the_header_correction_widened_no_column_and_added_none(plan_bytes: bytes) -> None:
+    """Presentation only: the column layout of every sheet is exactly what the
+    accepted workbook had, so nothing was widened and no delimiter column was
+    inserted between two headers."""
+
+    stored = {sheet: _column_widths(plan_bytes, sheet) for sheet in EXPECTED_SHEETS}
+    label, units, period = 58, 21, 14
+    expected = {
+        "Summary": {1: 40, 2: 20, 3: 20, 4: 44},
+        "Inputs": {1: label, 2: units, 3: units, 4: 30, 5: 36, **{col: period for col in range(6, 9)}},
+        "Operating Projection": {1: label, 2: units, **{col: period for col in range(3, 10)}},
+        "Debt Schedule": {1: label, 2: units, **{col: period for col in range(3, 9)}},
+        "Equity Cash Flow": {1: label, 2: units, **{col: period for col in range(3, 10)}},
+        "Anchor Results": {1: label, 2: units, **{col: period for col in range(3, 10)}},
+        "Checks": {1: label, 2: 18, 3: 18, 4: 12, 5: 12, 6: 24, 7: 34, 8: 7},
+        "Audit Metadata": {1: 36, 2: 110},
+    }
+    for sheet, widths in expected.items():
+        # XlsxWriter stores the width plus Excel's own cell padding.
+        assert {col: round(width - 0.7109375) for col, width in stored[sheet].items()} == widths, sheet
+
+
+# =============================================================================
 # Security: analyst-authored text is text
 # =============================================================================
 
