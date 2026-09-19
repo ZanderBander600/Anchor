@@ -1,6 +1,6 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-18
+Last synchronized: 2026-09-19
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -47,6 +47,14 @@ whenever an accepted gate merges or the active gate changes.
   calculation, fingerprint or AI behaviour. It is not P7.10 and does not change
   the P7 phase sequence. Its authority is
   `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md`.
+- **Excel Export 1: Quick Underwrite formula-audit workbook** is implemented
+  on `feature/excel-export-1-quick-formula-audit` (from `51c5bf1`),
+  **pending human acceptance -- not accepted.** A saved, currently analysed
+  Quick Deal downloads as a formula-level audit workbook. It is read-only and
+  changes no financial calculation, fingerprint, stored analysis, schema (v14)
+  or AI behaviour; Detailed, Lease-Level and every other export are deferred.
+  It is not P7.10. Its authority is
+  `docs/architecture/EXCEL_EXPORT_1_QUICK_FORMULA_AUDIT.md`.
 - P7.9 final hands-on human acceptance remains pending.
 - P7.10 has not started.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
@@ -107,6 +115,10 @@ Asset Types 1 is merged and awaits hands-on human acceptance. It is a
 classification feature outside the P7 sequence and starts no later asset-type
 phase.
 
+Excel Export 1 (Quick Underwrite formula-audit workbook) is implemented and
+awaits review and hands-on human acceptance. It is outside the P7 sequence and
+starts no later export gate.
+
 A bounded stabilization sweep remains available for separate human
 authorization. It is not automatically active. Its source issues are:
 
@@ -155,6 +167,9 @@ sub-gate.
   `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md` -- **implemented and
   merged in PR #43, pending human acceptance.** It is not yet accepted and is
   not P7.10.
+- Excel Export 1 Quick Underwrite formula audit:
+  `docs/architecture/EXCEL_EXPORT_1_QUICK_FORMULA_AUDIT.md` -- **implemented,
+  pending human acceptance.** It is not yet accepted and is not P7.10.
 
 ## Historical-Document Rule
 
