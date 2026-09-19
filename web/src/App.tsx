@@ -6,6 +6,7 @@ import {
   createDeal,
   createDetailedDeal,
   deleteDeal,
+  downloadQuickUnderwriteAuditWorkbook,
   duplicateDeal,
   fetchAIAnalysis,
   fetchBreakEvenAnalysis,
@@ -32,7 +33,7 @@ import { BreakEvenPanel } from './components/BreakEvenPanel';
 import { CapitalEconomicsSection } from './components/CapitalEconomicsSection';
 import { CashFlowTable } from './components/CashFlowTable';
 import { DealHeader } from './components/DealHeader';
-import type { SaveStatus } from './components/DealHeader';
+import type { SaveStatus, WorkbookExportAction } from './components/DealHeader';
 import { DealLibraryPanel } from './components/DealLibraryPanel';
 import { DetailedExcelReviewPanel } from './components/DetailedExcelReviewPanel';
 import { DetailedOmReviewPanel } from './components/DetailedOmReviewPanel';
@@ -1370,6 +1371,78 @@ export default function App() {
   });
   const saveStatus: SaveStatus =
     currentDealId === null ? 'unsaved-deal' : isDirty ? 'unsaved-changes' : 'saved';
+
+  // Excel Export 1 -- the Quick audit workbook exports what is *stored*: the
+  // saved inputs and their saved analysis. It is therefore offered only when
+  // what the analyst sees is exactly that -- a saved deal, no unsaved change,
+  // and a result for the current inputs. `results` is always null or valid for
+  // the current `values` (every assumption edit clears it), so together with
+  // `!isDirty` it means "the saved inputs, analysed". The server re-checks all
+  // of it against the database and refuses a missing or stale analysis itself.
+  const [isExportingWorkbook, setIsExportingWorkbook] = useState(false);
+  const [workbookExportMessage, setWorkbookExportMessage] = useState<{
+    dealId: string;
+    tone: 'status' | 'error';
+    text: string;
+  } | null>(null);
+  const workbookExportBlockedReason: string | null =
+    currentDealId === null
+      ? 'Save this Deal, then analyze it, to export the Excel audit workbook.'
+      : isDirty
+        ? 'Unsaved changes are not exported. Save the Deal and analyze the saved inputs first.'
+        : isSubmitting
+          ? 'Analysis is running. Export when it finishes.'
+          : results === null
+            ? 'Analyze the saved inputs first. The workbook contains only a saved, current analysis.'
+            : null;
+
+  async function handleExportQuickAuditWorkbook() {
+    const dealId = currentDealId;
+    if (dealId === null || workbookExportBlockedReason !== null) {
+      return;
+    }
+    setIsExportingWorkbook(true);
+    setWorkbookExportMessage(null);
+    try {
+      const { blob, filename } = await downloadQuickUnderwriteAuditWorkbook(dealId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setWorkbookExportMessage({ dealId, tone: 'status', text: `Exported ${filename}` });
+    } catch (exportError) {
+      setWorkbookExportMessage({
+        dealId,
+        tone: 'error',
+        text:
+          exportError instanceof ApiError
+            ? exportError.message
+            : 'The audit workbook could not be exported.',
+      });
+    } finally {
+      setIsExportingWorkbook(false);
+    }
+  }
+
+  const quickWorkbookExport: WorkbookExportAction = {
+    blockedReason: workbookExportBlockedReason,
+    isExporting: isExportingWorkbook,
+    onExport: () => void handleExportQuickAuditWorkbook(),
+    // A message belongs to the deal *state* it was produced for: opening another
+    // deal hides it, and so does any unsaved edit or re-analysis -- "Exported
+    // <file>" beside unsaved changes would imply the edits were exported. No
+    // effect or reset call is needed; the message is simply not shown.
+    message:
+      workbookExportMessage !== null &&
+      workbookExportMessage.dealId === currentDealId &&
+      workbookExportBlockedReason === null
+        ? { tone: workbookExportMessage.tone, text: workbookExportMessage.text }
+        : null,
+  };
 
   /** Prompts before a New Deal / Open Deal action would discard unsaved
    * work; returns true if it is safe to proceed (nothing to lose, or the
@@ -3648,6 +3721,11 @@ export default function App() {
               })}
               onDuplicateDeal={handleDuplicateCurrentDeal}
               onDeleteDeal={handleDeleteCurrentDeal}
+              workbookExport={byMode(operatingMode, {
+                quick: quickWorkbookExport,
+                detailed: null,
+                lease_level: null,
+              })}
             />
 
             <WorkspaceNav active={workspace} onSelect={setWorkspace} />

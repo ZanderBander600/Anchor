@@ -1152,6 +1152,73 @@ export async function getDeal(dealId: string): Promise<Deal> {
   return _handleDealResponse(response, 'The deal could not be loaded');
 }
 
+/** Excel Export 1 -- a downloaded Quick Underwrite audit workbook: the bytes
+ * and the server-chosen, already-sanitized filename. */
+export interface QuickAuditWorkbookDownload {
+  blob: Blob;
+  filename: string;
+}
+
+/** Used only when the response carries no readable filename. */
+export const QUICK_AUDIT_FALLBACK_FILENAME = 'Quick Underwrite Audit.xlsx';
+
+/** Reads the filename out of a `Content-Disposition` header, preferring the
+ * RFC 5987 `filename*` form (exact UTF-8) over the ASCII `filename` fallback.
+ * Returns null when neither is present or decodable. */
+export function filenameFromContentDisposition(header: string | null): string | null {
+  if (!header) {
+    return null;
+  }
+  const extended = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (extended) {
+    try {
+      return decodeURIComponent(extended[1].trim());
+    } catch {
+      // Fall through to the plain form.
+    }
+  }
+  const plain = /filename="([^"]*)"/i.exec(header);
+  return plain && plain[1] ? plain[1] : null;
+}
+
+/** GETs the saved, currently analysed Quick Deal's formula-audit workbook.
+ *
+ * The server decides eligibility from what is stored -- never from anything
+ * this client holds -- and refuses with `{ detail: { code, message } }`; that
+ * message is surfaced verbatim because it says what the analyst must do. */
+export async function downloadQuickUnderwriteAuditWorkbook(
+  dealId: string,
+): Promise<QuickAuditWorkbookDownload> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/deals/${encodeURIComponent(dealId)}/exports/quick-underwrite.xlsx`,
+    );
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE);
+  }
+
+  if (!response.ok) {
+    let message = 'The audit workbook could not be exported.';
+    try {
+      const body: unknown = await response.json();
+      const detail = (body as { detail?: { message?: unknown } } | null)?.detail;
+      if (detail && typeof detail.message === 'string' && detail.message) {
+        message = detail.message;
+      }
+    } catch {
+      // A non-JSON failure keeps the generic message.
+    }
+    throw new ApiError(message);
+  }
+
+  const blob = await response.blob();
+  const filename =
+    filenameFromContentDisposition(response.headers.get('Content-Disposition')) ??
+    QUICK_AUDIT_FALLBACK_FILENAME;
+  return { blob, filename };
+}
+
 /** GETs every saved deal for the Deal Library, most recently updated
  * first (the backend's own ordering -- this function does not re-sort). */
 export async function listDeals(): Promise<Deal[]> {
