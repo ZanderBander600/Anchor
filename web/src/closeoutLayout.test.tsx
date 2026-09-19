@@ -299,46 +299,83 @@ describe('the NOI trend’s accessible table never widens the page', () => {
 });
 
 // =============================================================================
-// 5. The Tier Audit styles are scoped, role-based and pattern-free
+// 5. The Partnership table styles are scoped, role-based and pattern-free
 // =============================================================================
 
-describe('the Tier Audit table styles touch only the audit', () => {
-  it('right-aligns figures in tabular numerals and keeps words on the left', () => {
-    const figure = ruleBody(CSS, '.partnership-audit-table .partnership-audit-figure');
+/** Each rule's selector parts and body, comments removed. */
+function cssRules(): { parts: string[]; body: string }[] {
+  const uncommented = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...uncommented.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    parts: match[1].split(',').map((part) => part.trim()),
+    body: match[2],
+  }));
+}
+
+/** The body of the one rule whose selector parts include every given part. */
+function ruleWith(...parts: string[]): string {
+  const rules = cssRules().filter((rule) => parts.every((part) => rule.parts.includes(part)));
+  expect(rules, parts.join(' + ')).toHaveLength(1);
+  return rules[0].body;
+}
+
+describe('the Partnership table styles touch only the Partnership tables', () => {
+  it('right-aligns figures in tabular numerals, in the audit and the results alike', () => {
+    const figure = ruleWith(
+      '.partnership-audit-table .partnership-audit-figure',
+      '.partnership-result-table .partnership-result-figure',
+    );
     expect(figure).toContain('text-align: right;');
     expect(figure).toContain('font-variant-numeric: tabular-nums;');
-    const words = CSS.match(
-      /\.partnership-audit-table \.partnership-audit-period,\n\.partnership-audit-table \.partnership-audit-status,\n\.partnership-audit-table \.partnership-audit-text,\n\.partnership-audit-table \.partnership-audit-shares \{([^}]*)\}/,
+  });
+
+  it('keeps identity and words on the left', () => {
+    const words = ruleWith(
+      '.partnership-audit-table .partnership-audit-period',
+      '.partnership-audit-table .partnership-audit-status',
+      '.partnership-audit-table .partnership-audit-text',
+      '.partnership-audit-table .partnership-audit-shares',
+      '.partnership-result-table .partnership-result-identity',
+      '.partnership-result-table .partnership-result-text',
     );
-    expect(words?.[1]).toContain('text-align: left;');
+    expect(words).toContain('text-align: left;');
   });
 
   it('pads each cell, separates rows and gives the header its own band', () => {
-    const cells = ruleBody(CSS, '.partnership-audit-table th,\n.partnership-audit-table td');
+    const cells = ruleWith(
+      '.partnership-audit-table th',
+      '.partnership-audit-table td',
+      '.partnership-result-table th',
+      '.partnership-result-table td',
+    );
     expect(cells).toMatch(/padding: \d+px 1\dpx;/);
     expect(cells).toContain('border-bottom: 1px solid var(--border);');
-    const header = ruleBody(CSS, '.partnership-audit-table thead th');
+    const header = ruleWith('.partnership-audit-table thead th', '.partnership-result-table thead th');
     expect(header).toContain('background: var(--surface-muted);');
     expect(header).toContain('border-bottom: 1px solid var(--border-strong);');
   });
 
-  it('scopes every audit rule to the audit table and positions nothing by index', () => {
-    const uncommented = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
-    const selectors = [
-      ...uncommented.matchAll(/([^{}]*partnership-audit-(?:figure|period|status|text|shares)[^{}]*)\{/g),
-    ].map((match) => match[1].trim());
-    expect(selectors.length).toBeGreaterThan(0);
-    for (const selector of selectors) {
-      for (const part of selector.split(',')) {
-        expect(part.trim().startsWith('.partnership-audit-table ')).toBe(true);
+  it('scopes every role rule to its own table family and positions nothing by index', () => {
+    let scoped = 0;
+    for (const rule of cssRules()) {
+      for (const part of rule.parts) {
+        if (/\.partnership-audit-(figure|period|status|text|shares)\b/.test(part)) {
+          expect(part.startsWith('.partnership-audit-table '), part).toBe(true);
+          scoped += 1;
+        }
+        if (/\.partnership-result-(figure|identity|text)\b/.test(part)) {
+          expect(part.startsWith('.partnership-result-table '), part).toBe(true);
+          scoped += 1;
+        }
       }
     }
-    const auditRules = CSS.slice(CSS.indexOf('.partnership-audit-table {'));
-    expect(auditRules.slice(0, auditRules.indexOf('/* --- The PARTNER matrix'))).not.toMatch(
+    expect(scoped).toBeGreaterThan(0);
+    const tableRules = CSS.slice(CSS.indexOf('.partnership-audit-table,\n.partnership-result-table {'));
+    expect(tableRules.slice(0, tableRules.indexOf('/* --- The PARTNER matrix'))).not.toMatch(
       /nth-child|nth-of-type|first-child|last-child/,
     );
-    // The shared `.data-table` class the other Partnership tables use is still
-    // unstyled: fixing the audit did not restyle them.
+    // The shared `.data-table` class is still unstyled: the Partnership tables
+    // are styled through their own scoped classes, and nothing else that uses
+    // `.data-table` changed.
     expect(CSS).not.toMatch(/(^|\n)\s*\.data-table[\s,{.]/);
   });
 });

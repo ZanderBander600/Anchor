@@ -278,26 +278,34 @@ function CommonEquityContext({ result }: { result: PartnershipResult }) {
       </dl>
       {periods !== null && (
         <div className="table-scroll">
-          <table className="data-table partnership-table">
+          <table className="data-table partnership-table partnership-result-table">
             <caption className="visually-hidden">
               The Common Equity Cash Flow by period, with total partner contributions and
               distributions
             </caption>
             <thead>
               <tr>
-                <th scope="col">Period</th>
-                <th scope="col">Common Equity Cash Flow</th>
-                <th scope="col">Contributions</th>
-                <th scope="col">Distributions</th>
+                <th scope="col" className="partnership-result-identity">Period</th>
+                <th scope="col" className="partnership-result-figure">Common Equity Cash Flow</th>
+                <th scope="col" className="partnership-result-figure">Contributions</th>
+                <th scope="col" className="partnership-result-figure">Distributions</th>
               </tr>
             </thead>
             <tbody>
               {periods.map((record) => (
                 <tr key={record.period}>
-                  <th scope="row">{periodLabel(record.period)}</th>
-                  <td>{formatCurrency(record.common_equity_cash_flow)}</td>
-                  <td>{formatCurrency(record.total_contributions)}</td>
-                  <td>{formatCurrency(record.total_distributions)}</td>
+                  <th scope="row" className="partnership-result-identity">
+                    {periodLabel(record.period)}
+                  </th>
+                  <td className="partnership-result-figure">
+                    {formatCurrency(record.common_equity_cash_flow)}
+                  </td>
+                  <td className="partnership-result-figure">
+                    {formatCurrency(record.total_contributions)}
+                  </td>
+                  <td className="partnership-result-figure">
+                    {formatCurrency(record.total_distributions)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -333,28 +341,28 @@ function PartnerReturnsTable({
         </p>
       )}
       <div className="table-scroll">
-        <table className="data-table partnership-table">
+        <table className="data-table partnership-table partnership-result-table">
           <caption className="visually-hidden">
             Each partner’s commitment, benchmark share, contributions, distributions and returns
           </caption>
           <thead>
             <tr>
-              <th scope="col">Partner</th>
-              <th scope="col">Role</th>
-              <th scope="col">Commitment</th>
-              <th scope="col">Benchmark Share</th>
-              <th scope="col">Contributions</th>
-              <th scope="col">Distributions</th>
-              <th scope="col">Profit</th>
-              <th scope="col">Partner IRR</th>
-              <th scope="col">Partner MOIC</th>
-              <th scope="col">Promote Participant</th>
+              <th scope="col" className="partnership-result-identity">Partner</th>
+              <th scope="col" className="partnership-result-text">Role</th>
+              <th scope="col" className="partnership-result-figure">Commitment</th>
+              <th scope="col" className="partnership-result-figure">Benchmark Share</th>
+              <th scope="col" className="partnership-result-figure">Contributions</th>
+              <th scope="col" className="partnership-result-figure">Distributions</th>
+              <th scope="col" className="partnership-result-figure">Profit</th>
+              <th scope="col" className="partnership-result-figure">Partner IRR</th>
+              <th scope="col" className="partnership-result-figure">Partner MOIC</th>
+              <th scope="col" className="partnership-result-text">Promote Participant</th>
             </tr>
           </thead>
           <tbody>
             {partners.map((partner) => (
               <tr key={partner.partner_id} data-partner={partner.partner_id}>
-                <th scope="row">
+                <th scope="row" className="partnership-result-identity">
                   <span className="partner-result-name">
                     {partnerLabel(partner.partner_id, names)}
                   </span>
@@ -362,9 +370,11 @@ function PartnerReturnsTable({
                     <span className="partner-result-class">{partner.investor_class}</span>
                   )}
                 </th>
-                <td>{PARTNER_ROLE_LABELS[partner.role]}</td>
-                <td>{formatPercent(partner.commitment_share)}</td>
-                <td data-field="benchmark_share">
+                <td className="partnership-result-text">{PARTNER_ROLE_LABELS[partner.role]}</td>
+                <td className="partnership-result-figure">
+                  {formatPercent(partner.commitment_share)}
+                </td>
+                <td className="partnership-result-figure" data-field="benchmark_share">
                   {formatPercent(partner.benchmark_share)}
                   {!partner.benchmark_equals_commitment && (
                     <span className="partner-result-mismatch">
@@ -372,16 +382,20 @@ function PartnerReturnsTable({
                     </span>
                   )}
                 </td>
-                <td>{formatCurrency(partner.total_contributions)}</td>
-                <td>{formatCurrency(partner.total_distributions)}</td>
-                <td>{formatCurrency(partner.profit)}</td>
-                <td data-field="partner_irr">
+                <td className="partnership-result-figure">
+                  {formatCurrency(partner.total_contributions)}
+                </td>
+                <td className="partnership-result-figure">
+                  {formatCurrency(partner.total_distributions)}
+                </td>
+                <td className="partnership-result-figure">{formatCurrency(partner.profit)}</td>
+                <td className="partnership-result-figure" data-field="partner_irr">
                   <Figure
                     value={partner.irr === null ? null : formatPercent(partner.irr)}
                     reason={irrNotReportedExplanation('Partner IRR', partner.irr_status)}
                   />
                 </td>
-                <td data-field="partner_moic">
+                <td className="partnership-result-figure" data-field="partner_moic">
                   <Figure
                     value={partner.moic === null ? null : formatMultiple(partner.moic)}
                     reason={
@@ -392,7 +406,9 @@ function PartnerReturnsTable({
                     }
                   />
                 </td>
-                <td>{partner.is_promote_participant ? 'Yes' : 'No'}</td>
+                <td className="partnership-result-text">
+                  {partner.is_promote_participant ? 'Yes' : 'No'}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -421,40 +437,50 @@ function BenchmarkComparisonTable({
       <p className="partnership-section-note">{BENCHMARK_EXPLAINER}</p>
       <p className="partnership-section-note">{ADVANTAGE_EXPLAINER}</p>
       <div className="table-scroll">
-        <table className="data-table partnership-table">
+        <table className="data-table partnership-table partnership-result-table">
           <caption className="visually-hidden">
             Each partner’s actual and benchmark distributions, and the signed difference split into
             its capital-return and profit-distribution parts
           </caption>
           <thead>
             <tr>
-              <th scope="col">Partner</th>
-              <th scope="col">Distributions</th>
-              <th scope="col">Benchmark Distributions</th>
-              <th scope="col">Distribution Difference</th>
-              <th scope="col">Distribution Advantage</th>
-              <th scope="col">Distribution Disadvantage</th>
-              <th scope="col">Capital Return Difference</th>
-              <th scope="col">Profit Distribution Difference</th>
+              <th scope="col" className="partnership-result-identity">Partner</th>
+              <th scope="col" className="partnership-result-figure">Distributions</th>
+              <th scope="col" className="partnership-result-figure">Benchmark Distributions</th>
+              <th scope="col" className="partnership-result-figure">Distribution Difference</th>
+              <th scope="col" className="partnership-result-figure">Distribution Advantage</th>
+              <th scope="col" className="partnership-result-figure">Distribution Disadvantage</th>
+              <th scope="col" className="partnership-result-figure">Capital Return Difference</th>
+              <th scope="col" className="partnership-result-figure">Profit Distribution Difference</th>
             </tr>
           </thead>
           <tbody>
             {partners.map((partner) => (
               <tr key={partner.partner_id} data-partner={partner.partner_id}>
-                <th scope="row">{partnerLabel(partner.partner_id, names)}</th>
-                <td>{formatCurrency(partner.total_distributions)}</td>
-                <td>{formatCurrency(partner.total_benchmark_distributions)}</td>
-                <td data-field="distribution_difference">
+                <th scope="row" className="partnership-result-identity">
+                  {partnerLabel(partner.partner_id, names)}
+                </th>
+                <td className="partnership-result-figure">
+                  {formatCurrency(partner.total_distributions)}
+                </td>
+                <td className="partnership-result-figure">
+                  {formatCurrency(partner.total_benchmark_distributions)}
+                </td>
+                <td className="partnership-result-figure" data-field="distribution_difference">
                   {formatCurrency(partner.distribution_difference)}
                 </td>
-                <td data-field="distribution_advantage">
+                <td className="partnership-result-figure" data-field="distribution_advantage">
                   {formatCurrency(partner.distribution_advantage)}
                 </td>
-                <td data-field="distribution_disadvantage">
+                <td className="partnership-result-figure" data-field="distribution_disadvantage">
                   {formatCurrency(partner.distribution_disadvantage)}
                 </td>
-                <td>{formatCurrency(partner.capital_return_difference)}</td>
-                <td>{formatCurrency(partner.profit_distribution_difference)}</td>
+                <td className="partnership-result-figure">
+                  {formatCurrency(partner.capital_return_difference)}
+                </td>
+                <td className="partnership-result-figure">
+                  {formatCurrency(partner.profit_distribution_difference)}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -482,23 +508,27 @@ function PromoteEarnedTable({
       </h4>
       <p className="partnership-section-note">{PROMOTE_EXPLAINER}</p>
       <div className="table-scroll">
-        <table className="data-table partnership-table">
+        <table className="data-table partnership-table partnership-result-table">
           <caption className="visually-hidden">
             Promote Earned for each partner, or why it does not apply
           </caption>
           <thead>
             <tr>
-              <th scope="col">Partner</th>
-              <th scope="col">Promote Participant</th>
-              <th scope="col">Promote Earned</th>
+              <th scope="col" className="partnership-result-identity">Partner</th>
+              <th scope="col" className="partnership-result-text">Promote Participant</th>
+              <th scope="col" className="partnership-result-figure">Promote Earned</th>
             </tr>
           </thead>
           <tbody>
             {partners.map((partner) => (
               <tr key={partner.partner_id} data-partner={partner.partner_id}>
-                <th scope="row">{partnerLabel(partner.partner_id, names)}</th>
-                <td>{partner.is_promote_participant ? 'Yes' : 'No'}</td>
-                <td data-field="promote_earned">
+                <th scope="row" className="partnership-result-identity">
+                  {partnerLabel(partner.partner_id, names)}
+                </th>
+                <td className="partnership-result-text">
+                  {partner.is_promote_participant ? 'Yes' : 'No'}
+                </td>
+                <td className="partnership-result-figure" data-field="promote_earned">
                   <Figure
                     value={
                       partner.promote_earned === null
@@ -540,26 +570,32 @@ function SubordinationTable({
       </h4>
       <p className="partnership-section-note">{SUBORDINATION_EXPLAINER}</p>
       <div className="table-scroll">
-        <table className="data-table partnership-table">
+        <table className="data-table partnership-table partnership-result-table">
           <caption className="visually-hidden">
             Each partner’s capital returned against the benchmark world’s, and the resulting
             benchmark capital subordination
           </caption>
           <thead>
             <tr>
-              <th scope="col">Partner</th>
-              <th scope="col">Capital Returned</th>
-              <th scope="col">Benchmark Capital Returned</th>
-              <th scope="col">Benchmark Capital Subordination</th>
+              <th scope="col" className="partnership-result-identity">Partner</th>
+              <th scope="col" className="partnership-result-figure">Capital Returned</th>
+              <th scope="col" className="partnership-result-figure">Benchmark Capital Returned</th>
+              <th scope="col" className="partnership-result-figure">Benchmark Capital Subordination</th>
             </tr>
           </thead>
           <tbody>
             {partners.map((partner) => (
               <tr key={partner.partner_id} data-partner={partner.partner_id}>
-                <th scope="row">{partnerLabel(partner.partner_id, names)}</th>
-                <td>{formatCurrency(partner.capital_returned)}</td>
-                <td>{formatCurrency(partner.benchmark_capital_returned)}</td>
-                <td data-field="benchmark_capital_subordination">
+                <th scope="row" className="partnership-result-identity">
+                  {partnerLabel(partner.partner_id, names)}
+                </th>
+                <td className="partnership-result-figure">
+                  {formatCurrency(partner.capital_returned)}
+                </td>
+                <td className="partnership-result-figure">
+                  {formatCurrency(partner.benchmark_capital_returned)}
+                </td>
+                <td className="partnership-result-figure" data-field="benchmark_capital_subordination">
                   {formatCurrency(partner.benchmark_capital_subordination)}
                 </td>
               </tr>
@@ -614,29 +650,31 @@ function PromoteAttributionTable({
       </h4>
       <p className="partnership-section-note">{ATTRIBUTION_EXPLAINER}</p>
       <div className="table-scroll">
-        <table className="data-table partnership-table">
+        <table className="data-table partnership-table partnership-result-table">
           <caption className="visually-hidden">
             Each promote participant’s Promote Earned attributed across the waterfall tiers
           </caption>
           <thead>
             <tr>
-              <th scope="col">Partner</th>
+              <th scope="col" className="partnership-result-identity">Partner</th>
               {tiers.map((tier) => (
-                <th key={tier.tier_id} scope="col">
+                <th key={tier.tier_id} scope="col" className="partnership-result-figure">
                   {tierLabel(tier.tier_id, tierNames)}
                 </th>
               ))}
-              <th scope="col">Promote Earned</th>
+              <th scope="col" className="partnership-result-figure">Promote Earned</th>
             </tr>
           </thead>
           <tbody>
             {participants.map((partner) => (
               <tr key={partner.partner_id} data-partner={partner.partner_id}>
-                <th scope="row">{partnerLabel(partner.partner_id, names)}</th>
+                <th scope="row" className="partnership-result-identity">
+                  {partnerLabel(partner.partner_id, names)}
+                </th>
                 {tiers.map((tier) => {
                   const amount = tierAmount(partner.promote_attribution_by_tier, tier.tier_id);
                   return (
-                    <td key={tier.tier_id} data-tier={tier.tier_id}>
+                    <td key={tier.tier_id} className="partnership-result-figure" data-tier={tier.tier_id}>
                       <Figure
                         value={amount === null ? null : formatCurrency(amount)}
                         reason={null}
@@ -644,7 +682,7 @@ function PromoteAttributionTable({
                     </td>
                   );
                 })}
-                <td data-field="promote_earned">
+                <td className="partnership-result-figure" data-field="promote_earned">
                   <Figure
                     value={
                       partner.promote_earned === null
