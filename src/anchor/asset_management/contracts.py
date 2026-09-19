@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
 
+from ..asset_types import AssetClassification, AssetType
+
 
 # =============================================================================
 # Identity
@@ -50,8 +52,20 @@ class ManagedAsset:
     historical reports untouched; the divergence is provenance the product may
     show, never a reason to rewrite anything.
 
-    ``property_type`` and ``market`` are optional analyst context. ``None`` is
-    "not stated" -- never a fabricated default.
+    ``market`` is optional analyst context. ``None`` is "not stated" -- never a
+    fabricated default.
+
+    **Classification (Asset Types 1)** is ``asset_type`` and ``asset_subtype``:
+    a snapshot of the source Deal's classification copied once, at creation,
+    exactly as the acquisition fingerprint is. A later Deal edit reclassifies
+    the Deal and leaves this copy untouched. Both ``None`` is "Not specified" --
+    an asset created before Asset Types 1, or from a Deal that was not yet
+    classified. No type is ever inferred for it.
+
+    ``property_type`` is **legacy** analyst text from before Asset Types 1, when
+    it was typed by hand at creation. It is preserved and read back verbatim so
+    nothing an analyst wrote is lost, but it is no longer authored, it is not a
+    classification, and it is never mapped onto an ``AssetType``.
     """
 
     id: str
@@ -59,10 +73,22 @@ class ManagedAsset:
     name: str
     acquisition_date: date
     property_type: str | None
+    asset_type: AssetType | None = None
+    asset_subtype: str | None = None
     market: str | None
     acquisition_fingerprint: str
     created_at: datetime
     updated_at: datetime
+
+    def __post_init__(self) -> None:
+        # The pair is one classification, held to the same rules as a Deal's.
+        if self.asset_type is None:
+            if self.asset_subtype is not None:
+                raise ValueError(
+                    "A Managed Asset with no 'asset_type' must not carry an 'asset_subtype'."
+                )
+        else:
+            AssetClassification(asset_type=self.asset_type, asset_subtype=self.asset_subtype)
 
 
 # =============================================================================
@@ -184,6 +210,9 @@ class AssetReportIssueCode(StrEnum):
     INVALID_COMMENTARY = "invalid_commentary"
     INVALID_ASSET_NAME = "invalid_asset_name"
     INVALID_ACQUISITION_DATE = "invalid_acquisition_date"
+    #: Retired by Asset Types 1: ``property_type`` is no longer authored, so no
+    #: validator raises this. Kept so the token is never reused for a
+    #: different meaning.
     INVALID_PROPERTY_TYPE = "invalid_property_type"
     INVALID_MARKET = "invalid_market"
 

@@ -305,6 +305,9 @@ from ..asset_management.validation import (
     require_valid_monthly_report,
     validate_commentary,
 )
+# Asset Types 1. The controlled vocabulary and its validation only -- metadata,
+# never an engine input and never read by any fingerprint in this module.
+from ..asset_types import AssetClassification, AssetClassificationError, AssetType
 from .capital_structure_codec import FundingAmountRuleKind, amount_rule_kind
 from .contracts import (
     Deal,
@@ -416,7 +419,14 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # ``_connect`` exactly as version 12's were. No ALTER and no existing row read
 # or rewritten: a Deal gains a Managed Asset only when the analyst explicitly
 # creates one, and a v12 database simply gains two empty tables.
-_SCHEMA_VERSION = 13
+#
+# Asset Types 1 -- schema version 14 adds two purely additive classification
+# tables, ``deal_asset_classifications`` and ``managed_asset_classifications``,
+# created unconditionally by ``_connect`` exactly as version 13's were. No ALTER
+# and no existing row read or rewritten: a legacy Deal or Managed Asset simply
+# has no classification row, which *is* "Not specified" -- nothing is guessed
+# for it, and it gains a row only when the analyst classifies it.
+_SCHEMA_VERSION = 14
 
 
 class PersistedDealDataError(RuntimeError):
@@ -1600,6 +1610,66 @@ CREATE TABLE IF NOT EXISTS monthly_asset_reports (
 _AM1_TABLES = ("managed_assets", "monthly_asset_reports")
 
 
+# =============================================================================
+# Asset Types 1 -- the persisted classification, schema version 14.
+#
+# Two purely additive tables, created by ``_connect`` via CREATE TABLE IF NOT
+# EXISTS exactly as every table since version 2. No ALTER: ``deals``,
+# ``detailed_deals``, ``lease_level_deals`` and ``managed_assets`` keep their
+# DDL byte for byte, and no existing row is read or rewritten to assign a type.
+#
+# **Row absent means "Not specified".** A classification row exists only once
+# an analyst has chosen a type, so ``asset_type`` is NOT NULL: there is exactly
+# one spelling of "unclassified" (no row), never a row of NULLs beside it. A
+# legacy record needs no migration to be honest -- it simply has no row.
+#
+# **Deal classification is mode-blind**, keyed by ``deal_id`` like the Business
+# Plan tables: deal ids are unique across the three mode tables, and the same
+# classification means the same thing whichever engine underwrites the deal.
+#
+# **A Managed Asset's classification is a snapshot**, written once by
+# ``create_managed_asset`` from its source Deal and by nothing else. A later
+# Deal edit reclassifies the Deal and leaves this row exactly as it was, exactly
+# as the frozen acquisition fingerprint is left. The pre-existing
+# ``managed_assets.property_type`` column is legacy analyst text: preserved and
+# read back verbatim, never written again and never mapped onto a type.
+#
+# Both columns are typed TEXT; ``asset_type`` holds only the canonical
+# ``AssetType`` value, and a token the vocabulary no longer recognises is a
+# ``PersistedDealDataError`` on read, never a silently dropped classification.
+# =============================================================================
+
+_CREATE_DEAL_ASSET_CLASSIFICATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS deal_asset_classifications (
+    deal_id       TEXT PRIMARY KEY,
+    asset_type    TEXT NOT NULL,
+    asset_subtype TEXT
+)
+"""
+
+_CREATE_MANAGED_ASSET_CLASSIFICATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS managed_asset_classifications (
+    managed_asset_id TEXT PRIMARY KEY REFERENCES managed_assets (id),
+    asset_type       TEXT NOT NULL,
+    asset_subtype    TEXT
+)
+"""
+
+_ASSET_TYPES_1_TABLES = ("deal_asset_classifications", "managed_asset_classifications")
+
+
+class _KeepClassification(Enum):
+    """The one value meaning "this write states no classification": an update
+    from a caller that predates Asset Types 1 leaves the stored classification
+    exactly as it is, rather than reading the omission as "clear it"."""
+
+    KEEP = "keep"
+
+
+#: Passed by an update whose request did not mention classification at all.
+KEEP_CLASSIFICATION = _KeepClassification.KEEP
+
+
 _LEASE_LEVEL_CHILD_TABLES = (
     "lease_level_property_inputs",
     "lease_level_operating_inputs",
@@ -2074,6 +2144,11 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # Asset by being opened or edited. A v12 database simply gains two empty
     # tables, and every pre-existing Deal keeps loading and responding exactly
     # as it did.
+    # Asset Types 1 -- schema version 14 adds ``deal_asset_classifications`` and
+    # ``managed_asset_classifications`` the same way: no table is altered and no
+    # row is written for anything that already exists. Every legacy Deal and
+    # Managed Asset reads back as "Not specified" because it has no row -- the
+    # migration assigns no type, and neither does any read.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -2152,6 +2227,8 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_WATERFALL_CATCH_UP_TERMS_TABLE_SQL)
     connection.execute(_CREATE_MANAGED_ASSETS_TABLE_SQL)
     connection.execute(_CREATE_MONTHLY_ASSET_REPORTS_TABLE_SQL)
+    connection.execute(_CREATE_DEAL_ASSET_CLASSIFICATIONS_TABLE_SQL)
+    connection.execute(_CREATE_MANAGED_ASSET_CLASSIFICATIONS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -2687,6 +2764,83 @@ def _read_all_business_plans(
     }
 
 
+# =============================================================================
+# Asset Types 1 -- classification rows
+# =============================================================================
+
+
+def _classification_from_row(owner: str, row: sqlite3.Row | None) -> AssetClassification | None:
+    """One stored classification, or ``None`` when there is no row ("Not
+    specified"). A token the vocabulary no longer recognises, or a pair the
+    classification rules refuse, is raised -- never read as "Not specified",
+    which would silently erase a choice an analyst made."""
+
+    if row is None:
+        return None
+    raw_type = row["asset_type"]
+    if not isinstance(raw_type, str) or raw_type not in AssetType._value2member_map_:
+        raise PersistedDealDataError(
+            f"{owner} holds an asset type the vocabulary does not recognise: {raw_type!r}."
+        )
+    try:
+        return AssetClassification(asset_type=AssetType(raw_type), asset_subtype=row["asset_subtype"])
+    except AssetClassificationError as error:
+        raise PersistedDealDataError(
+            f"{owner} holds a classification that does not validate: {error}"
+        ) from None
+
+
+def _read_deal_classification(
+    connection: sqlite3.Connection, deal_id: str
+) -> AssetClassification | None:
+    row = connection.execute(
+        "SELECT * FROM deal_asset_classifications WHERE deal_id = ?", (deal_id,)
+    ).fetchone()
+    return _classification_from_row(f"Deal {deal_id!r}", row)
+
+
+def _read_all_deal_classifications(
+    connection: sqlite3.Connection,
+) -> dict[str, AssetClassification | None]:
+    """Every classified deal's classification in one query for the whole
+    library. A deal absent from the result is "Not specified"."""
+
+    return {
+        row["deal_id"]: _classification_from_row(f"Deal {row['deal_id']!r}", row)
+        for row in connection.execute("SELECT * FROM deal_asset_classifications")
+    }
+
+
+def _write_deal_classification(
+    connection: sqlite3.Connection,
+    deal_id: str,
+    classification: AssetClassification | None | _KeepClassification,
+) -> None:
+    """Record the analyst's classification for one deal, inside the caller's
+    transaction. ``KEEP_CLASSIFICATION`` writes nothing at all; ``None`` removes
+    any row, which is "Not specified". Touches no other table: classification
+    is metadata, and no deal row, plan row or snapshot is read or written
+    here."""
+
+    if classification is KEEP_CLASSIFICATION:
+        return
+    connection.execute("DELETE FROM deal_asset_classifications WHERE deal_id = ?", (deal_id,))
+    if isinstance(classification, AssetClassification):
+        connection.execute(
+            "INSERT INTO deal_asset_classifications (deal_id, asset_type, asset_subtype) "
+            "VALUES (?, ?, ?)",
+            (deal_id, classification.asset_type.value, classification.asset_subtype),
+        )
+
+
+def _classification_fields(classification: AssetClassification | None) -> dict[str, Any]:
+    """The two flat ``Deal``/``ManagedAsset`` fields for one classification."""
+
+    if classification is None:
+        return {"asset_type": None, "asset_subtype": None}
+    return {"asset_type": classification.asset_type, "asset_subtype": classification.asset_subtype}
+
+
 def _lease_level_input_fingerprint(
     connection: sqlite3.Connection, row: sqlite3.Row
 ) -> str:
@@ -2710,6 +2864,9 @@ def _lease_level_input_fingerprint(
         connection,
         row,
         business_plan=_read_business_plan(connection, row["id"]),
+        # Asset Types 1: never read here. Classification is not a fingerprint
+        # input, so the fingerprint is computed without it by construction.
+        classification=None,
         include_snapshots=False,
     )
     assert deal.terms is not None
@@ -2734,6 +2891,7 @@ def _row_to_lease_level_deal(
     row: sqlite3.Row,
     *,
     business_plan: BusinessPlan,
+    classification: AssetClassification | None,
     include_snapshots: bool = True,
 ) -> Deal:
     """Reassemble one Lease-Level deal from its parent row and children.
@@ -2824,6 +2982,7 @@ def _row_to_lease_level_deal(
         suites=suites,
         leases=leases,
         business_plan=business_plan,
+        **_classification_fields(classification),
         deal_context=deal_context,
         # D5 decision A: never restored from persistence, and there is no column
         # it could be restored from. D5.8A does not reverse this -- the AI report
@@ -2890,7 +3049,11 @@ def _detailed_operating_inputs_from_row(row: sqlite3.Row) -> DetailedOperatingIn
 
 
 def _row_to_deal(
-    row: sqlite3.Row, *, business_plan: BusinessPlan, include_snapshots: bool = True
+    row: sqlite3.Row,
+    *,
+    business_plan: BusinessPlan,
+    classification: AssetClassification | None,
+    include_snapshots: bool = True,
 ) -> Deal:
     """``include_snapshots=False`` (used by ``list_deals``) skips decoding
     the cached snapshot columns entirely, always returning
@@ -2938,6 +3101,7 @@ def _row_to_deal(
         terms=None,
         detailed_operating_inputs=None,
         business_plan=business_plan,
+        **_classification_fields(classification),
         deal_context=deal_context,
         analysis_snapshot=analysis_snapshot,
         ai_snapshot=ai_snapshot,
@@ -2951,6 +3115,7 @@ def _row_to_detailed_deal(
     operating_row: sqlite3.Row,
     *,
     business_plan: BusinessPlan,
+    classification: AssetClassification | None,
     include_snapshots: bool = True,
 ) -> Deal:
     """``include_snapshots`` and ``business_plan`` mirror ``_row_to_deal``'s
@@ -2992,6 +3157,7 @@ def _row_to_detailed_deal(
         terms=terms,
         detailed_operating_inputs=detailed_operating_inputs,
         business_plan=business_plan,
+        **_classification_fields(classification),
         deal_context=deal_context,
         analysis_snapshot=analysis_snapshot,
         ai_snapshot=ai_snapshot,
@@ -3028,6 +3194,7 @@ def create_deal(
     *,
     deal_context: str | None = None,
     business_plan: BusinessPlan = BusinessPlan(),
+    classification: AssetClassification | None = None,
     db_path: Path | None = None,
 ) -> Deal:
     """Insert a new Quick deal and return it as stored. ``inputs`` must
@@ -3059,7 +3226,11 @@ def create_deal(
     handed to the validation authority first, and an invalid plan is refused
     (``BusinessPlanValidationError``) before anything is written. The empty
     default is a compatibility boundary for plan-free callers; the API always
-    passes the request's plan."""
+    passes the request's plan.
+
+    Asset Types 1: ``classification`` is written in the same transaction, into
+    the mode-blind ``deal_asset_classifications`` table. ``None`` writes no row
+    -- "Not specified" -- and nothing is ever inferred for it."""
 
     require_valid_business_plan(business_plan)
     deal_id = uuid.uuid4().hex
@@ -3075,6 +3246,7 @@ def create_deal(
             (deal_id, name, *_input_values(inputs), deal_context, now, now),
         )
         _write_business_plan(connection, deal_id, business_plan)
+        _write_deal_classification(connection, deal_id, classification)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -3086,6 +3258,7 @@ def update_deal(
     *,
     deal_context: str | None = None,
     business_plan: BusinessPlan = BusinessPlan(),
+    classification: AssetClassification | None | _KeepClassification = KEEP_CLASSIFICATION,
     db_path: Path | None = None,
 ) -> Deal:
     """Overwrite ``deal_id``'s name, inputs, and Deal Context (Gate A4),
@@ -3117,7 +3290,13 @@ def update_deal(
     same transaction as the inputs, so an empty plan leaves no ghost rows and a
     failure part-way leaves the previous inputs *and* plan intact. A plan
     change moves the fingerprint, so the same read-time check invalidates
-    every snapshot computed under the old plan."""
+    every snapshot computed under the old plan.
+
+    Asset Types 1: ``classification`` replaces the stored classification in the
+    same transaction; ``None`` records "Not specified". The default,
+    ``KEEP_CLASSIFICATION``, leaves it exactly as stored, so a caller that
+    predates classification can never erase one by omission. Classification is
+    in no fingerprint, so changing it alone invalidates no snapshot."""
 
     require_valid_business_plan(business_plan)
     now = _utc_now_iso()
@@ -3138,6 +3317,7 @@ def update_deal(
 
         _delete_business_plan(connection, deal_id)
         _write_business_plan(connection, deal_id, business_plan)
+        _write_deal_classification(connection, deal_id, classification)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -3154,6 +3334,7 @@ def create_detailed_deal(
     *,
     deal_context: str | None = None,
     business_plan: BusinessPlan = BusinessPlan(),
+    classification: AssetClassification | None = None,
     db_path: Path | None = None,
 ) -> Deal:
     """Insert a new Detailed deal and return it as stored. ``terms`` and
@@ -3170,7 +3351,11 @@ def create_detailed_deal(
     no-snapshot-parameter contract exactly -- see its docstring.
 
     Phase 6 Gate D6.5: ``business_plan`` mirrors ``create_deal``'s parameter
-    exactly -- validated first, written in the same transaction."""
+    exactly -- validated first, written in the same transaction.
+
+    Asset Types 1: ``classification`` is written in the same transaction, into
+    the mode-blind ``deal_asset_classifications`` table. ``None`` writes no row
+    -- "Not specified" -- and nothing is ever inferred for it."""
 
     require_valid_business_plan(business_plan)
     deal_id = uuid.uuid4().hex
@@ -3194,6 +3379,7 @@ def create_detailed_deal(
             (deal_id, *_detailed_operating_values(detailed_operating_inputs)),
         )
         _write_business_plan(connection, deal_id, business_plan)
+        _write_deal_classification(connection, deal_id, classification)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -3206,6 +3392,7 @@ def update_detailed_deal(
     *,
     deal_context: str | None = None,
     business_plan: BusinessPlan = BusinessPlan(),
+    classification: AssetClassification | None | _KeepClassification = KEEP_CLASSIFICATION,
     db_path: Path | None = None,
 ) -> Deal:
     """Overwrite ``deal_id``'s name, terms, detailed operating inputs, and
@@ -3217,7 +3404,13 @@ def update_detailed_deal(
     never-touches-snapshot-columns contract exactly -- see its docstring.
 
     Phase 6 Gate D6.5: mirrors ``update_deal``'s whole-plan replacement, in
-    the same transaction."""
+    the same transaction.
+
+    Asset Types 1: ``classification`` replaces the stored classification in the
+    same transaction; ``None`` records "Not specified". The default,
+    ``KEEP_CLASSIFICATION``, leaves it exactly as stored, so a caller that
+    predates classification can never erase one by omission. Classification is
+    in no fingerprint, so changing it alone invalidates no snapshot."""
 
     require_valid_business_plan(business_plan)
     now = _utc_now_iso()
@@ -3246,6 +3439,7 @@ def update_detailed_deal(
         )
         _delete_business_plan(connection, deal_id)
         _write_business_plan(connection, deal_id, business_plan)
+        _write_deal_classification(connection, deal_id, classification)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -3267,6 +3461,7 @@ def create_lease_level_deal(
     *,
     deal_context: str | None = None,
     business_plan: BusinessPlan = BusinessPlan(),
+    classification: AssetClassification | None = None,
     db_path: Path | None = None,
 ) -> Deal:
     """Persist one Lease-Level deal: parent row plus every child row.
@@ -3285,6 +3480,10 @@ def create_lease_level_deal(
 
     Persists inputs only. There is no analysis-snapshot column to write, by
     design (D5 decision A) -- opening the deal re-runs the engine.
+
+    Asset Types 1: ``classification`` is written in the same transaction, into
+    the mode-blind ``deal_asset_classifications`` table. ``None`` writes no row
+    -- "Not specified" -- and nothing is ever inferred for it.
     """
 
     require_valid_business_plan(business_plan)
@@ -3311,6 +3510,7 @@ def create_lease_level_deal(
             leases,
         )
         _write_business_plan(connection, deal_id, business_plan)
+        _write_deal_classification(connection, deal_id, classification)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -3327,6 +3527,7 @@ def update_lease_level_deal(
     *,
     deal_context: str | None = None,
     business_plan: BusinessPlan = BusinessPlan(),
+    classification: AssetClassification | None | _KeepClassification = KEEP_CLASSIFICATION,
     db_path: Path | None = None,
 ) -> Deal:
     """Replace one Lease-Level deal's approved input state.
@@ -3342,6 +3543,12 @@ def update_lease_level_deal(
 
     All of it in one transaction: a mid-update failure leaves the previous rent
     roll intact rather than a half-replaced one.
+
+    Asset Types 1: ``classification`` replaces the stored classification in the
+    same transaction; ``None`` records "Not specified". The default,
+    ``KEEP_CLASSIFICATION``, leaves it exactly as stored, so a caller that
+    predates classification can never erase one by omission. Classification is
+    in no fingerprint, so changing it alone invalidates no snapshot.
     """
 
     require_valid_business_plan(business_plan)
@@ -3372,6 +3579,7 @@ def update_lease_level_deal(
         )
         _delete_business_plan(connection, deal_id)
         _write_business_plan(connection, deal_id, business_plan)
+        _write_deal_classification(connection, deal_id, classification)
 
     return get_deal(deal_id, db_path=db_path)
 
@@ -3398,7 +3606,9 @@ def _read_deal(connection: sqlite3.Connection, deal_id: str) -> Deal:
     ).fetchone()
     if quick_row is not None:
         return _row_to_deal(
-            quick_row, business_plan=_read_business_plan(connection, deal_id)
+            quick_row,
+            business_plan=_read_business_plan(connection, deal_id),
+            classification=_read_deal_classification(connection, deal_id),
         )
 
     detailed_row = connection.execute(
@@ -3417,6 +3627,7 @@ def _read_deal(connection: sqlite3.Connection, deal_id: str) -> Deal:
             connection,
             lease_level_row,
             business_plan=_read_business_plan(connection, deal_id),
+            classification=_read_deal_classification(connection, deal_id),
         )
 
     operating_row = connection.execute(
@@ -3433,6 +3644,7 @@ def _read_deal(connection: sqlite3.Connection, deal_id: str) -> Deal:
         detailed_row,
         operating_row,
         business_plan=_read_business_plan(connection, deal_id),
+        classification=_read_deal_classification(connection, deal_id),
     )
 
 
@@ -3460,6 +3672,9 @@ def list_deals(*, db_path: Path | None = None) -> list[Deal]:
             connection,
             [row["id"] for row in (*quick_rows, *detailed_rows, *lease_level_rows)],
         )
+        # Asset Types 1: every classification in one query. A deal with no row
+        # is listed as "Not specified" -- the list never classifies anything.
+        classifications = _read_all_deal_classifications(connection)
         # Built inside the connection block: a Lease-Level deal is assembled
         # from five child tables, so its reader needs the live connection --
         # unlike the flat Quick/Detailed rows, which are complete on their own.
@@ -3468,6 +3683,7 @@ def list_deals(*, db_path: Path | None = None) -> list[Deal]:
                 connection,
                 row,
                 business_plan=business_plans[row["id"]],
+                classification=classifications.get(row["id"]),
                 include_snapshots=False,
             )
             for row in lease_level_rows
@@ -3479,7 +3695,10 @@ def list_deals(*, db_path: Path | None = None) -> list[Deal]:
 
     quick_deals = [
         _row_to_deal(
-            row, business_plan=business_plans[row["id"]], include_snapshots=False
+            row,
+            business_plan=business_plans[row["id"]],
+            classification=classifications.get(row["id"]),
+            include_snapshots=False,
         )
         for row in quick_rows
     ]
@@ -3488,6 +3707,7 @@ def list_deals(*, db_path: Path | None = None) -> list[Deal]:
             row,
             operating_rows_by_deal_id[row["id"]],
             business_plan=business_plans[row["id"]],
+            classification=classifications.get(row["id"]),
             include_snapshots=False,
         )
         for row in detailed_rows
@@ -3533,6 +3753,10 @@ def delete_deal(deal_id: str, *, db_path: Path | None = None) -> None:
         # mode. A deal id that turns out to exist nowhere raises below, and the
         # raise rolls this delete back with everything else.
         _delete_business_plan(connection, deal_id)
+        # Asset Types 1: the mode-blind classification row goes the same way,
+        # for the same reason, and is rolled back with everything else if the
+        # id turns out to exist nowhere.
+        _write_deal_classification(connection, deal_id, None)
 
         cursor = connection.execute("DELETE FROM deals WHERE id = ?", (deal_id,))
         if cursor.rowcount > 0:
@@ -3599,7 +3823,11 @@ def duplicate_deal(
     IDs (unique only within one plan) -- in the same transaction that creates
     the copy. The copy's rows are its own: editing or deleting either deal's
     plan never touches the other's. Both fingerprints include the plan, so a
-    copied snapshot stays valid exactly when the copied plan is unchanged."""
+    copied snapshot stays valid exactly when the copied plan is unchanged.
+
+    Asset Types 1: the classification is underwriting identity, not analytical
+    output, so it is copied exactly -- type and the analyst's own subtype, or
+    "Not specified" -- in the same transaction that creates the copy."""
 
     original = get_deal(deal_id, db_path=db_path)
     new_name = name if name else f"{original.name} (Copy)"
@@ -3618,6 +3846,7 @@ def duplicate_deal(
                 original.inputs,
                 deal_context=original.deal_context,
                 business_plan=original.business_plan,
+                classification=original.classification,
                 db_path=db_path,
             )
             analysis_fingerprint = fingerprint_quick_inputs(
@@ -3632,6 +3861,7 @@ def duplicate_deal(
                 original.detailed_operating_inputs,
                 deal_context=original.deal_context,
                 business_plan=original.business_plan,
+                classification=original.classification,
                 db_path=db_path,
             )
             analysis_fingerprint = fingerprint_detailed_inputs(
@@ -3660,6 +3890,7 @@ def duplicate_deal(
                 original.leases,
                 deal_context=original.deal_context,
                 business_plan=original.business_plan,
+                classification=original.classification,
                 db_path=db_path,
             )
             analysis_fingerprint = fingerprint_lease_level_inputs(
@@ -8190,13 +8421,19 @@ def _figure_values(figures: OperatingFigures, prefix: str) -> dict[str, float]:
     return {f"{prefix}_{field}": float(getattr(figures, field)) for field in _AM1_FIGURE_FIELDS}
 
 
-def _row_to_managed_asset(row: sqlite3.Row) -> ManagedAsset:
+def _row_to_managed_asset(
+    row: sqlite3.Row, *, classification: AssetClassification | None
+) -> ManagedAsset:
+    """``classification`` is the asset's own snapshot row, read by the caller
+    (Asset Types 1) -- never the source Deal's current classification."""
+
     return ManagedAsset(
         id=row["id"],
         source_deal_id=row["source_deal_id"],
         name=row["name"],
         acquisition_date=date.fromisoformat(row["acquisition_date"]),
         property_type=row["property_type"],
+        **_classification_fields(classification),
         market=row["market"],
         acquisition_fingerprint=row["acquisition_fingerprint"],
         created_at=datetime.fromisoformat(row["created_at"]),
@@ -8216,6 +8453,23 @@ def _row_to_monthly_report(row: sqlite3.Row) -> MonthlyAssetReport:
     )
 
 
+def _read_managed_asset_classification(
+    connection: sqlite3.Connection, managed_asset_id: str
+) -> AssetClassification | None:
+    row = connection.execute(
+        "SELECT * FROM managed_asset_classifications WHERE managed_asset_id = ?",
+        (managed_asset_id,),
+    ).fetchone()
+    return _classification_from_row(f"Managed asset {managed_asset_id!r}", row)
+
+
+def _read_managed_asset(connection: sqlite3.Connection, managed_asset_id: str) -> ManagedAsset:
+    return _row_to_managed_asset(
+        _require_managed_asset(connection, managed_asset_id),
+        classification=_read_managed_asset_classification(connection, managed_asset_id),
+    )
+
+
 def _require_managed_asset(connection: sqlite3.Connection, managed_asset_id: str) -> sqlite3.Row:
     row = connection.execute(
         "SELECT * FROM managed_assets WHERE id = ?", (managed_asset_id,)
@@ -8230,7 +8484,6 @@ def create_managed_asset(
     source_deal_id: str,
     name: str | None = None,
     acquisition_date: date,
-    property_type: str | None = None,
     market: str | None = None,
     db_path: Path | None = None,
 ) -> ManagedAsset:
@@ -8259,6 +8512,14 @@ def create_managed_asset(
     two modes. A saved Lease-Level deal therefore qualifies on the strength of
     the same evidence the other modes' snapshots stand on: assumptions that are
     on file and reassemble into the contracts the engine consumes.
+
+    **Asset Types 1: the classification is the Deal's, copied once.** The
+    Deal's ``asset_type`` and ``asset_subtype`` are read in this transaction and
+    written into ``managed_asset_classifications`` beside the asset -- the one
+    classification source, with no hand-typed alternative that could disagree
+    with it. An unclassified Deal yields an unclassified asset ("Not
+    specified"); nothing is inferred. Like the fingerprint, the copy is a
+    snapshot: no later Deal edit reaches it.
 
     Raises ``DealNotFoundError`` if the Deal does not exist,
     ``InvestmentStructureError`` if it has no current analysis,
@@ -8291,7 +8552,6 @@ def create_managed_asset(
         require_valid_managed_asset(
             name=resolved_name,
             acquisition_date=acquisition_date,
-            property_type=property_type,
             market=market,
         )
         # Captured once, here, and written by no other statement in this module.
@@ -8310,15 +8570,29 @@ def create_managed_asset(
                 source_deal_id,
                 resolved_name,
                 acquisition_date.isoformat(),
-                property_type,
+                # Legacy column: no longer authored (Asset Types 1). A new
+                # asset states no hand-typed property type.
+                None,
                 market,
                 fingerprint,
                 now,
                 now,
             ),
         )
-        row = _require_managed_asset(connection, managed_asset_id)
-        return _row_to_managed_asset(row)
+        # Asset Types 1: the snapshot of the Deal's classification, written
+        # once, here, and by no other statement in this module.
+        classification = deal.classification
+        if classification is not None:
+            connection.execute(
+                "INSERT INTO managed_asset_classifications "
+                "(managed_asset_id, asset_type, asset_subtype) VALUES (?, ?, ?)",
+                (
+                    managed_asset_id,
+                    classification.asset_type.value,
+                    classification.asset_subtype,
+                ),
+            )
+        return _read_managed_asset(connection, managed_asset_id)
 
 
 def list_managed_assets(*, db_path: Path | None = None) -> list[ManagedAsset]:
@@ -8329,14 +8603,24 @@ def list_managed_assets(*, db_path: Path | None = None) -> list[ManagedAsset]:
         rows = connection.execute(
             "SELECT * FROM managed_assets ORDER BY updated_at DESC, id ASC"
         ).fetchall()
-    return [_row_to_managed_asset(row) for row in rows]
+        # Asset Types 1: every snapshot in one query. An asset with no row is
+        # "Not specified".
+        classifications = {
+            row["managed_asset_id"]: _classification_from_row(
+                f"Managed asset {row['managed_asset_id']!r}", row
+            )
+            for row in connection.execute("SELECT * FROM managed_asset_classifications")
+        }
+    return [
+        _row_to_managed_asset(row, classification=classifications.get(row["id"])) for row in rows
+    ]
 
 
 def get_managed_asset(managed_asset_id: str, *, db_path: Path | None = None) -> ManagedAsset:
     """One Managed Asset. Raises ``ManagedAssetNotFoundError``."""
 
     with _connect(db_path) as connection:
-        return _row_to_managed_asset(_require_managed_asset(connection, managed_asset_id))
+        return _read_managed_asset(connection, managed_asset_id)
 
 
 def delete_managed_asset(managed_asset_id: str, *, db_path: Path | None = None) -> None:
@@ -8355,6 +8639,12 @@ def delete_managed_asset(managed_asset_id: str, *, db_path: Path | None = None) 
         _require_managed_asset(connection, managed_asset_id)
         connection.execute(
             "DELETE FROM monthly_asset_reports WHERE managed_asset_id = ?",
+            (managed_asset_id,),
+        )
+        # Asset Types 1: the asset's classification snapshot is owned by it and
+        # goes with it. The source Deal's own classification is untouched.
+        connection.execute(
+            "DELETE FROM managed_asset_classifications WHERE managed_asset_id = ?",
             (managed_asset_id,),
         )
         connection.execute("DELETE FROM managed_assets WHERE id = ?", (managed_asset_id,))

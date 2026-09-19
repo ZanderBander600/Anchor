@@ -68,6 +68,14 @@ from .analysis import (
 )
 from .business_plan import BusinessPlan, BusinessPlanValidationError, parse_business_plan
 
+# Asset Types 1. Parsing and validation of non-economic classification metadata
+# only; nothing here reaches an engine, a fingerprint or the AI grounding.
+from .asset_types import (
+    AssetClassification,
+    AssetClassificationError,
+    parse_asset_classification,
+)
+
 # Gate AM1. ``analyze_asset_performance`` is the sole authority for every AM1
 # financial result; this module serializes what it returns and computes nothing
 # of its own. No AI module is reachable from any AM1 route.
@@ -863,6 +871,16 @@ _ONE_WAY_FIELDS = ("assumption", "values", "metric")
 #: consumes, and nothing derived from the request may ever join them -- a typo
 #: must never be able to excuse itself by appearing in the owned set.
 _DEAL_FIELDS = ("name", "deal_context")
+
+#: Asset Types 1: the two classification keys ``POST``/``PUT /deals`` consume
+#: beside ``_DEAL_FIELDS``. Deliberately *not* part of ``_DEAL_FIELDS``, which
+#: ``/deals/fingerprint`` also declares: classification is not a fingerprint
+#: input, so a Lease-Level fingerprint request that carries it is refused as an
+#: unknown key rather than silently accepted and ignored.
+_CLASSIFICATION_FIELDS = ("asset_type", "asset_subtype")
+#: ``_DEAL_FIELDS`` plus the classification keys, spelled out as a literal for
+#: the same reason ``_DEAL_FIELDS`` is: nothing derived may join an owned set.
+_DEAL_WRITE_FIELDS = ("name", "deal_context", "asset_type", "asset_subtype")
 
 
 def _require_fields(payload: dict[str, Any], fields: tuple[str, ...]) -> None:
@@ -1806,6 +1824,47 @@ def _optional_deal_context(payload: dict[str, Any]) -> str | None:
     return stripped if stripped else None
 
 
+def _asset_classification_error_response(error: AssetClassificationError) -> HTTPException:
+    """A classification refusal as a structured 422: every issue, each with its
+    stable code and the field to fix, in the same ``field_id``/``category``/
+    ``message`` shape every other Deal refusal already uses."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "field_id": issue.field,
+                "category": "classification",
+                "message": issue.message,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _deal_classification(
+    payload: dict[str, Any], *, when_absent: Any
+) -> AssetClassification | None | Any:
+    """Asset Types 1: the classification a ``/deals`` body states.
+
+    **Compatibility is explicit, not accidental.** A body that names neither
+    ``asset_type`` nor ``asset_subtype`` predates classification: it states
+    nothing about it, and gets ``when_absent`` -- ``None`` ("Not specified") on
+    create, and ``KEEP_CLASSIFICATION`` on update, so an older client or saved
+    fixture can never erase a classification by leaving it out. A body that
+    names either key states the whole classification: the other key absent is
+    ``null``, and both are validated together (``null`` type is "Not
+    specified"; ``other`` needs a subtype; a subtype needs a type)."""
+
+    if not any(key in payload for key in _CLASSIFICATION_FIELDS):
+        return when_absent
+    try:
+        return parse_asset_classification(payload.get("asset_type"), payload.get("asset_subtype"))
+    except AssetClassificationError as error:
+        raise _asset_classification_error_response(error) from None
+
+
 def _require_snapshot_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     """Owner Return Metrics V3 Gate A6/A7: ``analysis_snapshot``/
     ``ai_snapshot`` are already-computed result shapes (the exact JSON a
@@ -1943,13 +2002,18 @@ def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
     name = _require_deal_name(payload)
     operating_mode = _require_operating_mode(payload)
     deal_context = _optional_deal_context(payload)
+    classification = _deal_classification(payload, when_absent=None)
 
     match operating_mode:
         case OperatingMode.QUICK:
             inputs = _require_deal_inputs(payload)
             business_plan = _optional_business_plan(payload)
             return deals_store.create_deal(
-                name, inputs, deal_context=deal_context, business_plan=business_plan
+                name,
+                inputs,
+                deal_context=deal_context,
+                business_plan=business_plan,
+                classification=classification,
             )
         case OperatingMode.DETAILED:
             terms = _require_deal_terms(payload)
@@ -1961,10 +2025,11 @@ def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
                 detailed_inputs,
                 deal_context=deal_context,
                 business_plan=business_plan,
+                classification=classification,
             )
         case OperatingMode.LEASE_LEVEL:
             terms = _require_deal_terms(payload, mode_label="lease_level")
-            inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+            inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_WRITE_FIELDS)
             business_plan = _optional_business_plan(payload)
             return deals_store.create_lease_level_deal(
                 name,
@@ -1976,6 +2041,7 @@ def create_deal(payload: dict[str, Any] = Body(...)) -> Deal:
                 inputs.leases,
                 deal_context=deal_context,
                 business_plan=business_plan,
+                classification=classification,
             )
         case _:
             raise _unsupported_operating_mode(operating_mode, endpoint="POST /deals")
@@ -2011,6 +2077,9 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
     name = _require_deal_name(payload)
     operating_mode = _require_operating_mode(payload)
     deal_context = _optional_deal_context(payload)
+    classification = _deal_classification(
+        payload, when_absent=investment_store.KEEP_CLASSIFICATION
+    )
 
     try:
         match operating_mode:
@@ -2023,6 +2092,7 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
                     inputs,
                     deal_context=deal_context,
                     business_plan=business_plan,
+                    classification=classification,
                 )
             case OperatingMode.DETAILED:
                 terms = _require_deal_terms(payload)
@@ -2035,10 +2105,11 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
                     detailed_inputs,
                     deal_context=deal_context,
                     business_plan=business_plan,
+                    classification=classification,
                 )
             case OperatingMode.LEASE_LEVEL:
                 terms = _require_deal_terms(payload, mode_label="lease_level")
-                inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_FIELDS)
+                inputs = _require_lease_level_inputs(payload, also_owned=_DEAL_WRITE_FIELDS)
                 business_plan = _optional_business_plan(payload)
                 return deals_store.update_lease_level_deal(
                     deal_id,
@@ -2051,6 +2122,7 @@ def update_deal(deal_id: str, payload: dict[str, Any] = Body(...)) -> Deal:
                     inputs.leases,
                     deal_context=deal_context,
                     business_plan=business_plan,
+                    classification=classification,
                 )
             case _:
                 raise _unsupported_operating_mode(
@@ -4712,7 +4784,13 @@ def analyze_investment_partner_decision_matrix(
 #: them: a missing ``payroll`` is a body that forgot a line, never a zero.
 _AM1_FIGURE_FIELDS = ("occupancy", *AM1_MONETARY_FIELDS)
 
-_MANAGED_ASSET_FIELDS = ("source_deal_id", "name", "acquisition_date", "property_type", "market")
+_MANAGED_ASSET_FIELDS = ("source_deal_id", "name", "acquisition_date", "market")
+#: Asset Types 1 retired the hand-typed property type: a new asset's
+#: classification is copied from its source Deal. A body from a client that
+#: predates this may still carry the key, and is honored only when it states
+#: nothing (``null``) -- a stated value is refused rather than silently
+#: dropped or stored as a competing classification.
+_RETIRED_MANAGED_ASSET_FIELD = "property_type"
 _MONTHLY_REPORT_FIELDS = ("reporting_month", "budget", "actual", "commentary")
 _ACTUALS_FIELDS = ("actual", "commentary", "budget")
 #: The commentary-only update states exactly one field. No figure can travel
@@ -4804,15 +4882,36 @@ def create_managed_asset(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     One per Deal. The Deal's authoritative analysis fingerprint is captured here
     as the frozen approved acquisition basis; the Deal itself is not modified,
     and no later Deal edit reaches the asset.
+
+    Asset Types 1: the Deal's classification is copied into the asset as a
+    snapshot by the store. The body carries no classification of its own.
     """
 
+    if _RETIRED_MANAGED_ASSET_FIELD in payload:
+        if payload[_RETIRED_MANAGED_ASSET_FIELD] is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=[
+                    {
+                        "code": "property_type_retired",
+                        "message": (
+                            "A managed asset's classification is copied from its source "
+                            "Deal. Set the Deal's Asset Type instead of a property type."
+                        ),
+                        "scope": None,
+                        "field": _RETIRED_MANAGED_ASSET_FIELD,
+                    }
+                ],
+            )
+        payload = {
+            key: value for key, value in payload.items() if key != _RETIRED_MANAGED_ASSET_FIELD
+        }
     body = _exact_keys(payload, _MANAGED_ASSET_FIELDS, "The request body")
     try:
         asset = investment_store.create_managed_asset(
             source_deal_id=body["source_deal_id"],
             name=body["name"],
             acquisition_date=_am1_date(body["acquisition_date"], "acquisition_date"),
-            property_type=body["property_type"],
             market=body["market"],
         )
     except DealNotFoundError as error:

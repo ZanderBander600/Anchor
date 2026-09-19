@@ -74,7 +74,6 @@ def _asset(db: Path, mode: str = "quick", **overrides):
     kwargs = {
         "source_deal_id": deal.id,
         "acquisition_date": date(2026, 10, 1),
-        "property_type": "Multifamily",
         "market": "Toronto, ON",
         "db_path": db,
     }
@@ -92,7 +91,10 @@ def test_a_managed_asset_is_created_from_a_saved_deal_in_every_mode(mode: str, d
     deal, asset = _asset(db, mode)
     assert asset.source_deal_id == deal.id
     assert asset.name == deal.name
-    assert asset.property_type == "Multifamily"
+    # Asset Types 1: no hand-typed property type is authored any more, and an
+    # unclassified source Deal yields an unclassified asset.
+    assert asset.property_type is None
+    assert (asset.asset_type, asset.asset_subtype) == (None, None)
     assert asset.market == "Toronto, ON"
     assert asset.acquisition_date == date(2026, 10, 1)
     assert asset.id != deal.id

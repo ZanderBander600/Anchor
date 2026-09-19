@@ -286,6 +286,48 @@ AM1_TABLES = (
     "monthly_asset_reports",
 )
 
+#: The two classification tables schema v14 adds (Asset Types 1). Unlike the
+#: tables above they hold Deal and Managed Asset metadata rather than P7
+#: structure, so ``legacy_rows`` deliberately keeps them: no P7 operation may
+#: change a classification.
+ASSET_TYPES_1_TABLES = (
+    "deal_asset_classifications",
+    "managed_asset_classifications",
+)
+
+#: The two keys Asset Types 1 adds to every Deal and Managed Asset response.
+CLASSIFICATION_KEYS = ("asset_type", "asset_subtype")
+
+
+def without_unstated_classification(current: Any, recorded: Any) -> Any:
+    """``current`` minus exactly the classification keys a pre-Asset-Types-1
+    response could not have carried -- and only where they read ``null``.
+
+    Every compatibility oracle replays responses a baseline tree recorded before
+    classification existed. Asset Types 1 adds two keys to each Deal body, and a
+    legacy record must answer them with ``null`` ("Not specified"): nothing may
+    be inferred for it. So a key is removed only when (a) it is one of the two,
+    (b) the recorded object at the same position lacks it, and (c) its value is
+    ``None``. A legacy record that came back *classified* keeps the key and
+    fails the comparison, and every other byte must still match exactly -- the
+    oracle is not loosened anywhere else.
+    """
+
+    if isinstance(current, dict) and isinstance(recorded, dict):
+        return {
+            key: (
+                without_unstated_classification(value, recorded[key]) if key in recorded else value
+            )
+            for key, value in current.items()
+            if not (key in CLASSIFICATION_KEYS and key not in recorded and value is None)
+        }
+    if isinstance(current, list) and isinstance(recorded, list) and len(current) == len(recorded):
+        return [
+            without_unstated_classification(item, recorded_item)
+            for item, recorded_item in zip(current, recorded, strict=True)
+        ]
+    return current
+
 
 def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
     """Every row of every table that is not a P7 table, in rowid order."""

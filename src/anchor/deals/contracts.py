@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ..ai.contracts import AIAnalysis
+from ..asset_types import AssetClassification, AssetType
 from ..contracts import (
     AcquisitionInputs,
     AcquisitionTerms,
@@ -220,6 +221,21 @@ class Deal:
     # plan it read.
     business_plan: BusinessPlan = BusinessPlan()
 
+    # --- Asset Types 1 -------------------------------------------------
+    #
+    # Non-economic classification metadata, mode-blind like the Business
+    # Plan and stored beside the deal rather than in any mode's table.
+    # ``asset_type`` is the controlled type; ``asset_subtype`` the analyst's
+    # own description, never mapped onto a predefined value. Both ``None`` is
+    # "Not specified" -- every legacy deal, which no read ever classifies.
+    # Neither field reaches an engine, a fingerprint or the AI grounding, so
+    # changing them changes no number and invalidates no snapshot.
+    #
+    # Defaulted so every existing construction site keeps working unchanged;
+    # the store always passes what it read.
+    asset_type: AssetType | None = None
+    asset_subtype: str | None = None
+
     deal_context: str | None
     analysis_snapshot: AcquisitionResults | DetailedAcquisitionResults | None
     ai_snapshot: AIAnalysis | None
@@ -241,6 +257,15 @@ class Deal:
 
     created_at: datetime
     updated_at: datetime
+
+    @property
+    def classification(self) -> AssetClassification | None:
+        """The Deal's classification as one value, or ``None`` for "Not
+        specified"."""
+
+        if self.asset_type is None:
+            return None
+        return AssetClassification(asset_type=self.asset_type, asset_subtype=self.asset_subtype)
 
     def _lease_level_fields_populated(self) -> bool:
         """Whether any Lease-Level-only field carries a value.
@@ -274,6 +299,16 @@ class Deal:
                 "A Deal's 'business_plan' must be a BusinessPlan instance; a deal "
                 "with no plan carries BusinessPlan(), never None."
             )
+        # Asset Types 1: the pair is one classification. A subtype with no type
+        # is refused, and a stated type must satisfy the classification's own
+        # rules (``other`` needs a subtype; the subtype is normalized text).
+        if self.asset_type is None:
+            if self.asset_subtype is not None:
+                raise ValueError(
+                    "A Deal with no 'asset_type' must not carry an 'asset_subtype'."
+                )
+        else:
+            AssetClassification(asset_type=self.asset_type, asset_subtype=self.asset_subtype)
         if self.operating_mode is OperatingMode.QUICK:
             if self._lease_level_fields_populated():
                 raise ValueError(
