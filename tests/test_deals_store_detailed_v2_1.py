@@ -371,9 +371,12 @@ def test_detailed_deal_creates_no_row_in_the_quick_deals_table(db_path: Path) ->
     assert quick_row is None
 
 
-def test_detailed_deal_has_no_fabricated_quick_only_fields() -> None:
+def test_detailed_deal_has_no_fabricated_quick_only_fields(db_path: Path) -> None:
+    # Isolated like every other test here. Without ``db_path`` this wrote one
+    # "Detailed Deal" row into the repository's default ``data/anchor.db`` on
+    # every run (found at Asset Types 1).
     deal = create_detailed_deal(
-        "Detailed Deal", GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS
+        "Detailed Deal", GOLDEN_TERMS, GOLDEN_DETAILED_OPERATING_INPUTS, db_path=db_path
     )
 
     assert deal.operating_mode is OperatingMode.DETAILED

@@ -3,6 +3,9 @@ import type { RefObject } from 'react';
 
 import { formatAcquiredOn } from '../assetManagementFormat';
 import type { ManagedAsset } from '../assetManagementTypes';
+import { assetTypeLabel, matchesAssetTypeFilter } from '../assetTypes';
+import type { AssetTypeFilterValue } from '../assetTypes';
+import { AssetClassificationText, AssetTypeFilter } from './AssetClassification';
 import type { ManagedAssetsState } from '../useManagedAssets';
 import { useAssetPerformance } from '../useManagedAssets';
 import { ManagedAssetWorkspace } from './ManagedAssetWorkspace';
@@ -71,6 +74,10 @@ export function AssetManagementShell({
 }: AssetManagementShellProps) {
   const [section, setSection] = useState<AssetManagementSection>('assets');
   const [openAssetId, setOpenAssetId] = useState<string | null>(null);
+  // Asset Types 1: one filter per list, held here so it survives opening an
+  // asset and coming back. Presentation only -- nothing is written.
+  const [assetsFilter, setAssetsFilter] = useState<AssetTypeFilterValue>('all');
+  const [reportingFilter, setReportingFilter] = useState<AssetTypeFilterValue>('all');
   const managedAssetsHeading = useRef<HTMLHeadingElement>(null);
   const focusManagedAssetsAfterDelete = useRef(false);
 
@@ -185,7 +192,7 @@ export function AssetManagementShell({
                   <span className="sidebar-deal-text">
                     <span className="sidebar-deal-name">{asset.name}</span>
                     <span className="sidebar-deal-meta">
-                      {asset.property_type ?? 'Owned asset'} ·{' '}
+                      {asset.asset_type === null ? 'Owned asset' : assetTypeLabel(asset.asset_type)} ·{' '}
                       {formatAcquiredOn(asset.acquisition_date)}
                     </span>
                   </span>
@@ -214,7 +221,12 @@ export function AssetManagementShell({
         ) : section === 'portfolio' ? (
           <PortfolioOverview assets={state.assets} onOpen={openManagedAsset} />
         ) : section === 'reporting' ? (
-          <MonthlyReportingIndex assets={state.assets} onOpen={openManagedAsset} />
+          <MonthlyReportingIndex
+            assets={state.assets}
+            onOpen={openManagedAsset}
+            filter={reportingFilter}
+            onFilterChange={setReportingFilter}
+          />
         ) : (
           <ManagedAssetList
             assets={state.assets}
@@ -223,9 +235,34 @@ export function AssetManagementShell({
             onOpen={openManagedAsset}
             onOpenAcquisitions={onOpenAcquisitions}
             headingRef={managedAssetsHeading}
+            filter={assetsFilter}
+            onFilterChange={setAssetsFilter}
           />
         )}
       </div>
+    </div>
+  );
+}
+
+/** The asset's classification snapshot, with its legacy hand-typed property
+ * type shown -- and labelled -- only when it has no controlled type. */
+function ClassificationCell({ asset }: { asset: ManagedAsset }) {
+  return (
+    <AssetClassificationText
+      assetType={asset.asset_type}
+      assetSubtype={asset.asset_subtype}
+      legacyNote={asset.asset_type === null ? asset.property_type : null}
+    />
+  );
+}
+
+function FilteredEmpty({ onClear }: { onClear: () => void }) {
+  return (
+    <div className="am-empty asset-type-filter-empty">
+      No managed assets match this asset type.{' '}
+      <button type="button" className="am-quiet-button" onClick={onClear}>
+        Show all asset types
+      </button>
     </div>
   );
 }
@@ -237,6 +274,8 @@ function ManagedAssetList({
   onOpen,
   onOpenAcquisitions,
   headingRef,
+  filter,
+  onFilterChange,
 }: {
   assets: ManagedAsset[];
   isLoading: boolean;
@@ -244,7 +283,10 @@ function ManagedAssetList({
   onOpen: (asset: ManagedAsset) => void;
   onOpenAcquisitions: () => void;
   headingRef: RefObject<HTMLHeadingElement | null>;
+  filter: AssetTypeFilterValue;
+  onFilterChange: (filter: AssetTypeFilterValue) => void;
 }) {
+  const shown = assets.filter((asset) => matchesAssetTypeFilter([asset.asset_type], filter));
   return (
     <div className="am-page">
       <header className="am-page-head">
@@ -274,6 +316,18 @@ function ManagedAssetList({
       )}
 
       {assets.length > 0 && (
+        <AssetTypeFilter
+          value={filter}
+          onChange={onFilterChange}
+          shown={shown.length}
+          total={assets.length}
+          noun="managed assets"
+        />
+      )}
+
+      {assets.length > 0 && shown.length === 0 && <FilteredEmpty onClear={() => onFilterChange('all')} />}
+
+      {shown.length > 0 && (
         <div className="am-table-scroll">
           <table className="am-table am-list-table">
             <thead>
@@ -282,7 +336,7 @@ function ManagedAssetList({
                   Asset
                 </th>
                 <th scope="col" className="am-col-text">
-                  Property Type
+                  Asset Type
                 </th>
                 <th scope="col" className="am-col-text">
                   Market
@@ -296,12 +350,14 @@ function ManagedAssetList({
               </tr>
             </thead>
             <tbody>
-              {assets.map((asset) => (
+              {shown.map((asset) => (
                 <tr key={asset.id}>
                   <th scope="row" className="am-col-line">
                     {asset.name}
                   </th>
-                  <td className="am-col-text">{asset.property_type ?? '—'}</td>
+                  <td className="am-col-text">
+                    <ClassificationCell asset={asset} />
+                  </td>
                   <td className="am-col-text">{asset.market ?? '—'}</td>
                   <td className="am-col-text">{formatAcquiredOn(asset.acquisition_date)}</td>
                   <td className="am-col-action">
@@ -371,10 +427,15 @@ function PortfolioOverview({
 function MonthlyReportingIndex({
   assets,
   onOpen,
+  filter,
+  onFilterChange,
 }: {
   assets: ManagedAsset[];
   onOpen: (asset: ManagedAsset) => void;
+  filter: AssetTypeFilterValue;
+  onFilterChange: (filter: AssetTypeFilterValue) => void;
 }) {
+  const shown = assets.filter((asset) => matchesAssetTypeFilter([asset.asset_type], filter));
   return (
     <div className="am-page">
       <header className="am-page-head">
@@ -388,12 +449,27 @@ function MonthlyReportingIndex({
       {assets.length === 0 ? (
         <p className="am-empty">No managed assets yet.</p>
       ) : (
+        <AssetTypeFilter
+          value={filter}
+          onChange={onFilterChange}
+          shown={shown.length}
+          total={assets.length}
+          noun="managed assets"
+        />
+      )}
+
+      {assets.length > 0 && shown.length === 0 && <FilteredEmpty onClear={() => onFilterChange('all')} />}
+
+      {shown.length > 0 && (
         <div className="am-table-scroll">
           <table className="am-table am-list-table">
             <thead>
               <tr>
                 <th scope="col" className="am-col-line">
                   Asset
+                </th>
+                <th scope="col" className="am-col-text">
+                  Asset Type
                 </th>
                 <th scope="col" className="am-col-text">
                   Market
@@ -404,11 +480,14 @@ function MonthlyReportingIndex({
               </tr>
             </thead>
             <tbody>
-              {assets.map((asset) => (
+              {shown.map((asset) => (
                 <tr key={asset.id}>
                   <th scope="row" className="am-col-line">
                     {asset.name}
                   </th>
+                  <td className="am-col-text">
+                    <ClassificationCell asset={asset} />
+                  </td>
                   <td className="am-col-text">{asset.market ?? '—'}</td>
                   <td className="am-col-action">
                     <button

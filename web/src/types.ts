@@ -12,6 +12,7 @@ import type {
   LeaseLevelTwoWaySensitivitySnapshot,
 } from './leaseLevelSensitivityTypes';
 import type { BusinessPlanInput } from './businessPlan';
+import type { AssetType } from './assetTypes';
 
 export interface AcquisitionFormValues {
   purchasePrice: string;
@@ -468,6 +469,12 @@ export interface Deal {
    * The client hydrates it into the editor and sends it back on every write,
    * because an absent plan on a write means an EMPTY plan to the backend. */
   business_plan: BusinessPlanInput;
+  /** Asset Types 1: the controlled Asset Type and the analyst's own Asset
+   * Subtype. Non-economic metadata, mode-agnostic like the Business Plan, and
+   * in no fingerprint. Both `null` is "Not specified" -- every deal saved
+   * before classification existed, which nothing ever classifies for it. */
+  asset_type: AssetType | null;
+  asset_subtype: string | null;
   /** Owner Return Metrics V3 Gate A4: optional, user-authored free text
    * describing the investment strategy/business plan -- never an
    * underwriting input, `null` when no context was supplied (including

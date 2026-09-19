@@ -239,24 +239,25 @@ def test_require_valid_monthly_report_raises_with_every_issue() -> None:
 
 
 def test_a_managed_asset_needs_a_name_and_an_acquisition_date() -> None:
-    issues = validate_managed_asset(
-        name="  ", acquisition_date="2026-10-01", property_type=None, market=None
-    )
+    issues = validate_managed_asset(name="  ", acquisition_date="2026-10-01", market=None)
     assert _codes(issues) == [
         AssetReportIssueCode.INVALID_ASSET_NAME.value,
         AssetReportIssueCode.INVALID_ACQUISITION_DATE.value,
     ]
 
 
-def test_property_type_and_market_are_optional_but_never_blank() -> None:
+def test_market_is_optional_but_never_blank() -> None:
     """"Not stated" has exactly one spelling, so the store never has to guess
-    which the analyst meant."""
+    which the analyst meant.
+
+    Asset Types 1 retired the hand-typed ``property_type`` from the authored
+    identity: the classification is copied from the source Deal, so there is
+    no property type left to validate here."""
 
     assert (
         validate_managed_asset(
             name="Harbor Point Apartments",
             acquisition_date=date(2026, 10, 1),
-            property_type=None,
             market=None,
         )
         == ()
@@ -264,20 +265,15 @@ def test_property_type_and_market_are_optional_but_never_blank() -> None:
     issues = validate_managed_asset(
         name="Harbor Point Apartments",
         acquisition_date=date(2026, 10, 1),
-        property_type="   ",
         market="",
     )
-    assert _codes(issues) == [
-        AssetReportIssueCode.INVALID_PROPERTY_TYPE.value,
-        AssetReportIssueCode.INVALID_MARKET.value,
-    ]
+    assert _codes(issues) == [AssetReportIssueCode.INVALID_MARKET.value]
 
 
 def test_require_valid_managed_asset_accepts_the_demo_asset() -> None:
     require_valid_managed_asset(
         name="Harbor Point Apartments",
         acquisition_date=date(2026, 10, 1),
-        property_type="Multifamily",
         market="Toronto, ON",
     )
 

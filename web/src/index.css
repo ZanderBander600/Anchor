@@ -8016,6 +8016,10 @@ body {
 /* Horizontal scrolling stays inside the card, so a narrow viewport never
    makes the page itself scroll sideways. */
 .am-table-scroll {
+  /* A positioning context, so absolutely positioned descendants -- the
+     visually hidden "Actions" header and the Asset Types 1 classification
+     separators -- scroll with the table instead of widening the page at 390px. */
+  position: relative;
   overflow-x: auto;
   margin: 0 -2px;
   padding: 0 2px;
@@ -8596,5 +8600,217 @@ body {
 
   .am-col-line {
     min-width: 132px;
+  }
+}
+
+/* =====================================================================
+   Asset Types 1 -- controlled Asset Type and analyst-authored subtype.
+   Built from the existing field, strip, badge and table vocabulary; no
+   new colour or type scale is introduced.
+   ===================================================================== */
+
+/* The Underwrite strip mirrors the Deal Context strip's row, label and text
+   so the two read as one family, under its own class names. */
+.deal-classification-strip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.deal-classification-strip-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.deal-classification-strip-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.deal-classification-strip-text {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deal-classification-strip-text-empty {
+  color: var(--text-muted);
+}
+
+.deal-classification-strip-editor {
+  margin-top: var(--sp-3);
+}
+
+.asset-classification-field {
+  display: grid;
+  grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
+  gap: var(--sp-3) var(--sp-4);
+  align-items: start;
+}
+
+.asset-classification-field .field-hint {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.asset-classification-required {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.asset-classification-select {
+  min-height: 2.25rem;
+}
+
+/* Overview -- one quiet card above the Owner Summary. */
+.deal-classification-summary {
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.deal-classification-summary-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-6);
+  margin: 0;
+}
+
+.deal-classification-summary-list > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.deal-classification-summary-list dt {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.deal-classification-summary-list dd {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+/* One type/subtype pair in a row. Stacked in tables, inline in the Deal
+   Library's one-line meta, so rows keep their height. */
+.asset-classification-text {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.asset-classification-type {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.asset-classification-subtype {
+  font-size: 0.85em;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.asset-classification-inline {
+  display: inline;
+}
+
+.asset-classification-inline .asset-classification-subtype {
+  font-size: inherit;
+}
+
+.asset-classification-separator {
+  color: var(--color-text-muted);
+}
+
+.asset-classification-empty {
+  color: var(--color-text-muted);
+  font-style: italic;
+  font-weight: 400;
+}
+
+/* Library filters -- a labelled select and a polite count. */
+.asset-type-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  margin: 0 0 var(--sp-3);
+}
+
+.asset-type-filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.asset-type-filter-select {
+  width: auto;
+  min-width: 12rem;
+  max-width: 100%;
+}
+
+.asset-type-filter-status {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.asset-type-filter-empty button {
+  margin-left: var(--sp-2);
+}
+
+/* Investment Library -- one small chip per distinct Unit type. */
+.investment-asset-types {
+  min-width: 8rem;
+}
+
+.asset-type-chip {
+  display: inline-block;
+  margin: 1px 4px 1px 0;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  color: var(--color-text);
+  background: var(--color-surface-muted);
+}
+
+.am-create-classification .asset-classification-text {
+  padding: 0.35rem 0;
+}
+
+@media (max-width: 720px) {
+  .asset-classification-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .asset-type-filter-select {
+    flex: 1 1 12rem;
+    min-width: 0;
+  }
+
+  .asset-type-filter-status {
+    flex-basis: 100%;
   }
 }

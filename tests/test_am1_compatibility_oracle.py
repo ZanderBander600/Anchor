@@ -31,6 +31,10 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from _p7_2_fixtures import (  # type: ignore[import-not-found]
+    ASSET_TYPES_1_TABLES,
+    without_unstated_classification,
+)
 from anchor import api as api_module
 from anchor.deals import store
 
@@ -162,16 +166,19 @@ def test_the_migration_adds_exactly_two_empty_tables_and_rewrites_nothing(
     store.list_deals(db_path=db)  # any store call migrates
     migrated_schema, migrated_rows = _schema(db), _every_row(db)
 
-    assert _version(db) == 13
+    # Asset Types 1 (schema 14) adds its two classification tables in the same
+    # additive way; they are named so the table set stays an exact comparison.
+    assert _version(db) == 14
+    expected_tables = set(AM1_TABLES) | set(ASSET_TYPES_1_TABLES)
     added = {name: migrated_schema[name] for name in set(migrated_schema) - set(before_schema)}
-    assert {name for name, (kind, _, _) in added.items() if kind == "table"} == set(AM1_TABLES)
+    assert {name for name, (kind, _, _) in added.items() if kind == "table"} == expected_tables
     # Every other new object is one of those tables' own key indexes.
-    assert {table for _, table, _ in added.values()} == set(AM1_TABLES)
+    assert {table for _, table, _ in added.values()} == expected_tables
     assert {kind for kind, _, _ in added.values()} <= {"table", "index"}
     # Nothing that existed was removed or altered.
     assert set(before_schema) <= set(migrated_schema)
     assert {name: migrated_schema[name] for name in before_schema} == before_schema
-    assert {table: migrated_rows[table] for table in AM1_TABLES} == dict.fromkeys(AM1_TABLES, [])
+    assert {table: migrated_rows[table] for table in expected_tables} == dict.fromkeys(expected_tables, [])
     assert {table: migrated_rows[table] for table in before_rows} == before_rows
 
 
@@ -260,7 +267,11 @@ def test_every_recorded_read_replays_byte_for_byte(
     for exchange in replayed:
         response = client.request(exchange["method"], exchange["path"], json=exchange["body"])
         assert response.status_code == exchange["status"], exchange["path"]
-        assert response.json() == exchange["json"], exchange["path"]
+        # Asset Types 1: a legacy Deal now also states its classification, as
+        # null ("Not specified"); only those keys are set aside.
+        assert (
+            without_unstated_classification(response.json(), exchange["json"]) == exchange["json"]
+        ), exchange["path"]
 
 
 def test_the_recorded_refusals_are_still_refused_the_same_way(
@@ -279,7 +290,10 @@ def test_the_recorded_refusals_are_still_refused_the_same_way(
     assert refusals, "the baseline recorded no refusal to compare"
     for exchange in refusals:
         response = client.request(exchange["method"], exchange["path"], json=exchange["body"])
-        assert (response.status_code, response.json()) == (
+        assert (
+            response.status_code,
+            without_unstated_classification(response.json(), exchange["json"]),
+        ) == (
             exchange["status"],
             exchange["json"],
         ), exchange["path"]

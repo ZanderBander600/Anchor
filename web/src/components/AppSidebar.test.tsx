@@ -35,6 +35,8 @@ function makeDeal(overrides: Partial<Deal> = {}): Deal {
     market_leasing: null,
     suites: null,
     leases: null,
+    asset_type: null,
+    asset_subtype: null,
     deal_context: null,
     business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,

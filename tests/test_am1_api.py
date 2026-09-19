@@ -55,7 +55,6 @@ def _create_asset(client: TestClient, db: Path, **overrides: Any) -> dict[str, A
         "source_deal_id": deal.id,
         "name": None,
         "acquisition_date": "2026-10-01",
-        "property_type": "Multifamily",
         "market": "Toronto, ON",
     }
     body.update(overrides)
@@ -83,7 +82,10 @@ def _create_report(client: TestClient, asset_id: str, **overrides: Any) -> Any:
 def test_a_managed_asset_is_created_from_a_deal(client: TestClient, db: Path) -> None:
     asset = _create_asset(client, db)
     assert asset["name"] == "Harbor Point Apartments"
-    assert asset["property_type"] == "Multifamily"
+    # Asset Types 1: the hand-typed property type is retired; an unclassified
+    # source Deal yields an unclassified asset.
+    assert asset["property_type"] is None
+    assert (asset["asset_type"], asset["asset_subtype"]) == (None, None)
     assert asset["acquisition_date"] == "2026-10-01"
     assert asset["acquisition_fingerprint"]
     assert asset["id"] != asset["source_deal_id"]

@@ -537,10 +537,12 @@ def test_the_eight_tables_hold_authored_terms_only() -> None:
     assert "target_profit_share" in columns  # the catch-up term itself, authored
     for forbidden in (r"irr", r"moic", r"(?<!target_)profit", r"promote_earned", r"distribution(?!_order)", r"amount", r"result", r"snapshot", r"json", r"blob"):
         assert not {column for column in columns if re.search(forbidden, column)}, forbidden
-    # AM1 advanced the store to schema 13. Stage 2's eight Partnership tables
-    # are unchanged by it; what this line pins is that the store still
-    # declares one version, and that Stage 2's tables were added under 12.
-    assert "_SCHEMA_VERSION = 13" in text
+    # AM1 advanced the store to schema 13 and Asset Types 1 to 14. Stage 2's
+    # eight Partnership tables are unchanged by either; what this line pins is
+    # that the store still declares one version, and that Stage 2's tables
+    # were added under 12.
+    assert "_SCHEMA_VERSION = 14" in text
+    assert "_SCHEMA_VERSION = 12" in _git("show", f"{_STAGE_2_HEAD}:{_STORE}")
 
 
 def test_the_new_services_never_write_the_store() -> None:
@@ -574,8 +576,12 @@ def test_exactly_the_authorized_routes_are_added() -> None:
 
 
 def test_the_api_adds_by_addition_and_catches_no_value_error() -> None:
+    # Measured over Stage 2's own committed range. Against the working tree
+    # this read every later accepted gate's API edit (Asset Types 1 threads
+    # classification through the /deals and /managed-assets routes) as a
+    # Stage 2 removal.
     removed = [
-        line for line in _git("diff", "-U0", _STAGE_2_BASE, "--", _API).splitlines()
+        line for line in _git("diff", "-U0", _STAGE_2_BASE, _STAGE_2_HEAD, "--", _API).splitlines()
         if line.startswith("-") and not line.startswith("---")
     ]
     assert removed == [

@@ -4,7 +4,8 @@ Status: Implemented and merged in PR #38 (`3048976`), pending human product acce
 Gate: AM1
 Started from: `main` at `63c2ac0`
 Branch: `feature/am1-managed-assets-monthly-performance`
-Schema: v12 → v13 (additive)
+Schema: AM1 introduced v12 → v13 (additive); Asset Types 1 later advances the
+current schema to v14 with two additive classification tables
 Risk tier: Tier 1 financial/contract critical, with Tier 2 persistence and
 Tier 3 product behavior
 
@@ -45,8 +46,8 @@ Backend, exactly:
 | `src/anchor/asset_management/contracts.py` | new — identity, inputs, errors, results |
 | `src/anchor/asset_management/validation.py` | new — structural validation |
 | `src/anchor/asset_management/performance.py` | new — **the sole financial authority** |
-| `src/anchor/deals/store.py` | schema v13, two tables, the AM1 lifecycle |
-| `src/anchor/api.py` | the eight AM1 routes |
+| `src/anchor/deals/store.py` | AM1's schema-v13 tables and lifecycle; the later schema-v14 classification snapshot is governed by Asset Types 1 |
+| `src/anchor/api.py` | the AM1 route surface (ten routes after the commentary-only correction) |
 
 Frontend, exactly:
 
@@ -127,7 +128,9 @@ its own name, its own lifecycle, and no acquisition assumption of any kind.
 | `source_deal_id` | provenance, not ownership |
 | `name` | copied from the Deal at creation |
 | `acquisition_date` | authored |
-| `property_type` | optional; `None` is "not stated" |
+| `asset_type` | controlled classification copied from the source Deal at creation; `None` is "Not specified" |
+| `asset_subtype` | optional analyst-authored subtype copied with `asset_type` |
+| `property_type` | legacy read-only text from before Asset Types 1; never authored for a new Managed Asset or promoted into a classification |
 | `market` | optional; `None` is "not stated" |
 | `acquisition_fingerprint` | the Deal's authoritative analysis fingerprint, frozen at creation |
 | `created_at` / `updated_at` | timestamps |
@@ -140,6 +143,10 @@ its own name, its own lifecycle, and no acquisition assumption of any kind.
 - Creating the asset requires a current saved Deal analysis (see 2.3).
 - The Deal's authoritative fingerprint is captured once, by
   `create_managed_asset`, and written by no other statement.
+- The Deal's controlled Asset Type and analyst-authored subtype are likewise
+  copied once at creation. Later Deal edits do not reclassify the Managed
+  Asset. `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md` governs that
+  snapshot and the retirement of the hand-authored Property Type input.
 - Later Deal edits do not rewrite the asset, its budgets or its historical
   reports. The divergence between the Deal's current fingerprint and the
   asset's frozen copy is provenance the product may show — never a trigger to

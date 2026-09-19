@@ -205,9 +205,13 @@ def test_the_ledger_rejects_a_production_file_am1_did_not_declare() -> None:
 
 @pytest.mark.parametrize("path", _UNCHANGED)
 def test_no_earlier_financial_module_changed(path: str) -> None:
-    """Including every P7.9 Partnership module and the Stage 1 engine."""
+    """Including every P7.9 Partnership module and the Stage 1 engine.
 
-    assert _changes_since(_AM1_BASE, path) == set()
+    Measured over AM1's own committed range, like the ledger above. Against the
+    working tree it read a later gate's legitimate change -- Asset Types 1 adds
+    two metadata fields to ``deals/contracts.py`` -- as an AM1 change."""
+
+    assert _changes_between(_AM1_BASE, _AM1_HEAD, path) == set()
 
 
 # =============================================================================
@@ -467,16 +471,19 @@ def test_no_am1_write_path_mutates_a_deal_table(name: str) -> None:
 
 
 def test_creating_an_asset_only_reads_the_deal() -> None:
-    """It captures the Deal's fingerprint and writes exactly one row, into
-    ``managed_assets``."""
+    """It captures the Deal's fingerprint and writes the asset row, into
+    ``managed_assets`` -- and, since Asset Types 1, the snapshot of the Deal's
+    classification into ``managed_asset_classifications``. Both are inserts
+    into asset-owned tables; nothing is updated or deleted."""
 
     writes = [
         sql
         for sql in _sql_strings(_function(_STORE, "create_managed_asset"))
         if any(verb in sql.upper() for verb in ("INSERT", "UPDATE", "DELETE"))
     ]
-    assert len(writes) == 1
+    assert len(writes) == 2
     assert "INSERT INTO managed_assets" in writes[0]
+    assert writes[1].startswith("INSERT INTO managed_asset_classifications")
 
 
 def test_deleting_an_asset_explicitly_removes_reports_then_the_asset() -> None:
@@ -484,6 +491,8 @@ def test_deleting_an_asset_explicitly_removes_reports_then_the_asset() -> None:
     deletes = [sql for sql in _sql_strings(delete) if "DELETE FROM" in sql.upper()]
     assert deletes == [
         "DELETE FROM monthly_asset_reports WHERE managed_asset_id = ?",
+        # Asset Types 1: the asset's own classification snapshot.
+        "DELETE FROM managed_asset_classifications WHERE managed_asset_id = ?",
         "DELETE FROM managed_assets WHERE id = ?",
     ]
 
@@ -704,8 +713,12 @@ def test_the_store_has_no_independent_report_delete_function() -> None:
 
 
 def test_the_schema_is_v13_and_the_migration_adds_no_alter() -> None:
+    # AM1 introduced schema 13; Asset Types 1 later moved the store to 14 with
+    # two more additive tables. The pin is AM1's own, so it is read at AM1's
+    # committed head; the no-ALTER rule below still holds for today's source.
+    assert "_SCHEMA_VERSION = 13" in _git("show", f"{_AM1_HEAD}:{_STORE}")
     source = _current(_STORE)
-    assert "_SCHEMA_VERSION = 13" in source
+    assert "_SCHEMA_VERSION = 14" in source
 
     migrate = _function(_STORE, "_migrate")
     for sql in _sql_strings(migrate):

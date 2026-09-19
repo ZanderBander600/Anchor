@@ -130,6 +130,23 @@ _P7_9_STAGE_3_WEB = frozenset(
 #:   `PartnershipResults.tsx`, `PartnershipWorkspace.tsx`, `partnershipForm.ts`,
 #:   `AssetManagementShell.tsx`, `ManagedAssetWorkspace.tsx`,
 #:   `NoiTrendChart.tsx` and `index.css`, and adds only test sources.
+#: Asset Types 1 -- controlled classification and analyst-authored subtypes
+#: (feature/asset-types-1-classification, from 2e6ca8e). Two new production
+#: modules: the vocabulary and its rules (``assetTypes.ts``) and the shared
+#: classification surfaces (``components/AssetClassification.tsx``). Neither
+#: computes a figure or reaches an analysis:
+#: ``tests/test_asset_types_1_architecture.py`` parses both, forbids arithmetic
+#: and analysis vocabulary, and holds the vocabulary to the Python one. Every
+#: shipped file it edits -- App.tsx, api.ts (insertions only, the D4.6A lines
+#: untouched), types.ts, index.css, the two Underwrite workspaces, the Deal and
+#: Investment libraries and the AM1 modules -- is already in ``_PERMITTED_WEB``.
+_ASSET_TYPES_1_WEB = frozenset(
+    {
+        "web/src/assetTypes.ts",
+        "web/src/components/AssetClassification.tsx",
+    }
+)
+
 _AM1_WEB = frozenset(
     {
         "web/src/assetManagementTypes.ts",
@@ -444,7 +461,7 @@ _PERMITTED_WEB = frozenset(
         # file; ratified at the P7.9 Stage 1 review.
         "web/README.md",
     }
-) | _P7_9_STAGE_3_WEB | _AM1_WEB
+) | _P7_9_STAGE_3_WEB | _AM1_WEB | _ASSET_TYPES_1_WEB
 
 #: Each later gate's group, by the committed range that added it: the proof, in
 #: ``test_g37_each_later_gate_entry_was_added_by_its_gate``, that no entry was
@@ -454,6 +471,10 @@ _GATE_ADDED_WEB = {
     ("825a60a84185b978a001ed4f8c648f40ef6d7491", "ce70d79bdf5f1503f4b4a09faa98c1b102f3dd1d"): _P7_9_STAGE_3_WEB,
     # AM1's reviewed branch, merged by PR #38 as 3048976.
     ("63c2ac0fc0e7c62f4059a1b3b4ff4f2c020b2cff", "1e7fe3ddc084c889a289200e1b7d7ee99ee38672"): _AM1_WEB,
+    # Asset Types 1's frontend commit on feature/asset-types-1-classification,
+    # from main at 2e6ca8e: it adds exactly the two modules above (and one test
+    # source, excused by the extension filter).
+    ("2e6ca8ee0d540aba4fe22b806d150fb55e615152", "984c6c1c08b3be9f551da7d999f3bcd039467cff"): _ASSET_TYPES_1_WEB,
 }
 
 

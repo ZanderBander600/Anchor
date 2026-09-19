@@ -94,6 +94,10 @@ export interface LeaseLevelWorkspaceProps {
   onMarketFieldChange: (key: keyof MarketLeasingFormValues, value: string) => void;
   dealContext: string;
   onDealContextChange: (value: string) => void;
+  /** Asset Types 1: the classification strip, already bound to this mode's
+   * own draft by the caller. Rendered above Deal Context on every tab, so the
+   * required choice for a new Deal is never behind a tab. */
+  classificationStrip?: ReactNode;
   /** True while an analysis or save is in flight; disables every input, exactly
    * as the shared workspace does. */
   isSubmitting: boolean;
@@ -376,6 +380,7 @@ export function LeaseLevelWorkspace({
   onMarketFieldChange,
   dealContext,
   onDealContextChange,
+  classificationStrip,
   isSubmitting,
   leaseIssues,
   termsIssues,
@@ -501,6 +506,7 @@ export function LeaseLevelWorkspace({
 
   return (
     <div className="underwrite">
+      {classificationStrip}
       <DealContextStrip value={dealContext} onChange={onDealContextChange} />
 
       <SubNav

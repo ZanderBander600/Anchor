@@ -708,10 +708,15 @@ def test_the_api_declares_only_literal_endpoint_owned_keys() -> None:
                 # input set. Same shape as its three predecessors and for the
                 # same reason: naming the endpoint's own keys is what keeps the
                 # unknown-key check live for every other key in the body.
+                # Asset Types 1 adds ``_DEAL_WRITE_FIELDS``: ``_DEAL_FIELDS``
+                # plus the two classification keys ``POST``/``PUT /deals``
+                # consume. ``/deals/fingerprint`` keeps ``_DEAL_FIELDS``, so a
+                # classification key there is still reported as unknown.
                 assert keyword.value.id in {
                     "_TWO_WAY_FIELDS",
                     "_ONE_WAY_FIELDS",
                     "_DEAL_FIELDS",
+                    "_DEAL_WRITE_FIELDS",
                     "_AI_HURDLE_FIELDS",
                     "also_owned",
                 }, f"owned keys came from {keyword.value.id!r}"
@@ -722,7 +727,7 @@ def test_the_api_declares_only_literal_endpoint_owned_keys() -> None:
                 )
 
     # Each reviewed constant is itself a literal tuple of literal strings.
-    for name in ("_TWO_WAY_FIELDS", "_ONE_WAY_FIELDS", "_DEAL_FIELDS"):
+    for name in ("_TWO_WAY_FIELDS", "_ONE_WAY_FIELDS", "_DEAL_FIELDS", "_DEAL_WRITE_FIELDS"):
         assignment = next(
             node
             for node in ast.walk(tree)

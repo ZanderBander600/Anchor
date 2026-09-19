@@ -43,7 +43,6 @@ export interface ManagedAssetsState {
     source_deal_id: string;
     name: string | null;
     acquisition_date: string;
-    property_type: string | null;
     market: string | null;
   }) => Promise<ManagedAsset>;
   remove: (managedAssetId: string) => Promise<void>;
@@ -88,7 +87,6 @@ export function useManagedAssets(): ManagedAssetsState {
       source_deal_id: string;
       name: string | null;
       acquisition_date: string;
-      property_type: string | null;
       market: string | null;
     }) => {
       const created = await createManagedAsset(request);

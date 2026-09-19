@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { assetTypeLabel } from '../assetTypes';
 import { formatAcquiredOn, formatMonth } from '../assetManagementFormat';
 import type { ManagedAsset, PerformanceView } from '../assetManagementTypes';
 import { isMonthAlreadyReported } from '../useManagedAssets';
@@ -70,7 +71,13 @@ export function ManagedAssetWorkspace({
     wasConfirmingDelete.current = isConfirmingDelete;
   }, [isConfirmingDelete]);
 
-  const meta = [asset.property_type, `Acquired ${formatAcquiredOn(asset.acquisition_date)}`, asset.market]
+  // Asset Types 1: the asset's own classification snapshot leads the meta
+  // line. An unclassified asset says so rather than borrowing its legacy text.
+  const classificationMeta =
+    asset.asset_type === null
+      ? 'Asset Type not specified'
+      : [assetTypeLabel(asset.asset_type), asset.asset_subtype].filter(Boolean).join(' · ');
+  const meta = [classificationMeta, `Acquired ${formatAcquiredOn(asset.acquisition_date)}`, asset.market]
     .filter((part): part is string => part !== null && part !== '')
     .join(' · ');
 
@@ -256,9 +263,22 @@ export function ManagedAssetWorkspace({
                   <dd>{asset.name}</dd>
                 </div>
                 <div>
-                  <dt>Property Type</dt>
-                  <dd>{asset.property_type ?? 'Not stated'}</dd>
+                  <dt>Asset Type</dt>
+                  <dd>{assetTypeLabel(asset.asset_type)}</dd>
                 </div>
+                <div>
+                  <dt>{asset.asset_type === 'other' ? 'Description' : 'Asset Subtype'}</dt>
+                  <dd>{asset.asset_subtype ?? '—'}</dd>
+                </div>
+                {asset.asset_type === null && asset.property_type !== null && (
+                  // Legacy text typed by hand before Asset Types 1. Shown so
+                  // nothing the analyst wrote is lost -- and labelled so it is
+                  // never mistaken for a classification.
+                  <div>
+                    <dt>Recorded Property Type (legacy)</dt>
+                    <dd>{asset.property_type}</dd>
+                  </div>
+                )}
                 <div>
                   <dt>Market</dt>
                   <dd>{asset.market ?? 'Not stated'}</dd>

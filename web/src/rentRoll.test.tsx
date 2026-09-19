@@ -232,6 +232,8 @@ function savedDeal(overrides: Partial<Deal> = {}): Deal {
     inputs: null,
     detailed_operating_inputs: null,
     ...DEAL_FIELDS,
+    asset_type: null,
+    asset_subtype: null,
     deal_context: 'Value-add reposition.',
     business_plan: { capital_items: [], owner_expense_items: [] },
     analysis_snapshot: null,

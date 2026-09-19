@@ -9,8 +9,11 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `60be780` (PR #39, AM1 Managed Asset deletion
-  extension, merged pending hands-on human product acceptance).
+- Accepted baseline: `main` at `2e6ca8e` (PR #42, the second P7.9 / AM1 QA
+  corrections; PR #40 recorded the AM1 deletion merge and PR #41 merged the
+  P7.9 closeout and first AM1 QA corrections). Asset Types 1 started from this
+  commit. None of these merges changed the acceptance status of P7.9 or AM1
+  below.
 - Last accepted financial implementation merge: `70b92e2` (PR #34, P7.9
   Stage 1 deterministic contracts and engine).
 - Active gate: **P7.9 Partnership Waterfalls + Investor Returns**. The ratified
@@ -23,7 +26,8 @@ whenever an accepted gate merges or the active gate changes.
   - **Stage 3** (product UI, browser QA; Section 17.3): **implementation
     complete and merged** in PR #36 (`3f23ba4`). Final hands-on human product
     acceptance is pending before P7.9 closes.
-- Open PR: none at the time of this synchronization.
+- **Asset Types 1** is implemented and merged in PR #43, pending hands-on
+  human acceptance.
 - **AM1 Managed Assets + Monthly Performance** was explicitly started from
   `main` at `63c2ac0` and merged in PR #38 (`3048976`). It is an independent
   post-acquisition feature: it is not P7.10 and is not part of P7.10. Its
@@ -34,6 +38,15 @@ whenever an accepted gate merges or the active gate changes.
   inline confirmation, preserves the source acquisition, and changes no
   financial calculation or schema. It remains part of the pending AM1 hands-on
   product acceptance.
+- **Asset Types 1: controlled classification and analyst-authored subtypes**
+  is implemented and merged in PR #43 (schema v14),
+  **pending human acceptance -- not accepted.** It adds classification only: a
+  controlled Asset Type and an analyst-authored subtype on Deals in all three
+  modes, an honest multi-type view of Investments, and a creation-time
+  classification snapshot on Managed Assets. It changes no financial
+  calculation, fingerprint or AI behaviour. It is not P7.10 and does not change
+  the P7 phase sequence. Its authority is
+  `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md`.
 - P7.9 final hands-on human acceptance remains pending.
 - P7.10 has not started.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
@@ -90,6 +103,10 @@ and finishing P7.9 will not start it automatically.
 AM1 is also merged and awaits hands-on human product acceptance. That parallel
 post-acquisition feature does not change the P7 phase sequence or close P7.9.
 
+Asset Types 1 is merged and awaits hands-on human acceptance. It is a
+classification feature outside the P7 sequence and starts no later asset-type
+phase.
+
 A bounded stabilization sweep remains available for separate human
 authorization. It is not automatically active. Its source issues are:
 
@@ -134,6 +151,10 @@ sub-gate.
   **implemented and merged in PR #38 (`3048976`), pending human acceptance.**
   It is not yet accepted, is an independent post-acquisition feature and is not
   P7.10.
+- Asset Types 1 classification:
+  `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md` -- **implemented and
+  merged in PR #43, pending human acceptance.** It is not yet accepted and is
+  not P7.10.
 
 ## Historical-Document Rule
 

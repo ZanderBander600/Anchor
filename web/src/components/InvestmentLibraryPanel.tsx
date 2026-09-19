@@ -11,15 +11,29 @@
  * Investment itself owns is deleted. Focus goes to the safe choice. The Deal
  * Library is separate and unchanged: a Deal and an Investment are different
  * things.
+ *
+ * Asset Types 1: an Investment states no classification of its own. Its
+ * "Asset Types" column lists the distinct types of the Deals it holds -- one
+ * name when they agree, every name when they differ, "Not specified" for an
+ * unclassified Unit -- and the Asset Type filter keeps an Investment when *any*
+ * of its Units matches. No single type is ever chosen to stand for a
+ * multi-asset Investment, and nothing is written.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { formatCurrency } from '../format';
 import { DELETE_INVESTMENT_CONSEQUENCES } from '../investmentCatalog';
 import type { VisibleInvestment } from '../investmentTypes';
+import { assetTypeLabel, distinctAssetTypes, matchesAssetTypeFilter } from '../assetTypes';
+import type { AssetType, AssetTypeFilterValue } from '../assetTypes';
+import type { Deal } from '../types';
+import { AssetTypeFilter } from './AssetClassification';
 
 export interface InvestmentLibraryPanelProps {
   investments: VisibleInvestment[];
+  /** Asset Types 1: the saved Deals, to read each Unit's classification from.
+   * Read only; a Unit missing from the list reads as "Not specified". */
+  deals: Deal[];
   isLoading: boolean;
   error: string | null;
   onOpen: (investmentId: string) => void;
@@ -43,8 +57,16 @@ function unitCount(count: number): string {
   return count === 1 ? '1 Unit' : `${count} Units`;
 }
 
+/** Every Unit's type, one entry per Unit, `null` for an unclassified one. */
+function unitAssetTypes(investment: VisibleInvestment, deals: Deal[]): (AssetType | null)[] {
+  return investment.units.map(
+    (unit) => deals.find((deal) => deal.id === unit.unit_id)?.asset_type ?? null,
+  );
+}
+
 export function InvestmentLibraryPanel({
   investments,
+  deals,
   isLoading,
   error,
   onOpen,
@@ -56,6 +78,10 @@ export function InvestmentLibraryPanel({
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
+  const [filter, setFilter] = useState<AssetTypeFilterValue>('all');
+  const shown = investments.filter((investment) =>
+    matchesAssetTypeFilter(unitAssetTypes(investment, deals), filter),
+  );
 
   useEffect(() => {
     if (pendingDeleteId !== null) {
@@ -113,12 +139,32 @@ export function InvestmentLibraryPanel({
       )}
 
       {investments.length > 0 && (
+        <AssetTypeFilter
+          value={filter}
+          onChange={setFilter}
+          shown={shown.length}
+          total={investments.length}
+          noun="investments"
+        />
+      )}
+
+      {investments.length > 0 && shown.length === 0 && (
+        <div className="empty-state asset-type-filter-empty">
+          No investments hold a Unit of this asset type.{' '}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFilter('all')}>
+            Show all asset types
+          </button>
+        </div>
+      )}
+
+      {shown.length > 0 && (
         <div className="investment-table-scroll" role="region" aria-label="Investments" tabIndex={0}>
           <table className="investment-table investment-library-table">
             <caption className="visually-hidden">Saved investments</caption>
             <thead>
               <tr>
                 <th scope="col">Investment</th>
+                <th scope="col">Asset Types</th>
                 <th scope="col" className="investment-num">
                   Transaction Price
                 </th>
@@ -132,13 +178,32 @@ export function InvestmentLibraryPanel({
               </tr>
             </thead>
             <tbody>
-              {investments.map((investment) => {
+              {shown.map((investment) => {
                 const isPending = pendingDeleteId === investment.id;
+                const types = distinctAssetTypes(unitAssetTypes(investment, deals));
                 return (
                   <tr key={investment.id} className={isPending ? 'investment-row-pending' : undefined}>
                     <th scope="row" className="investment-name-cell">
                       {investment.name}
                     </th>
+                    <td className="investment-asset-types">
+                      {types.length > 1 && <span className="visually-hidden">Mixed: </span>}
+                      {types.map((assetType, position) => (
+                        <span key={assetType ?? 'not-specified'}>
+                          {/* Real text between chips, so they read as a list. */}
+                          {position > 0 && <span className="visually-hidden">, </span>}
+                          <span
+                            className={
+                              assetType === null
+                                ? 'asset-type-chip asset-classification-empty'
+                                : 'asset-type-chip'
+                            }
+                          >
+                            {assetTypeLabel(assetType)}
+                          </span>
+                        </span>
+                      ))}
+                    </td>
                     <td className="investment-num">{formatCurrency(investment.transaction_price)}</td>
                     <td className="investment-num">{unitCount(investment.units.length)}</td>
                     <td className="investment-muted">{formatUpdatedAt(investment.updated_at)}</td>

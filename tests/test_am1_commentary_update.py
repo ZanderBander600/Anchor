@@ -64,7 +64,6 @@ def _asset(db: Path) -> str:
         source_deal_id=deal.id,
         name=None,
         acquisition_date=am.MARCH,
-        property_type="Multifamily",
         market="Toronto, ON",
         db_path=db,
     )

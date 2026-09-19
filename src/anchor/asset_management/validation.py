@@ -235,14 +235,15 @@ def validate_managed_asset(
     *,
     name: object,
     acquisition_date: object,
-    property_type: object,
     market: object,
 ) -> tuple[AssetReportIssue, ...]:
     """Every structural issue in a Managed Asset's authored identity.
 
-    The fingerprint and the source Deal id are deliberately not validated here:
-    neither is authored by the analyst. Both are captured by the store from the
-    Deal itself, so there is no untrusted value to check.
+    The fingerprint, the source Deal id and the classification are deliberately
+    not validated here: none is authored on the asset. All three are captured by
+    the store from the Deal itself, so there is no untrusted value to check.
+    (Asset Types 1 retired the hand-typed ``property_type``: the classification
+    is the source Deal's, copied once.)
     """
 
     issues: list[AssetReportIssue] = []
@@ -273,10 +274,7 @@ def validate_managed_asset(
                 field="acquisition_date",
             )
         )
-    for value, field, code in (
-        (property_type, "property_type", Code.INVALID_PROPERTY_TYPE),
-        (market, "market", Code.INVALID_MARKET),
-    ):
+    for value, field, code in ((market, "market", Code.INVALID_MARKET),):
         # Optional: absent is stated by `None`. A blank string is refused rather
         # than folded into `None`, so "not stated" has exactly one spelling and
         # the store never has to guess which the analyst meant.
@@ -301,7 +299,6 @@ def require_valid_managed_asset(
     *,
     name: object,
     acquisition_date: object,
-    property_type: object,
     market: object,
 ) -> None:
     """Raise ``AssetReportValidationError`` if the asset's identity is
@@ -310,7 +307,6 @@ def require_valid_managed_asset(
     issues = validate_managed_asset(
         name=name,
         acquisition_date=acquisition_date,
-        property_type=property_type,
         market=market,
     )
     if issues:

@@ -34,6 +34,7 @@ import { RESULTING_PRICE_LABEL } from '../investmentForm';
 import type { UnitKind, VisibleInvestment } from '../investmentTypes';
 import { operatingModeLabel } from '../operatingMode';
 import type { Deal } from '../types';
+import { AssetClassificationText } from './AssetClassification';
 import type { InvestmentWorkspaceState } from '../useInvestmentWorkspace';
 import { InvestmentIssueList } from './InvestmentIssueList';
 import { NumericInput } from './NumericInput';
@@ -111,6 +112,7 @@ export function InvestmentUnitsPanel({ workspace, investments, onOpenUnit }: Inv
             <thead>
               <tr>
                 <th scope="col">Unit</th>
+                <th scope="col">Asset Type</th>
                 <th scope="col">Mode</th>
                 <th scope="col">Unit Kind</th>
                 <th scope="col" className="investment-num">
@@ -141,6 +143,19 @@ export function InvestmentUnitsPanel({ workspace, investments, onOpenUnit }: Inv
                         <span className="investment-row-note">{row.membership.label}</span>
                       )}
                     </th>
+                    {/* Asset Types 1: each Unit's own classification. The
+                     * Investment states none of its own -- its Units may be of
+                     * different types, and none is chosen to stand for all. */}
+                    <td>
+                      {row.deal === null ? (
+                        'N/A'
+                      ) : (
+                        <AssetClassificationText
+                          assetType={row.deal.asset_type}
+                          assetSubtype={row.deal.asset_subtype}
+                        />
+                      )}
+                    </td>
                     <td>{row.deal === null ? 'N/A' : operatingModeLabel(row.deal.operating_mode)}</td>
                     <td>{unitKindLabel(row.membership.unit_kind)}</td>
                     <td className="investment-num">
@@ -188,7 +203,7 @@ export function InvestmentUnitsPanel({ workspace, investments, onOpenUnit }: Inv
                   </tr>
                   {isEditing && workspace.unitEdit !== null && (
                     <tr className="investment-subrow">
-                      <td colSpan={7}>
+                      <td colSpan={8}>
                         <div className="investment-inline-form" role="group" aria-label={`Display settings for ${dealName}`}>
                           <div className="field">
                             <label className="field-label" htmlFor={`investment-unit-${unitId}-label`}>
@@ -268,7 +283,7 @@ export function InvestmentUnitsPanel({ workspace, investments, onOpenUnit }: Inv
                   )}
                   {isRemoving && workspace.removal !== null && (
                     <tr className="investment-subrow">
-                      <td colSpan={7}>
+                      <td colSpan={8}>
                         <div className="investment-confirm" role="group" aria-label={`Confirm removing ${dealName}`}>
                           <p className="investment-confirm-text">{REMOVE_UNIT_CONSEQUENCES}</p>
                           <p className="investment-note">

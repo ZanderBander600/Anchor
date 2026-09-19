@@ -549,7 +549,7 @@ def test_the_migration_reaches_the_current_schema_version(migrated) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     connection.close()
 
-    assert version == 13  # P7.4: eight Strategy tables; P7.6: five sidecars; P7.8B: six Capital Structure tables; P7.9 Stage 2: eight Partnership tables; AM1: two Asset Management tables, all purely additive
+    assert version == 14  # P7.4: eight Strategy tables; P7.6: five sidecars; P7.8B: six Capital Structure tables; P7.9 Stage 2: eight Partnership tables; AM1: two Asset Management tables; Asset Types 1: two classification tables, all purely additive
 
 
 def test_the_migration_adds_all_six_lease_level_tables(migrated) -> None:
@@ -643,7 +643,7 @@ def test_the_migration_is_idempotent(migrated) -> None:
     suites = connection.execute("SELECT COUNT(*) FROM lease_level_suites").fetchone()[0]
     connection.close()
 
-    assert version == 13  # AM1; see test_the_migration_reaches_the_current_schema_version
+    assert version == 14  # Asset Types 1; see test_the_migration_reaches_the_current_schema_version
     assert suites == 0
     assert len(deals_store.list_deals(db_path=path)) == 2
 

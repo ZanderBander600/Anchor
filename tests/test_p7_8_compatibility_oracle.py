@@ -38,7 +38,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from _p7_2_fixtures import P7_8_TABLES, rows, table_names  # type: ignore[import-not-found]
+from _p7_2_fixtures import P7_8_TABLES, rows, table_names, without_unstated_classification  # type: ignore[import-not-found]
 from _p7_7_fixtures import analyze_visible_investment  # type: ignore[import-not-found]
 from anchor import api as api_module
 from anchor.capital_structure import (
@@ -121,8 +121,15 @@ def _every_row(db: Path) -> dict[str, list[tuple[Any, ...]]]:
 
 
 def _replay(client: TestClient, exchanges: list[dict[str, Any]]) -> list[tuple[int, Any]]:
+    # Asset Types 1 (schema 14): every Deal body now also states its
+    # classification, and a legacy record states it as null ("Not specified").
+    # Only those null keys, absent from the recorded response, are set aside;
+    # every other byte must still match.
     return [
-        ((response := client.request(e["method"], e["path"], json=e["body"])).status_code, response.json())
+        (
+            (response := client.request(e["method"], e["path"], json=e["body"])).status_code,
+            without_unstated_classification(response.json(), e["json"]),
+        )
         for e in exchanges
     ]
 

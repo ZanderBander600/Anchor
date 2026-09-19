@@ -748,6 +748,11 @@ _PRE_D6 = "908499c"
 _RUNNER = Path(__file__).resolve().parent / "_d6_9_oracle_cases.py"
 #: Keys D6 appended to a response a legacy client already received.
 _ADDITIVE_KEYS = D6_RESULT_FIELDS | {"business_plan"}
+#: Keys a later gate appended whose legacy value is fixed. Asset Types 1 adds a
+#: Deal's classification, and a legacy deal -- every deal this oracle writes --
+#: must answer it ``null`` ("Not specified"): accepted only with that value, so a
+#: legacy deal that came back classified is still a difference.
+_LATER_NULL_KEYS = frozenset({"asset_type", "asset_subtype"})
 
 
 def _run_oracle(root: Path, scratch: Path, out: Path) -> dict[str, Any]:
@@ -791,7 +796,10 @@ def _differences(before: Any, after: Any, path: str = "") -> tuple[list[tuple], 
             if key not in after:
                 found.append((f"{path}.{key}", "missing"))
             elif key not in before:
-                if key not in _ADDITIVE_KEYS:
+                if key in _LATER_NULL_KEYS:
+                    if after[key] is not None:
+                        found.append((f"{path}.{key}", "legacy classification is not null"))
+                elif key not in _ADDITIVE_KEYS:
                     found.append((f"{path}.{key}", "unexpected new key"))
             else:
                 sub_found, sub_compared = _differences(before[key], after[key], f"{path}.{key}")
@@ -872,6 +880,12 @@ def test_f_the_comparison_detects_a_single_changed_bit(product_oracle: tuple[dic
     tampered_key["quick:analyze"]["body"]["capital_plan_total"] = 0.0
     assert _differences(baseline["legacy"], tampered_key)[0] == [
         (".quick:analyze.body.capital_plan_total", "unexpected new key")
+    ]
+    # Asset Types 1: a legacy deal that came back classified is a difference.
+    tampered_type = json.loads(json.dumps(current["legacy"]))
+    tampered_type["quick:reopen"]["body"]["asset_type"] = "multifamily"
+    assert _differences(baseline["legacy"], tampered_type)[0] == [
+        (".quick:reopen.body.asset_type", "legacy classification is not null")
     ]
 
 

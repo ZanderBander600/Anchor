@@ -237,6 +237,8 @@ function quickDeal(): Deal {
     suites: null,
     leases: null,
     business_plan: referencePlan(),
+    asset_type: null,
+    asset_subtype: null,
     deal_context: null,
     analysis_snapshot: null,
     ai_snapshot: null,
@@ -585,6 +587,8 @@ describe('a plan entered in the editor (U2-U4, PART K, L)', () => {
     expect(screen.getByText('Post-Hold')).toBeTruthy();
 
     await user.type(labelled('Deal Name'), 'Entered Plan');
+    // Asset Types 1: a new Deal is classified before its first Save.
+    await user.selectOptions(screen.getByRole('combobox', { name: /^Asset Type/ }), 'multifamily');
     await save(user);
     const first = lastSent('/deals').body?.business_plan as BusinessPlanInput;
     expect(first.capital_items.map(({ month, amount, category }) => [month, amount, category])).toEqual([
