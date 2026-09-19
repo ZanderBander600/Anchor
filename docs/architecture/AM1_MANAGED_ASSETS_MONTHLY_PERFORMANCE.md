@@ -415,11 +415,13 @@ Structure and a Partnership. It proves:
 | GET | `/managed-assets/{id}/reports/{month}` |
 | POST | `/managed-assets/{id}/reports` |
 | PUT | `/managed-assets/{id}/reports/{month}` |
+| PUT | `/managed-assets/{id}/reports/{month}/commentary` |
 | GET | `/managed-assets/{id}/performance/{month}` |
 
-Nine routes. The single DELETE is the bounded Managed Asset lifecycle action:
+Ten routes. The single DELETE is the bounded Managed Asset lifecycle action:
 it removes the asset and its reports, never the source Deal. There is no DELETE
-for an individual report.
+for an individual report. The commentary PUT (Section 14) updates a report's
+commentary alone; actual results change only through the report PUT.
 
 Bodies use the repository's `_exact_keys` contract — every field is stated
 explicitly, including the ones that are `null`, so nothing a request does not
@@ -560,7 +562,7 @@ production seed and no database is tracked.
 - the schema migration is additive and idempotent, and nothing computed has a
   column;
 - no AM1 module imports or invokes AI, and no AM1 route reaches one;
-- the route surface is exactly the nine authorized routes, with one bounded
+- the route surface is exactly the authorized routes (ten since Section 14), with one bounded
   asset DELETE and no independent report DELETE;
 - no P7.9 engine or Partnership module changed, and no earlier financial module
   changed.
@@ -725,3 +727,33 @@ correction awaits independent review, merge and hands-on human acceptance.
 - **No calculation, schema or lifecycle change.** `performance.py`, the v13
   schema, the budget freeze, the deletion lifecycle and every API route are
   unchanged.
+
+## 14. Commentary-only update
+
+The second hands-on QA pass (branch `fix/p7-9-am1-second-qa-corrections`)
+gave "Update Commentary" a focused editor. Its first version saved through the
+actual-results PUT and resent the actual figures the browser had loaded. If
+another tab or user had saved newer actuals in the meantime, a commentary save
+would have silently put the stale figures back. This pass adds a narrow
+commentary-only operation instead. **AM1 is not accepted by this record.**
+
+- **Store.** `update_monthly_report_commentary` validates the note with the
+  report's own `validate_commentary`. Its one write is a literal statement,
+  `UPDATE monthly_asset_reports SET commentary = ?, updated_at = ? WHERE
+  managed_asset_id = ? AND reporting_month = ?`, and it names no `actual_*` or
+  `budget_*` column and no identity or provenance column.
+- **Route.** `PUT /managed-assets/{id}/reports/{month}/commentary` takes
+  exactly `{"commentary": text | null}` and returns the updated report through
+  `_wire`. Refusals follow the existing contracts: the structured 422 for
+  invalid commentary, the structural 422 for any other body shape, and 404 for
+  a missing asset or report.
+- **Client.** `updateMonthlyReportCommentary` sends only the note, and the
+  focused editor uses it. "Edit Actuals" keeps the actual-results PUT.
+- **Proof.** `tests/test_am1_commentary_update.py` shows that only
+  `commentary` and `updated_at` change and that every figure column is
+  value-identical. It shows that actuals saved concurrently, after the report
+  was loaded, survive a later commentary save, and it reproduces the previous
+  path reverting them. It also shows the typed 422 and 404 refusals and that the
+  two routes call two different operations.
+- **No calculation, schema or lifecycle change.** The v13 schema, the budget
+  freeze, `performance.py` and the actual-results route are unchanged.

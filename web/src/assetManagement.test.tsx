@@ -44,12 +44,14 @@ function performanceState(overrides: Partial<AssetPerformanceState> = {}): Asset
     reportsStatus: 'ready',
     performance: DEMO_PERFORMANCE,
     performanceStatus: 'ready',
+    isRefreshing: false,
     selectedMonth: '2027-03-01',
     error: null,
     selectMonth: vi.fn(),
     reload: vi.fn(),
     saveReport: vi.fn().mockResolvedValue(undefined),
     saveActuals: vi.fn().mockResolvedValue(undefined),
+    saveCommentary: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -101,6 +103,7 @@ describe('Monthly Performance', () => {
         view={view}
         onViewChange={vi.fn()}
         onEditActuals={vi.fn()}
+        onSaveCommentary={vi.fn()}
       />,
     );
 
@@ -215,6 +218,7 @@ describe('Monthly Performance', () => {
         view="monthly"
         onViewChange={vi.fn()}
         onEditActuals={vi.fn()}
+        onSaveCommentary={vi.fn()}
       />,
     );
     const card = screen.getByRole('region', { name: 'Occupancy' });
@@ -267,6 +271,7 @@ describe('Monthly Performance', () => {
         view="monthly"
         onViewChange={onViewChange}
         onEditActuals={vi.fn()}
+        onSaveCommentary={vi.fn()}
       />,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Year to Date' }));

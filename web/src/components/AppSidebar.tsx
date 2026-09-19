@@ -231,13 +231,22 @@ export function AppSidebar({
             view === 'library' ? 'sidebar-nav-item sidebar-nav-item-active' : 'sidebar-nav-item'
           }
           aria-current={view === 'library' ? 'page' : undefined}
+          aria-label="Deal Library"
           onClick={onOpenLibrary}
         >
           <IconLibrary />
           <span className="sidebar-nav-label">Deal Library</span>
         </button>
 
-        <button type="button" className="sidebar-nav-item" onClick={onNewDeal}>
+        {/* The name is stated on the button, as on every other rail item:
+          * below 1024px the rail hides `.sidebar-nav-label`, which removes the
+          * text -- and with it the name -- from the accessibility tree. */}
+        <button
+          type="button"
+          className="sidebar-nav-item"
+          aria-label="New Deal"
+          onClick={onNewDeal}
+        >
           <IconPlus />
           <span className="sidebar-nav-label">New Deal</span>
         </button>

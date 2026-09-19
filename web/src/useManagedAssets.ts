@@ -15,8 +15,10 @@ import {
   deleteManagedAsset,
   listManagedAssets,
   listMonthlyReports,
+  MonthlyReportExistsError,
   readAssetPerformance,
   updateMonthlyReportActuals,
+  updateMonthlyReportCommentary,
 } from './api';
 import type {
   AssetPerformanceResponse,
@@ -24,6 +26,13 @@ import type {
   MonthlyAssetReport,
   OperatingFigures,
 } from './assetManagementTypes';
+
+/** Whether a failed save was the "this month already has a report" refusal --
+ * the one error a different reporting month resolves. Components ask here
+ * rather than importing the client. */
+export function isMonthAlreadyReported(caught: unknown): boolean {
+  return caught instanceof MonthlyReportExistsError;
+}
 
 export interface ManagedAssetsState {
   assets: ManagedAsset[];
@@ -117,6 +126,13 @@ export interface AssetPerformanceState {
    * available for the asset **and** month currently selected. */
   performance: AssetPerformanceResponse | null;
   performanceStatus: LoadStatus;
+  /** `true` while this same asset's reports, or this same month's performance,
+   * are being re-read after a save. The last confirmed values stay in
+   * `reports` / `performance` meanwhile, so the dashboard does not collapse to
+   * an empty state and imply that no report exists. Nothing new is shown as
+   * saved until the re-read settles; a re-read that fails reports its error
+   * and drops the old values rather than leaving them looking current. */
+  isRefreshing: boolean;
   selectedMonth: string | null;
   error: string | null;
   selectMonth: (month: string) => void;
@@ -131,6 +147,10 @@ export interface AssetPerformanceState {
     month: string,
     request: { actual: OperatingFigures; commentary: string | null },
   ) => Promise<void>;
+  /** Saves one month's commentary alone, through the commentary-only route:
+   * no figure is read or sent, so a note can never overwrite actual results
+   * saved elsewhere since this report was loaded. */
+  saveCommentary: (month: string, commentary: string | null) => Promise<void>;
 }
 
 /** One request's settled outcome, tagged with the key that produced it. */
@@ -162,6 +182,13 @@ function message(caught: unknown, fallback: string): string {
  * cancelled, and even if it were not, the outcome it writes carries its own key
  * and is ignored.
  *
+ * **A refresh keeps what was confirmed.** A save re-reads the same asset (and
+ * month) under a new refresh id. Until that settles, the last *confirmed*
+ * outcome for the same asset -- and, for performance, the same month -- is
+ * still returned, flagged by `isRefreshing`, rather than dropping to an empty
+ * state that briefly claimed there was no report. The tag rule above is
+ * untouched: a different asset or month never inherits anything.
+ *
  * **Loading is derived, not stored.** "Loading" means no settled outcome exists
  * for the current key, which is true synchronously from the moment that key
  * changes. There is deliberately no shared `isLoading` flag: the two requests
@@ -182,13 +209,30 @@ export function useAssetPerformance(managedAssetId: string | null): AssetPerform
   const settledReports =
     reportsKey !== null && reportsOutcome?.key === reportsKey ? reportsOutcome : null;
 
+  // The last confirmed reports of this same asset, while a refresh of it is
+  // in flight. Never another asset's: the key's asset prefix must match.
+  const refreshingReports =
+    settledReports === null &&
+    managedAssetId !== null &&
+    reportsOutcome !== null &&
+    reportsOutcome.error === null &&
+    reportsOutcome.key.startsWith(`${managedAssetId}#`)
+      ? reportsOutcome
+      : null;
+
   const reports =
-    settledReports !== null && settledReports.error === null ? settledReports.value : [];
+    settledReports !== null && settledReports.error === null
+      ? settledReports.value
+      : refreshingReports !== null
+        ? refreshingReports.value
+        : [];
   const reportsStatus: LoadStatus =
     managedAssetId === null
       ? 'idle'
       : settledReports === null
-        ? 'loading'
+        ? refreshingReports !== null
+          ? 'ready'
+          : 'loading'
         : settledReports.error !== null
           ? 'error'
           : 'ready';
@@ -211,18 +255,36 @@ export function useAssetPerformance(managedAssetId: string | null): AssetPerform
       ? performanceOutcome
       : null;
 
+  // The last confirmed result for this same asset **and month**, while a
+  // refresh of it is in flight. A different month never inherits one.
+  const refreshingPerformance =
+    settledPerformance === null &&
+    managedAssetId !== null &&
+    selectedMonth !== null &&
+    performanceOutcome !== null &&
+    performanceOutcome.error === null &&
+    performanceOutcome.key.startsWith(`${managedAssetId}#${selectedMonth}#`)
+      ? performanceOutcome
+      : null;
+
   const performance =
     settledPerformance !== null && settledPerformance.error === null
       ? settledPerformance.value
-      : null;
+      : refreshingPerformance !== null
+        ? refreshingPerformance.value
+        : null;
   const performanceStatus: LoadStatus =
     performanceKey === null
       ? 'idle'
       : settledPerformance === null
-        ? 'loading'
+        ? refreshingPerformance !== null
+          ? 'ready'
+          : 'loading'
         : settledPerformance.error !== null
           ? 'error'
           : 'ready';
+
+  const isRefreshing = refreshingReports !== null || refreshingPerformance !== null;
 
   const error = settledReports?.error ?? settledPerformance?.error ?? null;
 
@@ -317,16 +379,29 @@ export function useAssetPerformance(managedAssetId: string | null): AssetPerform
     [managedAssetId],
   );
 
+  const saveCommentary = useCallback(
+    async (month: string, commentary: string | null) => {
+      if (managedAssetId === null) {
+        throw new AssetManagementError('No managed asset is open.');
+      }
+      await updateMonthlyReportCommentary(managedAssetId, month, commentary);
+      setRefreshId((current) => current + 1);
+    },
+    [managedAssetId],
+  );
+
   return {
     reports,
     reportsStatus,
     performance,
     performanceStatus,
+    isRefreshing,
     selectedMonth,
     error,
     selectMonth,
     reload,
     saveReport,
     saveActuals,
+    saveCommentary,
   };
 }

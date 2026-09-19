@@ -1374,3 +1374,123 @@ describe('focus survives a successful removal', () => {
     expect(screen.queryByText(REMOVE_CONFIRM_QUESTION)).toBeNull();
   });
 });
+
+// =============================================================================
+// Second QA pass -- every Partnership result table states its column roles
+// =============================================================================
+
+const RESULT_ROLES = [
+  'partnership-result-identity',
+  'partnership-result-figure',
+  'partnership-result-text',
+];
+
+function resultRoleOf(cell: Element): string | null {
+  const roles = RESULT_ROLES.filter((name) => cell.classList.contains(name));
+  return roles.length === 1 ? roles[0] : null;
+}
+
+describe('every Partnership result table aligns by stated column role', () => {
+  function renderComplete() {
+    return render(
+      <PartnershipResults
+        result={COMPLETE}
+        partnerNames={PARTNER_NAMES}
+        tierNames={TIER_NAMES}
+        conditionLabels={conditionAuditLabels(PARTNERSHIP)}
+      />,
+    );
+  }
+
+  function tableUnder(heading: string): HTMLElement {
+    const section = screen.getByRole('heading', { name: heading }).closest('section') as HTMLElement;
+    return section.querySelector('table') as HTMLElement;
+  }
+
+  const RESULT_SECTIONS = [
+    'Common Equity Cash Flow',
+    'Partner Returns',
+    'Distribution Difference vs Benchmark',
+    'Promote Earned',
+    'Benchmark Capital Subordination',
+    'Promote Attribution by Tier',
+  ];
+
+  it('gives each result table the scoped class, and the audit keeps its own', () => {
+    const { container } = renderComplete();
+    for (const heading of RESULT_SECTIONS) {
+      const table = tableUnder(heading);
+      expect(table.classList.contains('partnership-result-table'), heading).toBe(true);
+      expect(table.classList.contains('partnership-audit-table'), heading).toBe(false);
+    }
+    // Every table on the surface is exactly one of the two families.
+    for (const table of container.querySelectorAll('table')) {
+      const families = ['partnership-result-table', 'partnership-audit-table'].filter((name) =>
+        table.classList.contains(name),
+      );
+      expect(families).toHaveLength(1);
+    }
+    expect(container.querySelectorAll('table.partnership-result-table')).toHaveLength(6);
+  });
+
+  it('pairs each header with the same role down its column', () => {
+    renderComplete();
+    for (const heading of RESULT_SECTIONS) {
+      const table = tableUnder(heading);
+      const header = [...table.querySelectorAll('thead tr > *')].map(resultRoleOf);
+      expect(header, heading).not.toContain(null);
+      expect(header[0], heading).toBe('partnership-result-identity');
+      for (const row of table.querySelectorAll('tbody tr')) {
+        expect([...row.children].map(resultRoleOf), heading).toEqual(header);
+      }
+    }
+  });
+
+  it('marks every quantitative column a figure and every word column text', () => {
+    renderComplete();
+    const returns = tableUnder('Partner Returns');
+    expect(
+      [...returns.querySelectorAll('thead th')].map((cell) => [cell.textContent, resultRoleOf(cell)]),
+    ).toEqual([
+      ['Partner', 'partnership-result-identity'],
+      ['Role', 'partnership-result-text'],
+      ['Commitment', 'partnership-result-figure'],
+      ['Benchmark Share', 'partnership-result-figure'],
+      ['Contributions', 'partnership-result-figure'],
+      ['Distributions', 'partnership-result-figure'],
+      ['Profit', 'partnership-result-figure'],
+      ['Partner IRR', 'partnership-result-figure'],
+      ['Partner MOIC', 'partnership-result-figure'],
+      ['Promote Participant', 'partnership-result-text'],
+    ]);
+    // Any cell whose value is a currency, percentage or multiple is a figure.
+    let quantitative = 0;
+    for (const heading of RESULT_SECTIONS) {
+      for (const cell of tableUnder(heading).querySelectorAll('tbody td')) {
+        const value = cell.querySelector('.partner-result-figure')?.textContent ?? cell.textContent ?? '';
+        if (/^-?\$[\d,]+$|^-?[\d.]+%$|^[\d.]+x$/.test(value)) {
+          expect(resultRoleOf(cell), `${heading}: ${value}`).toBe('partnership-result-figure');
+          quantitative += 1;
+        }
+      }
+    }
+    expect(quantitative).toBeGreaterThan(40);
+  });
+
+  it('changes no value, label or disclosure', () => {
+    renderComplete();
+    // The engine's own figures and the N/A reasons still read exactly as before.
+    const lp = within(tableUnder('Distribution Difference vs Benchmark')).getByRole('row', {
+      name: /Harbor Capital LP/,
+    });
+    expect((lp.querySelector('[data-field="distribution_advantage"]') as HTMLElement).textContent).toBe(
+      '$66,000',
+    );
+    expect(screen.getAllByText(BENCHMARK_MISMATCH_NOTICE).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('Not applicable: this partner is not one of the stated promote participants.')
+        .length,
+    ).toBeGreaterThan(0);
+    expect(within(tableUnder('Promote Attribution by Tier')).getByText('-$6,000')).toBeTruthy();
+  });
+});

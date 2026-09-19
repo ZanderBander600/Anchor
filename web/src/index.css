@@ -7309,16 +7309,24 @@ body {
   margin-top: var(--sp-2);
 }
 
-/* The Tier Audit's tables. Scoped to `.partnership-audit-table`, which only
-   the audit's three account tables carry -- the other Partnership result
-   tables and every AM1 table are untouched. Each header and cell states its
-   column's role in a class, so alignment never depends on column position:
-   figures right-aligned in tabular numerals, the period and the words (a
-   status, a distribution order, the applied shares) on the left. The treatment
-   -- a muted uppercase header band, a firmer rule beneath it and hairline row
-   separators -- is the one the Asset Management lists use. A wide account
+/* The Partnership financial tables: the Tier Audit's account tables
+   (`.partnership-audit-table`) and every other Partnership result table
+   (`.partnership-result-table`) -- Common Equity Cash Flow, Partner Returns,
+   Distribution Difference vs Benchmark, Promote Earned, Benchmark Capital
+   Subordination and Promote Attribution by Tier. One treatment, stated once,
+   so the two families cannot drift apart. Only those tables carry either
+   class: the Decision Matrix, the Capital Structure tables and every AM1
+   table are untouched.
+
+   Each header and cell states its column's role in a class, so alignment
+   never depends on column position: figures right-aligned in tabular
+   numerals; identity (period, partner) and words (a role, a status, a
+   distribution order, the applied shares) on the left. The treatment -- a
+   muted uppercase header band, a firmer rule beneath it and hairline row
+   separators -- is the one the Asset Management lists use. A wide table
    scrolls inside its own `.table-scroll`; no column is hidden or shortened. */
-.partnership-audit-table {
+.partnership-audit-table,
+.partnership-result-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12.5px;
@@ -7326,14 +7334,17 @@ body {
 }
 
 .partnership-audit-table th,
-.partnership-audit-table td {
+.partnership-audit-table td,
+.partnership-result-table th,
+.partnership-result-table td {
   padding: 7px 12px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
   white-space: nowrap;
 }
 
-.partnership-audit-table thead th {
+.partnership-audit-table thead th,
+.partnership-result-table thead th {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -7343,12 +7354,14 @@ body {
   border-bottom: 1px solid var(--border-strong);
 }
 
-.partnership-audit-table tbody th {
+.partnership-audit-table tbody th,
+.partnership-result-table tbody th {
   font-weight: 600;
   color: var(--text);
 }
 
-.partnership-audit-table .partnership-audit-figure {
+.partnership-audit-table .partnership-audit-figure,
+.partnership-result-table .partnership-result-figure {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -7356,7 +7369,21 @@ body {
 .partnership-audit-table .partnership-audit-period,
 .partnership-audit-table .partnership-audit-status,
 .partnership-audit-table .partnership-audit-text,
-.partnership-audit-table .partnership-audit-shares {
+.partnership-audit-table .partnership-audit-shares,
+.partnership-result-table .partnership-result-identity,
+.partnership-result-table .partnership-result-text {
+  text-align: left;
+}
+
+/* A figure the engine did not report reads "N/A" with the engine's reason
+   beneath it. The reason is prose: it keeps the right edge of its figure
+   column but reads left to right, in a measure wide enough to stay a few
+   lines rather than a column of single words. The benchmark marker beside a
+   share stays with its figure on the right. */
+.partnership-result-table .partnership-result-figure .partner-result-reason {
+  min-width: 11rem;
+  max-width: 16rem;
+  margin-left: auto;
   text-align: left;
 }
 
@@ -8303,6 +8330,56 @@ body {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 16px;
+}
+
+/* --- Focused commentary, and a save re-read in place ------------------ */
+
+/* "Update Commentary" opens this inside the Management Commentary panel: the
+   month, the one field and its two actions, not the whole actuals form. */
+.am-commentary-editor {
+  min-width: 0;
+}
+
+.am-commentary-editor > * + * {
+  margin-top: 10px;
+}
+
+.am-commentary-editor-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.am-commentary-editor .am-editor-actions {
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+/* After a commentary save, focus lands on the panel heading -- a stable
+   target, because the Update button is disabled while the month is re-read.
+   The heading is not a control, so it takes focus without a control's ring. */
+.am-panel-title[tabindex='-1']:focus {
+  outline: none;
+}
+
+/* The re-read of a saved month. The status line is always in the document,
+   so a screen reader hears it change, and takes no room while it is empty. */
+.am-refresh-status {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.am-refresh-status:empty {
+  margin: 0;
+}
+
+/* The last confirmed dashboard stays in place while the saved month is
+   re-read, dimmed so it reads as pending rather than as the saved result. */
+.am-dashboard[aria-busy='true'] .am-performance {
+  opacity: 0.6;
+  transition: opacity 150ms ease;
 }
 
 .am-create-asset {
