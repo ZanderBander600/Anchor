@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from 'react';
+
 import {
   ASSESSMENT_LABELS,
   EMPHASIZED_LINES,
@@ -17,6 +19,7 @@ import type {
   LineVariance,
   PerformanceView,
 } from '../assetManagementTypes';
+import { CommentaryEditor } from './MonthlyReportEditor';
 import { NoiTrendChart } from './NoiTrendChart';
 
 /** Gate AM1 -- the Monthly Performance view: summary cards, the actual-versus-
@@ -110,6 +113,12 @@ export interface MonthlyPerformancePanelProps {
   view: PerformanceView;
   onViewChange: (view: PerformanceView) => void;
   onEditActuals: () => void;
+  /** Saves this month's commentary alone. Resolves once the save is
+   * confirmed. */
+  onSaveCommentary: (commentary: string | null) => Promise<void>;
+  /** A save or its re-read is pending: the edit actions wait for it, so a
+   * second submission cannot start on top of the first. */
+  isBusy?: boolean;
 }
 
 export function MonthlyPerformancePanel({
@@ -117,8 +126,29 @@ export function MonthlyPerformancePanel({
   view,
   onViewChange,
   onEditActuals,
+  onSaveCommentary,
+  isBusy = false,
 }: MonthlyPerformancePanelProps) {
   const { result } = performance;
+  /** Where focus goes when the commentary editor closes: back to the button
+   * that opened it on Cancel, or to the section heading after a save -- the
+   * button is disabled while the saved month is re-read, and a disabled
+   * control cannot hold focus. */
+  const [commentaryEditor, setCommentaryEditor] = useState<'closed' | 'open'>('closed');
+  const closedBy = useRef<'cancel' | 'save' | null>(null);
+  const updateCommentaryButton = useRef<HTMLButtonElement>(null);
+  const commentaryHeading = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    if (commentaryEditor === 'closed' && closedBy.current !== null) {
+      if (closedBy.current === 'cancel') {
+        updateCommentaryButton.current?.focus();
+      } else {
+        commentaryHeading.current?.focus();
+      }
+      closedBy.current = null;
+    }
+  }, [commentaryEditor]);
   const period = view === 'monthly' ? result.monthly : result.year_to_date;
   const byLine = new Map(period.lines.map((line) => [line.line, line]));
 
@@ -205,7 +235,12 @@ export function MonthlyPerformancePanel({
             <h3 id="am-statement-heading" className="am-panel-title">
               {heading}
             </h3>
-            <button type="button" className="am-secondary-button" onClick={onEditActuals}>
+            <button
+              type="button"
+              className="am-secondary-button"
+              onClick={onEditActuals}
+              disabled={isBusy}
+            >
               Edit Actuals
             </button>
           </div>
@@ -290,17 +325,46 @@ export function MonthlyPerformancePanel({
           </section>
 
           <section className="am-panel" aria-labelledby="am-commentary-heading">
-            <h3 id="am-commentary-heading" className="am-panel-title">
+            <h3
+              id="am-commentary-heading"
+              ref={commentaryHeading}
+              className="am-panel-title"
+              tabIndex={-1}
+            >
               Management Commentary
             </h3>
-            {result.commentary === null ? (
-              <p className="am-empty">No commentary has been written for this month.</p>
+            {commentaryEditor === 'open' ? (
+              <CommentaryEditor
+                reportingMonth={result.reporting_month}
+                commentary={result.commentary}
+                onCancel={() => {
+                  closedBy.current = 'cancel';
+                  setCommentaryEditor('closed');
+                }}
+                onSave={async (commentary) => {
+                  await onSaveCommentary(commentary);
+                  closedBy.current = 'save';
+                  setCommentaryEditor('closed');
+                }}
+              />
             ) : (
-              <p className="am-commentary">{result.commentary}</p>
+              <>
+                {result.commentary === null ? (
+                  <p className="am-empty">No commentary has been written for this month.</p>
+                ) : (
+                  <p className="am-commentary">{result.commentary}</p>
+                )}
+                <button
+                  ref={updateCommentaryButton}
+                  type="button"
+                  className="am-secondary-button"
+                  onClick={() => setCommentaryEditor('open')}
+                  disabled={isBusy}
+                >
+                  Update Commentary
+                </button>
+              </>
             )}
-            <button type="button" className="am-secondary-button" onClick={onEditActuals}>
-              Update Commentary
-            </button>
           </section>
         </div>
       </div>

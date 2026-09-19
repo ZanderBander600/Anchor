@@ -186,6 +186,7 @@ describe('the Asset Management lists align each header with its own values', () 
         view="monthly"
         onViewChange={vi.fn()}
         onEditActuals={vi.fn()}
+        onSaveCommentary={vi.fn()}
       />,
     );
     for (const table of screen.getAllByRole('table')) {
@@ -209,6 +210,7 @@ function performanceState(): AssetPerformanceState {
     reportsStatus: 'ready',
     performance: DEMO_PERFORMANCE,
     performanceStatus: 'ready',
+    isRefreshing: false,
     selectedMonth: '2027-03-01',
     error: null,
     selectMonth: vi.fn(),

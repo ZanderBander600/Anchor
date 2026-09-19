@@ -8332,6 +8332,56 @@ body {
   margin-top: 16px;
 }
 
+/* --- Focused commentary, and a save re-read in place ------------------ */
+
+/* "Update Commentary" opens this inside the Management Commentary panel: the
+   month, the one field and its two actions, not the whole actuals form. */
+.am-commentary-editor {
+  min-width: 0;
+}
+
+.am-commentary-editor > * + * {
+  margin-top: 10px;
+}
+
+.am-commentary-editor-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.am-commentary-editor .am-editor-actions {
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+/* After a commentary save, focus lands on the panel heading -- a stable
+   target, because the Update button is disabled while the month is re-read.
+   The heading is not a control, so it takes focus without a control's ring. */
+.am-panel-title[tabindex='-1']:focus {
+  outline: none;
+}
+
+/* The re-read of a saved month. The status line is always in the document,
+   so a screen reader hears it change, and takes no room while it is empty. */
+.am-refresh-status {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.am-refresh-status:empty {
+  margin: 0;
+}
+
+/* The last confirmed dashboard stays in place while the saved month is
+   re-read, dimmed so it reads as pending rather than as the saved result. */
+.am-dashboard[aria-busy='true'] .am-performance {
+  opacity: 0.6;
+  transition: opacity 150ms ease;
+}
+
 .am-create-asset {
   max-width: 720px;
 }

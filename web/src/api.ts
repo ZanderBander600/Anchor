@@ -3069,6 +3069,18 @@ export class AssetManagementError extends Error {
   }
 }
 
+/** The typed "this month already has a report" conflict (`409
+ * monthly_report_exists`). A subclass of `AssetManagementError`, so every caller
+ * that already handles that keeps working; the type lets the month form tell
+ * this one refusal -- which a different month resolves -- apart from a
+ * validation failure that a month change does not. */
+export class MonthlyReportExistsError extends AssetManagementError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MonthlyReportExistsError';
+  }
+}
+
 /** The typed frozen-budget conflict. Never a subclass of
  * `AssetManagementError`: a caller that treats every failure as "invalid input"
  * would tell the analyst to correct a budget that is not theirs to correct. */
@@ -3141,7 +3153,9 @@ async function assetFetch(
       );
     }
     if (conflict.code === 'monthly_report_exists') {
-      throw new AssetManagementError((detail as { message?: string }).message ?? failureMessage);
+      throw new MonthlyReportExistsError(
+        (detail as { message?: string }).message ?? failureMessage,
+      );
     }
   }
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { formatAcquiredOn, formatMonth } from '../assetManagementFormat';
 import type { ManagedAsset, PerformanceView } from '../assetManagementTypes';
+import { isMonthAlreadyReported } from '../useManagedAssets';
 import type { AssetPerformanceState } from '../useManagedAssets';
 import { MonthlyPerformancePanel } from './MonthlyPerformancePanel';
 import { MonthlyReportEditor } from './MonthlyReportEditor';
@@ -47,6 +48,12 @@ export function ManagedAssetWorkspace({
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
   });
   const [saveError, setSaveError] = useState<string | null>(null);
+  /** The month a "report already exists" refusal was about, or `null` when the
+   * error on screen (if any) is some other refusal. Choosing a different month
+   * resolves that one refusal, so it clears the moment the month changes; any
+   * other error stays until the next save attempt, because a month change does
+   * not answer it. */
+  const [duplicateMonth, setDuplicateMonth] = useState<string | null>(null);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -75,16 +82,37 @@ export function ManagedAssetWorkspace({
   const closeEditor = () => {
     setEditing('none');
     setSaveError(null);
+    setDuplicateMonth(null);
   };
 
-  const guard = async (action: () => Promise<void>) => {
+  const guard = async (action: () => Promise<void>, submittedMonth: string | null = null) => {
     setSaveError(null);
+    setDuplicateMonth(null);
     try {
       await action();
       closeEditor();
     } catch (caught: unknown) {
       setSaveError(caught instanceof Error ? caught.message : 'The report could not be saved.');
+      setDuplicateMonth(isMonthAlreadyReported(caught) ? submittedMonth : null);
     }
+  };
+
+  const changeDraftMonth = (month: string) => {
+    setDraftMonth(month);
+    if (duplicateMonth !== null && month !== duplicateMonth) {
+      setSaveError(null);
+      setDuplicateMonth(null);
+    }
+  };
+
+  /** Commentary alone. The one write route takes the month's actual figures
+   * too, so it is sent the report's own saved figures, unchanged, and -- like
+   * every edit -- no budget. */
+  const saveCommentary = async (commentary: string | null) => {
+    if (state.selectedMonth === null || selectedReport === null) {
+      throw new Error('No saved report is selected.');
+    }
+    await state.saveActuals(state.selectedMonth, { actual: selectedReport.actual, commentary });
   };
 
   const confirmDelete = async () => {
@@ -119,8 +147,10 @@ export function ManagedAssetWorkspace({
               className="am-primary-button"
               onClick={() => {
                 setSaveError(null);
+                setDuplicateMonth(null);
                 setEditing(selectedReport === null ? 'new' : 'existing');
               }}
+              disabled={state.isRefreshing}
             >
               {selectedReport === null ? 'Add Monthly Report' : 'Edit Actuals'}
             </button>
@@ -269,9 +299,11 @@ export function ManagedAssetWorkspace({
                 <MonthlyReportEditor
                   report={editing === 'existing' ? selectedReport : null}
                   month={draftMonth}
-                  onMonthChange={setDraftMonth}
+                  onMonthChange={changeDraftMonth}
                   onCancel={closeEditor}
-                  onCreate={(request) => guard(() => state.saveReport(request))}
+                  onCreate={(request) =>
+                    guard(() => state.saveReport(request), request.reporting_month)
+                  }
                   onUpdate={(request) =>
                     guard(() => state.saveActuals(state.selectedMonth ?? draftMonth, request))
                   }
@@ -304,7 +336,10 @@ export function ManagedAssetWorkspace({
                 </button>
               </section>
             ) : (
-              <>
+              // While a save is re-read the last confirmed dashboard stays in
+              // place, marked busy, and its edit actions wait -- rather than
+              // collapsing to a bare month picker that implied no report.
+              <div className="am-dashboard" aria-busy={state.isRefreshing}>
                 <div className="am-month-bar">
                   <label className="am-field am-field-inline">
                     <span className="am-field-label">Reporting Month</span>
@@ -334,12 +369,23 @@ export function ManagedAssetWorkspace({
                     className="am-quiet-button"
                     onClick={() => {
                       setSaveError(null);
+                      setDuplicateMonth(null);
                       setEditing('new');
                     }}
+                    disabled={state.isRefreshing}
                   >
                     Add Month
                   </button>
                 </div>
+
+                {/* Always present, so a screen reader hears the change. */}
+                <p className="am-refresh-status" role="status">
+                  {state.isRefreshing
+                    ? `Updating ${
+                        state.selectedMonth === null ? 'this asset' : formatMonth(state.selectedMonth)
+                      } with the saved report…`
+                    : ''}
+                </p>
 
                 {state.performanceStatus === 'loading' && (
                   <section className="am-panel">
@@ -357,11 +403,14 @@ export function ManagedAssetWorkspace({
                     onViewChange={setView}
                     onEditActuals={() => {
                       setSaveError(null);
+                      setDuplicateMonth(null);
                       setEditing('existing');
                     }}
+                    onSaveCommentary={saveCommentary}
+                    isBusy={state.isRefreshing}
                   />
                 )}
-              </>
+              </div>
             )}
           </div>
         )}
