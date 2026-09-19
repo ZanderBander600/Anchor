@@ -539,18 +539,27 @@ def test_business_plan_items_are_listed_and_resolved_independently(plan_bytes: b
 # Column headers: one header, one column
 # =============================================================================
 #
-# Headers are aligned to the data they label -- a number column's header right,
+# Headers were aligned to the data they label -- a value column's header right,
 # a text column's header left -- so a right-aligned header and the left-aligned
-# one beside it meet at their shared cell boundary and read as a single run of
-# words ("Working InputUnits"). Every header therefore carries a vertical rule
-# on its right edge, and a header too long for its column wraps instead of
-# being clipped by its neighbour.
+# one beside it met at their shared cell boundary and read as a single run of
+# words ("Working InputUnits"). A rule between them is too quiet to fix that on
+# its own, so the separation is real space: a value header is centred, and a
+# descriptive header that has a header to its left is indented away from it.
+# The rule stays, marking the boundary inside that space.
 
 
 HEADER_FILL = "FFDCE3EE"
 HEADER_RULE = "FF8FA0BC"
-#: One line of a wrapped header, in points.
+#: One line of wrapped text, in points.
 HEADER_LINE_HEIGHT = 13.5
+#: One indent level is three spaces of the normal font (ECMA-376 alignment).
+INDENT_CHARS = 3
+#: XlsxWriter stores a column width plus Excel's own cell padding.
+WIDTH_PADDING = 0.7109375
+#: Clear space every adjacent header pair must keep, in character units.
+MINIMUM_GAP = 2.0
+#: Clear space the pairs that were reported as colliding must keep.
+REPORTED_PAIR_GAP = 4.0
 
 
 def _is_header(cell: Any) -> bool:
@@ -575,8 +584,8 @@ def _header_bands(ws: Worksheet) -> dict[int, list[Any]]:
 
 
 def _column_widths(data: bytes, sheet: str) -> dict[int, float]:
-    """Stored width per 1-based column. Read from the sheet part because
-    openpyxl registers only the first column of a width span."""
+    """Nominal width per 1-based column, as the builder set it. Read from the
+    sheet part because openpyxl registers only the first column of a span."""
 
     part = f"xl/worksheets/sheet{EXPECTED_SHEETS.index(sheet) + 1}.xml"
     xml = zipfile.ZipFile(io.BytesIO(data)).read(part).decode()
@@ -586,37 +595,104 @@ def _column_widths(data: bytes, sheet: str) -> dict[int, float]:
         if "width" not in found:
             continue
         for col in range(int(found["min"]), int(found["max"]) + 1):
-            widths[col] = float(found["width"])
+            widths[col] = float(found["width"]) - WIDTH_PADDING
     return widths
 
 
-def _lines_needed(text: str, width: float) -> int:
-    """How many lines this header needs, counting one character per unit of
-    column width -- an independently generous reading of Excel's own unit."""
+def _greedy_lines(text: str, chars_per_line: int) -> int:
+    """Lines needed to wrap ``text`` at word boundaries -- written here rather
+    than imported, so the workbook's own arithmetic is not marking its own
+    homework."""
 
-    return max(1, -(-len(text) // max(1, int(width))))
+    limit = max(1, chars_per_line)
+    lines, current = 1, 0
+    for word in text.split():
+        length = len(word)
+        while length > limit:
+            lines += 1 if current == 0 else 2
+            length -= limit
+            current = 0
+        if current == 0:
+            current = length
+        elif current + 1 + length <= limit:
+            current += 1 + length
+        else:
+            lines += 1
+            current = length
+    return lines
 
 
-def _band_cells(data: bytes, sheet: str, row: int) -> list[tuple[int, str, str, bool, float]]:
-    """``(column, text, alignment, wrapped, width)`` for one header band."""
+class _Header:
+    """One header cell, with the geometry that decides whether it reads as its
+    own label: where its text sits inside its column."""
+
+    def __init__(self, cell: Any, width: float) -> None:
+        self.cell = cell
+        self.column = int(cell.column)
+        self.text = str(cell.value) if cell.value is not None else ""
+        self.width = width
+        self.align = cell.alignment.horizontal or "general"
+        self.indent = int(cell.alignment.indent or 0)
+        self.wrapped = bool(cell.alignment.wrap_text)
+
+    @property
+    def inset(self) -> float:
+        """Character units between the cell's left edge and its text."""
+
+        return INDENT_CHARS * self.indent
+
+    def free_space(self) -> tuple[float, float]:
+        """Clear character units to the left and right of the text, read
+        conservatively: a wrapped header is assumed to fill its line."""
+
+        if self.wrapped:
+            return (0.0, 0.0) if self.align == "center" else (self.inset, 0.0)
+        free = max(0.0, self.width - len(self.text))
+        if self.align == "center":
+            return free / 2, free / 2
+        return self.inset, max(0.0, free - self.inset)
+
+
+def _band(data: bytes, sheet: str, row: int) -> dict[str, _Header]:
+    """One header band by header text."""
 
     ws = load(data)[sheet]
     widths = _column_widths(data, sheet)
-    return [
-        (
-            int(cell.column),
-            str(cell.value) if cell.value is not None else "",
-            cell.alignment.horizontal or "general",
-            bool(cell.alignment.wrap_text),
-            widths[int(cell.column)],
-        )
-        for cell in _header_bands(ws)[row]
-    ]
+    return {
+        header.text: header
+        for header in (_Header(cell, widths[int(cell.column)]) for cell in _header_bands(ws)[row])
+    }
+
+
+def _band_row(data: bytes, sheet: str, anchor_label: str) -> int:
+    """The row of the band whose leading header is ``anchor_label`` -- located
+    by its own text, never by a row number."""
+
+    ws = load(data)[sheet]
+    start = row_of(ws, "Monthly schedule") if anchor_label == "Month" else 1
+    return row_of(ws, anchor_label, start=start)
 
 
 def _every_band(data: bytes) -> list[tuple[str, int, list[Any]]]:
     wb = load(data)
     return [(ws.title, row, cells) for ws in wb.worksheets for row, cells in _header_bands(ws).items()]
+
+
+def _adjacent_pairs(data: bytes) -> list[tuple[str, _Header, _Header, float]]:
+    """Every neighbouring header pair in the workbook, with the clear space
+    between their texts in character units."""
+
+    wb = load(data)
+    pairs: list[tuple[str, _Header, _Header, float]] = []
+    for ws in wb.worksheets:
+        widths = _column_widths(data, ws.title)
+        for cells in _header_bands(ws).values():
+            band = [_Header(cell, widths[int(cell.column)]) for cell in cells]
+            for left, right in zip(band, band[1:]):
+                if not left.text or not right.text:
+                    continue  # a band written across a column with no header
+                pairs.append((ws.title, left, right, left.free_space()[1] + right.free_space()[0]))
+    return pairs
 
 
 def test_every_column_header_is_ruled_off_from_the_one_beside_it(plan_bytes: bytes) -> None:
@@ -633,8 +709,44 @@ def test_every_column_header_is_ruled_off_from_the_one_beside_it(plan_bytes: byt
             assert cell.border.bottom is not None and cell.border.bottom.style == "thin", (sheet, cell.coordinate)
 
 
-#: The header pairs reported as running together, located by their own text.
-#: Each is a right-aligned header immediately followed by a left-aligned one.
+def test_headers_are_placed_so_their_text_leaves_the_shared_boundary(plan_bytes: bytes) -> None:
+    """The mechanism, stated once: no header's text may sit against a boundary
+    it shares with another header. A value header is centred (so it ends before
+    its right edge and costs no width in the narrow value columns); a
+    descriptive header with a header to its left is indented; only the leading
+    label column, which nothing meets, keeps its text on the margin."""
+
+    placed = 0
+    for sheet, row, cells in _every_band(plan_bytes):
+        widths = _column_widths(plan_bytes, sheet)
+        band = [_Header(cell, widths[int(cell.column)]) for cell in cells]
+        first = band[0].column
+        for header in band:
+            placed += 1
+            if header.align == "center":
+                assert header.indent == 0, (sheet, header.text)
+            elif header.column == first:
+                assert (header.align, header.indent) == ("left", 0), (sheet, row, header.text)
+            else:
+                assert header.align == "left", (sheet, header.text)
+                assert header.indent >= 1, (sheet, header.text, "must be indented off the boundary")
+            assert header.align in ("left", "center"), (sheet, header.text)
+    assert placed > 50
+
+
+def test_every_adjacent_header_pair_keeps_real_space_between_its_labels(plan_bytes: bytes) -> None:
+    """A border is not separation. Every neighbouring pair keeps clear
+    character space between the two texts, so they cannot read as one label
+    even where the rule is missed."""
+
+    pairs = _adjacent_pairs(plan_bytes)
+    assert len(pairs) > 40
+    tight = [(gap, sheet, left.text, right.text) for sheet, left, right, gap in pairs if gap < MINIMUM_GAP]
+    assert tight == [], tight
+
+
+#: The header pairs reported as running together, located by their own text:
+#: a value header immediately followed by a descriptive one.
 REPORTED_COLLISIONS = (
     ("Inputs", "Assumption", "Working Input", "Units"),
     ("Inputs", "Capital item", "Amount", "Category"),
@@ -647,53 +759,46 @@ REPORTED_COLLISIONS = (
 
 
 @pytest.mark.parametrize(
-    ("sheet", "anchor_label", "right_header", "left_header"),
+    ("sheet", "anchor_label", "value_header", "text_header"),
     REPORTED_COLLISIONS,
-    ids=[f"{sheet}:{right}|{left}" for sheet, _, right, left in REPORTED_COLLISIONS],
+    ids=[f"{sheet}:{value}|{text}" for sheet, _, value, text in REPORTED_COLLISIONS],
 )
-def test_each_reported_header_pair_is_adjacent_right_then_left_and_separated(
-    plan_bytes: bytes, sheet: str, anchor_label: str, right_header: str, left_header: str
+def test_each_reported_header_pair_is_adjacent_and_pulled_apart(
+    plan_bytes: bytes, sheet: str, anchor_label: str, value_header: str, text_header: str
 ) -> None:
     """The defect and its correction in one assertion: the two headers really
-    do meet at a shared boundary with opposite alignments, and the rule between
-    them is what keeps them apart. Located by the band's own first label, never
-    by a row number."""
+    are neighbours sharing a boundary, and each is now placed away from it --
+    the value header centred, the descriptive header indented -- leaving space
+    that reads unmistakably as two labels."""
 
-    ws = load(plan_bytes)[sheet]
-    start = row_of(ws, "Monthly schedule") if anchor_label == "Month" else 1
-    row = row_of(ws, anchor_label, start=start)
-    band = {text: (col, align, wrapped, width) for col, text, align, wrapped, width in _band_cells(plan_bytes, sheet, row)}
-    right_col, right_align, _, _ = band[right_header]
-    left_col, left_align, _, _ = band[left_header]
-    assert left_col == right_col + 1, (sheet, right_header, left_header)
-    assert (right_align, left_align) == ("right", "left"), (sheet, right_header, left_header)
-    for cell in (ws.cell(row, right_col), ws.cell(row, left_col)):
-        assert cell.border.right.style == "thin" and cell.border.right.color.rgb == HEADER_RULE, cell.coordinate
+    band = _band(plan_bytes, sheet, _band_row(plan_bytes, sheet, anchor_label))
+    value, text = band[value_header], band[text_header]
+    assert text.column == value.column + 1, (sheet, value_header, text_header)
+    assert value.align == "center", (sheet, value_header)
+    assert (text.align, text.indent) == ("left", 1), (sheet, text_header)
+    gap = value.free_space()[1] + text.free_space()[0]
+    assert gap >= REPORTED_PAIR_GAP, (sheet, value_header, text_header, gap)
 
 
 def test_no_header_is_clipped_by_its_neighbour(plan_bytes: bytes) -> None:
-    """A header either fits its own column or wraps, and a row holding a
-    wrapped header is tall enough to show every line of it."""
+    """A header either fits its own column, indent included, or wraps -- and a
+    row holding a wrapped header is tall enough to show every line of it."""
 
-    wb = load(plan_bytes)
     wrapped: list[tuple[str, str]] = []
-    for sheet in EXPECTED_SHEETS:
-        ws = wb[sheet]
+    for sheet, row, cells in _every_band(plan_bytes):
         widths = _column_widths(plan_bytes, sheet)
-        for row, cells in _header_bands(ws).items():
-            height = ws.row_dimensions[row].height
-            for cell in cells:
-                text = str(cell.value) if cell.value is not None else ""
-                width = widths[int(cell.column)]
-                if cell.alignment.wrap_text:
-                    wrapped.append((sheet, text))
-                    lines = _lines_needed(text, width)
-                    assert height is not None and height >= HEADER_LINE_HEIGHT * lines, (sheet, cell.coordinate, height)
-                    continue
-                # Unwrapped, so it must fit: one character per unit of column
-                # width is a generous reading of Excel's unit (a bold header
-                # character is wider), so failing it means certain clipping.
-                assert len(text) <= width, (sheet, cell.coordinate, text, width)
+        height = load(plan_bytes)[sheet].row_dimensions[row].height
+        for cell in cells:
+            header = _Header(cell, widths[int(cell.column)])
+            if header.wrapped:
+                wrapped.append((sheet, header.text))
+                lines = _greedy_lines(header.text, int(header.width - header.inset))
+                assert height is not None and height >= HEADER_LINE_HEIGHT * lines, (sheet, cell.coordinate, height)
+                continue
+            # Unwrapped, so it must fit: one character per unit of column width
+            # is a generous reading of Excel's unit (a bold header character is
+            # wider), so failing this would mean certain clipping.
+            assert len(header.text) + header.inset <= header.width, (sheet, cell.coordinate, header.text)
     # Only genuinely long headers wrap: the rest keep the default row height.
     assert sorted(wrapped) == [
         ("Debt Schedule", "Beginning balance"),
@@ -702,8 +807,44 @@ def test_no_header_is_clipped_by_its_neighbour(plan_bytes: bytes) -> None:
     ]
 
 
-def test_only_a_sheet_title_or_a_wrapped_header_sets_a_row_height(plan_bytes: bytes) -> None:
-    """The correction grew two header rows and nothing else."""
+def test_every_audit_metadata_label_fits_its_column_or_wraps_into_a_tall_enough_row(
+    plan_bytes: bytes,
+) -> None:
+    """Audit Metadata is label and value, not columns of headers. Its one
+    over-long label -- the source commit, whose qualification is part of what
+    it says -- wraps and its row grows, rather than being cut off by the value
+    beside it or having the text shortened."""
+
+    ws = load(plan_bytes)["Audit Metadata"]
+    widths = _column_widths(plan_bytes, "Audit Metadata")
+    label_width, value_width = widths[1], widths[2]
+    wrapped: list[str] = []
+    checked = 0
+    for row in range(1, ws.max_row + 1):
+        label, value = ws.cell(row, 1), ws.cell(row, 2)
+        if not isinstance(label.value, str) or value.value is None:
+            continue  # titles, notes and the navy section bars
+        checked += 1
+        text = label.value
+        if not label.alignment.wrap_text:
+            assert len(text) <= label_width, (label.coordinate, text, label_width)
+            continue
+        wrapped.append(text)
+        lines = _greedy_lines(text, int(label_width))
+        if value.alignment.wrap_text and isinstance(value.value, str):
+            lines = max(lines, _greedy_lines(value.value, int(value_width)))
+        height = ws.row_dimensions[row].height
+        assert height is not None and height >= HEADER_LINE_HEIGHT * lines, (label.coordinate, height, lines)
+    assert checked > 20
+    assert wrapped == ["Source commit (checkout HEAD; uncommitted changes are not detected)"]
+    # The qualification is preserved in full, not trimmed away.
+    assert "uncommitted changes are not detected" in wrapped[0]
+
+
+def test_only_a_sheet_title_a_wrapped_header_or_the_wrapped_audit_label_sets_a_row_height(
+    plan_bytes: bytes,
+) -> None:
+    """The correction grew three rows and nothing else."""
 
     wb = load(plan_bytes)
     heights = {
@@ -713,51 +854,15 @@ def test_only_a_sheet_title_or_a_wrapped_header_sets_a_row_height(plan_bytes: by
         if dimension.height is not None
     }
     titles = {(sheet, 1): 22.0 for sheet in EXPECTED_SHEETS}
-    grown = {key: height for key, height in heights.items() if key not in titles}
     assert {key: height for key, height in heights.items() if key in titles} == titles
-    assert sorted(grown) == [("Debt Schedule", 38), ("Inputs", 45)]
-    assert set(grown.values()) == {2 * HEADER_LINE_HEIGHT}
-
-
-def _effective_alignment(cell: Any) -> str:
-    """Excel's General alignment resolved the way it renders: text left,
-    numbers right."""
-
-    if cell.alignment.horizontal:
-        return cell.alignment.horizontal
-    return "right" if isinstance(cell.value, (int, float)) else "left"
-
-
-@pytest.mark.parametrize(
-    ("sheet", "anchor_label", "header"),
-    [
-        ("Debt Schedule", "Month", "Hold year"),
-        ("Debt Schedule", "Month", "Phase"),
-        ("Debt Schedule", "Month", "Beginning balance"),
-        ("Checks", "Metric", "Tolerance"),
-        ("Checks", "Metric", "Status"),
-        ("Checks", "Metric", "Excel location"),
-        ("Inputs", "Assumption", "Working Input"),
-        ("Inputs", "Assumption", "Units"),
-    ],
-)
-def test_a_header_keeps_the_alignment_of_the_column_it_labels(
-    plan_bytes: bytes, sheet: str, anchor_label: str, header: str
-) -> None:
-    """Separation comes from the rule, not from moving headers away from their
-    own data: each header is still aligned like the first value beneath it."""
-
-    ws = load(plan_bytes)[sheet]
-    start = row_of(ws, "Monthly schedule") if anchor_label == "Month" else 1
-    row = row_of(ws, anchor_label, start=start)
-    band = {text: col for col, text, _, _, _ in _band_cells(plan_bytes, sheet, row)}
-    column = band[header]
-    first_value = next(
-        ws.cell(r, column)
-        for r in range(row + 1, ws.max_row + 1)
-        if ws.cell(r, column).value is not None and not _is_header(ws.cell(r, column))
+    grown = {key: height for key, height in heights.items() if key not in titles}
+    audit = load(plan_bytes)["Audit Metadata"]
+    source_commit = row_of(audit, "Source commit (checkout HEAD; uncommitted changes are not detected)")
+    assert sorted(grown) == sorted(
+        [("Debt Schedule", 38), ("Inputs", 45), ("Audit Metadata", source_commit)]
     )
-    assert ws.cell(row, column).alignment.horizontal == _effective_alignment(first_value), header
+    assert grown[("Debt Schedule", 38)] == grown[("Inputs", 45)] == 2 * HEADER_LINE_HEIGHT
+    assert grown[("Audit Metadata", source_commit)] == 3 * HEADER_LINE_HEIGHT
 
 
 def test_the_header_correction_widened_no_column_and_added_none(plan_bytes: bytes) -> None:
@@ -765,7 +870,6 @@ def test_the_header_correction_widened_no_column_and_added_none(plan_bytes: byte
     accepted workbook had, so nothing was widened and no delimiter column was
     inserted between two headers."""
 
-    stored = {sheet: _column_widths(plan_bytes, sheet) for sheet in EXPECTED_SHEETS}
     label, units, period = 58, 21, 14
     expected = {
         "Summary": {1: 40, 2: 20, 3: 20, 4: 44},
@@ -778,8 +882,8 @@ def test_the_header_correction_widened_no_column_and_added_none(plan_bytes: byte
         "Audit Metadata": {1: 36, 2: 110},
     }
     for sheet, widths in expected.items():
-        # XlsxWriter stores the width plus Excel's own cell padding.
-        assert {col: round(width - 0.7109375) for col, width in stored[sheet].items()} == widths, sheet
+        stored = {col: round(width) for col, width in _column_widths(plan_bytes, sheet).items()}
+        assert stored == widths, sheet
 
 
 # =============================================================================

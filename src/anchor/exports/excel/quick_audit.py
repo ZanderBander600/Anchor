@@ -156,8 +156,16 @@ DEFAULT_COLUMN_WIDTH = 8.43
 #: is wider, and the cell keeps a character of padding. A header longer than
 #: its column's allowance wraps rather than being clipped by its neighbour.
 HEADER_CHARS_PER_WIDTH = 0.92
-#: Row height, in points, for one line of a wrapped header.
+#: An ordinary-weight label holds slightly more characters than its column's
+#: nominal width, because the width unit is a digit and prose is narrower than
+#: that. Deliberately cautious: over-wrapping only costs a taller row.
+LABEL_CHARS_PER_WIDTH = 1.05
+#: Row height, in points, for one line of wrapped text.
 HEADER_LINE_HEIGHT = 13.5
+#: Indent levels applied to a header that has another header to its left.
+HEADER_INDENT = 1
+#: One indent level is three spaces of the normal font (ECMA-376 alignment).
+INDENT_CHARS = 3
 
 _PROTECTION = {
     "select_locked_cells": True,
@@ -196,6 +204,34 @@ def _write_formula(ws: Worksheet, row: int, col: int, formula: str, cell_format:
 
 def _humanize(token: str) -> str:
     return token.replace("_", " ").capitalize()
+
+
+def _wrapped_lines(text: str, chars_per_line: int) -> int:
+    """How many lines ``text`` needs when Excel wraps it at word boundaries.
+
+    Greedy, like Excel: a word that does not fit starts a new line, and a word
+    longer than the line is broken. Counting words rather than characters
+    matters -- ``"... are not detected)"`` needs a third line that dividing the
+    length would miss, and a row set one line short clips the text it wraps."""
+
+    limit = max(1, chars_per_line)
+    lines, current = 1, 0
+    for word in text.split():
+        length = len(word)
+        while length > limit:  # a single word longer than the line
+            if current:
+                lines += 1
+            lines += 1
+            length -= limit
+            current = 0
+        if current == 0:
+            current = length
+        elif current + 1 + length <= limit:
+            current += 1 + length
+        else:
+            lines += 1
+            current = length
+    return lines
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,7 +293,7 @@ class _Formats:
     def subsection(self) -> Format:
         return self.get(bold=True, bg_color=SUBSECTION_FILL)
 
-    def header(self, *, align: str = "right", wrap: bool = False) -> Format:
+    def header(self, *, align: str = "right", indent: int = 0, wrap: bool = False) -> Format:
         """One column header: the band's fill, its rule underneath, and a
         vertical rule on its right edge separating it from the next header."""
 
@@ -272,14 +308,19 @@ class _Formats:
             # the same baseline as the single-line headers beside it.
             "valign": "bottom",
         }
+        if indent:
+            properties["indent"] = indent
         if wrap:
             properties["text_wrap"] = True
         return self.get(**properties)
 
-    def label(self, *, bold: bool = False, indent: int = 0) -> Format:
+    def label(self, *, bold: bool = False, indent: int = 0, wrap: bool = False) -> Format:
         properties: dict[str, Any] = {"bold": bold} if bold else {}
         if indent:
             properties["indent"] = indent
+        if wrap:
+            properties["text_wrap"] = True
+            properties["valign"] = "top"
         return self.get(**properties)
 
     def units(self) -> Format:
@@ -469,24 +510,42 @@ class _QuickAuditWorkbook:
         for col in range(first, last + 1):
             widths[col] = width
 
-    def _header_lines(self, sheet: str, col: int, text: str) -> int:
+    def _header_lines(self, sheet: str, col: int, text: str, indent: int = 0) -> int:
         width = self.column_width[sheet].get(col, DEFAULT_COLUMN_WIDTH)
-        per_line = max(1, int((width - 1) * HEADER_CHARS_PER_WIDTH))
-        return max(1, -(-len(text) // per_line))
+        room = width - 1 - INDENT_CHARS * indent
+        return _wrapped_lines(text, int(room * HEADER_CHARS_PER_WIDTH))
 
     def _headers(self, sheet: str, row: int, cells: Sequence[tuple[int, str, str]]) -> None:
-        """Write one band of column headers, as ``(column, text, alignment)``.
+        """Write one band of column headers, as ``(column, text, alignment)``,
+        where the alignment given is that of the column's own data.
 
-        Every header carries the band's vertical rule, so two headers never
-        read as one label however they are aligned. A header longer than its
-        column wraps instead of being clipped by the header beside it, and the
-        row grows to hold the tallest one. An empty text writes the band
-        across a column that has no header of its own."""
+        Two headers must never read as one label. A rule alone is too quiet for
+        that, so the separation is real space:
+
+        * a header over a **value** column is *centred*, so its text stops well
+          before the boundary it shares with the header on its right (and it
+          costs no width, which matters in the narrow value columns);
+        * a **descriptive** header that has a header to its left is *indented*,
+          so its text never starts on that boundary;
+        * the leading label column keeps its text on the margin, where no
+          header meets it.
+
+        The thin vertical rule stays, marking the boundary inside that space. A
+        header longer than its column wraps instead of being clipped by the
+        header beside it, and the row grows to hold the tallest one. An empty
+        text writes the band across a column that has no header of its own."""
 
         ws = self.sheets[sheet]
-        lines = {col: self._header_lines(sheet, col, text) for col, text, _ in cells}
-        for col, text, align in cells:
-            cell_format = self.fmt.header(align=align, wrap=lines[col] > 1)
+        first_col = min(col for col, _, _ in cells)
+        placed: list[tuple[int, str, str, int]] = [
+            (col, text, "center", 0)
+            if align == "right"
+            else (col, text, "left", 0 if col == first_col else HEADER_INDENT)
+            for col, text, align in cells
+        ]
+        lines = {col: self._header_lines(sheet, col, text, indent) for col, text, _, indent in placed}
+        for col, text, align, indent in placed:
+            cell_format = self.fmt.header(align=align, indent=indent, wrap=lines[col] > 1)
             if text:
                 ws.write_string(row, col, text, cell_format)
             else:
@@ -2081,12 +2140,40 @@ class _QuickAuditWorkbook:
 
     # --------------------------------------------------------- Audit Metadata
 
+    def _audit_row(self, row: int, label: str, value: str, *, wrap_value: bool) -> None:
+        """One label / value row on Audit Metadata.
+
+        A label too long for its column wraps instead of being cut off by the
+        value beside it -- the provenance qualification on the source commit is
+        part of what the label says -- and the row grows to show every line.
+        The height covers the value as well, so wrapping a label can never hide
+        the value it names. A label that already fits is left exactly as it
+        was, height included."""
+
+        sheet = AUDIT
+        ws = self.sheets[sheet]
+        widths = self.column_width[sheet]
+        label_width = widths.get(0, DEFAULT_COLUMN_WIDTH)
+        value_format = self.fmt.text(wrap=wrap_value)
+        if len(label) <= label_width * LABEL_CHARS_PER_WIDTH:
+            self._label(sheet, row, label)
+            ws.write_string(row, 1, value, value_format)
+            return
+        ws.write_string(row, 0, label, self.fmt.label(wrap=True))
+        ws.write_string(row, 1, value, value_format)
+        value_lines = (
+            _wrapped_lines(value, int(widths.get(1, DEFAULT_COLUMN_WIDTH) - 1)) if wrap_value else 1
+        )
+        lines = max(_wrapped_lines(label, int(label_width - 1)), value_lines)
+        ws.set_row(row, HEADER_LINE_HEIGHT * lines)
+
     def _build_audit(self) -> None:
         sheet = AUDIT
         ws = self.sheets[sheet]
         source = self.source
         plan = source.business_plan
         generated = source.generated_at.astimezone(timezone.utc)
+        self._audit_layout()
         self._title(sheet, "Audit Metadata", "What this workbook was built from, and under which conventions.")
         row = 3
         self._section(sheet, row, "Provenance", 1)
@@ -2099,8 +2186,7 @@ class _QuickAuditWorkbook:
             ("Asset subtype", source.asset_subtype or "Not specified"),
         ]
         for label, value in entries:
-            self._label(sheet, row, label)
-            ws.write_string(row, 1, value, self.fmt.text())
+            self._audit_row(row, label, value, wrap_value=False)
             row += 1
         self._label(sheet, row, "Generated (UTC)")
         ws.write_datetime(row, 1, generated.replace(tzinfo=None), self.fmt.get(num_format=NUM_DATETIME, align="left"))
@@ -2115,8 +2201,7 @@ class _QuickAuditWorkbook:
             ("Business Plan", f"{len(plan.capital_items)} capital item(s) and {len(plan.owner_expense_items)} owner-expense item(s), resolved by Anchor into the annual totals on Inputs."),
         ]
         for label, value in more:
-            self._label(sheet, row, label)
-            ws.write_string(row, 1, value, self.fmt.text(wrap=True))
+            self._audit_row(row, label, value, wrap_value=True)
             row += 1
         row += 1
         self._section(sheet, row, "Conventions", 1)
@@ -2137,9 +2222,15 @@ class _QuickAuditWorkbook:
             ("Scope", "Only Quick Underwrite Deals are supported. Detailed Underwrite, Lease-Level, Investments, Capital Structure, Partnership Waterfalls and Asset Management are not exported."),
         )
         for label, value in conventions:
-            self._label(sheet, row, label)
-            ws.write_string(row, 1, value, self.fmt.text(wrap=True))
+            self._audit_row(row, label, value, wrap_value=True)
             row += 1
+
+    def _audit_layout(self) -> None:
+        """Audit Metadata is a label / value sheet, laid out before anything is
+        written so a label can be measured against its column."""
+
+        sheet = AUDIT
+        ws = self.sheets[sheet]
         ws.hide_gridlines(2)
         self._set_column(sheet, 0, 0, 36)
         self._set_column(sheet, 1, 1, 110)
