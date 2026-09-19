@@ -3596,6 +3596,72 @@ def get_deal(deal_id: str, *, db_path: Path | None = None) -> Deal:
         return _read_deal(connection, deal_id)
 
 
+class QuickAnalysisState(Enum):
+    """Excel Export 1: what a Quick Deal's stored analysis column holds,
+    judged against the Deal's currently-stored assumptions.
+
+    ``get_deal`` deliberately collapses every unusable snapshot to ``None``;
+    an export must tell the analyst *which* problem it is, so this names the
+    three cases without changing that read."""
+
+    #: A snapshot is stored and decodes for the current inputs.
+    CURRENT = "current"
+    #: No analysis has ever been saved for this Deal.
+    MISSING = "missing"
+    #: A snapshot is stored but no longer matches the current inputs (or can
+    #: no longer be read under the current contract).
+    STALE = "stale"
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class QuickAnalysisProvenance:
+    """A Quick Deal as stored, with its analysis state and its canonical
+    analysis fingerprint -- read in one connection so the three cannot
+    describe different moments."""
+
+    deal: Deal
+    analysis_state: QuickAnalysisState
+    analysis_fingerprint: str
+
+
+def get_quick_analysis_provenance(
+    deal_id: str, *, db_path: Path | None = None
+) -> QuickAnalysisProvenance:
+    """Excel Export 1: read a Quick Deal and classify its stored analysis.
+
+    Read-only: one ``SELECT`` beside ``_read_deal``, nothing written. The
+    state is decided by the same gate ``get_deal`` uses -- ``CURRENT`` exactly
+    when ``_read_deal`` returned a snapshot, which it does only after the
+    stored fingerprint matched ``fingerprint_quick_inputs`` over the stored
+    inputs and Business Plan -- so an export can never call "current" what the
+    Deal Library would call stale. The fingerprint reported is
+    ``_deal_analysis_fingerprint``'s, the one definition AM1 already uses.
+
+    Raises ``DealNotFoundError`` for an unknown id and
+    ``UnsupportedOperatingModeError`` for a Detailed or Lease-Level Deal."""
+
+    with _connect(db_path) as connection:
+        deal = _read_deal(connection, deal_id)
+        if deal.operating_mode is not OperatingMode.QUICK or deal.inputs is None:
+            raise UnsupportedOperatingModeError(
+                deal.operating_mode, operation="the Quick Underwrite analysis provenance read"
+            )
+        stored = connection.execute(
+            "SELECT analysis_snapshot FROM deals WHERE id = ?", (deal_id,)
+        ).fetchone()
+        fingerprint = _deal_analysis_fingerprint(connection, deal_id)
+
+    if deal.analysis_snapshot is not None:
+        state = QuickAnalysisState.CURRENT
+    elif stored is None or stored["analysis_snapshot"] is None:
+        state = QuickAnalysisState.MISSING
+    else:
+        state = QuickAnalysisState.STALE
+    return QuickAnalysisProvenance(
+        deal=deal, analysis_state=state, analysis_fingerprint=fingerprint
+    )
+
+
 def _read_deal(connection: sqlite3.Connection, deal_id: str) -> Deal:
     """``get_deal``'s read, inside the caller's connection -- so a P7.6
     Investment write can judge its Units' stored inputs in the same

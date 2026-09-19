@@ -21,6 +21,11 @@ dependencies = [
     # environment for local development; see anchor.env. Real environment
     # variables always take precedence -- see anchor.env's override=False.
     "python-dotenv>=1.0",
+    # Excel Export 1: writes the Quick Underwrite formula-audit workbook.
+    # openpyxl (above) reads workbooks for ingestion; XlsxWriter is a
+    # write-only, dependency-free generator with deterministic packages,
+    # per-formula cached-value control, sheet protection and defined names.
+    "XlsxWriter>=3.2,<4",
 ]
 
 [project.optional-dependencies]

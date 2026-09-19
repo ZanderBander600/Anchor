@@ -1,0 +1,2022 @@
+"""Excel Export 1 -- the Quick Underwrite formula-audit workbook.
+
+One workbook, eight sheets, in this order::
+
+    Summary, Inputs, Operating Projection, Debt Schedule, Equity Cash Flow,
+    Anchor Results, Checks, Audit Metadata
+
+The model sheets rebuild Anchor's Quick Underwrite calculation with visible
+Excel formulas driven only by the ``Working Input`` column of ``Inputs``.
+``Anchor Results`` holds the values Anchor saved, as constants. ``Checks``
+compares the two row by row. The formulas are an *independent
+representation* of the ratified Quick contract
+(``docs/financial_conventions.md``, ``docs/underwriting_v2_financial_conventions.md``
+and ``docs/architecture/D6_BUSINESS_PLAN_CONVENTIONS.md``); they are never
+read back by Anchor and never feed an application result.
+
+Every formula cell is written with a *pessimistic* cached value -- blank, or
+"Not recalculated" for a status -- never a number copied from Anchor. A viewer
+that does not calculate therefore shows an honestly unfinished workbook, and
+only a real recalculation can make a check pass. ``fullCalcOnLoad`` asks Excel
+to recalculate everything when the file is opened.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import timezone
+from io import BytesIO
+from typing import Any
+
+import xlsxwriter
+from xlsxwriter.format import Format
+from xlsxwriter.utility import xl_rowcol_to_cell
+from xlsxwriter.worksheet import Worksheet
+
+from ...engine.contracts import IrrStatus
+from ...engine.debt import (
+    calculate_amortization_schedule,
+    calculate_io_months,
+    calculate_io_payment,
+    calculate_monthly_rate,
+    calculate_scheduled_payment_count,
+)
+from .source import (
+    EXPORT_CONTRACT_VERSION,
+    QuickAuditExportError,
+    QuickAuditRefusalCode,
+    QuickAuditSource,
+)
+
+SUMMARY = "Summary"
+INPUTS = "Inputs"
+OPERATING = "Operating Projection"
+DEBT = "Debt Schedule"
+EQUITY = "Equity Cash Flow"
+ANCHOR = "Anchor Results"
+CHECKS = "Checks"
+AUDIT = "Audit Metadata"
+
+SHEET_ORDER: tuple[str, ...] = (
+    SUMMARY,
+    INPUTS,
+    OPERATING,
+    DEBT,
+    EQUITY,
+    ANCHOR,
+    CHECKS,
+    AUDIT,
+)
+
+#: The one text every unavailable figure is written as, on both sides of a
+#: check: a missing number is never shown as zero.
+UNAVAILABLE = "Unavailable"
+#: The cached value of every status formula until a spreadsheet engine
+#: recalculates it.
+NOT_RECALCULATED = "Not recalculated"
+PASS = "Pass"
+PASS_BOTH_UNAVAILABLE = "Pass (both unavailable)"
+FAIL = "FAIL"
+EXCEL_ERROR = "Excel error"
+NOT_LIKE_FOR_LIKE = "Not like-for-like"
+
+#: IRR availability, in the vocabulary both sides of the check use. The first
+#: five are what the workbook's sign-rule formulas can produce; the last two are
+#: Anchor-only numerical outcomes Excel cannot reproduce (documented).
+IRR_STATUS_TEXT: dict[IrrStatus, str] = {
+    IrrStatus.DEFINED: "Available",
+    IrrStatus.NO_NONZERO_CASH_FLOW: "No nonzero cash flow",
+    IrrStatus.FIRST_NONZERO_NOT_NEGATIVE: "First nonzero cash flow not negative",
+    IrrStatus.NO_POSITIVE_CASH_FLOW: "No positive cash flow",
+    IrrStatus.MULTIPLE_SIGN_CHANGES: "More than one sign change",
+    IrrStatus.ROOT_OUTSIDE_SEARCH_DOMAIN: "Outside Anchor's IRR search domain",
+    IrrStatus.NUMERICAL_FAILURE: "Anchor numerical failure",
+}
+
+# --- Tolerances --------------------------------------------------------------
+#
+# Anchor and Excel both compute in IEEE-754 double precision from the same
+# unrounded inputs; they differ only in operation order (a SUM across a row
+# versus Anchor's left-to-right subtraction, ``(1+r)^-N`` versus
+# ``expm1(-N*log1p(r))``, twelve monthly steps per year). Those differences are
+# a few units in the last place per operation. The tolerances below sit several
+# orders of magnitude above that and far below any displayed digit.
+
+#: Currency: the larger of one millionth of a currency unit and one part in
+#: 10^10 of the Anchor value.
+CURRENCY_ABSOLUTE_TOLERANCE = 1e-6
+CURRENCY_RELATIVE_TOLERANCE = 1e-10
+#: Ratios, rates and multiples (DSCR, cap rate, yields, cash-on-cash, equity
+#: multiple): absolute.
+RATIO_TOLERANCE = 1e-10
+#: IRR: Excel's documented ``IRR`` convergence criterion (0.00001 percent).
+#: Anchor bisects to a tighter bound, so Excel's stopping rule is the binding
+#: precision.
+IRR_TOLERANCE = 1e-7
+
+# --- Presentation ------------------------------------------------------------
+
+FONT = "Arial"
+NAVY = "#1F3864"
+HEADER_FILL = "#DCE3EE"
+SUBSECTION_FILL = "#EEF1F6"
+INPUT_BLUE = "#0000FF"
+INPUT_FILL = "#FFF7DC"
+LINK_GREEN = "#00703C"
+FROZEN_GRAY = "#595959"
+FROZEN_FILL = "#F2F2F2"
+NOTE_GRAY = "#595959"
+
+NUM_CURRENCY = '#,##0_);(#,##0);"-"_)'
+NUM_CURRENCY_CENTS = '#,##0.00_);(#,##0.00);"-"_)'
+NUM_PERCENT = '0.00%_);(0.00%);"-"_)'
+NUM_PERCENT_FINE = '0.0000%_);(0.0000%);"-"_)'
+NUM_MULTIPLE = '0.00"x"_);(0.00"x");"-"_)'
+NUM_MULTIPLE_FINE = '0.0000"x"_);(0.0000"x");"-"_)'
+NUM_INTEGER = '0_);(0);"-"_)'
+#: Sign flags and counts in the IRR audit: -1 reads as -1, not (1).
+NUM_FLAG = "0;-0;0"
+NUM_FACTOR = "0.000000_)"
+NUM_SCIENTIFIC = "0.00E+00"
+NUM_DATETIME = "yyyy-mm-dd hh:mm:ss"
+
+LABEL_WIDTH = 58
+UNITS_WIDTH = 21
+PERIOD_WIDTH = 14
+
+_PROTECTION = {
+    "select_locked_cells": True,
+    "select_unlocked_cells": True,
+    "format_columns": True,
+    "format_rows": True,
+}
+
+
+def _xref(sheet: str, row: int, col: int, *, absolute: bool = True) -> str:
+    """A cross-sheet reference such as ``'Debt Schedule'!$C$12``."""
+
+    return f"'{sheet}'!{xl_rowcol_to_cell(row, col, absolute, absolute)}"
+
+
+def _cell(row: int, col: int, *, row_abs: bool = False, col_abs: bool = False) -> str:
+    return xl_rowcol_to_cell(row, col, row_abs, col_abs)
+
+
+def _abs(row: int, col: int) -> str:
+    return xl_rowcol_to_cell(row, col, True, True)
+
+
+def _range(sheet: str | None, row1: int, col1: int, row2: int, col2: int) -> str:
+    body = f"{_abs(row1, col1)}:{_abs(row2, col2)}"
+    return f"'{sheet}'!{body}" if sheet is not None else body
+
+
+def _write_formula(ws: Worksheet, row: int, col: int, formula: str, cell_format: Format, cached: str) -> None:
+    """Every formula in the workbook is written here, with a *string* cached
+    value (blank or a "Not recalculated" status). XlsxWriter documents and
+    accepts a string ``value``; its type stub declares ``int``."""
+
+    ws.write_formula(row, col, formula, cell_format, cached)  # pyright: ignore[reportArgumentType]
+
+
+def _humanize(token: str) -> str:
+    return token.replace("_", " ").capitalize()
+
+
+@dataclass(frozen=True, slots=True)
+class _Check:
+    """One reconciliation row: an Anchor constant against an Excel result."""
+
+    metric: str
+    anchor: str
+    excel: str
+    location: str
+    #: ``currency`` / ``ratio`` / ``irr`` compare within a tolerance;
+    #: ``exact`` compares identity (numbers with ``=``, text with ``EXACT``).
+    kind: str
+    number_format: str
+    key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _InputSpec:
+    key: str
+    label: str
+    units: str
+    value: float
+    number_format: str
+    #: ``None`` keeps the Working Input equal to the Original Export and
+    #: locked, with this note as its status.
+    fixed_note: str | None = None
+    name: str | None = None
+    validation: dict[str, Any] | None = None
+
+
+class _Formats:
+    """Cached XlsxWriter formats keyed by their properties."""
+
+    def __init__(self, workbook: xlsxwriter.Workbook) -> None:
+        self._workbook = workbook
+        self._cache: dict[tuple[tuple[str, Any], ...], Format] = {}
+
+    def get(self, **properties: Any) -> Format:
+        merged = {"font_name": FONT, "font_size": 10, "valign": "vcenter", **properties}
+        key = tuple(sorted(merged.items()))
+        cached = self._cache.get(key)
+        if cached is None:
+            cached = self._workbook.add_format(merged)
+            self._cache[key] = cached
+        return cached
+
+    # Roles ------------------------------------------------------------------
+
+    def title(self) -> Format:
+        return self.get(bold=True, font_size=14, font_color=NAVY)
+
+    def note(self) -> Format:
+        return self.get(italic=True, font_color=NOTE_GRAY)
+
+    def section(self) -> Format:
+        return self.get(bold=True, font_color="#FFFFFF", bg_color=NAVY)
+
+    def subsection(self) -> Format:
+        return self.get(bold=True, bg_color=SUBSECTION_FILL)
+
+    def header(self, *, align: str = "right") -> Format:
+        return self.get(bold=True, bg_color=HEADER_FILL, bottom=1, align=align)
+
+    def label(self, *, bold: bool = False, indent: int = 0) -> Format:
+        properties: dict[str, Any] = {"bold": bold} if bold else {}
+        if indent:
+            properties["indent"] = indent
+        return self.get(**properties)
+
+    def units(self) -> Format:
+        return self.get(font_color=NOTE_GRAY)
+
+    def text(self, *, bold: bool = False, wrap: bool = False) -> Format:
+        properties: dict[str, Any] = {}
+        if bold:
+            properties["bold"] = True
+        if wrap:
+            properties["text_wrap"] = True
+            properties["valign"] = "top"
+        return self.get(**properties)
+
+    def value(self, role: str, number_format: str, *, bold: bool = False) -> Format:
+        properties: dict[str, Any] = {"num_format": number_format, "align": "right"}
+        if bold:
+            properties["bold"] = True
+            properties["top"] = 1
+        if role == "input":
+            properties.update(font_color=INPUT_BLUE, bg_color=INPUT_FILL, locked=False)
+        elif role == "link":
+            properties["font_color"] = LINK_GREEN
+        elif role == "frozen":
+            properties.update(font_color=FROZEN_GRAY, bg_color=FROZEN_FILL)
+        return self.get(**properties)
+
+    def status(self, role: str = "calc") -> Format:
+        properties: dict[str, Any] = {"align": "left"}
+        if role == "link":
+            properties["font_color"] = LINK_GREEN
+        return self.get(**properties)
+
+
+class _QuickAuditWorkbook:
+    """Builds one workbook. Sheets are added in their final order first, then
+    filled in dependency order so every cross-sheet reference is known when it
+    is written."""
+
+    def __init__(self, source: QuickAuditSource) -> None:
+        self.source = source
+        self.inputs = source.inputs
+        self.results = source.results
+        self.hold = source.inputs.hold_period
+        self.years = tuple(range(1, self.hold + 1))
+        self.ending_balance_by_year = self._anchor_ending_balances()
+        self._require_consistent_analysis()
+
+        self.output = BytesIO()
+        self.book = xlsxwriter.Workbook(
+            self.output,
+            {
+                "in_memory": True,
+                # Analyst-authored text is always written with write_string;
+                # these options make a stray write() equally unable to turn
+                # "=..." into a formula or a string into a number or a link.
+                "strings_to_formulas": False,
+                "strings_to_numbers": False,
+                "strings_to_urls": False,
+            },
+        )
+        self.fmt = _Formats(self.book)
+        self.sheets: dict[str, Worksheet] = {
+            name: self.book.add_worksheet(name) for name in SHEET_ORDER
+        }
+        #: Excel-model cells by key, for Checks and Summary.
+        self.excel: dict[str, str] = {}
+        #: Anchor constants by the same keys.
+        self.anchor: dict[str, str] = {}
+        #: Checks status cells by key, for Summary.
+        self.status: dict[str, str] = {}
+        #: Checks status cells by metric label.
+        self.status_by_metric: dict[str, str] = {}
+        self.checks: list[tuple[str, list[_Check]]] = []
+
+    # ------------------------------------------------------------------ guards
+
+    def _anchor_ending_balances(self) -> tuple[float, ...]:
+        """Anchor's loan balance at the end of each hold year.
+
+        The saved analysis records only the balance at the sale. The annual
+        balances come from Anchor's own debt engine functions, fed the saved
+        inputs and the saved monthly payment -- the same recurrence that
+        produced the saved exit balance -- and the last one must equal it."""
+
+        inputs = self.inputs
+        loan_amount = self.results.loan_amount
+        monthly_rate = calculate_monthly_rate(interest_rate=inputs.interest_rate)
+        n_payments = calculate_scheduled_payment_count(amortization=inputs.amortization)
+        io_months = calculate_io_months(io_period=inputs.io_period)
+        io_payment = calculate_io_payment(loan_amount=loan_amount, monthly_rate=monthly_rate)
+        months_to_run = min(self.hold * 12, io_months + n_payments)
+        balances = calculate_amortization_schedule(
+            loan_amount=loan_amount,
+            monthly_rate=monthly_rate,
+            monthly_debt_service=self.results.monthly_debt_service,
+            n_payments=n_payments,
+            months_to_run=months_to_run,
+            io_months=io_months,
+            io_payment=io_payment,
+        )
+        return tuple(
+            balances[12 * year - 1] if 12 * year <= months_to_run else 0.0
+            for year in self.years
+        )
+
+    def _require_consistent_analysis(self) -> None:
+        results = self.results
+        problems = [
+            len(results.noi_by_year) != self.hold,
+            len(results.levered_cash_flows) != self.hold + 1,
+            len(results.unlevered_cash_flows) != self.hold + 1,
+            any(value != 0.0 for value in results.tenant_improvements_by_year),
+            any(value != 0.0 for value in results.leasing_commissions_by_year),
+            len(results.project_capital_by_year) != self.hold,
+            len(results.owner_expenses_by_year) != self.hold,
+            self.ending_balance_by_year[-1] != results.remaining_loan_balance,
+        ]
+        if any(problems):
+            raise QuickAuditExportError(
+                QuickAuditRefusalCode.ANALYSIS_INCONSISTENT,
+                "The saved analysis could not be reconciled with the saved inputs "
+                "and Business Plan. Analyze and save the Deal again, then export.",
+            )
+
+    # ------------------------------------------------------------- primitives
+
+    def _formula(
+        self,
+        sheet: str,
+        row: int,
+        col: int,
+        formula: str,
+        role: str,
+        number_format: str,
+        *,
+        bold: bool = False,
+        cached: str = "",
+    ) -> str:
+        """Write a formula with a pessimistic cached value and return its
+        absolute cross-sheet reference."""
+
+        _write_formula(
+            self.sheets[sheet], row, col, formula, self.fmt.value(role, number_format, bold=bold), cached
+        )
+        return _xref(sheet, row, col)
+
+    def _status_formula(self, sheet: str, row: int, col: int, formula: str, role: str = "calc") -> str:
+        _write_formula(
+            self.sheets[sheet], row, col, formula, self.fmt.status(role), NOT_RECALCULATED
+        )
+        return _xref(sheet, row, col)
+
+    def _label(self, sheet: str, row: int, text: str, *, bold: bool = False, indent: int = 0) -> None:
+        self.sheets[sheet].write_string(row, 0, text, self.fmt.label(bold=bold, indent=indent))
+
+    def _units(self, sheet: str, row: int, text: str) -> None:
+        self.sheets[sheet].write_string(row, 1, text, self.fmt.units())
+
+    def _section(self, sheet: str, row: int, text: str, last_col: int) -> None:
+        ws = self.sheets[sheet]
+        ws.write_string(row, 0, text, self.fmt.section())
+        for col in range(1, last_col + 1):
+            ws.write_blank(row, col, None, self.fmt.section())
+
+    def _subsection(self, sheet: str, row: int, text: str, last_col: int) -> None:
+        ws = self.sheets[sheet]
+        ws.write_string(row, 0, text, self.fmt.subsection())
+        for col in range(1, last_col + 1):
+            ws.write_blank(row, col, None, self.fmt.subsection())
+
+    def _title(self, sheet: str, title: str, note: str) -> None:
+        ws = self.sheets[sheet]
+        ws.write_string(0, 0, title, self.fmt.title())
+        ws.write_string(1, 0, note, self.fmt.note())
+        ws.set_row(0, 22)
+
+    def _period_header(
+        self, sheet: str, row: int, first_col: int, labels: Sequence[str], left: str = "Period"
+    ) -> None:
+        ws = self.sheets[sheet]
+        ws.write_string(row, 0, left, self.fmt.header(align="left"))
+        ws.write_blank(row, 1, None, self.fmt.header())
+        for offset, text in enumerate(labels):
+            ws.write_string(row, first_col + offset, text, self.fmt.header())
+
+    def _frozen(self, sheet: str, row: int, col: int, value: float | str | None, number_format: str) -> str:
+        """Write one Anchor constant: a number, or ``Unavailable``."""
+
+        ws = self.sheets[sheet]
+        cell_format = self.fmt.value("frozen", number_format)
+        if value is None:
+            ws.write_string(row, col, UNAVAILABLE, cell_format)
+        elif isinstance(value, str):
+            ws.write_string(row, col, value, cell_format)
+        else:
+            ws.write_number(row, col, float(value), cell_format)
+        return _xref(sheet, row, col)
+
+    def _base_layout(self, sheet: str, period_columns: int) -> None:
+        ws = self.sheets[sheet]
+        ws.hide_gridlines(2)
+        ws.set_column(0, 0, LABEL_WIDTH)
+        ws.set_column(1, 1, UNITS_WIDTH)
+        if period_columns:
+            ws.set_column(2, 1 + period_columns, PERIOD_WIDTH)
+        ws.set_landscape()
+        ws.fit_to_pages(1, 0)
+        ws.protect("", _PROTECTION)
+
+    # ------------------------------------------------------------------ build
+
+    def build(self) -> bytes:
+        self._build_inputs()
+        self._build_operating()
+        self._build_debt()
+        self._build_equity()
+        self._build_anchor_results()
+        self._build_checks()
+        self._build_summary()
+        self._build_audit()
+        self._finish_workbook()
+        self.book.close()
+        return self.output.getvalue()
+
+    def _finish_workbook(self) -> None:
+        generated = self.source.generated_at.astimezone(timezone.utc).replace(tzinfo=None)
+        self.book.set_properties(
+            {
+                "title": f"{self.source.deal_name} - Quick Underwrite Audit",
+                "subject": "Quick Underwrite formula audit",
+                "author": "Anchor",
+                "comments": EXPORT_CONTRACT_VERSION,
+                "created": generated,
+            }
+        )
+        self.book.set_calc_mode("auto")
+        self.sheets[SUMMARY].activate()
+
+    # ----------------------------------------------------------------- Inputs
+
+    def _input_specs(self) -> list[tuple[str, list[_InputSpec]]]:
+        i = self.inputs
+        positive = {"validate": "decimal", "criteria": ">", "value": 0}
+        non_negative = {"validate": "decimal", "criteria": ">=", "value": 0}
+        fraction = {"validate": "decimal", "criteria": "between", "minimum": 0, "maximum": 1}
+        above_minus_one = {"validate": "decimal", "criteria": ">", "value": -1}
+        return [
+            (
+                "Acquisition",
+                [
+                    _InputSpec("purchase_price", "Purchase price", "$", i.purchase_price, NUM_CURRENCY, name="Purchase_Price", validation=positive),
+                    _InputSpec("acquisition_cost_pct", "Acquisition costs", "% of purchase price", i.acquisition_cost_pct, NUM_PERCENT, name="Acquisition_Cost_Pct", validation=fraction),
+                ],
+            ),
+            (
+                "Operations",
+                [
+                    _InputSpec("current_noi", "Current NOI (Year 1 NOI)", "$ per year", i.current_noi, NUM_CURRENCY, name="Current_NOI", validation=non_negative),
+                    _InputSpec("noi_growth", "NOI growth", "% per year, from Year 2", i.noi_growth, NUM_PERCENT, name="NOI_Growth", validation=above_minus_one),
+                    _InputSpec("occupancy", "Occupancy", "% (informational)", i.occupancy, NUM_PERCENT, fixed_note="Informational: not used by the Quick engine"),
+                    _InputSpec("annual_capex_reserve", "Annual CapEx reserve", "$ per year, below NOI", i.annual_capex_reserve, NUM_CURRENCY, name="CapEx_Reserve", validation=non_negative),
+                ],
+            ),
+            (
+                "Financing",
+                [
+                    _InputSpec("ltv", "Loan-to-value", "% of purchase price", i.ltv, NUM_PERCENT, name="Loan_To_Value", validation=fraction),
+                    _InputSpec("interest_rate", "Interest rate", "% per year, fixed", i.interest_rate, NUM_PERCENT, name="Interest_Rate", validation=non_negative),
+                    _InputSpec("amortization", "Amortization", "years", float(i.amortization), NUM_INTEGER, name="Amortization_Years", validation={"validate": "integer", "criteria": ">=", "value": 1}),
+                    _InputSpec("io_period", "Interest-only period", "years", float(i.io_period), NUM_INTEGER, name="IO_Period_Years", validation={"validate": "integer", "criteria": ">=", "value": 0}),
+                    _InputSpec("financing_fee_pct", "Financing fee", "% of loan amount", i.financing_fee_pct, NUM_PERCENT, name="Financing_Fee_Pct", validation=fraction),
+                ],
+            ),
+            (
+                "Exit",
+                [
+                    _InputSpec("hold_period", "Hold period", "years", float(self.hold), NUM_INTEGER, fixed_note="Fixed at export: sets the period columns", name="Hold_Period"),
+                    _InputSpec("exit_cap_rate", "Exit cap rate", "% of Year H+1 NOI", i.exit_cap_rate, NUM_PERCENT, name="Exit_Cap_Rate", validation=positive),
+                    _InputSpec("disposition_cost_pct", "Disposition costs", "% of gross sale price", i.disposition_cost_pct, NUM_PERCENT, name="Disposition_Cost_Pct", validation=fraction),
+                ],
+            ),
+            (
+                "Business Plan (annual totals Anchor resolved, from the saved analysis)",
+                [
+                    _InputSpec("closing_project_capital", "Closing project capital", "$ at Year 0", self.results.closing_project_capital, NUM_CURRENCY, name="Closing_Project_Capital", validation=non_negative),
+                    _InputSpec("post_hold_project_capital", "Post-hold project capital", "$ (disclosure only)", self.results.post_hold_project_capital, NUM_CURRENCY, fixed_note="Disclosure only: never enters the hold"),
+                ],
+            ),
+        ]
+
+    def _build_inputs(self) -> None:
+        sheet = INPUTS
+        ws = self.sheets[sheet]
+        self._title(
+            sheet,
+            "Inputs",
+            "Original Export is what Anchor analysed. Working Input starts equal to it and is "
+            "the only column the model reads; edit it to explore a modified case.",
+        )
+        ws.write_string(
+            2,
+            0,
+            "Blue: editable working input.  Black: calculation.  Green: value from another "
+            "sheet.  Gray: frozen Anchor value.",
+            self.fmt.note(),
+        )
+        ws.write_string(3, 0, "Model state", self.fmt.label(bold=True))
+        _write_formula(ws, 3, 1, "=Model_State", self.fmt.status("link"), NOT_RECALCULATED)
+        header_row = 5
+        ws.write_string(header_row, 0, "Assumption", self.fmt.header(align="left"))
+        ws.write_string(header_row, 1, "Original Export", self.fmt.header())
+        ws.write_string(header_row, 2, "Working Input", self.fmt.header())
+        ws.write_string(header_row, 3, "Units", self.fmt.header(align="left"))
+        ws.write_string(header_row, 4, "Status", self.fmt.header(align="left"))
+
+        row = header_row + 1
+        self.inputs_first_row = row
+        #: The block's shape, replayed on Anchor Results as the frozen record.
+        self.input_layout: list[_InputSpec | str] = []
+        for section, specs in self._input_specs():
+            self._subsection(sheet, row, section, 4)
+            self.input_layout.append(section)
+            row += 1
+            for spec in specs:
+                self._write_input(row, spec)
+                self.input_layout.append(spec)
+                row += 1
+        self.inputs_last_row = row - 1
+
+        # Business Plan by year: Original and Working side by side, per year.
+        row += 1
+        first_col = 2
+        last_col = first_col + self.hold - 1
+        self._period_header(sheet, row, first_col, [f"Year {year}" for year in self.years], left="Business Plan by year")
+        ws.write_string(row, 1, "Units", self.fmt.header())
+        row += 1
+        self.bp_rows: dict[str, tuple[int, int]] = {}
+        series = (
+            ("project_capital", "Project capital", self.results.project_capital_by_year),
+            ("owner_expenses", "Owner expenses", self.results.owner_expenses_by_year),
+        )
+        for key, label, values in series:
+            original_row, working_row = row, row + 1
+            self._label(sheet, original_row, f"{label} - Original Export")
+            self._label(sheet, working_row, f"{label} - Working Input")
+            self._units(sheet, original_row, "$")
+            self._units(sheet, working_row, "$")
+            for offset, value in enumerate(values):
+                col = first_col + offset
+                ws.write_number(original_row, col, value, self.fmt.value("frozen", NUM_CURRENCY))
+                ws.write_number(working_row, col, value, self.fmt.value("input", NUM_CURRENCY))
+            ws.data_validation(
+                working_row, first_col, working_row, last_col,
+                {"validate": "decimal", "criteria": ">=", "value": 0,
+                 "error_title": "Business Plan amount",
+                 "error_message": "Enter an amount of 0 or more, as Anchor requires."},
+            )
+            self.bp_rows[key] = (original_row, working_row)
+            row += 2
+        self._label(sheet, row, "Status")
+        pc_o, pc_w = self.bp_rows["project_capital"]
+        oe_o, oe_w = self.bp_rows["owner_expenses"]
+        for offset in range(self.hold):
+            col = first_col + offset
+            _write_formula(ws, 
+                row, col,
+                f'=IF(AND({_cell(pc_w, col)}={_cell(pc_o, col)},{_cell(oe_w, col)}={_cell(oe_o, col)}),"","Modified")',
+                self.fmt.get(align="right"), "",
+            )
+        self.bp_first_col, self.bp_last_col = first_col, last_col
+        row += 2
+
+        self._build_business_plan_items(row)
+
+        ws.hide_gridlines(2)
+        ws.set_column(0, 0, LABEL_WIDTH)
+        ws.set_column(1, 2, UNITS_WIDTH)
+        ws.set_column(3, 3, 30)
+        ws.set_column(4, 4, 36)
+        if self.hold > 3:
+            ws.set_column(5, first_col + self.hold - 1, PERIOD_WIDTH)
+        ws.freeze_panes(header_row + 1, 1)
+        ws.set_landscape()
+        ws.fit_to_pages(1, 0)
+        ws.protect("", _PROTECTION)
+
+    def _write_input(self, row: int, spec: _InputSpec) -> None:
+        sheet = INPUTS
+        ws = self.sheets[sheet]
+        self._label(sheet, row, spec.label, indent=1)
+        ws.write_number(row, 1, spec.value, self.fmt.value("frozen", spec.number_format))
+        original = _cell(row, 1)
+        working = _cell(row, 2)
+        if spec.fixed_note is None:
+            ws.write_number(row, 2, spec.value, self.fmt.value("input", spec.number_format))
+            _write_formula(ws, row, 4, f'=IF({working}={original},"","Modified")', self.fmt.status(), "")
+            if spec.validation is not None:
+                ws.data_validation(
+                    row, 2, row, 2,
+                    {**spec.validation,
+                     "error_title": spec.label,
+                     "error_message": "This value is outside the domain Anchor accepts for this input."},
+                )
+        else:
+            _write_formula(ws, row, 2, f"={original}", self.fmt.value("calc", spec.number_format), "")
+            ws.write_string(row, 4, spec.fixed_note, self.fmt.units())
+        ws.write_string(row, 3, spec.units, self.fmt.units())
+        if spec.name is not None:
+            self.book.define_name(spec.name, f"={_xref(INPUTS, row, 2)}")
+        self.excel[f"input:{spec.key}"] = _xref(INPUTS, row, 2)
+        self.excel[f"original:{spec.key}"] = _xref(INPUTS, row, 1)
+
+    def _build_business_plan_items(self, row: int) -> None:
+        sheet = INPUTS
+        ws = self.sheets[sheet]
+        plan = self.source.business_plan
+        self._subsection(sheet, row, "Business Plan items (as saved, for reference)", 4)
+        row += 1
+        self.bp_items: dict[str, Any] = {}
+        if not plan.capital_items and not plan.owner_expense_items:
+            ws.write_string(row, 0, "No Business Plan items are saved for this Deal.", self.fmt.note())
+            return
+
+        frozen_text = self.fmt.get(font_color=FROZEN_GRAY, bg_color=FROZEN_FILL)
+        if plan.capital_items:
+            ws.write_string(row, 0, "Capital item", self.fmt.header(align="left"))
+            ws.write_string(row, 1, "Model month", self.fmt.header())
+            ws.write_string(row, 2, "Amount", self.fmt.header())
+            ws.write_string(row, 3, "Category", self.fmt.header(align="left"))
+            ws.write_blank(row, 4, None, self.fmt.header())
+            row += 1
+            first = row
+            for item in plan.capital_items:
+                ws.write_string(row, 0, item.description, frozen_text)
+                ws.write_number(row, 1, item.month, self.fmt.value("frozen", NUM_INTEGER))
+                ws.write_number(row, 2, item.amount, self.fmt.value("frozen", NUM_CURRENCY))
+                ws.write_string(row, 3, _humanize(item.category.value), frozen_text)
+                row += 1
+            self.bp_items["capital"] = (first, row - 1)
+            ws.write_string(row, 0, "Month 0 is closing; months 1 to 12H fall in hold year ((month - 1) / 12) + 1; later months are post-hold.", self.fmt.note())
+            row += 2
+        if plan.owner_expense_items:
+            ws.write_string(row, 0, "Owner-expense item", self.fmt.header(align="left"))
+            ws.write_string(row, 1, "First year", self.fmt.header())
+            ws.write_string(row, 2, "Annual amount", self.fmt.header())
+            ws.write_string(row, 3, "Last year (blank = through hold)", self.fmt.header(align="left"))
+            ws.write_string(row, 4, "Category", self.fmt.header(align="left"))
+            row += 1
+            first = row
+            for item in plan.owner_expense_items:
+                ws.write_string(row, 0, item.description, frozen_text)
+                ws.write_number(row, 1, item.first_year, self.fmt.value("frozen", NUM_INTEGER))
+                ws.write_number(row, 2, item.annual_amount, self.fmt.value("frozen", NUM_CURRENCY))
+                if item.last_year is None:
+                    ws.write_blank(row, 3, None, self.fmt.value("frozen", NUM_INTEGER))
+                else:
+                    ws.write_number(row, 3, item.last_year, self.fmt.value("frozen", NUM_INTEGER))
+                ws.write_string(row, 4, _humanize(item.category.value), frozen_text)
+                row += 1
+            self.bp_items["expenses"] = (first, row - 1)
+            row += 1
+
+        # Excel's own resolution of the items, reconciled against Anchor's.
+        self._period_header(sheet, row, self.bp_first_col, [f"Year {year}" for year in self.years], left="Items resolved by Excel")
+        ws.write_string(row, 1, "Year 0", self.fmt.header())
+        row += 1
+        self._label(sheet, row, "Project capital from items")
+        self._label(sheet, row + 1, "Owner expenses from items")
+        if "capital" in self.bp_items:
+            c1, c2 = self.bp_items["capital"]
+            months = _range(None, c1, 1, c2, 1)
+            amounts = _range(None, c1, 2, c2, 2)
+            self.excel["items:closing"] = self._formula(sheet, row, 1, f'=SUMIFS({amounts},{months},0)', "calc", NUM_CURRENCY)
+        else:
+            self.excel["items:closing"] = self._formula(sheet, row, 1, "=0", "calc", NUM_CURRENCY)
+        for offset, year in enumerate(self.years):
+            col = self.bp_first_col + offset
+            if "capital" in self.bp_items:
+                c1, c2 = self.bp_items["capital"]
+                months = _range(None, c1, 1, c2, 1)
+                amounts = _range(None, c1, 2, c2, 2)
+                formula = f'=SUMIFS({amounts},{months},">="&(12*({year}-1)+1),{months},"<="&(12*{year}))'
+            else:
+                formula = "=0"
+            self.excel[f"items:project_capital:{year}"] = self._formula(sheet, row, col, formula, "calc", NUM_CURRENCY)
+            if "expenses" in self.bp_items:
+                e1, e2 = self.bp_items["expenses"]
+                first_years = _range(None, e1, 1, e2, 1)
+                annual = _range(None, e1, 2, e2, 2)
+                last_years = _range(None, e1, 3, e2, 3)
+                formula = (
+                    f'=SUMPRODUCT({annual},--({first_years}<={year}),'
+                    f'--((({last_years}="")+({last_years}>={year}))>0))'
+                )
+            else:
+                formula = "=0"
+            self.excel[f"items:owner_expenses:{year}"] = self._formula(sheet, row + 1, col, formula, "calc", NUM_CURRENCY)
+
+    # ------------------------------------------------------ Operating Projection
+
+    def _build_operating(self) -> None:
+        sheet = OPERATING
+        ws = self.sheets[sheet]
+        hold = self.hold
+        first_col = 2
+        forward_col = first_col + hold
+        last_col = forward_col
+        self._title(
+            sheet,
+            "Operating Projection",
+            "Quick Underwrite projects NOI directly from Current NOI and NOI growth; revenue, "
+            "vacancy and operating-expense lines are not Quick inputs and are not modelled.",
+        )
+        row = 3
+        self._section(sheet, row, "Assumptions used (from Inputs)", last_col)
+        row += 1
+        links = (
+            ("current_noi", "Current NOI (Year 1 NOI)", "$ per year", "=Current_NOI", NUM_CURRENCY),
+            ("noi_growth", "NOI growth", "% per year", "=NOI_Growth", NUM_PERCENT),
+            ("capex", "Annual CapEx reserve", "$ per year", "=CapEx_Reserve", NUM_CURRENCY),
+            ("purchase_price", "Purchase price", "$", "=Purchase_Price", NUM_CURRENCY),
+        )
+        a: dict[str, str] = {}
+        for key, label, units, formula, number_format in links:
+            self._label(sheet, row, label, indent=1)
+            self._units(sheet, row, units)
+            self._formula(sheet, row, 2, formula, "link", number_format)
+            a[key] = _abs(row, 2)
+            row += 1
+        row += 1
+
+        labels = [f"Year {year}" for year in self.years] + [f"Year {hold + 1}"]
+        self._period_header(sheet, row, first_col, labels)
+        row += 1
+        year_row = row
+        self._label(sheet, row, "Year number")
+        for offset, year in enumerate([*self.years, hold + 1]):
+            ws.write_number(row, first_col + offset, year, self.fmt.value("calc", NUM_INTEGER))
+        row += 1
+        self._label(sheet, row, "Period type")
+        for offset in range(hold):
+            ws.write_string(row, first_col + offset, "Hold year", self.fmt.get(align="right", font_color=NOTE_GRAY))
+        ws.write_string(row, forward_col, "Exit NOI only", self.fmt.get(align="right", font_color=NOTE_GRAY))
+        row += 2
+
+        self._section(sheet, row, "Net operating income", last_col)
+        row += 1
+        factor_row, noi_row, growth_row = row, row + 1, row + 2
+        self._label(sheet, factor_row, "NOI growth factor  (1 + growth) ^ (year - 1)", indent=1)
+        self._units(sheet, factor_row, "factor")
+        self._label(sheet, noi_row, "Net operating income", bold=True)
+        self._units(sheet, noi_row, "$")
+        self._label(sheet, growth_row, "Change from prior year", indent=1)
+        self._units(sheet, growth_row, "%")
+        for offset in range(hold + 1):
+            col = first_col + offset
+            year_ref = _cell(year_row, col, row_abs=True)
+            self._formula(sheet, factor_row, col, f"=(1+{a['noi_growth']})^({year_ref}-1)", "calc", NUM_FACTOR)
+            ref = self._formula(sheet, noi_row, col, f"={a['current_noi']}*{_cell(factor_row, col)}", "calc", NUM_CURRENCY, bold=True)
+            if offset < hold:
+                self.excel[f"noi:{offset + 1}"] = ref
+            else:
+                self.excel["exit_noi"] = ref
+            if offset == 0:
+                ws.write_string(growth_row, col, "n/a", self.fmt.get(align="right", font_color=NOTE_GRAY))
+            else:
+                prior, current = _cell(noi_row, col - 1), _cell(noi_row, col)
+                self._formula(sheet, growth_row, col, f'=IF({prior}=0,"n/a",{current}/{prior}-1)', "calc", NUM_PERCENT)
+        self.noi_row = noi_row
+        row = growth_row + 1
+        ws.write_string(row, 0, f"Year {hold + 1} NOI is used only to value the sale at the end of Year {hold}; it is not a hold-year cash flow.", self.fmt.note())
+        row += 2
+
+        self._section(sheet, row, "Below-NOI cash flow (hold years; outflows negative)", last_col)
+        row += 1
+        r_noi, r_capex, r_pcf, r_pc, r_oe, r_uocf = range(row, row + 6)
+        self._label(sheet, r_noi, "Net operating income", indent=1)
+        self._label(sheet, r_capex, "CapEx reserve", indent=1)
+        self._label(sheet, r_pcf, "Property cash flow after CapEx", bold=True)
+        self._label(sheet, r_pc, "Business Plan project capital", indent=1)
+        self._label(sheet, r_oe, "Business Plan owner expenses", indent=1)
+        self._label(sheet, r_uocf, "Unlevered owner cash flow", bold=True)
+        for r in (r_noi, r_capex, r_pcf, r_pc, r_oe, r_uocf):
+            self._units(sheet, r, "$")
+        pc_working = self.bp_rows["project_capital"][1]
+        oe_working = self.bp_rows["owner_expenses"][1]
+        for offset, year in enumerate(self.years):
+            col = first_col + offset
+            input_col = self.bp_first_col + offset
+            self._formula(sheet, r_noi, col, f"={_cell(noi_row, col)}", "calc", NUM_CURRENCY)
+            self.excel[f"capex:{year}"] = self._formula(sheet, r_capex, col, f"=-{a['capex']}", "calc", NUM_CURRENCY)
+            self.excel[f"property_cf:{year}"] = self._formula(sheet, r_pcf, col, f"={_cell(r_noi, col)}+{_cell(r_capex, col)}", "calc", NUM_CURRENCY, bold=True)
+            self.excel[f"project_capital:{year}"] = self._formula(sheet, r_pc, col, f"=-{_xref(INPUTS, pc_working, input_col)}", "link", NUM_CURRENCY)
+            self.excel[f"owner_expenses:{year}"] = self._formula(sheet, r_oe, col, f"=-{_xref(INPUTS, oe_working, input_col)}", "link", NUM_CURRENCY)
+            self.excel[f"uocf:{year}"] = self._formula(
+                sheet, r_uocf, col, f"={_cell(r_pcf, col)}+{_cell(r_pc, col)}+{_cell(r_oe, col)}", "calc", NUM_CURRENCY, bold=True
+            )
+        self.operating_rows = {"capex": r_capex, "project_capital": r_pc, "owner_expenses": r_oe, "uocf": r_uocf}
+        row = r_uocf + 2
+
+        self._section(sheet, row, "Valuation metric", last_col)
+        row += 1
+        self._label(sheet, row, "Going-in cap rate  (Year 1 NOI / purchase price)", indent=1)
+        self._units(sheet, row, "%")
+        self.excel["going_in_cap_rate"] = self._formula(
+            sheet, row, 2, f"={_cell(noi_row, first_col)}/{a['purchase_price']}", "calc", NUM_PERCENT
+        )
+        self._base_layout(sheet, hold + 1)
+        ws.freeze_panes(0, 2)
+
+    # ----------------------------------------------------------- Debt Schedule
+
+    def _build_debt(self) -> None:
+        sheet = DEBT
+        ws = self.sheets[sheet]
+        hold = self.hold
+        first_col = 2
+        last_col = max(first_col + hold - 1, 7)
+        self._title(
+            sheet,
+            "Debt Schedule",
+            "Monthly fixed-rate schedule: interest = beginning balance x monthly rate; principal = "
+            "payment - interest; the balance is set to zero at contractual maturity.",
+        )
+        row = 3
+        self._section(sheet, row, "Loan terms", last_col)
+        row += 1
+        terms: dict[str, int] = {}
+
+        def line(key: str, label: str, units: str, formula: str, role: str, number_format: str, *, bold: bool = False, name: str | None = None) -> None:
+            nonlocal row
+            self._label(sheet, row, label, indent=0 if bold else 1, bold=bold)
+            self._units(sheet, row, units)
+            self._formula(sheet, row, 2, formula, role, number_format, bold=bold)
+            terms[key] = row
+            if name is not None:
+                self.book.define_name(name, f"={_xref(DEBT, row, 2)}")
+            row += 1
+
+        line("price", "Purchase price", "$", "=Purchase_Price", "link", NUM_CURRENCY)
+        line("ltv", "Loan-to-value", "%", "=Loan_To_Value", "link", NUM_PERCENT)
+        line("rate", "Interest rate", "% per year", "=Interest_Rate", "link", NUM_PERCENT)
+        line("amort", "Amortization", "years", "=Amortization_Years", "link", NUM_INTEGER)
+        line("io", "Interest-only period", "years", "=IO_Period_Years", "link", NUM_INTEGER)
+        line("fee_pct", "Financing fee", "% of loan", "=Financing_Fee_Pct", "link", NUM_PERCENT)
+        line("hold", "Hold period", "years", "=Hold_Period", "link", NUM_INTEGER)
+        T = {key: _abs(r, 2) for key, r in terms.items()}
+        line("loan", "Loan amount", "$", f"={T['price']}*{T['ltv']}", "calc", NUM_CURRENCY, bold=True, name="Loan_Amount")
+        T["loan"] = _abs(terms["loan"], 2)
+        line("fee", "Financing fee", "$", f"={T['loan']}*{T['fee_pct']}", "calc", NUM_CURRENCY)
+        T["fee"] = _abs(terms["fee"], 2)
+        line("r", "Monthly rate  (annual rate / 12)", "% per month", f"={T['rate']}/12", "calc", NUM_PERCENT_FINE, name="Monthly_Rate")
+        T["r"] = _abs(terms["r"], 2)
+        line("n", "Amortizing payments  (amortization x 12)", "months", f"={T['amort']}*12", "calc", NUM_INTEGER)
+        T["n"] = _abs(terms["n"], 2)
+        line("io_months", "Interest-only months  (IO period x 12)", "months", f"={T['io']}*12", "calc", NUM_INTEGER)
+        T["io_months"] = _abs(terms["io_months"], 2)
+        line("io_payment", "Interest-only monthly payment  (loan x monthly rate)", "$ per month", f"={T['loan']}*{T['r']}", "calc", NUM_CURRENCY_CENTS)
+        T["io_payment"] = _abs(terms["io_payment"], 2)
+        line(
+            "pmt",
+            "Amortizing payment  L x r / (1 - (1 + r)^-N)",
+            "$ per month",
+            f"=IF({T['loan']}=0,0,IF({T['r']}=0,{T['loan']}/{T['n']},{T['loan']}*({T['r']}/(1-(1+{T['r']})^(-{T['n']})))))",
+            "calc",
+            NUM_CURRENCY_CENTS,
+        )
+        T["pmt"] = _abs(terms["pmt"], 2)
+        line("maturity", "Contractual maturity  (IO months + N)", "month", f"={T['io_months']}+{T['n']}", "calc", NUM_INTEGER)
+        T["maturity"] = _abs(terms["maturity"], 2)
+        line("sale_month", "Sale month  (hold period x 12)", "month", f"={T['hold']}*12", "calc", NUM_INTEGER)
+        self.excel["loan_amount"] = _xref(DEBT, terms["loan"], 2)
+        self.excel["financing_fee"] = _xref(DEBT, terms["fee"], 2)
+        self.excel["monthly_debt_service"] = _xref(DEBT, terms["pmt"], 2)
+        ws.write_string(row, 0, "With a zero interest rate the payment is loan / N, matching Anchor; Excel's PMT would give the same figures.", self.fmt.note())
+        row += 2
+
+        # Monthly schedule placement is fixed first so the annual block can
+        # reference it.
+        annual_top = row
+        annual_rows = 12
+        monthly_section = annual_top + annual_rows + 2
+        monthly_header = monthly_section + 1
+        first_month_row = monthly_header + 1
+        months = 12 * hold
+
+        def month_row(month: int) -> int:
+            return first_month_row + month - 1
+
+        # Annual summary.
+        self._section(sheet, row, "Annual summary", last_col)
+        row += 1
+        self._period_header(sheet, row, first_col, [f"Year {year}" for year in self.years])
+        row += 1
+        r_beg, r_ds, r_int, r_prin, r_end, r_noi, r_dscr = range(row, row + 7)
+        for r, label, units, bold in (
+            (r_beg, "Beginning loan balance", "$", False),
+            (r_ds, "Scheduled debt service", "$", True),
+            (r_int, "Interest", "$", False),
+            (r_prin, "Principal amortization", "$", False),
+            (r_end, "Ending loan balance", "$", True),
+            (r_noi, "Net operating income", "$", False),
+            (r_dscr, "Debt service coverage (NOI / debt service)", "x", True),
+        ):
+            self._label(sheet, r, label, bold=bold, indent=0 if bold else 1)
+            self._units(sheet, r, units)
+        for offset, year in enumerate(self.years):
+            col = first_col + offset
+            first, last = month_row(12 * year - 11), month_row(12 * year)
+            if offset == 0:
+                self._formula(sheet, r_beg, col, f"={T['loan']}", "calc", NUM_CURRENCY)
+            else:
+                self._formula(sheet, r_beg, col, f"={_cell(r_end, col - 1)}", "calc", NUM_CURRENCY)
+            self.excel[f"debt_service:{year}"] = self._formula(sheet, r_ds, col, f"=SUM({_cell(first, 4)}:{_cell(last, 4)})", "calc", NUM_CURRENCY, bold=True)
+            self._formula(sheet, r_int, col, f"=SUM({_cell(first, 5)}:{_cell(last, 5)})", "calc", NUM_CURRENCY)
+            self._formula(sheet, r_prin, col, f"=SUM({_cell(first, 6)}:{_cell(last, 6)})", "calc", NUM_CURRENCY)
+            self.excel[f"ending_balance:{year}"] = self._formula(sheet, r_end, col, f"={_cell(last, 7)}", "calc", NUM_CURRENCY, bold=True)
+            self._formula(sheet, r_noi, col, f"={_xref(OPERATING, self.noi_row, 2 + offset)}", "link", NUM_CURRENCY)
+            self.excel[f"dscr:{year}"] = self._formula(
+                sheet, r_dscr, col,
+                f'=IF({_cell(r_ds, col)}>0,{_cell(r_noi, col)}/{_cell(r_ds, col)},"{UNAVAILABLE}")',
+                "calc", NUM_MULTIPLE, bold=True,
+            )
+        last_year_col = first_col + hold - 1
+        dscr_range = f"{_abs(r_dscr, first_col)}:{_abs(r_dscr, last_year_col)}"
+        row = r_dscr + 1
+        self._label(sheet, row, "Headline DSCR (Year 1)", indent=1)
+        self._units(sheet, row, "x")
+        self.excel["headline_dscr"] = self._formula(sheet, row, 2, f"={_abs(r_dscr, first_col)}", "calc", NUM_MULTIPLE)
+        row += 1
+        self._label(sheet, row, "Minimum DSCR (years with debt service)", indent=1)
+        self._units(sheet, row, "x")
+        self.excel["min_dscr"] = self._formula(sheet, row, 2, f'=IF(COUNT({dscr_range})=0,"{UNAVAILABLE}",MIN({dscr_range}))', "calc", NUM_MULTIPLE)
+        row += 1
+        self._label(sheet, row, "Year 1 debt yield  (Year 1 NOI / loan amount)", indent=1)
+        self._units(sheet, row, "%")
+        self.excel["year_1_debt_yield"] = self._formula(sheet, row, 2, f'=IF({T["loan"]}=0,"{UNAVAILABLE}",{_abs(r_noi, first_col)}/{T["loan"]})', "calc", NUM_PERCENT)
+        row += 1
+        self._label(sheet, row, f"Loan payoff at sale (end of Year {hold})", bold=True)
+        self._units(sheet, row, "$")
+        payoff = self._formula(sheet, row, 2, f"={_abs(r_end, last_year_col)}", "calc", NUM_CURRENCY, bold=True)
+        self.excel["remaining_loan_balance"] = payoff
+        self.debt_payoff_ref = payoff
+        self.debt_ds_row = r_ds
+        assert row < monthly_section
+
+        # Monthly schedule.
+        self._section(sheet, monthly_section, "Monthly schedule", last_col)
+        headers = ("Month", "Hold year", "Phase", "Beginning balance", "Payment", "Interest", "Principal", "Ending balance")
+        for col, text in enumerate(headers):
+            ws.write_string(monthly_header, col, text, self.fmt.header(align="left" if col in (0, 2) else "right"))
+        phase_format = self.fmt.get(font_color=NOTE_GRAY)
+        month_format = self.fmt.get(align="left", num_format="0")
+        year_format = self.fmt.value("calc", NUM_INTEGER)
+        for month in range(1, months + 1):
+            r = month_row(month)
+            m = _cell(r, 0)
+            ws.write_number(r, 0, month, month_format)
+            ws.write_number(r, 1, (month - 1) // 12 + 1, year_format)
+            _write_formula(ws, 
+                r, 2,
+                f'=IF({m}<={T["io_months"]},"Interest-only",IF({m}<={T["maturity"]},"Amortizing","Repaid"))',
+                phase_format, "",
+            )
+            beginning = f"={T['loan']}" if month == 1 else f"={_cell(r - 1, 7)}"
+            self._formula(sheet, r, 3, beginning, "calc", NUM_CURRENCY_CENTS)
+            self._formula(
+                sheet, r, 4,
+                f"=IF({m}<={T['io_months']},{T['io_payment']},IF({m}-{T['io_months']}<={T['n']},{T['pmt']},0))",
+                "calc", NUM_CURRENCY_CENTS,
+            )
+            self._formula(sheet, r, 5, f"={_cell(r, 3)}*{T['r']}", "calc", NUM_CURRENCY_CENTS)
+            self._formula(sheet, r, 6, f"={_cell(r, 4)}-{_cell(r, 5)}", "calc", NUM_CURRENCY_CENTS)
+            self._formula(sheet, r, 7, f"=IF({m}={T['maturity']},0,{_cell(r, 3)}-{_cell(r, 6)})", "calc", NUM_CURRENCY_CENTS)
+        self._base_layout(sheet, max(hold, 6))
+        ws.freeze_panes(0, 2)
+
+    # -------------------------------------------------------- Equity Cash Flow
+
+    def _build_equity(self) -> None:
+        sheet = EQUITY
+        ws = self.sheets[sheet]
+        hold = self.hold
+        c0 = 2  # Year 0
+        cH = c0 + hold
+        last_col = cH
+        self._title(
+            sheet,
+            "Equity Cash Flow",
+            f"Annual periods: Year 0 is acquisition; the sale occurs at the end of Year {hold} and "
+            "is included in that year. Inflows are positive, outflows negative.",
+        )
+        row = 3
+        self._section(sheet, row, "Assumptions used", last_col)
+        row += 1
+        a: dict[str, str] = {}
+        links = (
+            ("price", "Purchase price", "$", "=Purchase_Price", NUM_CURRENCY),
+            ("acq_pct", "Acquisition costs", "% of purchase price", "=Acquisition_Cost_Pct", NUM_PERCENT),
+            ("disp_pct", "Disposition costs", "% of gross sale price", "=Disposition_Cost_Pct", NUM_PERCENT),
+            ("exit_cap", "Exit cap rate", "%", "=Exit_Cap_Rate", NUM_PERCENT),
+            ("closing_pc", "Closing project capital", "$", "=Closing_Project_Capital", NUM_CURRENCY),
+            ("loan", "Loan amount", "$", f"={self.excel['loan_amount']}", NUM_CURRENCY),
+            ("fee", "Financing fee", "$", f"={self.excel['financing_fee']}", NUM_CURRENCY),
+            ("exit_noi", f"Year {hold + 1} NOI (exit NOI)", "$", f"={self.excel['exit_noi']}", NUM_CURRENCY),
+            ("hold", "Hold period", "years", "=Hold_Period", NUM_INTEGER),
+        )
+        for key, label, units, formula, number_format in links:
+            self._label(sheet, row, label, indent=1)
+            self._units(sheet, row, units)
+            self._formula(sheet, row, 2, formula, "link", number_format)
+            a[key] = _abs(row, 2)
+            row += 1
+        row += 1
+
+        self._period_header(sheet, row, c0, [f"Year {year}" for year in range(0, hold + 1)])
+        row += 1
+
+        # Acquisition, Year 0.
+        self._section(sheet, row, "Acquisition (Year 0)", last_col)
+        row += 1
+        r_price, r_acq, r_fee, r_cpc, r_loan, r_equity, r_uses, r_sources = range(row, row + 8)
+        acquisition = (
+            (r_price, "Purchase price", f"=-{a['price']}", "calc", False),
+            (r_acq, "Acquisition costs", f"=-{a['price']}*{a['acq_pct']}", "calc", False),
+            (r_fee, "Financing fee", f"=-{a['fee']}", "calc", False),
+            (r_cpc, "Closing project capital", f"=-{a['closing_pc']}", "calc", False),
+            (r_loan, "Loan proceeds", f"={a['loan']}", "calc", False),
+            (r_equity, "Acquisition equity", f"=SUM({_cell(r_price, c0)}:{_cell(r_loan, c0)})", "calc", True),
+            (r_uses, "Total closing uses", f"=-SUM({_cell(r_price, c0)}:{_cell(r_cpc, c0)})", "calc", False),
+            (r_sources, "Total closing sources  (loan + equity)", f"={_cell(r_loan, c0)}-{_cell(r_equity, c0)}", "calc", False),
+        )
+        for r, label, formula, role, bold in acquisition:
+            self._label(sheet, r, label, bold=bold, indent=0 if bold else 1)
+            self._units(sheet, r, "$")
+            self._formula(sheet, r, c0, formula, role, NUM_CURRENCY, bold=bold)
+        self.excel["acquisition_costs_neg"] = _xref(sheet, r_acq, c0)
+        self.excel["acquisition_equity"] = _xref(sheet, r_equity, c0)
+        self.excel["total_closing_uses"] = _xref(sheet, r_uses, c0)
+        self.excel["total_closing_sources"] = _xref(sheet, r_sources, c0)
+        self.excel["closing_pc_neg"] = _xref(sheet, r_cpc, c0)
+        row = r_sources + 2
+
+        # Operations, Years 1..H.
+        self._section(sheet, row, f"Operations (Years 1 to {hold})", last_col)
+        row += 1
+        r_noi, r_capex, r_pc, r_oe, r_ds, r_locf = range(row, row + 6)
+        for r, label, bold in (
+            (r_noi, "Net operating income", False),
+            (r_capex, "CapEx reserve", False),
+            (r_pc, "Business Plan project capital", False),
+            (r_oe, "Business Plan owner expenses", False),
+            (r_ds, "Debt service", False),
+            (r_locf, "Levered owner cash flow", True),
+        ):
+            self._label(sheet, r, label, bold=bold, indent=0 if bold else 1)
+            self._units(sheet, r, "$")
+        op = self.operating_rows
+        for offset, year in enumerate(self.years):
+            col = c0 + 1 + offset
+            op_col = 2 + offset
+            self._formula(sheet, r_noi, col, f"={_xref(OPERATING, self.noi_row, op_col)}", "link", NUM_CURRENCY)
+            self._formula(sheet, r_capex, col, f"={_xref(OPERATING, op['capex'], op_col)}", "link", NUM_CURRENCY)
+            self._formula(sheet, r_pc, col, f"={_xref(OPERATING, op['project_capital'], op_col)}", "link", NUM_CURRENCY)
+            self._formula(sheet, r_oe, col, f"={_xref(OPERATING, op['owner_expenses'], op_col)}", "link", NUM_CURRENCY)
+            self._formula(sheet, r_ds, col, f"=-{_xref(DEBT, self.debt_ds_row, op_col)}", "link", NUM_CURRENCY)
+            self.excel[f"locf:{year}"] = self._formula(
+                sheet, r_locf, col, f"=SUM({_cell(r_noi, col)}:{_cell(r_ds, col)})", "calc", NUM_CURRENCY, bold=True
+            )
+        row = r_locf + 2
+
+        # Sale, end of Year H.
+        self._section(sheet, row, f"Sale (end of Year {hold})", last_col)
+        row += 1
+        r_gross, r_sell, r_payoff, r_nsp = range(row, row + 4)
+        sale = (
+            (r_gross, "Gross sale price  (exit NOI / exit cap rate)", f"={a['exit_noi']}/{a['exit_cap']}", "calc", False),
+            (r_sell, "Selling costs", f"=-{_cell(r_gross, cH)}*{a['disp_pct']}", "calc", False),
+            (r_payoff, "Debt payoff", f"=-{self.debt_payoff_ref}", "link", False),
+            (r_nsp, "Net sale proceeds", f"=SUM({_cell(r_gross, cH)}:{_cell(r_payoff, cH)})", "calc", True),
+        )
+        for r, label, formula, role, bold in sale:
+            self._label(sheet, r, label, bold=bold, indent=0 if bold else 1)
+            self._units(sheet, r, "$")
+            self._formula(sheet, r, cH, formula, role, NUM_CURRENCY, bold=bold)
+        self.excel["exit_value"] = _xref(sheet, r_gross, cH)
+        self.excel["disposition_costs_neg"] = _xref(sheet, r_sell, cH)
+        self.excel["net_sale_proceeds"] = _xref(sheet, r_nsp, cH)
+        row = r_nsp + 2
+
+        # Equity cash flow.
+        self._section(sheet, row, "Equity cash flow", last_col)
+        row += 1
+        r_ecf, r_cum = row, row + 1
+        self._label(sheet, r_ecf, "Total equity cash flow", bold=True)
+        self._label(sheet, r_cum, "Cumulative equity cash flow", indent=1)
+        self._units(sheet, r_ecf, "$")
+        self._units(sheet, r_cum, "$")
+        for t in range(0, hold + 1):
+            col = c0 + t
+            if t == 0:
+                formula = f"={_cell(r_equity, col)}"
+            elif t < hold:
+                formula = f"={_cell(r_locf, col)}"
+            else:
+                formula = f"={_cell(r_locf, col)}+{_cell(r_nsp, col)}"
+            self.excel[f"ecf:{t}"] = self._formula(sheet, r_ecf, col, formula, "calc", NUM_CURRENCY, bold=True)
+            cumulative = f"={_cell(r_ecf, col)}" if t == 0 else f"={_cell(r_cum, col - 1)}+{_cell(r_ecf, col)}"
+            self._formula(sheet, r_cum, col, cumulative, "calc", NUM_CURRENCY)
+        ecf_range = f"{_abs(r_ecf, c0)}:{_abs(r_ecf, cH)}"
+        self.excel["ecf_range_count"] = f"COUNT({_range(EQUITY, r_ecf, c0, r_ecf, cH)})"
+        row = r_cum + 2
+
+        # Returns.
+        self._section(sheet, row, "Returns", last_col)
+        row += 1
+        r_inv, r_ret, r_profit, r_em = range(row, row + 4)
+        returns = (
+            (r_inv, "Total equity invested  (sum of negative periods)", "$", f'=-SUMIF({ecf_range},"<0")', NUM_CURRENCY),
+            (r_ret, "Total cash returned  (sum of positive periods)", "$", f'=SUMIF({ecf_range},">0")', NUM_CURRENCY),
+            (r_profit, "Total profit", "$", f"={_cell(r_ret, 2)}-{_cell(r_inv, 2)}", NUM_CURRENCY),
+            (r_em, "Equity multiple  (returned / invested)", "x", f'=IF({_cell(r_inv, 2)}=0,"{UNAVAILABLE}",{_cell(r_ret, 2)}/{_cell(r_inv, 2)})', NUM_MULTIPLE),
+        )
+        for r, label, units, formula, number_format in returns:
+            self._label(sheet, r, label, bold=r in (r_profit, r_em))
+            self._units(sheet, r, units)
+            self._formula(sheet, r, 2, formula, "calc", number_format, bold=r in (r_profit, r_em))
+        self.excel["total_equity_invested"] = _xref(sheet, r_inv, 2)
+        self.excel["total_cash_returned"] = _xref(sheet, r_ret, 2)
+        self.excel["total_profit"] = _xref(sheet, r_profit, 2)
+        self.excel["equity_multiple"] = _xref(sheet, r_em, 2)
+        row = r_em + 1
+        row = self._irr_block(sheet, row, r_ecf, c0, cH, "levered", "Levered IRR", hold=a["hold"])
+        row += 1
+
+        # Owner return metrics by year.
+        self._section(sheet, row, "Owner return metrics by year", last_col)
+        row += 1
+        r_coc, r_cum_dist = row, row + 1
+        self._label(sheet, r_coc, "Levered cash-on-cash  (owner cash flow / equity)", indent=1)
+        self._label(sheet, r_cum_dist, "Cumulative operating distributions", indent=1)
+        self._units(sheet, r_coc, "%")
+        self._units(sheet, r_cum_dist, "$")
+        equity0 = _abs(r_equity, c0)
+        for offset, year in enumerate(self.years):
+            col = c0 + 1 + offset
+            self.excel[f"coc:{year}"] = self._formula(
+                sheet, r_coc, col, f'=IF({equity0}=0,"{UNAVAILABLE}",{_cell(r_locf, col)}/-{equity0})', "calc", NUM_PERCENT
+            )
+            cumulative = f"={_cell(r_locf, col)}" if offset == 0 else f"={_cell(r_cum_dist, col - 1)}+{_cell(r_locf, col)}"
+            self.excel[f"cum_dist:{year}"] = self._formula(sheet, r_cum_dist, col, cumulative, "calc", NUM_CURRENCY)
+        row = r_cum_dist + 2
+
+        # Unlevered project cash flow.
+        self._section(sheet, row, "Unlevered project cash flow (no debt)", last_col)
+        row += 1
+        r_uocf, r_ucf, r_yield = row, row + 1, row + 2
+        self._label(sheet, r_uocf, "Unlevered owner cash flow", indent=1)
+        self._label(sheet, r_ucf, "Unlevered project cash flow", bold=True)
+        self._label(sheet, r_yield, "Unlevered cash yield  (owner cash flow / cost basis)", indent=1)
+        self._units(sheet, r_uocf, "$")
+        self._units(sheet, r_ucf, "$")
+        self._units(sheet, r_yield, "%")
+        self.excel["ucf:0"] = self._formula(
+            sheet, r_ucf, c0, f"={_cell(r_price, c0)}+{_cell(r_acq, c0)}+{_cell(r_cpc, c0)}", "calc", NUM_CURRENCY, bold=True
+        )
+        basis = _abs(r_ucf, c0)
+        for offset, year in enumerate(self.years):
+            col = c0 + 1 + offset
+            self._formula(sheet, r_uocf, col, f"={_xref(OPERATING, op['uocf'], 2 + offset)}", "link", NUM_CURRENCY)
+            if year < hold:
+                formula = f"={_cell(r_uocf, col)}"
+            else:
+                formula = f"={_cell(r_uocf, col)}+{_cell(r_gross, col)}+{_cell(r_sell, col)}"
+            self.excel[f"ucf:{year}"] = self._formula(sheet, r_ucf, col, formula, "calc", NUM_CURRENCY, bold=True)
+            self.excel[f"unlevered_yield:{year}"] = self._formula(
+                sheet, r_yield, col, f'=IF({basis}=0,"{UNAVAILABLE}",{_cell(r_uocf, col)}/-{basis})', "calc", NUM_PERCENT
+            )
+        row = r_yield + 1
+        row = self._irr_block(sheet, row, r_ucf, c0, cH, "unlevered", "Unlevered IRR", hold=a["hold"])
+        self._base_layout(sheet, hold + 1)
+        ws.freeze_panes(0, 2)
+
+    def _irr_block(
+        self,
+        sheet: str,
+        row: int,
+        cf_row: int,
+        c0: int,
+        cH: int,
+        key: str,
+        title: str,
+        *,
+        hold: str,
+    ) -> int:
+        """The IRR, guarded by Anchor's sign rules, with every helper visible.
+
+        Rules (``docs/financial_conventions.md`` "IRR validity"): zero periods
+        are ignored for signs only; the nonzero sequence must start negative,
+        contain a positive, and change sign exactly once. Otherwise the IRR is
+        ``Unavailable`` and Excel's ``IRR`` is never evaluated."""
+
+        ws = self.sheets[sheet]
+        self._subsection(sheet, row, f"{title}: sign-rule audit", cH)
+        row += 1
+        r_sign, r_last, r_change, r_first = range(row, row + 4)
+        for r, label in (
+            (r_sign, "Sign of cash flow"),
+            (r_last, "Sign of latest nonzero cash flow"),
+            (r_change, "Sign change here"),
+            (r_first, "First nonzero cash flow here"),
+        ):
+            self._label(sheet, r, label, indent=1)
+            self._units(sheet, r, "flag")
+        for col in range(c0, cH + 1):
+            sign = _cell(r_sign, col)
+            self._formula(sheet, r_sign, col, f"=SIGN({_cell(cf_row, col)})", "calc", NUM_FLAG)
+            if col == c0:
+                self._formula(sheet, r_last, col, f"={sign}", "calc", NUM_FLAG)
+                self._formula(sheet, r_change, col, "=0", "calc", NUM_FLAG)
+                self._formula(sheet, r_first, col, f"=IF({sign}<>0,1,0)", "calc", NUM_FLAG)
+            else:
+                prior = _cell(r_last, col - 1)
+                self._formula(sheet, r_last, col, f"=IF({sign}<>0,{sign},{prior})", "calc", NUM_FLAG)
+                self._formula(sheet, r_change, col, f"=IF(AND({sign}<>0,{prior}<>0,{sign}<>{prior}),1,0)", "calc", NUM_FLAG)
+                self._formula(sheet, r_first, col, f"=IF(AND({sign}<>0,{prior}=0),1,0)", "calc", NUM_FLAG)
+        signs = f"{_abs(r_sign, c0)}:{_abs(r_sign, cH)}"
+        row = r_first + 1
+        r_nonzero, r_first_sign, r_positive, r_changes, r_status, r_multiple, r_guess, r_irr = range(row, row + 8)
+        scalars = (
+            (r_nonzero, "Nonzero periods", "count", f'=COUNTIF({signs},"<>0")', NUM_INTEGER),
+            (r_first_sign, "Sign of first nonzero cash flow", "flag", f"=SUMPRODUCT({_abs(r_first, c0)}:{_abs(r_first, cH)},{signs})", NUM_FLAG),
+            (r_positive, "Positive periods", "count", f'=COUNTIF({signs},">0")', NUM_INTEGER),
+            (r_changes, "Sign changes", "count", f"=SUM({_abs(r_change, c0)}:{_abs(r_change, cH)})", NUM_INTEGER),
+        )
+        for r, label, units, formula, number_format in scalars:
+            self._label(sheet, r, label, indent=1)
+            self._units(sheet, r, units)
+            self._formula(sheet, r, 2, formula, "calc", number_format)
+        self._label(sheet, r_status, f"{title} availability", indent=1)
+        self._units(sheet, r_status, "status")
+        n, first, positive, changes = (_abs(r, 2) for r in (r_nonzero, r_first_sign, r_positive, r_changes))
+        status = self._status_formula(
+            sheet, r_status, 2,
+            f'=IF({n}=0,"{IRR_STATUS_TEXT[IrrStatus.NO_NONZERO_CASH_FLOW]}",'
+            f'IF({first}>=0,"{IRR_STATUS_TEXT[IrrStatus.FIRST_NONZERO_NOT_NEGATIVE]}",'
+            f'IF({positive}=0,"{IRR_STATUS_TEXT[IrrStatus.NO_POSITIVE_CASH_FLOW]}",'
+            f'IF({changes}<>1,"{IRR_STATUS_TEXT[IrrStatus.MULTIPLE_SIGN_CHANGES]}",'
+            f'"{IRR_STATUS_TEXT[IrrStatus.DEFINED]}"))))',
+        )
+        cf_range = f"{_abs(cf_row, c0)}:{_abs(cf_row, cH)}"
+        self._label(sheet, r_multiple, "Cash multiple of this series  (inflows / outflows)", indent=1)
+        self._units(sheet, r_multiple, "x")
+        self._formula(
+            sheet, r_multiple, 2,
+            f'=IF(SUMIF({cf_range},"<0")=0,"{UNAVAILABLE}",SUMIF({cf_range},">0")/-SUMIF({cf_range},"<0"))',
+            "calc", NUM_MULTIPLE,
+        )
+        # Excel's IRR iterates from a starting estimate. Seeding it with the rate
+        # that would turn this series' own multiple into its value over the hold
+        # keeps it on the right branch near -100% and at very high returns.
+        self._label(sheet, r_guess, "Starting estimate for Excel IRR  (multiple ^ (1 / H) - 1)", indent=1)
+        self._units(sheet, r_guess, "%")
+        multiple = _abs(r_multiple, 2)
+        self._formula(
+            sheet, r_guess, 2,
+            f"=IF(AND(ISNUMBER({multiple}),N({multiple})>0),{multiple}^(1/{hold})-1,0.1)",
+            "calc", NUM_PERCENT,
+        )
+        self._label(sheet, r_irr, title, bold=True)
+        self._units(sheet, r_irr, "% per year")
+        irr = f"IRR({cf_range},{_abs(r_guess, 2)})"
+        status_ref = _abs(r_status, 2)
+        ref = self._formula(
+            sheet, r_irr, 2,
+            f'=IF({status_ref}<>"{IRR_STATUS_TEXT[IrrStatus.DEFINED]}","{UNAVAILABLE}",'
+            f'IF(ISERROR({irr}),IF(ERROR.TYPE({irr})=6,"Did not converge",{irr}),{irr}))',
+            "calc", NUM_PERCENT, bold=True,
+        )
+        ws.write_string(
+            r_irr + 1, 0,
+            "Excel's IRR solves the same annual equation by iteration; a series that passes the "
+            "sign rules but does not converge shows 'Did not converge', never a number.",
+            self.fmt.note(),
+        )
+        self.excel[f"{key}_irr"] = ref
+        self.excel[f"{key}_irr_status"] = status
+        return r_irr + 2
+
+    # ----------------------------------------------------------- Anchor Results
+
+    def _build_anchor_results(self) -> None:
+        sheet = ANCHOR
+        ws = self.sheets[sheet]
+        results = self.results
+        hold = self.hold
+        c0 = 2
+        last_col = c0 + hold
+        self._title(
+            sheet,
+            "Anchor Results (frozen at export)",
+            "Values produced by Anchor's deterministic engine and saved with this Deal's current "
+            "analysis. They are constants, not Excel formulas, and never change with Working Inputs.",
+        )
+        row = 3
+        self._section(sheet, row, "Headline and summary results", last_col)
+        row += 1
+        ws.write_string(row, 0, "Result", self.fmt.header(align="left"))
+        ws.write_string(row, 1, "Units", self.fmt.header(align="left"))
+        ws.write_string(row, 2, "Anchor", self.fmt.header())
+        row += 1
+        scalars: tuple[tuple[str, str, str, float | str | None, str], ...] = (
+            ("hold_period", "Hold period", "years", float(len(results.noi_by_year)), NUM_INTEGER),
+            ("ecf_periods", "Equity cash-flow periods", "count", float(len(results.levered_cash_flows)), NUM_INTEGER),
+            ("going_in_cap_rate", "Going-in cap rate", "%", results.going_in_cap_rate, NUM_PERCENT),
+            ("loan_amount", "Loan amount", "$", results.loan_amount, NUM_CURRENCY),
+            ("acquisition_costs", "Acquisition costs", "$", results.acquisition_costs, NUM_CURRENCY),
+            ("financing_fee", "Financing fee", "$", results.financing_fee, NUM_CURRENCY),
+            ("closing_project_capital", "Closing project capital", "$", results.closing_project_capital, NUM_CURRENCY),
+            ("initial_equity", "Initial equity requirement", "$", results.initial_equity, NUM_CURRENCY),
+            ("total_closing_uses", "Total closing uses", "$", results.total_closing_uses, NUM_CURRENCY),
+            ("total_closing_sources", "Total closing sources", "$", results.total_closing_sources, NUM_CURRENCY),
+            ("monthly_debt_service", "Amortizing monthly payment (post-IO)", "$ per month", results.monthly_debt_service, NUM_CURRENCY_CENTS),
+            ("remaining_loan_balance", "Loan balance at sale (debt payoff)", "$", results.remaining_loan_balance, NUM_CURRENCY),
+            ("exit_noi", "Exit NOI (Year H+1)", "$", results.exit_noi, NUM_CURRENCY),
+            ("exit_value", "Exit value (gross sale price)", "$", results.exit_value, NUM_CURRENCY),
+            ("disposition_costs", "Disposition costs", "$", results.disposition_costs, NUM_CURRENCY),
+            ("net_sale_proceeds", "Net sale proceeds", "$", results.net_sale_proceeds, NUM_CURRENCY),
+            ("headline_dscr", "Headline DSCR (Year 1)", "x", results.headline_dscr, NUM_MULTIPLE),
+            ("min_dscr", "Minimum DSCR", "x", results.min_dscr, NUM_MULTIPLE),
+            ("year_1_debt_yield", "Year 1 debt yield", "%", results.year_1_debt_yield, NUM_PERCENT),
+            ("total_equity_invested", "Total equity invested", "$", results.total_equity_invested, NUM_CURRENCY),
+            ("total_cash_returned", "Total cash returned", "$", results.total_cash_returned, NUM_CURRENCY),
+            ("total_profit", "Total profit", "$", results.total_profit, NUM_CURRENCY),
+            ("equity_multiple", "Equity multiple", "x", results.equity_multiple, NUM_MULTIPLE),
+            ("levered_irr", "Levered IRR", "% per year", results.levered_irr, NUM_PERCENT),
+            ("levered_irr_status", "Levered IRR availability", "status", IRR_STATUS_TEXT[results.levered_irr_status], "@"),
+            ("unlevered_irr", "Unlevered IRR", "% per year", results.unlevered_irr, NUM_PERCENT),
+            ("unlevered_irr_status", "Unlevered IRR availability", "status", IRR_STATUS_TEXT[results.unlevered_irr_status], "@"),
+            ("post_hold_project_capital", "Post-hold project capital (disclosure)", "$", results.post_hold_project_capital, NUM_CURRENCY),
+        )
+        for key, label, units, value, number_format in scalars:
+            self._label(sheet, row, label, indent=1)
+            self._units(sheet, row, units)
+            self.anchor[key] = self._frozen(sheet, row, 2, value, number_format)
+            row += 1
+        row += 1
+
+        self._section(sheet, row, "Annual results", last_col)
+        row += 1
+        self._period_header(sheet, row, c0, [f"Year {year}" for year in range(0, hold + 1)], left="Result")
+        row += 1
+        annual: tuple[tuple[str, str, str, Sequence[float | None], str], ...] = (
+            ("noi", "Net operating income", "$", results.noi_by_year, NUM_CURRENCY),
+            ("capex", "CapEx reserve (outflow)", "$", results.capex_by_year, NUM_CURRENCY),
+            ("project_capital", "Business Plan project capital (outflow)", "$", results.project_capital_by_year, NUM_CURRENCY),
+            ("owner_expenses", "Business Plan owner expenses (outflow)", "$", results.owner_expenses_by_year, NUM_CURRENCY),
+            ("property_cf", "Property cash flow after CapEx", "$", results.property_cash_flow_by_year, NUM_CURRENCY),
+            ("uocf", "Unlevered owner cash flow", "$", results.unlevered_owner_cash_flow_by_year, NUM_CURRENCY),
+            ("debt_service", "Scheduled debt service", "$", results.annual_debt_service, NUM_CURRENCY),
+            ("ending_balance", "Ending loan balance (see note)", "$", self.ending_balance_by_year, NUM_CURRENCY),
+            ("dscr", "Debt service coverage", "x", results.dscr_by_year, NUM_MULTIPLE),
+            ("locf", "Levered owner cash flow", "$", results.levered_owner_cash_flow_by_year, NUM_CURRENCY),
+            ("coc", "Levered cash-on-cash", "%", results.levered_cash_on_cash_by_year, NUM_PERCENT),
+            ("cum_dist", "Cumulative operating distributions", "$", results.cumulative_operating_distributions_by_year, NUM_CURRENCY),
+            ("unlevered_yield", "Unlevered cash yield", "%", results.unlevered_cash_yield_by_year, NUM_PERCENT),
+        )
+        for key, label, units, values, number_format in annual:
+            self._label(sheet, row, label, indent=1)
+            self._units(sheet, row, units)
+            for offset, value in enumerate(values):
+                self.anchor[f"{key}:{offset + 1}"] = self._frozen(sheet, row, c0 + 1 + offset, value, number_format)
+            row += 1
+        for key, label, values in (
+            ("ecf", "Equity cash flow", results.levered_cash_flows),
+            ("ucf", "Unlevered project cash flow", results.unlevered_cash_flows),
+        ):
+            self._label(sheet, row, label, bold=True)
+            self._units(sheet, row, "$")
+            for t, value in enumerate(values):
+                self.anchor[f"{key}:{t}"] = self._frozen(sheet, row, c0 + t, value, NUM_CURRENCY)
+            row += 1
+        ws.write_string(
+            row, 0,
+            "The saved analysis records the loan balance only at the sale. Annual ending balances "
+            "come from Anchor's debt engine at export, from the saved inputs and saved payment; the "
+            "final year equals the saved balance exactly.",
+            self.fmt.note(),
+        )
+        row += 2
+
+        # The frozen record of the exported inputs, laid out exactly like the
+        # Inputs block so Checks can compare the two ranges cell for cell.
+        self._section(sheet, row, "Exported inputs (frozen record)", last_col)
+        row += 1
+        self.record_first_row = row
+        for entry in self.input_layout:
+            if isinstance(entry, str):
+                self._label(sheet, row, entry, bold=True)
+            else:
+                self._label(sheet, row, entry.label, indent=1)
+                self._units(sheet, row, entry.units)
+                self._frozen(sheet, row, 2, entry.value, entry.number_format)
+            row += 1
+        self.record_last_row = row - 1
+        self.record_bp_rows: dict[str, int] = {}
+        for key, label, values in (
+            ("project_capital", "Business Plan project capital (resolved)", self.results.project_capital_by_year),
+            ("owner_expenses", "Business Plan owner expenses (resolved)", self.results.owner_expenses_by_year),
+        ):
+            self._label(sheet, row, label, indent=1)
+            self._units(sheet, row, "$")
+            for offset, value in enumerate(values):
+                self._frozen(sheet, row, c0 + 1 + offset, value, NUM_CURRENCY)
+            self.record_bp_rows[key] = row
+            row += 1
+        self._base_layout(sheet, hold + 1)
+        ws.freeze_panes(0, 2)
+
+    # ----------------------------------------------------------------- Checks
+
+    def _check_groups(self) -> list[tuple[str, list[_Check]]]:
+        x, a = self.excel, self.anchor
+        years = self.years
+
+        def loc(ref: str) -> str:
+            return ref.replace("$", "")
+
+        def neg(ref: str) -> str:
+            return f"-{ref}"
+
+        def check(metric: str, anchor_key: str, excel_ref: str, kind: str, number_format: str, *, negate: bool = False, key: str | None = None) -> _Check:
+            return _Check(
+                metric=metric,
+                anchor=a[anchor_key],
+                excel=neg(excel_ref) if negate else excel_ref,
+                location=loc(excel_ref),
+                kind=kind,
+                number_format=number_format,
+                key=key,
+            )
+
+        def yearly(label: str, anchor_prefix: str, excel_prefix: str, kind: str, number_format: str, *, negate: bool = False) -> list[_Check]:
+            return [
+                check(f"{label}, Year {year}", f"{anchor_prefix}:{year}", x[f"{excel_prefix}:{year}"], kind, number_format, negate=negate)
+                for year in years
+            ]
+
+        groups: list[tuple[str, list[_Check]]] = [
+            (
+                "Periods and identity",
+                [
+                    check("Hold period (years)", "hold_period", x["input:hold_period"], "exact", NUM_INTEGER),
+                    _Check("Equity cash-flow periods", a["ecf_periods"], x["ecf_range_count"], f"'{EQUITY}' total equity cash flow row", "exact", NUM_INTEGER),
+                ],
+            ),
+            (
+                "Operations",
+                [
+                    *yearly("Net operating income", "noi", "noi", "currency", NUM_CURRENCY_CENTS),
+                    check("Exit NOI (Year H+1)", "exit_noi", x["exit_noi"], "currency", NUM_CURRENCY_CENTS),
+                    *yearly("CapEx reserve", "capex", "capex", "currency", NUM_CURRENCY_CENTS, negate=True),
+                    *yearly("Business Plan project capital", "project_capital", "project_capital", "currency", NUM_CURRENCY_CENTS, negate=True),
+                    *yearly("Business Plan owner expenses", "owner_expenses", "owner_expenses", "currency", NUM_CURRENCY_CENTS, negate=True),
+                    *yearly("Property cash flow after CapEx", "property_cf", "property_cf", "currency", NUM_CURRENCY_CENTS),
+                    *yearly("Unlevered owner cash flow", "uocf", "uocf", "currency", NUM_CURRENCY_CENTS),
+                    check("Going-in cap rate", "going_in_cap_rate", x["going_in_cap_rate"], "ratio", NUM_PERCENT_FINE, key="going_in_cap_rate"),
+                ],
+            ),
+            (
+                "Acquisition and debt",
+                [
+                    check("Loan amount", "loan_amount", x["loan_amount"], "currency", NUM_CURRENCY_CENTS, key="loan_amount"),
+                    check("Acquisition costs", "acquisition_costs", x["acquisition_costs_neg"], "currency", NUM_CURRENCY_CENTS, negate=True),
+                    check("Financing fee", "financing_fee", x["financing_fee"], "currency", NUM_CURRENCY_CENTS),
+                    check("Closing project capital", "closing_project_capital", x["closing_pc_neg"], "currency", NUM_CURRENCY_CENTS, negate=True),
+                    check("Initial equity requirement", "initial_equity", x["acquisition_equity"], "currency", NUM_CURRENCY_CENTS, negate=True, key="initial_equity"),
+                    check("Total closing uses", "total_closing_uses", x["total_closing_uses"], "currency", NUM_CURRENCY_CENTS),
+                    check("Total closing sources", "total_closing_sources", x["total_closing_sources"], "currency", NUM_CURRENCY_CENTS),
+                    check("Amortizing monthly payment", "monthly_debt_service", x["monthly_debt_service"], "currency", NUM_CURRENCY_CENTS),
+                    *yearly("Scheduled debt service", "debt_service", "debt_service", "currency", NUM_CURRENCY_CENTS),
+                    *yearly("Ending loan balance", "ending_balance", "ending_balance", "currency", NUM_CURRENCY_CENTS),
+                    *yearly("Debt service coverage", "dscr", "dscr", "ratio", NUM_MULTIPLE_FINE),
+                    check("Headline DSCR (Year 1)", "headline_dscr", x["headline_dscr"], "ratio", NUM_MULTIPLE_FINE, key="headline_dscr"),
+                    check("Minimum DSCR", "min_dscr", x["min_dscr"], "ratio", NUM_MULTIPLE_FINE),
+                    check("Year 1 debt yield", "year_1_debt_yield", x["year_1_debt_yield"], "ratio", NUM_PERCENT_FINE),
+                ],
+            ),
+            (
+                "Sale",
+                [
+                    check("Exit value (gross sale price)", "exit_value", x["exit_value"], "currency", NUM_CURRENCY_CENTS, key="exit_value"),
+                    check("Disposition costs", "disposition_costs", x["disposition_costs_neg"], "currency", NUM_CURRENCY_CENTS, negate=True),
+                    check("Debt payoff at sale", "remaining_loan_balance", x["remaining_loan_balance"], "currency", NUM_CURRENCY_CENTS),
+                    check("Net sale proceeds", "net_sale_proceeds", x["net_sale_proceeds"], "currency", NUM_CURRENCY_CENTS, key="net_sale_proceeds"),
+                ],
+            ),
+            (
+                "Equity cash flow",
+                [
+                    *yearly("Levered owner cash flow", "locf", "locf", "currency", NUM_CURRENCY_CENTS),
+                    *[
+                        check(f"Equity cash flow, Year {t}", f"ecf:{t}", x[f"ecf:{t}"], "currency", NUM_CURRENCY_CENTS)
+                        for t in range(0, self.hold + 1)
+                    ],
+                    *[
+                        check(f"Unlevered project cash flow, Year {t}", f"ucf:{t}", x[f"ucf:{t}"], "currency", NUM_CURRENCY_CENTS)
+                        for t in range(0, self.hold + 1)
+                    ],
+                ],
+            ),
+            (
+                "Returns",
+                [
+                    check("Total equity invested", "total_equity_invested", x["total_equity_invested"], "currency", NUM_CURRENCY_CENTS, key="total_equity_invested"),
+                    check("Total cash returned", "total_cash_returned", x["total_cash_returned"], "currency", NUM_CURRENCY_CENTS, key="total_cash_returned"),
+                    check("Total profit", "total_profit", x["total_profit"], "currency", NUM_CURRENCY_CENTS, key="total_profit"),
+                    check("Equity multiple", "equity_multiple", x["equity_multiple"], "ratio", NUM_MULTIPLE_FINE, key="equity_multiple"),
+                    check("Levered IRR availability", "levered_irr_status", x["levered_irr_status"], "exact", "@"),
+                    check("Levered IRR", "levered_irr", x["levered_irr"], "irr", NUM_PERCENT_FINE, key="levered_irr"),
+                    check("Unlevered IRR availability", "unlevered_irr_status", x["unlevered_irr_status"], "exact", "@"),
+                    check("Unlevered IRR", "unlevered_irr", x["unlevered_irr"], "irr", NUM_PERCENT_FINE, key="unlevered_irr"),
+                    *yearly("Levered cash-on-cash", "coc", "coc", "ratio", NUM_PERCENT_FINE),
+                    *yearly("Cumulative operating distributions", "cum_dist", "cum_dist", "currency", NUM_CURRENCY_CENTS),
+                    *yearly("Unlevered cash yield", "unlevered_yield", "unlevered_yield", "ratio", NUM_PERCENT_FINE),
+                ],
+            ),
+            (
+                "Business Plan",
+                [
+                    check("Post-hold project capital (disclosure)", "post_hold_project_capital", x["original:post_hold_project_capital"], "currency", NUM_CURRENCY_CENTS),
+                ],
+            ),
+        ]
+        if "items:closing" in x:
+            groups[-1][1].extend(
+                [
+                    check("Closing capital resolved from items", "closing_project_capital", x["items:closing"], "currency", NUM_CURRENCY_CENTS),
+                    *yearly("Project capital resolved from items", "project_capital", "items:project_capital", "currency", NUM_CURRENCY_CENTS),
+                    *yearly("Owner expenses resolved from items", "owner_expenses", "items:owner_expenses", "currency", NUM_CURRENCY_CENTS),
+                ]
+            )
+        return groups
+
+    def _build_checks(self) -> None:
+        sheet = CHECKS
+        ws = self.sheets[sheet]
+        self._title(
+            sheet,
+            "Checks",
+            "Each row compares a frozen Anchor result with the Excel model. A missing, "
+            "uncalculated or erroring Excel value never passes.",
+        )
+        last_col = 7
+        row = 3
+        self._section(sheet, row, "Workbook status", last_col)
+        row += 1
+        status_rows = {name: row + offset for offset, name in enumerate(
+            ("recalculated", "differing", "modified", "original", "available", "total", "passed", "open", "first", "first_location", "explanation")
+        )}
+
+        def status_line(name: str, label: str) -> None:
+            self._label(sheet, status_rows[name], label)
+
+        status_line("recalculated", "Excel formulas recalculated")
+        status_line("differing", "Working inputs that differ from the export")
+        status_line("modified", "Workbook modified since export")
+        status_line("original", "Original inputs unchanged")
+        status_line("available", "Anchor reconciliation available")
+        status_line("total", "Reconciliation checks")
+        status_line("passed", "Passed")
+        status_line("open", "Not passed")
+        status_line("first", "First check not passed")
+        status_line("first_location", "Its location")
+        status_line("explanation", "What the comparison means")
+
+        # Recalculation canary: a formula whose only cached value says it has
+        # not been calculated.
+        recalculated = self._status_formula(sheet, status_rows["recalculated"], 1, '="Yes"')
+        self.book.define_name("Formulas_Recalculated", f"={recalculated}")
+
+        first_input, last_input = self.inputs_first_row, self.inputs_last_row
+        originals = _range(INPUTS, first_input, 1, last_input, 1)
+        workings = _range(INPUTS, first_input, 2, last_input, 2)
+        bp_terms = []
+        record_terms = []
+        for key in ("project_capital", "owner_expenses"):
+            original_row, working_row = self.bp_rows[key]
+            bp_o = _range(INPUTS, original_row, self.bp_first_col, original_row, self.bp_last_col)
+            bp_w = _range(INPUTS, working_row, self.bp_first_col, working_row, self.bp_last_col)
+            bp_terms.append(f"SUMPRODUCT(--({bp_w}<>{bp_o}))")
+            record_row = self.record_bp_rows[key]
+            record = _range(ANCHOR, record_row, 3, record_row, 3 + self.hold - 1)
+            record_terms.append(f"SUMPRODUCT(--({bp_o}<>{record}))")
+        differing = self._formula(
+            sheet, status_rows["differing"], 1,
+            f"=SUMPRODUCT(--({workings}<>{originals}))+" + "+".join(bp_terms),
+            "link", NUM_INTEGER,
+        )
+        modified = self._status_formula(sheet, status_rows["modified"], 1, f'=IF({differing}>0,"Yes","No")')
+        self.book.define_name("Workbook_Modified", f"={modified}")
+        record_range = _range(ANCHOR, self.record_first_row, 2, self.record_last_row, 2)
+        original_ok = self._status_formula(
+            sheet, status_rows["original"], 1,
+            f'=IF(SUMPRODUCT(--({originals}<>{record_range}))+' + "+".join(record_terms) + '=0,"Yes","No")',
+            "link",
+        )
+        available = self._status_formula(
+            sheet, status_rows["available"], 1,
+            f'=IF({recalculated}<>"Yes","No: formulas not recalculated",'
+            f'IF({modified}="Yes","No: Working Inputs modified",'
+            f'IF({original_ok}<>"Yes","No: Original Export values altered","Yes")))',
+        )
+        self.book.define_name(
+            "Model_State",
+            f"={_xref(CHECKS, status_rows['explanation'], 1)}",
+        )
+
+        # Reconciliation table.
+        row = status_rows["explanation"] + 2
+        self._section(sheet, row, "Reconciliation", last_col)
+        row += 1
+        headers = ("Metric", "Anchor Result", "Excel Result", "Difference", "Tolerance", "Status", "Excel location", "Open")
+        for col, text in enumerate(headers):
+            ws.write_string(row, col, text, self.fmt.header(align="left" if col in (0, 5, 6) else "right"))
+        header_row = row
+        row += 1
+        first_check_row = row
+        groups = self._check_groups()
+        for group, checks in groups:
+            self._subsection(sheet, row, group, last_col)
+            row += 1
+            for check_row in checks:
+                self._write_check(row, check_row, modified)
+                row += 1
+        last_check_row = row - 1
+        ws.write_string(
+            row + 1, 0,
+            "Quick Underwrite has no revenue, vacancy or operating-expense lines: NOI is its input "
+            "and is reconciled directly, year by year.",
+            self.fmt.note(),
+        )
+
+        statuses = _range(None, first_check_row, 5, last_check_row, 5)
+        flags = _range(None, first_check_row, 7, last_check_row, 7)
+        metrics = _range(None, first_check_row, 0, last_check_row, 0)
+        total = self._formula(sheet, status_rows["total"], 1, f"=COUNTIF({flags},\">=0\")", "calc", NUM_INTEGER)
+        self._formula(sheet, status_rows["passed"], 1, f"={total}-SUM({flags})", "calc", NUM_INTEGER)
+        open_count = self._formula(sheet, status_rows["open"], 1, f"=SUM({flags})", "calc", NUM_INTEGER)
+        self._status_formula(
+            sheet, status_rows["first"], 1,
+            f'=IF({open_count}=0,"None",INDEX({metrics},MATCH(1,{flags},0)))',
+        )
+        self._status_formula(
+            sheet, status_rows["first_location"], 1,
+            f'=IF({open_count}=0,"None","Checks!F"&ROW(INDEX({statuses},MATCH(1,{flags},0))))',
+        )
+        self._status_formula(
+            sheet, status_rows["explanation"], 1,
+            f'=IF({modified}="Yes","MODIFIED MODEL: Working Inputs differ from the exported inputs, so Excel '
+            f'results describe a modified case and are not a like-for-like reconciliation with Anchor. '
+            f'The frozen Anchor Results are unchanged.","Working Inputs equal the exported inputs: every row '
+            f'below is a like-for-like reconciliation with Anchor.")',
+        )
+        self.check_summary = {
+            "recalculated": recalculated,
+            "modified": modified,
+            "original": original_ok,
+            "available": available,
+            "total": total,
+            "passed": _xref(CHECKS, status_rows["passed"], 1),
+            "open": open_count,
+            "first": _xref(CHECKS, status_rows["first"], 1),
+            "first_location": _xref(CHECKS, status_rows["first_location"], 1),
+            "explanation": _xref(CHECKS, status_rows["explanation"], 1),
+        }
+
+        fail_format = self.fmt.get(bold=True, font_color="#C00000")
+        amber_format = self.fmt.get(font_color="#9C5700")
+        pass_format = self.fmt.get(font_color="#006100")
+        for text, cell_format, criteria in (
+            (FAIL, fail_format, "begins with"),
+            (EXCEL_ERROR, fail_format, "begins with"),
+            (NOT_LIKE_FOR_LIKE, amber_format, "begins with"),
+            (NOT_RECALCULATED, amber_format, "begins with"),
+            (PASS, pass_format, "begins with"),
+        ):
+            ws.conditional_format(
+                first_check_row, 5, last_check_row, 5,
+                {"type": "text", "criteria": criteria, "value": text, "format": cell_format},
+            )
+
+        ws.hide_gridlines(2)
+        ws.set_column(0, 0, LABEL_WIDTH)
+        ws.set_column(1, 2, 18)
+        ws.set_column(3, 4, 12)
+        ws.set_column(5, 5, 24)
+        ws.set_column(6, 6, 34)
+        ws.set_column(7, 7, 7)
+        ws.freeze_panes(header_row + 1, 1)
+        ws.set_landscape()
+        ws.fit_to_pages(1, 0)
+        ws.protect("", _PROTECTION)
+
+    def _write_check(self, row: int, check: _Check, modified: str) -> None:
+        sheet = CHECKS
+        ws = self.sheets[sheet]
+        ws.write_string(row, 0, check.metric, self.fmt.label(indent=1))
+        b, c, d, e, f = (_cell(row, col) for col in range(1, 6))
+        _write_formula(ws, row, 1, f"={check.anchor}", self.fmt.value("link", check.number_format), "")
+        source = check.excel
+        if check.excel.startswith("COUNT("):
+            excel_formula = f"={source}"
+        else:
+            bare = source.lstrip("-")
+            excel_formula = f'=IF(ISBLANK({bare}),"Missing",{source})'
+        _write_formula(ws, row, 2, excel_formula, self.fmt.value("link", check.number_format), "")
+        _write_formula(ws, 
+            row, 3, f'=IF(AND(ISNUMBER({b}),ISNUMBER({c})),{c}-{b},"n/a")',
+            self.fmt.value("calc", NUM_SCIENTIFIC), "",
+        )
+        tolerance_format = self.fmt.value("calc", NUM_SCIENTIFIC)
+        if check.kind == "exact":
+            ws.write_string(row, 4, "Exact", self.fmt.get(align="right"))
+            if check.number_format == "@":
+                comparison = f'IF(EXACT({b},{c}),"{PASS}","{FAIL}")'
+            else:
+                comparison = f'IF(AND(ISNUMBER({b}),ISNUMBER({c})),IF({b}={c},"{PASS}","{FAIL}"),"{FAIL}")'
+        else:
+            if check.kind == "currency":
+                _write_formula(ws, 
+                    row, 4,
+                    f"=MAX({CURRENCY_ABSOLUTE_TOLERANCE},{CURRENCY_RELATIVE_TOLERANCE}*ABS(N({b})))",
+                    tolerance_format, "",
+                )
+            else:
+                ws.write_number(row, 4, RATIO_TOLERANCE if check.kind == "ratio" else IRR_TOLERANCE, tolerance_format)
+            comparison = (
+                f'IF(AND(ISNUMBER({b}),ISNUMBER({c})),IF(ABS({c}-{b})<={e},"{PASS}","{FAIL}"),'
+                f'IF(AND({b}="{UNAVAILABLE}",{c}="{UNAVAILABLE}"),"{PASS_BOTH_UNAVAILABLE}","{FAIL}"))'
+            )
+        _write_formula(ws, 
+            row, 5,
+            f'=IF(ISERROR({c}),"{EXCEL_ERROR}",IF({modified}="Yes","{NOT_LIKE_FOR_LIKE}",{comparison}))',
+            self.fmt.status(), NOT_RECALCULATED,
+        )
+        self.status_by_metric[check.metric] = _xref(CHECKS, row, 5)
+        ws.write_string(row, 6, check.location, self.fmt.units())
+        _write_formula(ws, row, 7, f'=IF(LEFT({f},4)="{PASS}",0,1)', self.fmt.value("calc", "0"), "")
+        if check.key is not None:
+            self.status[check.key] = _xref(CHECKS, row, 5)
+            self.excel[f"check_excel:{check.key}"] = _xref(CHECKS, row, 2)
+
+    # ---------------------------------------------------------------- Summary
+
+    def _build_summary(self) -> None:
+        sheet = SUMMARY
+        ws = self.sheets[sheet]
+        source = self.source
+        ws.write_string(0, 0, "Quick Underwrite Audit", self.fmt.title())
+        ws.set_row(0, 22)
+        ws.write_string(1, 0, source.deal_name, self.fmt.get(bold=True, font_size=12))
+        ws.write_string(
+            2, 0,
+            "Formula-level audit of a saved Anchor Quick Underwrite analysis. The Excel model "
+            "recalculates from the Inputs sheet; Anchor's results are frozen for comparison.",
+            self.fmt.note(),
+        )
+        row = 4
+        self._section(sheet, row, "Deal", 3)
+        row += 1
+        not_specified = "Not specified"
+        facts = (
+            ("Deal", source.deal_name),
+            ("Asset Type", source.asset_type_label or not_specified),
+            ("Asset subtype", source.asset_subtype or not_specified),
+            ("Operating mode", "Quick Underwrite"),
+            ("Status at export", "Saved Deal; saved analysis current for the saved inputs"),
+        )
+        for label, value in facts:
+            self._label(sheet, row, label)
+            ws.write_string(row, 1, value, self.fmt.text())
+            row += 1
+        self._label(sheet, row, "Generated (UTC)")
+        ws.write_datetime(
+            row, 1,
+            source.generated_at.astimezone(timezone.utc).replace(tzinfo=None),
+            self.fmt.get(num_format=NUM_DATETIME, align="left"),
+        )
+        row += 1
+        self._label(sheet, row, "Model state")
+        _write_formula(ws, row, 1, f"={self.check_summary['modified']}", self.fmt.status("link"), NOT_RECALCULATED)
+        ws.write_string(row, 2, "(Yes = Working Inputs modified since export)", self.fmt.units())
+        row += 2
+
+        self._section(sheet, row, "Key metrics", 3)
+        row += 1
+        for col, text in enumerate(("Metric", "Excel model", "Anchor (exported)", "Check")):
+            ws.write_string(row, col, text, self.fmt.header(align="left" if col in (0, 3) else "right"))
+        row += 1
+        metrics = (
+            ("Purchase price", self.excel["input:purchase_price"], self.excel["original:purchase_price"], None, NUM_CURRENCY),
+            ("Year 1 NOI", self.excel["noi:1"], self.anchor["noi:1"], None, NUM_CURRENCY),
+            ("Going-in cap rate", self.excel["going_in_cap_rate"], self.anchor["going_in_cap_rate"], "going_in_cap_rate", NUM_PERCENT),
+            ("Loan amount", self.excel["loan_amount"], self.anchor["loan_amount"], "loan_amount", NUM_CURRENCY),
+            ("Required equity (initial equity)", self.excel["check_excel:initial_equity"], self.anchor["initial_equity"], "initial_equity", NUM_CURRENCY),
+            ("Headline DSCR (Year 1)", self.excel["headline_dscr"], self.anchor["headline_dscr"], "headline_dscr", NUM_MULTIPLE),
+            ("Gross sale price", self.excel["exit_value"], self.anchor["exit_value"], "exit_value", NUM_CURRENCY),
+            ("Net sale proceeds", self.excel["net_sale_proceeds"], self.anchor["net_sale_proceeds"], "net_sale_proceeds", NUM_CURRENCY),
+            ("Total equity invested", self.excel["total_equity_invested"], self.anchor["total_equity_invested"], "total_equity_invested", NUM_CURRENCY),
+            ("Total cash returned", self.excel["total_cash_returned"], self.anchor["total_cash_returned"], "total_cash_returned", NUM_CURRENCY),
+            ("Total profit", self.excel["total_profit"], self.anchor["total_profit"], "total_profit", NUM_CURRENCY),
+            ("Equity multiple", self.excel["equity_multiple"], self.anchor["equity_multiple"], "equity_multiple", NUM_MULTIPLE),
+            ("Levered IRR", self.excel["levered_irr"], self.anchor["levered_irr"], "levered_irr", NUM_PERCENT),
+            ("Unlevered IRR", self.excel["unlevered_irr"], self.anchor["unlevered_irr"], "unlevered_irr", NUM_PERCENT),
+        )
+        for label, excel_ref, anchor_ref, status_key, number_format in metrics:
+            self._label(sheet, row, label, indent=1)
+            self._formula(sheet, row, 1, f"={excel_ref}", "link", number_format)
+            self._formula(sheet, row, 2, f"={anchor_ref}", "link", number_format)
+            if status_key is not None:
+                _write_formula(ws, row, 3, f"={self.status[status_key]}", self.fmt.status("link"), NOT_RECALCULATED)
+            else:
+                input_status = f'IF({self.excel["input:purchase_price"]}={self.excel["original:purchase_price"]},"Input unchanged","Input modified")'
+                if label == "Year 1 NOI":
+                    _write_formula(ws, row, 3, "=" + self.status_by_metric["Net operating income, Year 1"], self.fmt.status("link"), NOT_RECALCULATED)
+                else:
+                    _write_formula(ws, row, 3, f"={input_status}", self.fmt.status("link"), NOT_RECALCULATED)
+            row += 1
+        row += 1
+
+        self._section(sheet, row, "Reconciliation", 3)
+        row += 1
+        summary = self.check_summary
+        for label, ref in (
+            ("Excel formulas recalculated", summary["recalculated"]),
+            ("Workbook modified since export", summary["modified"]),
+            ("Original inputs unchanged", summary["original"]),
+            ("Anchor reconciliation available", summary["available"]),
+            ("Reconciliation checks", summary["total"]),
+            ("Passed", summary["passed"]),
+            ("Not passed", summary["open"]),
+            ("First check not passed", summary["first"]),
+            ("Its location", summary["first_location"]),
+        ):
+            self._label(sheet, row, label, indent=1)
+            is_count = label in ("Reconciliation checks", "Passed", "Not passed")
+            if is_count:
+                self._formula(sheet, row, 1, f"={ref}", "link", NUM_INTEGER)
+            else:
+                _write_formula(ws, row, 1, f"={ref}", self.fmt.status("link"), NOT_RECALCULATED)
+            row += 1
+        ws.write_string(
+            row, 0,
+            "If these cells read 'Not recalculated', the file was opened without calculation. "
+            "Open it in Excel (or press Ctrl+Alt+F9) to recalculate every formula.",
+            self.fmt.note(),
+        )
+        row += 2
+
+        self._section(sheet, row, "Formatting legend", 3)
+        row += 1
+        legend = (
+            ("Editable working input", "input", 1000),
+            ("Calculation on the same sheet", "calc", 1000),
+            ("Value brought from another sheet", "link", 1000),
+            ("Frozen Anchor result", "frozen", 1000),
+        )
+        for label, role, sample in legend:
+            self._label(sheet, row, label, indent=1)
+            # The input sample is shown in input colours but stays locked:
+            # the Summary has nothing to edit.
+            sample_format = (
+                self.fmt.get(num_format=NUM_CURRENCY, align="right", font_color=INPUT_BLUE, bg_color=INPUT_FILL)
+                if role == "input"
+                else self.fmt.value(role, NUM_CURRENCY)
+            )
+            ws.write_number(row, 1, sample, sample_format)
+            row += 1
+        self._label(sheet, row, "Negative amounts, zero and unavailable", indent=1)
+        ws.write_number(row, 1, -1000, self.fmt.value("calc", NUM_CURRENCY))
+        ws.write_number(row, 2, 0, self.fmt.value("calc", NUM_CURRENCY))
+        ws.write_string(row, 3, UNAVAILABLE, self.fmt.get(align="left"))
+
+        ws.hide_gridlines(2)
+        ws.set_column(0, 0, 40)
+        ws.set_column(1, 2, 20)
+        ws.set_column(3, 3, 44)
+        ws.set_landscape()
+        ws.fit_to_pages(1, 0)
+        ws.protect("", _PROTECTION)
+
+    # --------------------------------------------------------- Audit Metadata
+
+    def _build_audit(self) -> None:
+        sheet = AUDIT
+        ws = self.sheets[sheet]
+        source = self.source
+        plan = source.business_plan
+        generated = source.generated_at.astimezone(timezone.utc)
+        self._title(sheet, "Audit Metadata", "What this workbook was built from, and under which conventions.")
+        row = 3
+        self._section(sheet, row, "Provenance", 1)
+        row += 1
+        entries: list[tuple[str, str]] = [
+            ("Deal name", source.deal_name),
+            ("Deal ID", source.deal_id),
+            ("Operating mode", "Quick Underwrite"),
+            ("Asset Type", source.asset_type_label or "Not specified"),
+            ("Asset subtype", source.asset_subtype or "Not specified"),
+        ]
+        for label, value in entries:
+            self._label(sheet, row, label)
+            ws.write_string(row, 1, value, self.fmt.text())
+            row += 1
+        self._label(sheet, row, "Generated (UTC)")
+        ws.write_datetime(row, 1, generated.replace(tzinfo=None), self.fmt.get(num_format=NUM_DATETIME, align="left"))
+        row += 1
+        more: list[tuple[str, str]] = [
+            ("Generated (ISO 8601, with time zone)", generated.isoformat()),
+            ("Anchor version", source.anchor_version),
+            ("Source commit (checkout HEAD; uncommitted changes are not detected)", source.source_commit or "Not available"),
+            ("Analysis fingerprint", source.analysis_fingerprint),
+            ("Workbook contract", EXPORT_CONTRACT_VERSION),
+            ("Source", "The saved Anchor Deal and its current saved analysis. The analysis fingerprint was verified against the saved inputs and Business Plan at export."),
+            ("Business Plan", f"{len(plan.capital_items)} capital item(s) and {len(plan.owner_expense_items)} owner-expense item(s), resolved by Anchor into the annual totals on Inputs."),
+        ]
+        for label, value in more:
+            self._label(sheet, row, label)
+            ws.write_string(row, 1, value, self.fmt.text(wrap=True))
+            row += 1
+        row += 1
+        self._section(sheet, row, "Conventions", 1)
+        row += 1
+        conventions = (
+            ("Currency", "Amounts are in the Deal's own currency units as entered; Anchor records no currency code."),
+            ("Periods", f"Annual. Year 0 is acquisition; Years 1 to {self.hold} are hold years; the sale is at the end of Year {self.hold} and included in it. Year {self.hold + 1} NOI is used only for the exit value."),
+            ("NOI", "Year 1 NOI equals Current NOI; growth applies from Year 2: NOI(y) = Current NOI x (1 + growth)^(y - 1)."),
+            ("Exit", f"Gross sale price = Year {self.hold + 1} NOI / exit cap rate. Selling costs = gross sale price x disposition cost %. Net sale proceeds = gross sale price - selling costs - loan payoff."),
+            ("Debt", "Fixed rate, monthly. Monthly rate = annual rate / 12. Interest-only months (IO years x 12) come first, then N = amortization x 12 amortizing payments. The balance is set to zero at contractual maturity; annual figures sum twelve months."),
+            ("Fees", "Acquisition costs = purchase price x acquisition cost %. Financing fee = loan amount x financing fee %. Both are funded by equity and never change the loan."),
+            ("Signs", "Equity cash flow: inflows positive, outflows negative. Total equity invested = sum of negative periods; total cash returned = sum of positive periods."),
+            ("IRR", "Annual periodic IRR over equal intervals, so Excel's IRR (not XIRR) is the matching function. Anchor solves by bracket-and-bisection; Excel iterates. Both are guarded by the same sign rules; an unavailable IRR is never shown as a number."),
+            ("Rounding", "No value is rounded; number formats affect display only."),
+            ("Stored precision", "Numbers are stored to 16 significant digits (beyond Excel's 15-digit display), so a frozen Anchor value can differ from Anchor's own double in the last binary place: about 1 part in 10^16, far inside every tolerance."),
+            ("Calculation mode", "Automatic, with a full recalculation requested when the file opens."),
+            ("Tolerances", f"Currency: the larger of {CURRENCY_ABSOLUTE_TOLERANCE:g} and {CURRENCY_RELATIVE_TOLERANCE:g} x |Anchor value|. Ratios and multiples: {RATIO_TOLERANCE:g}. IRR: {IRR_TOLERANCE:g} (Excel's documented IRR precision). Counts, hold period and availability: exact."),
+            ("Scope", "Only Quick Underwrite Deals are supported. Detailed Underwrite, Lease-Level, Investments, Capital Structure, Partnership Waterfalls and Asset Management are not exported."),
+        )
+        for label, value in conventions:
+            self._label(sheet, row, label)
+            ws.write_string(row, 1, value, self.fmt.text(wrap=True))
+            row += 1
+        ws.hide_gridlines(2)
+        ws.set_column(0, 0, 36)
+        ws.set_column(1, 1, 110)
+        ws.set_landscape()
+        ws.fit_to_pages(1, 0)
+        ws.protect("", _PROTECTION)
+
+
+def build_quick_audit_workbook(source: QuickAuditSource) -> bytes:
+    """The complete ``.xlsx`` for one saved, currently analysed Quick Deal.
+
+    Raises ``QuickAuditExportError`` (``ANALYSIS_INCONSISTENT``) when the saved
+    analysis does not reconcile with the saved inputs and Business Plan."""
+
+    return _QuickAuditWorkbook(source).build()
+
