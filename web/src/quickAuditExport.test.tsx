@@ -377,14 +377,39 @@ describe('exporting from the Quick workspace', () => {
     expect(clicked).toEqual([]);
   });
 
-  it('is not offered in the Detailed or Lease-Level workspaces', async () => {
+  it('never sends the Quick request from another workspace', async () => {
+    // Excel Export 2 gave Detailed its own workbook, so the action is now
+    // offered there too -- routed to the Detailed endpoint, which
+    // `detailedAuditExport.test.tsx` pins. What stays true here is that
+    // nothing but the Quick workspace can reach the Quick endpoint.
     const user = userEvent.setup({ delay: null });
     render(<App />);
     for (const mode of ['Detailed Underwrite', 'Lease-Level Underwrite']) {
       await user.click(screen.getByRole('tab', { name: mode }));
       await user.click(screen.getByRole('button', { name: 'More deal actions' }));
-      expect(within(screen.getByRole('menu')).queryByRole('menuitem', { name: EXPORT_ITEM })).toBeNull();
+      const item = within(screen.getByRole('menu')).queryByRole('menuitem', { name: EXPORT_ITEM });
+      if (item !== null) {
+        // Unsaved workspace: the action is present but blocked, and clicking
+        // it sends nothing.
+        expect((item as HTMLButtonElement).disabled).toBe(true);
+        fireEvent.click(item);
+      }
       await user.keyboard('{Escape}');
     }
+    expect(exports()).toEqual([]);
+  });
+
+  it('explains itself in the Lease-Level workspace rather than disappearing', async () => {
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: 'Lease-Level Underwrite' }));
+    await user.click(screen.getByRole('button', { name: 'More deal actions' }));
+    const item = within(screen.getByRole('menu')).getByRole('menuitem', {
+      name: EXPORT_ITEM,
+    }) as HTMLButtonElement;
+    expect(item.disabled).toBe(true);
+    expect(document.getElementById('workbook-export-note')?.textContent).toContain(
+      'Lease-Level Deals are not exported yet.',
+    );
   });
 });

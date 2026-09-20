@@ -1,11 +1,22 @@
 # Excel Export 1: Quick Underwrite Formula Audit
 
-Status: implemented on `feature/excel-export-1-quick-formula-audit`, **pending
-human acceptance -- not accepted.** Baseline: `main` at `51c5bf1` (Asset Types 1
+Status: implemented and **merged in PR #44**, with its presentation polish
+(header separation) merged in **PR #45 at `b9437e4`**; still **pending human
+acceptance -- not accepted.** Baseline: `main` at `51c5bf1` (Asset Types 1
 merged, schema v14). Risk tier: 1 (the workbook independently reproduces NOI,
 debt, exit value, equity cash flow, equity multiple and IRR), with Tier 2
 eligibility and stale-state behaviour. No financial calculation, fingerprint,
 stored analysis, schema or AI behaviour changes.
+
+**Later change.** Excel Export 2
+(`docs/architecture/EXCEL_EXPORT_2_DETAILED_FORMULA_AUDIT.md`) moved the
+presentation, the below-NOI model, the debt and equity sheets and the
+reconciliation into a shared `_workbook.py` that both exports are built on, and
+gave the "Export Excel audit (.xlsx)" action a second mode. This workbook's
+*output* is unchanged: all 18 golden cases below are byte-for-byte identical to
+`b9437e4`, which is how that refactor was accepted. Section 2's file table and
+Section 10's Quick-only menu note describe the original gate; the Quick
+behaviour they describe still holds, and Detailed is now offered beside it.
 
 ## 1. Scope
 

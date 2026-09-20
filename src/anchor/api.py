@@ -190,10 +190,15 @@ from .deals import Deal, DealNotFoundError, SnapshotValidationError
 from .deals import store as investment_store
 from .exports.excel import (
     XLSX_MEDIA_TYPE,
+    DetailedAuditExportError,
+    DetailedAuditRefusalCode,
     QuickAuditExportError,
     QuickAuditRefusalCode,
+    build_detailed_audit_workbook,
     build_quick_audit_workbook,
     content_disposition,
+    detailed_audit_filename,
+    detailed_audit_source,
     quick_audit_filename,
     quick_audit_source,
 )
@@ -2371,13 +2376,17 @@ def update_deal_two_way_sensitivity_snapshot(
         raise _snapshot_validation_error_response(error) from None
 
 # =============================================================================
-# Excel Export 1 -- Quick Underwrite formula-audit workbook
+# Excel Export 1 and 2 -- the formula-audit workbooks
 #
-# The one export route. It reads the saved Deal and its saved analysis, refuses
-# with a typed reason when they cannot be exported, and otherwise returns the
-# workbook built by ``anchor.exports.excel``. It writes nothing: no Deal, no
-# snapshot and no fingerprint is touched. The workbook never feeds any result
-# back into Anchor.
+# One route per operating mode. Each reads the saved Deal and its saved
+# analysis, refuses with a typed reason when they cannot be exported, and
+# otherwise returns the workbook built by ``anchor.exports.excel``. They write
+# nothing: no Deal, no snapshot and no fingerprint is touched. A workbook never
+# feeds any result back into Anchor.
+#
+# The two routes are separate rather than one route that branches on mode: the
+# mode decides which stored contracts exist at all, and a Deal in the wrong
+# mode is a refusal with its own reason, not a fallback.
 # =============================================================================
 
 _EXPORT_REFUSAL_STATUS: dict[QuickAuditRefusalCode, int] = {
@@ -2452,6 +2461,79 @@ def export_quick_underwrite_workbook(deal_id: str) -> Response:
         media_type=XLSX_MEDIA_TYPE,
         headers={
             "Content-Disposition": content_disposition(quick_audit_filename(source.deal_name)),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+_DETAILED_EXPORT_REFUSAL_STATUS: dict[DetailedAuditRefusalCode, int] = {
+    DetailedAuditRefusalCode.DEAL_NOT_FOUND: status.HTTP_404_NOT_FOUND,
+    DetailedAuditRefusalCode.UNSUPPORTED_OPERATING_MODE: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    DetailedAuditRefusalCode.ANALYSIS_MISSING: status.HTTP_409_CONFLICT,
+    DetailedAuditRefusalCode.ANALYSIS_STALE: status.HTTP_409_CONFLICT,
+    DetailedAuditRefusalCode.ANALYSIS_INCONSISTENT: status.HTTP_409_CONFLICT,
+    DetailedAuditRefusalCode.HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    DetailedAuditRefusalCode.EXPORT_GENERATION_FAILED: status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+
+def _detailed_export_refusal(code: DetailedAuditRefusalCode, message: str) -> HTTPException:
+    """A typed refusal: a stable ``code`` and an analyst-facing ``message``.
+    Never an exception string, a path or a stack trace."""
+
+    return HTTPException(
+        status_code=_DETAILED_EXPORT_REFUSAL_STATUS[code],
+        detail={"code": code.value, "message": message},
+    )
+
+
+@app.get("/deals/{deal_id}/exports/detailed-underwrite.xlsx", response_model=None)
+def export_detailed_underwrite_workbook(deal_id: str) -> Response:
+    """Excel Export 2: the saved, currently analysed Detailed Deal as a
+    formula-audit workbook. Read-only.
+
+    Eligibility is enforced here, independently of the client: the Deal must
+    exist, be a Detailed Underwrite Deal, and carry a saved analysis whose
+    fingerprint matches its saved terms, Detailed operating inputs and
+    Business Plan."""
+
+    try:
+        provenance = investment_store.get_detailed_analysis_provenance(deal_id)
+    except DealNotFoundError:
+        raise _detailed_export_refusal(
+            DetailedAuditRefusalCode.DEAL_NOT_FOUND,
+            "This Deal could not be found. It may have been deleted; refresh the Deal "
+            "Library and try again.",
+        ) from None
+    except UnsupportedOperatingModeError as error:
+        raise _detailed_export_refusal(
+            DetailedAuditRefusalCode.UNSUPPORTED_OPERATING_MODE,
+            "The Detailed audit workbook supports Detailed Underwrite Deals only. This "
+            f"Deal uses {_EXPORT_MODE_LABELS.get(error.operating_mode, 'another mode')}.",
+        ) from None
+
+    try:
+        source = detailed_audit_source(
+            provenance,
+            generated_at=datetime.now(timezone.utc),
+            anchor_version=anchor_version(),
+            source_commit=source_commit(),
+        )
+        workbook = build_detailed_audit_workbook(source)
+    except DetailedAuditExportError as error:
+        raise _detailed_export_refusal(error.code, error.message) from None
+    except Exception:
+        raise _detailed_export_refusal(
+            DetailedAuditRefusalCode.EXPORT_GENERATION_FAILED,
+            "The workbook could not be generated. No file was produced; try again.",
+        ) from None
+
+    return Response(
+        content=workbook,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": content_disposition(detailed_audit_filename(source.deal_name)),
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
         },

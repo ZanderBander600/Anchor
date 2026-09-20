@@ -1,5 +1,5 @@
-"""Excel Export 1 -- the download filename, sanitized independently of the
-workbook.
+"""Excel Export 1 and 2 -- the download filename, sanitized independently of
+the workbook.
 
 A Deal name is analyst-authored text. It becomes part of a filename a browser
 writes to disk, so it is reduced to characters that are safe on every common
@@ -13,6 +13,7 @@ import unicodedata
 from urllib.parse import quote
 
 QUICK_AUDIT_SUFFIX = " - Quick Underwrite Audit.xlsx"
+DETAILED_AUDIT_SUFFIX = " - Detailed Underwrite Audit.xlsx"
 FALLBACK_DEAL_NAME = "Untitled Deal"
 
 #: Longest Deal-name portion kept; the whole name stays well inside the
@@ -47,6 +48,16 @@ def quick_audit_filename(deal_name: str) -> str:
     """``<Deal Name> - Quick Underwrite Audit.xlsx``, sanitized."""
 
     return sanitize_deal_name(deal_name) + QUICK_AUDIT_SUFFIX
+
+
+def detailed_audit_filename(deal_name: str) -> str:
+    """``<Deal Name> - Detailed Underwrite Audit.xlsx``, sanitized.
+
+    The same sanitisation as the Quick name -- the Deal name is the only
+    analyst-authored part, and it is reduced identically -- so the two exports
+    cannot drift apart on what is safe to write to disk."""
+
+    return sanitize_deal_name(deal_name) + DETAILED_AUDIT_SUFFIX
 
 
 def content_disposition(filename: str) -> str:

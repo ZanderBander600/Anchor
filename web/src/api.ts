@@ -1153,7 +1153,8 @@ export async function getDeal(dealId: string): Promise<Deal> {
 }
 
 /** Excel Export 1 -- a downloaded Quick Underwrite audit workbook: the bytes
- * and the server-chosen, already-sanitized filename. */
+ * and the server-chosen, already-sanitized filename. Excel Export 2's Detailed
+ * download has the identical shape. */
 export interface QuickAuditWorkbookDownload {
   blob: Blob;
   filename: string;
@@ -1161,6 +1162,9 @@ export interface QuickAuditWorkbookDownload {
 
 /** Used only when the response carries no readable filename. */
 export const QUICK_AUDIT_FALLBACK_FILENAME = 'Quick Underwrite Audit.xlsx';
+
+/** Used only when the response carries no readable filename. */
+export const DETAILED_AUDIT_FALLBACK_FILENAME = 'Detailed Underwrite Audit.xlsx';
 
 /** Reads the filename out of a `Content-Disposition` header, preferring the
  * RFC 5987 `filename*` form (exact UTF-8) over the ASCII `filename` fallback.
@@ -1216,6 +1220,47 @@ export async function downloadQuickUnderwriteAuditWorkbook(
   const filename =
     filenameFromContentDisposition(response.headers.get('Content-Disposition')) ??
     QUICK_AUDIT_FALLBACK_FILENAME;
+  return { blob, filename };
+}
+
+/** GETs the saved, currently analysed Detailed Deal's formula-audit workbook.
+ *
+ * Excel Export 2. A separate endpoint from the Quick one, not a mode
+ * parameter: the server reads different stored contracts for a Detailed Deal,
+ * and a Deal in the wrong mode is refused rather than served the other
+ * workbook. Eligibility is decided from what is stored -- never from anything
+ * this client holds -- and refused with `{ detail: { code, message } }`; that
+ * message is surfaced verbatim because it says what the analyst must do. */
+export async function downloadDetailedUnderwriteAuditWorkbook(
+  dealId: string,
+): Promise<QuickAuditWorkbookDownload> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/deals/${encodeURIComponent(dealId)}/exports/detailed-underwrite.xlsx`,
+    );
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE);
+  }
+
+  if (!response.ok) {
+    let message = 'The audit workbook could not be exported.';
+    try {
+      const body: unknown = await response.json();
+      const detail = (body as { detail?: { message?: unknown } } | null)?.detail;
+      if (detail && typeof detail.message === 'string' && detail.message) {
+        message = detail.message;
+      }
+    } catch {
+      // A non-JSON failure keeps the generic message.
+    }
+    throw new ApiError(message);
+  }
+
+  const blob = await response.blob();
+  const filename =
+    filenameFromContentDisposition(response.headers.get('Content-Disposition')) ??
+    DETAILED_AUDIT_FALLBACK_FILENAME;
   return { blob, filename };
 }
 

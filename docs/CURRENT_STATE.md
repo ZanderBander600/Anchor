@@ -1,6 +1,6 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-19
+Last synchronized: 2026-09-19 (Excel Export 2 started)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -48,13 +48,25 @@ whenever an accepted gate merges or the active gate changes.
   the P7 phase sequence. Its authority is
   `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md`.
 - **Excel Export 1: Quick Underwrite formula-audit workbook** is implemented
-  on `feature/excel-export-1-quick-formula-audit` (from `51c5bf1`),
-  **pending human acceptance -- not accepted.** A saved, currently analysed
-  Quick Deal downloads as a formula-level audit workbook. It is read-only and
-  changes no financial calculation, fingerprint, stored analysis, schema (v14)
-  or AI behaviour; Detailed, Lease-Level and every other export are deferred.
+  and **merged in PR #44**, with its presentation polish (header separation)
+  merged in **PR #45 at `b9437e4`**. It remains **pending human acceptance --
+  not accepted.** A saved, currently analysed Quick Deal downloads as a
+  formula-level audit workbook. It is read-only and changes no financial
+  calculation, fingerprint, stored analysis, schema (v14) or AI behaviour.
   It is not P7.10. Its authority is
   `docs/architecture/EXCEL_EXPORT_1_QUICK_FORMULA_AUDIT.md`.
+- **Excel Export 2: Detailed Underwrite formula-audit workbook** was
+  explicitly started from `main` at `b9437e4` and is implemented on
+  `feature/excel-export-2-detailed-formula-audit`, **pending review and human
+  acceptance -- not accepted.** A saved, currently analysed Detailed Deal
+  downloads as a formula-level audit workbook that independently reproduces
+  the Detailed operating model, including the complete Year H+1 exit
+  projection, and reconciles it against the frozen saved analysis. It is
+  read-only and changes no financial calculation, fingerprint, stored
+  analysis, schema (v14) or AI behaviour; the Quick workbook's output is
+  byte-for-byte unchanged. Lease-Level and every other export remain deferred.
+  It is not P7.10. Its authority is
+  `docs/architecture/EXCEL_EXPORT_2_DETAILED_FORMULA_AUDIT.md`.
 - P7.9 final hands-on human acceptance remains pending.
 - P7.10 has not started.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
@@ -115,9 +127,12 @@ Asset Types 1 is merged and awaits hands-on human acceptance. It is a
 classification feature outside the P7 sequence and starts no later asset-type
 phase.
 
-Excel Export 1 (Quick Underwrite formula-audit workbook) is implemented and
-awaits review and hands-on human acceptance. It is outside the P7 sequence and
-starts no later export gate.
+Excel Export 1 (Quick Underwrite formula-audit workbook) is merged (PR #44,
+with PR #45's presentation polish) and awaits hands-on human acceptance. Excel
+Export 2 (Detailed Underwrite formula-audit workbook) is implemented on its own
+branch from `b9437e4` and awaits review and hands-on human acceptance. Both are
+outside the P7 sequence, and neither starts a later export gate: Lease-Level
+export has not started and is not authorized by this work.
 
 A bounded stabilization sweep remains available for separate human
 authorization. It is not automatically active. Its source issues are:
@@ -168,8 +183,13 @@ sub-gate.
   merged in PR #43, pending human acceptance.** It is not yet accepted and is
   not P7.10.
 - Excel Export 1 Quick Underwrite formula audit:
-  `docs/architecture/EXCEL_EXPORT_1_QUICK_FORMULA_AUDIT.md` -- **implemented,
-  pending human acceptance.** It is not yet accepted and is not P7.10.
+  `docs/architecture/EXCEL_EXPORT_1_QUICK_FORMULA_AUDIT.md` -- **merged in
+  PR #44 and PR #45 (`b9437e4`), pending human acceptance.** It is not yet
+  accepted and is not P7.10.
+- Excel Export 2 Detailed Underwrite formula audit:
+  `docs/architecture/EXCEL_EXPORT_2_DETAILED_FORMULA_AUDIT.md` --
+  **implemented, pending review and human acceptance.** It is not yet accepted
+  and is not P7.10.
 
 ## Historical-Document Rule
 
