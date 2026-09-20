@@ -66,6 +66,13 @@ SHEET_ORDER: tuple[str, ...] = (
     AUDIT,
 )
 
+#: Excel's hard worksheet limits. A workbook that would need more rows or
+#: columns than these cannot be written at all, so an export that would exceed
+#: them is refused with a typed, user-facing reason rather than producing a
+#: file that is silently truncated (Excel Export 3).
+EXCEL_MAX_ROWS = 1_048_576
+EXCEL_MAX_COLUMNS = 16_384
+
 #: The one text every unavailable figure is written as, on both sides of a
 #: check: a missing number is never shown as zero.
 UNAVAILABLE = "Unavailable"
@@ -425,6 +432,24 @@ class _AuditWorkbookBase:
     #: The export's scope limitation, for Audit Metadata.
     SCOPE_NOTE: str = ""
 
+    #: The sheets this workbook holds, in their final order. Quick and Detailed
+    #: keep the published eight; a mode whose model does not fit them (Excel
+    #: Export 3's Lease-Level rent roll) names its own, and every sheet the
+    #: shared code writes keeps its name and its place in both.
+    SHEETS: tuple[str, ...] = SHEET_ORDER
+
+    #: Whether this mode's rent roll produces variable below-NOI capital (TI
+    #: and LC). ``False`` for Quick and Detailed, which have no rent roll: their
+    #: saved analysis must carry an all-zero operating-capital schedule, and a
+    #: non-zero one means the snapshot is not what it claims.
+    HAS_OPERATING_CAPITAL: bool = False
+
+    #: The sheet carrying the annual NOI row and the below-NOI block. Debt and
+    #: Equity read their NOI, CapEx and Business Plan lines from it by name, so
+    #: a mode that builds its annual view on a differently named sheet says so
+    #: here rather than duplicating those builders.
+    OPERATING_SHEET: str = OPERATING
+
     #: Published by ``_build_operating``: the Operating Projection row holding
     #: NOI for Years 1..H and, one column further right, the exit year. This
     #: and ``operating_rows`` are the whole of what the model below NOI knows
@@ -462,10 +487,10 @@ class _AuditWorkbookBase:
         )
         self.fmt = _Formats(self.book)
         self.sheets: dict[str, Worksheet] = {
-            name: self.book.add_worksheet(name) for name in SHEET_ORDER
+            name: self.book.add_worksheet(name) for name in self.SHEETS
         }
         #: Column widths as they are set, so a header knows its own room.
-        self.column_width: dict[str, dict[int, float]] = {name: {} for name in SHEET_ORDER}
+        self.column_width: dict[str, dict[int, float]] = {name: {} for name in self.SHEETS}
         #: Excel-model cells by key, for Checks and Summary.
         self.excel: dict[str, str] = {}
         #: Anchor constants by the same keys.
@@ -517,12 +542,21 @@ class _AuditWorkbookBase:
         be laid beside independent formulas. Subclasses add their own."""
 
         results = self.results
+        # A mode with no rent roll has no variable below-NOI capital, and a
+        # non-zero TI or LC in its saved analysis would mean the snapshot is not
+        # what it claims. A mode that *does* have one (Excel Export 3) asserts
+        # the schedule's length instead, and reconciles its values on Checks.
+        no_operating_capital = not self.HAS_OPERATING_CAPITAL
         return [
             len(results.noi_by_year) != self.hold,
             len(results.levered_cash_flows) != self.hold + 1,
             len(results.unlevered_cash_flows) != self.hold + 1,
-            any(value != 0.0 for value in results.tenant_improvements_by_year),
-            any(value != 0.0 for value in results.leasing_commissions_by_year),
+            any(value != 0.0 for value in results.tenant_improvements_by_year)
+            if no_operating_capital
+            else len(results.tenant_improvements_by_year) != self.hold,
+            any(value != 0.0 for value in results.leasing_commissions_by_year)
+            if no_operating_capital
+            else len(results.leasing_commissions_by_year) != self.hold,
             len(results.project_capital_by_year) != self.hold,
             len(results.owner_expenses_by_year) != self.hold,
             self.ending_balance_by_year[-1] != results.remaining_loan_balance,
@@ -977,6 +1011,19 @@ class _AuditWorkbookBase:
 
         raise NotImplementedError
 
+    def _operating_capital_line(self) -> tuple[str, dict[int, str]] | None:
+        """The below-NOI variable capital line, or ``None`` when the mode has
+        none.
+
+        Quick and Detailed have no rent roll, so they have no variable
+        below-NOI capital and return ``None``: no row is written and their
+        below-NOI block is unchanged. Excel Export 3 returns its label and one
+        **positive** reference per hold year -- the shared code negates it
+        exactly once, beside CapEx, matching
+        ``anchor.engine.acquisition.calculate_operating_capital_by_year``."""
+
+        return None
+
     def _build_below_noi(self, sheet: str, row: int, first_col: int, last_col: int, noi_row: int, capex_ref: str) -> int:
         """The below-NOI block: CapEx, Business Plan and unlevered owner cash
         flow, hold years only. Identical in both modes -- CapEx, debt service,
@@ -987,15 +1034,31 @@ class _AuditWorkbookBase:
 
         self._section(sheet, row, "Below-NOI cash flow (hold years; outflows negative)", last_col)
         row += 1
-        r_noi, r_capex, r_pcf, r_pc, r_oe, r_uocf = range(row, row + 6)
+        # A mode whose rent roll produces variable below-NOI capital (Excel
+        # Export 3's TI and LC) gets one extra line here. Quick and Detailed
+        # have none, so `_operating_capital_line` returns None for them, no row
+        # is written, and every row below keeps its original index and label.
+        capital_line = self._operating_capital_line()
+        r_noi, r_capex = row, row + 1
+        r_opcap = r_capex + 1 if capital_line is not None else None
+        r_pcf = (r_opcap if r_opcap is not None else r_capex) + 1
+        r_pc, r_oe, r_uocf = r_pcf + 1, r_pcf + 2, r_pcf + 3
         self._label(sheet, r_noi, "Net operating income", indent=1)
         self._label(sheet, r_capex, "CapEx reserve", indent=1)
-        self._label(sheet, r_pcf, "Property cash flow after CapEx", bold=True)
+        if capital_line is not None and r_opcap is not None:
+            self._label(sheet, r_opcap, capital_line[0], indent=1)
+        self._label(
+            sheet,
+            r_pcf,
+            "Property cash flow after CapEx" if capital_line is None else "Property cash flow after capital",
+            bold=True,
+        )
         self._label(sheet, r_pc, "Business Plan project capital", indent=1)
         self._label(sheet, r_oe, "Business Plan owner expenses", indent=1)
         self._label(sheet, r_uocf, "Unlevered owner cash flow", bold=True)
-        for r in (r_noi, r_capex, r_pcf, r_pc, r_oe, r_uocf):
-            self._units(sheet, r, "$")
+        for r in (r_noi, r_capex, r_opcap, r_pcf, r_pc, r_oe, r_uocf):
+            if r is not None:
+                self._units(sheet, r, "$")
         pc_working = self.bp_rows["project_capital"][1]
         oe_working = self.bp_rows["owner_expenses"][1]
         for offset, year in enumerate(self.years):
@@ -1003,13 +1066,21 @@ class _AuditWorkbookBase:
             input_col = self.bp_first_col + offset
             self._formula(sheet, r_noi, col, f"={_cell(noi_row, col)}", "calc", NUM_CURRENCY)
             self.excel[f"capex:{year}"] = self._formula(sheet, r_capex, col, f"=-{capex_ref}", "calc", NUM_CURRENCY)
-            self.excel[f"property_cf:{year}"] = self._formula(sheet, r_pcf, col, f"={_cell(r_noi, col)}+{_cell(r_capex, col)}", "calc", NUM_CURRENCY, bold=True)
+            property_cf = f"={_cell(r_noi, col)}+{_cell(r_capex, col)}"
+            if capital_line is not None and r_opcap is not None:
+                self.excel[f"operating_capital:{year}"] = self._formula(
+                    sheet, r_opcap, col, f"=-({capital_line[1][year]})", "link", NUM_CURRENCY
+                )
+                property_cf += f"+{_cell(r_opcap, col)}"
+            self.excel[f"property_cf:{year}"] = self._formula(sheet, r_pcf, col, property_cf, "calc", NUM_CURRENCY, bold=True)
             self.excel[f"project_capital:{year}"] = self._formula(sheet, r_pc, col, f"=-{_xref(INPUTS, pc_working, input_col)}", "link", NUM_CURRENCY)
             self.excel[f"owner_expenses:{year}"] = self._formula(sheet, r_oe, col, f"=-{_xref(INPUTS, oe_working, input_col)}", "link", NUM_CURRENCY)
             self.excel[f"uocf:{year}"] = self._formula(
                 sheet, r_uocf, col, f"={_cell(r_pcf, col)}+{_cell(r_pc, col)}+{_cell(r_oe, col)}", "calc", NUM_CURRENCY, bold=True
             )
         self.operating_rows = {"capex": r_capex, "project_capital": r_pc, "owner_expenses": r_oe, "uocf": r_uocf}
+        if r_opcap is not None:
+            self.operating_rows["operating_capital"] = r_opcap
         return r_uocf + 2
 
     # ----------------------------------------------------------- Debt Schedule
@@ -1120,7 +1191,7 @@ class _AuditWorkbookBase:
             self._formula(sheet, r_int, col, f"=SUM({_cell(first, 5)}:{_cell(last, 5)})", "calc", NUM_CURRENCY)
             self._formula(sheet, r_prin, col, f"=SUM({_cell(first, 6)}:{_cell(last, 6)})", "calc", NUM_CURRENCY)
             self.excel[f"ending_balance:{year}"] = self._formula(sheet, r_end, col, f"={_cell(last, 7)}", "calc", NUM_CURRENCY, bold=True)
-            self._formula(sheet, r_noi, col, f"={_xref(OPERATING, self.noi_row, 2 + offset)}", "link", NUM_CURRENCY)
+            self._formula(sheet, r_noi, col, f"={_xref(self.OPERATING_SHEET, self.noi_row, 2 + offset)}", "link", NUM_CURRENCY)
             self.excel[f"dscr:{year}"] = self._formula(
                 sheet, r_dscr, col,
                 f'=IF({_cell(r_ds, col)}>0,{_cell(r_noi, col)}/{_cell(r_ds, col)},"{UNAVAILABLE}")',
@@ -1252,25 +1323,45 @@ class _AuditWorkbookBase:
         # Operations, Years 1..H.
         self._section(sheet, row, f"Operations (Years 1 to {hold})", last_col)
         row += 1
-        r_noi, r_capex, r_pc, r_oe, r_ds, r_locf = range(row, row + 6)
-        for r, label, bold in (
-            (r_noi, "Net operating income", False),
-            (r_capex, "CapEx reserve", False),
-            (r_pc, "Business Plan project capital", False),
-            (r_oe, "Business Plan owner expenses", False),
-            (r_ds, "Debt service", False),
-            (r_locf, "Levered owner cash flow", True),
-        ):
+        # The same optional line the below-NOI block carries. It is inserted
+        # inside the summed range rather than added afterwards, so the levered
+        # cash flow stays one contiguous SUM in both shapes.
+        capital_line = self._operating_capital_line()
+        if capital_line is None:
+            r_opcap = None
+            r_noi, r_capex, r_pc, r_oe, r_ds, r_locf = range(row, row + 6)
+            operations = (
+                (r_noi, "Net operating income", False),
+                (r_capex, "CapEx reserve", False),
+                (r_pc, "Business Plan project capital", False),
+                (r_oe, "Business Plan owner expenses", False),
+                (r_ds, "Debt service", False),
+                (r_locf, "Levered owner cash flow", True),
+            )
+        else:
+            r_noi, r_capex, r_opcap, r_pc, r_oe, r_ds, r_locf = range(row, row + 7)
+            operations = (
+                (r_noi, "Net operating income", False),
+                (r_capex, "CapEx reserve", False),
+                (r_opcap, capital_line[0], False),
+                (r_pc, "Business Plan project capital", False),
+                (r_oe, "Business Plan owner expenses", False),
+                (r_ds, "Debt service", False),
+                (r_locf, "Levered owner cash flow", True),
+            )
+        for r, label, bold in operations:
             self._label(sheet, r, label, bold=bold, indent=0 if bold else 1)
             self._units(sheet, r, "$")
         op = self.operating_rows
         for offset, year in enumerate(self.years):
             col = c0 + 1 + offset
             op_col = 2 + offset
-            self._formula(sheet, r_noi, col, f"={_xref(OPERATING, self.noi_row, op_col)}", "link", NUM_CURRENCY)
-            self._formula(sheet, r_capex, col, f"={_xref(OPERATING, op['capex'], op_col)}", "link", NUM_CURRENCY)
-            self._formula(sheet, r_pc, col, f"={_xref(OPERATING, op['project_capital'], op_col)}", "link", NUM_CURRENCY)
-            self._formula(sheet, r_oe, col, f"={_xref(OPERATING, op['owner_expenses'], op_col)}", "link", NUM_CURRENCY)
+            self._formula(sheet, r_noi, col, f"={_xref(self.OPERATING_SHEET, self.noi_row, op_col)}", "link", NUM_CURRENCY)
+            self._formula(sheet, r_capex, col, f"={_xref(self.OPERATING_SHEET, op['capex'], op_col)}", "link", NUM_CURRENCY)
+            if r_opcap is not None:
+                self._formula(sheet, r_opcap, col, f"={_xref(self.OPERATING_SHEET, op['operating_capital'], op_col)}", "link", NUM_CURRENCY)
+            self._formula(sheet, r_pc, col, f"={_xref(self.OPERATING_SHEET, op['project_capital'], op_col)}", "link", NUM_CURRENCY)
+            self._formula(sheet, r_oe, col, f"={_xref(self.OPERATING_SHEET, op['owner_expenses'], op_col)}", "link", NUM_CURRENCY)
             self._formula(sheet, r_ds, col, f"=-{_xref(DEBT, self.debt_ds_row, op_col)}", "link", NUM_CURRENCY)
             self.excel[f"locf:{year}"] = self._formula(
                 sheet, r_locf, col, f"=SUM({_cell(r_noi, col)}:{_cell(r_ds, col)})", "calc", NUM_CURRENCY, bold=True
@@ -1375,7 +1466,7 @@ class _AuditWorkbookBase:
         basis = _abs(r_ucf, c0)
         for offset, year in enumerate(self.years):
             col = c0 + 1 + offset
-            self._formula(sheet, r_uocf, col, f"={_xref(OPERATING, op['uocf'], 2 + offset)}", "link", NUM_CURRENCY)
+            self._formula(sheet, r_uocf, col, f"={_xref(self.OPERATING_SHEET, op['uocf'], 2 + offset)}", "link", NUM_CURRENCY)
             if year < hold:
                 formula = f"={_cell(r_uocf, col)}"
             else:

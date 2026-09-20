@@ -192,13 +192,18 @@ from .exports.excel import (
     XLSX_MEDIA_TYPE,
     DetailedAuditExportError,
     DetailedAuditRefusalCode,
+    LeaseLevelAuditExportError,
+    LeaseLevelAuditRefusalCode,
     QuickAuditExportError,
     QuickAuditRefusalCode,
     build_detailed_audit_workbook,
+    build_lease_level_audit_workbook,
     build_quick_audit_workbook,
     content_disposition,
     detailed_audit_filename,
     detailed_audit_source,
+    lease_level_audit_filename,
+    lease_level_audit_source,
     quick_audit_filename,
     quick_audit_source,
 )
@@ -2539,6 +2544,96 @@ def export_detailed_underwrite_workbook(deal_id: str) -> Response:
         },
     )
 
+
+
+# =============================================================================
+# Excel Export 3 -- Lease-Level Underwrite
+#
+# A separate endpoint with its own published refusal vocabulary. Three tokens
+# coincide with the other two exports because they mean the same thing on the
+# wire; the rest are Lease-Level's own, because its eligibility genuinely
+# differs: `lease_level_deals` has no `analysis_snapshot` column, so there is
+# no stored result to be missing or stale. The server reads the saved Deal and
+# its typed records in one consistent read and re-runs the authoritative
+# analysis over exactly those inputs. Nothing is written.
+# =============================================================================
+
+
+_LEASE_LEVEL_EXPORT_REFUSAL_STATUS: dict[LeaseLevelAuditRefusalCode, int] = {
+    LeaseLevelAuditRefusalCode.DEAL_NOT_FOUND: status.HTTP_404_NOT_FOUND,
+    LeaseLevelAuditRefusalCode.UNSUPPORTED_OPERATING_MODE: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    LeaseLevelAuditRefusalCode.LEASE_LEVEL_INPUTS_INVALID: status.HTTP_409_CONFLICT,
+    LeaseLevelAuditRefusalCode.TERMINAL_VALUE_NOT_CAPITALIZABLE: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    LeaseLevelAuditRefusalCode.EXCEL_CAPACITY_EXCEEDED: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    LeaseLevelAuditRefusalCode.EXPORT_GENERATION_FAILED: status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+
+def _lease_level_export_refusal(
+    code: LeaseLevelAuditRefusalCode, message: str
+) -> HTTPException:
+    """A typed refusal: a stable ``code`` and an analyst-facing ``message``.
+    Never an exception string, a path or a stack trace."""
+
+    return HTTPException(
+        status_code=_LEASE_LEVEL_EXPORT_REFUSAL_STATUS[code],
+        detail={"code": code.value, "message": message},
+    )
+
+
+@app.get("/deals/{deal_id}/exports/lease-level.xlsx", response_model=None)
+def export_lease_level_workbook(deal_id: str) -> Response:
+    """Excel Export 3: the saved Lease-Level Deal as a formula-audit workbook.
+    Read-only.
+
+    Eligibility is enforced here, independently of the client: the Deal must
+    exist, be a Lease-Level Underwrite Deal, and carry saved inputs the
+    authoritative Lease-Level analysis accepts. There is deliberately no
+    "analysis missing" or "analysis stale" state -- Lease-Level persists no
+    analysis, so the export analyses the saved state it reads."""
+
+    try:
+        provenance = investment_store.get_lease_level_export_provenance(deal_id)
+    except DealNotFoundError:
+        raise _lease_level_export_refusal(
+            LeaseLevelAuditRefusalCode.DEAL_NOT_FOUND,
+            "This Deal could not be found. It may have been deleted; refresh the Deal "
+            "Library and try again.",
+        ) from None
+    except UnsupportedOperatingModeError as error:
+        raise _lease_level_export_refusal(
+            LeaseLevelAuditRefusalCode.UNSUPPORTED_OPERATING_MODE,
+            "The Lease-Level audit workbook supports Lease-Level Underwrite Deals only. "
+            f"This Deal uses {_EXPORT_MODE_LABELS.get(error.operating_mode, 'another mode')}.",
+        ) from None
+
+    try:
+        source = lease_level_audit_source(
+            provenance,
+            generated_at=datetime.now(timezone.utc),
+            anchor_version=anchor_version(),
+            source_commit=source_commit(),
+        )
+        workbook = build_lease_level_audit_workbook(source)
+    except LeaseLevelAuditExportError as error:
+        raise _lease_level_export_refusal(error.code, error.message) from None
+    except Exception:
+        raise _lease_level_export_refusal(
+            LeaseLevelAuditRefusalCode.EXPORT_GENERATION_FAILED,
+            "The workbook could not be generated. No file was produced; try again.",
+        ) from None
+
+    return Response(
+        content=workbook,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": content_disposition(
+                lease_level_audit_filename(source.deal_name)
+            ),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 # =============================================================================
 # Phase 7 Gate P7.2 -- the Investment shell and persisted Scenarios

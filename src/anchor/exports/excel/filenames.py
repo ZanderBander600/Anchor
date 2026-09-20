@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 QUICK_AUDIT_SUFFIX = " - Quick Underwrite Audit.xlsx"
 DETAILED_AUDIT_SUFFIX = " - Detailed Underwrite Audit.xlsx"
+LEASE_LEVEL_AUDIT_SUFFIX = " - Lease-Level Underwrite Audit.xlsx"
 FALLBACK_DEAL_NAME = "Untitled Deal"
 
 #: Longest Deal-name portion kept; the whole name stays well inside the
@@ -58,6 +59,16 @@ def detailed_audit_filename(deal_name: str) -> str:
     cannot drift apart on what is safe to write to disk."""
 
     return sanitize_deal_name(deal_name) + DETAILED_AUDIT_SUFFIX
+
+
+def lease_level_audit_filename(deal_name: str) -> str:
+    """``<Deal Name> - Lease-Level Underwrite Audit.xlsx``, sanitized.
+
+    The same sanitisation the other two exports use, for the same reason: the
+    Deal name is the only analyst-authored part, and all three exports must
+    agree on what is safe to write to disk."""
+
+    return sanitize_deal_name(deal_name) + LEASE_LEVEL_AUDIT_SUFFIX
 
 
 def content_disposition(filename: str) -> str:
