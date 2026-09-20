@@ -244,7 +244,19 @@ def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
     The facade is a re-export only. ``__init__.py`` imports two names and one
     error class from ``leasing.parsing``/``leasing.validation``; it defines no
     parsing behaviour, so the leasing layer still has exactly one
-    implementation owner."""
+    implementation owner.
+
+    **Excel Export 3 adds two consumers outside ``anchor/analysis``, and they
+    consume rather than compute.** ``exports/excel/source.py`` calls the one
+    Lease-Level entry point to re-run the authoritative analysis (a Lease-Level
+    Deal stores no snapshot) and catches its typed validation error;
+    ``exports/excel/lease_level_audit.py`` reads the D0 Section 24.5 market
+    leasing resolver, the canonical calendar and the contract enums so that the
+    workbook does not restate them. Neither performs leasing arithmetic:
+    ``tests/test_excel_export_3_architecture.py`` parses the workbook module
+    and forbids every leasing builder that produces dollars, and no production
+    module but ``anchor.api`` may import ``anchor.exports`` at all -- so the
+    leasing layer still has exactly one implementation owner."""
 
     importers = sorted(
         str(source_file.relative_to(_SRC_DIR)).replace("\\", "/")
@@ -259,7 +271,8 @@ def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
     )
 
     # P7.1 adds the Scenario engine and P7.4 the Strategy engine (see
-    # ``_PERMITTED_LEASING_IMPORTERS``).
+    # ``_PERMITTED_LEASING_IMPORTERS``). Excel Export 3 adds two files in
+    # ``anchor/exports``, for the reason stated in the docstring above.
     assert importers == [
         "anchor/analysis/__init__.py",
         "anchor/analysis/business_plan_analysis.py",
@@ -268,6 +281,8 @@ def test_exactly_three_modules_in_the_tree_import_anchor_leasing() -> None:
         "anchor/analysis/lease_level_sensitivity.py",
         "anchor/analysis/scenario.py",
         "anchor/analysis/strategy.py",
+        "anchor/exports/excel/lease_level_audit.py",
+        "anchor/exports/excel/source.py",
     ]
 
     # The facade re-exports; it does not parse. Anything more than imports and

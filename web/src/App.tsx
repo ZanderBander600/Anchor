@@ -7,6 +7,7 @@ import {
   createDetailedDeal,
   deleteDeal,
   downloadDetailedUnderwriteAuditWorkbook,
+  downloadLeaseLevelAuditWorkbook,
   downloadQuickUnderwriteAuditWorkbook,
   duplicateDeal,
   fetchAIAnalysis,
@@ -1517,22 +1518,6 @@ export default function App() {
         : null,
   };
 
-  // Lease-Level has no audit workbook yet. The action is shown and disabled,
-  // with the reason, rather than hidden: an analyst who has seen it in the
-  // other two modes should be told it does not exist here, not left to wonder
-  // where it went.
-  //
-  // Named for the workspace it belongs to, like every other Lease-Level arm of
-  // a `byMode` call: it reads no other mode's state, and it must stay that
-  // way (`modeDispatch.architecture.test.ts` M14).
-  const leaseLevelWorkspaceExport: WorkbookExportAction = {
-    blockedReason:
-      'The Excel audit workbook is available for Quick and Detailed Underwrite Deals. ' +
-      'Lease-Level Deals are not exported yet.',
-    isExporting: false,
-    onExport: () => {},
-    message: null,
-  };
 
   /** Prompts before a New Deal / Open Deal action would discard unsaved
    * work; returns true if it is safe to proceed (nothing to lose, or the
@@ -1918,6 +1903,76 @@ export default function App() {
       setWorkspace('underwrite');
     },
   });
+
+  // Excel Export 3 -- the Lease-Level audit workbook.
+  //
+  // **It is gated on saved and clean, and deliberately not on a current
+  // result.** Quick and Detailed export a stored analysis snapshot, so they
+  // must wait for one. Lease-Level Deals store no snapshot at all: the server
+  // reads the saved Deal and its typed records in one consistent read and
+  // re-runs the authoritative analysis over exactly those inputs. Requiring a
+  // browser result here would block an export the server can serve perfectly
+  // well, and would imply a persisted analysis that does not exist.
+  //
+  // Unsaved edits still block it, because only saved inputs are exported.
+  //
+  // Named for the workspace it belongs to, like every other Lease-Level arm of
+  // a `byMode` call: it reads no other mode's state, and it must stay that
+  // way (`modeDispatch.architecture.test.ts` M14).
+  const [isExportingLeaseLevelWorkbook, setIsExportingLeaseLevelWorkbook] = useState(false);
+  const [leaseLevelWorkbookExportMessage, setLeaseLevelWorkbookExportMessage] = useState<{
+    dealId: string;
+    tone: 'status' | 'error';
+    text: string;
+  } | null>(null);
+  const leaseLevelWorkbookExportBlockedReason: string | null =
+    leaseLevel.currentDealId === null
+      ? 'Save this Deal to export the Excel audit workbook.'
+      : leaseLevel.isDirty
+        ? 'Unsaved changes are not exported. Save the Deal first; the workbook audits the saved rent roll.'
+        : leaseLevel.isAnalyzing || leaseLevel.isSaving
+          ? 'Analysis is running. Export when it finishes.'
+          : null;
+
+  async function handleExportLeaseLevelAuditWorkbook() {
+    const dealId = leaseLevel.currentDealId;
+    if (dealId === null || leaseLevelWorkbookExportBlockedReason !== null) {
+      return;
+    }
+    setIsExportingLeaseLevelWorkbook(true);
+    setLeaseLevelWorkbookExportMessage(null);
+    try {
+      const { blob, filename } = await downloadLeaseLevelAuditWorkbook(dealId);
+      saveWorkbookDownload(blob, filename);
+      setLeaseLevelWorkbookExportMessage({ dealId, tone: 'status', text: `Exported ${filename}` });
+    } catch (exportError) {
+      setLeaseLevelWorkbookExportMessage({
+        dealId,
+        tone: 'error',
+        text:
+          exportError instanceof ApiError
+            ? exportError.message
+            : 'The audit workbook could not be exported.',
+      });
+    } finally {
+      setIsExportingLeaseLevelWorkbook(false);
+    }
+  }
+
+  const leaseLevelWorkspaceExport: WorkbookExportAction = {
+    blockedReason: leaseLevelWorkbookExportBlockedReason,
+    isExporting: isExportingLeaseLevelWorkbook,
+    onExport: () => void handleExportLeaseLevelAuditWorkbook(),
+    message:
+      leaseLevelWorkbookExportMessage !== null &&
+      leaseLevelWorkbookExportMessage.dealId === leaseLevel.currentDealId &&
+      leaseLevelWorkbookExportBlockedReason === null
+        ? {
+            tone: leaseLevelWorkbookExportMessage.tone,
+            text: leaseLevelWorkbookExportMessage.text,
+          }
+        : null,
+  };
 
   /**
    * Detailed Operating Model V2.1 Gate 11: dispatches by `deal.operating_mode`

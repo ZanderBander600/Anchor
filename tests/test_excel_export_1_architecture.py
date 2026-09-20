@@ -108,11 +108,17 @@ _UNCHANGED = (
 #: package as a whole.
 _EXPORT_IMPORTS = {
     "anchor.exports.excel.source": {
+        # Excel Export 3 re-runs the authoritative Lease-Level analysis,
+        # because a Lease-Level Deal stores none. It calls the same entry
+        # point the analyze route calls and adds no second pathway.
+        "anchor.analysis.business_plan_analysis",
         "anchor.asset_types",
         "anchor.business_plan",
         "anchor.contracts",
         "anchor.deals.store",
         "anchor.engine.contracts",
+        "anchor.leasing",
+        "anchor.leasing.validation",
     },
     "anchor.exports.excel._workbook": {
         "anchor.engine.contracts",
@@ -123,6 +129,15 @@ _EXPORT_IMPORTS = {
         "xlsxwriter.worksheet",
     },
     "anchor.exports.excel.quick_audit": set(),
+    # Excel Export 3's module, on the same shared base. It reads the leasing
+    # contracts it reproduces -- the calendar, the market-leasing resolver and
+    # the enums -- and computes no financial result of its own.
+    "anchor.exports.excel.lease_level_audit": {
+        "anchor.leasing",
+        "anchor.leasing.calendar",
+        "anchor.leasing.contracts",
+        "anchor.leasing.market",
+    },
     "anchor.exports.excel.detailed_audit": set(),
     "anchor.exports.excel.filenames": set(),
     "anchor.exports.excel.provenance": set(),
@@ -286,10 +301,12 @@ def test_the_export_reads_the_store_only_through_the_provenance_types() -> None:
         if isinstance(node, ast.ImportFrom) and node.module and node.module.endswith("deals.store")
         for alias in node.names
     }
-    # Excel Export 2 added the Detailed provenance read beside the Quick one.
-    # Both are read-only classifications; neither is a store write.
+    # Excel Export 2 added the Detailed provenance read beside the Quick one,
+    # and Excel Export 3 the Lease-Level one. All three are read-only
+    # classifications or reads; none is a store write.
     assert names == {
         "DetailedAnalysisProvenance",
+        "LeaseLevelExportProvenance",
         "QuickAnalysisProvenance",
         "QuickAnalysisState",
     }

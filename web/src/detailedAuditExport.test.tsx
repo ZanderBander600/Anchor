@@ -388,7 +388,7 @@ describe('mode routing', () => {
 });
 
 describe('Lease-Level', () => {
-  it('shows the action disabled with an honest, mode-specific explanation', async () => {
+  it('has an action of its own, disabled until the Deal is saved', async () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await waitFor(() => expect(document.querySelector('.sidebar-deal-list')).not.toBeNull());
@@ -400,9 +400,10 @@ describe('Lease-Level', () => {
 
     const item = await exportItem(user);
     expect(item.disabled).toBe(true);
+    // Excel Export 3 replaced the placeholder with a real action. Unsaved
+    // still means no export, in Lease-Level's own words.
     expect(document.getElementById('workbook-export-note')?.textContent).toBe(
-      'The Excel audit workbook is available for Quick and Detailed Underwrite Deals. ' +
-        'Lease-Level Deals are not exported yet.',
+      'Save this Deal to export the Excel audit workbook.',
     );
     fireEvent.click(item);
     expect(exportsTo('.xlsx')).toEqual([]);

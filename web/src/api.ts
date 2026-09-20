@@ -1264,6 +1264,57 @@ export async function downloadDetailedUnderwriteAuditWorkbook(
   return { blob, filename };
 }
 
+/** Used only when the response carries no readable filename. */
+export const LEASE_LEVEL_AUDIT_FALLBACK_FILENAME = 'Lease-Level Underwrite Audit.xlsx';
+
+/** GETs the saved Lease-Level Deal's formula-audit workbook.
+ *
+ * Excel Export 3, and a third separate endpoint for the same reason the second
+ * one exists: the server reads different stored contracts for a Lease-Level
+ * Deal, and a Deal in the wrong mode is refused rather than served another
+ * workbook.
+ *
+ * One thing differs from Quick and Detailed, deliberately. A Lease-Level Deal
+ * stores no analysis snapshot, so there is nothing for this client -- or the
+ * server -- to find missing or stale: the server re-runs the authoritative
+ * analysis over the saved inputs it reads. The action therefore does not wait
+ * for a current in-browser result, only for the Deal to be saved and clean.
+ * Eligibility is still decided entirely from what is stored, and refused with
+ * `{ detail: { code, message } }`; that message is surfaced verbatim because
+ * it says what the analyst must do. */
+export async function downloadLeaseLevelAuditWorkbook(
+  dealId: string,
+): Promise<QuickAuditWorkbookDownload> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/deals/${encodeURIComponent(dealId)}/exports/lease-level.xlsx`,
+    );
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE);
+  }
+
+  if (!response.ok) {
+    let message = 'The audit workbook could not be exported.';
+    try {
+      const body: unknown = await response.json();
+      const detail = (body as { detail?: { message?: unknown } } | null)?.detail;
+      if (detail && typeof detail.message === 'string' && detail.message) {
+        message = detail.message;
+      }
+    } catch {
+      // A non-JSON failure keeps the generic message.
+    }
+    throw new ApiError(message);
+  }
+
+  const blob = await response.blob();
+  const filename =
+    filenameFromContentDisposition(response.headers.get('Content-Disposition')) ??
+    LEASE_LEVEL_AUDIT_FALLBACK_FILENAME;
+  return { blob, filename };
+}
+
 /** GETs every saved deal for the Deal Library, most recently updated
  * first (the backend's own ordering -- this function does not re-sort). */
 export async function listDeals(): Promise<Deal[]> {
