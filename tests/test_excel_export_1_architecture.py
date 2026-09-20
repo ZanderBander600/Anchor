@@ -4,9 +4,10 @@
 reads objects only (protocol 11.2). The guards hold:
 
 1. **the production ledger** -- exactly the declared backend and frontend
-   files changed since ``main`` at ``51c5bf1`` (Asset Types 1 merged).
-   Measured against the working tree while the gate is open, untracked files
-   included; the next gate re-pins it to the merged, committed range;
+   files changed by Excel Export 1, now re-pinned by Excel Export 2 to its
+   merged, committed range ``51c5bf1..b9437e4`` (PR #44 and the PR #45
+   presentation polish). Frozen history: it describes what Export 1 changed
+   and no longer moves with the working tree;
 2. **no financial module changed** -- no engine, analysis, fingerprint,
    Business Plan, leasing, AI or ingestion module;
 3. **nothing depends on the export** -- no production module but the API
@@ -36,6 +37,11 @@ _EXPORTS = _ANCHOR / "exports"
 
 #: ``main`` when Excel Export 1 began: PR #43 (Asset Types 1) merged, schema v14.
 _BASE = "51c5bf1"
+
+#: ``main`` when Excel Export 1 finished: PR #45, the header-separation polish
+#: on top of PR #44. The ledger below is the diff between these two commits, so
+#: it stays a record of Export 1 no matter what later gates add.
+_MERGED = "b9437e4"
 
 _BACKEND_FILES = frozenset(
     {
@@ -93,6 +99,13 @@ _UNCHANGED = (
 )
 
 #: Exactly what the export package may import from outside itself.
+#:
+#: Excel Export 2 moved the shared workbook machinery into ``_workbook``, so
+#: the engine contracts and XlsxWriter are imported there rather than by
+#: ``quick_audit``. The rule this guard exists for is unchanged: the package
+#: reaches for engine *contracts* and the pure debt functions and nothing
+#: else. ``test_excel_export_2_architecture`` holds the same map for the
+#: package as a whole.
 _EXPORT_IMPORTS = {
     "anchor.exports.excel.source": {
         "anchor.asset_types",
@@ -101,7 +114,7 @@ _EXPORT_IMPORTS = {
         "anchor.deals.store",
         "anchor.engine.contracts",
     },
-    "anchor.exports.excel.quick_audit": {
+    "anchor.exports.excel._workbook": {
         "anchor.engine.contracts",
         "anchor.engine.debt",
         "xlsxwriter",
@@ -109,6 +122,8 @@ _EXPORT_IMPORTS = {
         "xlsxwriter.utility",
         "xlsxwriter.worksheet",
     },
+    "anchor.exports.excel.quick_audit": set(),
+    "anchor.exports.excel.detailed_audit": set(),
     "anchor.exports.excel.filenames": set(),
     "anchor.exports.excel.provenance": set(),
     "anchor.exports.excel": set(),
@@ -127,9 +142,12 @@ def _is_production(path: str) -> bool:
 
 
 def _changes_since(base: str, *paths: str) -> set[str]:
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+    """What Excel Export 1 changed: a diff between two commits, not against
+    the working tree. Re-pinned at Excel Export 2, so a later gate's files
+    cannot appear in -- or be hidden by -- this gate's ledger."""
+
+    tracked = _git("diff", "--name-only", "--no-renames", base, _MERGED, "--", *paths).split()
+    return {path for path in tracked if path}
 
 
 def _module_name(path: Path) -> str:
@@ -235,7 +253,8 @@ def test_xlsxwriter_is_used_only_by_the_export_package_and_is_declared() -> None
         for path in _production_modules()
         if any(name == "xlsxwriter" or name.startswith("xlsxwriter.") for name in _imports(path))
     )
-    assert users == ["anchor.exports.excel.quick_audit"]
+    # One writer for both workbooks, in the shared module.
+    assert users == ["anchor.exports.excel._workbook"]
     dependencies = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
     assert any(dependency.lower().startswith("xlsxwriter") for dependency in dependencies)
 
@@ -267,7 +286,13 @@ def test_the_export_reads_the_store_only_through_the_provenance_types() -> None:
         if isinstance(node, ast.ImportFrom) and node.module and node.module.endswith("deals.store")
         for alias in node.names
     }
-    assert names == {"QuickAnalysisProvenance", "QuickAnalysisState"}
+    # Excel Export 2 added the Detailed provenance read beside the Quick one.
+    # Both are read-only classifications; neither is a store write.
+    assert names == {
+        "DetailedAnalysisProvenance",
+        "QuickAnalysisProvenance",
+        "QuickAnalysisState",
+    }
 
 
 def test_the_export_never_opens_a_workbook_or_names_ai() -> None:
@@ -327,10 +352,17 @@ def test_the_schema_version_is_unchanged_and_no_ddl_was_added() -> None:
 # =============================================================================
 
 
-def test_exactly_one_get_route_exposes_an_export() -> None:
+def test_the_quick_export_is_exposed_by_exactly_one_get_route() -> None:
+    """One route per mode, ``GET`` only. Excel Export 2 added the Detailed
+    route beside this one; ``test_excel_export_2_architecture`` pins the whole
+    set."""
+
     routes = sorted(
         (sorted(getattr(route, "methods", None) or ()), str(getattr(route, "path", "")))
         for route in app.routes
         if "/exports/" in str(getattr(route, "path", ""))
     )
-    assert routes == [(["GET"], "/deals/{deal_id}/exports/quick-underwrite.xlsx")]
+    assert (["GET"], "/deals/{deal_id}/exports/quick-underwrite.xlsx") in routes
+    assert [path for _methods, path in routes].count(
+        "/deals/{deal_id}/exports/quick-underwrite.xlsx"
+    ) == 1

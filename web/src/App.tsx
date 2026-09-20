@@ -6,6 +6,7 @@ import {
   createDeal,
   createDetailedDeal,
   deleteDeal,
+  downloadDetailedUnderwriteAuditWorkbook,
   downloadQuickUnderwriteAuditWorkbook,
   duplicateDeal,
   fetchAIAnalysis,
@@ -244,6 +245,23 @@ function isDetailedAnalysisSnapshot(
   snapshot: AcquisitionResults | DetailedAcquisitionResults,
 ): snapshot is DetailedAcquisitionResults {
   return 'operating_projection' in snapshot;
+}
+
+/** Hands a downloaded audit workbook to the browser under the server's own
+ * sanitized filename.
+ *
+ * Excel Export 1 and 2 save identically -- the filename is already decided and
+ * cleaned by the server, and this only delivers the bytes -- so both exports
+ * call this rather than keeping two copies of the same object-URL dance. */
+function saveWorkbookDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export default function App() {
@@ -1405,14 +1423,7 @@ export default function App() {
     setWorkbookExportMessage(null);
     try {
       const { blob, filename } = await downloadQuickUnderwriteAuditWorkbook(dealId);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      saveWorkbookDownload(blob, filename);
       setWorkbookExportMessage({ dealId, tone: 'status', text: `Exported ${filename}` });
     } catch (exportError) {
       setWorkbookExportMessage({
@@ -1442,6 +1453,85 @@ export default function App() {
       workbookExportBlockedReason === null
         ? { tone: workbookExportMessage.tone, text: workbookExportMessage.text }
         : null,
+  };
+
+  // Excel Export 2 -- the Detailed audit workbook, on exactly the same terms as
+  // the Quick one above and read from the Detailed workspace's own state. The
+  // two are deliberately not merged: a Detailed Deal has its own saved id,
+  // dirty flag and result, and sharing one set of them would make the action
+  // report on whichever mode happened to be open last.
+  const [isExportingDetailedWorkbook, setIsExportingDetailedWorkbook] = useState(false);
+  const [detailedWorkbookExportMessage, setDetailedWorkbookExportMessage] = useState<{
+    dealId: string;
+    tone: 'status' | 'error';
+    text: string;
+  } | null>(null);
+  const detailedWorkbookExportBlockedReason: string | null =
+    currentDetailedDealId === null
+      ? 'Save this Deal, then analyze it, to export the Excel audit workbook.'
+      : isDetailedDirty
+        ? 'Unsaved changes are not exported. Save the Deal and analyze the saved inputs first.'
+        : isDetailedSubmitting
+          ? 'Analysis is running. Export when it finishes.'
+          : detailedResults === null
+            ? 'Analyze the saved inputs first. The workbook contains only a saved, current analysis.'
+            : null;
+
+  async function handleExportDetailedAuditWorkbook() {
+    const dealId = currentDetailedDealId;
+    if (dealId === null || detailedWorkbookExportBlockedReason !== null) {
+      return;
+    }
+    setIsExportingDetailedWorkbook(true);
+    setDetailedWorkbookExportMessage(null);
+    try {
+      const { blob, filename } = await downloadDetailedUnderwriteAuditWorkbook(dealId);
+      saveWorkbookDownload(blob, filename);
+      setDetailedWorkbookExportMessage({ dealId, tone: 'status', text: `Exported ${filename}` });
+    } catch (exportError) {
+      setDetailedWorkbookExportMessage({
+        dealId,
+        tone: 'error',
+        text:
+          exportError instanceof ApiError
+            ? exportError.message
+            : 'The audit workbook could not be exported.',
+      });
+    } finally {
+      setIsExportingDetailedWorkbook(false);
+    }
+  }
+
+  const detailedWorkbookExport: WorkbookExportAction = {
+    blockedReason: detailedWorkbookExportBlockedReason,
+    isExporting: isExportingDetailedWorkbook,
+    onExport: () => void handleExportDetailedAuditWorkbook(),
+    message:
+      detailedWorkbookExportMessage !== null &&
+      detailedWorkbookExportMessage.dealId === currentDetailedDealId &&
+      detailedWorkbookExportBlockedReason === null
+        ? {
+            tone: detailedWorkbookExportMessage.tone,
+            text: detailedWorkbookExportMessage.text,
+          }
+        : null,
+  };
+
+  // Lease-Level has no audit workbook yet. The action is shown and disabled,
+  // with the reason, rather than hidden: an analyst who has seen it in the
+  // other two modes should be told it does not exist here, not left to wonder
+  // where it went.
+  //
+  // Named for the workspace it belongs to, like every other Lease-Level arm of
+  // a `byMode` call: it reads no other mode's state, and it must stay that
+  // way (`modeDispatch.architecture.test.ts` M14).
+  const leaseLevelWorkspaceExport: WorkbookExportAction = {
+    blockedReason:
+      'The Excel audit workbook is available for Quick and Detailed Underwrite Deals. ' +
+      'Lease-Level Deals are not exported yet.',
+    isExporting: false,
+    onExport: () => {},
+    message: null,
   };
 
   /** Prompts before a New Deal / Open Deal action would discard unsaved
@@ -3723,8 +3813,8 @@ export default function App() {
               onDeleteDeal={handleDeleteCurrentDeal}
               workbookExport={byMode(operatingMode, {
                 quick: quickWorkbookExport,
-                detailed: null,
-                lease_level: null,
+                detailed: detailedWorkbookExport,
+                lease_level: leaseLevelWorkspaceExport,
               })}
             />
 
