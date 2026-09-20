@@ -1,7 +1,8 @@
 # Asset Types 1: Controlled Classification and Analyst-Authored Subtypes
 
-Status: **implemented and merged in PR #43, pending human acceptance.** Not
-accepted. Baseline: `main` at `2e6ca8e` (PR #42), schema v13.
+Status: **implemented, merged in PR #43, and human accepted.** Implementation
+baseline: `main` at `2e6ca8e` (PR #42), schema v13. Accepted product baseline:
+`main` at `1afd003` (PR #47), schema v14.
 Risk tier: Tier 2 (schema, API contract, fingerprint boundary, persistence),
 with Tier 3 product UI.
 
@@ -281,3 +282,15 @@ invariants are caught:
 - Inferring a type for legacy records or legacy `property_type` text.
 - Showing the type in the Recent Deals sidebar. The contract permits it but
   does not require it, so it is left out to keep the collapsed rail unchanged.
+
+## 9. Human acceptance and feature closeout
+
+On 2026-09-20 the human explicitly accepted Asset Types 1. A final isolated
+acceptance sweep against merged `main` at `1afd003` verified controlled Asset
+Types and analyst-authored subtypes on Quick, Detailed, and Lease-Level Deals,
+and verified the acquisition-time classification snapshot in the Managed
+Assets list and asset workspace at desktop and mobile widths.
+
+Asset Types 1 is therefore **complete and accepted**. This record changes
+status only; classification remains non-economic and outside every financial
+fingerprint. No later Asset Types phase is started or implied.

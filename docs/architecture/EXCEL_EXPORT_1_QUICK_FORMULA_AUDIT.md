@@ -1,8 +1,8 @@
 # Excel Export 1: Quick Underwrite Formula Audit
 
-Status: implemented and **merged in PR #44**, with its presentation polish
-(header separation) merged in **PR #45 at `b9437e4`**; still **pending human
-acceptance -- not accepted.** Baseline: `main` at `51c5bf1` (Asset Types 1
+Status: **implemented, merged, and human accepted.** Core work merged in PR
+#44, with presentation polish merged in **PR #45 at `b9437e4`**. Implementation
+baseline: `main` at `51c5bf1` (Asset Types 1
 merged, schema v14). Risk tier: 1 (the workbook independently reproduces NOI,
 debt, exit value, equity cash flow, equity multiple and IRR), with Tier 2
 eligibility and stale-state behaviour. No financial calculation, fingerprint,
@@ -259,3 +259,13 @@ generation failures expose no path or exception text.
    Anchor Results is unchanged; restore it and confirm every check passes.
 5. Confirm unsaved changes, an unanalysed Deal and a Detailed or Lease-Level
    Deal cannot be exported.
+
+## 13. Human acceptance and feature closeout
+
+On 2026-09-20 the human explicitly accepted Excel Export 1, including the PR
+#45 workbook presentation polish. The final isolated acceptance sweep against
+merged `main` at `1afd003` completed a Quick Underwrite audit export and
+confirmed the mode-specific success status and sanitized `.xlsx` filename.
+
+Excel Export 1 is therefore **complete and accepted**. This record changes
+status only and starts no later export gate.

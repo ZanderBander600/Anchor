@@ -1,8 +1,8 @@
 # Excel Export 3: Lease-Level Underwrite Formula Audit
 
-Status: **implemented on `feature/excel-export-3-lease-level-formula-audit`,
-pending independent review and human acceptance -- not accepted.** Baseline:
-`main` at `fe70d40` (Excel Export 2 merged in PR #46; schema v14). Risk tier: 1
+Status: **implemented, merged in PR #47 (`1afd003`), independently reviewed,
+and human accepted.** Implementation baseline: `main` at `fe70d40` (Excel
+Export 2 merged in PR #46; schema v14). Risk tier: 1
 (the workbook independently reproduces the whole Lease-Level rent roll,
 rollover chain, recoveries, property statement, debt, exit value, equity cash
 flow, equity multiple and IRR), with Tier 2 eligibility behaviour and Tier 3
@@ -456,3 +456,15 @@ process it starts). `tests/test_excel_export_3_native_recalc.py`:
 7. Confirm a term or downtime cell is locked, and says why.
 8. Confirm unsaved changes, an unsaved Deal, a Quick Deal and a Detailed Deal
    cannot be exported through this route.
+
+## 15. Human acceptance and feature closeout
+
+On 2026-09-20 the human explicitly accepted Excel Export 3, including both
+post-review provenance corrections. The final isolated acceptance sweep
+against merged `main` at `1afd003` completed a Lease-Level Underwrite audit
+export and confirmed the mode-specific success status and sanitized `.xlsx`
+filename. Quick and Detailed exports were also completed in the same sweep.
+
+Excel Export 3 is therefore **complete and accepted**. This record changes
+status only and starts no later export gate. Together, Excel Exports 1–3 close
+the currently authorized formula-audit workbook sequence.

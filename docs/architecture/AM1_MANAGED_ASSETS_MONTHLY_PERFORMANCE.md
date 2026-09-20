@@ -1,6 +1,8 @@
 # AM1 — Managed Assets and Monthly Performance
 
-Status: Implemented and merged in PR #38 (`3048976`), pending human product acceptance
+Status: **Implemented, merged, and human accepted.** Core implementation merged
+in PR #38 (`3048976`); bounded deletion and QA corrections are included in the
+accepted product.
 Gate: AM1
 Started from: `main` at `63c2ac0`
 Branch: `feature/am1-managed-assets-monthly-performance`
@@ -10,8 +12,7 @@ Risk tier: Tier 1 financial/contract critical, with Tier 2 persistence and
 Tier 3 product behavior
 
 AM1 is an independent post-acquisition feature. It is **not** P7.10, it is not
-part of P7.10, and it does not advance the P7 competition sequence. P7.9 final
-human acceptance remains pending and is unaffected by this gate.
+part of P7.10, and it does not advance the P7 competition sequence.
 
 ---
 
@@ -671,14 +672,14 @@ answered with repeated full-suite attempts (protocol 7.3).
 ## 12. Implementation status
 
 Implemented and verified on `feature/am1-managed-assets-monthly-performance`,
-then merged to `main` in PR #38 (`3048976`). Human product acceptance is
-pending, so AM1 is not yet accepted.
+then merged to `main` in PR #38 (`3048976`). Human product acceptance and the
+final closeout are recorded in Section 15.
 
 The user-authorized Managed Asset deletion extension is implemented on
 `feature/am1-delete-managed-asset` and merged to `main` in PR #39 (`60be780`).
 It does not change the schema or any financial calculation: it adds one
 transactional asset-level lifecycle action, an inline confirmation, and no
-report-level delete action. Hands-on AM1 product acceptance remains pending.
+report-level delete action. It is included in the accepted AM1 product.
 
 Deletion-extension verification on 2026-09-18:
 
@@ -695,15 +696,15 @@ Deletion-extension verification on 2026-09-18:
 - the final backend suite reported 9,597 passed and the same three inherited
   architecture-ledger failures already present after the AM1 merge.
 
-P7.9 final human acceptance remains pending and is unaffected by this gate.
-P7.10 has not started.
+P7.9 and AM1 were later accepted together in the 2026-09-20 closeout. P7.10
+has not started.
 
 ## 13. Closeout QA correction record
 
 Hands-on browser QA of the merged AM1 product found presentation defects. The
 P7.9 / AM1 closeout branch `fix/p7-9-closeout-and-am1-qa-corrections` (from
-`main` at `c637d1e`) corrects them. **AM1 is not accepted by this record**: the
-correction awaits independent review, merge and hands-on human acceptance.
+`main` at `c637d1e`) corrects them. This correction record did not itself
+accept AM1; the later human acceptance is recorded in Section 15.
 
 - **List alignment.** The Managed Assets and Monthly Reporting headers
   inherited the browser's centred `th` default above left-aligned values. Each
@@ -742,7 +743,8 @@ gave "Update Commentary" a focused editor. Its first version saved through the
 actual-results PUT and resent the actual figures the browser had loaded. If
 another tab or user had saved newer actuals in the meantime, a commentary save
 would have silently put the stale figures back. This pass adds a narrow
-commentary-only operation instead. **AM1 is not accepted by this record.**
+commentary-only operation instead. This correction record did not itself
+accept AM1; the later human acceptance is recorded in Section 15.
 
 - **Store.** `update_monthly_report_commentary` validates the note with the
   report's own `validate_commentary`. Its one write is a literal statement,
@@ -764,3 +766,17 @@ commentary-only operation instead. **AM1 is not accepted by this record.**
   two routes call two different operations.
 - **No calculation, schema or lifecycle change.** The v13 schema, the budget
   freeze, `performance.py` and the actual-results route are unchanged.
+
+## 15. Human acceptance and feature closeout
+
+On 2026-09-20 the human explicitly accepted AM1, including the Managed Asset
+deletion extension and the later presentation, staleness, validation, focus,
+and commentary-only corrections. A final isolated acceptance sweep against
+merged `main` at `1afd003` verified the Managed Assets list, acquisition
+linkage, monthly budget-versus-actual KPI cards, operating statement,
+attention items, management commentary, and desktop/mobile presentation. It
+found no page-level overflow and no browser console warnings or errors.
+
+AM1 is therefore **complete and accepted**. This record changes status only;
+it changes no financial calculation, schema, lifecycle, or API contract and
+starts no later Asset Management phase. AM1 remains independent of P7.10.

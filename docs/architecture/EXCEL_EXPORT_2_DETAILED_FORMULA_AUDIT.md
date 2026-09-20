@@ -1,7 +1,7 @@
 # Excel Export 2: Detailed Underwrite Formula Audit
 
-Status: implemented on `feature/excel-export-2-detailed-formula-audit`,
-**pending human acceptance -- not accepted.** Baseline: `main` at `b9437e4`
+Status: **implemented, merged in PR #46 (`fe70d40`), and human accepted.**
+Implementation baseline: `main` at `b9437e4`
 (Excel Export 1 merged in PR #44, its presentation polish in PR #45; schema
 v14). Risk tier: 1 (the workbook independently reproduces the whole Detailed
 operating model, debt, exit value, equity cash flow, equity multiple and IRR),
@@ -364,3 +364,13 @@ stays v14; no DDL and no migration was added.
    confirm every check passes.
 6. Confirm unsaved changes, an unanalysed Deal, a Quick Deal and a Lease-Level
    Deal cannot be exported through this route.
+
+## 14. Human acceptance and feature closeout
+
+On 2026-09-20 the human explicitly accepted Excel Export 2. The final isolated
+acceptance sweep against merged `main` at `1afd003` completed a Detailed
+Underwrite audit export and confirmed the mode-specific success status and
+sanitized `.xlsx` filename.
+
+Excel Export 2 is therefore **complete and accepted**. This record changes
+status only and starts no later export gate.

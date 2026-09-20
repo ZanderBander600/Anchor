@@ -1,6 +1,7 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-19 (Excel Export 3 started)
+Last synchronized: 2026-09-20 (P7.9, AM1, Asset Types 1, and Excel Exports
+1–3 accepted and closed)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -9,87 +10,65 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `2e6ca8e` (PR #42, the second P7.9 / AM1 QA
-  corrections; PR #40 recorded the AM1 deletion merge and PR #41 merged the
-  P7.9 closeout and first AM1 QA corrections). Asset Types 1 started from this
-  commit. None of these merges changed the acceptance status of P7.9 or AM1
-  below.
-- Last accepted financial implementation merge: `70b92e2` (PR #34, P7.9
-  Stage 1 deterministic contracts and engine).
-- Active gate: **P7.9 Partnership Waterfalls + Investor Returns**. The ratified
-  contract is `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`.
-  - **Stage 1** (deterministic contracts and engine): **complete and accepted**
-    in PR #34 (`70b92e2`).
-  - **Stage 2** (persistence, migration, fingerprints, API, Partner Decision
-    Matrix; Section 17.2): **complete and accepted** in PR #35 (`543c1b2`).
-    Tier 2 is integrated over the frozen Stage 1 engine.
-  - **Stage 3** (product UI, browser QA; Section 17.3): **implementation
-    complete and merged** in PR #36 (`3f23ba4`). Final hands-on human product
-    acceptance is pending before P7.9 closes.
-- **Asset Types 1** is implemented and merged in PR #43, pending hands-on
-  human acceptance.
-- **AM1 Managed Assets + Monthly Performance** was explicitly started from
-  `main` at `63c2ac0` and merged in PR #38 (`3048976`). It is an independent
-  post-acquisition feature: it is not P7.10 and is not part of P7.10. Its
-  authority is `docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md`.
-  Implementation is merged; hands-on human product acceptance is pending.
-- The bounded AM1 Managed Asset deletion extension merged in PR #39
-  (`60be780`). It deletes an asset and its owned monthly reports only after
-  inline confirmation, preserves the source acquisition, and changes no
-  financial calculation or schema. It remains part of the pending AM1 hands-on
-  product acceptance.
-- **Asset Types 1: controlled classification and analyst-authored subtypes**
-  is implemented and merged in PR #43 (schema v14),
-  **pending human acceptance -- not accepted.** It adds classification only: a
-  controlled Asset Type and an analyst-authored subtype on Deals in all three
-  modes, an honest multi-type view of Investments, and a creation-time
-  classification snapshot on Managed Assets. It changes no financial
-  calculation, fingerprint or AI behaviour. It is not P7.10 and does not change
-  the P7 phase sequence. Its authority is
-  `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md`.
-- **Excel Export 1: Quick Underwrite formula-audit workbook** is implemented
-  and **merged in PR #44**, with its presentation polish (header separation)
-  merged in **PR #45 at `b9437e4`**. It remains **pending human acceptance --
-  not accepted.** A saved, currently analysed Quick Deal downloads as a
-  formula-level audit workbook. It is read-only and changes no financial
-  calculation, fingerprint, stored analysis, schema (v14) or AI behaviour.
-  It is not P7.10. Its authority is
-  `docs/architecture/EXCEL_EXPORT_1_QUICK_FORMULA_AUDIT.md`.
-- **Excel Export 2: Detailed Underwrite formula-audit workbook** was
-  explicitly started from `main` at `b9437e4` and is **merged in PR #46 at
-  `fe70d40`**, **pending human acceptance -- not accepted.** A saved, currently
-  analysed Detailed Deal downloads as a formula-level audit workbook that
-  independently reproduces the Detailed operating model, including the complete
-  Year H+1 exit projection, and reconciles it against the frozen saved
-  analysis. It is read-only and changes no financial calculation, fingerprint,
-  stored analysis, schema (v14) or AI behaviour; the Quick workbook's output is
-  byte-for-byte unchanged. It is not P7.10. Its authority is
-  `docs/architecture/EXCEL_EXPORT_2_DETAILED_FORMULA_AUDIT.md`.
-- **Excel Export 3: Lease-Level Underwrite formula-audit workbook** was
-  explicitly started from `main` at `fe70d40` and is implemented on
-  `feature/excel-export-3-lease-level-formula-audit`, **pending review and
-  human acceptance -- not accepted.** A saved Lease-Level Deal downloads as a
-  formula-level audit workbook that independently reproduces the rent roll, the
-  recursive rollover chain, tenant recoveries, the monthly property statement,
-  the annual projection and the forward Year H+1 exit window, then reuses the
-  shared downstream debt, sale, cash-flow and return model. Lease-Level Deals
-  deliberately persist no analysis snapshot, so the server re-runs the existing
-  authoritative analysis over the saved inputs it reads and compares the
-  workbook against that; it adds no snapshot column and no migration. It is
-  read-only and changes no financial calculation, fingerprint, schema (v14) or
-  AI behaviour; the Quick and Detailed workbooks' output is byte-for-byte
-  unchanged. It is not P7.10 and starts no later export gate. Its authority is
-  `docs/architecture/EXCEL_EXPORT_3_LEASE_LEVEL_FORMULA_AUDIT.md`.
-- P7.9 final hands-on human acceptance remains pending.
-- P7.10 has not started.
+- Accepted baseline: `main` at `1afd003` (PR #47, Excel Export 3). This baseline
+  contains every implementation and correction accepted in the 2026-09-20
+  closeout record below.
+- Last financial-engine implementation merge: `70b92e2` (PR #34, P7.9 Stage 1
+  deterministic Partnership contracts and engine). Later accepted P7.9 work
+  integrates that engine without changing its frozen Stage 1 package.
+- Active gate: **none**. P7.9 is closed. **P7.10 has not started** and still
+  requires an explicit start.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
-  workflow is active
-- Autonomous merge: not authorized
-- Autonomous next-gate transition: not authorized
+  workflow is active.
+- Autonomous merge: not authorized.
+- Autonomous next-gate transition: not authorized.
 
 Git and GitHub remain operational truth for the exact current HEAD and open PR
-state. If `main` has moved beyond the baseline above, inspect the intervening
-accepted merge before updating this file.
+state. If `main` moves beyond the accepted baseline above, inspect the
+intervening merge before updating this file.
+
+## 2026-09-20 Human Acceptance and Closeout
+
+The human explicitly accepted all work through the current merged `main`. A
+final isolated acceptance sweep against the merged product then confirmed the
+major workflows below at desktop and 390px mobile widths, with no page-level
+overflow and no browser console warnings or errors. The sweep used temporary
+data and did not alter the production database or the user's active browser
+session.
+
+The following gates and bounded extensions are **accepted and closed**:
+
+- **P7.9 Partnership Waterfalls + Investor Returns**, all three stages:
+  - Stage 1 contracts and deterministic engine, PR #34 (`70b92e2`);
+  - Stage 2 persistence, migration, fingerprints, API, and Partner Decision
+    Matrix, PR #35 (`543c1b2`);
+  - Stage 3 product UI and browser QA, PR #36 (`3f23ba4`), including the later
+    P7.9 QA corrections merged through PR #42.
+  - The acceptance sweep ran the Partnership analysis and verified Partner
+    returns, benchmark differences, Promote Earned, benchmark capital
+    subordination, promote attribution by tier, the Tier Audit, and the Partner
+    Decision Matrix.
+- **AM1 Managed Assets + Monthly Performance**, PR #38 (`3048976`), including
+  the Managed Asset deletion extension in PR #39 and the later AM1 QA and
+  commentary-only corrections merged through PR #42. The acceptance sweep
+  verified the Managed Assets list, acquisition linkage, monthly budget versus
+  actual reporting, KPI cards, operating statement, attention items,
+  commentary, and responsive presentation.
+- **Asset Types 1**, PR #43: the controlled Asset Type and analyst-authored
+  subtype are accepted across Deals, Investments, and Managed Asset snapshots.
+- **Excel Export 1**, Quick Underwrite formula-audit workbook, PR #44 plus the
+  PR #45 presentation polish (`b9437e4`).
+- **Excel Export 2**, Detailed Underwrite formula-audit workbook, PR #46
+  (`fe70d40`).
+- **Excel Export 3**, Lease-Level Underwrite formula-audit workbook, PR #47
+  (`1afd003`).
+  - The acceptance sweep completed one export in each underwriting mode and
+    confirmed the mode-specific success status and filename.
+
+This closeout changes status only. It changes no calculation, convention,
+schema, fingerprint, API contract, workbook, or product behavior. It does not
+start P7.10, a later Asset Types phase, another Asset Management phase, or
+another Excel Export gate.
 
 ## Completed Milestones
 
@@ -109,44 +88,24 @@ accepted merge before updating this file.
 - P7.7 Capital Structure Foundation and legacy debt adapter
 - P7.8 Structured Position Cash Flows, Position Returns, persistence, product
   integration, Position Decision Matrix, browser QA, and human visual acceptance
-- P7.9 Stage 1 deterministic Partnership Waterfall contracts and engine
-- P7.9 Stage 2 Partnership persistence, migration, fingerprints, API and
-  Partner Decision Matrix
-- P7.9 Stage 3 Partnership product UI, Partner Decision Matrix integration and
-  browser QA implementation (PR #36; final hands-on human acceptance pending)
+- P7.9 Partnership Waterfalls + Investor Returns, Stages 1–3, human accepted
+- AM1 Managed Assets + Monthly Performance, including deletion and focused
+  commentary updates, human accepted
+- Asset Types 1 controlled classification and analyst-authored subtypes, human
+  accepted
+- Excel Exports 1–3 formula-audit workbooks for Quick, Detailed, and
+  Lease-Level Underwrite, human accepted
 
 ## Next Work
 
-**P7.9: Partnership Waterfalls + Investor Returns** is active. Its contract is
-ratified (PR #33). Human engine-scope approval (Q16) covers the P7.9
-Partnership Waterfall and Investor Return layer only. The gate runs in three
-stages, each started explicitly:
+The next ratified competition gate is **P7.10 Valuation Timepoints + remaining
+Decision Support / AI integration**. It has not started. Beginning it requires
+an explicit human start and a bounded contract/review step; this closeout does
+not authorize implementation automatically.
 
-1. Stage 1: deterministic contracts and engine. **Complete and accepted in
-   PR #34 (`70b92e2`).**
-2. Stage 2: persistence, migration, fingerprints, API and the Partner
-   Decision Matrix. **Complete and accepted in PR #35 (`543c1b2`).**
-3. Stage 3: product UI with browser QA. **Implementation complete and merged
-   in PR #36 (`3f23ba4`); final hands-on human product acceptance is pending.**
-
-The next action is the human workflow test of the merged Stage 3 product.
-P7.9 remains active until that acceptance is recorded. P7.10 has not started,
-and finishing P7.9 will not start it automatically.
-
-AM1 is also merged and awaits hands-on human product acceptance. That parallel
-post-acquisition feature does not change the P7 phase sequence or close P7.9.
-
-Asset Types 1 is merged and awaits hands-on human acceptance. It is a
-classification feature outside the P7 sequence and starts no later asset-type
-phase.
-
-Excel Export 1 (Quick Underwrite formula-audit workbook) is merged (PR #44,
-with PR #45's presentation polish) and awaits hands-on human acceptance. Excel
-Export 2 (Detailed Underwrite formula-audit workbook) is merged in PR #46
-(`fe70d40`) and awaits hands-on human acceptance. Excel Export 3 (Lease-Level
-Underwrite formula-audit workbook) is implemented on its own branch from
-`fe70d40` and awaits review and hands-on human acceptance. All three are
-outside the P7 sequence, and none starts a later export gate.
+After P7.10, the ratified sequence ends with **P7.11 Competition Closeout**.
+Refinancing / recapitalization remains a separately authorized potential
+sub-gate.
 
 A bounded stabilization sweep remains available for separate human
 authorization. It is not automatically active. Its source issues are:
@@ -159,14 +118,6 @@ Do not treat #29 as authority to redesign the Lease-Level engine inside a
 polish gate. A full multifamily abstraction is separate product scope. Small
 unit-label, validation, diagnostic, and regression-fixture improvements may be
 scoped independently.
-
-After P7.9, the ratified sequence is:
-
-1. P7.10 Valuation Timepoints + remaining Decision Support / AI integration
-2. P7.11 Competition Closeout
-
-Refinancing / recapitalization remains a separately authorized potential
-sub-gate.
 
 ## Current Architecture Authorities
 
@@ -184,30 +135,25 @@ sub-gate.
   `docs/architecture/P7_7_CAPITAL_STRUCTURE_FOUNDATION.md`,
   `docs/architecture/P7_8_STRUCTURED_POSITION_ECONOMICS.md`, and
   `docs/architecture/P7_8_PRODUCT_INTEGRATION.md`
-- P7.9 ratified contract (Stages 1 and 2 accepted; Stage 3 merged, with final
-  hands-on human acceptance pending):
-  `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md`
+- P7.9 Partnership Waterfalls + Investor Returns:
+  `docs/architecture/P7_9_PARTNERSHIP_WATERFALLS.md` — **implemented and human
+  accepted; P7.9 is closed.**
 - AM1 Managed Assets + Monthly Performance:
-  `docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md` --
-  **implemented and merged in PR #38 (`3048976`), pending human acceptance.**
-  It is not yet accepted, is an independent post-acquisition feature and is not
-  P7.10.
+  `docs/architecture/AM1_MANAGED_ASSETS_MONTHLY_PERFORMANCE.md` — **implemented
+  and human accepted.** It remains an independent post-acquisition feature,
+  not P7.10.
 - Asset Types 1 classification:
-  `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md` -- **implemented and
-  merged in PR #43, pending human acceptance.** It is not yet accepted and is
-  not P7.10.
+  `docs/architecture/ASSET_TYPES_1_CLASSIFICATION.md` — **implemented and human
+  accepted.** It starts no later Asset Types phase.
 - Excel Export 1 Quick Underwrite formula audit:
-  `docs/architecture/EXCEL_EXPORT_1_QUICK_FORMULA_AUDIT.md` -- **merged in
-  PR #44 and PR #45 (`b9437e4`), pending human acceptance.** It is not yet
-  accepted and is not P7.10.
+  `docs/architecture/EXCEL_EXPORT_1_QUICK_FORMULA_AUDIT.md` — **implemented and
+  human accepted.**
 - Excel Export 2 Detailed Underwrite formula audit:
-  `docs/architecture/EXCEL_EXPORT_2_DETAILED_FORMULA_AUDIT.md` -- **merged in
-  PR #46 (`fe70d40`), pending human acceptance.** It is not yet accepted and is
-  not P7.10.
+  `docs/architecture/EXCEL_EXPORT_2_DETAILED_FORMULA_AUDIT.md` — **implemented
+  and human accepted.**
 - Excel Export 3 Lease-Level Underwrite formula audit:
-  `docs/architecture/EXCEL_EXPORT_3_LEASE_LEVEL_FORMULA_AUDIT.md` --
-  **implemented, pending review and human acceptance.** It is not yet accepted
-  and is not P7.10.
+  `docs/architecture/EXCEL_EXPORT_3_LEASE_LEVEL_FORMULA_AUDIT.md` — **implemented
+  and human accepted.**
 
 ## Historical-Document Rule
 
