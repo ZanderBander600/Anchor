@@ -1,6 +1,6 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-19 (Excel Export 2 started)
+Last synchronized: 2026-09-19 (Excel Export 3 started)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -56,17 +56,30 @@ whenever an accepted gate merges or the active gate changes.
   It is not P7.10. Its authority is
   `docs/architecture/EXCEL_EXPORT_1_QUICK_FORMULA_AUDIT.md`.
 - **Excel Export 2: Detailed Underwrite formula-audit workbook** was
-  explicitly started from `main` at `b9437e4` and is implemented on
-  `feature/excel-export-2-detailed-formula-audit`, **pending review and human
-  acceptance -- not accepted.** A saved, currently analysed Detailed Deal
-  downloads as a formula-level audit workbook that independently reproduces
-  the Detailed operating model, including the complete Year H+1 exit
-  projection, and reconciles it against the frozen saved analysis. It is
-  read-only and changes no financial calculation, fingerprint, stored
-  analysis, schema (v14) or AI behaviour; the Quick workbook's output is
-  byte-for-byte unchanged. Lease-Level and every other export remain deferred.
-  It is not P7.10. Its authority is
+  explicitly started from `main` at `b9437e4` and is **merged in PR #46 at
+  `fe70d40`**, **pending human acceptance -- not accepted.** A saved, currently
+  analysed Detailed Deal downloads as a formula-level audit workbook that
+  independently reproduces the Detailed operating model, including the complete
+  Year H+1 exit projection, and reconciles it against the frozen saved
+  analysis. It is read-only and changes no financial calculation, fingerprint,
+  stored analysis, schema (v14) or AI behaviour; the Quick workbook's output is
+  byte-for-byte unchanged. It is not P7.10. Its authority is
   `docs/architecture/EXCEL_EXPORT_2_DETAILED_FORMULA_AUDIT.md`.
+- **Excel Export 3: Lease-Level Underwrite formula-audit workbook** was
+  explicitly started from `main` at `fe70d40` and is implemented on
+  `feature/excel-export-3-lease-level-formula-audit`, **pending review and
+  human acceptance -- not accepted.** A saved Lease-Level Deal downloads as a
+  formula-level audit workbook that independently reproduces the rent roll, the
+  recursive rollover chain, tenant recoveries, the monthly property statement,
+  the annual projection and the forward Year H+1 exit window, then reuses the
+  shared downstream debt, sale, cash-flow and return model. Lease-Level Deals
+  deliberately persist no analysis snapshot, so the server re-runs the existing
+  authoritative analysis over the saved inputs it reads and compares the
+  workbook against that; it adds no snapshot column and no migration. It is
+  read-only and changes no financial calculation, fingerprint, schema (v14) or
+  AI behaviour; the Quick and Detailed workbooks' output is byte-for-byte
+  unchanged. It is not P7.10 and starts no later export gate. Its authority is
+  `docs/architecture/EXCEL_EXPORT_3_LEASE_LEVEL_FORMULA_AUDIT.md`.
 - P7.9 final hands-on human acceptance remains pending.
 - P7.10 has not started.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
@@ -129,10 +142,11 @@ phase.
 
 Excel Export 1 (Quick Underwrite formula-audit workbook) is merged (PR #44,
 with PR #45's presentation polish) and awaits hands-on human acceptance. Excel
-Export 2 (Detailed Underwrite formula-audit workbook) is implemented on its own
-branch from `b9437e4` and awaits review and hands-on human acceptance. Both are
-outside the P7 sequence, and neither starts a later export gate: Lease-Level
-export has not started and is not authorized by this work.
+Export 2 (Detailed Underwrite formula-audit workbook) is merged in PR #46
+(`fe70d40`) and awaits hands-on human acceptance. Excel Export 3 (Lease-Level
+Underwrite formula-audit workbook) is implemented on its own branch from
+`fe70d40` and awaits review and hands-on human acceptance. All three are
+outside the P7 sequence, and none starts a later export gate.
 
 A bounded stabilization sweep remains available for separate human
 authorization. It is not automatically active. Its source issues are:
@@ -187,7 +201,11 @@ sub-gate.
   PR #44 and PR #45 (`b9437e4`), pending human acceptance.** It is not yet
   accepted and is not P7.10.
 - Excel Export 2 Detailed Underwrite formula audit:
-  `docs/architecture/EXCEL_EXPORT_2_DETAILED_FORMULA_AUDIT.md` --
+  `docs/architecture/EXCEL_EXPORT_2_DETAILED_FORMULA_AUDIT.md` -- **merged in
+  PR #46 (`fe70d40`), pending human acceptance.** It is not yet accepted and is
+  not P7.10.
+- Excel Export 3 Lease-Level Underwrite formula audit:
+  `docs/architecture/EXCEL_EXPORT_3_LEASE_LEVEL_FORMULA_AUDIT.md` --
   **implemented, pending review and human acceptance.** It is not yet accepted
   and is not P7.10.
 

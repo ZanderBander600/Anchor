@@ -4,9 +4,9 @@
 reads objects only (protocol 11.2). The guards hold:
 
 1. **the production ledger** -- exactly the declared backend and frontend
-   files changed since ``main`` at ``b9437e4`` (Excel Export 1 merged, PR #45).
-   Measured against the working tree while the gate is open, untracked files
-   included; the next gate re-pins it to the merged, committed range;
+   files changed by Excel Export 2, now re-pinned by Excel Export 3 to its
+   merged, committed range ``b9437e4..fe70d40`` (PR #46). Frozen history: it
+   describes what Export 2 changed and no longer moves with the working tree;
 2. **no financial module changed** -- no engine, analysis, fingerprint,
    Business Plan, leasing, AI or ingestion module. The Detailed operating
    model is *reproduced* in Excel, never altered in Anchor;
@@ -39,6 +39,11 @@ _EXPORTS = _ANCHOR / "exports"
 #: ``main`` when Excel Export 2 began: PR #45 (Excel Export 1 presentation
 #: polish) merged, schema v14.
 _BASE = "b9437e4"
+
+#: ``main`` when Excel Export 2 merged: PR #46. The ledger below is the diff
+#: between these two commits, re-pinned at Excel Export 3 so a later gate's
+#: files can neither appear in nor be hidden by this gate's ledger.
+_MERGED = "fe70d40"
 
 _BACKEND_FILES = frozenset(
     {
@@ -101,11 +106,17 @@ _UNCHANGED = (
 #: Exactly what the export package may import from outside itself.
 _EXPORT_IMPORTS = {
     "anchor.exports.excel.source": {
+        # Excel Export 3 re-runs the authoritative Lease-Level analysis,
+        # because a Lease-Level Deal stores none. It calls the same entry
+        # point the analyze route calls and adds no second pathway.
+        "anchor.analysis.business_plan_analysis",
         "anchor.asset_types",
         "anchor.business_plan",
         "anchor.contracts",
         "anchor.deals.store",
         "anchor.engine.contracts",
+        "anchor.leasing",
+        "anchor.leasing.validation",
     },
     "anchor.exports.excel._workbook": {
         "anchor.engine.contracts",
@@ -116,6 +127,12 @@ _EXPORT_IMPORTS = {
         "xlsxwriter.worksheet",
     },
     "anchor.exports.excel.quick_audit": set(),
+    "anchor.exports.excel.lease_level_audit": {
+        "anchor.leasing",
+        "anchor.leasing.calendar",
+        "anchor.leasing.contracts",
+        "anchor.leasing.market",
+    },
     "anchor.exports.excel.detailed_audit": set(),
     "anchor.exports.excel.filenames": set(),
     "anchor.exports.excel.provenance": set(),
@@ -125,6 +142,7 @@ _EXPORT_IMPORTS = {
 
 _EXPORT_ROUTES = [
     (["GET"], "/deals/{deal_id}/exports/detailed-underwrite.xlsx"),
+    (["GET"], "/deals/{deal_id}/exports/lease-level.xlsx"),
     (["GET"], "/deals/{deal_id}/exports/quick-underwrite.xlsx"),
 ]
 
@@ -140,9 +158,11 @@ def _is_production(path: str) -> bool:
 
 
 def _changes_since(base: str, *paths: str) -> set[str]:
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+    """What Excel Export 2 changed: a diff between two commits, not against the
+    working tree. Re-pinned at Excel Export 3."""
+
+    tracked = _git("diff", "--name-only", "--no-renames", base, _MERGED, "--", *paths).split()
+    return {path for path in tracked if path}
 
 
 def _module_name(path: Path) -> str:
@@ -334,6 +354,7 @@ def test_the_export_reads_the_store_only_through_the_provenance_types() -> None:
     }
     assert names == {
         "DetailedAnalysisProvenance",
+        "LeaseLevelExportProvenance",
         "QuickAnalysisProvenance",
         "QuickAnalysisState",
     }
@@ -437,7 +458,7 @@ def test_no_migration_was_added() -> None:
 # =============================================================================
 
 
-def test_exactly_two_get_routes_expose_an_export() -> None:
+def test_exactly_one_get_route_per_supported_mode_exposes_an_export() -> None:
     routes = sorted(
         (sorted(getattr(route, "methods", None) or ()), str(getattr(route, "path", "")))
         for route in app.routes
@@ -451,16 +472,10 @@ def test_exactly_two_get_routes_expose_an_export() -> None:
 # =============================================================================
 
 
-#: Vocabulary from the domains this export deliberately excludes. Matched
-#: against *code* -- imports and identifiers -- never against prose, because
-#: the workbook's own scope note names these domains in order to say they are
-#: not exported.
+#: Vocabulary from the domains **no** export covers. Matched against *code* --
+#: imports and identifiers -- never against prose, because a workbook's scope
+#: note names these domains in order to say they are not exported.
 _EXCLUDED_VOCABULARY = (
-    "lease_level",
-    "LeaseLevel",
-    "rent_roll",
-    "Suite",
-    "Lease",
     "Investment",
     "Scenario",
     "Strategy",
@@ -469,6 +484,21 @@ _EXCLUDED_VOCABULARY = (
     "Waterfall",
     "ManagedAsset",
 )
+
+#: Lease-Level vocabulary. Excel Export 3 exists to reproduce a rent roll, so
+#: its own module and the shared eligibility layer may name these; the Quick
+#: and Detailed modules and the shared workbook base may not, because neither
+#: mode has a rent roll and a leak would mean one had acquired one.
+_LEASE_LEVEL_VOCABULARY = ("lease_level", "LeaseLevel", "rent_roll", "Suite", "Lease")
+
+_LEASE_LEVEL_MODULES = frozenset(
+    {"lease_level_audit.py", "source.py", "filenames.py", "__init__.py"}
+)
+
+#: Leasing contract names that merely *contain* an excluded token. They are
+#: named individually rather than by loosening the token, so the guard keeps
+#: catching the P7 domain it exists for.
+_VOCABULARY_EXEMPTIONS = frozenset({"InitialVacancyStrategy"})
 
 
 def _code_identifiers(path: Path) -> set[str]:
@@ -491,13 +521,34 @@ def _code_identifiers(path: Path) -> set[str]:
     return names
 
 
-def test_the_export_package_covers_only_quick_and_detailed() -> None:
-    """No Lease-Level, Investment, Scenario, Strategy, Capital Structure,
-    Partnership or Asset Management export has leaked in."""
+def test_the_export_package_covers_only_the_three_underwrite_modes() -> None:
+    """No Investment, Scenario, Strategy, Capital Structure, Partnership or
+    Asset Management export has leaked into any module."""
 
     for path in _EXPORTS.rglob("*.py"):
         identifiers = _code_identifiers(path)
         for excluded in _EXCLUDED_VOCABULARY:
+            offenders = {
+                name
+                for name in identifiers
+                if excluded in name and name not in _VOCABULARY_EXEMPTIONS
+            }
+            assert offenders == set(), (path, excluded, offenders)
+
+
+def test_quick_detailed_and_the_shared_base_never_learn_about_a_rent_roll() -> None:
+    """The seam that keeps the three exports honest.
+
+    Quick and Detailed model a property-level statement and have no rent roll.
+    If a Suite, a Lease or a Lease-Level contract reached their modules -- or
+    the shared base every mode is written on -- the convergence this package
+    depends on would no longer be real."""
+
+    for path in (_EXPORTS / "excel").glob("*.py"):
+        if path.name in _LEASE_LEVEL_MODULES:
+            continue
+        identifiers = _code_identifiers(path)
+        for excluded in _LEASE_LEVEL_VOCABULARY:
             offenders = {name for name in identifiers if excluded in name}
             assert offenders == set(), (path, excluded, offenders)
 
@@ -523,6 +574,7 @@ def test_the_export_package_holds_only_the_declared_modules() -> None:
         "_workbook.py",
         "detailed_audit.py",
         "filenames.py",
+        "lease_level_audit.py",
         "provenance.py",
         "quick_audit.py",
         "source.py",

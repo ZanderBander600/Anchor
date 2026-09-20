@@ -399,7 +399,7 @@ describe('exporting from the Quick workspace', () => {
     expect(exports()).toEqual([]);
   });
 
-  it('explains itself in the Lease-Level workspace rather than disappearing', async () => {
+  it('offers the Lease-Level workspace its own action, gated on saving first', async () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await user.click(screen.getByRole('tab', { name: 'Lease-Level Underwrite' }));
@@ -408,8 +408,11 @@ describe('exporting from the Quick workspace', () => {
       name: EXPORT_ITEM,
     }) as HTMLButtonElement;
     expect(item.disabled).toBe(true);
+    // Excel Export 3 gave Lease-Level a workbook of its own. An unsaved
+    // Deal is still refused, and for its own reason: there is nothing saved to
+    // audit yet.
     expect(document.getElementById('workbook-export-note')?.textContent).toContain(
-      'Lease-Level Deals are not exported yet.',
+      'Save this Deal to export the Excel audit workbook.',
     );
   });
 });

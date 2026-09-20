@@ -3723,6 +3723,64 @@ def get_detailed_analysis_provenance(
     )
 
 
+class LeaseLevelExportProvenance(NamedTuple):
+    """Excel Export 3: a Lease-Level Deal as stored, with its canonical
+    analysis fingerprint -- read in one connection so the two cannot describe
+    different moments.
+
+    **It carries no analysis state, and that is the whole difference from
+    Quick and Detailed.** ``lease_level_deals`` has no ``analysis_snapshot``
+    column: a Lease-Level analysis is never persisted, so there is no stored
+    result to be missing or stale. The export re-runs the authoritative
+    analysis over the inputs read here and treats *that* as the frozen Anchor
+    comparison. The fingerprint still identifies which saved inputs produced
+    it, so a workbook can be tied back to the exact rent roll it audited.
+
+    A ``NamedTuple`` for the same reason as ``QuickAnalysisProvenance``."""
+
+    deal: Deal
+    analysis_fingerprint: str
+
+
+def get_lease_level_export_provenance(
+    deal_id: str, *, db_path: Path | None = None
+) -> LeaseLevelExportProvenance:
+    """Excel Export 3: read a Lease-Level Deal and all its typed child records
+    in one consistent read.
+
+    Read-only: ``_read_deal`` plus the fingerprint, in one connection, and no
+    writer is called. ``_read_deal`` already assembles the property inputs, the
+    operating inputs, the market leasing defaults, every Suite and every Lease
+    from their own tables inside that one connection, so the rent roll this
+    returns is one coherent moment rather than rows read at several.
+
+    This function deliberately runs **no** analysis. Selecting the inputs and
+    computing over them are separate concerns, and keeping the store free of
+    the second one is what lets the read stay provably read-only.
+
+    Raises ``DealNotFoundError`` for an unknown id and
+    ``UnsupportedOperatingModeError`` for a Quick or Detailed Deal."""
+
+    with _connect(db_path) as connection:
+        deal = _read_deal(connection, deal_id)
+        if (
+            deal.operating_mode is not OperatingMode.LEASE_LEVEL
+            or deal.terms is None
+            or deal.property_inputs is None
+            or deal.operating_inputs is None
+            or deal.market_leasing is None
+            or deal.suites is None
+            or deal.leases is None
+        ):
+            raise UnsupportedOperatingModeError(
+                deal.operating_mode,
+                operation="the Lease-Level Underwrite export read",
+            )
+        fingerprint = _deal_analysis_fingerprint(connection, deal_id)
+
+    return LeaseLevelExportProvenance(deal=deal, analysis_fingerprint=fingerprint)
+
+
 def _read_deal(connection: sqlite3.Connection, deal_id: str) -> Deal:
     """``get_deal``'s read, inside the caller's connection -- so a P7.6
     Investment write can judge its Units' stored inputs in the same
