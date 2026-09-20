@@ -53,12 +53,13 @@ exports have no use for.
 Unsaved browser edits still block the action in the UI, because only saved
 inputs are exported (Section 9).
 
-### 2.1 The workbook says so, on every sheet that makes the claim
+### 2.1 The product says so, wherever it makes the claim
 
-The decision above is not only a server-side fact; it is something the
-workbook itself asserts in front of the analyst. Four places in the shared
-builder describe where Anchor's numbers came from, and their defaults describe
-Quick's and Detailed's **stored** snapshot:
+The decision above is not only a server-side fact; it is something the product
+asserts in front of the analyst. Five places in the shared builder describe
+where Anchor's numbers came from, and their defaults describe Quick's and
+Detailed's **stored** snapshot. Four are written *into* a workbook; the fifth
+is the typed refusal raised **instead of** one:
 
 | Where | Quick / Detailed (default) | Lease-Level (override) |
 | --- | --- | --- |
@@ -66,13 +67,27 @@ Quick's and Detailed's **stored** snapshot:
 | Anchor Results, title note | "...saved with this Deal's current analysis" | "...at export from this Deal's saved inputs" |
 | Audit Metadata, "Source" | "The saved Anchor Deal and its current saved analysis..." | "The saved Anchor Deal. Anchor reran the authoritative Lease-Level analysis at export from the saved inputs and Business Plan. The analysis fingerprint identifies those saved inputs." |
 | Anchor Results, debt-balance note | "The saved analysis records the loan balance only at the sale..." | "Anchor's analysis records the loan balance only at the sale... the monthly payment that analysis produced..." |
+| **Refusal** (no workbook produced) | "The saved analysis could not be reconciled with the saved inputs and Business Plan. Analyze and save the Deal again, then export." | "Anchor could not reconcile the Lease-Level analysis recalculated at export from the saved Deal inputs and Business Plan. No workbook was created." |
 
-They are four **class attributes** on `_AuditWorkbookBase`
+They are five **class attributes** on `_AuditWorkbookBase`
 (`STATUS_AT_EXPORT`, `ANCHOR_RESULTS_NOTE`, `AUDIT_SOURCE_NOTE`,
-`DEBT_BALANCE_NOTE`), stated together beside the other mode-specific copy,
-rather than four conditionals scattered through the builder: the claim each
-sheet makes is then reviewable in one place. The Lease-Level Summary note also
-describes a saved *Deal* rather than a saved *analysis*.
+`DEBT_BALANCE_NOTE`, `ANALYSIS_INCONSISTENT_MESSAGE`), stated together beside
+the other mode-specific copy, rather than five conditionals scattered through
+the builder: the claim each one makes is then reviewable in one place. The
+Lease-Level Summary note also describes a saved *Deal* rather than a saved
+*analysis*.
+
+**The refusal is the sharper case**, because no workbook exists to carry a
+correction: the message is the whole of what the analyst gets. The shared
+default ends "Analyze and save the Deal again, then export", which is right
+for Quick and Detailed -- their stored snapshot has genuinely drifted from its
+inputs, and re-analysing repairs exactly that. For Lease-Level it is
+impossible: the analysis was rerun from the saved inputs moments earlier, so
+re-saving the Deal changes nothing about the run that failed, and an analyst
+following the instruction would find no way to make the export succeed. The
+Lease-Level message names what Anchor actually did, states that nothing was
+produced, and stops. The typed code is unchanged
+(`lease_level_inputs_invalid`): only the words differ.
 
 **Why this is not cosmetic.** Every figure in an audit workbook is offered on
 the authority of its stated source. A workbook that tells an analyst its
@@ -83,8 +98,11 @@ say: the *inputs* are saved, the fingerprint identifies those inputs, and
 Anchor's values are constants no Working Input can move.
 
 `test_excel_export_3_lease_level_audit.py` reads every literal string in every
-golden workbook and fails on any phrase asserting a persisted analysis, and
-separately pins that Quick and Detailed still carry the shared defaults.
+golden workbook and fails on any phrase asserting a persisted analysis; drives
+the refusal by breaking one consistency condition and pins both its typed code
+and its exact words; holds all five attributes to a single list, so a sixth
+cannot be covered by only one guard; and pins that Quick and Detailed still
+carry the shared defaults.
 
 ## 3. Architecture
 

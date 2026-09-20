@@ -523,6 +523,15 @@ class _LeaseLevelAuditWorkbook(_AuditWorkbookBase):
         "come from Anchor's debt engine at export, from the saved inputs and the monthly payment "
         "that analysis produced; the final year equals Anchor's balance at sale exactly."
     )
+    # No workbook exists when this is raised, so it is the whole of what the
+    # analyst sees. The shared default ends "Analyze and save the Deal again,
+    # then export" -- a remediation that is impossible here: Lease-Level saves
+    # no analysis, so re-saving the Deal changes nothing about the run that
+    # failed. It names what Anchor actually did instead, and stops.
+    ANALYSIS_INCONSISTENT_MESSAGE = (
+        "Anchor could not reconcile the Lease-Level analysis recalculated at export from the "
+        "saved Deal inputs and Business Plan. No workbook was created."
+    )
     CHECKS_NOTE = (
         "Every suite's monthly leasing lines, every monthly recovery, every monthly property "
         "line and every annual line are reconciled, not only NOI. The forward Year H+1 window "

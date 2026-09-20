@@ -434,18 +434,25 @@ class _AuditWorkbookBase:
 
     # --- Provenance copy ------------------------------------------------------
     #
-    # Where the workbook tells an analyst *where Anchor's numbers came from*.
-    # The defaults below describe Quick and Detailed, which freeze a **stored**
-    # analysis snapshot whose fingerprint was verified against the saved inputs.
+    # Where the workbook -- or, in the last one, the refusal that replaces it --
+    # tells an analyst *where Anchor's numbers came from*. The defaults below
+    # describe Quick and Detailed, which freeze a **stored** analysis snapshot
+    # whose fingerprint was verified against the saved inputs.
     #
-    # A mode that has no persisted analysis must override all four. Excel
+    # A mode that has no persisted analysis must override all five. Excel
     # Export 3 does: ``lease_level_deals`` carries no ``analysis_snapshot``
     # column, so its workbook is built from an analysis Anchor **reran at
     # export** over the saved inputs. Saying "saved analysis" there would claim
     # a stored artifact that does not exist, and an audit workbook that
     # misdescribes its own provenance is wrong in the one way it cannot afford
-    # to be. They are four strings rather than four conditionals so that the
-    # claim each sheet makes is stated once, beside the others.
+    # to be. They are five strings rather than five conditionals so that the
+    # claim each one makes is stated once, beside the others.
+    #
+    # The first four are written *into* a workbook. The last is the message of
+    # the typed refusal raised **instead of** one, and it carries the same
+    # obligation: a remediation the analyst cannot perform is worse than none,
+    # because it sends them to re-save a Deal whose saved state was never the
+    # problem.
 
     #: The note under the Anchor Results title.
     ANCHOR_RESULTS_NOTE: str = (
@@ -465,6 +472,13 @@ class _AuditWorkbookBase:
         "The saved analysis records the loan balance only at the sale. Annual ending balances "
         "come from Anchor's debt engine at export, from the saved inputs and saved payment; the "
         "final year equals the saved balance exactly."
+    )
+    #: The message of the typed refusal raised when the analysis cannot be
+    #: reconciled with the inputs it claims to describe. No workbook is
+    #: produced, so this text is all the analyst gets.
+    ANALYSIS_INCONSISTENT_MESSAGE: str = (
+        "The saved analysis could not be reconciled with the saved inputs "
+        "and Business Plan. Analyze and save the Deal again, then export."
     )
 
     #: The sheets this workbook holds, in their final order. Quick and Detailed
@@ -599,10 +613,7 @@ class _AuditWorkbookBase:
 
     def _require_consistent_analysis(self) -> None:
         if any(self._consistency_problems()):
-            raise self._refuse(
-                "The saved analysis could not be reconciled with the saved inputs "
-                "and Business Plan. Analyze and save the Deal again, then export."
-            )
+            raise self._refuse(self.ANALYSIS_INCONSISTENT_MESSAGE)
 
     # ------------------------------------------------------------- primitives
 

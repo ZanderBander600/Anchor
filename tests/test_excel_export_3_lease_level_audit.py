@@ -17,6 +17,7 @@ compute Anchor's numbers, in a real spreadsheet engine.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import zipfile
 from io import BytesIO
@@ -427,6 +428,18 @@ _PERSISTED_ANALYSIS_CLAIMS = (
     "saved anchor lease-level underwrite analysis",
 )
 
+#: Every provenance string on the shared base. Four are written *into* a
+#: workbook; ``ANALYSIS_INCONSISTENT_MESSAGE`` is the typed refusal raised
+#: **instead of** one. Listed once so both guards below cover the same set and
+#: a later addition cannot be covered by only one of them.
+_PROVENANCE_ATTRIBUTES = (
+    "ANCHOR_RESULTS_NOTE",
+    "STATUS_AT_EXPORT",
+    "AUDIT_SOURCE_NOTE",
+    "DEBT_BALANCE_NOTE",
+    "ANALYSIS_INCONSISTENT_MESSAGE",
+)
+
 
 def _visible_strings(data: bytes) -> list[tuple[str, str, str]]:
     """Every literal string an analyst can read, as ``(sheet, cell, text)``.
@@ -505,22 +518,16 @@ def test_the_summary_note_describes_a_saved_deal_not_a_saved_analysis() -> None:
 
 
 def test_lease_level_overrides_every_shared_provenance_string() -> None:
-    """The seam itself: four strings, all four overridden.
+    """The seam itself: every provenance string overridden.
 
-    If a later gate adds a fifth provenance string to the shared base with a
+    If a later gate adds another provenance string to the shared base with a
     Quick/Detailed default, this fails until Lease-Level states its own --
     which is the point of keeping them together rather than inlining them."""
 
     from anchor.exports.excel._workbook import _AuditWorkbookBase
     from anchor.exports.excel.lease_level_audit import _LeaseLevelAuditWorkbook
 
-    provenance = (
-        "ANCHOR_RESULTS_NOTE",
-        "STATUS_AT_EXPORT",
-        "AUDIT_SOURCE_NOTE",
-        "DEBT_BALANCE_NOTE",
-    )
-    for name in provenance:
+    for name in _PROVENANCE_ATTRIBUTES:
         shared = getattr(_AuditWorkbookBase, name)
         own = getattr(_LeaseLevelAuditWorkbook, name)
         assert isinstance(shared, str) and shared, name
@@ -539,13 +546,91 @@ def test_quick_and_detailed_keep_the_shared_defaults() -> None:
     from anchor.exports.excel.quick_audit import _QuickAuditWorkbook
 
     for workbook in (_QuickAuditWorkbook, _DetailedAuditWorkbook):
-        for name in (
-            "ANCHOR_RESULTS_NOTE",
-            "STATUS_AT_EXPORT",
-            "AUDIT_SOURCE_NOTE",
-            "DEBT_BALANCE_NOTE",
-        ):
+        for name in _PROVENANCE_ATTRIBUTES:
             assert getattr(workbook, name) == getattr(_AuditWorkbookBase, name), (
                 workbook.__name__,
                 name,
             )
+
+def _inconsistent_source(case):  # noqa: ANN001, ANN202
+    """A Lease-Level source whose analysis cannot describe its own inputs.
+
+    One hold year is dropped from ``noi_by_year``, which is the first
+    condition ``_consistency_problems`` tests. Nothing else is touched, so the
+    refusal under test is the only thing that can fire."""
+
+    source = G.source_for(case)
+    broken = dataclasses.replace(
+        source.results, noi_by_year=source.results.noi_by_year[:-1]
+    )
+    return dataclasses.replace(source, results=broken)
+
+
+def test_an_inconsistent_lease_level_analysis_is_refused_accurately() -> None:
+    """The exceptional path, where no workbook exists to carry the correction.
+
+    Quick and Detailed reach this by freezing a *stored* snapshot that no
+    longer describes its inputs, and their remediation -- re-analyse and save
+    -- fixes exactly that. Lease-Level stores nothing: the analysis was rerun
+    seconds earlier from the saved inputs, so telling an analyst to save the
+    Deal again sends them to repair something that was never broken, and they
+    would find no way to make the export succeed."""
+
+    from anchor.exports.excel import build_lease_level_audit_workbook
+
+    case = G.CASES_BY_NAME["multiple_suites"]
+    with pytest.raises(LeaseLevelAuditExportError) as excinfo:
+        build_lease_level_audit_workbook(_inconsistent_source(case))
+
+    error = excinfo.value
+    # The published contract is unchanged: this is still the same typed code.
+    assert error.code is LeaseLevelAuditRefusalCode.LEASE_LEVEL_INPUTS_INVALID
+    assert error.code.value == "lease_level_inputs_invalid"
+
+    message = error.message
+    assert message == (
+        "Anchor could not reconcile the Lease-Level analysis recalculated at export from the "
+        "saved Deal inputs and Business Plan. No workbook was created."
+    )
+    # It says what Anchor did, and that nothing was produced.
+    assert "recalculated at export" in message
+    assert "No workbook was created." in message
+    # It does not send the analyst to a remediation they cannot perform.
+    assert "save the Deal again" not in message
+    assert "Analyze and save" not in message
+    # And it claims no stored artifact.
+    for claim in _PERSISTED_ANALYSIS_CLAIMS:
+        assert claim not in message.lower(), claim
+    # Refusals never leak internals.
+    assert "Traceback" not in message and case.name not in message
+
+
+def test_quick_and_detailed_keep_their_refusal_text() -> None:
+    """The other half: their remediation is correct for them and is untouched,
+    including the sentence Lease-Level had to drop."""
+
+    from anchor.exports.excel._workbook import _AuditWorkbookBase
+    from anchor.exports.excel.detailed_audit import _DetailedAuditWorkbook
+    from anchor.exports.excel.quick_audit import _QuickAuditWorkbook
+
+    expected = (
+        "The saved analysis could not be reconciled with the saved inputs "
+        "and Business Plan. Analyze and save the Deal again, then export."
+    )
+    assert _AuditWorkbookBase.ANALYSIS_INCONSISTENT_MESSAGE == expected
+    for workbook in (_QuickAuditWorkbook, _DetailedAuditWorkbook):
+        assert workbook.ANALYSIS_INCONSISTENT_MESSAGE == expected, workbook.__name__
+
+
+def test_the_refusal_is_raised_before_any_workbook_bytes_exist() -> None:
+    """"No workbook was created" has to be true, not merely reassuring."""
+
+    from anchor.exports.excel import build_lease_level_audit_workbook
+
+    source = _inconsistent_source(G.CASES_BY_NAME["initial_vacancy_market_lease_up"])
+    with pytest.raises(LeaseLevelAuditExportError) as excinfo:
+        build_lease_level_audit_workbook(source)
+    assert "No workbook was created." in excinfo.value.message
+    # The consistency gate runs in __init__, before a single sheet is written,
+    # so the refusal cannot be accompanied by a half-built file.
+    assert excinfo.value.code is LeaseLevelAuditRefusalCode.LEASE_LEVEL_INPUTS_INVALID
