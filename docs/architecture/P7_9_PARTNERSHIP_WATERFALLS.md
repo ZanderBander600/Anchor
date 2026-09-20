@@ -1,12 +1,14 @@
 # P7.9 Partnership Waterfalls + Investor Returns
 
-Status: **Ratified.** The human review approved this contract with the
-reviewer's recommended decisions (Section 19). It is the authority for P7.9.
+Status: **Ratified, implemented, merged, and human accepted.** The human review
+approved this contract with the reviewer's recommended decisions (Section 19).
+It is the authority for P7.9.
 **Stage 1 (Section 17.1) is complete and accepted** in PR #34 (`70b92e2`).
 **Stage 2 (Section 17.2) is complete and accepted** in PR #35 (`543c1b2`);
 the Stage 1 package remains frozen at `70b92e2`. **Stage 3 (Section 17.3) is
-implemented and merged** in PR #36 (`3f23ba4`). Final hands-on human product
-acceptance is pending; P7.9 remains active and P7.10 has not started.
+complete and accepted** after PR #36 (`3f23ba4`) and its later QA corrections.
+P7.9 closed by human acceptance on 2026-09-20. P7.10 is next but has not
+started.
 
 History:
 
@@ -1565,9 +1567,8 @@ Also ratified, as recorded in Section 19.1 and the body:
   and introduces no deferred scope (Section 18).
 - **Implementation.** Stage 1 is complete and accepted in PR #34 (`70b92e2`).
   Stage 2 is complete and accepted in PR #35 (`543c1b2`). Stage 3
-  (Section 17.3) is implemented and merged in PR #36 (`3f23ba4`), with final
-  hands-on human product acceptance pending. P7.9 remains active until that
-  acceptance is recorded; P7.10 has not started.
+  (Section 17.3) is implemented in PR #36 (`3f23ba4`) and accepted with the
+  full P7.9 product on 2026-09-20. P7.10 has not started.
 
 ---
 
@@ -1577,9 +1578,9 @@ Stage 3 merged in PR #36 (`3f23ba4`). Hands-on browser QA of the merged product
 then found presentation defects, which the closeout branch
 `fix/p7-9-closeout-and-am1-qa-corrections` (from `main` at `c637d1e`)
 corrects. The Stage 3 record in the History above is left as it was written;
-this section records what that record got wrong and what changed. **P7.9 is
-not accepted by this record**: the correction awaits independent review, merge
-and hands-on human acceptance, and P7.10 has not started.
+this section records what that record got wrong and what changed. This
+correction record did not itself accept P7.9; the later human acceptance and
+gate closeout are recorded in Section 21.
 
 - **Tier Audit period mapping (a presentation defect, not an engine one).**
   `TierResult.amounts` is dense by period (index `0` is closing) while
@@ -1614,3 +1615,20 @@ and hands-on human acceptance, and P7.10 has not started.
 - **No backend or financial change.** No engine, contract, validation,
   persistence, fingerprint, API or financial convention changed. Every figure
   still comes from the backend, and the no-arithmetic guard is unchanged.
+
+---
+
+## 21. Human acceptance and gate closeout
+
+On 2026-09-20 the human explicitly accepted P7.9 in full. A final isolated
+acceptance sweep against merged `main` at `1afd003` ran the Partnership
+analysis and verified Partner returns, benchmark differences, Promote Earned,
+benchmark capital subordination, promote attribution by tier, the Tier Audit,
+and the Partner Decision Matrix. Desktop and 390px mobile presentation showed
+no page-level overflow, and the browser console reported no warnings or
+errors.
+
+Stages 1, 2, and 3 are therefore **complete and accepted**, and P7.9 is
+**closed**. This record changes status only and reopens no financial or
+architecture decision. P7.10 is the next ratified competition gate, but it has
+not started and still requires an explicit human start.
