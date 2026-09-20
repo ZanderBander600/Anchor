@@ -432,6 +432,41 @@ class _AuditWorkbookBase:
     #: The export's scope limitation, for Audit Metadata.
     SCOPE_NOTE: str = ""
 
+    # --- Provenance copy ------------------------------------------------------
+    #
+    # Where the workbook tells an analyst *where Anchor's numbers came from*.
+    # The defaults below describe Quick and Detailed, which freeze a **stored**
+    # analysis snapshot whose fingerprint was verified against the saved inputs.
+    #
+    # A mode that has no persisted analysis must override all four. Excel
+    # Export 3 does: ``lease_level_deals`` carries no ``analysis_snapshot``
+    # column, so its workbook is built from an analysis Anchor **reran at
+    # export** over the saved inputs. Saying "saved analysis" there would claim
+    # a stored artifact that does not exist, and an audit workbook that
+    # misdescribes its own provenance is wrong in the one way it cannot afford
+    # to be. They are four strings rather than four conditionals so that the
+    # claim each sheet makes is stated once, beside the others.
+
+    #: The note under the Anchor Results title.
+    ANCHOR_RESULTS_NOTE: str = (
+        "Values produced by Anchor's deterministic engine and saved with this Deal's current "
+        "analysis. They are constants, not Excel formulas, and never change with Working Inputs."
+    )
+    #: Summary's "Status at export" value.
+    STATUS_AT_EXPORT: str = "Saved Deal; saved analysis current for the saved inputs"
+    #: Audit Metadata's "Source" value.
+    AUDIT_SOURCE_NOTE: str = (
+        "The saved Anchor Deal and its current saved analysis. The analysis fingerprint was "
+        "verified against the saved inputs and Business Plan at export."
+    )
+    #: The closing note on Debt Schedule, explaining where annual ending
+    #: balances come from when the analysis records only the balance at sale.
+    DEBT_BALANCE_NOTE: str = (
+        "The saved analysis records the loan balance only at the sale. Annual ending balances "
+        "come from Anchor's debt engine at export, from the saved inputs and saved payment; the "
+        "final year equals the saved balance exactly."
+    )
+
     #: The sheets this workbook holds, in their final order. Quick and Detailed
     #: keep the published eight; a mode whose model does not fit them (Excel
     #: Export 3's Lease-Level rent roll) names its own, and every sheet the
@@ -1604,8 +1639,7 @@ class _AuditWorkbookBase:
         self._title(
             sheet,
             "Anchor Results (frozen at export)",
-            "Values produced by Anchor's deterministic engine and saved with this Deal's current "
-            "analysis. They are constants, not Excel formulas, and never change with Working Inputs.",
+            self.ANCHOR_RESULTS_NOTE,
         )
         row = 3
         self._section(sheet, row, "Headline and summary results", last_col)
@@ -1685,13 +1719,7 @@ class _AuditWorkbookBase:
             for t, value in enumerate(values):
                 self.anchor[f"{key}:{t}"] = self._frozen(sheet, row, c0 + t, value, NUM_CURRENCY)
             row += 1
-        ws.write_string(
-            row, 0,
-            "The saved analysis records the loan balance only at the sale. Annual ending balances "
-            "come from Anchor's debt engine at export, from the saved inputs and saved payment; the "
-            "final year equals the saved balance exactly.",
-            self.fmt.note(),
-        )
+        ws.write_string(row, 0, self.DEBT_BALANCE_NOTE, self.fmt.note())
         row += 2
 
         # The frozen record of the exported inputs, laid out exactly like the
@@ -2102,7 +2130,7 @@ class _AuditWorkbookBase:
             ("Asset Type", source.asset_type_label or not_specified),
             ("Asset subtype", source.asset_subtype or not_specified),
             ("Operating mode", self.MODE_LABEL),
-            ("Status at export", "Saved Deal; saved analysis current for the saved inputs"),
+            ("Status at export", self.STATUS_AT_EXPORT),
         )
         for label, value in facts:
             self._label(sheet, row, label)
@@ -2276,7 +2304,7 @@ class _AuditWorkbookBase:
             ("Source commit (checkout HEAD; uncommitted changes are not detected)", source.source_commit or "Not available"),
             ("Analysis fingerprint", source.analysis_fingerprint),
             ("Workbook contract", self.CONTRACT_VERSION),
-            ("Source", "The saved Anchor Deal and its current saved analysis. The analysis fingerprint was verified against the saved inputs and Business Plan at export."),
+            ("Source", self.AUDIT_SOURCE_NOTE),
             ("Business Plan", f"{len(plan.capital_items)} capital item(s) and {len(plan.owner_expense_items)} owner-expense item(s), resolved by Anchor into the annual totals on Inputs."),
         ]
         for label, value in more:

@@ -405,3 +405,147 @@ def test_capacity_refusal_names_no_internal_detail() -> None:
     message = excinfo.value.message
     assert "Traceback" not in message and "deal-" not in message
     assert str(EXCEL_MAX_ROWS) not in message  # rows are not the binding limit here
+
+# =============================================================================
+# Provenance -- the workbook must not claim an analysis that was never stored
+# =============================================================================
+
+
+#: Phrases that assert a *persisted* analysis. Quick and Detailed freeze a
+#: stored snapshot and may say these; Lease-Level has no ``analysis_snapshot``
+#: column at all, so any of them in its workbook is a false claim about where
+#: the numbers came from.
+_PERSISTED_ANALYSIS_CLAIMS = (
+    "saved analysis",
+    "saved with this deal",
+    "current saved analysis",
+    "saved analysis current",
+    "stored analysis",
+    "saved payment",
+    "saved balance",
+    "analysis snapshot",
+    "saved anchor lease-level underwrite analysis",
+)
+
+
+def _visible_strings(data: bytes) -> list[tuple[str, str, str]]:
+    """Every literal string an analyst can read, as ``(sheet, cell, text)``.
+
+    Formulas are excluded deliberately: this asks what the workbook *tells*
+    the reader, not what it computes."""
+
+    wb = G.load(data)
+    found: list[tuple[str, str, str]] = []
+    for name in wb.sheetnames:
+        ws = wb[name]
+        for row in ws.iter_rows():
+            for cell in row:
+                value = cell.value
+                if isinstance(value, str) and not value.startswith("="):
+                    found.append((name, cell.coordinate, value))
+    return found
+
+
+@pytest.mark.parametrize("case", G.GOLDEN_CASES, ids=lambda c: c.name)
+def test_the_workbook_never_claims_a_persisted_analysis(case) -> None:
+    """The defect this guards is not arithmetic but provenance.
+
+    A Lease-Level Deal stores no analysis. The server reads its saved inputs
+    and **reruns** the authoritative engine at export. A workbook that tells
+    an analyst those numbers were "saved with this Deal's current analysis"
+    describes an artifact that does not exist -- and an audit workbook that
+    misdescribes its own source is wrong in the one way it cannot afford to
+    be, because every other figure in it is offered on that source's
+    authority."""
+
+    offenders = [
+        (sheet, ref, text)
+        for sheet, ref, text in _visible_strings(G.build(case))
+        for claim in _PERSISTED_ANALYSIS_CLAIMS
+        if claim in text.lower()
+    ]
+    assert offenders == [], offenders
+
+
+def test_the_provenance_copy_says_what_actually_happened() -> None:
+    """The positive statement, so the wording cannot drift into vagueness:
+    each sheet names the rerun, the saved *inputs*, and the fingerprint's
+    actual scope."""
+
+    data = G.build(G.CASES_BY_NAME["multiple_suites"])
+    wb = G.load(data)
+
+    summary = wb["Summary"]
+    status = summary.cell(G.row_of(summary, "Status at export"), 2).value
+    assert status == (
+        "Saved Deal; Anchor analysis recalculated at export from the saved inputs"
+    )
+
+    anchor_note = wb["Anchor Results"].cell(2, 1).value
+    assert isinstance(anchor_note, str)
+    assert "at export from this Deal's saved inputs" in anchor_note
+    # Still true, and still the point of the sheet.
+    assert "constants, not Excel formulas" in anchor_note
+    assert "never change with Working Inputs" in anchor_note
+
+    audit = wb["Audit Metadata"]
+    source = audit.cell(G.row_of(audit, "Source"), 2).value
+    assert isinstance(source, str)
+    assert "reran the authoritative Lease-Level analysis at export" in source
+    # The fingerprint identifies inputs, never a stored result.
+    assert "fingerprint identifies those saved inputs" in source
+
+
+def test_the_summary_note_describes_a_saved_deal_not_a_saved_analysis() -> None:
+    from anchor.exports.excel.lease_level_audit import _LeaseLevelAuditWorkbook
+
+    note = _LeaseLevelAuditWorkbook.SUMMARY_NOTE
+    assert "saved Anchor Lease-Level Underwrite Deal" in note
+    assert "analysis" not in note.lower().split("Deal.")[0].lower()
+
+
+def test_lease_level_overrides_every_shared_provenance_string() -> None:
+    """The seam itself: four strings, all four overridden.
+
+    If a later gate adds a fifth provenance string to the shared base with a
+    Quick/Detailed default, this fails until Lease-Level states its own --
+    which is the point of keeping them together rather than inlining them."""
+
+    from anchor.exports.excel._workbook import _AuditWorkbookBase
+    from anchor.exports.excel.lease_level_audit import _LeaseLevelAuditWorkbook
+
+    provenance = (
+        "ANCHOR_RESULTS_NOTE",
+        "STATUS_AT_EXPORT",
+        "AUDIT_SOURCE_NOTE",
+        "DEBT_BALANCE_NOTE",
+    )
+    for name in provenance:
+        shared = getattr(_AuditWorkbookBase, name)
+        own = getattr(_LeaseLevelAuditWorkbook, name)
+        assert isinstance(shared, str) and shared, name
+        assert own != shared, f"{name} still uses the stored-snapshot default"
+        for claim in _PERSISTED_ANALYSIS_CLAIMS:
+            assert claim not in own.lower(), (name, claim)
+
+
+def test_quick_and_detailed_keep_the_shared_defaults() -> None:
+    """The other half of the contract: this correction changed no other
+    mode's words. Their byte-for-byte output is pinned by their own golden
+    suites; this states the intent directly."""
+
+    from anchor.exports.excel._workbook import _AuditWorkbookBase
+    from anchor.exports.excel.detailed_audit import _DetailedAuditWorkbook
+    from anchor.exports.excel.quick_audit import _QuickAuditWorkbook
+
+    for workbook in (_QuickAuditWorkbook, _DetailedAuditWorkbook):
+        for name in (
+            "ANCHOR_RESULTS_NOTE",
+            "STATUS_AT_EXPORT",
+            "AUDIT_SOURCE_NOTE",
+            "DEBT_BALANCE_NOTE",
+        ):
+            assert getattr(workbook, name) == getattr(_AuditWorkbookBase, name), (
+                workbook.__name__,
+                name,
+            )

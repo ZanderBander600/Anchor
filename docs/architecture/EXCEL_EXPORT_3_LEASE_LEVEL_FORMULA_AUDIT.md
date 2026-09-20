@@ -53,6 +53,39 @@ exports have no use for.
 Unsaved browser edits still block the action in the UI, because only saved
 inputs are exported (Section 9).
 
+### 2.1 The workbook says so, on every sheet that makes the claim
+
+The decision above is not only a server-side fact; it is something the
+workbook itself asserts in front of the analyst. Four places in the shared
+builder describe where Anchor's numbers came from, and their defaults describe
+Quick's and Detailed's **stored** snapshot:
+
+| Where | Quick / Detailed (default) | Lease-Level (override) |
+| --- | --- | --- |
+| Summary, "Status at export" | "Saved Deal; saved analysis current for the saved inputs" | "Saved Deal; Anchor analysis recalculated at export from the saved inputs" |
+| Anchor Results, title note | "...saved with this Deal's current analysis" | "...at export from this Deal's saved inputs" |
+| Audit Metadata, "Source" | "The saved Anchor Deal and its current saved analysis..." | "The saved Anchor Deal. Anchor reran the authoritative Lease-Level analysis at export from the saved inputs and Business Plan. The analysis fingerprint identifies those saved inputs." |
+| Anchor Results, debt-balance note | "The saved analysis records the loan balance only at the sale..." | "Anchor's analysis records the loan balance only at the sale... the monthly payment that analysis produced..." |
+
+They are four **class attributes** on `_AuditWorkbookBase`
+(`STATUS_AT_EXPORT`, `ANCHOR_RESULTS_NOTE`, `AUDIT_SOURCE_NOTE`,
+`DEBT_BALANCE_NOTE`), stated together beside the other mode-specific copy,
+rather than four conditionals scattered through the builder: the claim each
+sheet makes is then reviewable in one place. The Lease-Level Summary note also
+describes a saved *Deal* rather than a saved *analysis*.
+
+**Why this is not cosmetic.** Every figure in an audit workbook is offered on
+the authority of its stated source. A workbook that tells an analyst its
+Anchor column was "saved with this Deal's current analysis" describes an
+artifact that does not exist for this mode, and invites the reader to trust a
+provenance the product never had. What is still true is what these strings now
+say: the *inputs* are saved, the fingerprint identifies those inputs, and
+Anchor's values are constants no Working Input can move.
+
+`test_excel_export_3_lease_level_audit.py` reads every literal string in every
+golden workbook and fails on any phrase asserting a persisted analysis, and
+separately pins that Quick and Detailed still carry the shared defaults.
+
 ## 3. Architecture
 
 | Layer | File | Role |

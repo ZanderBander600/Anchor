@@ -489,9 +489,39 @@ class _LeaseLevelAuditWorkbook(_AuditWorkbookBase):
     WORKBOOK_TITLE = "Lease-Level Underwrite Audit"
     CONTRACT_VERSION = LEASE_LEVEL_EXPORT_CONTRACT_VERSION
     SUMMARY_NOTE = (
-        "Formula-level audit of a saved Anchor Lease-Level Underwrite analysis. The Excel model "
+        "Formula-level audit of a saved Anchor Lease-Level Underwrite Deal. The Excel model "
         "rebuilds the rent roll, the rollover chain, recoveries and the property statement from "
         "the Inputs sheet; Anchor's results are frozen for comparison."
+    )
+
+    # --- Provenance copy ------------------------------------------------------
+    #
+    # **Lease-Level persists no analysis, so this workbook must not claim one.**
+    # ``lease_level_deals`` has no ``analysis_snapshot`` column (Section 2 of
+    # the architecture record): the server reads the saved Deal and its typed
+    # records in one consistent read and reruns the authoritative engine at
+    # export. The shared defaults describe Quick's and Detailed's stored
+    # snapshot and would be false here, so all four are overridden.
+    #
+    # What is still true, and is what these say: the *inputs* are saved, the
+    # fingerprint identifies them, and Anchor's values are constants that no
+    # Working Input can move.
+    ANCHOR_RESULTS_NOTE = (
+        "Values produced by Anchor's deterministic engine at export from this Deal's saved "
+        "inputs. They are constants, not Excel formulas, and never change with Working Inputs."
+    )
+    STATUS_AT_EXPORT = (
+        "Saved Deal; Anchor analysis recalculated at export from the saved inputs"
+    )
+    AUDIT_SOURCE_NOTE = (
+        "The saved Anchor Deal. Anchor reran the authoritative Lease-Level analysis at export "
+        "from the saved inputs and Business Plan. The analysis fingerprint identifies those "
+        "saved inputs."
+    )
+    DEBT_BALANCE_NOTE = (
+        "Anchor's analysis records the loan balance only at the sale. Annual ending balances "
+        "come from Anchor's debt engine at export, from the saved inputs and the monthly payment "
+        "that analysis produced; the final year equals Anchor's balance at sale exactly."
     )
     CHECKS_NOTE = (
         "Every suite's monthly leasing lines, every monthly recovery, every monthly property "
