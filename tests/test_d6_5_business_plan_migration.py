@@ -148,17 +148,20 @@ _P7_10_TABLES = {
     "memo_risk_items",
     "memo_term_items",
     "memo_draft_evidence",
+    "memo_claim_evidence",
+    "memo_selected_valuations",
     "investment_memo_versions",
     "memo_version_items",
     "memo_version_risk_items",
     "memo_version_term_items",
     "memo_version_evidence",
     "memo_version_valuations",
+    "memo_version_claim_evidence",
     "memo_version_dependencies",
     "investment_committee_decisions",
 }
 #: The schema version the current store migrates a v6 database to.
-#: P7.10 Stage 2 (schema 15) added sixteen purely additive valuation and
+#: P7.10 Stage 2 (schema 15) added nineteen purely additive valuation and
 #: Investment Memo tables. D6.5's own two plan tables and every row it wrote
 #: are still asserted unchanged below.
 _CURRENT_VERSION = 15

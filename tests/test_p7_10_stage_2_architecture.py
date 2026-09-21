@@ -51,6 +51,9 @@ _STRUCTURED = "src/anchor/deals/structured_variants.py"
 _MEMO_PACKAGE = "src/anchor/memo"
 _MEMO_NAMES = ("__init__", "contracts", "validation", "availability", "publication")
 _MEMO_MODULES = tuple(f"{_MEMO_PACKAGE}/{name}.py" for name in _MEMO_NAMES)
+_CONTRACTS_MEMO = f"{_MEMO_PACKAGE}/contracts.py"
+_VALIDATION = f"{_MEMO_PACKAGE}/validation.py"
+_PUBLICATION = f"{_MEMO_PACKAGE}/publication.py"
 
 #: The accepted Stage 1 package. Consumed by Stage 2 and edited by none of it.
 _VALUATION_PACKAGE = "src/anchor/valuation"
@@ -62,7 +65,7 @@ _VALUATION_PACKAGE = "src/anchor/valuation"
 #: - ``deals/valuation_views.py`` (new): persisted definitions meet the Stage 1
 #:   authority;
 #: - ``deals/memo_dependencies.py`` (new): the dependency ledger and freshness;
-#: - ``deals/store.py``: schema v15, the sixteen tables and the lifecycle;
+#: - ``deals/store.py``: schema v15, the nineteen tables and the lifecycle;
 #: - ``deals/contracts.py``: the P7.10 lookups and refusals;
 #: - ``deals/fingerprint.py``: the Section 10 identities;
 #: - ``deals/structured_variants.py``: the funding-authority seam;
@@ -642,7 +645,7 @@ def test_the_migration_alters_and_drops_nothing_new() -> None:
     creates = [
         line for line in added if re.search(r"CREATE TABLE IF NOT EXISTS (\w+) \(", line)
     ]
-    assert len(creates) == 16, creates
+    assert len(creates) == 19, creates
     # Any other line naming CREATE TABLE is prose explaining the migration, not
     # DDL: it must be a comment.
     assert all(
@@ -660,7 +663,7 @@ def test_every_new_table_is_registered_on_the_connection() -> None:
     store = _current(_STORE)
     connect = store[store.index("def _connect("):store.index("def _utc_now_iso(")]
     declared = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", _p7_10_region(store)))
-    assert len(declared) == 16
+    assert len(declared) == 19
     for table in sorted(declared):
         constant = f"_CREATE_{table.upper()}_TABLE_SQL"
         assert constant in connect, table
@@ -761,3 +764,91 @@ def test_no_case_or_competition_identifier() -> None:
         source = _current(path)
         region = _p7_10_region(source) if path in {_API, _STORE, _FINGERPRINT, _CONTRACTS, _STRUCTURED} else source
         assert p7_0._case_identifiers_in(region) == [], path
+
+
+# =============================================================================
+# 11. The two ratified corrections (Section 22.6, 22.7)
+# =============================================================================
+
+
+def test_publication_judges_only_the_valuations_the_package_depends_on() -> None:
+    """Correction 1, structurally. The rule reads one collection -- the required
+    valuations the dependency layer handed it -- and has no way to reach the
+    Investment's whole authored list, so an exploratory definition cannot block
+    a publication even by accident."""
+
+    source = _code_only(_current(_PUBLICATION))
+    tree = ast.parse(_current(_PUBLICATION))
+    rule = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_valuation_refusals"
+    )
+    body = _code_only(_code(rule))
+    assert "context.required_valuations" in body
+    for forbidden in ("list_valuation_timepoints", "surface", "views", "timepoints"):
+        assert forbidden not in body, forbidden
+    # The context offers nothing else to iterate: the superseded whole-surface
+    # map is gone, not merely unused.
+    assert "cited_valuations_available" not in source
+
+
+def test_the_selection_is_an_explicit_relationship_and_never_an_inference() -> None:
+    """Section 22.6: selection is a stored typed relationship. The dependency
+    layer reads it from the draft's own field, and nothing in the P7.10 region
+    derives it from display order, existence or recency."""
+
+    dependencies = _code_only(_current(_DEPENDENCIES))
+    assert "draft.selected_valuation_timepoint_ids" in dependencies
+    assert re.search(r"CREATE TABLE IF NOT EXISTS memo_selected_valuations \(", _current(_STORE))
+
+    required = next(
+        node
+        for node in ast.walk(ast.parse(_current(_DEPENDENCIES)))
+        if isinstance(node, ast.FunctionDef) and node.name == "_required_valuations"
+    )
+    body = _code_only(_code(required))
+    for forbidden in ("display_order", "created_at", "updated_at", "[0]", "[-1]"):
+        assert forbidden not in body, forbidden
+
+
+def test_a_claim_evidence_link_is_a_normalized_row_not_a_blob() -> None:
+    """Correction 2: the relationship is a table with real columns on both
+    sides, for the draft and for the frozen snapshot alike. A JSON column would
+    make "what does this risk rest on" unanswerable without parsing."""
+
+    store_source = _current(_STORE)
+    for table in ("memo_claim_evidence", "memo_version_claim_evidence"):
+        match = re.search(rf"CREATE TABLE IF NOT EXISTS {table} \((.*?)\n *\)", store_source, re.S)
+        assert match is not None, table
+        ddl = match.group(1)
+        for column in ("claim_kind", "item_id", "evidence_id", "ordinal"):
+            assert column in ddl, (table, column)
+        for forbidden in ("JSON", "BLOB", "_json"):
+            assert forbidden not in ddl.upper().replace("_JSON", "_json"), (table, forbidden)
+
+
+def test_no_write_path_can_edit_a_frozen_claim_evidence_row() -> None:
+    """The snapshot is covered by the same absolute rule as the rest of a
+    published version: there is no UPDATE and no DELETE naming its table
+    anywhere, so no supported operation can reach it."""
+
+    source = _current(_STORE).upper()
+    for statement in ("UPDATE MEMO_VERSION_CLAIM_EVIDENCE", "DELETE FROM MEMO_VERSION_CLAIM_EVIDENCE"):
+        assert statement not in source, statement
+
+
+def test_evidence_is_traceable_and_never_mandatory() -> None:
+    """R-G's boundary. Every claim-bearing item declares the link with an empty
+    default, so citing nothing is a legitimate state the type system permits --
+    and no validation rule demands a citation for any field."""
+
+    contracts = _current(_CONTRACTS_MEMO)
+    for shape in ("class MemoItem", "class MemoRiskItem", "class MemoTermItem"):
+        declaration = contracts[contracts.index(shape):]
+        declaration = declaration[: declaration.index("@dataclass", 1)] if "@dataclass" in declaration[1:] else declaration
+        assert "evidence_ids: tuple[str, ...] = ()" in declaration, shape
+
+    validation = _code_only(_current(_VALIDATION))
+    for forbidden in ("requires evidence", "must cite", "at least one evidence"):
+        assert forbidden not in validation.lower(), forbidden

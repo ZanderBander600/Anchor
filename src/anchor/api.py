@@ -5511,11 +5511,20 @@ _MEMO_FIELDS = (
     "risk_items",
     "term_items",
     "evidence_ids",
+    "selected_valuation_timepoint_ids",
 )
 _SELECTED_DECISION_FIELDS = ("strategy_id", "scenario_id", "perspective", "position_id", "partner_id")
-_MEMO_ITEM_FIELDS = ("item_id", "section", "display_order", "text")
-_MEMO_RISK_FIELDS = ("item_id", "display_order", "text", "severity", "residual_risk", "mitigant")
-_MEMO_TERM_FIELDS = ("item_id", "display_order", "text", "priority")
+_MEMO_ITEM_FIELDS = ("item_id", "section", "display_order", "text", "evidence_ids")
+_MEMO_RISK_FIELDS = (
+    "item_id",
+    "display_order",
+    "text",
+    "severity",
+    "residual_risk",
+    "mitigant",
+    "evidence_ids",
+)
+_MEMO_TERM_FIELDS = ("item_id", "display_order", "text", "priority", "evidence_ids")
 _IC_DECISION_FIELDS = ("decision", "decision_note", "decided_at")
 
 
@@ -5661,6 +5670,9 @@ def _memo_draft_request(payload: dict[str, Any], *, investment_id: str) -> Inves
                 section=_memo_token(MemoSection, item["section"]),
                 display_order=item["display_order"],
                 text=item["text"],
+                evidence_ids=tuple(
+                    _wire_array(item["evidence_ids"], f"items[{index}].evidence_ids")
+                ),
             )
             for index, raw in enumerate(_wire_array(body["items"], "items"))
         ),
@@ -5672,6 +5684,9 @@ def _memo_draft_request(payload: dict[str, Any], *, investment_id: str) -> Inves
                 severity=_memo_token(RiskSeverity, item["severity"]),
                 residual_risk=_memo_token(RiskSeverity, item["residual_risk"]),
                 mitigant=item["mitigant"],
+                evidence_ids=tuple(
+                    _wire_array(item["evidence_ids"], f"risk_items[{index}].evidence_ids")
+                ),
             )
             for index, raw in enumerate(_wire_array(body["risk_items"], "risk_items"))
         ),
@@ -5681,10 +5696,18 @@ def _memo_draft_request(payload: dict[str, Any], *, investment_id: str) -> Inves
                 display_order=item["display_order"],
                 text=item["text"],
                 priority=_memo_token(TermPriority, item["priority"]),
+                evidence_ids=tuple(
+                    _wire_array(item["evidence_ids"], f"term_items[{index}].evidence_ids")
+                ),
             )
             for index, raw in enumerate(_wire_array(body["term_items"], "term_items"))
         ),
         evidence_ids=tuple(_wire_array(body["evidence_ids"], "evidence_ids")),
+        selected_valuation_timepoint_ids=tuple(
+            _wire_array(
+                body["selected_valuation_timepoint_ids"], "selected_valuation_timepoint_ids"
+            )
+        ),
     )
 
 
@@ -5739,6 +5762,7 @@ def _publication_refused_response(error: PublicationRefusedError) -> HTTPExcepti
                 "message": refusal.message,
                 "scope_id": refusal.scope_id,
                 "field": refusal.field,
+                "unavailable_reason": refusal.unavailable_reason,
             }
             for refusal in error.refusals
         ],
@@ -6198,6 +6222,7 @@ def read_memo_publication_readiness(investment_id: str) -> dict[str, Any]:
                 "message": refusal.message,
                 "scope_id": refusal.scope_id,
                 "field": refusal.field,
+                "unavailable_reason": refusal.unavailable_reason,
             }
             for refusal in refusals
         ],

@@ -108,18 +108,38 @@ class RiskSeverity(StrEnum):
     NOT_ASSESSED = "not_assessed"
 
 
+class MemoClaimKind(StrEnum):
+    """Which authored collection a claim-level evidence link belongs to.
+
+    An ``item_id`` is unique **within** its collection, not across them, so a
+    link names the collection as well as the id. Without this discriminator a
+    thesis item and a risk that happened to share an id would silently share
+    their sources."""
+
+    ITEM = "item"
+    RISK = "risk"
+    TERM = "term"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MemoItem:
     """One authored statement in one section.
 
     ``item_id`` is the identity; ``display_order`` is presentation only
     (Section 7.4). Rewriting ``text`` edits this item -- it never creates a new
-    one -- and reordering the list never changes what any item is."""
+    one -- and reordering the list never changes what any item is.
+
+    ``evidence_ids`` are the Evidence References supporting *this claim*
+    (R-G). Zero or more: an unsupported statement is a real, storable analyst
+    assertion and is labelled as one, never silently upgraded to a sourced fact
+    (Section 8). The ids name records in the Investment's own evidence library;
+    a foreign or unknown id is refused rather than stored."""
 
     item_id: str
     section: MemoSection
     display_order: int
     text: str
+    evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -130,7 +150,11 @@ class MemoRiskItem:
     ``severity`` and ``residual_risk`` are labels the analyst writes. Nothing
     derives either from a return, a sensitivity or a break-even, and stating a
     ``mitigant`` never resolves the risk or lowers its residual label
-    (Section 7.4)."""
+    (Section 7.4).
+
+    ``evidence_ids`` support the risk and its mitigant together: the contract
+    gives a mitigant no id of its own, so a source cited for "pre-leasing is
+    underway" attaches to the risk that states it."""
 
     item_id: str
     display_order: int
@@ -138,16 +162,23 @@ class MemoRiskItem:
     severity: RiskSeverity
     residual_risk: RiskSeverity
     mitigant: str | None
+    evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MemoTermItem:
-    """One authored term and how hard it is held."""
+    """One authored term and how hard it is held.
+
+    ``evidence_ids`` are *supported, never required*. A term is a negotiating
+    position rather than a claim about the world, so R-G does not oblige a
+    source for one; an analyst who wants to cite the letter of intent a term
+    came from can, and nothing refuses a term that cites none."""
 
     item_id: str
     display_order: int
     text: str
     priority: TermPriority
+    evidence_ids: tuple[str, ...] = ()
 
 
 # =============================================================================
@@ -247,7 +278,22 @@ class InvestmentMemoDraft:
     ``prepared_by`` is display text, not an authenticated identity
     (Section 7.5). Every narrative field is analyst-authoritative; an empty
     optional section stays empty, and nothing manufactures boilerplate to fill
-    it."""
+    it.
+
+    **Authoring a valuation is not selecting one.** An Investment may hold any
+    number of authored valuation definitions, including exploratory ones the
+    analyst is still working out. ``selected_valuation_timepoint_ids`` is the
+    memo's own, explicit statement of which of them this decision package
+    *includes* -- and it is the only thing that makes a valuation a memo
+    dependency. Selection is never inferred from display order, from a
+    definition merely existing, or from which one was authored most recently:
+    an analyst who has not chosen has not chosen.
+
+    ``evidence_ids`` is the memo's evidence register -- the sources the package
+    presents as a whole. It is distinct from, and does not replace, the
+    per-claim links each item carries (R-G): the register says what the package
+    rests on, and an item's own ``evidence_ids`` say which source supports
+    *that* claim."""
 
     memo_id: str
     investment_id: str
@@ -262,8 +308,40 @@ class InvestmentMemoDraft:
     risk_items: tuple[MemoRiskItem, ...] = ()
     term_items: tuple[MemoTermItem, ...] = ()
     evidence_ids: tuple[str, ...] = ()
+    selected_valuation_timepoint_ids: tuple[str, ...] = ()
     created_at: str = ""
     updated_at: str = ""
+
+    def cited_evidence_ids(self) -> tuple[str, ...]:
+        """Every Evidence Reference this draft cites anywhere -- the register
+        and every claim-level link -- in canonical order.
+
+        The union, deduplicated: one reference cited by three claims is one
+        record, and publication validates it once."""
+
+        cited: set[str] = set(self.evidence_ids)
+        for collection in (self.items, self.risk_items, self.term_items):
+            for item in collection:
+                cited.update(item.evidence_ids)
+        return tuple(sorted(cited))
+
+    def claim_links(self) -> tuple[tuple[str, str, str], ...]:
+        """Every claim-to-evidence link as ``(claim_kind, item_id,
+        evidence_id)``, canonical by all three.
+
+        One flat, sorted view of the relationships, so persistence, identity and
+        the wire all read the same thing and authored order never participates."""
+
+        links: list[tuple[str, str, str]] = []
+        for kind, collection in (
+            (MemoClaimKind.ITEM, self.items),
+            (MemoClaimKind.RISK, self.risk_items),
+            (MemoClaimKind.TERM, self.term_items),
+        ):
+            for item in collection:
+                for evidence_id in item.evidence_ids:
+                    links.append((kind.value, item.item_id, evidence_id))
+        return tuple(sorted(set(links)))
 
     def section(self, section: MemoSection) -> tuple[MemoItem, ...]:
         """This draft's items in one section, in authored display order."""
@@ -388,7 +466,17 @@ class MemoVersionValuation:
     Frozen with the version: it records what the memo actually cited, including
     an unavailable view and its typed reason. ``value`` is ``None`` for an
     unavailable view and is never zero-filled -- a version that cited "no value
-    at this timepoint" keeps saying so forever."""
+    at this timepoint" keeps saying so forever.
+
+    ``selected`` says the memo *included* this view, and ``consumed`` that a
+    ``PctOfValue`` funding of the selected variant sized itself from it. Both
+    are recorded because they are different reasons for a valuation to be a
+    dependency, and only one of them is visible in the report: a consumed
+    valuation the memo never displays is still load-bearing.
+
+    A view that is neither selected nor consumed is frozen for the record --
+    the analyst could see it existed -- and is not a dependency of this
+    version."""
 
     timepoint_id: str
     kind: str
@@ -399,6 +487,29 @@ class MemoVersionValuation:
     value: float | None
     unavailable_reason: str | None
     unavailable_message: str | None
+    selected: bool = False
+    consumed: bool = False
+
+    @property
+    def required(self) -> bool:
+        """Whether this view had to resolve for the version to exist."""
+
+        return self.selected or self.consumed
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MemoClaimEvidence:
+    """One frozen claim-to-evidence link of a published version (R-G).
+
+    Snapshotted at publication, exactly as the memo content and the evidence
+    content are. A later draft edit, a re-linked claim or a deleted Evidence
+    Reference changes the draft and never this record: a reviewer opening
+    version N sees the source that supported that claim *then*."""
+
+    claim_kind: MemoClaimKind
+    item_id: str
+    evidence_id: str
+    ordinal: int
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -416,7 +527,12 @@ class InvestmentMemoVersion:
     ``published_fingerprint`` covers the version's content and that ledger, and
     deliberately excludes the IC decision (Section 10): the committee records
     its outcome *after* publication, and doing so must not alter the identity of
-    what it decided on."""
+    what it decided on.
+
+    ``claim_evidence`` is the frozen per-claim source map (R-G). It is stored
+    beside the items rather than inside them because it is a relationship, and
+    a relationship one of whose ends can be deleted has to be snapshotted to
+    survive."""
 
     version_id: str
     investment_id: str
@@ -432,11 +548,29 @@ class InvestmentMemoVersion:
     risk_items: tuple[MemoRiskItem, ...]
     term_items: tuple[MemoTermItem, ...]
     evidence: tuple[MemoEvidenceReference, ...]
+    claim_evidence: tuple[MemoClaimEvidence, ...]
     valuations: tuple[MemoVersionValuation, ...]
     dependencies: tuple[MemoDependency, ...]
     memo_content_fingerprint: str
     published_fingerprint: str
     created_at: str
+
+    def evidence_for(self, claim_kind: MemoClaimKind, item_id: str) -> tuple[str, ...]:
+        """The Evidence Reference ids frozen against one claim, in the order
+        they were authored."""
+
+        return tuple(
+            link.evidence_id
+            for link in sorted(self.claim_evidence, key=lambda entry: entry.ordinal)
+            if link.claim_kind is claim_kind and link.item_id == item_id
+        )
+
+    @property
+    def required_valuations(self) -> tuple[MemoVersionValuation, ...]:
+        """The views this version depended on: the ones it selected, and the
+        ones a ``PctOfValue`` funding consumed."""
+
+        return tuple(view for view in self.valuations if view.required)
 
 
 # =============================================================================

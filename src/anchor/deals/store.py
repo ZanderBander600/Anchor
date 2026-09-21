@@ -330,6 +330,8 @@ from ..valuation.validation import validate_valuation_timepoint
 from ..memo.contracts import (
     AnalystRecommendation,
     DecisionPerspectiveKind,
+    MemoClaimEvidence,
+    MemoClaimKind,
     EvidenceSourceKind,
     ExecutionComplexity,
     InvestmentCommitteeDecision,
@@ -476,11 +478,11 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # has no classification row, which *is* "Not specified" -- nothing is guessed
 # for it, and it gains a row only when the analyst classifies it.
 #
-# P7.10 Stage 2 -- schema version 15 adds the sixteen valuation and Investment
+# P7.10 Stage 2 -- schema version 15 adds the nineteen valuation and Investment
 # Memo tables, created unconditionally by ``_connect`` exactly as version 14's
 # were. No ALTER and no existing row read or rewritten: an Investment gains a
 # valuation definition, an Evidence Reference or a memo only when the analyst
-# authors one, and a v14 database simply gains sixteen empty tables. Every
+# authors one, and a v14 database simply gains nineteen empty tables. Every
 # pre-existing Deal, Investment, Strategy, Scenario, Capital Structure,
 # Partnership, Managed Asset and export keeps loading and responding exactly as
 # it did, because nothing this gate adds is read on any of those paths.
@@ -1721,9 +1723,9 @@ _ASSET_TYPES_1_TABLES = ("deal_asset_classifications", "managed_asset_classifica
 # Investment Memo and its immutable versions, schema version 15.
 #
 # ``docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`` Sections 5, 7, 8, 9
-# and 15. Sixteen purely additive tables, created by ``_connect`` via CREATE
+# and 15. Nineteen purely additive tables, created by ``_connect`` via CREATE
 # TABLE IF NOT EXISTS exactly as every table since version 2. No ALTER, and no
-# existing row is read or rewritten: a v14 database simply gains sixteen empty
+# existing row is read or rewritten: a v14 database simply gains nineteen empty
 # tables, and every pre-existing Deal, Investment, Strategy, Scenario, Capital
 # Structure, Partnership, Managed Asset and export keeps behaving exactly as it
 # did. An Investment gains a valuation or a memo only when the analyst authors
@@ -1878,6 +1880,44 @@ CREATE TABLE IF NOT EXISTS memo_draft_evidence (
 )
 """
 
+#: R-G's claim-level linkage. One row per (claim, source), keyed by the claim's
+#: collection *and* its id: an ``item_id`` is unique within its collection, not
+#: across them, so without ``claim_kind`` a thesis item and a risk sharing an id
+#: would silently share their sources.
+#:
+#: Normalized rather than an opaque list on the item, so a link is queryable,
+#: one source cited by three claims is three rows naming one record, and a
+#: reviewer can ask "what supports this claim" and "what does this source
+#: support" with equal ease.
+_CREATE_MEMO_CLAIM_EVIDENCE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_claim_evidence (
+    memo_id      TEXT NOT NULL,
+    claim_kind   TEXT NOT NULL CHECK (claim_kind IN ('item', 'risk', 'term')),
+    item_id      TEXT NOT NULL,
+    evidence_id  TEXT NOT NULL,
+    ordinal      INTEGER NOT NULL,
+    PRIMARY KEY (memo_id, claim_kind, item_id, evidence_id)
+)
+"""
+
+#: The memo's explicit statement of which authored valuation definitions this
+#: decision package *includes*. Authoring a definition is not selecting it: an
+#: Investment may hold exploratory valuations the analyst is still working out,
+#: and only the rows here make one a memo dependency.
+#:
+#: A table rather than a flag on ``valuation_timepoints``, because selection
+#: belongs to the memo and not to the Investment's valuation library: two
+#: successive memos may include different views of the same definitions, and a
+#: definition's own identity must not move when a memo changes its mind.
+_CREATE_MEMO_SELECTED_VALUATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_selected_valuations (
+    memo_id       TEXT NOT NULL,
+    timepoint_id  TEXT NOT NULL,
+    ordinal       INTEGER NOT NULL,
+    PRIMARY KEY (memo_id, timepoint_id)
+)
+"""
+
 _CREATE_INVESTMENT_MEMO_VERSIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS investment_memo_versions (
     version_id               TEXT PRIMARY KEY,
@@ -1958,6 +1998,12 @@ CREATE TABLE IF NOT EXISTS memo_version_evidence (
 #: unavailable one and its typed reason. ``value`` is NULL for an unavailable
 #: view and is never zero-filled: a version that cited "no value at this
 #: timepoint" keeps saying exactly that.
+#:
+#: ``selected`` and ``consumed`` record *why* a view was a dependency: the memo
+#: included it, or a ``PctOfValue`` funding of the selected variant sized itself
+#: from it. Both are stored because only the first is visible in the report, and
+#: a consumed valuation the memo never displays is still load-bearing. A view
+#: that is neither is frozen for the record and depended on by nothing.
 _CREATE_MEMO_VERSION_VALUATIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS memo_version_valuations (
     version_id          TEXT NOT NULL,
@@ -1970,7 +2016,24 @@ CREATE TABLE IF NOT EXISTS memo_version_valuations (
     value               REAL,
     unavailable_reason  TEXT,
     unavailable_message TEXT,
+    selected            INTEGER NOT NULL CHECK (selected IN (0, 1)),
+    consumed            INTEGER NOT NULL CHECK (consumed IN (0, 1)),
     PRIMARY KEY (version_id, timepoint_id)
+)
+"""
+
+#: The claim-to-evidence links a version froze (R-G). Snapshotted rather than
+#: referenced, because one end of the relationship -- the Evidence Reference --
+#: can be edited or removed afterwards, and a reviewer opening version N must
+#: see the source that supported that claim *then*.
+_CREATE_MEMO_VERSION_CLAIM_EVIDENCE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_claim_evidence (
+    version_id   TEXT NOT NULL,
+    claim_kind   TEXT NOT NULL CHECK (claim_kind IN ('item', 'risk', 'term')),
+    item_id      TEXT NOT NULL,
+    evidence_id  TEXT NOT NULL,
+    ordinal      INTEGER NOT NULL,
+    PRIMARY KEY (version_id, claim_kind, item_id, evidence_id)
 )
 """
 
@@ -2009,6 +2072,8 @@ _MEMO_DRAFT_CHILD_TABLES = (
     "memo_risk_items",
     "memo_term_items",
     "memo_draft_evidence",
+    "memo_claim_evidence",
+    "memo_selected_valuations",
 )
 
 #: Every child table one published version owns. Deleted only with the whole
@@ -2018,6 +2083,7 @@ _MEMO_VERSION_CHILD_TABLES = (
     "memo_version_risk_items",
     "memo_version_term_items",
     "memo_version_evidence",
+    "memo_version_claim_evidence",
     "memo_version_valuations",
     "memo_version_dependencies",
 )
@@ -2525,13 +2591,13 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # row is written for anything that already exists. Every legacy Deal and
     # Managed Asset reads back as "Not specified" because it has no row -- the
     # migration assigns no type, and neither does any read.
-    # P7.10 Stage 2 -- schema version 15 adds the sixteen valuation and
+    # P7.10 Stage 2 -- schema version 15 adds the nineteen valuation and
     # Investment Memo tables the same way, and for the same reason it is the
     # safest migration available: it touches no existing data. ``_connect``
     # creates them via CREATE TABLE IF NOT EXISTS, no table is altered, and no
     # row is written for any Deal, Investment, Strategy, Scenario, Capital
     # Structure, Partnership or Managed Asset that already exists. A v14
-    # database simply gains sixteen empty tables; an Investment with no
+    # database simply gains nineteen empty tables; an Investment with no
     # valuation definition and no memo has neither, which is exactly its state
     # before this gate, and opening or editing one creates nothing.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -2622,11 +2688,14 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_MEMO_RISK_ITEMS_TABLE_SQL)
     connection.execute(_CREATE_MEMO_TERM_ITEMS_TABLE_SQL)
     connection.execute(_CREATE_MEMO_DRAFT_EVIDENCE_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_CLAIM_EVIDENCE_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_SELECTED_VALUATIONS_TABLE_SQL)
     connection.execute(_CREATE_INVESTMENT_MEMO_VERSIONS_TABLE_SQL)
     connection.execute(_CREATE_MEMO_VERSION_ITEMS_TABLE_SQL)
     connection.execute(_CREATE_MEMO_VERSION_RISK_ITEMS_TABLE_SQL)
     connection.execute(_CREATE_MEMO_VERSION_TERM_ITEMS_TABLE_SQL)
     connection.execute(_CREATE_MEMO_VERSION_EVIDENCE_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_CLAIM_EVIDENCE_TABLE_SQL)
     connection.execute(_CREATE_MEMO_VERSION_VALUATIONS_TABLE_SQL)
     connection.execute(_CREATE_MEMO_VERSION_DEPENDENCIES_TABLE_SQL)
     connection.execute(_CREATE_INVESTMENT_COMMITTEE_DECISIONS_TABLE_SQL)
@@ -10172,10 +10241,20 @@ def delete_evidence_reference(
                 ).fetchall()
             )
         )
+        # The draft's register *and* every individual claim link. A source a
+        # single risk cites is in use exactly as much as one the package cites
+        # as a whole: removing it would leave that claim pointing at nothing,
+        # which is the dangling reference Section 8 refuses to create.
         cited = (
             connection.execute(
                 "SELECT 1 FROM memo_draft_evidence e JOIN investment_memo_drafts d ON d.memo_id = e.memo_id "
                 "WHERE d.investment_id = ? AND e.evidence_id = ?",
+                (investment_id, evidence_id),
+            ).fetchone()
+            is not None
+            or connection.execute(
+                "SELECT 1 FROM memo_claim_evidence c JOIN investment_memo_drafts d ON d.memo_id = c.memo_id "
+                "WHERE d.investment_id = ? AND c.evidence_id = ?",
                 (investment_id, evidence_id),
             ).fetchone()
             is not None
@@ -10234,16 +10313,52 @@ def _read_memo_items(connection: sqlite3.Connection, table: str, key: str, owner
     ).fetchall()
 
 
-def _row_to_memo_item(row: sqlite3.Row, *, where: str) -> MemoItem:
+def _read_claim_links(
+    connection: sqlite3.Connection, table: str, key: str, owner_id: str
+) -> dict[tuple[str, str], tuple[str, ...]]:
+    """Every claim-to-evidence link of one draft or version, by
+    ``(claim_kind, item_id)``, in the analyst's authored order.
+
+    Read once per memo and handed to each item, rather than queried per item:
+    the relationship is one table, and one read of it keeps every claim's view
+    of it consistent."""
+
+    links: dict[tuple[str, str], list[tuple[int, str]]] = {}
+    for row in connection.execute(
+        f"SELECT claim_kind, item_id, evidence_id, ordinal FROM {table} WHERE {key} = ?",
+        (owner_id,),
+    ).fetchall():
+        links.setdefault((row["claim_kind"], row["item_id"]), []).append(
+            (row["ordinal"], row["evidence_id"])
+        )
+    return {
+        key_pair: tuple(evidence_id for _, evidence_id in sorted(entries))
+        for key_pair, entries in links.items()
+    }
+
+
+def _claim_evidence_of(
+    links: dict[tuple[str, str], tuple[str, ...]], kind: MemoClaimKind, item_id: str
+) -> tuple[str, ...]:
+    return links.get((kind.value, item_id), ())
+
+
+def _row_to_memo_item(
+    row: sqlite3.Row, *, where: str, links: dict[tuple[str, str], tuple[str, ...]]
+) -> MemoItem:
+    item_id = row["item_id"]
     return MemoItem(
-        item_id=row["item_id"],
-        section=_p7_10_token(row["section"], MemoSection, where=f"{where} item {row['item_id']!r} section"),
+        item_id=item_id,
+        section=_p7_10_token(row["section"], MemoSection, where=f"{where} item {item_id!r} section"),
         display_order=row["display_order"],
         text=row["text"],
+        evidence_ids=_claim_evidence_of(links, MemoClaimKind.ITEM, item_id),
     )
 
 
-def _row_to_memo_risk(row: sqlite3.Row, *, where: str) -> MemoRiskItem:
+def _row_to_memo_risk(
+    row: sqlite3.Row, *, where: str, links: dict[tuple[str, str], tuple[str, ...]]
+) -> MemoRiskItem:
     item_id = row["item_id"]
     return MemoRiskItem(
         item_id=item_id,
@@ -10254,16 +10369,20 @@ def _row_to_memo_risk(row: sqlite3.Row, *, where: str) -> MemoRiskItem:
             row["residual_risk"], RiskSeverity, where=f"{where} risk {item_id!r} residual risk"
         ),
         mitigant=row["mitigant"],
+        evidence_ids=_claim_evidence_of(links, MemoClaimKind.RISK, item_id),
     )
 
 
-def _row_to_memo_term(row: sqlite3.Row, *, where: str) -> MemoTermItem:
+def _row_to_memo_term(
+    row: sqlite3.Row, *, where: str, links: dict[tuple[str, str], tuple[str, ...]]
+) -> MemoTermItem:
     item_id = row["item_id"]
     return MemoTermItem(
         item_id=item_id,
         display_order=row["display_order"],
         text=row["text"],
         priority=_p7_10_token(row["priority"], TermPriority, where=f"{where} term {item_id!r} priority"),
+        evidence_ids=_claim_evidence_of(links, MemoClaimKind.TERM, item_id),
     )
 
 
@@ -10277,6 +10396,15 @@ def _read_memo_draft(connection: sqlite3.Connection, row: sqlite3.Row) -> Invest
         found["evidence_id"]
         for found in connection.execute(
             "SELECT evidence_id FROM memo_draft_evidence WHERE memo_id = ? ORDER BY ordinal, evidence_id",
+            (memo_id,),
+        ).fetchall()
+    )
+    links = _read_claim_links(connection, "memo_claim_evidence", "memo_id", memo_id)
+    selected_valuations = tuple(
+        found["timepoint_id"]
+        for found in connection.execute(
+            "SELECT timepoint_id FROM memo_selected_valuations WHERE memo_id = ? "
+            "ORDER BY ordinal, timepoint_id",
             (memo_id,),
         ).fetchall()
     )
@@ -10295,18 +10423,19 @@ def _read_memo_draft(connection: sqlite3.Connection, row: sqlite3.Row) -> Invest
         return_on_time_notes=row["return_on_time_notes"],
         selected_decision=_selected_decision_from_row(row),
         items=tuple(
-            _row_to_memo_item(item, where=where)
+            _row_to_memo_item(item, where=where, links=links)
             for item in _read_memo_items(connection, "memo_items", "memo_id", memo_id)
         ),
         risk_items=tuple(
-            _row_to_memo_risk(item, where=where)
+            _row_to_memo_risk(item, where=where, links=links)
             for item in _read_memo_items(connection, "memo_risk_items", "memo_id", memo_id)
         ),
         term_items=tuple(
-            _row_to_memo_term(item, where=where)
+            _row_to_memo_term(item, where=where, links=links)
             for item in _read_memo_items(connection, "memo_term_items", "memo_id", memo_id)
         ),
         evidence_ids=evidence_ids,
+        selected_valuation_timepoint_ids=selected_valuations,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -10358,6 +10487,23 @@ def _write_memo_children(connection: sqlite3.Connection, draft: InvestmentMemoDr
             "INSERT INTO memo_draft_evidence (memo_id, evidence_id, ordinal) VALUES (?, ?, ?)",
             (memo_id, evidence_id, ordinal),
         )
+    for kind, collection in (
+        (MemoClaimKind.ITEM, draft.items),
+        (MemoClaimKind.RISK, draft.risk_items),
+        (MemoClaimKind.TERM, draft.term_items),
+    ):
+        for item in collection:
+            for ordinal, evidence_id in enumerate(item.evidence_ids):
+                connection.execute(
+                    "INSERT INTO memo_claim_evidence "
+                    "(memo_id, claim_kind, item_id, evidence_id, ordinal) VALUES (?, ?, ?, ?, ?)",
+                    (memo_id, _encode_enum(kind), item.item_id, evidence_id, ordinal),
+                )
+    for ordinal, timepoint_id in enumerate(draft.selected_valuation_timepoint_ids):
+        connection.execute(
+            "INSERT INTO memo_selected_valuations (memo_id, timepoint_id, ordinal) VALUES (?, ?, ?)",
+            (memo_id, timepoint_id, ordinal),
+        )
 
 
 def _delete_memo_draft_children(connection: sqlite3.Connection, memo_id: str) -> None:
@@ -10384,6 +10530,28 @@ def _require_cited_evidence_exists(
     missing = sorted(set(evidence_ids) - known)
     if missing:
         raise EvidenceReferenceNotFoundError(investment_id, missing[0])
+
+
+def _require_selected_valuations_exist(
+    connection: sqlite3.Connection, investment_id: str, timepoint_ids: tuple[str, ...]
+) -> None:
+    """Every selected valuation definition belongs to this Investment.
+
+    Fails closed on a foreign id for the same reason a cited Evidence Reference
+    does (Section 15): a memo must not be able to select a view it does not own,
+    and a selection naming nothing is an authoring mistake, not an empty
+    package."""
+
+    known = {
+        row["timepoint_id"]
+        for row in connection.execute(
+            "SELECT timepoint_id FROM valuation_timepoints WHERE investment_id = ?",
+            (investment_id,),
+        ).fetchall()
+    }
+    missing = sorted(set(timepoint_ids) - known)
+    if missing:
+        raise ValuationTimepointNotFoundError(investment_id, missing[0])
 
 
 def _write_memo_draft(
@@ -10497,7 +10665,10 @@ def put_memo_draft(
         stated = require_valid_memo_draft(
             dataclasses.replace(draft, memo_id=memo_id, investment_id=investment_id)
         )
-        _require_cited_evidence_exists(connection, investment_id, stated.evidence_ids)
+        _require_cited_evidence_exists(connection, investment_id, stated.cited_evidence_ids())
+        _require_selected_valuations_exist(
+            connection, investment_id, stated.selected_valuation_timepoint_ids
+        )
         if existing is not None:
             _delete_memo_draft_children(connection, memo_id)
             connection.execute(
@@ -10577,7 +10748,10 @@ def put_deal_memo_draft(
         stated = require_valid_memo_draft(
             dataclasses.replace(draft, memo_id=memo_id, investment_id=investment_id)
         )
-        _require_cited_evidence_exists(connection, investment_id, stated.evidence_ids)
+        _require_cited_evidence_exists(connection, investment_id, stated.cited_evidence_ids())
+        _require_selected_valuations_exist(
+            connection, investment_id, stated.selected_valuation_timepoint_ids
+        )
         if existing is not None:
             _delete_memo_draft_children(connection, memo_id)
             connection.execute(
@@ -10605,6 +10779,9 @@ def _read_memo_version(connection: sqlite3.Connection, row: sqlite3.Row) -> Inve
 
     version_id = row["version_id"]
     where = f"Memo version {version_id!r}"
+    version_links = _read_claim_links(
+        connection, "memo_version_claim_evidence", "version_id", version_id
+    )
     return InvestmentMemoVersion(
         version_id=version_id,
         investment_id=row["investment_id"],
@@ -10629,15 +10806,15 @@ def _read_memo_version(connection: sqlite3.Connection, row: sqlite3.Row) -> Inve
             partner_id=row["perspective_partner_id"],
         ),
         items=tuple(
-            _row_to_memo_item(item, where=where)
+            _row_to_memo_item(item, where=where, links=version_links)
             for item in _read_memo_items(connection, "memo_version_items", "version_id", version_id)
         ),
         risk_items=tuple(
-            _row_to_memo_risk(item, where=where)
+            _row_to_memo_risk(item, where=where, links=version_links)
             for item in _read_memo_items(connection, "memo_version_risk_items", "version_id", version_id)
         ),
         term_items=tuple(
-            _row_to_memo_term(item, where=where)
+            _row_to_memo_term(item, where=where, links=version_links)
             for item in _read_memo_items(connection, "memo_version_term_items", "version_id", version_id)
         ),
         evidence=tuple(
@@ -10658,6 +10835,21 @@ def _read_memo_version(connection: sqlite3.Connection, row: sqlite3.Row) -> Inve
                 (version_id,),
             ).fetchall()
         ),
+        claim_evidence=tuple(
+            MemoClaimEvidence(
+                claim_kind=_p7_10_token(
+                    item["claim_kind"], MemoClaimKind, where=f"{where} claim evidence kind"
+                ),
+                item_id=item["item_id"],
+                evidence_id=item["evidence_id"],
+                ordinal=item["ordinal"],
+            )
+            for item in connection.execute(
+                "SELECT * FROM memo_version_claim_evidence WHERE version_id = ? "
+                "ORDER BY claim_kind, item_id, ordinal, evidence_id",
+                (version_id,),
+            ).fetchall()
+        ),
         valuations=tuple(
             MemoVersionValuation(
                 timepoint_id=item["timepoint_id"],
@@ -10669,6 +10861,8 @@ def _read_memo_version(connection: sqlite3.Connection, row: sqlite3.Row) -> Inve
                 value=item["value"],
                 unavailable_reason=item["unavailable_reason"],
                 unavailable_message=item["unavailable_message"],
+                selected=_decode_p7_10_flag(item["selected"], where=f"{where} valuation selection"),
+                consumed=_decode_p7_10_flag(item["consumed"], where=f"{where} valuation consumption"),
             )
             for item in connection.execute(
                 "SELECT * FROM memo_version_valuations WHERE version_id = ? ORDER BY timepoint_id",
@@ -10853,11 +11047,24 @@ def publish_memo_version(
                     1 if item.approved else 0,
                 ),
             )
+        for kind, collection in (
+            (MemoClaimKind.ITEM, draft.items),
+            (MemoClaimKind.RISK, draft.risk_items),
+            (MemoClaimKind.TERM, draft.term_items),
+        ):
+            for item in collection:
+                for ordinal, evidence_id in enumerate(item.evidence_ids):
+                    connection.execute(
+                        "INSERT INTO memo_version_claim_evidence "
+                        "(version_id, claim_kind, item_id, evidence_id, ordinal) VALUES (?, ?, ?, ?, ?)",
+                        (version_id, _encode_enum(kind), item.item_id, evidence_id, ordinal),
+                    )
         for view in valuations:
             connection.execute(
                 "INSERT INTO memo_version_valuations "
                 "(version_id, timepoint_id, kind, label, model_month, scope_kind, status, value, "
-                "unavailable_reason, unavailable_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "unavailable_reason, unavailable_message, selected, consumed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     version_id,
                     view.timepoint_id,
@@ -10869,6 +11076,8 @@ def publish_memo_version(
                     view.value,
                     view.unavailable_reason,
                     view.unavailable_message,
+                    1 if view.selected else 0,
+                    1 if view.consumed else 0,
                 ),
             )
         for dependency in dependencies:

@@ -59,9 +59,11 @@ class PublicationRefusalCode(StrEnum):
     - ``EVIDENCE_NOT_FOUND``: a cited reference does not exist.
     - ``EVIDENCE_NOT_APPROVED``: a cited reference is not approved, so the memo
       would present an unapproved source as a supporting one (Section 8).
-    - ``VALUATION_UNAVAILABLE_FOR_CITED_VIEW``: a valuation view the memo cites
-      has no value. The version is not published with a fabricated or omitted
-      figure in its place.
+    - ``VALUATION_UNAVAILABLE_FOR_REQUIRED_VIEW``: a valuation the package
+      *depends on* -- one the memo selected, or one a ``PctOfValue`` funding
+      consumed -- has no value. The version is not published with a fabricated
+      or omitted figure in its place. An authored but unselected and unconsumed
+      definition is not a dependency and never reaches this code.
     """
 
     MEMO_INVALID = "memo_invalid"
@@ -73,17 +75,24 @@ class PublicationRefusalCode(StrEnum):
     BLANK_DECISION_ASK = "blank_decision_ask"
     EVIDENCE_NOT_FOUND = "evidence_not_found"
     EVIDENCE_NOT_APPROVED = "evidence_not_approved"
-    VALUATION_UNAVAILABLE_FOR_CITED_VIEW = "valuation_unavailable_for_cited_view"
+    VALUATION_UNAVAILABLE_FOR_REQUIRED_VIEW = "valuation_unavailable_for_required_view"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PublicationRefusal:
-    """One specific reason publication is refused, with the thing it concerns."""
+    """One specific reason publication is refused, with the thing it concerns.
+
+    ``unavailable_reason`` carries the upstream structured reason code where the
+    refusal has one -- a valuation that could not be resolved states *its own*
+    typed reason here rather than being flattened into publication's vocabulary.
+    A reader is told "the forward NOI is not positive", not merely "unavailable"
+    (Section 16)."""
 
     code: PublicationRefusalCode
     message: str
     scope_id: str | None = None
     field: str | None = None
+    unavailable_reason: str | None = None
 
 
 class PublicationRefusedError(Exception):
@@ -94,6 +103,39 @@ class PublicationRefusedError(Exception):
     def __init__(self, refusals: tuple[PublicationRefusal, ...]) -> None:
         self.refusals = tuple(refusals)
         super().__init__("; ".join(refusal.message for refusal in self.refusals))
+
+
+class RequiredValuationReason(StrEnum):
+    """Why one valuation is a dependency of the package being published.
+
+    Two different reasons, kept apart because only one of them is visible in
+    the report and a reader deserves to know which applies:
+
+    - ``SELECTED``: the memo explicitly included this view. It will be shown.
+    - ``CONSUMED``: a ``PctOfValue`` funding of the selected variant sized
+      itself from this valuation (Section 6). The memo may never display it,
+      and the decision package still rests on it.
+
+    An authored definition with neither reason is not a dependency at all."""
+
+    SELECTED = "selected"
+    CONSUMED = "consumed"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RequiredValuation:
+    """One valuation the package depends on, and whether it currently resolves.
+
+    ``unavailable_reason`` and ``unavailable_detail`` carry the structured
+    reason from the Stage 2 adapter, so a refusal quotes the specific finding --
+    "the analyst has not approved the source", "direct capitalisation of a
+    non-positive NOI has no meaning" -- rather than a generic "unavailable"."""
+
+    timepoint_id: str
+    reason: RequiredValuationReason
+    available: bool
+    unavailable_reason: str | None = None
+    unavailable_detail: str = ""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -115,8 +157,11 @@ class PublicationContext:
       completes (Section 7.3). ``cell_detail`` carries the variant's own reason
       when it does not.
     - ``evidence``: every Evidence Reference of the Investment, by id.
-    - ``cited_valuations_available``: for each timepoint the memo cites, whether
-      it currently has a value.
+    - ``required_valuations``: for each valuation the package actually
+      *depends* on, whether it currently has a value. Only the depended-on ones
+      appear -- see ``RequiredValuation`` -- so an exploratory definition the
+      memo neither selected nor consumed is simply absent and cannot block
+      anything.
     """
 
     strategy_exists: bool
@@ -125,7 +170,7 @@ class PublicationContext:
     cell_resolves: bool
     cell_detail: str = ""
     evidence: Mapping[str, MemoEvidenceReference]
-    cited_valuations_available: Mapping[str, bool]
+    required_valuations: tuple[RequiredValuation, ...] = ()
 
 
 def _selection_refusals(
@@ -195,6 +240,11 @@ def _evidence_refusals(
 ) -> list[PublicationRefusal]:
     """Every cited Evidence Reference exists and is approved (Section 8).
 
+    ``evidence_ids`` is the *union* of the memo's register and every claim-level
+    link, so a source cited only by one risk is held to exactly the same
+    standard as one cited by the package as a whole. That is the point of R-G:
+    a reviewer must be able to follow a claim to a source they can trust.
+
     An unapproved reference is never silently downgraded to an unsupported
     assertion at publication time: the analyst either approves it or removes the
     citation, so a published version never carries a source the analyst did not
@@ -230,26 +280,56 @@ def _evidence_refusals(
     return refusals
 
 
+#: How each reason reads in a refusal, and which field an analyst would fix.
+_REQUIRED_VALUATION_WORDING: dict[RequiredValuationReason, tuple[str, str]] = {
+    RequiredValuationReason.SELECTED: (
+        "the memo selects it for inclusion",
+        "selected_valuation_timepoint_ids",
+    ),
+    RequiredValuationReason.CONSUMED: (
+        "a percentage-of-value funding of the selected variant is sized from it",
+        "capital_structure",
+    ),
+}
+
+
 def _valuation_refusals(context: PublicationContext) -> list[PublicationRefusal]:
-    """Every valuation view the memo cites currently has a value.
+    """Every valuation the package **depends on** currently has a value.
 
-    A cited view with no value would leave the published package stating a
-    valuation it cannot show. The version is refused rather than published with
-    the figure omitted or filled in."""
+    The dependency, not the existence, is what matters. An Investment may hold
+    exploratory valuation definitions an analyst is still working out; one of
+    those being unavailable says nothing about the decision package and must not
+    block it. What must block it is a valuation the memo *selected* for
+    inclusion, or one a ``PctOfValue`` funding of the selected variant
+    *consumed* -- the second of which the report may never display and the
+    package still rests on.
 
-    return [
-        PublicationRefusal(
-            code=PublicationRefusalCode.VALUATION_UNAVAILABLE_FOR_CITED_VIEW,
-            message=(
-                f"Valuation timepoint {timepoint_id!r} has no value for the selected variant, so the memo cannot "
-                "publish it. It is never published as zero, as the acquisition price, or silently omitted."
-            ),
-            scope_id=timepoint_id,
-            field="valuations",
+    A blocked publication quotes the valuation's own structured reason. Nothing
+    is published as zero, as the acquisition price, as another timepoint's
+    value, or silently omitted."""
+
+    refusals: list[PublicationRefusal] = []
+    for required in sorted(
+        context.required_valuations, key=lambda entry: (entry.timepoint_id, entry.reason.value)
+    ):
+        if required.available:
+            continue
+        because, field = _REQUIRED_VALUATION_WORDING[required.reason]
+        detail = f" {required.unavailable_detail}" if required.unavailable_detail else ""
+        refusals.append(
+            PublicationRefusal(
+                code=PublicationRefusalCode.VALUATION_UNAVAILABLE_FOR_REQUIRED_VIEW,
+                message=(
+                    f"Valuation timepoint {required.timepoint_id!r} has no value for the selected variant, and "
+                    f"{because}, so the decision package depends on it.{detail} It is never published as zero, as "
+                    "the acquisition price, as another valuation, or silently omitted."
+                ),
+                scope_id=required.timepoint_id,
+                field=field,
+                unavailable_reason=required.unavailable_reason,
+            )
         )
-        for timepoint_id, available in sorted(context.cited_valuations_available.items())
-        if not available
-    ]
+    return refusals
 
 
 def publication_refusals(
@@ -258,8 +338,8 @@ def publication_refusals(
     """Every reason ``draft`` may not be published right now, or ``()``.
 
     Ordered: the draft's own well-formedness first, then the selected cell, then
-    evidence, then the cited valuations -- so the analyst reads the most
-    fundamental problem first."""
+    evidence, then the valuations the package depends on -- so the analyst reads
+    the most fundamental problem first."""
 
     refusals: list[PublicationRefusal] = [
         PublicationRefusal(
@@ -294,7 +374,7 @@ def publication_refusals(
         )
     else:
         refusals.extend(_selection_refusals(selected, context))
-    refusals.extend(_evidence_refusals(draft.evidence_ids, context))
+    refusals.extend(_evidence_refusals(draft.cited_evidence_ids(), context))
     refusals.extend(_valuation_refusals(context))
     return tuple(refusals)
 

@@ -75,7 +75,13 @@ def _memo_body(**changes: Any) -> dict[str, Any]:
             "partner_id": None,
         },
         "items": [
-            {"item_id": "t1", "section": "thesis", "display_order": 0, "text": "Below replacement cost."}
+            {
+                "item_id": "t1",
+                "section": "thesis",
+                "display_order": 0,
+                "text": "Below replacement cost.",
+                "evidence_ids": [],
+            }
         ],
         "risk_items": [
             {
@@ -85,12 +91,20 @@ def _memo_body(**changes: Any) -> dict[str, Any]:
                 "severity": "moderate",
                 "residual_risk": "low",
                 "mitigant": None,
+                "evidence_ids": [],
             }
         ],
         "term_items": [
-            {"item_id": "x1", "display_order": 0, "text": "60-day DD.", "priority": "required"}
+            {
+                "item_id": "x1",
+                "display_order": 0,
+                "text": "60-day DD.",
+                "priority": "required",
+                "evidence_ids": [],
+            }
         ],
         "evidence_ids": [],
+        "selected_valuation_timepoint_ids": [],
     }
     body.update(changes)
     return body

@@ -31,6 +31,7 @@ from enum import StrEnum
 from .contracts import (
     AnalystRecommendation,
     DecisionPerspectiveKind,
+    MemoClaimKind,
     EvidenceSourceKind,
     ExecutionComplexity,
     InvestmentMemoDraft,
@@ -71,6 +72,8 @@ class MemoIssueCode(StrEnum):
     BLANK_EVIDENCE_TITLE = "blank_evidence_title"
     BLANK_EVIDENCE_REFERENCE = "blank_evidence_reference"
     INVALID_AS_OF_DATE = "invalid_as_of_date"
+    BLANK_TIMEPOINT_ID = "blank_timepoint_id"
+    DUPLICATE_TIMEPOINT_ID = "duplicate_timepoint_id"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -489,7 +492,86 @@ def validate_memo_draft(draft: InvestmentMemoDraft) -> tuple[MemoIssue, ...]:
                     field="evidence_ids",
                 )
             )
+    issues.extend(_claim_evidence_issues(draft))
+    issues.extend(_selected_valuation_issues(draft))
     return tuple(issues)
+
+
+def _claim_evidence_issues(draft: InvestmentMemoDraft) -> list[MemoIssue]:
+    """Every structural reason a claim's evidence links are not well formed
+    (R-G).
+
+    Whether a cited reference *exists and belongs to this Investment* is a
+    persisted fact this layer cannot see; the store refuses a foreign or unknown
+    id at the write. What is structural is here: a link must name a reference,
+    and one claim must not cite the same reference twice."""
+
+    issues: list[MemoIssue] = []
+    for collection, field in (
+        (draft.items, "items"),
+        (draft.risk_items, "risk_items"),
+        (draft.term_items, "term_items"),
+    ):
+        for item in sorted(collection, key=lambda entry: getattr(entry, "item_id", "")):
+            evidence_ids = getattr(item, "evidence_ids", ())
+            for evidence_id in evidence_ids:
+                if _blank(evidence_id):
+                    issues.append(
+                        _issue(
+                            MemoIssueCode.BLANK_EVIDENCE_ID,
+                            f"{field} item {item.item_id!r} cites an Evidence Reference with no id; a claim cites "
+                            "a reference by its stable id or cites none.",
+                            item_id=item.item_id,
+                            field=f"{field}.evidence_ids",
+                        )
+                    )
+            for evidence_id, count in sorted(Counter(evidence_ids).items()):
+                if count > 1:
+                    issues.append(
+                        _issue(
+                            MemoIssueCode.DUPLICATE_EVIDENCE_ID,
+                            f"{field} item {item.item_id!r} cites Evidence Reference {evidence_id!r} {count} "
+                            "times; one citation names one reference.",
+                            item_id=item.item_id,
+                            field=f"{field}.evidence_ids",
+                        )
+                    )
+    return issues
+
+
+def _selected_valuation_issues(draft: InvestmentMemoDraft) -> list[MemoIssue]:
+    """Every structural reason the memo's valuation selection is not well
+    formed.
+
+    Selection is an explicit statement, so the only structural rules are that
+    each entry names something and names it once. Whether the named timepoint
+    exists, belongs to this Investment, and currently resolves are questions for
+    the store and for ``publication`` -- a selection that is perfectly well
+    formed today can become unpublishable tomorrow without a character of it
+    changing."""
+
+    issues: list[MemoIssue] = []
+    selected = draft.selected_valuation_timepoint_ids
+    for timepoint_id in selected:
+        if _blank(timepoint_id):
+            issues.append(
+                _issue(
+                    MemoIssueCode.BLANK_TIMEPOINT_ID,
+                    f"Memo {draft.memo_id!r} selects a valuation with no timepoint id.",
+                    field="selected_valuation_timepoint_ids",
+                )
+            )
+    for timepoint_id, count in sorted(Counter(selected).items()):
+        if count > 1:
+            issues.append(
+                _issue(
+                    MemoIssueCode.DUPLICATE_TIMEPOINT_ID,
+                    f"Memo {draft.memo_id!r} selects valuation timepoint {timepoint_id!r} {count} times; one "
+                    "selection includes one view.",
+                    field="selected_valuation_timepoint_ids",
+                )
+            )
+    return issues
 
 
 def require_valid_memo_draft(draft: InvestmentMemoDraft) -> InvestmentMemoDraft:

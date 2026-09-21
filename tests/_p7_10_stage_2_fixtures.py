@@ -169,6 +169,10 @@ def memo_draft(
     *,
     selected: SelectedDecision | None = None,
     evidence_ids: tuple[str, ...] = (),
+    selected_valuation_timepoint_ids: tuple[str, ...] = (),
+    thesis_evidence_ids: tuple[str, ...] = (),
+    risk_evidence_ids: tuple[str, ...] = (),
+    term_evidence_ids: tuple[str, ...] = (),
     decision_ask: str = "Approve the acquisition at $10.0m.",
     recommendation: AnalystRecommendation = AnalystRecommendation.APPROVE_WITH_CONDITIONS,
 ) -> InvestmentMemoDraft:
@@ -188,6 +192,7 @@ def memo_draft(
                 section=MemoSection.THESIS,
                 display_order=0,
                 text="Acquired below replacement cost.",
+                evidence_ids=thesis_evidence_ids,
             ),
             MemoItem(
                 item_id="condition-1",
@@ -204,6 +209,7 @@ def memo_draft(
                 severity=RiskSeverity.MODERATE,
                 residual_risk=RiskSeverity.LOW,
                 mitigant="Pre-leasing discussions underway.",
+                evidence_ids=risk_evidence_ids,
             ),
         ),
         term_items=(
@@ -212,9 +218,11 @@ def memo_draft(
                 display_order=0,
                 text="60-day due diligence period.",
                 priority=TermPriority.REQUIRED,
+                evidence_ids=term_evidence_ids,
             ),
         ),
         evidence_ids=evidence_ids,
+        selected_valuation_timepoint_ids=selected_valuation_timepoint_ids,
     )
 
 

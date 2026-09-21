@@ -57,7 +57,7 @@ def db(tmp_path: Path) -> Path:
 # =============================================================================
 
 
-def test_a_fresh_store_is_schema_15_with_sixteen_empty_p7_10_tables(db: Path) -> None:
+def test_a_fresh_store_is_schema_15_with_nineteen_empty_p7_10_tables(db: Path) -> None:
     store.list_deals(db_path=db)
     connection = sqlite3.connect(db)
     version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -65,7 +65,7 @@ def test_a_fresh_store_is_schema_15_with_sixteen_empty_p7_10_tables(db: Path) ->
 
     assert version == 15
     assert set(P7_10_TABLES) <= table_names(db)
-    assert len(P7_10_TABLES) == 16
+    assert len(P7_10_TABLES) == 19
     assert {table: fx.row_count(db, table) for table in P7_10_TABLES} == dict.fromkeys(
         P7_10_TABLES, 0
     )

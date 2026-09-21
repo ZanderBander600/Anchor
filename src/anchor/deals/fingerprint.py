@@ -1091,12 +1091,25 @@ def fingerprint_evidence(evidence: Iterable[MemoEvidenceReference]) -> str:
     return _fingerprint_json({_EVIDENCE_KEY: evidence_payload(evidence)})
 
 
+def _claim_evidence_payload(evidence_ids: Iterable[str]) -> list[str]:
+    """The evidence one claim rests on, in the analyst's authored order.
+
+    Order participates because it is authored, not presentational: it is the
+    order a reader is asked to follow the support in. Re-pointing a claim at a
+    different source, adding one or dropping one therefore changes the memo's
+    content identity, which is what makes an evidence-link change visible to
+    stale analysis (Section 10)."""
+
+    return [str(evidence_id) for evidence_id in evidence_ids]
+
+
 def _memo_item_payload(item: MemoItem) -> dict[str, Any]:
     return {
         "item_id": item.item_id,
         "section": item.section.value,
         "display_order": int(item.display_order),
         "text": item.text,
+        "evidence_ids": _claim_evidence_payload(item.evidence_ids),
     }
 
 
@@ -1108,6 +1121,7 @@ def _memo_risk_payload(item: MemoRiskItem) -> dict[str, Any]:
         "severity": item.severity.value,
         "residual_risk": item.residual_risk.value,
         "mitigant": item.mitigant,
+        "evidence_ids": _claim_evidence_payload(item.evidence_ids),
     }
 
 
@@ -1117,7 +1131,25 @@ def _memo_term_payload(item: MemoTermItem) -> dict[str, Any]:
         "display_order": int(item.display_order),
         "text": item.text,
         "priority": item.priority.value,
+        "evidence_ids": _claim_evidence_payload(item.evidence_ids),
     }
+
+
+def _selected_valuation_payload(memo: InvestmentMemoDraft | InvestmentMemoVersion) -> list[str]:
+    """The valuation views this memo selects for inclusion, sorted.
+
+    A draft states its selection directly; a published version carries the
+    selection frozen onto its own valuation rows. Both answer the same question,
+    so both reduce to the same sorted set of ``timepoint_id`` here.
+
+    Sorted, not authored-order: which views the memo includes is the content
+    question. Where they sit on the page is presentation, and Section 10 keeps
+    presentation out of identity."""
+
+    selected = getattr(memo, "selected_valuation_timepoint_ids", None)
+    if selected is None:
+        selected = tuple(view.timepoint_id for view in memo.valuations if view.selected)
+    return sorted(str(timepoint_id) for timepoint_id in selected)
 
 
 def _selected_decision_payload(selected: SelectedDecision | None) -> dict[str, Any] | None:
@@ -1139,9 +1171,16 @@ def memo_content_payload(
 
     Included: every authoritative field, every item's stable id and text, the
     **explicit display order** Section 10 names as part of the memo, the
-    selected decision, and the *content* of the evidence it cites -- so
-    withdrawing approval from a cited source invalidates the memo that leaned on
-    it.
+    selected decision, the *content* of the evidence it cites -- so withdrawing
+    approval from a cited source invalidates the memo that leaned on it -- the
+    **evidence each individual claim rests on**, and the valuation views the
+    memo selects for inclusion.
+
+    Claim-level links participate because re-pointing a risk at a different
+    appraisal changes what the memo asserts, even when every word and every
+    registered source is untouched. The selection participates because which
+    valuation views a memo includes decides which ones must resolve before it
+    can publish.
 
     Excluded: ``memo_id``, ``investment_id`` and the timestamps. They identify
     the record, not its content; a memo does not become a different memo by
@@ -1167,6 +1206,7 @@ def memo_content_payload(
             key=lambda entry: entry["item_id"],
         ),
         "evidence": evidence_payload(evidence),
+        "selected_valuations": _selected_valuation_payload(memo),
     }
 
 

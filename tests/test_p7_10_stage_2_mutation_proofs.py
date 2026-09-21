@@ -23,10 +23,12 @@ Six invariants, one mutant each:
 from __future__ import annotations
 
 import importlib
+import inspect
 import itertools
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 LF = chr(10)
 CRLF = chr(13) + LF
@@ -303,50 +305,136 @@ def test_always_hashing_the_consumed_payload_would_break_every_existing_digest(
 # =============================================================================
 
 
-def test_dropping_the_cited_valuation_check_would_publish_an_unshowable_figure(
+def test_dropping_the_required_valuation_check_would_publish_an_unshowable_figure(
     tmp_path: Path,
 ) -> None:
-    """A cited view with no value would leave the published package stating a
-    valuation it cannot show. Publication must refuse rather than omit it."""
+    """A valuation the package depends on, with no value, would leave the
+    published version stating a figure it cannot show. Publication must refuse
+    rather than omit it."""
 
-    from anchor.memo.publication import PublicationContext, publication_refusals
+    from anchor.memo.publication import (
+        PublicationContext,
+        RequiredValuation,
+        RequiredValuationReason,
+        publication_refusals,
+    )
 
     healthy_refusals = publication_refusals
     mutated = _mutant(
         tmp_path,
         "anchor/memo/publication.py",
-        [("    refusals.extend(_valuation_refusals(context))\n", "")],
+        [("    refusals.extend(_valuation_refusals(context))" + LF, "")],
         "pub_valuation",
     )
 
     import _p7_10_stage_2_fixtures as fx  # type: ignore[import-not-found]
 
+    draft = fx.memo_draft("i", selected_valuation_timepoint_ids=("as-is",))
+
+    def context(module: Any) -> Any:
+        return module.PublicationContext(
+            strategy_exists=True,
+            scenario_exists=True,
+            perspective_exists=True,
+            cell_resolves=True,
+            evidence={},
+            required_valuations=(
+                module.RequiredValuation(
+                    timepoint_id="as-is",
+                    reason=module.RequiredValuationReason.SELECTED,
+                    available=False,
+                    unavailable_reason="non_positive_forward_noi",
+                    unavailable_detail="The forward NOI is not positive.",
+                ),
+            ),
+        )
+
+    import anchor.memo.publication as healthy_module
+
+    assert PublicationContext is healthy_module.PublicationContext
+    assert RequiredValuation is healthy_module.RequiredValuation
+    assert RequiredValuationReason is healthy_module.RequiredValuationReason
+
+    healthy_result = healthy_refusals(draft, context(healthy_module))
+    healthy_codes = {refusal.code.value for refusal in healthy_result}
+    assert "valuation_unavailable_for_required_view" in healthy_codes
+    # The refusal carries the valuation's *own* typed reason, not a generic one.
+    assert {
+        refusal.unavailable_reason
+        for refusal in healthy_result
+        if refusal.code.value == "valuation_unavailable_for_required_view"
+    } == {"non_positive_forward_noi"}
+
+    mutant_codes = {
+        refusal.code.value
+        for refusal in mutated.publication_refusals(_sibling_draft(mutated, draft), context(mutated))
+    }
+    assert "valuation_unavailable_for_required_view" not in mutant_codes, "the mutant is alive"
+
+
+def test_dropping_the_selection_filter_would_block_on_an_exploratory_definition(
+    tmp_path: Path,
+) -> None:
+    """The correction itself, proved from the other side: a mutant that refuses
+    for *every* entry regardless of whether the package depends on it would
+    block a memo that merely coexists with an unfinished working view.
+
+    The healthy rule reads only ``context.required_valuations``, which the
+    dependency layer fills from the selection and the consumption -- so an
+    exploratory definition never appears there and nothing it does can refuse a
+    publication."""
+
+    from anchor.memo.publication import PublicationContext, publication_refusals
+
+    import _p7_10_stage_2_fixtures as fx  # type: ignore[import-not-found]
+
     draft = fx.memo_draft("i")
-    context = PublicationContext(
+    clean = PublicationContext(
         strategy_exists=True,
         scenario_exists=True,
         perspective_exists=True,
         cell_resolves=True,
         evidence={},
-        cited_valuations_available={"as-is": False},
+        required_valuations=(),
+    )
+    codes = {refusal.code.value for refusal in publication_refusals(draft, clean)}
+    assert "valuation_unavailable_for_required_view" not in codes
+
+    source = inspect.getsource(_valuation_refusals_of(publication_refusals))
+    assert "context.required_valuations" in source
+    # Nothing else is consulted: no path reads a whole-Investment valuation list.
+    for forbidden in ("list_valuation_timepoints", "surface.views", "all_valuations"):
+        assert forbidden not in source, forbidden
+
+
+def _valuation_refusals_of(_: Any) -> Any:
+    from anchor.memo.publication import _valuation_refusals
+
+    return _valuation_refusals
+
+
+def _sibling_draft(module: Any, draft: Any) -> Any:
+    """``draft`` rebuilt from the mutant's own contracts.
+
+    The mutant is a whole copied package: its ``MemoItem`` is a different class
+    from the repository's, and a mutant guard that type-checks would reject the
+    repository's object for the wrong reason."""
+
+    import dataclasses
+
+    contracts = _sibling(module, "memo.contracts")
+    return contracts.InvestmentMemoDraft(
+        **{
+            field.name: getattr(draft, field.name)
+            for field in dataclasses.fields(draft)
+            if field.name not in {"items", "risk_items", "term_items"}
+        },
+        items=(),
+        risk_items=(),
+        term_items=(),
     )
 
-    healthy_codes = {r.code.value for r in healthy_refusals(draft, context)}
-    assert "valuation_unavailable_for_cited_view" in healthy_codes
 
-    mutant_context = mutated.PublicationContext(
-        strategy_exists=True,
-        scenario_exists=True,
-        perspective_exists=True,
-        cell_resolves=True,
-        evidence={},
-        cited_valuations_available={"as-is": False},
-    )
-    mutant_codes = {r.code.value for r in mutated.publication_refusals(draft, mutant_context)}
-    assert "valuation_unavailable_for_cited_view" not in mutant_codes, "the mutant is alive"
-
-
-# =============================================================================
 # 6. The published-version fingerprint excludes the IC decision (Section 10)
 # =============================================================================
 

@@ -68,7 +68,12 @@ from ..memo.contracts import (
     MemoVersionValuation,
     SelectedDecision,
 )
-from ..memo.publication import PublicationContext, require_publishable
+from ..memo.publication import (
+    PublicationContext,
+    RequiredValuation,
+    RequiredValuationReason,
+    require_publishable,
+)
 from . import store
 from .contracts import (
     DealNotFoundError,
@@ -116,7 +121,13 @@ class MemoDependencySet:
     ``resolved`` is ``False`` when the selected variant does not currently
     resolve; ``detail`` then carries the variant's own reason. The ledger is
     still returned, holding the classes that *could* be computed, so a stale
-    report can name what is unavailable rather than failing to describe it."""
+    report can name what is unavailable rather than failing to describe it.
+
+    ``surface`` is likewise kept where it could be read at all, even on an
+    unresolved set: resolving valuations does not execute the structured
+    positions, so a variant whose *execution* refuses still has a valuation
+    surface, and that surface holds the typed reason a ``PctOfValue`` funding
+    could not be sized."""
 
     investment_id: str
     selected: SelectedDecision
@@ -286,7 +297,9 @@ def dependency_set(
     cited = (
         evidence
         if draft is None
-        else tuple(item for item in evidence if item.evidence_id in set(draft.evidence_ids))
+        else tuple(
+            item for item in evidence if item.evidence_id in set(draft.cited_evidence_ids())
+        )
     )
     entries.append(_entry(MemoDependencyClass.EVIDENCE, fingerprint_evidence(cited)))
     if draft is not None:
@@ -316,10 +329,30 @@ def dependency_set(
         _entry(MemoDependencyClass.SCENARIO, fingerprint_scenario_definition(scenario))
     )
 
+    # The valuation surface is read on its own, before anything that executes
+    # the structured positions. Resolving a valuation does not execute them, so
+    # the surface survives a variant whose execution refuses -- and it is
+    # exactly that surface that says *why*, in the valuation's own typed words,
+    # when a ``PctOfValue`` funding could not be sized. Folding the two reads
+    # together would throw the specific reason away and leave publication with
+    # nothing but "the variant does not resolve".
     try:
         surface = analyze_structured_valuations(
             investment_id, selected.strategy_id, selected.scenario_id, db_path=db_path
         )
+    except (InvestmentNotFoundError, DealNotFoundError):
+        raise
+    except Exception as error:  # the variant is not even readable; say so in its own words
+        return MemoDependencySet(
+            investment_id=investment_id,
+            selected=selected,
+            dependencies=tuple(entries),
+            surface=None,
+            resolved=False,
+            detail=str(error),
+        )
+
+    try:
         unit_fingerprints = _unit_fingerprints(investment_id, selected, db_path)
         partnership = partnership_variant_fingerprint(
             investment_id, selected.strategy_id, selected.scenario_id, db_path=db_path
@@ -331,7 +364,7 @@ def dependency_set(
             investment_id=investment_id,
             selected=selected,
             dependencies=tuple(entries),
-            surface=None,
+            surface=surface,
             resolved=False,
             detail=str(error),
         )
@@ -444,8 +477,17 @@ def version_freshness(
 # =============================================================================
 
 
-def _version_valuations(surface: StructuredValuationSurface | None) -> tuple[MemoVersionValuation, ...]:
+def _version_valuations(
+    draft: InvestmentMemoDraft, surface: StructuredValuationSurface | None
+) -> tuple[MemoVersionValuation, ...]:
     """The valuation views a version freezes with itself.
+
+    Every authored view is frozen, so the version keeps the whole surface its
+    committee could see -- but each one records whether the memo *selected* it
+    for inclusion and whether the resolved Capital Structure *consumed* it. That
+    distinction is what a later reader needs to know which views the version was
+    actually required to resolve, and it is frozen rather than recomputed
+    because the draft's selection moves on afterwards.
 
     An unavailable view is frozen too, with its typed reason and **no value**:
     a version that cited "no value at this timepoint" keeps saying exactly that,
@@ -453,6 +495,8 @@ def _version_valuations(surface: StructuredValuationSurface | None) -> tuple[Mem
 
     if surface is None:
         return ()
+    selected = set(draft.selected_valuation_timepoint_ids)
+    consumed = set(surface.consumed_timepoint_ids)
     return tuple(
         MemoVersionValuation(
             timepoint_id=view.timepoint_id,
@@ -466,27 +510,77 @@ def _version_valuations(surface: StructuredValuationSurface | None) -> tuple[Mem
                 None if view.unavailable is None else view.unavailable.reason_code.value
             ),
             unavailable_message=None if view.unavailable is None else view.unavailable.reason,
+            selected=view.timepoint_id in selected,
+            consumed=view.timepoint_id in consumed,
         )
         for view in surface.views
     )
 
 
-def _cited_valuation_availability(
+def _required_valuations(
     draft: InvestmentMemoDraft, surface: StructuredValuationSurface | None
-) -> dict[str, bool]:
-    """Whether each valuation view the memo would publish currently has a value.
+) -> tuple[RequiredValuation, ...]:
+    """The valuation views this draft is actually required to resolve.
 
-    Every authored view participates: a published package presents the
-    Investment's valuation surface, so a view it would show without a value is a
-    refusal rather than an omission."""
+    Two sources, and only two. A view the memo **selected** for inclusion must
+    resolve, because the package would otherwise present a valuation with no
+    value. A view the resolved Capital Structure **consumes** through a
+    ``PctOfValue`` rule must resolve whether or not the memo displays it,
+    because the funding cannot be sized without it and the whole structured
+    result rests on the advance.
+
+    Everything else the analyst authored is exploratory. An unselected,
+    unconsumed definition may sit unavailable indefinitely without blocking a
+    memo that never leaned on it -- which is the correction Section 22 records:
+    the earlier rule refused publication for any authored definition at all, and
+    made an analyst delete their own working views to publish.
+
+    Selection is read from the draft's explicit relationship, never inferred
+    from display order, existence or recency.
+
+    A selected definition the surface no longer holds is reported as
+    ``NOT_AUTHORED`` rather than quietly dropped: it was selected, so its
+    disappearance is a refusal."""
 
     if surface is None:
-        return {}
-    from ..memo.availability import AvailabilityStatus
+        return ()
+    from ..memo.availability import AvailabilityStatus, UnavailableReasonCode
 
-    return {
-        view.timepoint_id: view.status is AvailabilityStatus.AVAILABLE for view in surface.views
-    }
+    views = {view.timepoint_id: view for view in surface.views}
+    selected = set(draft.selected_valuation_timepoint_ids)
+    consumed = set(surface.consumed_timepoint_ids)
+    required: list[RequiredValuation] = []
+    for timepoint_id in sorted(selected | consumed):
+        reason = (
+            RequiredValuationReason.SELECTED
+            if timepoint_id in selected
+            else RequiredValuationReason.CONSUMED
+        )
+        view = views.get(timepoint_id)
+        if view is None:
+            required.append(
+                RequiredValuation(
+                    timepoint_id=timepoint_id,
+                    reason=reason,
+                    available=False,
+                    unavailable_reason=UnavailableReasonCode.NOT_AUTHORED.value,
+                    unavailable_detail="No valuation definition exists for this timepoint.",
+                )
+            )
+            continue
+        available = view.status is AvailabilityStatus.AVAILABLE
+        required.append(
+            RequiredValuation(
+                timepoint_id=timepoint_id,
+                reason=reason,
+                available=available,
+                unavailable_reason=(
+                    None if view.unavailable is None else view.unavailable.reason_code.value
+                ),
+                unavailable_detail="" if view.unavailable is None else view.unavailable.reason,
+            )
+        )
+    return tuple(required)
 
 
 def publication_context(
@@ -515,7 +609,7 @@ def publication_context(
             cell_resolves=False,
             cell_detail="",
             evidence=evidence,
-            cited_valuations_available={},
+            required_valuations=(),
         )
     try:
         _selected_strategy(investment_id, selected.strategy_id, db_path)
@@ -534,7 +628,7 @@ def publication_context(
         cell_resolves=dependencies.resolved,
         cell_detail=dependencies.detail,
         evidence=evidence,
-        cited_valuations_available=_cited_valuation_availability(draft, dependencies.surface),
+        required_valuations=_required_valuations(draft, dependencies.surface),
     )
 
 
@@ -612,7 +706,7 @@ def publish(investment_id: str, *, db_path: Path | None = None) -> InvestmentMem
     cited = tuple(
         item
         for item in store.list_evidence_references(investment_id, db_path=db_path)
-        if item.evidence_id in set(draft.evidence_ids)
+        if item.evidence_id in set(draft.cited_evidence_ids())
     )
     content_fingerprint = fingerprint_memo_content(draft, evidence=cited)
     published_fingerprint = fingerprint_published_version(
@@ -626,7 +720,7 @@ def publish(investment_id: str, *, db_path: Path | None = None) -> InvestmentMem
         investment_id,
         draft=draft,
         evidence=cited,
-        valuations=_version_valuations(dependencies.surface),
+        valuations=_version_valuations(draft, dependencies.surface),
         dependencies=dependencies.dependencies,
         memo_content_fingerprint=content_fingerprint,
         published_fingerprint=published_fingerprint,
