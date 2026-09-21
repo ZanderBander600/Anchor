@@ -195,6 +195,7 @@ from .deals import store as investment_store
 from .deals import memo_dependencies
 from .deals.structured_variants import (
     StructuredValuationSurface,
+    StructuredVariantConflictError,
     analyze_structured_valuations,
 )
 from .deals.contracts import (
@@ -4095,6 +4096,8 @@ _FUNDING_EVENT_FIELDS = ("event_id", "model_month", "sequence", "amount_rule")
 _FEE_FIELDS = ("fee_id", "description", "amount", "model_month", "sequence")
 _FIXED_AMOUNT_FIELDS = ("kind", "amount")
 _PCT_OF_PRICE_FIELDS = ("kind", "pct")
+#: P7.10 Stage 2: the rule P7.7 has always represented, now authorable.
+_PCT_OF_VALUE_FIELDS = ("kind", "timepoint_id", "pct")
 _DEBT_TERMS_FIELDS = (
     "kind",
     "interest_rate",
@@ -4186,15 +4189,21 @@ def _amount_rule_request(raw: Any, where: str) -> Any:
     if kind == FundingAmountRuleKind.PCT_OF_PRICE:
         return PctOfPrice(pct=_exact_keys(raw, _PCT_OF_PRICE_FIELDS, where)["pct"])
     if kind == FundingAmountRuleKind.PCT_OF_VALUE:
-        raise _unsupported_authoring(
-            ExecutionIssueCode.UNSUPPORTED_AMOUNT_RULE,
-            where,
-            "Funding as a percentage of value arrives with valuation timepoints; author a "
-            "fixed amount or a percentage of price.",
-        )
+        # P7.10 Stage 2. P7.8B refused this rule at the door because valuation
+        # timepoints did not exist yet -- "arrives with valuation timepoints".
+        # They have now arrived, so the refusal is retired rather than relaxed:
+        # the rule the P7.7 contract has always represented becomes authorable,
+        # and every downstream boundary is unchanged. The named timepoint need
+        # not exist yet; a rule naming one the Investment does not define
+        # resolves to a typed unavailable funding state with its own reason,
+        # which is exactly what Section 6.2 requires instead of a fabricated
+        # amount.
+        body = _exact_keys(raw, _PCT_OF_VALUE_FIELDS, where)
+        return PctOfValue(timepoint_id=body["timepoint_id"], pct=body["pct"])
     raise _structural_error(
-        f"{where}.kind must be {FundingAmountRuleKind.FIXED_AMOUNT.value!r} or "
-        f"{FundingAmountRuleKind.PCT_OF_PRICE.value!r}; got {kind!r}."
+        f"{where}.kind must be {FundingAmountRuleKind.FIXED_AMOUNT.value!r}, "
+        f"{FundingAmountRuleKind.PCT_OF_PRICE.value!r} or "
+        f"{FundingAmountRuleKind.PCT_OF_VALUE.value!r}; got {kind!r}."
     )
 
 
@@ -5969,8 +5978,10 @@ def put_evidence_reference(
     here reads, fetches or copies what ``reference`` points at. ``approved`` is
     written exactly as the analyst states it."""
 
-    evidence = _evidence_request(payload, investment_id=investment_id, evidence_id=evidence_id)
     try:
+        # Parsed inside the guard: the domain refuses an unparseable as-of date
+        # with its own error, and that refusal is reported like every other one.
+        evidence = _evidence_request(payload, investment_id=investment_id, evidence_id=evidence_id)
         saved = investment_store.put_evidence_reference(investment_id, evidence)
     except (InvestmentNotFoundError, DealNotFoundError) as error:
         raise _memo_p7_10_not_found(error) from None

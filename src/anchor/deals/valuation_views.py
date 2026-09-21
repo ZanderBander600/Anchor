@@ -471,34 +471,6 @@ def funding_authority(
     )
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class FundingState:
-    """One ``PctOfValue`` funding rule's state, as Stage 2 exposes it
-    (Section 6.2).
-
-    This is the Stage 2 obligation at its sharpest. The accepted Stage 1
-    executor refuses an unresolved ``PctOfValue`` with a typed
-    ``CapitalStructureExecutionError`` -- a real, specific refusal, and
-    deliberately not relaxed here. But a refusal an analyst meets only by trying
-    to run an analysis is not the "structured unavailable / N/A representation
-    on the API surface" Section 6.2 requires, so the same states are *also*
-    reported here, read-only and ahead of time, with the specific reason.
-
-    ``amount`` is present exactly when the funding resolved. When it did not,
-    ``unavailable`` says why and there is no amount anywhere in the record: a
-    percentage of an unknown value is unknown, and it is never read as zero,
-    estimated, or sized from the purchase price."""
-
-    event_id: str
-    position_id: str
-    timepoint_id: str
-    model_month: int
-    pct: float
-    status: AvailabilityStatus
-    amount: float | None
-    unavailable: UnavailableState | None
-
-
 def funding_unavailable(
     requirement: object,
     *,
@@ -593,80 +565,6 @@ def view_set(
         variant_source_fingerprint=variant_source_fingerprint,
         definition_fingerprint=definition_fingerprint,
         result_fingerprint=result_fingerprint,
-    )
-
-
-def funding_states(
-    *,
-    capital_structure: object,
-    authority: ValuationAuthority | None,
-    blocked: Mapping[str, Mapping[str, str]],
-) -> tuple[FundingState, ...]:
-    """Every ``PctOfValue`` funding rule the structure states, resolved through
-    the Stage 1 sizing authority and reported in the Stage 2 representation.
-
-    Read-only and side-effect free: it sizes nothing that the executor does not
-    already size the same way, and it writes nothing. Its whole purpose is to
-    let the product show an analyst *why* a value-sized funding cannot be
-    sized, before they run an analysis that would refuse.
-
-    With no authority at all -- an Investment that defines no valuation -- every
-    rule is unavailable for the reason the Stage 1 funding layer gives: the
-    timepoint is not defined, and no other timepoint is used in its place."""
-
-    from ..capital_structure.contracts import PctOfValue
-    from ..capital_structure.funding import valuation_scope
-    from ..valuation.contracts import FundingResolutionStatus
-    from ..valuation.funding import resolve_pct_of_value_funding, valuation_authority
-
-    if not hasattr(capital_structure, "positions"):
-        return ()
-    resolved_authority = authority or valuation_authority(investment_id="", valuations=())
-    states: list[FundingState] = []
-    for position in capital_structure.positions:
-        for event in position.funding:
-            rule = event.amount_rule
-            if not isinstance(rule, PctOfValue):
-                continue
-            scope_kind, unit_id = valuation_scope(position.scope)
-            resolution = resolve_pct_of_value_funding(
-                event_id=event.event_id,
-                position_id=position.position_id,
-                event_model_month=event.model_month,
-                timepoint_id=rule.timepoint_id,
-                pct=rule.pct,
-                scope_kind=scope_kind,
-                unit_id=unit_id,
-                authority=resolved_authority,
-            )
-            if resolution.status is FundingResolutionStatus.RESOLVED:
-                states.append(
-                    FundingState(
-                        event_id=event.event_id,
-                        position_id=position.position_id,
-                        timepoint_id=rule.timepoint_id,
-                        model_month=event.model_month,
-                        pct=float(rule.pct),
-                        status=AvailabilityStatus.AVAILABLE,
-                        amount=resolution.amount,  # type: ignore[union-attr]
-                        unavailable=None,
-                    )
-                )
-                continue
-            states.append(
-                FundingState(
-                    event_id=event.event_id,
-                    position_id=position.position_id,
-                    timepoint_id=rule.timepoint_id,
-                    model_month=event.model_month,
-                    pct=float(rule.pct),
-                    status=AvailabilityStatus.UNAVAILABLE,
-                    amount=None,
-                    unavailable=funding_unavailable(resolution, blocked=blocked),
-                )
-            )
-    return tuple(
-        sorted(states, key=lambda state: (state.position_id, state.event_id))
     )
 
 
