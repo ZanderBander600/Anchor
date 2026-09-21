@@ -11,11 +11,10 @@ Stage status:
   `main` at `f6f3680` on 2026-09-20. It delivers the deterministic valuation
   layer and `PctOfValue` **closing** execution, and nothing else. Its boundary
   is Section 6.1 and its Stage 2 obligation is Section 6.2.
-- **Stage 2 is implemented and pending independent review and human
-  acceptance.** It was explicitly started from accepted `main` at `46650a7`
-  (PR #50) and delivers persistence, the Investment Memo domain, versioning, the
-  unavailable-state adapter and the typed API, and nothing else. Its
-  implementation clarifications are Section 22.
+- **Stage 2 is implemented, merged, and human accepted.** PR #51 merged to
+  `main` at `ababa50` on 2026-09-21. It delivers persistence, the Investment
+  Memo domain, versioning, the unavailable-state adapter and the typed API, and
+  nothing else. Its ratified implementation clarifications are Section 22.
 - **Stages 3 and 4 are not started.** Each requires its own explicit human
   start.
 - **Finishing Stage 1 does not automatically start Stage 2, and accepting
@@ -663,7 +662,7 @@ Stage 1 was human accepted after PR #49 merged to `main` at `f6f3680` on
 2026-09-20. Its acceptance does not start Stage 2 or authorize any later
 financing event.
 
-### Stage 2 — persistence, fingerprints, memo domain, and API — **implemented 2026-09-20, pending review**
+### Stage 2 — persistence, fingerprints, memo domain, and API — **implemented and accepted 2026-09-21**
 
 - the unavailable / N/A presentation adapter Section 6.2 obliges;
 - additive schema migration;
@@ -676,6 +675,9 @@ financing event.
 Stage 2 adds no frontend file, no AI surface, no prompt, no PDF and no report
 layout. Schema version 15 adds nineteen purely additive tables; no table is
 altered and no existing row is read or rewritten.
+
+Stage 2 was human accepted after PR #51 merged to `main` at `ababa50` on
+2026-09-21. Its acceptance does not start Stage 3 or Stage 4.
 
 ### Stage 3 — grounded AI proposals — **not started**
 
@@ -779,19 +781,22 @@ This contract is ratified and closed to further negotiation within P7.10.
   `PctOfValue` closing execution, with no persistence, migration, schema version
   change, API route, memo storage, AI grounding, PDF generation, or frontend
   change.
-- **Stage 2 is implemented and pending independent review and human
-  acceptance.** It is not accepted, not merged, and does not start Stage 3.
+- **Stage 2 is implemented, merged, and human accepted.** Its accepted scope is
+  limited to Section 17 and the ratified clarifications in Section 22. It does
+  not start Stage 3.
 - **Stages 3 and 4 are not started.**
 - P7.10 does not start P7.11.
 
 ## 22. Stage 2 implementation record
 
 Stage 2 was implemented from accepted `main` at `46650a7` on branch
-`feature/p7-10-stage-2-memo-persistence-api`. It is **pending independent review
-and human acceptance**; nothing below is ratified by implementation alone.
+`feature/p7-10-stage-2-memo-persistence-api`, merged through PR #51, and human
+accepted at `ababa50` on 2026-09-21. The implementation clarifications below,
+including the two independent-review corrections, are ratified as part of that
+acceptance.
 
-The clarifications the implementation required are recorded here so a reviewer
-can accept or reject each one deliberately rather than discovering it in a diff.
+The clarifications the implementation required are recorded here as the
+accepted interpretation, rather than remaining implicit in a diff.
 
 ### 22.1 Identity and fingerprint layering
 

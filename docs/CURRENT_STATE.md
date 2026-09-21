@@ -1,6 +1,6 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-21 (P7.10 Stage 2 corrections applied, pending review)
+Last synchronized: 2026-09-21 (P7.10 Stage 2 accepted after PR #51)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -9,9 +9,9 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted repository and product implementation baseline: `main` at `46650a7`
-  (PR #50, the P7.10 Stage 1 acceptance closeout over the accepted Stage 1
-  implementation at `f6f3680`, PR #49).
+- Accepted repository and product implementation baseline: `main` at `ababa50`
+  (PR #51, P7.10 Stage 2 persistence, fingerprints, Investment Memo domain,
+  immutable versioning, unavailable-state adapter, and typed API).
 - Last financial-engine implementation merge: `f6f3680` (PR #49, P7.10 Stage
   1 deterministic valuation and `PctOfValue` closing execution).
 - Active gate: **P7.10 Valuation Timepoints + remaining Decision Support / AI
@@ -19,9 +19,9 @@ whenever an accepted gate merges or the active gate changes.
   are closed within the gate and recorded in Section 20 of
   `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`, the ratified
   authority. **Stage 1 is implemented, merged, and human accepted at
-  `f6f3680`.** **Stage 2 is implemented and pending independent review and
-  human acceptance**; it is not merged and not accepted. **Stages 3 and 4 have
-  not started** and each requires a separate explicit start.
+  `f6f3680`. Stage 2 is implemented, merged, and human accepted at
+  `ababa50`.** **Stages 3 and 4 have not started** and each requires a separate
+  explicit start.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active.
 - Autonomous merge: not authorized.
@@ -31,11 +31,28 @@ Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
 
-## 2026-09-21 P7.10 Stage 2 Corrections (pending review)
+## 2026-09-21 P7.10 Stage 2 Acceptance
+
+The human explicitly accepted P7.10 Stage 2 after PR #51 merged to `main` at
+`ababa50`. The accepted scope is schema version 15's nineteen additive tables,
+persisted valuation definitions and claim-level Evidence References, the
+Investment Memo domain, one mutable draft and immutable published versions,
+the layered dependency ledger and precise stale reasons, the structured
+unavailable / N/A adapter, and the typed backend API.
+
+The accepted publication gate validates selected or consumed valuation
+dependencies, not unrelated exploratory definitions. Published versions freeze
+their selected and consumed valuations, structured memo content, dependency
+ledger, Evidence References, and claim-to-evidence relationships.
+
+This acceptance does not start grounded AI proposals, the Memo workstation,
+institutional PDF reporting, browser QA, Stage 3, Stage 4, or P7.11.
+
+## 2026-09-21 P7.10 Stage 2 Corrections (accepted)
 
 Independent review approved Stage 2 in principle subject to two focused
-contract corrections. Both are implemented on the same branch. Stage 2 remains
-**not merged, not accepted, and does not start Stage 3.**
+contract corrections. Both were implemented, merged through PR #51, and human
+accepted at `ababa50`. Their acceptance does not start Stage 3.
 
 - **Publication validates the dependencies, not the workspace.** A valuation
   blocks publication only where the memo *selected* it for inclusion or a
@@ -56,11 +73,11 @@ authority, which now state the ratified resolutions rather than the two
 superseded judgements. Schema version 15 accordingly declares **nineteen**
 additive tables; the migration is unchanged in kind.
 
-## 2026-09-20 P7.10 Stage 2 Implementation (pending review)
+## 2026-09-20 P7.10 Stage 2 Implementation (accepted)
 
-Stage 2 was explicitly started from accepted `main` at `46650a7` and is
-implemented on `feature/p7-10-stage-2-memo-persistence-api`. It is **not
-merged, not accepted, and does not start Stage 3.**
+Stage 2 was explicitly started from accepted `main` at `46650a7`, implemented
+on `feature/p7-10-stage-2-memo-persistence-api`, merged through PR #51, and
+human accepted at `ababa50`. It does not start Stage 3.
 
 Its scope is Section 17's Stage 2 list and nothing else: schema version 15's
 nineteen purely additive tables, persisted valuation definitions and Evidence
@@ -171,6 +188,8 @@ human instruction recorded above.
   Lease-Level Underwrite, human accepted
 - P7.10 Stage 1 deterministic valuation authority and `PctOfValue` closing
   execution, human accepted
+- P7.10 Stage 2 persistence, fingerprints, Investment Memo domain, immutable
+  versioning, unavailable-state adapter, and typed API, human accepted
 
 ## Next Work
 
@@ -178,9 +197,9 @@ human instruction recorded above.
 remains the current program. Its contract is ratified; decisions R-A through
 R-J are closed within this gate and recorded in Section 20 of
 `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`. Stage 1 is implemented,
-merged, and human accepted. **Stage 2 is implemented, its two ratified review
-corrections are applied, and it is awaiting final review and human
-acceptance.** Stages 3 and 4 have not started.
+merged, and human accepted. **Stage 2 is implemented, merged, and human
+accepted at `ababa50`; its two ratified review corrections are part of the
+accepted implementation.** Stages 3 and 4 have not started.
 
 Stage 1 implements the deterministic valuation layer and `PctOfValue`
 **closing** execution only. It adds no persistence, migration, schema version
@@ -203,10 +222,10 @@ Two boundaries carry into Stage 2 and are recorded in the contract:
   and presentation surfaces, and must not expose them as a generic server
   error, fabricate an amount, or collapse them into zero.
 
-Stage 2 was separately started and is implemented; its review is the next
-action. Stage 3 (grounded AI proposals) and Stage 4 (the Memo workspace,
-institutional report and PDF export) each require a separate explicit human
-start, and accepting Stage 2 does not begin either.
+Stage 2 was separately started, implemented, merged, and accepted. Stage 3
+(grounded AI proposals) and Stage 4 (the Memo workspace, institutional report
+and PDF export) each require a separate explicit human start, and accepting
+Stage 2 does not begin either.
 
 After P7.10, the ratified sequence ends with **P7.11 Competition Closeout**.
 Refinancing / recapitalization remains a separately authorized potential
@@ -262,8 +281,9 @@ scoped independently.
 - P7.10 Valuation Timepoints, Investment Memo, and Institutional Reporting:
   `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md` — **ratified
   2026-09-20; Stage 1 implemented, merged, and human accepted at `f6f3680`;
-  Stage 2 implemented and pending review, with its implementation record and
-  every clarification it required in Section 22; Stages 3 and 4 not started.**
+  Stage 2 implemented, merged, and human accepted at `ababa50`, with its
+  implementation record and every ratified clarification in Section 22;
+  Stages 3 and 4 not started.**
 
 ## Historical-Document Rule
 
