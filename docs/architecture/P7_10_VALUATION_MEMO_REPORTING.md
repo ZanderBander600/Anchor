@@ -24,7 +24,7 @@ Memo workspace, institutional report, PDF generation, and browser behavior.
 
 This document specializes the ratified P7 authority in
 `P7_COMPETITION_DECISION_ARCHITECTURE.md`. It does not reopen that document's
-financial conventions. Where this proposal is silent, the ratified P7, D6,
+financial conventions. Where this contract is silent, the ratified P7, D6,
 underwriting-mode, Capital Structure, and Partnership authorities continue to
 govern.
 
@@ -131,7 +131,7 @@ The following are not design choices left to P7.10:
 
 ### 5.1 Contract
 
-The proposed persisted definition is:
+The persisted definition is:
 
 ```text
 ValuationTimepoint
@@ -159,6 +159,14 @@ and no user-editable Exit method in this contract.
   from occupancy, lease-up, NOI growth, construction completion, or a Business
   Plan schedule.
 - `CUSTOM` may use closing or any hold-year end.
+- A storable month is therefore closing, or a hold-year end strictly before the
+  exit: `0`, or `12y` with `1 <= y <= H - 1`. The exit month `12H` is **not**
+  storable. Its value is the reserved system Exit view (R-B), and a stored
+  definition there would be a second terminal value able to drift from D6's,
+  which is exactly what that decision prevents. A definition at the exit month
+  resolves to a typed unavailable result naming the Exit view, and a month
+  beyond `12H` is outside that variant's horizon and may resolve under a longer
+  hold.
 - An initial P7.10 timepoint cannot occur inside a hold year. Monthly valuation
   would require a new forward-NOI convention and is deferred.
 - The model month is economic identity. A label change is presentation-only;
@@ -522,7 +530,7 @@ reader could otherwise infer zero or completeness.
 ## 14. UI vision
 
 P7.10 adds an **Investment Memo** workspace, not another underwriting tab. The
-proposed sections are:
+sections are:
 
 1. **Decision** — ask, recommendation, selected Strategy/Scenario/perspective,
    conditions, and IC decision;
