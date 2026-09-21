@@ -205,6 +205,18 @@ from .deals.contracts import (
     MemoVersionNotFoundError,
     ValuationTimepointNotFoundError,
 )
+# Gate P7.10 Stage 4. The report assembly and the PDF renderer, and nothing
+# else: this layer hands the assembler an id and the renderer a finished
+# package. No AI module is imported here, because Stage 4 ships none.
+from .reporting import (
+    MemoReportError,
+    PdfExportRefusedError,
+    assemble_draft_preview,
+    assemble_version_report,
+    export_filename,
+    render_memo_pdf,
+)
+from .reporting.assembly import assemble_version_report_for_export
 from .memo.contracts import (
     AnalystRecommendation,
     DecisionPerspectiveKind,
@@ -6361,3 +6373,251 @@ def put_committee_decision(
     except MemoError as error:
         raise _structural_error(str(error)) from None
     return {"investment_id": investment_id, "version_id": version_id, "decision": _wire(saved)}
+
+
+# -----------------------------------------------------------------------------
+# Phase 7 Gate P7.10 Stage 4 -- the memo library, the report and the PDF
+#
+# `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md` Sections 13 and 13.3.
+#
+# Four read-only routes. None writes memo content, financial state or a
+# published version, and none can reach a draft mutation: the report routes take
+# an id and return an assembled package, and the export route takes a *version*
+# id and returns bytes.
+#
+# Stage 4 adds no AI route, no prompt and no proposal surface. Stage 3 remains
+# deferred and unstarted.
+# -----------------------------------------------------------------------------
+
+
+def _memo_report_refusal(error: PdfExportRefusedError) -> HTTPException:
+    """A refused export as a structured 422 (Stage 4 §9).
+
+    Deliberately not a failed download and not a 500: the analyst asked for
+    something the contract does not permit -- a final PDF of a mutable draft, or
+    a version that does not exist -- and is told which, by a stable code they
+    can act on."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail={
+            "code": error.code.value,
+            "message": error.message,
+            "version_id": error.version_id,
+        },
+    )
+
+
+@app.get("/memo-library", response_model=None)
+def read_memo_library() -> dict[str, Any]:
+    """Every Investment Committee memo workspace, and every Investment that
+    could start one.
+
+    Read-only and non-materializing: reading this list creates no memo, no
+    draft and no hidden Investment. A standalone Deal appears only once it
+    actually has a memo, because asking a Deal whether it has one must not be
+    the thing that gives it an Investment.
+
+    Deliberately cheap. It reports stored facts -- status, recommendation,
+    selected cell, latest version and dates -- and **not** freshness, which
+    would run one full analysis per row. Freshness is a per-version question and
+    is answered by the accepted Stage 2 route the workspace already calls, so a
+    long library never pays for an analysis the analyst did not ask for."""
+
+    rows: list[dict[str, Any]] = []
+
+    for investment in investment_store.list_visible_investments():
+        rows.append(
+            _memo_library_row(
+                investment_id=investment.id,
+                deal_id=None,
+                name=investment.name,
+                unit_count=len(investment.units),
+                classification=_memo_library_classification(
+                    [unit.unit_id for unit in investment.units]
+                ),
+            )
+        )
+
+    for deal in investment_store.list_deals():
+        try:
+            investment_id, draft = investment_store.read_deal_memo_draft(deal.id)
+        except (DealNotFoundError, InvestmentStructureError):
+            continue
+        if investment_id is None:
+            continue
+        versions = investment_store.list_memo_versions(investment_id)
+        if draft is None and not versions:
+            continue
+        rows.append(
+            _memo_library_row(
+                investment_id=investment_id,
+                deal_id=deal.id,
+                name=deal.name,
+                unit_count=1,
+                classification=_memo_library_classification([deal.id]),
+            )
+        )
+
+    return {"memos": rows}
+
+
+def _memo_library_classification(unit_ids: list[str]) -> tuple[str | None, str | None]:
+    """The classification the Units agree on, or nothing.
+
+    Units that disagree report nothing rather than the first one's answer: a
+    mixed Investment has no single asset type, and picking one would be a claim
+    the analyst did not make. The controlled type and the analyst's subtype
+    travel as the two separate fields the Asset Types 1 contract defines, so the
+    product labels them with the vocabulary it already has."""
+
+    found: set[tuple[str, str | None]] = set()
+    for unit_id in unit_ids:
+        try:
+            deal = investment_store.get_deal(unit_id)
+        except DealNotFoundError:
+            continue
+        if deal.asset_type is None:
+            continue
+        found.add((deal.asset_type.value, deal.asset_subtype))
+    if len(found) != 1:
+        return None, None
+    return found.pop()
+
+
+def _memo_library_row(
+    *,
+    investment_id: str,
+    deal_id: str | None,
+    name: str,
+    unit_count: int,
+    classification: tuple[str | None, str | None],
+) -> dict[str, Any]:
+    """One library row: what this memo is, and where it stands.
+
+    ``analyst_recommendation`` is read from the draft when one exists and from
+    the latest published version otherwise, and is never confused with the
+    committee's own outcome, which is its own field and is ``null`` until a
+    human records one (R-F)."""
+
+    draft = investment_store.get_memo_draft(investment_id)
+    versions = investment_store.list_memo_versions(investment_id)
+    latest = versions[-1] if versions else None
+
+    decision = None
+    if latest is not None:
+        decision = investment_store.get_committee_decision(investment_id, latest.version_id)
+
+    asset_type, asset_subtype = classification
+    selected = draft.selected_decision if draft is not None else None
+    if selected is None and latest is not None:
+        selected = latest.selected_decision
+
+    recommendation = None
+    if draft is not None:
+        recommendation = draft.analyst_recommendation.value
+    elif latest is not None:
+        recommendation = latest.analyst_recommendation.value
+
+    return {
+        "investment_id": investment_id,
+        "deal_id": deal_id,
+        "name": name,
+        "unit_count": unit_count,
+        "asset_type": asset_type,
+        "asset_subtype": asset_subtype,
+        "has_draft": draft is not None,
+        "draft_updated_at": None if draft is None else draft.updated_at,
+        "analyst_recommendation": recommendation,
+        "committee_decision": None if decision is None else decision.decision.value,
+        "latest_version_id": None if latest is None else latest.version_id,
+        "latest_version_number": None if latest is None else latest.version_number,
+        "latest_published_at": None if latest is None else latest.created_at,
+        "version_count": len(versions),
+        "strategy_id": None if selected is None else selected.strategy_id,
+        "scenario_id": None if selected is None else selected.scenario_id,
+        "perspective": None if selected is None else selected.perspective.value,
+    }
+
+
+@app.get("/investments/{investment_id}/memo/report-preview", response_model=None)
+def read_memo_report_preview(investment_id: str) -> dict[str, Any]:
+    """The draft as a report package, for the workspace's preview.
+
+    Marked ``draft_preview`` at the contract level. It is the current draft, so
+    it moves as the analyst works; it is never a published memo, and the export
+    route cannot be reached from it."""
+
+    try:
+        package = assemble_draft_preview(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError, MemoNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except MemoReportError as error:
+        raise _not_found(LookupError(str(error))) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StructuredVariantConflictError as error:
+        raise _structured_conflict(error) from None
+    return {"investment_id": investment_id, "report": _wire(package)}
+
+
+@app.get("/investments/{investment_id}/memo-versions/{version_id}/report", response_model=None)
+def read_memo_version_report(investment_id: str, version_id: str) -> dict[str, Any]:
+    """One published version as a report package.
+
+    Its memo content, evidence, claim links and selected valuations are read
+    from the immutable version; its returns and Capital Structure are recomputed
+    from the cell that version recorded. A stale version answers normally and
+    says it is stale -- it is never withheld and never silently refreshed."""
+
+    try:
+        package = assemble_version_report(investment_id, version_id)
+    except (
+        InvestmentNotFoundError,
+        DealNotFoundError,
+        MemoVersionNotFoundError,
+    ) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StructuredVariantConflictError as error:
+        raise _structured_conflict(error) from None
+    return {"investment_id": investment_id, "version_id": version_id, "report": _wire(package)}
+
+
+@app.get(
+    "/investments/{investment_id}/memo-versions/{version_id}/exports/investment-memo.pdf",
+    response_model=None,
+)
+def export_memo_version_pdf(investment_id: str, version_id: str) -> Response:
+    """The Investment Committee memorandum as PDF (Section 13.3).
+
+    **Only from a published version.** The route takes a ``version_id`` and no
+    draft can be named here; ``assemble_version_report_for_export`` refuses
+    anything that is not an immutable published version with a typed reason.
+
+    Read-only with respect to financial and memo content (Section 15): it writes
+    nothing, records nothing, and stores no generated bytes as a source record.
+    Exporting the same version twice produces the same document."""
+
+    try:
+        package = assemble_version_report_for_export(investment_id, version_id)
+        document = render_memo_pdf(package)
+        filename = export_filename(package)
+    except (
+        InvestmentNotFoundError,
+        DealNotFoundError,
+        MemoVersionNotFoundError,
+    ) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except PdfExportRefusedError as error:
+        raise _memo_report_refusal(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StructuredVariantConflictError as error:
+        raise _structured_conflict(error) from None
+    return Response(
+        content=document,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
