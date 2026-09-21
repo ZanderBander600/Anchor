@@ -697,7 +697,7 @@ Deletion-extension verification on 2026-09-18:
   architecture-ledger failures already present after the AM1 merge.
 
 P7.9 and AM1 were later accepted together in the 2026-09-20 closeout. P7.10
-has not started.
+was explicitly started later that day; AM1 remains independent of it.
 
 ## 13. Closeout QA correction record
 

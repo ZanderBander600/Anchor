@@ -7,8 +7,8 @@ It is the authority for P7.9.
 **Stage 2 (Section 17.2) is complete and accepted** in PR #35 (`543c1b2`);
 the Stage 1 package remains frozen at `70b92e2`. **Stage 3 (Section 17.3) is
 complete and accepted** after PR #36 (`3f23ba4`) and its later QA corrections.
-P7.9 closed by human acceptance on 2026-09-20. P7.10 is next but has not
-started.
+P7.9 closed by human acceptance on 2026-09-20. P7.10 was explicitly started
+later that day; it reopens no P7.9 decision.
 
 History:
 
@@ -1568,7 +1568,8 @@ Also ratified, as recorded in Section 19.1 and the body:
 - **Implementation.** Stage 1 is complete and accepted in PR #34 (`70b92e2`).
   Stage 2 is complete and accepted in PR #35 (`543c1b2`). Stage 3
   (Section 17.3) is implemented in PR #36 (`3f23ba4`) and accepted with the
-  full P7.9 product on 2026-09-20. P7.10 has not started.
+  full P7.9 product on 2026-09-20. At that closeout, P7.10 had not started; it
+  was explicitly started later that day.
 
 ---
 
@@ -1630,5 +1631,5 @@ errors.
 
 Stages 1, 2, and 3 are therefore **complete and accepted**, and P7.9 is
 **closed**. This record changes status only and reopens no financial or
-architecture decision. P7.10 is the next ratified competition gate, but it has
-not started and still requires an explicit human start.
+architecture decision. P7.10 was explicitly started later on 2026-09-20. No
+P7.10 stage was started by the P7.9 closeout itself.

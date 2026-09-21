@@ -112,6 +112,10 @@ def test_the_execution_enumerations_have_exactly_their_members() -> None:
         "claim_below_common_equity",
         "duplicate_result_event_id",
         "overfunded_closing",
+        # P7.10 Stage 1 appends exactly one member: the reason a ``PctOfValue``
+        # funding the supplied valuation authority cannot size is refused.
+        # Every pre-existing member keeps its place and its meaning.
+        "unresolved_valuation_funding",
     ]
     assert [member.value for member in Kind] == [
         "funding", "fee", "scheduled_debt_service", "balloon", "preferred_current_pay", "preferred_redemption",

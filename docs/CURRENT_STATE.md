@@ -1,7 +1,7 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-20 (P7.9, AM1, Asset Types 1, and Excel Exports
-1–3 accepted and closed)
+Last synchronized: 2026-09-20 (P7.10 contract ratified; Stage 1 implemented
+and pending merge)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -10,14 +10,20 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted baseline: `main` at `1afd003` (PR #47, Excel Export 3). This baseline
-  contains every implementation and correction accepted in the 2026-09-20
-  closeout record below.
+- Accepted repository baseline: `main` at `9c65843` (PR #48, the
+  documentation-only acceptance closeout). The accepted product implementation
+  baseline remains `1afd003` (PR #47, Excel Export 3). **The accepted baseline
+  stays the current merged `main` until the open P7.10 Stage 1 PR is merged.**
 - Last financial-engine implementation merge: `70b92e2` (PR #34, P7.9 Stage 1
   deterministic Partnership contracts and engine). Later accepted P7.9 work
   integrates that engine without changing its frozen Stage 1 package.
-- Active gate: **none**. P7.9 is closed. **P7.10 has not started** and still
-  requires an explicit start.
+- Active gate: **P7.10 Valuation Timepoints + remaining Decision Support / AI
+  integration — Stage 1.** The P7.10 contract is **ratified**; decisions R-A
+  through R-J are closed within the gate and recorded in Section 20 of
+  `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`, the ratified
+  authority. **Stage 1 implementation is complete and pending merge and human
+  acceptance.** **Stage 2 has not started**, and finishing Stage 1 does not
+  start it.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active.
 - Autonomous merge: not authorized.
@@ -66,9 +72,10 @@ The following gates and bounded extensions are **accepted and closed**:
     confirmed the mode-specific success status and filename.
 
 This closeout changes status only. It changes no calculation, convention,
-schema, fingerprint, API contract, workbook, or product behavior. It does not
-start P7.10, a later Asset Types phase, another Asset Management phase, or
-another Excel Export gate.
+schema, fingerprint, API contract, workbook, or product behavior. It did not
+itself start P7.10, a later Asset Types phase, another Asset Management phase,
+or another Excel Export gate. P7.10 was started later by a separate explicit
+human instruction recorded above.
 
 ## Completed Milestones
 
@@ -98,10 +105,35 @@ another Excel Export gate.
 
 ## Next Work
 
-The next ratified competition gate is **P7.10 Valuation Timepoints + remaining
-Decision Support / AI integration**. It has not started. Beginning it requires
-an explicit human start and a bounded contract/review step; this closeout does
-not authorize implementation automatically.
+**P7.10 Valuation Timepoints + remaining Decision Support / AI integration** is
+active at Stage 1. Its contract is ratified; decisions R-A through R-J are
+closed within this gate and recorded in Section 20 of
+`docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`.
+
+Stage 1 implements the deterministic valuation layer and `PctOfValue`
+**closing** execution only. It adds no persistence, migration, schema version
+change, API route, memo storage, AI grounding, PDF generation, or frontend
+change. Its implementation is complete and pending merge and human acceptance;
+it is not accepted before merge.
+
+Two boundaries carry into Stage 2 and are recorded in the contract:
+
+- **Closing-only execution (Section 6.1).** The valuation authority resolves
+  As-Is, Stabilized and Custom timepoints alike, but the capital execution seam
+  can use `PctOfValue` only at closing, model month 0. A later Stabilized or
+  Custom valuation is a reporting value that cannot presently create a later
+  funding event. Supporting one requires an explicitly authorized refinancing
+  or event-timing stage. This is a product limitation — never a zero, and never
+  a fallback to the purchase price.
+- **The unavailable-state adapter (Section 6.2).** Stage 1 stops internal
+  execution with the typed `UnresolvedFundingRequirement`. Stage 2 must
+  translate unresolved valuation and funding states into the established
+  structured unavailable / N/A representation with a specific reason on the API
+  and presentation surfaces, and must not expose them as a generic server
+  error, fabricate an amount, or collapse them into zero.
+
+Stage 2 persistence and the later memo, AI, and reporting stages each require a
+separate explicit human start.
 
 After P7.10, the ratified sequence ends with **P7.11 Competition Closeout**.
 Refinancing / recapitalization remains a separately authorized potential
@@ -154,6 +186,10 @@ scoped independently.
 - Excel Export 3 Lease-Level Underwrite formula audit:
   `docs/architecture/EXCEL_EXPORT_3_LEASE_LEVEL_FORMULA_AUDIT.md` — **implemented
   and human accepted.**
+- P7.10 Valuation Timepoints, Investment Memo, and Institutional Reporting:
+  `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md` — **ratified
+  2026-09-20; Stage 1 implemented and pending merge and acceptance; Stages 2-4
+  not started.**
 
 ## Historical-Document Rule
 

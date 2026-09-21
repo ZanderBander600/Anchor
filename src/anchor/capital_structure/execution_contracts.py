@@ -39,6 +39,7 @@ from .contracts import (
     FundingRequirement,
     LegacyAcquisitionLoan,
     PctOfPrice,
+    PctOfValue,
     PositionClass,
     PositionScope,
     ScopeKind,
@@ -75,6 +76,12 @@ class ExecutionIssueCode(StrEnum):
     CLAIM_BELOW_COMMON_EQUITY = "claim_below_common_equity"
     DUPLICATE_RESULT_EVENT_ID = "duplicate_result_event_id"
     OVERFUNDED_CLOSING = "overfunded_closing"
+    #: P7.10 Stage 1, appended so every pre-existing member keeps its place: a
+    #: ``PctOfValue`` funding the supplied valuation authority cannot size. The
+    #: contract is well formed and the rule is executable -- this variant's
+    #: value for that scope is unknowable, so the funding is left unresolved
+    #: rather than read as zero. It cannot arise without a P7.10 authority.
+    UNRESOLVED_VALUATION_FUNDING = "unresolved_valuation_funding"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -134,12 +141,19 @@ class PriceBasis:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResolvedFundingEvent:
     """One authored ``FundingEvent`` resolved to dollars. ``price_basis`` is
-    the basis a ``PctOfPrice`` rule used, and ``None`` for a ``FixedAmount``."""
+    the basis a ``PctOfPrice`` rule used, and ``None`` for a ``FixedAmount``.
+
+    P7.10 Stage 1 admits ``PctOfValue`` here, sized from a resolved valuation.
+    Its ``price_basis`` is ``None``: a valuation is not an acquisition price,
+    and reporting one as the other would be false. The rule itself carries the
+    ``timepoint_id`` and ``pct`` it used, and the resolved valuation states the
+    value; threading those operands onto this record is Stage 2 work, because
+    a new field here would change every existing response."""
 
     event_id: str
     model_month: int
     sequence: int
-    amount_rule: FixedAmount | PctOfPrice
+    amount_rule: FixedAmount | PctOfPrice | PctOfValue
     price_basis: PriceBasis | None
     amount: float
 

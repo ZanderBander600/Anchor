@@ -4,9 +4,10 @@
 query reads objects only (protocol 11.2). The guards hold:
 
 1. **the production ledger** -- exactly the declared backend and frontend files
-   changed since ``main`` at ``fe70d40`` (Excel Export 2 merged, PR #46).
-   Measured against the working tree while the gate is open, untracked files
-   included; the next gate re-pins it to the merged, committed range;
+   changed between ``main`` at ``fe70d40`` (Excel Export 2 merged, PR #46) and
+   this gate's own reviewed head. Re-pinned at P7.10 Stage 1 from the working
+   tree to that merged, committed range, so the claim stays exactly true
+   however far later gates build on it;
 2. **no financial module changed** -- no engine, analysis, fingerprint,
    Business Plan, leasing, AI or ingestion module. The Lease-Level model is
    *reproduced* in Excel, never altered in Anchor;
@@ -28,6 +29,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from anchor.api import app
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +41,17 @@ _EXPORTS = _ANCHOR / "exports"
 #: ``main`` when Excel Export 3 began: PR #46 (Excel Export 2) merged,
 #: schema v14.
 _BASE = "fe70d40"
+
+#: Excel Export 3's own reviewed head: the second parent of its merge into
+#: `main` (PR #47, `1afd003`).
+#:
+#: P7.10 Stage 1 re-pin. The backend and frontend ledgers below measured the
+#: working tree, so they could only stay true while no later gate existed.
+#: They now read Excel Export 3's own committed range -- the P7.9 Stage 2
+#: precedent -- so each keeps proving exactly what this gate shipped, however
+#: far later gates build on it. Nothing is weakened: the assertion is the same
+#: equality, against the range that actually belongs to this gate.
+_HEAD = "ab106171cab6f0033200a3e90ab42d4c70278b5d"
 
 _BACKEND_FILES = frozenset(
     {
@@ -66,6 +80,22 @@ _FRONTEND_FILES = frozenset(
 
 #: Not touched by this gate. The Lease-Level engine in particular: this export
 #: reproduces it in Excel and must never adjust it to make a check pass.
+
+#: P7.10 Stage 1 re-pin. The ratified P7.10 contract activates the existing
+#: ``PctOfValue`` funding rule (decision R-E). These four Capital Structure
+#: modules are the whole seam that change carries, so they leave this gate's
+#: working-tree freeze and become P7.10's ledger. Nothing is weakened: the
+#: assertion below still proves they were untouched from this gate through the
+#: accepted baseline `9c65843`, and `tests/test_p7_10_stage_1_architecture.py`
+#: proves the P7.10 change is confined to its declared definitions.
+_P7_10_SEAM = tuple(
+    f"src/anchor/capital_structure/{name}.py"
+    for name in ("execution_contracts", "execution_validation", "funding", "execution")
+)
+
+#: The accepted repository baseline P7.10 Stage 1 starts from (PR #48).
+_P7_10_BASE = "9c658437f76e8815cb228d4b71b11aaa473450d4"
+
 _UNCHANGED = (
     "src/anchor/engine",
     "src/anchor/analysis",
@@ -117,10 +147,11 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/src/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
-def _changes_since(base: str, *paths: str) -> set[str]:
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+def _changes_between(start: str, end: str, *paths: str) -> set[str]:
+    """Files that differ between two commits, renames split into their removal
+    and addition. Reads Git objects only."""
+
+    return {path for path in _git("diff", "--name-only", "--no-renames", start, end, "--", *paths).split() if path}
 
 
 def _source(path: Path) -> str:
@@ -165,12 +196,12 @@ def _production_modules() -> list[Path]:
 
 
 def test_excel_export_3_changes_exactly_the_declared_backend_files() -> None:
-    changed = {path for path in _changes_since(_BASE, "src") if _is_production(path)}
+    changed = {path for path in _changes_between(_BASE, _HEAD, "src") if _is_production(path)}
     assert changed == _BACKEND_FILES
 
 
 def test_excel_export_3_changes_exactly_the_declared_frontend_files() -> None:
-    changed = {path for path in _changes_since(_BASE, "web/src") if _is_production(path)}
+    changed = {path for path in _changes_between(_BASE, _HEAD, "web/src") if _is_production(path)}
     assert changed == _FRONTEND_FILES
 
 
@@ -181,9 +212,23 @@ def test_excel_export_3_changes_exactly_the_declared_frontend_files() -> None:
 
 def test_no_financial_or_engine_module_changed() -> None:
     """The point of an audit export is to reproduce the engine independently.
-    Adjusting the engine to agree with the workbook would invert that."""
+    Adjusting the engine to agree with the workbook would invert that.
 
-    assert _changes_since(_BASE, *_UNCHANGED) == set()
+    P7.10 Stage 1 re-pin: read over Excel Export 3's own committed range, so
+    the claim stays exactly true. That the four P7.10 Capital Structure seam
+    files were also untouched from here through the accepted baseline is
+    proven separately below."""
+
+    assert _changes_between(_BASE, _HEAD, *_UNCHANGED) == set()
+
+
+@pytest.mark.parametrize("path", _P7_10_SEAM)
+def test_each_p7_10_seam_module_was_unchanged_by_this_gate(path: str) -> None:
+    """Excel Export 3's own claim, still proven: it left these four files
+    byte-identical to its base, as did every gate through the accepted
+    baseline `9c65843`."""
+
+    assert _git("rev-parse", f"{_P7_10_BASE}:{path}").strip() == _git("rev-parse", f"{_BASE}:{path}").strip(), path
 
 
 def test_the_export_never_computes_a_lease_level_financial_result() -> None:
