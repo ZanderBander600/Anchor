@@ -684,3 +684,122 @@ def test_every_p7_10_route_is_covered_by_this_suite() -> None:
         # The route's distinctive tail must appear somewhere in this file.
         tail = re.sub(r"\{[^}]+\}", "", path).rstrip("/").rsplit("/", 1)[-1]
         assert tail in source, path
+
+
+# =============================================================================
+# The two ratified corrections, through the wire (Sections 22.6, 22.7)
+# =============================================================================
+
+
+def _evidence_body(evidence_id: str, *, approved: bool = True, order: int = 0) -> dict[str, Any]:
+    return {
+        "evidence_id": evidence_id,
+        "source_kind": "sales_comp",
+        "title": f"Source {evidence_id}",
+        "reference": f"doc://{evidence_id}",
+        "as_of_date": None,
+        "approved": approved,
+        "display_order": order,
+    }
+
+
+def test_a_claim_states_its_own_sources_and_the_memo_states_its_selection(
+    client: TestClient,
+) -> None:
+    """Both relationships are explicit on the wire, in the analyst's own order,
+    and both survive the round trip unchanged."""
+
+    _, investment_id = _opted_in(client)
+    for order, evidence_id in enumerate(("comp-a", "comp-b")):
+        client.put(
+            f"/investments/{investment_id}/evidence-references/{evidence_id}",
+            json=_evidence_body(evidence_id, order=order),
+        )
+
+    body = _memo_body(selected_valuation_timepoint_ids=["as-is"])
+    body["items"][0]["evidence_ids"] = ["comp-b", "comp-a"]
+    body["risk_items"][0]["evidence_ids"] = ["comp-a"]
+    saved = client.put(f"/investments/{investment_id}/memo", json=body)
+    assert saved.status_code == 200
+
+    memo = client.get(f"/investments/{investment_id}/memo").json()["memo"]
+    assert memo["selected_valuation_timepoint_ids"] == ["as-is"]
+    assert memo["items"][0]["evidence_ids"] == ["comp-b", "comp-a"]
+    assert memo["risk_items"][0]["evidence_ids"] == ["comp-a"]
+    assert memo["term_items"][0]["evidence_ids"] == []
+
+
+def test_a_published_version_carries_the_claim_to_source_relationships(
+    client: TestClient,
+) -> None:
+    """Unambiguous on the wire: the frozen claim-evidence snapshot names the
+    claim's kind, its id and each source, and every frozen item repeats the same
+    relationship where a reader is already looking."""
+
+    _, investment_id = _opted_in(client)
+    client.put(
+        f"/investments/{investment_id}/evidence-references/comp-a", json=_evidence_body("comp-a")
+    )
+    body = _memo_body(selected_valuation_timepoint_ids=["as-is"])
+    body["risk_items"][0]["evidence_ids"] = ["comp-a"]
+    client.put(f"/investments/{investment_id}/memo", json=body)
+
+    version = client.post(f"/investments/{investment_id}/memo/publish").json()["memo_version"]
+    assert version["claim_evidence"] == [
+        {"claim_kind": "risk", "item_id": "r1", "evidence_id": "comp-a", "ordinal": 0}
+    ]
+    assert version["risk_items"][0]["evidence_ids"] == ["comp-a"]
+    assert [view for view in version["valuations"] if view["selected"]][0]["timepoint_id"] == "as-is"
+
+
+def test_readiness_names_the_required_valuation_and_its_own_reason(client: TestClient) -> None:
+    """Correction 1 through the wire. An unapproved source makes the analyst
+    value unresolvable; selecting that view refuses publication, and the refusal
+    carries the valuation's own structured reason rather than a generic one."""
+
+    deal_id, investment_id = _opted_in(client)
+    client.put(
+        f"/investments/{investment_id}/evidence-references/pending",
+        json=_evidence_body("pending", approved=False),
+    )
+    client.post(
+        f"/investments/{investment_id}/valuation-timepoints",
+        json={
+            "timepoint_id": "appraised",
+            "kind": "as_is",
+            "label": "Appraised",
+            "model_month": 0,
+            "unit_instructions": [
+                {
+                    "unit_id": deal_id,
+                    "method": {"kind": "analyst_value", "amount": 9_000_000.0, "evidence_id": "pending"},
+                }
+            ],
+        },
+    )
+
+    # Unselected: the exploratory definition blocks nothing.
+    client.put(f"/investments/{investment_id}/memo", json=_memo_body())
+    clean = client.get(f"/investments/{investment_id}/memo/publication-readiness").json()
+    assert clean["publishable"], clean["refusals"]
+
+    # Selected: the same definition now refuses, with its own reason code.
+    client.put(
+        f"/investments/{investment_id}/memo",
+        json=_memo_body(selected_valuation_timepoint_ids=["appraised"]),
+    )
+    blocked = client.get(f"/investments/{investment_id}/memo/publication-readiness").json()
+    assert not blocked["publishable"]
+    (refusal,) = [
+        item
+        for item in blocked["refusals"]
+        if item["code"] == "valuation_unavailable_for_required_view"
+    ]
+    assert refusal["scope_id"] == "appraised"
+    assert refusal["unavailable_reason"] == "evidence_not_approved"
+
+    refused = client.post(f"/investments/{investment_id}/memo/publish")
+    assert refused.status_code == 422
+    assert any(
+        item["code"] == "valuation_unavailable_for_required_view" for item in refused.json()["detail"]
+    )

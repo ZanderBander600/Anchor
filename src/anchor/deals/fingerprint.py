@@ -1146,9 +1146,10 @@ def _selected_valuation_payload(memo: InvestmentMemoDraft | InvestmentMemoVersio
     question. Where they sit on the page is presentation, and Section 10 keeps
     presentation out of identity."""
 
-    selected = getattr(memo, "selected_valuation_timepoint_ids", None)
-    if selected is None:
-        selected = tuple(view.timepoint_id for view in memo.valuations if view.selected)
+    if isinstance(memo, InvestmentMemoDraft):
+        selected: Iterable[str] = memo.selected_valuation_timepoint_ids
+    else:
+        selected = (view.timepoint_id for view in memo.valuations if view.selected)
     return sorted(str(timepoint_id) for timepoint_id in selected)
 
 

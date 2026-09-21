@@ -1,6 +1,6 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-20 (P7.10 Stage 2 implemented, pending review)
+Last synchronized: 2026-09-21 (P7.10 Stage 2 corrections applied, pending review)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -31,6 +31,31 @@ Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
 
+## 2026-09-21 P7.10 Stage 2 Corrections (pending review)
+
+Independent review approved Stage 2 in principle subject to two focused
+contract corrections. Both are implemented on the same branch. Stage 2 remains
+**not merged, not accepted, and does not start Stage 3.**
+
+- **Publication validates the dependencies, not the workspace.** A valuation
+  blocks publication only where the memo *selected* it for inclusion or a
+  `PctOfValue` funding of the selected Capital Structure *consumed* it.
+  Selection is an explicit stored relationship, never inferred from display
+  order, existence or recency, and a refusal carries the valuation's own
+  structured reason code. An exploratory definition no longer forces an analyst
+  to delete their working view in order to publish.
+- **Evidence is traceable to the individual claim (R-G).** Every claim-bearing
+  memo item links to zero or more Evidence References as normalized rows;
+  publishing freezes those relationships into the immutable version, and no
+  later draft edit, relink or deletion reaches the frozen copy. Link changes
+  participate in the memo-content fingerprint and in stale analysis. Evidence
+  stays traceable and never mandatory.
+
+Both are recorded with their reasoning in Sections 22.6 and 22.7 of the P7.10
+authority, which now state the ratified resolutions rather than the two
+superseded judgements. Schema version 15 accordingly declares **nineteen**
+additive tables; the migration is unchanged in kind.
+
 ## 2026-09-20 P7.10 Stage 2 Implementation (pending review)
 
 Stage 2 was explicitly started from accepted `main` at `46650a7` and is
@@ -38,7 +63,7 @@ implemented on `feature/p7-10-stage-2-memo-persistence-api`. It is **not
 merged, not accepted, and does not start Stage 3.**
 
 Its scope is Section 17's Stage 2 list and nothing else: schema version 15's
-sixteen purely additive tables, persisted valuation definitions and Evidence
+nineteen purely additive tables, persisted valuation definitions and Evidence
 References, the Investment Memo domain with one mutable draft and immutable
 published versions, the layered dependency ledger and precise stale reasons,
 the structured unavailable / N/A adapter Section 6.2 obliges, and 24 typed API
@@ -153,8 +178,9 @@ human instruction recorded above.
 remains the current program. Its contract is ratified; decisions R-A through
 R-J are closed within this gate and recorded in Section 20 of
 `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`. Stage 1 is implemented,
-merged, and human accepted. **Stage 2 is implemented and awaiting independent
-review and human acceptance.** Stages 3 and 4 have not started.
+merged, and human accepted. **Stage 2 is implemented, its two ratified review
+corrections are applied, and it is awaiting final review and human
+acceptance.** Stages 3 and 4 have not started.
 
 Stage 1 implements the deterministic valuation layer and `PctOfValue`
 **closing** execution only. It adds no persistence, migration, schema version
