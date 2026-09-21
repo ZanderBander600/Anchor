@@ -105,7 +105,11 @@ def test_a_fresh_store_is_schema_12_with_eight_empty_partnership_tables(db: Path
     }
     connection.close()
 
-    assert version == 14  # AM1 added schema 13's two Asset Management tables; Asset Types 1 schema 14's two classification tables
+    # AM1 added schema 13's two Asset Management tables; Asset Types 1 schema
+    # 14's two classification tables; P7.10 Stage 2 schema 15's fourteen
+    # valuation and Investment Memo tables. P7.9's own eight are unchanged by
+    # all three, which is what this test is about.
+    assert version == 15
     assert set(P7_9_TABLES) <= table_names(db)
     assert partnership_rows(db) == EMPTY
     assert {table: [name for name, _ in described] for table, described in columns.items()} == {

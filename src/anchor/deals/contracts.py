@@ -698,3 +698,111 @@ class InvestmentUnitNotFoundError(LookupError):
         self.investment_id = investment_id
         self.unit_id = unit_id
         super().__init__(f"No unit {unit_id!r} belongs to investment {investment_id!r}.")
+
+
+# =============================================================================
+# Phase 7 Gate P7.10 Stage 2 -- the persisted valuation and memo lookups
+#
+# ``docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`` Sections 5, 7, 8 and
+# 9. Every error below follows this package's existing rule: a miss is raised
+# identically whether the id never existed or belongs to another Investment, so
+# a caller's id never discloses another Investment's state (Section 15, "all
+# writes validate Investment ownership and fail closed on foreign ids").
+# =============================================================================
+
+
+class ValuationTimepointNotFoundError(LookupError):
+    """No valuation timepoint with this id belongs to this Investment."""
+
+    def __init__(self, investment_id: str, timepoint_id: str) -> None:
+        self.investment_id = investment_id
+        self.timepoint_id = timepoint_id
+        super().__init__(
+            f"No valuation timepoint {timepoint_id!r} belongs to investment {investment_id!r}."
+        )
+
+
+class MemoNotFoundError(LookupError):
+    """This Investment has no memo draft yet.
+
+    Distinct from "the Investment does not exist": an Investment with no draft
+    is an ordinary state, and reading it creates nothing."""
+
+    def __init__(self, investment_id: str) -> None:
+        self.investment_id = investment_id
+        super().__init__(f"Investment {investment_id!r} has no Investment Memo draft.")
+
+
+class MemoVersionNotFoundError(LookupError):
+    """No published memo version with this id belongs to this Investment."""
+
+    def __init__(self, investment_id: str, version_id: str) -> None:
+        self.investment_id = investment_id
+        self.version_id = version_id
+        super().__init__(
+            f"No published memo version {version_id!r} belongs to investment {investment_id!r}."
+        )
+
+
+class EvidenceReferenceNotFoundError(LookupError):
+    """No Evidence Reference with this id belongs to this Investment."""
+
+    def __init__(self, investment_id: str, evidence_id: str) -> None:
+        self.investment_id = investment_id
+        self.evidence_id = evidence_id
+        super().__init__(
+            f"No Evidence Reference {evidence_id!r} belongs to investment {investment_id!r}."
+        )
+
+
+class MemoVersionImmutableError(RuntimeError):
+    """An attempt to change a published memo version (R-H).
+
+    A published version is never edited in place: editing resumes in the mutable
+    draft and produces a *new* version when published again. This is a
+    programming error rather than an analyst finding -- the store exposes no
+    function that updates a version, so reaching this means a caller tried to
+    build one."""
+
+    def __init__(self, version_id: str) -> None:
+        self.version_id = version_id
+        super().__init__(
+            f"Published memo version {version_id!r} is immutable. Edit the draft and publish a new version; a "
+            "published version is never rewritten."
+        )
+
+
+class EvidenceInUseError(RuntimeError):
+    """An Evidence Reference that cannot be removed because live state still
+    cites it.
+
+    ``valuation_timepoint_ids`` are the analyst-supplied valuations that name
+    it, and ``cited_by_draft`` says whether the memo draft does. Removing it
+    anyway would leave an analyst-supplied value with no source, which
+    Section 5.4 forbids -- so the refusal names what to detach first rather than
+    cascading a delete through authored economics.
+
+    Published versions are deliberately not listed: each froze its own copy of
+    the evidence content at publication, so none of them depends on this row
+    still existing."""
+
+    def __init__(
+        self,
+        investment_id: str,
+        evidence_id: str,
+        *,
+        valuation_timepoint_ids: tuple[str, ...],
+        cited_by_draft: bool,
+    ) -> None:
+        self.investment_id = investment_id
+        self.evidence_id = evidence_id
+        self.valuation_timepoint_ids = valuation_timepoint_ids
+        self.cited_by_draft = cited_by_draft
+        users = ", ".join(repr(item) for item in valuation_timepoint_ids)
+        cited = "the memo draft cites it" if cited_by_draft else "the memo draft does not cite it"
+        names = f" Valuation timepoints using it: {users}." if users else ""
+        super().__init__(
+            f"Evidence Reference {evidence_id!r} of investment {investment_id!r} is still in use, and "
+            f"{cited}.{names} Detach it before removing it; an analyst-supplied value is never left without its "
+            "source."
+        )
