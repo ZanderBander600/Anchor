@@ -1,7 +1,6 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-20 (P7.10 contract ratified; Stage 1 implemented
-and pending merge)
+Last synchronized: 2026-09-20 (P7.10 Stage 1 accepted after PR #49)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -10,20 +9,17 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted repository baseline: `main` at `9c65843` (PR #48, the
-  documentation-only acceptance closeout). The accepted product implementation
-  baseline remains `1afd003` (PR #47, Excel Export 3). **The accepted baseline
-  stays the current merged `main` until the open P7.10 Stage 1 PR is merged.**
-- Last financial-engine implementation merge: `70b92e2` (PR #34, P7.9 Stage 1
-  deterministic Partnership contracts and engine). Later accepted P7.9 work
-  integrates that engine without changing its frozen Stage 1 package.
+- Accepted repository and product implementation baseline: `main` at `f6f3680`
+  (PR #49, P7.10 contract ratification and Stage 1 deterministic valuation and
+  `PctOfValue` closing execution).
+- Last financial-engine implementation merge: `f6f3680` (PR #49, P7.10 Stage
+  1 deterministic valuation and `PctOfValue` closing execution).
 - Active gate: **P7.10 Valuation Timepoints + remaining Decision Support / AI
-  integration — Stage 1.** The P7.10 contract is **ratified**; decisions R-A
-  through R-J are closed within the gate and recorded in Section 20 of
+  integration.** The P7.10 contract is **ratified**; decisions R-A through R-J
+  are closed within the gate and recorded in Section 20 of
   `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`, the ratified
-  authority. **Stage 1 implementation is complete and pending merge and human
-  acceptance.** **Stage 2 has not started**, and finishing Stage 1 does not
-  start it.
+  authority. **Stage 1 is implemented, merged, and human accepted.** **Stage 2
+  has not started** and requires a separate explicit start.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active.
 - Autonomous merge: not authorized.
@@ -32,6 +28,20 @@ whenever an accepted gate merges or the active gate changes.
 Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
+
+## 2026-09-20 P7.10 Stage 1 Acceptance
+
+The human explicitly accepted P7.10 Stage 1 after PR #49 merged to `main` at
+`f6f3680`. The accepted scope is the ratified P7.10 contract, deterministic
+valuation authority, and `PctOfValue` **closing** execution, including the
+typed unresolved result and the boundaries recorded in Sections 6.1 and 6.2
+of the P7.10 authority.
+
+This acceptance does not broaden Stage 1: later valuation timepoints remain
+reporting-only for funding purposes, and later financing still requires an
+explicitly authorized refinancing or event-timing stage. It also does not
+start Stage 2, persistence, an API or presentation adapter, memo storage,
+grounded AI, institutional reporting, or PDF generation.
 
 ## 2026-09-20 Human Acceptance and Closeout
 
@@ -102,19 +112,21 @@ human instruction recorded above.
   accepted
 - Excel Exports 1–3 formula-audit workbooks for Quick, Detailed, and
   Lease-Level Underwrite, human accepted
+- P7.10 Stage 1 deterministic valuation authority and `PctOfValue` closing
+  execution, human accepted
 
 ## Next Work
 
-**P7.10 Valuation Timepoints + remaining Decision Support / AI integration** is
-active at Stage 1. Its contract is ratified; decisions R-A through R-J are
-closed within this gate and recorded in Section 20 of
-`docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`.
+**P7.10 Valuation Timepoints + remaining Decision Support / AI integration**
+remains the current program. Its contract is ratified; decisions R-A through
+R-J are closed within this gate and recorded in Section 20 of
+`docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`. Stage 1 is implemented,
+merged, and human accepted. Stage 2 has not started.
 
 Stage 1 implements the deterministic valuation layer and `PctOfValue`
 **closing** execution only. It adds no persistence, migration, schema version
 change, API route, memo storage, AI grounding, PDF generation, or frontend
-change. Its implementation is complete and pending merge and human acceptance;
-it is not accepted before merge.
+change. Its implementation is accepted at `main` `f6f3680` through PR #49.
 
 Two boundaries carry into Stage 2 and are recorded in the contract:
 
@@ -188,8 +200,8 @@ scoped independently.
   and human accepted.**
 - P7.10 Valuation Timepoints, Investment Memo, and Institutional Reporting:
   `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md` — **ratified
-  2026-09-20; Stage 1 implemented and pending merge and acceptance; Stages 2-4
-  not started.**
+  2026-09-20; Stage 1 implemented, merged, and human accepted at `f6f3680`;
+  Stages 2-4 not started.**
 
 ## Historical-Document Rule
 

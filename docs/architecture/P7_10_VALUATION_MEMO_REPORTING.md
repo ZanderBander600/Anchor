@@ -7,14 +7,13 @@ completed ratification record is Section 20.
 
 Stage status:
 
-- **Stage 1 is implemented and pending merge and acceptance.** It delivers the
-  deterministic valuation layer and `PctOfValue` **closing** execution, and
-  nothing else. Its boundary is Section 6.1 and its Stage 2 obligation is
-  Section 6.2.
+- **Stage 1 is implemented, merged, and human accepted.** PR #49 merged to
+  `main` at `f6f3680` on 2026-09-20. It delivers the deterministic valuation
+  layer and `PctOfValue` **closing** execution, and nothing else. Its boundary
+  is Section 6.1 and its Stage 2 obligation is Section 6.2.
 - **Stages 2, 3, and 4 are not started.** Each requires its own explicit human
   start.
 - **Finishing Stage 1 does not automatically start Stage 2.**
-- Stage 1 is not accepted until the human accepts it after merge.
 
 Gate: P7.10
 
@@ -642,8 +641,9 @@ Stage 1 adds no persistence, migration, schema version change, API route, memo
 record, AI grounding, PDF generation, or frontend change. Stage 1 is pure and
 deterministic.
 
-Stage 1's implementation is complete and pending review, merge and human
-acceptance. It is not accepted until the human accepts it after merge.
+Stage 1 was human accepted after PR #49 merged to `main` at `f6f3680` on
+2026-09-20. Its acceptance does not start Stage 2 or authorize any later
+financing event.
 
 ### Stage 2 — persistence, fingerprints, memo domain, and API — **not started**
 
@@ -752,11 +752,12 @@ human instruction and a new gate; a later stage may not quietly widen one.
 
 This contract is ratified and closed to further negotiation within P7.10.
 
-- **Stage 1 is explicitly started.** Production implementation is limited to the
-  Stage 1 scope in Section 17: the deterministic valuation layer and safe
-  `PctOfValue` execution, with no persistence, migration, schema version change,
-  API route, memo storage, AI grounding, PDF generation, or frontend change.
+- **Stage 1 is implemented, merged, and human accepted.** Its accepted scope is
+  limited to Section 17: the deterministic valuation layer and safe
+  `PctOfValue` closing execution, with no persistence, migration, schema version
+  change, API route, memo storage, AI grounding, PDF generation, or frontend
+  change.
 - **Stages 2, 3, and 4 are not started.**
-- **Finishing Stage 1 does not start Stage 2.** Stage 1 stops for independent
-  review, and Stage 2 requires a separate explicit human start.
+- **Accepting Stage 1 does not start Stage 2.** Stage 2 requires a separate
+  explicit human start.
 - P7.10 does not start P7.11.
