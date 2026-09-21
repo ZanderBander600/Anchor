@@ -95,10 +95,27 @@ _P7_8B_BACKEND_FILES = frozenset(
     }
 )
 
+
+#: P7.10 Stage 1 re-pin. The ratified P7.10 contract activates the existing
+#: ``PctOfValue`` funding rule (decision R-E). These four Capital Structure
+#: modules are the whole seam that change carries, so they leave this gate's
+#: working-tree freeze and become P7.10's ledger. Nothing is weakened: the
+#: assertion below still proves they were untouched from this gate through the
+#: accepted baseline `9c65843`, and `tests/test_p7_10_stage_1_architecture.py`
+#: proves the P7.10 change is confined to its declared definitions.
+_P7_10_SEAM = tuple(
+    f"src/anchor/capital_structure/{name}.py"
+    for name in ("execution_contracts", "execution_validation", "funding", "execution")
+)
+
+#: The accepted repository baseline P7.10 Stage 1 starts from (PR #48).
+_P7_10_BASE = "9c658437f76e8815cb228d4b71b11aaa473450d4"
+
 #: The P7.8A financial engine: executed by this gate, edited by none of it.
+#: P7.10 Stage 1 re-pin: the four seam modules move to the assertion above.
 _P7_8A_FINANCIAL = tuple(
     f"{_PACKAGE}/{name}.py"
-    for name in ("execution_contracts", "execution_validation", "funding", "debt_position", "preferred", "metrics", "execution")
+    for name in ("debt_position", "preferred", "metrics")
 )
 
 #: The P7.7 foundation and the mature engine: consumed, never changed.
@@ -265,7 +282,20 @@ def test_the_financial_engine_is_frozen_at_session_as_reviewed_head(path: str) -
 
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_a_protected_path_is_unchanged(path: str) -> None:
-    assert _changes_since(_P7_8A_HEAD, path) == set(), f"{path} changed at P7.8B"
+    """P7.10 Stage 1 re-pin: its four declared seam files are excepted, and are
+    proven separately below. Every other file under every protected path is
+    still unchanged."""
+
+    assert _changes_since(_P7_8A_HEAD, path) - set(_P7_10_SEAM) == set(), f"{path} changed at P7.8B"
+
+
+@pytest.mark.parametrize("path", _P7_10_SEAM)
+def test_each_p7_10_seam_module_was_frozen_through_the_accepted_baseline(path: str) -> None:
+    """P7.8B's claim, still proven: these four files were byte-identical to
+    P7.8A's reviewed head from this gate through the accepted baseline
+    `9c65843`. Only the separately ratified P7.10 Stage 1 changes them."""
+
+    assert _git("rev-parse", f"{_P7_10_BASE}:{path}").strip() == _git("rev-parse", f"{_P7_8A_HEAD}:{path}").strip(), path
 
 
 def test_only_the_named_layers_import_the_capital_structure() -> None:

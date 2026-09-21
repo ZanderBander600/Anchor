@@ -63,6 +63,27 @@ _PREFERRED = f"{_PACKAGE}/preferred.py"
 _METRICS = f"{_PACKAGE}/metrics.py"
 _EXECUTION = f"{_PACKAGE}/execution.py"
 _NEW = (_EXEC_CONTRACTS, _EXEC_VALIDATION, _FUNDING, _DEBT_POSITION, _PREFERRED, _METRICS, _EXECUTION)
+
+#: P7.10 Stage 1 re-pin. The ratified P7.10 contract activates the existing
+#: ``PctOfValue`` funding rule (decision R-E), which this gate's own guards
+#: predate. These four Capital Structure modules are the whole seam that
+#: change carries, so they leave this gate's working-tree freeze and become
+#: P7.10's ledger. Nothing is weakened: the assertion below still proves they
+#: were untouched from this gate through the accepted baseline `9c65843`, and
+#: `tests/test_p7_10_stage_1_architecture.py` proves the P7.10 change is
+#: confined to its declared definitions -- no settlement, residual, debt,
+#: preferred, return or metric formula moved.
+_P7_10_SEAM = tuple(
+    f"src/anchor/capital_structure/{name}.py"
+    for name in ("execution_contracts", "execution_validation", "funding", "execution")
+)
+
+#: The accepted repository baseline P7.10 Stage 1 starts from (PR #48).
+_P7_10_BASE = "9c658437f76e8815cb228d4b71b11aaa473450d4"
+
+#: The P7.8A financial core P7.10 does not touch: the debt and preferred
+#: formulas and the structural metrics. Still byte-frozen in the working tree.
+_STILL_FROZEN = tuple(path for path in _NEW if path not in _P7_10_SEAM)
 _P7_8_MODULES = (_INIT, *_NEW)
 
 #: Every production file P7.8 Session A changes, exactly: the seven new
@@ -322,7 +343,7 @@ def test_each_mature_module_is_byte_identical_to_the_p7_7_merge(path: str) -> No
     assert _git("hash-object", path).strip() == _git("rev-parse", f"{_P7_8_BASE}:{path}").strip(), path
 
 
-@pytest.mark.parametrize("path", _NEW)
+@pytest.mark.parametrize("path", _STILL_FROZEN)
 def test_each_p7_8a_financial_module_is_frozen_at_the_reviewed_head(path: str) -> None:
     """The P7.8A financial freeze, in the working tree.
 
@@ -333,6 +354,16 @@ def test_each_p7_8a_financial_module_is_frozen_at_the_reviewed_head(path: str) -
     one. A change here is a financial change and needs its own review."""
 
     assert _git("hash-object", path).strip() == _git("rev-parse", f"{_P7_8A_HEAD}:{path}").strip(), path
+
+
+@pytest.mark.parametrize("path", _P7_10_SEAM)
+def test_each_p7_10_seam_module_was_frozen_through_the_accepted_baseline(path: str) -> None:
+    """P7.8A's claim, still proven. Every gate from P7.8A's reviewed head to
+    the accepted baseline `9c65843` left these four files byte-identical; only
+    the separately ratified P7.10 Stage 1 changes them, under its own ledger
+    and its own review."""
+
+    assert _git("rev-parse", f"{_P7_10_BASE}:{path}").strip() == _git("rev-parse", f"{_P7_8A_HEAD}:{path}").strip(), path
 
 
 def test_the_package_init_changes_only_by_its_exports() -> None:
@@ -362,15 +393,24 @@ _EXPECTED_IMPORTS = {
         ".legacy", ".validation",
     },
     _EXEC_CONTRACTS: {"__future__", "collections.abc", "dataclasses", "enum", "..engine.contracts", ".contracts"},
-    _EXEC_VALIDATION: {"__future__", ".contracts", ".execution_contracts", ".preferred", ".validation"},
-    _FUNDING: {"__future__", "..consolidation.contracts", "..contracts", "..engine.contracts", ".contracts", ".execution_contracts"},
+    # P7.10 Stage 1 re-pin: the three seam modules gain the valuation layer they
+    # size a ``PctOfValue`` funding from. The direction is one way -- Capital
+    # Structure reads valuation, never the reverse -- and nothing else is added.
+    _EXEC_VALIDATION: {
+        "__future__", "..valuation.contracts", "..valuation.funding", ".contracts", ".execution_contracts",
+        ".funding", ".preferred", ".validation",
+    },
+    _FUNDING: {
+        "__future__", "..consolidation.contracts", "..contracts", "..engine.contracts", "..valuation.contracts",
+        "..valuation.funding", ".contracts", ".execution_contracts",
+    },
     _DEBT_POSITION: {"__future__", "..engine.debt", ".contracts", ".execution_contracts"},
     _PREFERRED: {"__future__", ".contracts", ".execution_contracts"},
     _METRICS: {"__future__", "collections.abc", "..engine.contracts", "..engine.returns", ".execution_contracts", ".foundation"},
     _EXECUTION: {
         "__future__", "collections", "collections.abc", "..consolidation.contracts", "..contracts", "..engine.contracts",
-        ".contracts", ".debt_position", ".execution_contracts", ".execution_validation", ".foundation", ".funding",
-        ".metrics", ".preferred", ".validation",
+        "..valuation.funding", ".contracts", ".debt_position", ".execution_contracts", ".execution_validation",
+        ".foundation", ".funding", ".metrics", ".preferred", ".validation",
     },
 }
 
@@ -687,13 +727,33 @@ def test_the_later_gate_guard_has_teeth() -> None:
     assert not _LATER.search("timepoint_id")
 
 
-def test_pct_of_value_is_never_valued() -> None:
+def test_pct_of_value_is_valued_only_through_the_one_valuation_authority() -> None:
+    """P7.10 Stage 1 re-pin, and the successor to P7.8's "never valued".
+
+    P7.8 refused this rule outright because no valuation existed. The ratified
+    P7.10 decision R-E activates it, so the invariant that replaces the refusal
+    is narrower and stronger: the branch still refuses when no authority is
+    supplied -- the pre-P7.10 behaviour every existing caller gets -- and, when
+    one is, it may only delegate to ``resolve_valuation_funding``. It computes
+    no value of its own, so no second valuation authority can appear here."""
+
     resolve = _functions(_tree(_FUNDING))["resolve_funding"]
     (case,) = [
         case for node in ast.walk(resolve) if isinstance(node, ast.Match) for case in node.cases
         if ast.unparse(case.pattern) == "PctOfValue()"
     ]
-    assert [type(statement) for statement in case.body] == [ast.Raise]
+    body = ast.unparse(ast.Module(body=list(case.body), type_ignores=[]))
+    # Without an authority the rule is refused, exactly as P7.8 refused it.
+    assert "if valuations is None:" in body
+    assert "raise CapitalStructureError" in body
+    # With one, the amount comes only from the valuation layer.
+    assert "resolve_valuation_funding(position, event, rule, authority=valuations)" in body
+    # No arithmetic of its own: no rate, no division, no price fallback.
+    assert not [
+        node for node in ast.walk(ast.parse(body))
+        if isinstance(node, ast.BinOp) and not isinstance(node.op, ast.Mod)
+    ]
+    assert "price_basis" not in body.replace("basis = None", "")
 
 
 def test_later_funding_months_and_fees_are_refused_never_moved_to_closing() -> None:

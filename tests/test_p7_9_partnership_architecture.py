@@ -57,11 +57,36 @@ _FROZEN = (
     *(
         f"src/anchor/capital_structure/{name}.py"
         for name in (
-            "__init__", "contracts", "validation", "legacy", "foundation", "execution_contracts",
-            "execution_validation", "funding", "debt_position", "preferred", "metrics", "execution",
+            "__init__", "contracts", "validation", "legacy", "foundation", "debt_position", "preferred", "metrics",
         )
     ),
 )
+
+#: P7.10 Stage 1 re-pin. The ratified P7.10 contract activates the existing
+#: ``PctOfValue`` funding rule (decision R-E), which this gate's own guards
+#: predate. These four Capital Structure modules are the whole seam that
+#: change carries, so they leave this gate's working-tree freeze and become
+#: P7.10's ledger. Nothing is weakened: the assertion below still proves they
+#: were untouched from this gate through the accepted baseline `9c65843`, and
+#: `tests/test_p7_10_stage_1_architecture.py` proves the P7.10 change is
+#: confined to its declared definitions -- no settlement, residual, debt,
+#: preferred, return or metric formula moved.
+_P7_10_SEAM = tuple(
+    f"src/anchor/capital_structure/{name}.py"
+    for name in ("execution_contracts", "execution_validation", "funding", "execution")
+)
+
+#: The accepted repository baseline P7.10 Stage 1 starts from (PR #48).
+_P7_10_BASE = "9c658437f76e8815cb228d4b71b11aaa473450d4"
+
+
+@pytest.mark.parametrize("path", _P7_10_SEAM)
+def test_each_p7_10_seam_module_was_frozen_through_the_accepted_baseline(path: str) -> None:
+    """P7.9 Stage 1's claim, still proven: these four files were byte-identical
+    to this gate's base from P7.9 through the accepted baseline `9c65843`. Only
+    the separately ratified P7.10 Stage 1 changes them."""
+
+    assert _git("rev-parse", f"{_P7_10_BASE}:{path}").strip() == _git("rev-parse", f"{_P7_9_BASE}:{path}").strip(), path
 
 #: Stage 2 and Stage 3 surfaces, and everything upstream: unchanged.
 _PROTECTED = (

@@ -13,8 +13,16 @@ never moved to closing.
 the scope's stated acquisition price: the Unit's resolved
 ``AcquisitionTerms.purchase_price``, or the Investment's
 ``ConsolidatedResults.transaction_price``. Never a second inferred value, an
-exit value, NOI or an estimate. ``PctOfValue`` needs a valuation timepoint and
-is never valued here.
+exit value, NOI or an estimate.
+
+**``PctOfValue`` (P7.10 Stage 1, R-E).** The rule P7.7 represented is now
+valued, against a ``ValuationAuthority`` the caller supplies: the funding is
+``pct`` of the value of the position's exact scope at the named timepoint, and
+only where that timepoint shares the funding event's model month. No second
+amount-rule shape exists, ``pct``'s own P7.7 validation is unchanged, and
+nothing is sized from a value that did not resolve. With no authority supplied
+the rule is refused exactly as before, so an analysis without P7.10 structure
+behaves identically.
 
 **Signs, provider side.** Funding advanced is negative and a fee received is
 positive. Common equity sees the opposite: the funding is a closing source, and
@@ -26,14 +34,22 @@ from __future__ import annotations
 from ..consolidation.contracts import ConsolidatedResults
 from ..contracts import AcquisitionTerms
 from ..engine.contracts import ensure_finite
+from ..valuation.contracts import (
+    UnresolvedFundingRequirement,
+    ValuationFundingResolution,
+    ValuationScopeKind,
+)
+from ..valuation.funding import ValuationAuthority, resolve_pct_of_value_funding
 from .contracts import (
     CapitalPosition,
     CapitalStructureError,
     DebtTerms,
-    FixedAmount,
     FundingEvent,
+    FixedAmount,
     PctOfPrice,
     PctOfValue,
+    PositionScope,
+    ScopeKind,
 )
 from .execution_contracts import (
     PositionCashFlowEvent,
@@ -56,15 +72,54 @@ def investment_price_basis(consolidated: ConsolidatedResults) -> PriceBasis:
     return PriceBasis(kind=PriceBasisKind.INVESTMENT_TRANSACTION_PRICE, amount=consolidated.transaction_price)
 
 
+def valuation_scope(scope: PositionScope) -> tuple[ValuationScopeKind, str | None]:
+    """A position's scope as the valuation layer names it. A Unit-scoped
+    position is valued by its own Unit; an Investment-scoped one by the
+    Investment. No scope is widened or narrowed to find a value."""
+
+    if scope.kind is ScopeKind.UNIT:
+        if scope.unit_id is None:
+            raise CapitalStructureError("A Unit-scoped position names no Unit.")
+        return ValuationScopeKind.UNIT, scope.unit_id
+    return ValuationScopeKind.INVESTMENT, None
+
+
+def resolve_valuation_funding(
+    position: CapitalPosition, event: FundingEvent, rule: PctOfValue, *, authority: ValuationAuthority
+) -> ValuationFundingResolution:
+    """One ``PctOfValue`` funding sized from ``authority``, or the typed
+    unresolved Funding Requirement saying why it is unknowable. The one
+    authority for this: the execution validator and the scheduler both call
+    it, so neither can size a funding the other refused."""
+
+    scope_kind, unit_id = valuation_scope(position.scope)
+    return resolve_pct_of_value_funding(
+        event_id=event.event_id,
+        position_id=position.position_id,
+        event_model_month=event.model_month,
+        timepoint_id=rule.timepoint_id,
+        pct=rule.pct,
+        scope_kind=scope_kind,
+        unit_id=unit_id,
+        authority=authority,
+    )
+
+
 def _funding_order(event: FundingEvent) -> tuple[int, int, str]:
     return (event.model_month, event.sequence, event.event_id)
 
 
-def resolve_funding(position: CapitalPosition, *, price_basis: PriceBasis) -> tuple[ResolvedFundingEvent, ...]:
+def resolve_funding(
+    position: CapitalPosition, *, price_basis: PriceBasis, valuations: ValuationAuthority | None = None
+) -> tuple[ResolvedFundingEvent, ...]:
     """Each funding event of ``position`` in dollars, in canonical order (model
     month, sequence, event id). Every event is resolved on its own; none is
     merged or dropped. Raises ``CapitalStructureError`` for a rule that is
-    never executed here."""
+    never executed here.
+
+    ``valuations`` is the P7.10 authority a ``PctOfValue`` rule is sized from.
+    ``None`` -- the default, and every caller without P7.10 structure -- keeps
+    the rule refused exactly as before."""
 
     resolved: list[ResolvedFundingEvent] = []
     for event in sorted(position.funding, key=_funding_order):
@@ -77,10 +132,19 @@ def resolve_funding(position: CapitalPosition, *, price_basis: PriceBasis) -> tu
                 amount = ensure_finite(f"funding[{event.event_id}]", rule.pct * price_basis.amount)
                 basis = price_basis
             case PctOfValue():
-                raise CapitalStructureError(
-                    f"Funding event {event.event_id!r} is valued at a valuation timepoint, which this executor "
-                    "never values; the execution validator refuses it first."
-                )
+                if valuations is None:
+                    raise CapitalStructureError(
+                        f"Funding event {event.event_id!r} is valued at a valuation timepoint, which this executor "
+                        "never values; the execution validator refuses it first."
+                    )
+                resolution = resolve_valuation_funding(position, event, rule, authority=valuations)
+                if isinstance(resolution, UnresolvedFundingRequirement):
+                    raise CapitalStructureError(
+                        f"Funding event {event.event_id!r} has no resolved value, so it is never scheduled: "
+                        f"{resolution.message} The execution validator refuses it first."
+                    )
+                amount = ensure_finite(f"funding[{event.event_id}]", resolution.amount)
+                basis = None
         resolved.append(
             ResolvedFundingEvent(
                 event_id=event.event_id,

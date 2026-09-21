@@ -110,6 +110,7 @@ from .foundation import (
     common_equity_outcome,
     settle_claim,
 )
+from ..valuation.funding import ValuationAuthority
 from .funding import closing_events, funded_amount, investment_price_basis, resolve_funding, unit_price_basis
 from .metrics import (
     annual_current_cash_service,
@@ -146,10 +147,14 @@ def _executable_positions(
     acquisition_loan_unit_ids: tuple[str, ...],
     analysis_scope: ScopeKind,
     hold_period: int,
+    valuations: ValuationAuthority | None,
 ) -> tuple[CapitalPosition, ...]:
     """The authored positions in economic order. An invalid structure raises
     ``CapitalStructureValidationError`` (P7.7, unchanged); a valid one the
-    executor does not execute raises ``CapitalStructureExecutionError``."""
+    executor does not execute raises ``CapitalStructureExecutionError``.
+
+    ``valuations`` is the P7.10 authority a ``PctOfValue`` funding is sized
+    from; ``None`` keeps that rule refused exactly as before."""
 
     if structure is None:
         return ()
@@ -158,7 +163,9 @@ def _executable_positions(
     )
     if issues:
         raise CapitalStructureValidationError(issues)
-    execution_issues = validate_structured_execution(structure, analysis_scope=analysis_scope, hold_period=hold_period)
+    execution_issues = validate_structured_execution(
+        structure, analysis_scope=analysis_scope, hold_period=hold_period, valuations=valuations
+    )
     if execution_issues:
         raise CapitalStructureExecutionError(execution_issues)
     return economic_order(structure.positions)
@@ -185,12 +192,19 @@ def _unit_id(position: CapitalPosition) -> str:
 # =============================================================================
 
 
-def schedule_position(position: CapitalPosition, *, price_basis: PriceBasis, hold_period: int) -> ScheduledPosition:
+def schedule_position(
+    position: CapitalPosition,
+    *,
+    price_basis: PriceBasis,
+    hold_period: int,
+    valuations: ValuationAuthority | None = None,
+) -> ScheduledPosition:
     """Resolve and schedule one authored claim-bearing position: its closing
     funding and fees, then its debt or preferred events, in canonical order.
-    ``price_basis`` is its scope's stated acquisition price."""
+    ``price_basis`` is its scope's stated acquisition price, and ``valuations``
+    the P7.10 authority a ``PctOfValue`` funding is sized from."""
 
-    resolved = resolve_funding(position, price_basis=price_basis)
+    resolved = resolve_funding(position, price_basis=price_basis, valuations=valuations)
     principal = funded_amount(resolved)
     terms = position.terms
     debt_schedule: DebtPositionSchedule | None = None
@@ -536,6 +550,7 @@ def execute_unit_capital_structure(
     terms: AcquisitionTerms,
     results: AcquisitionResults,
     capital_structure: CapitalStructure | None = None,
+    valuations: ValuationAuthority | None = None,
 ) -> StructuredCapitalResult:
     """The structured Capital Structure economics of one standalone Unit.
 
@@ -543,7 +558,11 @@ def execute_unit_capital_structure(
     completed ``AcquisitionResults``; nothing upstream is re-run or changed.
     ``capital_structure`` holds its authored positions, all Unit-scoped;
     ``None`` and the empty structure mean none, and the Common Equity Cash Flow
-    is then ``results.levered_cash_flows`` itself."""
+    is then ``results.levered_cash_flows`` itself.
+
+    ``valuations`` is the P7.10 authority a ``PctOfValue`` funding is sized
+    from (R-E). ``None`` is the default and the pre-P7.10 behaviour: such a
+    rule is refused, and an analysis without one is unchanged."""
 
     foundation = analyze_unit_capital_structure(unit_id=unit_id, terms=terms, results=results)
     loan = foundation.legacy_acquisition_loan
@@ -554,10 +573,14 @@ def execute_unit_capital_structure(
         acquisition_loan_unit_ids=() if loan is None else (unit_id,),
         analysis_scope=ScopeKind.UNIT,
         hold_period=hold_period,
+        valuations=valuations,
     )
     marker, claim_bearing = _split(positions)
     basis = unit_price_basis(terms)
-    scheduled = tuple(schedule_position(position, price_basis=basis, hold_period=hold_period) for position in claim_bearing)
+    scheduled = tuple(
+        schedule_position(position, price_basis=basis, hold_period=hold_period, valuations=valuations)
+        for position in claim_bearing
+    )
 
     source = foundation.cash_authority.post_acquisition_debt_cash_flows
     _require_funded_closing(scheduled, closing_source=source[0], root="Unit")
@@ -603,6 +626,7 @@ def execute_investment_capital_structure(
     units: Iterable[CapitalStructureUnit],
     consolidated: ConsolidatedResults,
     capital_structure: CapitalStructure | None = None,
+    valuations: ValuationAuthority | None = None,
 ) -> StructuredCapitalResult:
     """The structured Capital Structure economics of a visible Investment.
 
@@ -612,7 +636,12 @@ def execute_investment_capital_structure(
     the Investment scope then reads the consolidated residual those Unit
     positions leave. ``None`` and the empty structure mean no authored
     position, and the Common Equity Cash Flow is then
-    ``consolidated.levered_cash_flows`` itself."""
+    ``consolidated.levered_cash_flows`` itself.
+
+    ``valuations`` is the P7.10 authority a ``PctOfValue`` funding is sized
+    from (R-E). A Unit-scoped position is sized from its own Unit's value and
+    an Investment-scoped one from the Investment value, which exists only when
+    every member Unit has a value at the same model month."""
 
     given = tuple(units)
     foundation = analyze_investment_capital_structure(units=given, consolidated=consolidated)
@@ -626,6 +655,7 @@ def execute_investment_capital_structure(
         ),
         analysis_scope=ScopeKind.INVESTMENT,
         hold_period=hold_period,
+        valuations=valuations,
     )
     marker, claim_bearing = _split(positions)
     by_unit = {unit.unit_id: unit for unit in ordered}
@@ -637,6 +667,7 @@ def execute_investment_capital_structure(
             if position.scope.kind is ScopeKind.UNIT
             else investment_basis,
             hold_period=hold_period,
+            valuations=valuations,
         )
         for position in claim_bearing
     )

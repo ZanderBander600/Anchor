@@ -14,7 +14,12 @@ never moved to a supported convention, and never partially executed.
 The first executor runs:
 
 - funding and fees at model month 0 (closing) only;
-- ``FixedAmount`` and ``PctOfPrice`` funding, never ``PctOfValue``;
+- ``FixedAmount`` and ``PctOfPrice`` funding; and, from P7.10 Stage 1,
+  ``PctOfValue`` funding when the caller supplies a ``ValuationAuthority``
+  that sizes it. Without an authority the rule is refused exactly as before,
+  so an analysis with no P7.10 structure is unchanged. With one, a funding
+  whose valuation did not resolve is refused by its own typed reason rather
+  than sized at zero;
 - cash-pay debt: ``pik_rate == 0`` and ``current_pay_rate == interest_rate``;
 - preferred equity with ``0 <= current_pay_rate <= preferred_rate``, any
   accrual permitted by its terms, and a redemption at a hold-year end or at or
@@ -29,6 +34,8 @@ cross-position issues. List order never participates.
 
 from __future__ import annotations
 
+from ..valuation.contracts import UnresolvedFundingRequirement
+from ..valuation.funding import ValuationAuthority
 from .contracts import (
     CapitalPosition,
     CapitalStructure,
@@ -41,6 +48,7 @@ from .contracts import (
     ScopeKind,
 )
 from .execution_contracts import ExecutionIssue, ExecutionIssueCode
+from .funding import resolve_valuation_funding
 from .preferred import modeled_redemption_month
 from .validation import economic_order
 
@@ -73,7 +81,7 @@ def _common_equity_issues(position: CapitalPosition, analysis_scope: ScopeKind) 
     ]
 
 
-def _funding_issues(position: CapitalPosition) -> list[ExecutionIssue]:
+def _funding_issues(position: CapitalPosition, valuations: ValuationAuthority | None) -> list[ExecutionIssue]:
     issues: list[ExecutionIssue] = []
     for event in sorted(position.funding, key=_order):
         where = f"funding[{event.event_id}]"
@@ -89,16 +97,28 @@ def _funding_issues(position: CapitalPosition) -> list[ExecutionIssue]:
                 )
             )
         if isinstance(event.amount_rule, PctOfValue):
-            issues.append(
-                _issue(
-                    ExecutionIssueCode.UNSUPPORTED_AMOUNT_RULE,
-                    f"Funding event {event.event_id!r} of {position.position_id!r} is a percentage of the value at "
-                    f"valuation timepoint {event.amount_rule.timepoint_id!r}; valuation timepoints are not executed "
-                    "yet.",
-                    position,
-                    f"{where}.amount_rule",
+            if valuations is None:
+                issues.append(
+                    _issue(
+                        ExecutionIssueCode.UNSUPPORTED_AMOUNT_RULE,
+                        f"Funding event {event.event_id!r} of {position.position_id!r} is a percentage of the value at "
+                        f"valuation timepoint {event.amount_rule.timepoint_id!r}; valuation timepoints are not executed "
+                        "yet.",
+                        position,
+                        f"{where}.amount_rule",
+                    )
                 )
-            )
+                continue
+            resolution = resolve_valuation_funding(position, event, event.amount_rule, authority=valuations)
+            if isinstance(resolution, UnresolvedFundingRequirement):
+                issues.append(
+                    _issue(
+                        ExecutionIssueCode.UNRESOLVED_VALUATION_FUNDING,
+                        resolution.message,
+                        position,
+                        f"{where}.amount_rule",
+                    )
+                )
     return issues
 
 
@@ -175,7 +195,9 @@ def _preferred_issues(position: CapitalPosition, terms: PreferredEquityTerms, ho
     return issues
 
 
-def _claim_issues(position: CapitalPosition, analysis_scope: ScopeKind, hold_period: int) -> list[ExecutionIssue]:
+def _claim_issues(
+    position: CapitalPosition, analysis_scope: ScopeKind, hold_period: int, valuations: ValuationAuthority | None
+) -> list[ExecutionIssue]:
     issues: list[ExecutionIssue] = []
     if analysis_scope is ScopeKind.UNIT and position.scope.kind is ScopeKind.INVESTMENT:
         issues.append(
@@ -187,7 +209,7 @@ def _claim_issues(position: CapitalPosition, analysis_scope: ScopeKind, hold_per
                 "scope",
             )
         )
-    issues.extend(_funding_issues(position))
+    issues.extend(_funding_issues(position, valuations))
     terms = position.terms
     if isinstance(terms, DebtTerms):
         issues.extend(_debt_issues(position, terms))
@@ -197,13 +219,21 @@ def _claim_issues(position: CapitalPosition, analysis_scope: ScopeKind, hold_per
 
 
 def validate_structured_execution(
-    structure: CapitalStructure, *, analysis_scope: ScopeKind, hold_period: int
+    structure: CapitalStructure,
+    *,
+    analysis_scope: ScopeKind,
+    hold_period: int,
+    valuations: ValuationAuthority | None = None,
 ) -> tuple[ExecutionIssue, ...]:
     """Every reason the executor does not execute ``structure``, or ``()``.
 
     ``structure`` must already be structurally valid. ``analysis_scope`` is
     ``UNIT`` for a standalone Unit and ``INVESTMENT`` for a visible Investment;
-    ``hold_period`` is the analysis' hold, which decides the exit month."""
+    ``hold_period`` is the analysis' hold, which decides the exit month.
+
+    ``valuations`` is the P7.10 authority a ``PctOfValue`` funding is sized
+    from. ``None`` is the default and every pre-P7.10 caller: the rule is then
+    refused with its original reason and message."""
 
     ordered = economic_order(structure.positions)
     issues: list[ExecutionIssue] = []
@@ -211,7 +241,7 @@ def validate_structured_execution(
         if position.position_class is PositionClass.COMMON_EQUITY:
             issues.extend(_common_equity_issues(position, analysis_scope))
         else:
-            issues.extend(_claim_issues(position, analysis_scope, hold_period))
+            issues.extend(_claim_issues(position, analysis_scope, hold_period, valuations))
 
     markers = [position for position in ordered if position.position_class is PositionClass.COMMON_EQUITY]
     if len(markers) > 1:
