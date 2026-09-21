@@ -65,7 +65,22 @@ client = TestClient(api_module.app)
 exchanges: list[dict[str, Any]] = []
 
 
+def write(method: str, path: str, body: Any = None, *, expect: int = 200) -> Any:
+    """Build the baseline state. Deliberately **not** recorded: a create mints a
+    fresh id and timestamp, so replaying one could never match, and replaying it
+    against the migrated copy would be a second write rather than a comparison.
+    The manifest holds only exchanges that are replayable."""
+
+    response = client.request(method, path, json=body)
+    if response.status_code != expect:
+        raise SystemExit(f"{method} {path} -> {response.status_code}: {response.text}")
+    return response.json() if response.content else None
+
+
 def record(method: str, path: str, body: Any = None, *, expect: int | None = None) -> Any:
+    """Record one replayable exchange: a read, or a pure computation that writes
+    nothing. The current tree must answer it byte for byte identically."""
+
     response = client.request(method, path, json=body)
     if expect is not None and response.status_code != expect:
         raise SystemExit(f"{method} {path} -> {response.status_code}: {response.text}")
@@ -121,7 +136,7 @@ lease_level = store.create_lease_level_deal(
 # A visible Investment over one Unit
 # =============================================================================
 
-visible = record(
+visible = write(
     "POST",
     "/investments",
     {
@@ -175,7 +190,7 @@ SENIOR = {
     "shortfall_resolution": "common_equity_contribution",
 }
 
-record(
+write(
     "PUT",
     f"/deals/{detailed.id}/capital-structure",
     {"positions": [SENIOR, COMMON_EQUITY]},
@@ -184,7 +199,7 @@ record(
 structured_id = client.get(f"/deals/{detailed.id}/capital-structure").json()["investment_id"]
 
 # A Scenario and a Strategy on that hidden Investment.
-scenario = record(
+scenario = write(
     "POST",
     f"/investments/{structured_id}/scenarios",
     {
@@ -196,7 +211,7 @@ scenario = record(
     },
     expect=200,
 )
-strategy = record(
+strategy = write(
     "POST",
     f"/investments/{structured_id}/strategies",
     {
@@ -209,7 +224,7 @@ strategy = record(
 )
 
 # A Partnership on the same hidden Investment.
-record(
+write(
     "PUT",
     f"/deals/{detailed.id}/partnership",
     {
@@ -231,22 +246,18 @@ record(
                 },
             ],
             "contribution_rule": "pro_rata_by_commitment",
-            "promote_benchmark": {"shares": [{"partner_id": "lp", "share": 1.0}]},
+            "promote_benchmark": {
+                "shares": [
+                    {"partner_id": "lp", "share": 0.9},
+                    {"partner_id": "gp", "share": 0.1},
+                ]
+            },
             "promote_participant_ids": ["gp"],
             "tiers": [
                 {
-                    "tier_id": "return-of-capital",
-                    "name": "Return of capital",
-                    "sequence": 1,
-                    "kind": "hurdle",
-                    "split": {"kind": "pro_rata_by_contribution"},
-                    "hurdle": None,
-                    "catch_up": None,
-                },
-                {
                     "tier_id": "residual",
                     "name": "Residual split",
-                    "sequence": 2,
+                    "sequence": 1,
                     "kind": "residual",
                     "split": {
                         "kind": "explicit",
@@ -268,17 +279,14 @@ record(
 # A Managed Asset, so the AM1 surface is represented too
 # =============================================================================
 
-managed = record(
+managed = write(
     "POST",
     "/managed-assets",
     {
         "source_deal_id": lease_level.id,
         "name": "Riverbend (owned)",
         "acquisition_date": "2026-11-01",
-        "property_type": None,
         "market": None,
-        "asset_type": None,
-        "asset_subtype": None,
     },
     expect=200,
 )
@@ -305,26 +313,39 @@ record("GET", f"/investments/{structured_id}/strategies")
 record("GET", f"/investments/{structured_id}/position-perspectives")
 record("GET", f"/investments/{structured_id}/partner-perspectives")
 
-for strategy_id in ("base", strategy["strategy"]["strategy_id"]):
-    for scenario_id in ("base", scenario["scenario"]["scenario_id"]):
-        record("GET", f"/investments/{structured_id}/variants/{strategy_id}/{scenario_id}/fingerprint")
-        record("POST", f"/investments/{structured_id}/variants/{strategy_id}/{scenario_id}/analysis")
-        record(
-            "GET",
-            f"/investments/{structured_id}/structured-variants/{strategy_id}/{scenario_id}/fingerprint",
-        )
-        record(
-            "POST",
-            f"/investments/{structured_id}/structured-variants/{strategy_id}/{scenario_id}/analysis",
-        )
-        record(
-            "GET",
-            f"/investments/{structured_id}/partnership-variants/{strategy_id}/{scenario_id}/fingerprint",
-        )
-        record(
-            "POST",
-            f"/investments/{structured_id}/partnership-variants/{strategy_id}/{scenario_id}/analysis",
-        )
+_VARIANTS = [
+    (strategy_id, scenario_id)
+    for strategy_id in ("base", strategy["strategy"]["strategy_id"])
+    for scenario_id in ("base", scenario["scenario"]["scenario_id"])
+]
+
+# Warm the Project variant cache first, without recording. ``cache_status`` is
+# operational metadata about whether a cached Project result was served, and a
+# first computation reports "miss" while every later one reports "hit" -- so a
+# recording made on the miss could never be replayed. Warming makes both the
+# recording and the replay describe the same, settled cache state.
+for strategy_id, scenario_id in _VARIANTS:
+    write("POST", f"/investments/{structured_id}/variants/{strategy_id}/{scenario_id}/analysis")
+
+for strategy_id, scenario_id in _VARIANTS:
+    record("GET", f"/investments/{structured_id}/variants/{strategy_id}/{scenario_id}/fingerprint")
+    record("POST", f"/investments/{structured_id}/variants/{strategy_id}/{scenario_id}/analysis")
+    record(
+        "GET",
+        f"/investments/{structured_id}/structured-variants/{strategy_id}/{scenario_id}/fingerprint",
+    )
+    record(
+        "POST",
+        f"/investments/{structured_id}/structured-variants/{strategy_id}/{scenario_id}/analysis",
+    )
+    record(
+        "GET",
+        f"/investments/{structured_id}/partnership-variants/{strategy_id}/{scenario_id}/fingerprint",
+    )
+    record(
+        "POST",
+        f"/investments/{structured_id}/partnership-variants/{strategy_id}/{scenario_id}/analysis",
+    )
 
 record("POST", f"/investments/{structured_id}/decision-matrix", {"perspective": "project"})
 record("POST", f"/investments/{structured_id}/position-decision-matrix/senior-loan")

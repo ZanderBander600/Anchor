@@ -6019,8 +6019,9 @@ def read_valuation_views(investment_id: str, strategy_id: str, scenario_id: str)
     never fabricated, and never zero.
 
     ``evidence_blocked`` names the definitions whose analyst-supplied value has
-    no approved source, and ``consumed_timepoint_ids`` those a ``PctOfValue``
-    rule actually consumes."""
+    no approved source; ``funding_states`` reports every ``PctOfValue`` rule,
+    sized or typed-unavailable with no amount at all; and
+    ``consumed_timepoint_ids`` those a ``PctOfValue`` rule actually consumes."""
 
     try:
         surface = analyze_structured_valuations(investment_id, strategy_id, scenario_id)
@@ -6051,6 +6052,7 @@ def read_valuation_views(investment_id: str, strategy_id: str, scenario_id: str)
         "hold_period": surface.hold_period,
         "views": [_valuation_view_wire(view) for view in surface.views],
         "evidence_blocked": _wire(surface.evidence_blocked),
+        "funding_states": _wire(surface.funding_states),
         "consumed_timepoint_ids": list(surface.consumed_timepoint_ids),
         "project_source_fingerprint": surface.project_source_fingerprint,
         "structured_source_fingerprint": surface.structured_source_fingerprint,

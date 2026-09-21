@@ -77,6 +77,7 @@ from . import store
 from .fingerprint import fingerprint_structured_source
 from .valuation_views import (
     EvidenceBlockedValuation,
+    FundingState,
     ValuationUnitSource,
     ValuationView,
     blocked_records,
@@ -84,6 +85,7 @@ from .valuation_views import (
     consumed_valuations,
     evidence_blocked_timepoints,
     funding_authority,
+    funding_states,
     resolve_views,
     view_fingerprints,
 )
@@ -202,6 +204,11 @@ class StructuredValuationSurface:
     the funding authority, so an unresolved ``PctOfValue`` funding is reported
     with the specific reason rather than a misleading "timepoint not found".
 
+    ``funding_states`` reports every ``PctOfValue`` rule the resolved structure
+    states, sized or typed-unavailable, so an analyst can see why a value-sized
+    funding cannot be sized without running an analysis that would refuse
+    (Section 6.2).
+
     ``consumed_timepoint_ids`` are the timepoints a ``PctOfValue`` rule actually
     names -- the ones that participate in the structured financial identity
     (Section 6). A report-only valuation is deliberately absent.
@@ -219,6 +226,7 @@ class StructuredValuationSurface:
     hold_period: int
     views: tuple[ValuationView, ...]
     evidence_blocked: tuple[EvidenceBlockedValuation, ...]
+    funding_states: tuple[FundingState, ...]
     consumed_timepoint_ids: tuple[str, ...]
     project_source_fingerprint: str
     structured_source_fingerprint: str
@@ -694,6 +702,11 @@ def analyze_structured_valuations(
         hold_period=read.hold_period,
         views=valuation.views,
         evidence_blocked=blocked_records(valuation.blocked),
+        funding_states=funding_states(
+            capital_structure=resolved.capital_structure,
+            authority=valuation.authority,
+            blocked=valuation.blocked,
+        ),
         consumed_timepoint_ids=tuple(sorted(valuation.consumed)),
         project_source_fingerprint=read.project_source_fingerprint,
         structured_source_fingerprint=_structured_fingerprint(
