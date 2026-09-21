@@ -5,20 +5,20 @@ Status: **Ratified.** P7.10 was explicitly started on 2026-09-20 from accepted
 2026-09-20 by the human's delegation of P7.10 architecture ratification; the
 completed ratification record is Section 20.
 
-Stage status as of ratification:
+Stage status:
 
-- **Stage 1 is explicitly started** by the same 2026-09-20 instruction that
-  ratified this contract. Production implementation is limited to the Stage 1
-  scope in Section 17.
+- **Stage 1 is implemented and pending merge and acceptance.** It delivers the
+  deterministic valuation layer and `PctOfValue` **closing** execution, and
+  nothing else. Its boundary is Section 6.1 and its Stage 2 obligation is
+  Section 6.2.
 - **Stages 2, 3, and 4 are not started.** Each requires its own explicit human
   start.
-- **Finishing Stage 1 does not automatically start Stage 2.** Stage 1 stops for
-  independent review.
-- Stage 1 is not accepted until the human accepts it.
+- **Finishing Stage 1 does not automatically start Stage 2.**
+- Stage 1 is not accepted until the human accepts it after merge.
 
 Gate: P7.10
 
-Risk tier: Tier 1 for valuation and `PctOfValue` execution; Tier 2 for
+Risk tier: Tier 1 for valuation and `PctOfValue` closing execution; Tier 2 for
 persistence, fingerprints, memo versioning, and AI grounding; Tier 3 for the
 Memo workspace, institutional report, PDF generation, and browser behavior.
 
@@ -79,7 +79,8 @@ The following are not design choices left to P7.10:
 - As-Is, Stabilized, custom, and system Exit views;
 - direct-cap and analyst-supplied valuation methods;
 - unit and contemporaneous Investment-level valuations;
-- execution of the already-representable Capital Structure `PctOfValue` rule;
+- closing execution of the already-representable Capital Structure
+  `PctOfValue` rule (Section 6.1);
 - a structured, analyst-authoritative Investment Memo;
 - one mutable draft and immutable published memo versions;
 - selection of a Strategy, Scenario, and Project / Position / Partner
@@ -227,9 +228,12 @@ implies value creation by itself.
 
 ## 6. `PctOfValue` execution
 
-P7.7 already represents `PctOfValue(timepoint_id, pct)` and currently refuses
-to execute it. P7.10 proposes to activate that existing rule without adding a
-new amount-rule shape.
+P7.7 already represents `PctOfValue(timepoint_id, pct)` and refuses to execute
+it. P7.10 activates that existing rule without adding a new amount-rule shape.
+
+**Stage 1 activates `PctOfValue` closing execution, not `PctOfValue`
+generally.** The two halves of that boundary are separate, and neither is the
+other's excuse:
 
 - The named timepoint must belong to the same Investment as the Capital
   Structure.
@@ -249,6 +253,42 @@ new amount-rule shape.
 - A valuation consumed by `PctOfValue` is an economic dependency of the
   resolved Capital Structure and therefore participates in its financial
   identity and downstream invalidation.
+
+### 6.1 The closing-only execution boundary
+
+Recorded explicitly so no reader, guard or later stage infers more than Stage 1
+delivered:
+
+- The **valuation authority** resolves valid `AS_IS`, `STABILIZED` and `CUSTOM`
+  timepoints alike, exactly as Section 5 states. It is not the limitation.
+- The **capital execution seam** can use `PctOfValue` only when the funding
+  event occurs at closing, model month 0. The P7.8 rule that this executor
+  funds positions at closing only is unchanged, and P7.10 does not relax it.
+- A later `STABILIZED` or `CUSTOM` valuation may therefore be used for
+  **reporting**, but cannot presently create a later funding event. It resolves
+  to a real value; no funding event can consume it.
+- Supporting a later funding event would require an **explicitly authorized
+  refinancing or event-timing stage**. P7.10 does not silently infer one, and
+  no event is moved to closing to make one work.
+- This is a **product limitation**. It is not a zero-valued result, and it is
+  never an excuse to fall back to the purchase price or any other basis.
+
+### 6.2 What Stage 1 stops at, and the Stage 2 obligation
+
+Stage 1 is a pure engine layer with no API or presentation surface, so it may
+stop internal execution with the typed `UnresolvedFundingRequirement`. That
+record deliberately states no dollars at all: it carries no amount and no scope
+value, and shares no money-bearing field with P7.7's `FundingRequirement`,
+which reports a claim the eligible cash could not meet.
+
+**Stage 2 must** translate every unresolved valuation and funding state into
+the established structured unavailable / N/A representation, carrying the
+specific reason, on both the API and the presentation surfaces.
+
+**Stage 2 must not** expose such a state as a generic server error, fabricate
+an amount for it, or collapse it into zero.
+
+That adapter is Stage 2 work and is deliberately not implemented in Stage 1.
 
 P7.10 does not add refinancing. A later refinance gate may use the same
 timepoint contract for a later funding event; that future event's cash-flow
@@ -588,21 +628,26 @@ Unavailable, and Stale never share the same meaning.
 Each stage starts explicitly and stops for independent review. Completing one
 stage never authorizes the next.
 
-### Stage 1 — deterministic valuation and `PctOfValue` — **started 2026-09-20**
+### Stage 1 — deterministic valuation and `PctOfValue` closing execution — **implemented 2026-09-20**
 
 - valuation contracts and validation;
 - direct-cap and analyst-value resolution;
 - unit and contemporaneous Investment aggregation;
 - reserved system Exit view;
-- `PctOfValue` execution and unresolved-state propagation;
+- `PctOfValue` **closing** execution and typed unresolved results
+  (Sections 6.1 and 6.2);
 - neutral legacy oracle and financial mutation proofs.
 
 Stage 1 adds no persistence, migration, schema version change, API route, memo
 record, AI grounding, PDF generation, or frontend change. Stage 1 is pure and
 deterministic.
 
+Stage 1's implementation is complete and pending review, merge and human
+acceptance. It is not accepted until the human accepts it after merge.
+
 ### Stage 2 — persistence, fingerprints, memo domain, and API — **not started**
 
+- the unavailable / N/A presentation adapter Section 6.2 obliges;
 - additive schema migration;
 - valuation definitions and evidence references;
 - memo draft, structured items, selected decision, and IC decision;

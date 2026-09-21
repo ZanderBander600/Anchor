@@ -3,13 +3,24 @@
 Restates ``docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`` Section 6 and
 the ratified decision R-E; that document governs on any discrepancy.
 
-**One rule, activated -- not a new one.** P7.7 already represents
+**One rule, activated at closing -- not a new one.** P7.7 already represents
 ``PctOfValue(timepoint_id, pct)`` and P7.8 refuses to execute it. This module
 values that existing rule. No second amount-rule shape is added, and
 ``PctOfValue``'s own validation stays exactly where P7.7 put it: ``pct`` finite,
 greater than zero and at most one is checked by
 ``anchor.capital_structure.validation`` and is neither repeated nor relaxed
 here.
+
+**The execution boundary.** Stage 1 activates ``PctOfValue`` *closing*
+execution, not ``PctOfValue`` generally. This module resolves a funding from
+any timepoint the authority holds, at whatever model month the two share; the
+P7.8 executor downstream funds positions at closing (model month 0) only, and
+that rule is unchanged. A Stabilized or Custom timepoint at a later hold-year
+end therefore resolves to a real value and is a reporting value, but no funding
+event can presently consume it. That is a product limitation with a named
+reason -- never a zero, never a fallback to the acquisition price, and never a
+later funding event inferred into existence. Supporting one needs an explicitly
+authorised refinancing or event-timing stage.
 
 **Direction.** This module knows nothing about Capital Structures. It reads a
 resolved valuation and a position's scope, both passed in, so the dependency

@@ -3,6 +3,11 @@
 ``docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`` Sections 2, 5, 6, 17
 and 18.1. Every git query reads objects only (protocol 11.2). The guards hold:
 
+Stage 1 activates ``PctOfValue`` **closing** execution, not ``PctOfValue``
+generally (contract Section 6.1). Nothing below should be read as proving the
+rule universally executable: the P7.8 closing-only funding window is unchanged,
+and a later timepoint stays a reporting value.
+
 1. **the Stage 1 production ledger**: exactly the new ``anchor.valuation``
    package and the four Capital Structure modules the ``PctOfValue`` seam
    touches, measured from ``main`` at ``9c65843``;
@@ -14,7 +19,10 @@ and 18.1. Every git query reads objects only (protocol 11.2). The guards hold:
    reads the engine, and valuation never reads Capital Structure;
 5. **no duplicated authority, no cash flow, and no later-stage surface** --
    no persistence, migration, schema version, route, memo, AI, PDF or
-   frontend belongs to Stage 1.
+   frontend belongs to Stage 1;
+6. **no public API or wire contract changed** -- no Capital Structure
+   dataclass gained or lost a field, ``api.py`` is byte-identical, and nothing
+   routes to the valuation layer.
 """
 
 from __future__ import annotations
@@ -438,3 +446,65 @@ def test_stage_1_adds_no_test_only_production_shim() -> None:
             continue
         defined |= set(_definitions(_current(_module(name))))
     assert exported <= defined | {"ValuationMethod", "ValuationFundingResolution"}
+
+
+# =============================================================================
+# 6. No public API or wire contract changed (Stage 1 closeout)
+# =============================================================================
+
+
+def _dataclass_fields(source: str) -> dict[str, list[str]]:
+    """Every top-level dataclass in ``source``, by name, with its annotated
+    field names in declaration order. ``ClassVar`` is excluded: it is not a
+    dataclass field and never reaches the wire."""
+
+    found: dict[str, list[str]] = {}
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        fields = [
+            item.target.id
+            for item in node.body
+            if isinstance(item, ast.AnnAssign)
+            and isinstance(item.target, ast.Name)
+            and "ClassVar" not in ast.unparse(item.annotation)
+        ]
+        if fields:
+            found[node.name] = fields
+    return found
+
+
+@pytest.mark.parametrize("path", _SEAM_MODULES)
+def test_no_seam_dataclass_gained_or_lost_a_wire_field(path: str) -> None:
+    """``anchor.api._wire`` serialises a contract by its dataclass fields, in
+    order, so adding or removing one changes every existing response.
+
+    Stage 1 changes no field of any Capital Structure contract. It widens
+    ``ResolvedFundingEvent.amount_rule`` to admit the ``PctOfValue`` rule P7.7
+    already represented -- a type annotation, not a field -- and deliberately
+    threads the valuation operands nowhere: reporting them on this record is
+    Stage 2 work precisely because a new field would be a wire change."""
+
+    before = _dataclass_fields(_at_base(path))
+    after = _dataclass_fields(_current(path))
+    assert set(after) == set(before), path
+    for name, fields in before.items():
+        assert after[name] == fields, f"{path}::{name}"
+
+
+def test_the_api_module_is_byte_identical_to_the_baseline() -> None:
+    """The routes, their methods, their payloads and the wire serialiser are
+    all in ``api.py``. Stage 1 adds no route and changes no response."""
+
+    path = "src/anchor/api.py"
+    assert _git("hash-object", path).strip() == _git("rev-parse", f"{_P7_10_BASE}:{path}").strip()
+
+
+def test_the_valuation_package_is_not_reachable_from_the_api() -> None:
+    """Stage 1 is a pure engine layer. Nothing routes to it, so no unresolved
+    valuation state can reach a client as a generic server error -- there is no
+    path to a client at all yet. Translating these states into the established
+    structured unavailable/N/A representation is a Stage 2 obligation."""
+
+    api = ast.parse(_current("src/anchor/api.py"))
+    assert not any("valuation" in found for found in _imports(api))

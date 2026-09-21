@@ -39,6 +39,7 @@ from anchor.engine.contracts import AcquisitionResults
 from anchor.valuation import (
     DirectCap,
     ValuationAuthority,
+    ValuationAvailability,
     FundingResolutionStatus,
     ResolvedValuationFunding,
     UnitValuationInstruction,
@@ -566,3 +567,186 @@ def test_supplying_an_authority_changes_nothing_a_structure_does_not_consume() -
             capital_structure=authored,
             valuations=authority,
         )
+
+
+# =============================================================================
+# 8. The closing-only execution boundary (Stage 1 closeout)
+# =============================================================================
+#
+# Stage 1 activated ``PctOfValue`` *closing* execution, not ``PctOfValue``
+# generally. The valuation authority resolves As-Is, Stabilized and Custom
+# timepoints alike; the existing executor funds at closing only, so a later
+# timepoint is a reporting value no funding event can presently consume. That
+# is a product limitation with a named reason -- never a zero, never a fallback
+# to the purchase price, and never silently inferred into a later funding
+# event. Supporting one needs an explicitly authorised refinancing or
+# event-timing stage.
+
+
+def test_a_later_valuation_resolves_but_cannot_fund_at_its_own_month() -> None:
+    """The two halves of the boundary, in one place.
+
+    A Stabilized timepoint at model month 24 resolves to a real value, so the
+    valuation authority is not the limitation. Funding from it at month 24 is
+    refused by the unchanged closing-only executor, and nothing is moved to
+    closing to make it work."""
+
+    terms, results = round_unit()
+    authority = _authority_for_month(24)
+
+    (valuation,) = authority.valuations
+    assert valuation.model_month == 24
+    assert valuation.status is ValuationAvailability.AVAILABLE
+    # The round Unit's NOI is flat at $800,000, so Year 3 over the 8% cap rate
+    # is the same $10,000,000 As-Is shows. The value exists; only the funding
+    # is unavailable.
+    assert valuation.value == pytest.approx(AS_IS_VALUE)
+
+    with pytest.raises(CapitalStructureExecutionError) as raised:
+        _execute(_valued_position(month=24, timepoint_id="stabilized"), authority, terms, results)
+    assert ExecutionIssueCode.UNSUPPORTED_FUNDING_TIMING in {issue.code for issue in raised.value.issues}
+
+
+def test_a_later_valuation_is_never_pulled_back_to_closing_to_fund() -> None:
+    """The other direction: a closing funding event does not reach back to a
+    later valuation. It is left unresolved by model month, sized neither from
+    the later value nor from the purchase price."""
+
+    resolution = resolve_pct_of_value_funding(
+        event_id="mezz-funding",
+        position_id="mezz",
+        event_model_month=0,
+        timepoint_id="stabilized",
+        pct=PCT,
+        scope_kind=ValuationScopeKind.UNIT,
+        unit_id=UNIT,
+        authority=_authority_for_month(24),
+    )
+    assert isinstance(resolution, UnresolvedFundingRequirement)
+    assert resolution.reason is UnresolvedFundingReason.MODEL_MONTH_MISMATCH
+    assert resolution.valuation_reason is None
+
+
+def test_the_exit_month_is_never_a_fundable_valuation_timepoint() -> None:
+    """Month ``12 * hold_period`` stays reserved for the system Exit view at
+    the funding boundary too: a definition authored there has no value, so it
+    sizes nothing."""
+
+    terms, _ = round_unit()
+    exit_month = terms.hold_period * 12
+    assert exit_month == 60
+    resolution = resolve_pct_of_value_funding(
+        event_id="mezz-funding",
+        position_id="mezz",
+        event_model_month=exit_month,
+        timepoint_id="stabilized",
+        pct=PCT,
+        scope_kind=ValuationScopeKind.UNIT,
+        unit_id=UNIT,
+        authority=_authority_for_month(exit_month),
+    )
+    assert isinstance(resolution, UnresolvedFundingRequirement)
+    assert resolution.reason is UnresolvedFundingReason.VALUATION_UNAVAILABLE
+    assert resolution.valuation_reason is ValuationUnavailableReason.RESERVED_EXIT_MONTH
+
+
+_UNRESOLVED_REASONS = tuple(reason.value for reason in UnresolvedFundingReason)
+
+
+def _unresolved_case(reason: str) -> UnresolvedFundingRequirement:
+    """One unresolved resolution per reason the contract states."""
+
+    terms, results = round_unit()
+    common: dict[str, object] = {
+        "event_id": "mezz-funding",
+        "position_id": "mezz",
+        "pct": PCT,
+        "scope_kind": ValuationScopeKind.UNIT,
+        "unit_id": UNIT,
+    }
+    if reason == "timepoint_not_found":
+        case = resolve_pct_of_value_funding(
+            **common, event_model_month=0, timepoint_id="never-authored",
+            authority=_authority(_as_is(), terms, results),
+        )
+    elif reason == "foreign_investment":
+        case = resolve_pct_of_value_funding(
+            **common, event_model_month=0, timepoint_id="as-is",
+            authority=dataclasses.replace(
+                _authority(_as_is(investment_id="other-investment"), terms, results),
+                investment_id=INVESTMENT_ID,
+            ),
+        )
+    elif reason == "model_month_mismatch":
+        case = resolve_pct_of_value_funding(
+            **common, event_model_month=0, timepoint_id="stabilized",
+            authority=_authority_for_month(24),
+        )
+    elif reason == "scope_not_covered":
+        case = resolve_pct_of_value_funding(
+            **{**common, "unit_id": "a-different-unit"}, event_model_month=0, timepoint_id="as-is",
+            authority=_authority(_as_is(), terms, results),
+        )
+    elif reason == "valuation_unavailable":
+        flat_terms, flat_results = round_unit(current_noi=0.0)
+        case = resolve_pct_of_value_funding(
+            **common, event_model_month=0, timepoint_id="as-is",
+            authority=_authority(_as_is(), flat_terms, flat_results),
+        )
+    else:  # pragma: no cover -- the parametrisation is the enumeration
+        raise AssertionError(f"no case built for {reason!r}")
+    assert isinstance(case, UnresolvedFundingRequirement), reason
+    assert case.reason.value == reason, reason
+    return case
+
+
+def test_every_unresolved_reason_is_reachable_and_distinct() -> None:
+    """Each reason the contract names is reachable, and no two collapse."""
+
+    reached = {_unresolved_case(reason).reason for reason in _UNRESOLVED_REASONS}
+    assert reached == set(UnresolvedFundingReason)
+
+
+@pytest.mark.parametrize("reason", _UNRESOLVED_REASONS)
+def test_no_unresolved_case_carries_an_amount_a_value_or_a_price_fallback(reason: str) -> None:
+    """The invariant that matters most, across every unresolved reason: the
+    record states no dollars at all. There is no amount to read as zero, no
+    scope value to mistake for one, and nothing equal to the purchase price or
+    a percentage of it."""
+
+    case = _unresolved_case(reason)
+    names = {field.name for field in dataclasses.fields(case)}
+    assert "amount" not in names
+    assert "scope_value" not in names
+    money = {
+        getattr(case, name) for name in names if isinstance(getattr(case, name), float)
+    }
+    # ``pct`` is the only float it carries, and it is a share, not dollars.
+    assert money == {PCT}
+    assert 0.0 not in money
+    assert AS_IS_VALUE not in money
+    assert EXPECTED_FUNDING not in money
+
+
+@pytest.mark.parametrize("reason", _UNRESOLVED_REASONS)
+def test_no_unresolved_case_can_be_mistaken_for_the_p7_7_funding_requirement(reason: str) -> None:
+    """P7.7's ``FundingRequirement`` reports a contractual claim the eligible
+    cash could not meet, and states both the claim and the cash. This record
+    reports an advance whose dollars are unknown, so it is a different type and
+    shares none of those money-bearing fields. Neither can be read as the
+    other."""
+
+    from anchor.capital_structure.contracts import FundingRequirement
+
+    case = _unresolved_case(reason)
+    assert not isinstance(case, FundingRequirement)
+    money_fields = {
+        "claim_amount",
+        "cash_available",
+        "claim_paid_from_cash",
+        "amount",
+        "equity_contribution",
+        "unpaid_claim_amount",
+    }
+    assert money_fields <= {field.name for field in dataclasses.fields(FundingRequirement)}
+    assert money_fields & {field.name for field in dataclasses.fields(case)} == set()

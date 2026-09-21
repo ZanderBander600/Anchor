@@ -19,7 +19,10 @@ The first executor runs:
   that sizes it. Without an authority the rule is refused exactly as before,
   so an analysis with no P7.10 structure is unchanged. With one, a funding
   whose valuation did not resolve is refused by its own typed reason rather
-  than sized at zero;
+  than sized at zero. The closing-only rule above still applies to it, so the
+  only executable ``PctOfValue`` is a closing one; a later timepoint remains a
+  reporting value that no funding event can consume until a refinancing or
+  event-timing stage is separately authorised;
 - cash-pay debt: ``pik_rate == 0`` and ``current_pay_rate == interest_rate``;
 - preferred equity with ``0 <= current_pay_rate <= preferred_rate``, any
   accrual permitted by its terms, and a redemption at a hold-year end or at or

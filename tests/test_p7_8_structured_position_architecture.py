@@ -731,11 +731,14 @@ def test_pct_of_value_is_valued_only_through_the_one_valuation_authority() -> No
     """P7.10 Stage 1 re-pin, and the successor to P7.8's "never valued".
 
     P7.8 refused this rule outright because no valuation existed. The ratified
-    P7.10 decision R-E activates it, so the invariant that replaces the refusal
-    is narrower and stronger: the branch still refuses when no authority is
-    supplied -- the pre-P7.10 behaviour every existing caller gets -- and, when
-    one is, it may only delegate to ``resolve_valuation_funding``. It computes
-    no value of its own, so no second valuation authority can appear here."""
+    P7.10 decision R-E activates it **at closing only** -- the closing-only
+    funding window below is unchanged, so a later timepoint remains a reporting
+    value no funding event can consume. The invariant that replaces the refusal
+    is therefore narrower and stronger: the branch still refuses when no
+    authority is supplied -- the pre-P7.10 behaviour every existing caller gets
+    -- and, when one is, it may only delegate to ``resolve_valuation_funding``.
+    It computes no value of its own, so no second valuation authority can
+    appear here."""
 
     resolve = _functions(_tree(_FUNDING))["resolve_funding"]
     (case,) = [

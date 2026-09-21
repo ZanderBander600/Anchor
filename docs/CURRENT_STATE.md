@@ -1,7 +1,7 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-20 (P7.10 contract ratified; Stage 1 explicitly
-started)
+Last synchronized: 2026-09-20 (P7.10 contract ratified; Stage 1 implemented
+and pending merge)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -12,17 +12,18 @@ whenever an accepted gate merges or the active gate changes.
 - Repository: `ZanderBander600/Anchor`
 - Accepted repository baseline: `main` at `9c65843` (PR #48, the
   documentation-only acceptance closeout). The accepted product implementation
-  baseline remains `1afd003` (PR #47, Excel Export 3).
+  baseline remains `1afd003` (PR #47, Excel Export 3). **The accepted baseline
+  stays the current merged `main` until the open P7.10 Stage 1 PR is merged.**
 - Last financial-engine implementation merge: `70b92e2` (PR #34, P7.9 Stage 1
   deterministic Partnership contracts and engine). Later accepted P7.9 work
   integrates that engine without changing its frozen Stage 1 package.
 - Active gate: **P7.10 Valuation Timepoints + remaining Decision Support / AI
-  integration — Stage 1 (deterministic valuation and `PctOfValue`).** The human
-  explicitly started P7.10 on 2026-09-20 and, in the same instruction, ratified
-  decisions R-A through R-J and explicitly started Stage 1. The ratified
-  authority is `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`.
-  Production implementation is limited to Stage 1. Stages 2, 3, and 4 are not
-  started, and finishing Stage 1 does not start Stage 2.
+  integration — Stage 1.** The P7.10 contract is **ratified**; decisions R-A
+  through R-J are closed within the gate and recorded in Section 20 of
+  `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`, the ratified
+  authority. **Stage 1 implementation is complete and pending merge and human
+  acceptance.** **Stage 2 has not started**, and finishing Stage 1 does not
+  start it.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active.
 - Autonomous merge: not authorized.
@@ -109,12 +110,30 @@ active at Stage 1. Its contract is ratified; decisions R-A through R-J are
 closed within this gate and recorded in Section 20 of
 `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`.
 
-Stage 1 implements the deterministic valuation layer and safe `PctOfValue`
-execution only. It adds no persistence, migration, schema version change, API
-route, memo storage, AI grounding, PDF generation, or frontend change. Stage 1
-stops for independent review and human acceptance. Stage 2 persistence and the
-later memo, AI, and reporting stages each require a separate explicit human
-start.
+Stage 1 implements the deterministic valuation layer and `PctOfValue`
+**closing** execution only. It adds no persistence, migration, schema version
+change, API route, memo storage, AI grounding, PDF generation, or frontend
+change. Its implementation is complete and pending merge and human acceptance;
+it is not accepted before merge.
+
+Two boundaries carry into Stage 2 and are recorded in the contract:
+
+- **Closing-only execution (Section 6.1).** The valuation authority resolves
+  As-Is, Stabilized and Custom timepoints alike, but the capital execution seam
+  can use `PctOfValue` only at closing, model month 0. A later Stabilized or
+  Custom valuation is a reporting value that cannot presently create a later
+  funding event. Supporting one requires an explicitly authorized refinancing
+  or event-timing stage. This is a product limitation — never a zero, and never
+  a fallback to the purchase price.
+- **The unavailable-state adapter (Section 6.2).** Stage 1 stops internal
+  execution with the typed `UnresolvedFundingRequirement`. Stage 2 must
+  translate unresolved valuation and funding states into the established
+  structured unavailable / N/A representation with a specific reason on the API
+  and presentation surfaces, and must not expose them as a generic server
+  error, fabricate an amount, or collapse them into zero.
+
+Stage 2 persistence and the later memo, AI, and reporting stages each require a
+separate explicit human start.
 
 After P7.10, the ratified sequence ends with **P7.11 Competition Closeout**.
 Refinancing / recapitalization remains a separately authorized potential
@@ -169,7 +188,8 @@ scoped independently.
   and human accepted.**
 - P7.10 Valuation Timepoints, Investment Memo, and Institutional Reporting:
   `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md` — **ratified
-  2026-09-20; Stage 1 started; Stages 2-4 not started.**
+  2026-09-20; Stage 1 implemented and pending merge and acceptance; Stages 2-4
+  not started.**
 
 ## Historical-Document Rule
 

@@ -15,10 +15,14 @@ the scope's stated acquisition price: the Unit's resolved
 ``ConsolidatedResults.transaction_price``. Never a second inferred value, an
 exit value, NOI or an estimate.
 
-**``PctOfValue`` (P7.10 Stage 1, R-E).** The rule P7.7 represented is now
-valued, against a ``ValuationAuthority`` the caller supplies: the funding is
-``pct`` of the value of the position's exact scope at the named timepoint, and
-only where that timepoint shares the funding event's model month. No second
+**``PctOfValue`` at closing (P7.10 Stage 1, R-E).** The rule P7.7 represented
+is now valued, against a ``ValuationAuthority`` the caller supplies: the funding
+is ``pct`` of the value of the position's exact scope at the named timepoint,
+and only where that timepoint shares the funding event's model month. Because
+this executor funds at closing only -- the rule above, unchanged -- the only
+executable ``PctOfValue`` is a closing one against a month-0 valuation. A later
+timepoint still resolves as a reporting value; it simply cannot fund, and no
+event is moved to closing to make it. No second
 amount-rule shape exists, ``pct``'s own P7.7 validation is unchanged, and
 nothing is sized from a value that did not resolve. With no authority supplied
 the rule is refused exactly as before, so an analysis without P7.10 structure
