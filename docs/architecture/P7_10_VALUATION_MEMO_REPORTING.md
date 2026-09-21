@@ -333,11 +333,23 @@ InvestmentMemoDraft
   terms[]                     REQUIRED | DESIRED | NEGOTIABLE
   conditions_to_approval[]
   selected_decision
-  evidence_references[]
+  evidence_references[]        the reusable register; claims link into it
+  selected_valuations[]        the valuation views this memo includes
 ```
 
 All narrative fields are analyst-authoritative. Empty optional sections remain
 absent; the report never manufactures boilerplate to fill them.
+
+Every structured item that can carry a claim — a thesis item, a risk and its
+mitigant, a condition, a term, a business-plan milestone — additionally states
+the Evidence References it rests on, by id and in authored order. Zero is a
+legitimate answer: the link makes a claim *traceable*, and never makes one
+mandatory. See Section 22.7 for the ratified model.
+
+`selected_valuations[]` is the memo's explicit statement of which valuation
+views it includes. It is the only thing that makes a view a published
+dependency; nothing is inferred from order, existence or recency. See
+Section 22.6.
 
 ### 7.3 Selected decision
 
@@ -662,7 +674,7 @@ financing event.
 - typed API surface and compatibility oracle.
 
 Stage 2 adds no frontend file, no AI surface, no prompt, no PDF and no report
-layout. Schema version 15 adds sixteen purely additive tables; no table is
+layout. Schema version 15 adds nineteen purely additive tables; no table is
 altered and no existing row is read or rewritten.
 
 ### Stage 3 — grounded AI proposals — **not started**
@@ -878,16 +890,100 @@ silent equality.
 Publication fails closed on: an ill-formed draft, no selected decision, a
 missing Strategy, Scenario or perspective, a cell that does not resolve, a blank
 decision ask, a cited Evidence Reference that is missing or unapproved, and any
-cited valuation view with no value. A reviewer should confirm that requiring
-**every** authored valuation view to resolve before publishing is the intended
-strictness; the alternative would publish a package that shows a view it cannot
-value.
+**required** valuation view with no value.
 
-### 22.7 Draft-level evidence, not per-item
+**Ratified resolution (Correction 1).** The first implementation required
+*every authored* valuation definition to resolve. That was rejected on review
+and is superseded. A valuation is a dependency of the package, and therefore
+blocks publication, in exactly two cases:
 
-Section 7.2 lists `evidence_references[]` on the draft, and the implementation
-stores exactly that. Per-item evidence citation is not implemented, because the
-ratified contract does not describe it.
+- the memo **selected** it for inclusion, through the explicit
+  `selected_valuation_timepoint_ids` relationship on the draft; or
+- a `PctOfValue` funding of the **selected** Capital Structure **consumes** it,
+  whether or not the report ever displays it.
+
+An authored definition that is neither selected nor consumed is exploratory
+working state. It may sit unavailable indefinitely without blocking a memo that
+never leaned on it, and an analyst is never made to delete their own working
+view in order to publish.
+
+Selection is an explicit typed relationship — `memo_selected_valuations`, one
+row per included view, scoped to the same Investment and validated on save. It
+is **never** inferred from display order, from a definition's existence, or from
+recency. Where a required view is unavailable, publication refuses with the
+valuation's *own* structured reason code carried through on the refusal
+(`unavailable_reason`), never a generic failure, and never zero, the purchase
+price, another timepoint's value, or a silent omission. Exit remains
+system-controlled and later timepoints remain reporting-only; neither is
+reachable through selection.
+
+Which views a memo selects is memo **content**: the selection participates in
+`MEMO_CONTENT` and therefore in the published-version fingerprint and in stale
+analysis. It moves no valuation, variant or structured identity, because
+including a view in a memo changes no economics. A published version freezes
+`selected` and `consumed` on each of its own valuation rows, so a later reader
+can see which views that version was required to resolve without recomputing a
+draft that has since moved on.
+
+One consequence is worth naming: resolving valuations does not execute the
+structured positions, so the dependency layer reads the valuation surface
+*before* anything that executes, and keeps it even when execution refuses. That
+is what lets a consumed-but-unavailable valuation refuse publication with its
+specific reason instead of collapsing into "the selected cell does not
+resolve".
+
+### 22.7 Claim-level evidence linkage (R-G)
+
+**Ratified resolution (Correction 2).** The first implementation stored only the
+draft-level `evidence_references[]` register of Section 7.2 and left per-item
+citation out. That was rejected on review and is superseded: R-G requires that
+evidence be traceable to the specific claim it supports, and a flat register
+cannot answer "what does *this* risk rest on".
+
+The draft keeps its reusable register — an Evidence Reference is authored once
+and may support many claims — and in addition every structured item that can
+carry a claim references zero or more Evidence References **explicitly**:
+
+- `MemoItem` (thesis, business-plan milestone, condition to approval, and every
+  other contract-authorized narrative section);
+- `MemoRiskItem` (the risk and its mitigant);
+- `MemoTermItem` (a condition or term).
+
+Links are normalized typed persistence, not an opaque JSON list:
+`memo_claim_evidence(memo_id, claim_kind, item_id, evidence_id, ordinal)` for
+the draft and `memo_version_claim_evidence(version_id, …)` for the frozen
+snapshot, both with `claim_kind` constrained to `item | risk | term`. Evidence
+identity (`evidence_id`) and item identity (`item_id`) are the analyst's own
+stable ids, so a link survives an edit to either side's text.
+
+Scope and validity are enforced at the store: a link may only name an Evidence
+Reference of the *same* Investment and only within a valid draft context, and a
+nonexistent or cross-Investment reference is refused rather than stored. A
+source a claim still cites cannot be deleted out from under it — the link is a
+use, exactly as a citation in the register is — so no dangling reference is ever
+created.
+
+Publishing **snapshots** the item-to-evidence relationships into the immutable
+version alongside the frozen content and the frozen evidence content. Every
+source any claim cites is frozen, including one cited by a claim but absent from
+the register. Nothing an analyst does afterwards reaches that snapshot:
+re-pointing a claim, unlinking one, editing an item, deleting the source, or
+deleting the draft entirely leaves the published rows byte-identical, and
+republishing records the new relationships on a *new* version.
+
+Evidence-link changes participate in the memo-content fingerprint and therefore
+in stale analysis: re-pointing a claim at a different appraisal changes what the
+memo asserts even when every word and every registered source is untouched.
+Authored link order participates too, because it is the order a reader is asked
+to follow the support in.
+
+Two boundaries this does **not** cross. Evidence is never *required*: a claim
+may cite nothing, and purely subjective or decision-authority fields — the
+analyst recommendation, the execution-complexity judgement, the decision ask,
+the committee outcome — demand no citation. And this is claim-level traceability
+for memo items only, not a universal provenance system over every value in the
+product. No AI generates, suggests or verifies a citation; Stage 2 ships no AI
+surface at all.
 
 ### 22.8 Guards re-pinned
 
@@ -910,5 +1006,5 @@ claim it proved was restated as the historical fact it still proves.
   and gained a counterpart test.
 - Excel Export 3's no-migration guard measures its own committed range.
 - The P7.2, P7.4, P7.6 and P7.9 Stage 2 compatibility oracles and four
-  fresh-store assertions moved to schema 15 with P7.10's sixteen tables named,
-  so every set comparison stays exact.
+  fresh-store assertions moved to schema 15 with P7.10's nineteen tables
+  named, so every set comparison stays exact.
