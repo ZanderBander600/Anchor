@@ -783,13 +783,17 @@ can accept or reject each one deliberately rather than discovering it in a diff.
 
 ### 22.1 Identity and fingerprint layering
 
-Section 10 names five identities. The implementation records **twelve dependency
-classes** on a published version rather than one hash per identity, because
-"which dependency class changed" is only answerable if the classes are recorded
-separately: `INVESTMENT_MEMBERSHIP`, `UNDERWRITING`, `BUSINESS_PLAN`,
-`STRATEGY`, `SCENARIO`, `PROJECT_VARIANT`, `CAPITAL_STRUCTURE`, `PARTNERSHIP`,
+Section 10 names five identities. The implementation defines **thirteen
+dependency classes** and records one fingerprint per class per scope on a
+published version, rather than one hash per identity, because "which dependency
+class changed" is only answerable if the classes are recorded separately:
+`INVESTMENT_MEMBERSHIP`, `UNDERWRITING`, `BUSINESS_PLAN`, `STRATEGY`,
+`SCENARIO`, `PROJECT_VARIANT`, `CAPITAL_STRUCTURE`, `PARTNERSHIP`,
 `VALUATION_DEFINITIONS`, `VALUATION_RESULTS`, `DECISION_PERSPECTIVE`,
 `EVIDENCE` and `MEMO_CONTENT`.
+
+An Investment whose variant resolves no Partnership records twelve of them; see
+below.
 
 Three of them — Business Plan, Strategy and Scenario — **overlap**
 `PROJECT_VARIANT` by construction, because the ratified P7 identity model folds
