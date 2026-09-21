@@ -308,10 +308,60 @@ from ..asset_management.validation import (
 # Asset Types 1. The controlled vocabulary and its validation only -- metadata,
 # never an engine input and never read by any fingerprint in this module.
 from ..asset_types import AssetClassification, AssetClassificationError, AssetType
+# Gate P7.10 Stage 2. Contracts and structural validation only.
+# ``anchor.valuation.engine`` and ``anchor.valuation.funding`` are deliberately
+# absent, exactly as no engine calculation module is imported here: this store
+# persists authored valuation *definitions* and reads them back. Resolving one
+# into a value is ``anchor.deals.valuation_views``' job, above this layer, and
+# nothing resolved is persisted on a live table.
+from ..valuation.contracts import (
+    AnalystValue,
+    DirectCap,
+    UnitValuationInstruction,
+    ValuationIssue,
+    ValuationIssueCode,
+    ValuationKind,
+    ValuationMethod,
+    ValuationMethodKind,
+    ValuationTimepoint,
+    ValuationValidationError,
+)
+from ..valuation.validation import validate_valuation_timepoint
+from ..memo.contracts import (
+    AnalystRecommendation,
+    DecisionPerspectiveKind,
+    MemoClaimEvidence,
+    MemoClaimKind,
+    EvidenceSourceKind,
+    ExecutionComplexity,
+    InvestmentCommitteeDecision,
+    InvestmentCommitteeOutcome,
+    InvestmentMemoDraft,
+    InvestmentMemoVersion,
+    MemoDependency,
+    MemoDependencyClass,
+    MemoError,
+    MemoEvidenceReference,
+    MemoItem,
+    MemoRiskItem,
+    MemoSection,
+    MemoTermItem,
+    MemoVersionValuation,
+    RiskSeverity,
+    SelectedDecision,
+    TermPriority,
+)
+from ..memo.publication import next_version_number
+from ..memo.validation import require_valid_evidence_reference, require_valid_memo_draft
 from .capital_structure_codec import FundingAmountRuleKind, amount_rule_kind
 from .contracts import (
     Deal,
     DealNotFoundError,
+    EvidenceInUseError,
+    EvidenceReferenceNotFoundError,
+    MemoNotFoundError,
+    MemoVersionNotFoundError,
+    ValuationTimepointNotFoundError,
     Investment,
     InvestmentCapitalStructures,
     InvestmentNotFoundError,
@@ -330,6 +380,7 @@ from .contracts import (
     VisibleInvestment,
 )
 from .partnership_codec import HurdleConditionKind, condition_kind, split_rule_kind
+from .valuation_codec import valuation_method_kind
 from .position_identity import (
     StructureOwner,
     StructureOwnerKind,
@@ -426,7 +477,16 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # and no existing row read or rewritten: a legacy Deal or Managed Asset simply
 # has no classification row, which *is* "Not specified" -- nothing is guessed
 # for it, and it gains a row only when the analyst classifies it.
-_SCHEMA_VERSION = 14
+#
+# P7.10 Stage 2 -- schema version 15 adds the nineteen valuation and Investment
+# Memo tables, created unconditionally by ``_connect`` exactly as version 14's
+# were. No ALTER and no existing row read or rewritten: an Investment gains a
+# valuation definition, an Evidence Reference or a memo only when the analyst
+# authors one, and a v14 database simply gains nineteen empty tables. Every
+# pre-existing Deal, Investment, Strategy, Scenario, Capital Structure,
+# Partnership, Managed Asset and export keeps loading and responding exactly as
+# it did, because nothing this gate adds is read on any of those paths.
+_SCHEMA_VERSION = 15
 
 
 class PersistedDealDataError(RuntimeError):
@@ -1658,6 +1718,388 @@ CREATE TABLE IF NOT EXISTS managed_asset_classifications (
 _ASSET_TYPES_1_TABLES = ("deal_asset_classifications", "managed_asset_classifications")
 
 
+# =============================================================================
+# Phase 7 Gate P7.10 Stage 2 -- the persisted valuation definitions, the
+# Investment Memo and its immutable versions, schema version 15.
+#
+# ``docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`` Sections 5, 7, 8, 9
+# and 15. Nineteen purely additive tables, created by ``_connect`` via CREATE
+# TABLE IF NOT EXISTS exactly as every table since version 2. No ALTER, and no
+# existing row is read or rewritten: a v14 database simply gains nineteen empty
+# tables, and every pre-existing Deal, Investment, Strategy, Scenario, Capital
+# Structure, Partnership, Managed Asset and export keeps behaving exactly as it
+# did. An Investment gains a valuation or a memo only when the analyst authors
+# one.
+#
+# **Relational and typed, never a JSON blob** (Section 15). Every contract field
+# is its own column: REAL for cap rates and amounts, INTEGER for model months,
+# ordinals and booleans, TEXT for the Stage 1 wire tokens and the codec's method
+# token. A union is stored under its explicit discriminator (``method``), and
+# the columns a row states must be exactly those its token requires -- a
+# ``direct_cap`` row states ``cap_rate`` and no ``amount``, and the converse.
+# A token the contract no longer knows fails closed on read.
+#
+# **EXIT is unstorable, not merely unstored** (R-B). ``valuation_timepoints.kind``
+# is CHECK-constrained to the three storable kinds, so the database itself
+# refuses a second terminal value that could drift from D6's. There is no row
+# shape for it to occupy.
+#
+# **Stable ids, separate display order** (Sections 7.4, 10). Every repeating
+# record carries an opaque id as its key and an explicit ``display_order`` or
+# ``ordinal`` beside it. No fingerprint reads the order column, and no identity
+# reads list position: reordering is presentation, and editing prose never
+# redefines an item.
+#
+# **One draft per Investment** (R-H). ``investment_memo_drafts.investment_id`` is
+# UNIQUE, so a second mutable draft is not merely refused by a check some future
+# write path could forget -- it is unwritable.
+#
+# **Published versions are immutable** (R-H). Every ``memo_version*`` table is
+# written by exactly one INSERT, inside ``publish_investment_memo``'s single
+# transaction. No UPDATE statement anywhere in this module names one of them, so
+# editing a published version is not a rule enforced at a boundary; there is no
+# SQL in this module capable of performing it. The one thing that may be
+# recorded against a published version afterwards is the committee's own
+# decision, which lives in its own table for exactly that reason.
+#
+# **The dependency ledger is typed rows, not a hash bag.**
+# ``memo_version_dependencies`` holds one row per dependency class per scope,
+# each with the fingerprint that state had at publication. A stale package
+# therefore names which class moved and for which Unit, rather than reporting a
+# single undifferentiated "stale".
+#
+# No FOREIGN KEY / ON DELETE CASCADE on the rows keyed by ``memo_id`` or
+# ``timepoint_id``, for the reason stated above ``lease_level_suites``: these
+# tables coexist with pre-``PRAGMA foreign_keys`` tables. Every lifecycle
+# function deletes these rows explicitly, in one transaction with their parent.
+# =============================================================================
+
+_CREATE_VALUATION_TIMEPOINTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS valuation_timepoints (
+    timepoint_id   TEXT PRIMARY KEY,
+    investment_id  TEXT NOT NULL,
+    kind           TEXT NOT NULL CHECK (kind IN ('as_is', 'stabilized', 'custom')),
+    label          TEXT NOT NULL,
+    model_month    INTEGER NOT NULL,
+    display_order  INTEGER NOT NULL,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+)
+"""
+
+_CREATE_VALUATION_UNIT_INSTRUCTIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS valuation_unit_instructions (
+    timepoint_id  TEXT NOT NULL,
+    unit_id       TEXT NOT NULL,
+    ordinal       INTEGER NOT NULL,
+    method        TEXT NOT NULL CHECK (method IN ('direct_cap', 'analyst_value')),
+    cap_rate      REAL,
+    amount        REAL,
+    evidence_id   TEXT,
+    PRIMARY KEY (timepoint_id, unit_id)
+)
+"""
+
+_CREATE_MEMO_EVIDENCE_REFERENCES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_evidence_references (
+    investment_id  TEXT NOT NULL,
+    evidence_id    TEXT NOT NULL,
+    display_order  INTEGER NOT NULL,
+    source_kind    TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    reference      TEXT NOT NULL,
+    as_of_date     TEXT,
+    approved       INTEGER NOT NULL CHECK (approved IN (0, 1)),
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    PRIMARY KEY (investment_id, evidence_id)
+)
+"""
+
+_CREATE_INVESTMENT_MEMO_DRAFTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS investment_memo_drafts (
+    memo_id                 TEXT PRIMARY KEY,
+    investment_id           TEXT NOT NULL UNIQUE,
+    prepared_by             TEXT,
+    decision_ask            TEXT NOT NULL,
+    analyst_recommendation  TEXT NOT NULL,
+    executive_summary       TEXT NOT NULL,
+    execution_complexity    TEXT NOT NULL,
+    return_on_time_notes    TEXT NOT NULL,
+    selected_strategy_id    TEXT,
+    selected_scenario_id    TEXT,
+    perspective             TEXT,
+    perspective_position_id TEXT,
+    perspective_partner_id  TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+)
+"""
+
+_CREATE_MEMO_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_items (
+    memo_id        TEXT NOT NULL,
+    item_id        TEXT NOT NULL,
+    section        TEXT NOT NULL,
+    display_order  INTEGER NOT NULL,
+    text           TEXT NOT NULL,
+    PRIMARY KEY (memo_id, item_id)
+)
+"""
+
+_CREATE_MEMO_RISK_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_risk_items (
+    memo_id        TEXT NOT NULL,
+    item_id        TEXT NOT NULL,
+    display_order  INTEGER NOT NULL,
+    text           TEXT NOT NULL,
+    severity       TEXT NOT NULL,
+    residual_risk  TEXT NOT NULL,
+    mitigant       TEXT,
+    PRIMARY KEY (memo_id, item_id)
+)
+"""
+
+_CREATE_MEMO_TERM_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_term_items (
+    memo_id        TEXT NOT NULL,
+    item_id        TEXT NOT NULL,
+    display_order  INTEGER NOT NULL,
+    text           TEXT NOT NULL,
+    priority       TEXT NOT NULL,
+    PRIMARY KEY (memo_id, item_id)
+)
+"""
+
+_CREATE_MEMO_DRAFT_EVIDENCE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_draft_evidence (
+    memo_id      TEXT NOT NULL,
+    evidence_id  TEXT NOT NULL,
+    ordinal      INTEGER NOT NULL,
+    PRIMARY KEY (memo_id, evidence_id)
+)
+"""
+
+#: R-G's claim-level linkage. One row per (claim, source), keyed by the claim's
+#: collection *and* its id: an ``item_id`` is unique within its collection, not
+#: across them, so without ``claim_kind`` a thesis item and a risk sharing an id
+#: would silently share their sources.
+#:
+#: Normalized rather than an opaque list on the item, so a link is queryable,
+#: one source cited by three claims is three rows naming one record, and a
+#: reviewer can ask "what supports this claim" and "what does this source
+#: support" with equal ease.
+_CREATE_MEMO_CLAIM_EVIDENCE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_claim_evidence (
+    memo_id      TEXT NOT NULL,
+    claim_kind   TEXT NOT NULL CHECK (claim_kind IN ('item', 'risk', 'term')),
+    item_id      TEXT NOT NULL,
+    evidence_id  TEXT NOT NULL,
+    ordinal      INTEGER NOT NULL,
+    PRIMARY KEY (memo_id, claim_kind, item_id, evidence_id)
+)
+"""
+
+#: The memo's explicit statement of which authored valuation definitions this
+#: decision package *includes*. Authoring a definition is not selecting it: an
+#: Investment may hold exploratory valuations the analyst is still working out,
+#: and only the rows here make one a memo dependency.
+#:
+#: A table rather than a flag on ``valuation_timepoints``, because selection
+#: belongs to the memo and not to the Investment's valuation library: two
+#: successive memos may include different views of the same definitions, and a
+#: definition's own identity must not move when a memo changes its mind.
+_CREATE_MEMO_SELECTED_VALUATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_selected_valuations (
+    memo_id       TEXT NOT NULL,
+    timepoint_id  TEXT NOT NULL,
+    ordinal       INTEGER NOT NULL,
+    PRIMARY KEY (memo_id, timepoint_id)
+)
+"""
+
+_CREATE_INVESTMENT_MEMO_VERSIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS investment_memo_versions (
+    version_id               TEXT PRIMARY KEY,
+    investment_id            TEXT NOT NULL,
+    version_number           INTEGER NOT NULL,
+    prepared_by              TEXT,
+    decision_ask             TEXT NOT NULL,
+    analyst_recommendation   TEXT NOT NULL,
+    executive_summary        TEXT NOT NULL,
+    execution_complexity     TEXT NOT NULL,
+    return_on_time_notes     TEXT NOT NULL,
+    selected_strategy_id     TEXT NOT NULL,
+    selected_scenario_id     TEXT NOT NULL,
+    perspective              TEXT NOT NULL,
+    perspective_position_id  TEXT,
+    perspective_partner_id   TEXT,
+    memo_content_fingerprint TEXT NOT NULL,
+    published_fingerprint    TEXT NOT NULL,
+    created_at               TEXT NOT NULL,
+    UNIQUE (investment_id, version_number)
+)
+"""
+
+_CREATE_MEMO_VERSION_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_items (
+    version_id     TEXT NOT NULL,
+    item_id        TEXT NOT NULL,
+    section        TEXT NOT NULL,
+    display_order  INTEGER NOT NULL,
+    text           TEXT NOT NULL,
+    PRIMARY KEY (version_id, item_id)
+)
+"""
+
+_CREATE_MEMO_VERSION_RISK_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_risk_items (
+    version_id     TEXT NOT NULL,
+    item_id        TEXT NOT NULL,
+    display_order  INTEGER NOT NULL,
+    text           TEXT NOT NULL,
+    severity       TEXT NOT NULL,
+    residual_risk  TEXT NOT NULL,
+    mitigant       TEXT,
+    PRIMARY KEY (version_id, item_id)
+)
+"""
+
+_CREATE_MEMO_VERSION_TERM_ITEMS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_term_items (
+    version_id     TEXT NOT NULL,
+    item_id        TEXT NOT NULL,
+    display_order  INTEGER NOT NULL,
+    text           TEXT NOT NULL,
+    priority       TEXT NOT NULL,
+    PRIMARY KEY (version_id, item_id)
+)
+"""
+
+#: The evidence a version cites, copied whole at publication rather than
+#: referenced. A published version states the source as it stood when the
+#: committee read it; a later edit to the live Evidence Reference changes the
+#: draft's freshness and never rewrites history.
+_CREATE_MEMO_VERSION_EVIDENCE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_evidence (
+    version_id     TEXT NOT NULL,
+    evidence_id    TEXT NOT NULL,
+    display_order  INTEGER NOT NULL,
+    source_kind    TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    reference      TEXT NOT NULL,
+    as_of_date     TEXT,
+    approved       INTEGER NOT NULL CHECK (approved IN (0, 1)),
+    PRIMARY KEY (version_id, evidence_id)
+)
+"""
+
+#: The valuation views a version cited, frozen with it -- including an
+#: unavailable one and its typed reason. ``value`` is NULL for an unavailable
+#: view and is never zero-filled: a version that cited "no value at this
+#: timepoint" keeps saying exactly that.
+#:
+#: ``selected`` and ``consumed`` record *why* a view was a dependency: the memo
+#: included it, or a ``PctOfValue`` funding of the selected variant sized itself
+#: from it. Both are stored because only the first is visible in the report, and
+#: a consumed valuation the memo never displays is still load-bearing. A view
+#: that is neither is frozen for the record and depended on by nothing.
+_CREATE_MEMO_VERSION_VALUATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_valuations (
+    version_id          TEXT NOT NULL,
+    timepoint_id        TEXT NOT NULL,
+    kind                TEXT NOT NULL,
+    label               TEXT NOT NULL,
+    model_month         INTEGER NOT NULL,
+    scope_kind          TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    value               REAL,
+    unavailable_reason  TEXT,
+    unavailable_message TEXT,
+    selected            INTEGER NOT NULL CHECK (selected IN (0, 1)),
+    consumed            INTEGER NOT NULL CHECK (consumed IN (0, 1)),
+    PRIMARY KEY (version_id, timepoint_id)
+)
+"""
+
+#: The claim-to-evidence links a version froze (R-G). Snapshotted rather than
+#: referenced, because one end of the relationship -- the Evidence Reference --
+#: can be edited or removed afterwards, and a reviewer opening version N must
+#: see the source that supported that claim *then*.
+_CREATE_MEMO_VERSION_CLAIM_EVIDENCE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_claim_evidence (
+    version_id   TEXT NOT NULL,
+    claim_kind   TEXT NOT NULL CHECK (claim_kind IN ('item', 'risk', 'term')),
+    item_id      TEXT NOT NULL,
+    evidence_id  TEXT NOT NULL,
+    ordinal      INTEGER NOT NULL,
+    PRIMARY KEY (version_id, claim_kind, item_id, evidence_id)
+)
+"""
+
+#: One row per dependency class per scope. ``scope_id`` is '' for a
+#: whole-Investment entry rather than NULL, so two whole-Investment rows of one
+#: class cannot both exist under SQLite's NULL-in-primary-key behaviour.
+_CREATE_MEMO_VERSION_DEPENDENCIES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_dependencies (
+    version_id        TEXT NOT NULL,
+    dependency_class  TEXT NOT NULL,
+    scope_id          TEXT NOT NULL,
+    fingerprint       TEXT NOT NULL,
+    PRIMARY KEY (version_id, dependency_class, scope_id)
+)
+"""
+
+#: The committee's own record, against a published version (Section 7.5). It is
+#: the one P7.10 record attached to a version that may be updated after
+#: publication, which is precisely why it is not a column on the version itself:
+#: the published-version fingerprint must not move when the committee decides.
+_CREATE_INVESTMENT_COMMITTEE_DECISIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS investment_committee_decisions (
+    version_id     TEXT PRIMARY KEY,
+    decision       TEXT NOT NULL,
+    decision_note  TEXT,
+    decided_at     TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+)
+"""
+
+#: Every child table one memo draft owns, in delete order (children before the
+#: draft row itself).
+_MEMO_DRAFT_CHILD_TABLES = (
+    "memo_items",
+    "memo_risk_items",
+    "memo_term_items",
+    "memo_draft_evidence",
+    "memo_claim_evidence",
+    "memo_selected_valuations",
+)
+
+#: Every child table one published version owns. Deleted only with the whole
+#: Investment: no function removes one version's rows on its own.
+_MEMO_VERSION_CHILD_TABLES = (
+    "memo_version_items",
+    "memo_version_risk_items",
+    "memo_version_term_items",
+    "memo_version_evidence",
+    "memo_version_claim_evidence",
+    "memo_version_valuations",
+    "memo_version_dependencies",
+)
+
+_P7_10_TABLES = (
+    "valuation_timepoints",
+    "valuation_unit_instructions",
+    "memo_evidence_references",
+    "investment_memo_drafts",
+    *_MEMO_DRAFT_CHILD_TABLES,
+    "investment_memo_versions",
+    *_MEMO_VERSION_CHILD_TABLES,
+    "investment_committee_decisions",
+)
+
+
 class _KeepClassification(Enum):
     """The one value meaning "this write states no classification": an update
     from a caller that predates Asset Types 1 leaves the stored classification
@@ -2149,6 +2591,15 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # row is written for anything that already exists. Every legacy Deal and
     # Managed Asset reads back as "Not specified" because it has no row -- the
     # migration assigns no type, and neither does any read.
+    # P7.10 Stage 2 -- schema version 15 adds the nineteen valuation and
+    # Investment Memo tables the same way, and for the same reason it is the
+    # safest migration available: it touches no existing data. ``_connect``
+    # creates them via CREATE TABLE IF NOT EXISTS, no table is altered, and no
+    # row is written for any Deal, Investment, Strategy, Scenario, Capital
+    # Structure, Partnership or Managed Asset that already exists. A v14
+    # database simply gains nineteen empty tables; an Investment with no
+    # valuation definition and no memo has neither, which is exactly its state
+    # before this gate, and opening or editing one creates nothing.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -2229,6 +2680,25 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_MONTHLY_ASSET_REPORTS_TABLE_SQL)
     connection.execute(_CREATE_DEAL_ASSET_CLASSIFICATIONS_TABLE_SQL)
     connection.execute(_CREATE_MANAGED_ASSET_CLASSIFICATIONS_TABLE_SQL)
+    connection.execute(_CREATE_VALUATION_TIMEPOINTS_TABLE_SQL)
+    connection.execute(_CREATE_VALUATION_UNIT_INSTRUCTIONS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_EVIDENCE_REFERENCES_TABLE_SQL)
+    connection.execute(_CREATE_INVESTMENT_MEMO_DRAFTS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_RISK_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_TERM_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_DRAFT_EVIDENCE_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_CLAIM_EVIDENCE_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_SELECTED_VALUATIONS_TABLE_SQL)
+    connection.execute(_CREATE_INVESTMENT_MEMO_VERSIONS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_RISK_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_TERM_ITEMS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_EVIDENCE_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_CLAIM_EVIDENCE_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_VALUATIONS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_DEPENDENCIES_TABLE_SQL)
+    connection.execute(_CREATE_INVESTMENT_COMMITTEE_DECISIONS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -4926,6 +5396,12 @@ def _delete_investment_rows(connection: sqlite3.Connection, investment_id: str) 
     # P7.9 Stage 2: every Partnership statement the Investment owns -- its Base
     # Partnership and each Strategy's own.
     _delete_investment_partnerships(connection, investment_id)
+    # P7.10 Stage 2: every valuation definition, Evidence Reference, memo draft,
+    # published version and committee decision the Investment owns. Reached only
+    # when the Investment itself goes; nothing else in this module deletes a
+    # published version, because history is not housekeeping.
+    _delete_investment_valuations(connection, investment_id)
+    _delete_investment_memos(connection, investment_id)
     # P7.6: a visible Investment's sidecars. A hidden wrapper has none, so this
     # deletes nothing for it.
     for table in _P7_6_TABLES:
@@ -4949,9 +5425,14 @@ def _delete_investment_rows(connection: sqlite3.Connection, investment_id: str) 
 
 def _wrapper_holds_no_structure(connection: sqlite3.Connection, investment_id: str) -> bool:
     """Whether the hidden wrapper has no P7 structure left: no Scenario, from
-    P7.4 no Strategy, from P7.8B no Capital Structure, and from P7.9 Stage 2 no
-    Partnership. A wrapper that still holds any of them never collapses,
-    whichever was removed last."""
+    P7.4 no Strategy, from P7.8B no Capital Structure, from P7.9 Stage 2 no
+    Partnership, and from P7.10 Stage 2 no valuation definition, Evidence
+    Reference, memo draft or published memo version. A wrapper that still holds
+    any of them never collapses, whichever was removed last.
+
+    The published version matters most here: collapsing a wrapper that still
+    holds one would delete an immutable decision record as a side effect of
+    tidying up an empty workspace."""
 
     remaining_scenario = connection.execute(
         "SELECT 1 FROM scenarios WHERE investment_id = ? LIMIT 1", (investment_id,)
@@ -4965,11 +5446,27 @@ def _wrapper_holds_no_structure(connection: sqlite3.Connection, investment_id: s
     remaining_partnership = connection.execute(
         "SELECT 1 FROM partnerships WHERE investment_id = ? LIMIT 1", (investment_id,)
     ).fetchone()
+    remaining_valuation = connection.execute(
+        "SELECT 1 FROM valuation_timepoints WHERE investment_id = ? LIMIT 1", (investment_id,)
+    ).fetchone()
+    remaining_evidence = connection.execute(
+        "SELECT 1 FROM memo_evidence_references WHERE investment_id = ? LIMIT 1", (investment_id,)
+    ).fetchone()
+    remaining_memo = connection.execute(
+        "SELECT 1 FROM investment_memo_drafts WHERE investment_id = ? LIMIT 1", (investment_id,)
+    ).fetchone()
+    remaining_version = connection.execute(
+        "SELECT 1 FROM investment_memo_versions WHERE investment_id = ? LIMIT 1", (investment_id,)
+    ).fetchone()
     return (
         remaining_scenario is None
         and remaining_strategy is None
         and remaining_structure is None
         and remaining_partnership is None
+        and remaining_valuation is None
+        and remaining_evidence is None
+        and remaining_memo is None
+        and remaining_version is None
     )
 
 
@@ -9067,3 +9564,1642 @@ def update_monthly_report_commentary(
             (managed_asset_id, month.isoformat()),
         ).fetchone()
     return _row_to_monthly_report(updated)
+
+
+# =============================================================================
+# Phase 7 Gate P7.10 Stage 2 -- the valuation definition, Evidence Reference,
+# Investment Memo and immutable version lifecycle.
+#
+# ``docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`` Sections 5, 7, 8, 9
+# and 15.
+#
+# Nothing in this section performs a financial calculation or imports a module
+# that does. ``anchor.valuation.engine`` and ``anchor.valuation.funding`` are
+# deliberately absent: this store persists the analyst's *definitions* and reads
+# them back, and every resolved value is produced above it by
+# ``anchor.deals.valuation_views``, which is the sole authority. Nothing
+# computed is persisted here -- no resolved value, funding amount or Investment
+# total has a column on a live table. A published version is the one exception
+# and is not a counterexample: it stores the values a committee was shown, as a
+# frozen historical record, never as a cache anything reads back as current.
+#
+# **One owner, one door.** Everything here belongs to an Investment, exactly as
+# a Capital Structure and a Partnership do, and the ``/deals`` convenience door
+# materializes the hidden one-unit wrapper on the first *write* only (Q4).
+# Reading creates nothing.
+# =============================================================================
+
+
+def _require_memo_owner(connection: sqlite3.Connection, investment_id: str) -> _StructureOwner:
+    """The Investment that owns valuation definitions, evidence and the memo.
+
+    Both roots are legitimate here, unlike a Partnership: a hidden one-unit
+    wrapper's Deal is exactly the "standalone Deal opted into a memo" case
+    Section 7.1 describes, and a visible Investment is the multi-unit case. The
+    shared ``_require_structure_owner`` therefore judges it, so a Unit list and
+    its operating modes come from the one place that already knows them."""
+
+    return _require_structure_owner(connection, investment_id)
+
+
+def _memo_deal_wrapper(connection: sqlite3.Connection, deal_id: str) -> str | None:
+    """The hidden wrapper ``deal_id`` belongs to, or ``None`` for a standalone
+    Deal.
+
+    A Unit of a visible Investment is refused: the memo belongs to the
+    Investment that holds the Unit, and a Unit never holds one of its own.
+    Refusing is what keeps two memos from describing one decision."""
+
+    investment_id = _investment_of_deal(connection, deal_id)
+    if investment_id is None:
+        return None
+    if not _decode_hidden_flag(_investment_row(connection, investment_id)):
+        raise InvestmentStructureError(
+            f"Deal {deal_id!r} is a Unit of a visible Investment, whose Investment Memo covers the whole "
+            "Investment. Open the Investment's memo; a Unit never holds one of its own."
+        )
+    _require_hidden_wrapper(connection, investment_id)
+    return investment_id
+
+
+def _decode_p7_10_flag(value: object, *, where: str) -> bool:
+    """One stored 0/1 flag. Anything else is corrupt and is refused, never read
+    as false -- "not approved" and "we could not tell" are different answers."""
+
+    if value == 1:
+        return True
+    if value == 0:
+        return False
+    raise PersistedDealDataError(f"{where} holds {value!r}; it must be 0 or 1.")
+
+
+def _p7_10_token(value: object, enum_type: type, *, where: str) -> Any:
+    """One stored enum token as its member. A token this build does not know is
+    corrupt and fails closed, never defaulted to a neighbouring member."""
+
+    try:
+        return enum_type(value)
+    except ValueError as error:
+        raise PersistedDealDataError(
+            f"{where} holds {value!r}, which is not a {enum_type.__name__} this build knows."
+        ) from error
+
+
+# -----------------------------------------------------------------------------
+# Valuation definitions (Section 5)
+# -----------------------------------------------------------------------------
+
+
+def _valuation_method_from_row(row: sqlite3.Row, *, timepoint_id: str) -> ValuationMethod:
+    """One stored instruction's method, by its explicit discriminator.
+
+    Fails closed in both directions. A token the contract no longer knows is a
+    ``PersistedDealDataError``, never a silently substituted direct
+    capitalisation. So is a row whose columns disagree with its token: a
+    ``direct_cap`` row with no ``cap_rate``, or an ``analyst_value`` row with no
+    amount or no evidence id, is corrupt -- and reading a missing cap rate as a
+    default, or a missing amount as zero, is exactly the fabrication
+    Sections 5.3 and 5.4 forbid."""
+
+    token = row["method"]
+    unit_id = row["unit_id"]
+    if token == ValuationMethodKind.DIRECT_CAP:
+        cap_rate = row["cap_rate"]
+        if cap_rate is None:
+            raise PersistedDealDataError(
+                f"Valuation timepoint {timepoint_id!r} values Unit {unit_id!r} by direct capitalisation with no "
+                "cap rate. A missing rate is never defaulted or inferred from the going-in rate."
+            )
+        return DirectCap(cap_rate=cap_rate)
+    if token == ValuationMethodKind.ANALYST_VALUE:
+        amount, evidence_id = row["amount"], row["evidence_id"]
+        if amount is None or evidence_id is None:
+            raise PersistedDealDataError(
+                f"Valuation timepoint {timepoint_id!r} states an analyst-supplied value for Unit {unit_id!r} with "
+                f"amount {amount!r} and evidence {evidence_id!r}; both are required. A missing amount is never "
+                "read as zero, and a missing source is never read as approved."
+            )
+        return AnalystValue(amount=amount, evidence_id=evidence_id)
+    raise PersistedDealDataError(
+        f"Valuation timepoint {timepoint_id!r} values Unit {unit_id!r} by method {token!r}, which this build does "
+        "not know. The methods are direct capitalisation and an analyst-supplied value (R-D)."
+    )
+
+
+def _read_valuation_timepoint(
+    connection: sqlite3.Connection, row: sqlite3.Row
+) -> ValuationTimepoint:
+    """One stored definition as the Stage 1 contract, with its instructions in
+    canonical ``unit_id`` order. The storage ordinal orders nothing economic; it
+    preserves the analyst's authored order for presentation only."""
+
+    timepoint_id = row["timepoint_id"]
+    instructions = connection.execute(
+        "SELECT * FROM valuation_unit_instructions WHERE timepoint_id = ? ORDER BY unit_id",
+        (timepoint_id,),
+    ).fetchall()
+    if not instructions:
+        raise PersistedDealDataError(
+            f"Valuation timepoint {timepoint_id!r} instructs no Unit; a definition states exactly one instruction "
+            "for every included Unit."
+        )
+    return ValuationTimepoint(
+        timepoint_id=timepoint_id,
+        investment_id=row["investment_id"],
+        kind=_p7_10_token(
+            row["kind"], ValuationKind, where=f"Valuation timepoint {timepoint_id!r} kind"
+        ),
+        label=row["label"],
+        model_month=row["model_month"],
+        unit_instructions=tuple(
+            UnitValuationInstruction(
+                unit_id=instruction["unit_id"],
+                method=_valuation_method_from_row(instruction, timepoint_id=timepoint_id),
+            )
+            for instruction in instructions
+        ),
+    )
+
+
+def _stored_valuation_timepoints(
+    connection: sqlite3.Connection, investment_id: str
+) -> tuple[ValuationTimepoint, ...]:
+    """Every valuation definition the Investment states, in authored display
+    order then ``timepoint_id``. The order is presentation: no fingerprint and
+    no resolution reads it."""
+
+    rows = connection.execute(
+        "SELECT * FROM valuation_timepoints WHERE investment_id = ? ORDER BY display_order, timepoint_id",
+        (investment_id,),
+    ).fetchall()
+    return tuple(_read_valuation_timepoint(connection, row) for row in rows)
+
+
+def _valuation_display_orders(
+    connection: sqlite3.Connection, investment_id: str
+) -> dict[str, int]:
+    """Each definition's stored display order, by ``timepoint_id``. Read
+    separately from the contract because the Stage 1 ``ValuationTimepoint`` has
+    no display-order field -- by design, since order is not part of a
+    valuation's identity (Section 10)."""
+
+    return {
+        row["timepoint_id"]: row["display_order"]
+        for row in connection.execute(
+            "SELECT timepoint_id, display_order FROM valuation_timepoints WHERE investment_id = ?",
+            (investment_id,),
+        ).fetchall()
+    }
+
+
+def _write_valuation_instructions(
+    connection: sqlite3.Connection, timepoint: ValuationTimepoint
+) -> None:
+    """One definition's instructions. Called inside the caller's transaction,
+    after validation, and after any previous statement was removed: a definition
+    is replaced whole, never diffed."""
+
+    for ordinal, instruction in enumerate(timepoint.unit_instructions):
+        method = instruction.method
+        kind = valuation_method_kind(method)
+        connection.execute(
+            "INSERT INTO valuation_unit_instructions "
+            "(timepoint_id, unit_id, ordinal, method, cap_rate, amount, evidence_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                timepoint.timepoint_id,
+                instruction.unit_id,
+                ordinal,
+                kind.value,
+                method.cap_rate if isinstance(method, DirectCap) else None,
+                method.amount if isinstance(method, AnalystValue) else None,
+                method.evidence_id if isinstance(method, AnalystValue) else None,
+            ),
+        )
+
+
+def _require_valid_valuation_definition(
+    timepoint: ValuationTimepoint, *, owner: _StructureOwner
+) -> ValuationTimepoint:
+    """The Stage 1 structural authority on a definition about to be stored,
+    plus the one rule that is this store's own: every instructed Unit is a
+    member of this Investment.
+
+    That membership rule belongs here rather than in Stage 1 because Stage 1 is
+    variant-scoped -- the same definition may name a Unit one variant holds and
+    another does not, which is a typed unavailable result, not an authoring
+    fault. Naming a Unit the *Investment* does not hold at all is an authoring
+    fault, and it is refused at the door rather than stored as a definition that
+    can never resolve."""
+
+    issues = list(validate_valuation_timepoint(timepoint))
+    for instruction in sorted(timepoint.unit_instructions, key=lambda item: item.unit_id):
+        if instruction.unit_id and instruction.unit_id not in owner.unit_modes:
+            issues.append(
+                ValuationIssue(
+                    code=ValuationIssueCode.BLANK_UNIT_ID,
+                    message=(
+                        f"Valuation timepoint {timepoint.timepoint_id!r} instructs Unit {instruction.unit_id!r}, "
+                        f"which is not a Unit of Investment {owner.investment_id!r}."
+                    ),
+                    unit_id=instruction.unit_id,
+                    field="unit_instructions",
+                )
+            )
+    if issues:
+        raise ValuationValidationError(tuple(issues))
+    return timepoint
+
+
+def _delete_valuation_timepoint_rows(connection: sqlite3.Connection, timepoint_id: str) -> None:
+    connection.execute(
+        "DELETE FROM valuation_unit_instructions WHERE timepoint_id = ?", (timepoint_id,)
+    )
+    connection.execute("DELETE FROM valuation_timepoints WHERE timepoint_id = ?", (timepoint_id,))
+
+
+def _delete_investment_valuations(connection: sqlite3.Connection, investment_id: str) -> None:
+    """Every valuation definition the Investment owns, with its instructions."""
+
+    connection.execute(
+        "DELETE FROM valuation_unit_instructions WHERE timepoint_id IN "
+        "(SELECT timepoint_id FROM valuation_timepoints WHERE investment_id = ?)",
+        (investment_id,),
+    )
+    connection.execute("DELETE FROM valuation_timepoints WHERE investment_id = ?", (investment_id,))
+
+
+def list_valuation_timepoints(
+    investment_id: str, *, db_path: Path | None = None
+) -> tuple[ValuationTimepoint, ...]:
+    """Every valuation definition the Investment states, in display order.
+    Read-only: reading creates nothing and resolves nothing."""
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        return _stored_valuation_timepoints(connection, investment_id)
+
+
+def get_valuation_timepoint(
+    investment_id: str, timepoint_id: str, *, db_path: Path | None = None
+) -> ValuationTimepoint:
+    """One valuation definition by id, or ``ValuationTimepointNotFoundError``.
+
+    Ownership is part of the lookup: a timepoint of another Investment is
+    reported missing rather than returned, so an id never discloses another
+    Investment's state."""
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        row = connection.execute(
+            "SELECT * FROM valuation_timepoints WHERE timepoint_id = ? AND investment_id = ?",
+            (timepoint_id, investment_id),
+        ).fetchone()
+        if row is None:
+            raise ValuationTimepointNotFoundError(investment_id, timepoint_id)
+        return _read_valuation_timepoint(connection, row)
+
+
+def _insert_valuation_timepoint(
+    connection: sqlite3.Connection,
+    investment_id: str,
+    timepoint: ValuationTimepoint,
+    *,
+    display_order: int,
+    created_at: str,
+    now: str,
+) -> None:
+    connection.execute(
+        "INSERT INTO valuation_timepoints "
+        "(timepoint_id, investment_id, kind, label, model_month, display_order, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            timepoint.timepoint_id,
+            investment_id,
+            _encode_enum(timepoint.kind),
+            timepoint.label,
+            timepoint.model_month,
+            display_order,
+            created_at,
+            now,
+        ),
+    )
+    _write_valuation_instructions(connection, timepoint)
+
+
+def _next_valuation_order(
+    connection: sqlite3.Connection, investment_id: str, display_order: int | None
+) -> int:
+    if display_order is not None:
+        return display_order
+    orders = _valuation_display_orders(connection, investment_id)
+    return max(orders.values()) + 1 if orders else 0
+
+
+def _refuse_duplicate_timepoint(connection: sqlite3.Connection, timepoint_id: str) -> None:
+    """A second definition under an existing id is refused rather than
+    overwriting the first. Silently replacing a valuation a position may consume
+    is exactly what an opaque write would do."""
+
+    if connection.execute(
+        "SELECT 1 FROM valuation_timepoints WHERE timepoint_id = ?", (timepoint_id,)
+    ).fetchone() is not None:
+        raise InvestmentStructureError(
+            f"Valuation timepoint {timepoint_id!r} already exists. Update it explicitly; a save never silently "
+            "replaces a valuation a position may consume."
+        )
+
+
+def create_valuation_timepoint(
+    investment_id: str,
+    timepoint: ValuationTimepoint,
+    *,
+    display_order: int | None = None,
+    db_path: Path | None = None,
+) -> ValuationTimepoint:
+    """Author one valuation definition for an Investment.
+
+    One transaction: the definition validates against the Stage 1 contract and
+    this Investment's membership, then it and its instructions are written.
+
+    ``display_order`` defaults to the end of the list. It is presentation and
+    reaches no fingerprint."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        owner = _require_memo_owner(connection, investment_id)
+        stated = _require_valid_valuation_definition(
+            dataclasses.replace(timepoint, investment_id=investment_id), owner=owner
+        )
+        _refuse_duplicate_timepoint(connection, stated.timepoint_id)
+        _insert_valuation_timepoint(
+            connection,
+            investment_id,
+            stated,
+            display_order=_next_valuation_order(connection, investment_id, display_order),
+            created_at=now,
+            now=now,
+        )
+        _touch_investment(connection, investment_id, now=now)
+    return stated
+
+
+def update_valuation_timepoint(
+    investment_id: str,
+    timepoint: ValuationTimepoint,
+    *,
+    display_order: int | None = None,
+    db_path: Path | None = None,
+) -> ValuationTimepoint:
+    """Replace one valuation definition whole.
+
+    One transaction: the previous statement and every instruction under it go,
+    then the new one is written. Replaced whole rather than diffed, exactly as a
+    Capital Structure and a Partnership are -- a definition is one economic
+    statement, and half of a new one beside half of an old one is not a
+    valuation anybody authored.
+
+    ``display_order`` left unstated keeps the stored order: renaming a view or
+    changing its cap rate is not a reordering."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        owner = _require_memo_owner(connection, investment_id)
+        existing = connection.execute(
+            "SELECT * FROM valuation_timepoints WHERE timepoint_id = ? AND investment_id = ?",
+            (timepoint.timepoint_id, investment_id),
+        ).fetchone()
+        if existing is None:
+            raise ValuationTimepointNotFoundError(investment_id, timepoint.timepoint_id)
+        stated = _require_valid_valuation_definition(
+            dataclasses.replace(timepoint, investment_id=investment_id), owner=owner
+        )
+        order = display_order if display_order is not None else existing["display_order"]
+        created_at = existing["created_at"]
+        _delete_valuation_timepoint_rows(connection, stated.timepoint_id)
+        _insert_valuation_timepoint(
+            connection, investment_id, stated, display_order=order, created_at=created_at, now=now
+        )
+        _touch_investment(connection, investment_id, now=now)
+    return stated
+
+
+def reorder_valuation_timepoints(
+    investment_id: str, timepoint_ids: tuple[str, ...], *, db_path: Path | None = None
+) -> tuple[ValuationTimepoint, ...]:
+    """Set the presentation order of the Investment's valuation definitions.
+
+    Deliberately its own function, and deliberately the *only* write that
+    touches ``display_order`` alone. Reordering is presentation: it changes no
+    cap rate, no model month, no method and no identity, so it must not move the
+    valuation-definition fingerprint -- and a test proves it does not."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        stored = set(_valuation_display_orders(connection, investment_id))
+        requested = list(timepoint_ids)
+        if sorted(requested) != sorted(stored):
+            raise InvestmentStructureError(
+                f"Reordering Investment {investment_id!r}'s valuations must name every timepoint exactly once. "
+                f"Stated: {sorted(requested)}; stored: {sorted(stored)}."
+            )
+        for order, timepoint_id in enumerate(requested):
+            connection.execute(
+                "UPDATE valuation_timepoints SET display_order = ? WHERE timepoint_id = ? AND investment_id = ?",
+                (order, timepoint_id, investment_id),
+            )
+        _touch_investment(connection, investment_id, now=now)
+        return _stored_valuation_timepoints(connection, investment_id)
+
+
+def delete_valuation_timepoint(
+    investment_id: str, timepoint_id: str, *, db_path: Path | None = None
+) -> None:
+    """Remove one valuation definition and its instructions.
+
+    Published versions that cited it are untouched: each froze the value it
+    cited, so history stays readable. What *does* change is freshness -- the
+    definition set moved, and every published version that depended on it says
+    so."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        owner = _require_memo_owner(connection, investment_id)
+        row = connection.execute(
+            "SELECT 1 FROM valuation_timepoints WHERE timepoint_id = ? AND investment_id = ?",
+            (timepoint_id, investment_id),
+        ).fetchone()
+        if row is None:
+            raise ValuationTimepointNotFoundError(investment_id, timepoint_id)
+        _delete_valuation_timepoint_rows(connection, timepoint_id)
+        if owner.hidden and _wrapper_holds_no_structure(connection, investment_id):
+            _delete_investment_rows(connection, investment_id)
+        else:
+            _touch_investment(connection, investment_id, now=now)
+
+
+def read_deal_valuation_timepoints(
+    deal_id: str, *, db_path: Path | None = None
+) -> tuple[str | None, tuple[ValuationTimepoint, ...]]:
+    """The Deal's valuation definitions and the hidden Investment that owns
+    them -- or ``(None, ())`` for a standalone Deal. Read-only; it materializes
+    nothing."""
+
+    with _connect(db_path) as connection:
+        if _operating_mode_of(connection, deal_id) is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _memo_deal_wrapper(connection, deal_id)
+        if investment_id is None:
+            return None, ()
+        return investment_id, _stored_valuation_timepoints(connection, investment_id)
+
+
+def create_deal_valuation_timepoint(
+    deal_id: str,
+    timepoint: ValuationTimepoint,
+    *,
+    display_order: int | None = None,
+    db_path: Path | None = None,
+) -> tuple[str, ValuationTimepoint]:
+    """Author a valuation definition for a standalone Deal, materializing its
+    hidden one-unit Investment on the first save (Q4).
+
+    One transaction. The UI keeps saying "Deal" throughout; the Deal itself is
+    never altered and no Deal fingerprint moves (Section 7.1)."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        if _operating_mode_of(connection, deal_id) is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _memo_deal_wrapper(connection, deal_id)
+        if investment_id is None:
+            investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
+        owner = _require_memo_owner(connection, investment_id)
+        stated = _require_valid_valuation_definition(
+            dataclasses.replace(timepoint, investment_id=investment_id), owner=owner
+        )
+        _refuse_duplicate_timepoint(connection, stated.timepoint_id)
+        _insert_valuation_timepoint(
+            connection,
+            investment_id,
+            stated,
+            display_order=_next_valuation_order(connection, investment_id, display_order),
+            created_at=now,
+            now=now,
+        )
+        _touch_investment(connection, investment_id, now=now)
+    return investment_id, stated
+
+
+# -----------------------------------------------------------------------------
+# Evidence References (Section 8)
+# -----------------------------------------------------------------------------
+
+
+def _row_to_evidence(row: sqlite3.Row) -> MemoEvidenceReference:
+    evidence_id = row["evidence_id"]
+    return MemoEvidenceReference(
+        evidence_id=evidence_id,
+        investment_id=row["investment_id"],
+        source_kind=_p7_10_token(
+            row["source_kind"], EvidenceSourceKind, where=f"Evidence Reference {evidence_id!r} source kind"
+        ),
+        title=row["title"],
+        reference=row["reference"],
+        as_of_date=date.fromisoformat(row["as_of_date"]) if row["as_of_date"] else None,
+        approved=_decode_p7_10_flag(
+            row["approved"], where=f"Evidence Reference {evidence_id!r} approval"
+        ),
+        display_order=row["display_order"],
+    )
+
+
+def _stored_evidence(
+    connection: sqlite3.Connection, investment_id: str
+) -> tuple[MemoEvidenceReference, ...]:
+    return tuple(
+        _row_to_evidence(row)
+        for row in connection.execute(
+            "SELECT * FROM memo_evidence_references WHERE investment_id = ? "
+            "ORDER BY display_order, evidence_id",
+            (investment_id,),
+        ).fetchall()
+    )
+
+
+def _delete_investment_evidence(connection: sqlite3.Connection, investment_id: str) -> None:
+    connection.execute(
+        "DELETE FROM memo_evidence_references WHERE investment_id = ?", (investment_id,)
+    )
+
+
+def list_evidence_references(
+    investment_id: str, *, db_path: Path | None = None
+) -> tuple[MemoEvidenceReference, ...]:
+    """Every Evidence Reference the Investment holds, approved or not, in
+    display order. Both states are real records: an unapproved reference exists
+    and is visible, it simply cannot support a claim (Section 8)."""
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        return _stored_evidence(connection, investment_id)
+
+
+def get_evidence_reference(
+    investment_id: str, evidence_id: str, *, db_path: Path | None = None
+) -> MemoEvidenceReference:
+    """One Evidence Reference by id, or ``EvidenceReferenceNotFoundError``."""
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        row = connection.execute(
+            "SELECT * FROM memo_evidence_references WHERE investment_id = ? AND evidence_id = ?",
+            (investment_id, evidence_id),
+        ).fetchone()
+        if row is None:
+            raise EvidenceReferenceNotFoundError(investment_id, evidence_id)
+        return _row_to_evidence(row)
+
+
+def put_evidence_reference(
+    investment_id: str, evidence: MemoEvidenceReference, *, db_path: Path | None = None
+) -> MemoEvidenceReference:
+    """Create or replace one Evidence Reference whole.
+
+    P7.10 stores the reference, never a copy of the source document
+    (Section 8): the existing document security boundary is reused, and nothing
+    here reads, fetches or copies what ``reference`` points at.
+
+    ``approved`` is written exactly as stated. Nothing in this module approves a
+    reference on anyone's behalf, and no AI surface exists in this gate that
+    could."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        stated = require_valid_evidence_reference(
+            dataclasses.replace(evidence, investment_id=investment_id)
+        )
+        existing = connection.execute(
+            "SELECT created_at FROM memo_evidence_references WHERE investment_id = ? AND evidence_id = ?",
+            (investment_id, stated.evidence_id),
+        ).fetchone()
+        created_at = existing["created_at"] if existing is not None else now
+        connection.execute(
+            "DELETE FROM memo_evidence_references WHERE investment_id = ? AND evidence_id = ?",
+            (investment_id, stated.evidence_id),
+        )
+        connection.execute(
+            "INSERT INTO memo_evidence_references "
+            "(investment_id, evidence_id, display_order, source_kind, title, reference, as_of_date, approved, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                investment_id,
+                stated.evidence_id,
+                stated.display_order,
+                _encode_enum(stated.source_kind),
+                stated.title,
+                stated.reference,
+                stated.as_of_date.isoformat() if stated.as_of_date is not None else None,
+                1 if stated.approved else 0,
+                created_at,
+                now,
+            ),
+        )
+        _touch_investment(connection, investment_id, now=now)
+    return stated
+
+
+def delete_evidence_reference(
+    investment_id: str, evidence_id: str, *, db_path: Path | None = None
+) -> None:
+    """Remove one Evidence Reference, or refuse and name what still uses it.
+
+    Refused rather than cascaded: removing a reference an analyst-supplied
+    valuation cites would leave that value with no source, which Section 5.4
+    forbids. Published versions never block a removal -- each froze its own copy
+    of the content, so none of them depends on this row surviving."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        row = connection.execute(
+            "SELECT 1 FROM memo_evidence_references WHERE investment_id = ? AND evidence_id = ?",
+            (investment_id, evidence_id),
+        ).fetchone()
+        if row is None:
+            raise EvidenceReferenceNotFoundError(investment_id, evidence_id)
+        used_by = tuple(
+            sorted(
+                found["timepoint_id"]
+                for found in connection.execute(
+                    "SELECT DISTINCT i.timepoint_id AS timepoint_id FROM valuation_unit_instructions i "
+                    "JOIN valuation_timepoints t ON t.timepoint_id = i.timepoint_id "
+                    "WHERE t.investment_id = ? AND i.evidence_id = ?",
+                    (investment_id, evidence_id),
+                ).fetchall()
+            )
+        )
+        # The draft's register *and* every individual claim link. A source a
+        # single risk cites is in use exactly as much as one the package cites
+        # as a whole: removing it would leave that claim pointing at nothing,
+        # which is the dangling reference Section 8 refuses to create.
+        cited = (
+            connection.execute(
+                "SELECT 1 FROM memo_draft_evidence e JOIN investment_memo_drafts d ON d.memo_id = e.memo_id "
+                "WHERE d.investment_id = ? AND e.evidence_id = ?",
+                (investment_id, evidence_id),
+            ).fetchone()
+            is not None
+            or connection.execute(
+                "SELECT 1 FROM memo_claim_evidence c JOIN investment_memo_drafts d ON d.memo_id = c.memo_id "
+                "WHERE d.investment_id = ? AND c.evidence_id = ?",
+                (investment_id, evidence_id),
+            ).fetchone()
+            is not None
+        )
+        if used_by or cited:
+            raise EvidenceInUseError(
+                investment_id, evidence_id, valuation_timepoint_ids=used_by, cited_by_draft=cited
+            )
+        connection.execute(
+            "DELETE FROM memo_evidence_references WHERE investment_id = ? AND evidence_id = ?",
+            (investment_id, evidence_id),
+        )
+        _touch_investment(connection, investment_id, now=now)
+
+
+# -----------------------------------------------------------------------------
+# The Investment Memo draft (Section 7; R-H)
+# -----------------------------------------------------------------------------
+
+
+def _selected_decision_from_row(row: sqlite3.Row) -> SelectedDecision | None:
+    """The draft's selected cell, or ``None`` when it has not chosen one.
+
+    A partially stated selection is corrupt, never repaired: a row with a
+    Strategy and no perspective would let a reader infer which stakeholder the
+    analyst meant, and inferring that is exactly what a decision memo must not
+    do."""
+
+    strategy_id, scenario_id, perspective = (
+        row["selected_strategy_id"],
+        row["selected_scenario_id"],
+        row["perspective"],
+    )
+    stated = [value for value in (strategy_id, scenario_id, perspective) if value is not None]
+    if not stated:
+        return None
+    if len(stated) != 3:
+        raise PersistedDealDataError(
+            f"Memo {row['memo_id']!r} states a partial selected decision (strategy {strategy_id!r}, scenario "
+            f"{scenario_id!r}, perspective {perspective!r}). A selection names all three or none of them."
+        )
+    return SelectedDecision(
+        strategy_id=strategy_id,
+        scenario_id=scenario_id,
+        perspective=_p7_10_token(
+            perspective, DecisionPerspectiveKind, where=f"Memo {row['memo_id']!r} perspective"
+        ),
+        position_id=row["perspective_position_id"],
+        partner_id=row["perspective_partner_id"],
+    )
+
+
+def _read_memo_items(connection: sqlite3.Connection, table: str, key: str, owner_id: str) -> list[sqlite3.Row]:
+    return connection.execute(
+        f"SELECT * FROM {table} WHERE {key} = ? ORDER BY display_order, item_id", (owner_id,)
+    ).fetchall()
+
+
+def _read_claim_links(
+    connection: sqlite3.Connection, table: str, key: str, owner_id: str
+) -> dict[tuple[str, str], tuple[str, ...]]:
+    """Every claim-to-evidence link of one draft or version, by
+    ``(claim_kind, item_id)``, in the analyst's authored order.
+
+    Read once per memo and handed to each item, rather than queried per item:
+    the relationship is one table, and one read of it keeps every claim's view
+    of it consistent."""
+
+    links: dict[tuple[str, str], list[tuple[int, str]]] = {}
+    for row in connection.execute(
+        f"SELECT claim_kind, item_id, evidence_id, ordinal FROM {table} WHERE {key} = ?",
+        (owner_id,),
+    ).fetchall():
+        links.setdefault((row["claim_kind"], row["item_id"]), []).append(
+            (row["ordinal"], row["evidence_id"])
+        )
+    return {
+        key_pair: tuple(evidence_id for _, evidence_id in sorted(entries))
+        for key_pair, entries in links.items()
+    }
+
+
+def _claim_evidence_of(
+    links: dict[tuple[str, str], tuple[str, ...]], kind: MemoClaimKind, item_id: str
+) -> tuple[str, ...]:
+    return links.get((kind.value, item_id), ())
+
+
+def _row_to_memo_item(
+    row: sqlite3.Row, *, where: str, links: dict[tuple[str, str], tuple[str, ...]]
+) -> MemoItem:
+    item_id = row["item_id"]
+    return MemoItem(
+        item_id=item_id,
+        section=_p7_10_token(row["section"], MemoSection, where=f"{where} item {item_id!r} section"),
+        display_order=row["display_order"],
+        text=row["text"],
+        evidence_ids=_claim_evidence_of(links, MemoClaimKind.ITEM, item_id),
+    )
+
+
+def _row_to_memo_risk(
+    row: sqlite3.Row, *, where: str, links: dict[tuple[str, str], tuple[str, ...]]
+) -> MemoRiskItem:
+    item_id = row["item_id"]
+    return MemoRiskItem(
+        item_id=item_id,
+        display_order=row["display_order"],
+        text=row["text"],
+        severity=_p7_10_token(row["severity"], RiskSeverity, where=f"{where} risk {item_id!r} severity"),
+        residual_risk=_p7_10_token(
+            row["residual_risk"], RiskSeverity, where=f"{where} risk {item_id!r} residual risk"
+        ),
+        mitigant=row["mitigant"],
+        evidence_ids=_claim_evidence_of(links, MemoClaimKind.RISK, item_id),
+    )
+
+
+def _row_to_memo_term(
+    row: sqlite3.Row, *, where: str, links: dict[tuple[str, str], tuple[str, ...]]
+) -> MemoTermItem:
+    item_id = row["item_id"]
+    return MemoTermItem(
+        item_id=item_id,
+        display_order=row["display_order"],
+        text=row["text"],
+        priority=_p7_10_token(row["priority"], TermPriority, where=f"{where} term {item_id!r} priority"),
+        evidence_ids=_claim_evidence_of(links, MemoClaimKind.TERM, item_id),
+    )
+
+
+def _read_memo_draft(connection: sqlite3.Connection, row: sqlite3.Row) -> InvestmentMemoDraft:
+    """One stored draft as the domain contract, with every collection in
+    authored display order then ``item_id``."""
+
+    memo_id = row["memo_id"]
+    where = f"Memo {memo_id!r}"
+    evidence_ids = tuple(
+        found["evidence_id"]
+        for found in connection.execute(
+            "SELECT evidence_id FROM memo_draft_evidence WHERE memo_id = ? ORDER BY ordinal, evidence_id",
+            (memo_id,),
+        ).fetchall()
+    )
+    links = _read_claim_links(connection, "memo_claim_evidence", "memo_id", memo_id)
+    selected_valuations = tuple(
+        found["timepoint_id"]
+        for found in connection.execute(
+            "SELECT timepoint_id FROM memo_selected_valuations WHERE memo_id = ? "
+            "ORDER BY ordinal, timepoint_id",
+            (memo_id,),
+        ).fetchall()
+    )
+    return InvestmentMemoDraft(
+        memo_id=memo_id,
+        investment_id=row["investment_id"],
+        prepared_by=row["prepared_by"],
+        decision_ask=row["decision_ask"],
+        analyst_recommendation=_p7_10_token(
+            row["analyst_recommendation"], AnalystRecommendation, where=f"{where} analyst recommendation"
+        ),
+        executive_summary=row["executive_summary"],
+        execution_complexity=_p7_10_token(
+            row["execution_complexity"], ExecutionComplexity, where=f"{where} execution complexity"
+        ),
+        return_on_time_notes=row["return_on_time_notes"],
+        selected_decision=_selected_decision_from_row(row),
+        items=tuple(
+            _row_to_memo_item(item, where=where, links=links)
+            for item in _read_memo_items(connection, "memo_items", "memo_id", memo_id)
+        ),
+        risk_items=tuple(
+            _row_to_memo_risk(item, where=where, links=links)
+            for item in _read_memo_items(connection, "memo_risk_items", "memo_id", memo_id)
+        ),
+        term_items=tuple(
+            _row_to_memo_term(item, where=where, links=links)
+            for item in _read_memo_items(connection, "memo_term_items", "memo_id", memo_id)
+        ),
+        evidence_ids=evidence_ids,
+        selected_valuation_timepoint_ids=selected_valuations,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _stored_memo_draft(
+    connection: sqlite3.Connection, investment_id: str
+) -> InvestmentMemoDraft | None:
+    row = connection.execute(
+        "SELECT * FROM investment_memo_drafts WHERE investment_id = ?", (investment_id,)
+    ).fetchone()
+    return None if row is None else _read_memo_draft(connection, row)
+
+
+def _write_memo_children(connection: sqlite3.Connection, draft: InvestmentMemoDraft) -> None:
+    """The draft's item collections and evidence citations. Called inside the
+    caller's transaction, after validation, and after the previous rows were
+    removed: a collection is replaced whole, never diffed."""
+
+    memo_id = draft.memo_id
+    for item in draft.items:
+        connection.execute(
+            "INSERT INTO memo_items (memo_id, item_id, section, display_order, text) VALUES (?, ?, ?, ?, ?)",
+            (memo_id, item.item_id, _encode_enum(item.section), item.display_order, item.text),
+        )
+    for risk in draft.risk_items:
+        connection.execute(
+            "INSERT INTO memo_risk_items "
+            "(memo_id, item_id, display_order, text, severity, residual_risk, mitigant) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                memo_id,
+                risk.item_id,
+                risk.display_order,
+                risk.text,
+                _encode_enum(risk.severity),
+                _encode_enum(risk.residual_risk),
+                risk.mitigant,
+            ),
+        )
+    for term in draft.term_items:
+        connection.execute(
+            "INSERT INTO memo_term_items (memo_id, item_id, display_order, text, priority) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (memo_id, term.item_id, term.display_order, term.text, _encode_enum(term.priority)),
+        )
+    for ordinal, evidence_id in enumerate(draft.evidence_ids):
+        connection.execute(
+            "INSERT INTO memo_draft_evidence (memo_id, evidence_id, ordinal) VALUES (?, ?, ?)",
+            (memo_id, evidence_id, ordinal),
+        )
+    for kind, collection in (
+        (MemoClaimKind.ITEM, draft.items),
+        (MemoClaimKind.RISK, draft.risk_items),
+        (MemoClaimKind.TERM, draft.term_items),
+    ):
+        for item in collection:
+            for ordinal, evidence_id in enumerate(item.evidence_ids):
+                connection.execute(
+                    "INSERT INTO memo_claim_evidence "
+                    "(memo_id, claim_kind, item_id, evidence_id, ordinal) VALUES (?, ?, ?, ?, ?)",
+                    (memo_id, _encode_enum(kind), item.item_id, evidence_id, ordinal),
+                )
+    for ordinal, timepoint_id in enumerate(draft.selected_valuation_timepoint_ids):
+        connection.execute(
+            "INSERT INTO memo_selected_valuations (memo_id, timepoint_id, ordinal) VALUES (?, ?, ?)",
+            (memo_id, timepoint_id, ordinal),
+        )
+
+
+def _delete_memo_draft_children(connection: sqlite3.Connection, memo_id: str) -> None:
+    for table in _MEMO_DRAFT_CHILD_TABLES:
+        connection.execute(f"DELETE FROM {table} WHERE memo_id = ?", (memo_id,))
+
+
+def _require_cited_evidence_exists(
+    connection: sqlite3.Connection, investment_id: str, evidence_ids: tuple[str, ...]
+) -> None:
+    """Every cited Evidence Reference belongs to this Investment.
+
+    Fails closed on a foreign id (Section 15). A citation of another
+    Investment's reference is refused rather than stored, so a memo can never
+    quietly depend on a record it does not own."""
+
+    known = {
+        row["evidence_id"]
+        for row in connection.execute(
+            "SELECT evidence_id FROM memo_evidence_references WHERE investment_id = ?",
+            (investment_id,),
+        ).fetchall()
+    }
+    missing = sorted(set(evidence_ids) - known)
+    if missing:
+        raise EvidenceReferenceNotFoundError(investment_id, missing[0])
+
+
+def _require_selected_valuations_exist(
+    connection: sqlite3.Connection, investment_id: str, timepoint_ids: tuple[str, ...]
+) -> None:
+    """Every selected valuation definition belongs to this Investment.
+
+    Fails closed on a foreign id for the same reason a cited Evidence Reference
+    does (Section 15): a memo must not be able to select a view it does not own,
+    and a selection naming nothing is an authoring mistake, not an empty
+    package."""
+
+    known = {
+        row["timepoint_id"]
+        for row in connection.execute(
+            "SELECT timepoint_id FROM valuation_timepoints WHERE investment_id = ?",
+            (investment_id,),
+        ).fetchall()
+    }
+    missing = sorted(set(timepoint_ids) - known)
+    if missing:
+        raise ValuationTimepointNotFoundError(investment_id, missing[0])
+
+
+def _write_memo_draft(
+    connection: sqlite3.Connection,
+    investment_id: str,
+    draft: InvestmentMemoDraft,
+    *,
+    created_at: str,
+    now: str,
+) -> None:
+    selected = draft.selected_decision
+    connection.execute(
+        "INSERT INTO investment_memo_drafts "
+        "(memo_id, investment_id, prepared_by, decision_ask, analyst_recommendation, executive_summary, "
+        "execution_complexity, return_on_time_notes, selected_strategy_id, selected_scenario_id, perspective, "
+        "perspective_position_id, perspective_partner_id, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            draft.memo_id,
+            investment_id,
+            draft.prepared_by,
+            draft.decision_ask,
+            _encode_enum(draft.analyst_recommendation),
+            draft.executive_summary,
+            _encode_enum(draft.execution_complexity),
+            draft.return_on_time_notes,
+            None if selected is None else selected.strategy_id,
+            None if selected is None else selected.scenario_id,
+            None if selected is None else _encode_enum(selected.perspective),
+            None if selected is None else selected.position_id,
+            None if selected is None else selected.partner_id,
+            created_at,
+            now,
+        ),
+    )
+    _write_memo_children(connection, draft)
+
+
+def _delete_investment_memos(connection: sqlite3.Connection, investment_id: str) -> None:
+    """Every memo record the Investment owns: its draft and children, its
+    published versions and their children, and each version's committee
+    decision.
+
+    Reached only from ``_delete_investment_rows``, when the Investment itself
+    goes. Nothing else in this module deletes a published version -- history is
+    not housekeeping."""
+
+    version_ids = [
+        row["version_id"]
+        for row in connection.execute(
+            "SELECT version_id FROM investment_memo_versions WHERE investment_id = ?",
+            (investment_id,),
+        ).fetchall()
+    ]
+    for version_id in version_ids:
+        for table in _MEMO_VERSION_CHILD_TABLES:
+            connection.execute(f"DELETE FROM {table} WHERE version_id = ?", (version_id,))
+        connection.execute(
+            "DELETE FROM investment_committee_decisions WHERE version_id = ?", (version_id,)
+        )
+    connection.execute(
+        "DELETE FROM investment_memo_versions WHERE investment_id = ?", (investment_id,)
+    )
+    row = connection.execute(
+        "SELECT memo_id FROM investment_memo_drafts WHERE investment_id = ?", (investment_id,)
+    ).fetchone()
+    if row is not None:
+        _delete_memo_draft_children(connection, row["memo_id"])
+    connection.execute(
+        "DELETE FROM investment_memo_drafts WHERE investment_id = ?", (investment_id,)
+    )
+    _delete_investment_evidence(connection, investment_id)
+
+
+def get_memo_draft(
+    investment_id: str, *, db_path: Path | None = None
+) -> InvestmentMemoDraft | None:
+    """The Investment's one mutable memo draft, or ``None`` when it has none.
+    Read-only: reading creates nothing."""
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        return _stored_memo_draft(connection, investment_id)
+
+
+def put_memo_draft(
+    investment_id: str, draft: InvestmentMemoDraft, *, db_path: Path | None = None
+) -> InvestmentMemoDraft:
+    """Create or replace the Investment's one mutable draft (R-H).
+
+    One transaction: the draft validates structurally, every cited Evidence
+    Reference is proven to belong to this Investment, the previous draft's rows
+    are removed, and the new draft is written whole.
+
+    Exactly one draft exists per Investment -- the UNIQUE constraint makes a
+    second unwritable -- and ``memo_id`` is preserved across edits so the draft
+    keeps one identity for its whole life.
+
+    This writes no published version and touches none. Publishing is a separate
+    act with its own prerequisites."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        existing = connection.execute(
+            "SELECT memo_id, created_at FROM investment_memo_drafts WHERE investment_id = ?",
+            (investment_id,),
+        ).fetchone()
+        memo_id = existing["memo_id"] if existing is not None else (draft.memo_id or uuid.uuid4().hex)
+        created_at = existing["created_at"] if existing is not None else now
+        stated = require_valid_memo_draft(
+            dataclasses.replace(draft, memo_id=memo_id, investment_id=investment_id)
+        )
+        _require_cited_evidence_exists(connection, investment_id, stated.cited_evidence_ids())
+        _require_selected_valuations_exist(
+            connection, investment_id, stated.selected_valuation_timepoint_ids
+        )
+        if existing is not None:
+            _delete_memo_draft_children(connection, memo_id)
+            connection.execute(
+                "DELETE FROM investment_memo_drafts WHERE investment_id = ?", (investment_id,)
+            )
+        _write_memo_draft(connection, investment_id, stated, created_at=created_at, now=now)
+        _touch_investment(connection, investment_id, now=now)
+        stored = _stored_memo_draft(connection, investment_id)
+    if stored is None:  # pragma: no cover -- the row was just written
+        raise PersistedDealDataError(f"Investment {investment_id!r} lost its memo draft during the write.")
+    return stored
+
+
+def delete_memo_draft(investment_id: str, *, db_path: Path | None = None) -> None:
+    """Remove the Investment's draft and its items.
+
+    Published versions are untouched: each is an immutable copy, and discarding
+    a workspace never rewrites what a committee already read."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        owner = _require_memo_owner(connection, investment_id)
+        row = connection.execute(
+            "SELECT memo_id FROM investment_memo_drafts WHERE investment_id = ?", (investment_id,)
+        ).fetchone()
+        if row is None:
+            raise MemoNotFoundError(investment_id)
+        _delete_memo_draft_children(connection, row["memo_id"])
+        connection.execute(
+            "DELETE FROM investment_memo_drafts WHERE investment_id = ?", (investment_id,)
+        )
+        if owner.hidden and _wrapper_holds_no_structure(connection, investment_id):
+            _delete_investment_rows(connection, investment_id)
+        else:
+            _touch_investment(connection, investment_id, now=now)
+
+
+def read_deal_memo_draft(
+    deal_id: str, *, db_path: Path | None = None
+) -> tuple[str | None, InvestmentMemoDraft | None]:
+    """The Deal's memo draft and the hidden Investment that owns it -- or
+    ``(None, None)`` for a standalone Deal. Read-only; it materializes
+    nothing."""
+
+    with _connect(db_path) as connection:
+        if _operating_mode_of(connection, deal_id) is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _memo_deal_wrapper(connection, deal_id)
+        if investment_id is None:
+            return None, None
+        return investment_id, _stored_memo_draft(connection, investment_id)
+
+
+def put_deal_memo_draft(
+    deal_id: str, draft: InvestmentMemoDraft, *, db_path: Path | None = None
+) -> tuple[str, InvestmentMemoDraft]:
+    """Save a Deal's memo draft, materializing its hidden one-unit Investment on
+    the first save (Q4, Section 7.1).
+
+    One transaction. It does not create a visible Investment, alter the Deal, or
+    change any Deal fingerprint; the UI keeps saying "Deal" throughout."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        if _operating_mode_of(connection, deal_id) is None:
+            raise DealNotFoundError(deal_id)
+        investment_id = _memo_deal_wrapper(connection, deal_id)
+        if investment_id is None:
+            investment_id = _materialize_hidden_investment(connection, deal_id, now=now)
+        _require_memo_owner(connection, investment_id)
+        existing = connection.execute(
+            "SELECT memo_id, created_at FROM investment_memo_drafts WHERE investment_id = ?",
+            (investment_id,),
+        ).fetchone()
+        memo_id = existing["memo_id"] if existing is not None else (draft.memo_id or uuid.uuid4().hex)
+        created_at = existing["created_at"] if existing is not None else now
+        stated = require_valid_memo_draft(
+            dataclasses.replace(draft, memo_id=memo_id, investment_id=investment_id)
+        )
+        _require_cited_evidence_exists(connection, investment_id, stated.cited_evidence_ids())
+        _require_selected_valuations_exist(
+            connection, investment_id, stated.selected_valuation_timepoint_ids
+        )
+        if existing is not None:
+            _delete_memo_draft_children(connection, memo_id)
+            connection.execute(
+                "DELETE FROM investment_memo_drafts WHERE investment_id = ?", (investment_id,)
+            )
+        _write_memo_draft(connection, investment_id, stated, created_at=created_at, now=now)
+        _touch_investment(connection, investment_id, now=now)
+        stored = _stored_memo_draft(connection, investment_id)
+    if stored is None:  # pragma: no cover -- the row was just written
+        raise PersistedDealDataError(f"Investment {investment_id!r} lost its memo draft during the write.")
+    return investment_id, stored
+
+
+# -----------------------------------------------------------------------------
+# Immutable published versions (Section 9; R-H)
+# -----------------------------------------------------------------------------
+
+
+def _read_memo_version(connection: sqlite3.Connection, row: sqlite3.Row) -> InvestmentMemoVersion:
+    """One published version, exactly as it was written.
+
+    Every collection is read from the version's own frozen rows -- never from
+    the live draft, the live Evidence Reference or a recomputed valuation. That
+    is what makes a historical version readable after its inputs have moved."""
+
+    version_id = row["version_id"]
+    where = f"Memo version {version_id!r}"
+    version_links = _read_claim_links(
+        connection, "memo_version_claim_evidence", "version_id", version_id
+    )
+    return InvestmentMemoVersion(
+        version_id=version_id,
+        investment_id=row["investment_id"],
+        version_number=row["version_number"],
+        prepared_by=row["prepared_by"],
+        decision_ask=row["decision_ask"],
+        analyst_recommendation=_p7_10_token(
+            row["analyst_recommendation"], AnalystRecommendation, where=f"{where} analyst recommendation"
+        ),
+        executive_summary=row["executive_summary"],
+        execution_complexity=_p7_10_token(
+            row["execution_complexity"], ExecutionComplexity, where=f"{where} execution complexity"
+        ),
+        return_on_time_notes=row["return_on_time_notes"],
+        selected_decision=SelectedDecision(
+            strategy_id=row["selected_strategy_id"],
+            scenario_id=row["selected_scenario_id"],
+            perspective=_p7_10_token(
+                row["perspective"], DecisionPerspectiveKind, where=f"{where} perspective"
+            ),
+            position_id=row["perspective_position_id"],
+            partner_id=row["perspective_partner_id"],
+        ),
+        items=tuple(
+            _row_to_memo_item(item, where=where, links=version_links)
+            for item in _read_memo_items(connection, "memo_version_items", "version_id", version_id)
+        ),
+        risk_items=tuple(
+            _row_to_memo_risk(item, where=where, links=version_links)
+            for item in _read_memo_items(connection, "memo_version_risk_items", "version_id", version_id)
+        ),
+        term_items=tuple(
+            _row_to_memo_term(item, where=where, links=version_links)
+            for item in _read_memo_items(connection, "memo_version_term_items", "version_id", version_id)
+        ),
+        evidence=tuple(
+            MemoEvidenceReference(
+                evidence_id=item["evidence_id"],
+                investment_id=row["investment_id"],
+                source_kind=_p7_10_token(
+                    item["source_kind"], EvidenceSourceKind, where=f"{where} evidence source kind"
+                ),
+                title=item["title"],
+                reference=item["reference"],
+                as_of_date=date.fromisoformat(item["as_of_date"]) if item["as_of_date"] else None,
+                approved=_decode_p7_10_flag(item["approved"], where=f"{where} evidence approval"),
+                display_order=item["display_order"],
+            )
+            for item in connection.execute(
+                "SELECT * FROM memo_version_evidence WHERE version_id = ? ORDER BY display_order, evidence_id",
+                (version_id,),
+            ).fetchall()
+        ),
+        claim_evidence=tuple(
+            MemoClaimEvidence(
+                claim_kind=_p7_10_token(
+                    item["claim_kind"], MemoClaimKind, where=f"{where} claim evidence kind"
+                ),
+                item_id=item["item_id"],
+                evidence_id=item["evidence_id"],
+                ordinal=item["ordinal"],
+            )
+            for item in connection.execute(
+                "SELECT * FROM memo_version_claim_evidence WHERE version_id = ? "
+                "ORDER BY claim_kind, item_id, ordinal, evidence_id",
+                (version_id,),
+            ).fetchall()
+        ),
+        valuations=tuple(
+            MemoVersionValuation(
+                timepoint_id=item["timepoint_id"],
+                kind=item["kind"],
+                label=item["label"],
+                model_month=item["model_month"],
+                scope_kind=item["scope_kind"],
+                status=item["status"],
+                value=item["value"],
+                unavailable_reason=item["unavailable_reason"],
+                unavailable_message=item["unavailable_message"],
+                selected=_decode_p7_10_flag(item["selected"], where=f"{where} valuation selection"),
+                consumed=_decode_p7_10_flag(item["consumed"], where=f"{where} valuation consumption"),
+            )
+            for item in connection.execute(
+                "SELECT * FROM memo_version_valuations WHERE version_id = ? ORDER BY timepoint_id",
+                (version_id,),
+            ).fetchall()
+        ),
+        dependencies=tuple(
+            MemoDependency(
+                dependency_class=_p7_10_token(
+                    item["dependency_class"], MemoDependencyClass, where=f"{where} dependency class"
+                ),
+                scope_id=item["scope_id"],
+                fingerprint=item["fingerprint"],
+            )
+            for item in connection.execute(
+                "SELECT * FROM memo_version_dependencies WHERE version_id = ? "
+                "ORDER BY dependency_class, scope_id",
+                (version_id,),
+            ).fetchall()
+        ),
+        memo_content_fingerprint=row["memo_content_fingerprint"],
+        published_fingerprint=row["published_fingerprint"],
+        created_at=row["created_at"],
+    )
+
+
+def list_memo_versions(
+    investment_id: str, *, db_path: Path | None = None
+) -> tuple[InvestmentMemoVersion, ...]:
+    """Every published version of the Investment, oldest first.
+
+    Ordered by ``version_number``, which is the monotonically increasing
+    publication order (Section 9) -- never by a timestamp, which two publications
+    in one second could tie."""
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        rows = connection.execute(
+            "SELECT * FROM investment_memo_versions WHERE investment_id = ? ORDER BY version_number",
+            (investment_id,),
+        ).fetchall()
+        return tuple(_read_memo_version(connection, row) for row in rows)
+
+
+def get_memo_version(
+    investment_id: str, version_id: str, *, db_path: Path | None = None
+) -> InvestmentMemoVersion:
+    """One published version by id, or ``MemoVersionNotFoundError``.
+
+    Always readable, whatever has happened to its inputs since. Whether it is
+    still *current* is a separate question, answered by the freshness report --
+    a stale version is never withheld, rewritten or silently refreshed."""
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        row = connection.execute(
+            "SELECT * FROM investment_memo_versions WHERE version_id = ? AND investment_id = ?",
+            (version_id, investment_id),
+        ).fetchone()
+        if row is None:
+            raise MemoVersionNotFoundError(investment_id, version_id)
+        return _read_memo_version(connection, row)
+
+
+def publish_memo_version(
+    investment_id: str,
+    *,
+    draft: InvestmentMemoDraft,
+    evidence: tuple[MemoEvidenceReference, ...],
+    valuations: tuple[MemoVersionValuation, ...],
+    dependencies: tuple[MemoDependency, ...],
+    memo_content_fingerprint: str,
+    published_fingerprint: str,
+    db_path: Path | None = None,
+) -> InvestmentMemoVersion:
+    """Write one immutable published version and its dependency ledger
+    (Section 9; R-H).
+
+    **One transaction** (Section 15): either the complete version, its content,
+    its frozen evidence, its cited valuations and its whole dependency ledger
+    exist, or none of them does. There is no partial publication.
+
+    **The caller decides; this writes.** Whether the draft *may* be published is
+    ``anchor.memo.publication``'s question and the resolution layer's, and both
+    have already answered by the time this is called. Keeping the judgment out
+    of the store is what stops a second, drifting set of prerequisites from
+    growing here.
+
+    **Nothing is ever updated afterwards.** No function in this module rewrites
+    a ``memo_version*`` row; there is no UPDATE statement anywhere that names
+    one. A later draft edit publishes a *new* version, and the earlier one is
+    left exactly as its committee read it.
+
+    **The draft is left alone.** Publishing copies; it does not consume. The
+    analyst's workspace is unchanged and free to move on immediately."""
+
+    now = _utc_now_iso()
+    selected = draft.selected_decision
+    if selected is None:
+        raise MemoError(
+            f"Investment {investment_id!r} cannot publish a memo version with no selected decision. A published "
+            "version recommends exactly one decision cell."
+        )
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        existing = [
+            row["version_number"]
+            for row in connection.execute(
+                "SELECT version_number FROM investment_memo_versions WHERE investment_id = ?",
+                (investment_id,),
+            ).fetchall()
+        ]
+        version_id = uuid.uuid4().hex
+        version_number = next_version_number(existing)
+        connection.execute(
+            "INSERT INTO investment_memo_versions "
+            "(version_id, investment_id, version_number, prepared_by, decision_ask, analyst_recommendation, "
+            "executive_summary, execution_complexity, return_on_time_notes, selected_strategy_id, "
+            "selected_scenario_id, perspective, perspective_position_id, perspective_partner_id, "
+            "memo_content_fingerprint, published_fingerprint, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                version_id,
+                investment_id,
+                version_number,
+                draft.prepared_by,
+                draft.decision_ask,
+                _encode_enum(draft.analyst_recommendation),
+                draft.executive_summary,
+                _encode_enum(draft.execution_complexity),
+                draft.return_on_time_notes,
+                selected.strategy_id,
+                selected.scenario_id,
+                _encode_enum(selected.perspective),
+                selected.position_id,
+                selected.partner_id,
+                memo_content_fingerprint,
+                published_fingerprint,
+                now,
+            ),
+        )
+        for item in draft.items:
+            connection.execute(
+                "INSERT INTO memo_version_items (version_id, item_id, section, display_order, text) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (version_id, item.item_id, _encode_enum(item.section), item.display_order, item.text),
+            )
+        for risk in draft.risk_items:
+            connection.execute(
+                "INSERT INTO memo_version_risk_items "
+                "(version_id, item_id, display_order, text, severity, residual_risk, mitigant) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    version_id,
+                    risk.item_id,
+                    risk.display_order,
+                    risk.text,
+                    _encode_enum(risk.severity),
+                    _encode_enum(risk.residual_risk),
+                    risk.mitigant,
+                ),
+            )
+        for term in draft.term_items:
+            connection.execute(
+                "INSERT INTO memo_version_term_items "
+                "(version_id, item_id, display_order, text, priority) VALUES (?, ?, ?, ?, ?)",
+                (version_id, term.item_id, term.display_order, term.text, _encode_enum(term.priority)),
+            )
+        for item in evidence:
+            connection.execute(
+                "INSERT INTO memo_version_evidence "
+                "(version_id, evidence_id, display_order, source_kind, title, reference, as_of_date, approved) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    version_id,
+                    item.evidence_id,
+                    item.display_order,
+                    _encode_enum(item.source_kind),
+                    item.title,
+                    item.reference,
+                    item.as_of_date.isoformat() if item.as_of_date is not None else None,
+                    1 if item.approved else 0,
+                ),
+            )
+        for kind, collection in (
+            (MemoClaimKind.ITEM, draft.items),
+            (MemoClaimKind.RISK, draft.risk_items),
+            (MemoClaimKind.TERM, draft.term_items),
+        ):
+            for item in collection:
+                for ordinal, evidence_id in enumerate(item.evidence_ids):
+                    connection.execute(
+                        "INSERT INTO memo_version_claim_evidence "
+                        "(version_id, claim_kind, item_id, evidence_id, ordinal) VALUES (?, ?, ?, ?, ?)",
+                        (version_id, _encode_enum(kind), item.item_id, evidence_id, ordinal),
+                    )
+        for view in valuations:
+            connection.execute(
+                "INSERT INTO memo_version_valuations "
+                "(version_id, timepoint_id, kind, label, model_month, scope_kind, status, value, "
+                "unavailable_reason, unavailable_message, selected, consumed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    version_id,
+                    view.timepoint_id,
+                    view.kind,
+                    view.label,
+                    view.model_month,
+                    view.scope_kind,
+                    view.status,
+                    view.value,
+                    view.unavailable_reason,
+                    view.unavailable_message,
+                    1 if view.selected else 0,
+                    1 if view.consumed else 0,
+                ),
+            )
+        for dependency in dependencies:
+            connection.execute(
+                "INSERT INTO memo_version_dependencies "
+                "(version_id, dependency_class, scope_id, fingerprint) VALUES (?, ?, ?, ?)",
+                (
+                    version_id,
+                    _encode_enum(dependency.dependency_class),
+                    dependency.scope_id,
+                    dependency.fingerprint,
+                ),
+            )
+        _touch_investment(connection, investment_id, now=now)
+        written = connection.execute(
+            "SELECT * FROM investment_memo_versions WHERE version_id = ?", (version_id,)
+        ).fetchone()
+        return _read_memo_version(connection, written)
+
+
+# -----------------------------------------------------------------------------
+# The Investment Committee decision (Section 7.5; R-F)
+# -----------------------------------------------------------------------------
+
+
+def _row_to_ic_decision(row: sqlite3.Row) -> InvestmentCommitteeDecision:
+    version_id = row["version_id"]
+    return InvestmentCommitteeDecision(
+        memo_version_id=version_id,
+        decision=_p7_10_token(
+            row["decision"], InvestmentCommitteeOutcome, where=f"Committee decision on {version_id!r}"
+        ),
+        decision_note=row["decision_note"],
+        decided_at=row["decided_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def get_committee_decision(
+    investment_id: str, version_id: str, *, db_path: Path | None = None
+) -> InvestmentCommitteeDecision | None:
+    """The committee's recorded outcome for one published version, or ``None``
+    when none has been entered.
+
+    ``None`` is deliberately not ``PENDING``: "the committee has not recorded
+    anything" and "the committee recorded that it is pending" are different
+    facts, and the second is a decision somebody made."""
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        if connection.execute(
+            "SELECT 1 FROM investment_memo_versions WHERE version_id = ? AND investment_id = ?",
+            (version_id, investment_id),
+        ).fetchone() is None:
+            raise MemoVersionNotFoundError(investment_id, version_id)
+        row = connection.execute(
+            "SELECT * FROM investment_committee_decisions WHERE version_id = ?", (version_id,)
+        ).fetchone()
+        return None if row is None else _row_to_ic_decision(row)
+
+
+def put_committee_decision(
+    investment_id: str,
+    version_id: str,
+    decision: InvestmentCommitteeDecision,
+    *,
+    db_path: Path | None = None,
+) -> InvestmentCommitteeDecision:
+    """Record or update the committee's outcome for one published version
+    (Section 7.5; R-F).
+
+    **A different act from the analyst's recommendation.** This writes one
+    table, and that table holds no memo content: nothing here can reach
+    ``analyst_recommendation``, and nothing that writes a draft can reach this.
+    The two are separate fields, separate records and separate acts.
+
+    **It never changes the published version.** The version's own rows are not
+    touched and its ``published_fingerprint`` does not move, because the
+    fingerprint excludes the IC decision by construction (Section 10) -- the
+    committee decides on an immutable package, and deciding must not redefine
+    what was decided on.
+
+    **It attaches only to a published version.** There is no route to record a
+    committee decision against a draft: a committee decides on something
+    immutable, or it has not decided."""
+
+    now = _utc_now_iso()
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        if connection.execute(
+            "SELECT 1 FROM investment_memo_versions WHERE version_id = ? AND investment_id = ?",
+            (version_id, investment_id),
+        ).fetchone() is None:
+            raise MemoVersionNotFoundError(investment_id, version_id)
+        if not isinstance(decision.decision, InvestmentCommitteeOutcome):
+            raise MemoError(
+                f"Committee decision {decision.decision!r} is not one of: "
+                f"{', '.join(member.value for member in InvestmentCommitteeOutcome)}."
+            )
+        existing = connection.execute(
+            "SELECT created_at FROM investment_committee_decisions WHERE version_id = ?", (version_id,)
+        ).fetchone()
+        created_at = existing["created_at"] if existing is not None else now
+        connection.execute(
+            "DELETE FROM investment_committee_decisions WHERE version_id = ?", (version_id,)
+        )
+        connection.execute(
+            "INSERT INTO investment_committee_decisions "
+            "(version_id, decision, decision_note, decided_at, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                version_id,
+                _encode_enum(decision.decision),
+                decision.decision_note,
+                decision.decided_at,
+                created_at,
+                now,
+            ),
+        )
+        _touch_investment(connection, investment_id, now=now)
+        written = connection.execute(
+            "SELECT * FROM investment_committee_decisions WHERE version_id = ?", (version_id,)
+        ).fetchone()
+        return _row_to_ic_decision(written)

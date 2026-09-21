@@ -351,12 +351,29 @@ def test_the_provenance_read_executes_only_select_and_calls_no_writer() -> None:
     assert writers == set()
 
 
+#: Excel Export 1's own reviewed head: the second parent of its merge into
+#: `main` (PR #45, `b9437e4`). Named at P7.10 Stage 2 so the no-DDL guard below
+#: reads this export's own committed range rather than the working tree, which a
+#: later gate's migration legitimately changes.
+_HEAD = "e228a3e93613b37c70c0c5bfe63fb02e0c335d46"
+
+
 def test_the_schema_version_is_unchanged_and_no_ddl_was_added() -> None:
+    """**This export** adds no DDL and no schema version change.
+
+    Re-pinned at P7.10 Stage 2: measured against the working tree, the diff read
+    that separately ratified gate's additive migration as this one's. It is not
+    -- that gate has its own ledger and its own additive-migration proof.
+    Measured over this export's own committed range, the claim is exactly what
+    it always was."""
+
     store = (_ANCHOR / "deals" / "store.py").read_bytes().decode("utf-8").replace("\r\n", "\n")
-    assert re.search(r"^_SCHEMA_VERSION = 14$", store, re.M)
+    assert re.search(r"^_SCHEMA_VERSION = 15$", store, re.M)
     added = [
         line[1:]
-        for line in _git("diff", "--no-renames", "-U0", _BASE, "--", "src/anchor/deals/store.py").splitlines()
+        for line in _git(
+            "diff", "--no-renames", "-U0", _BASE, _HEAD, "--", "src/anchor/deals/store.py"
+        ).splitlines()
         if line.startswith("+") and not line.startswith("+++")
     ]
     assert added, "the ledger says store.py changed"

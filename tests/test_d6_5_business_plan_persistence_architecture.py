@@ -461,10 +461,31 @@ _PLAN_ITEM_ATTRIBUTES = frozenset(
 )
 
 
+#: ``item_id`` is a Business Plan item's field name *and* the ratified name for
+#: an Investment Memo item (P7.10 Section 7.4). Sharing a word is not reading a
+#: plan, so the memo's own use is excluded and replaced by the stronger,
+#: positive assertion below: the P7.10 section reads no Business Plan attribute
+#: at all.
+_SHARED_WITH_THE_MEMO = frozenset({"item_id"})
+
+
 def test_the_api_never_reads_a_plan_item() -> None:
-    tree = ast.parse(_current(_API))
+    source = _current(_API)
+    tree = ast.parse(source)
     attributes = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
-    assert not attributes & _PLAN_ITEM_ATTRIBUTES
+    assert not attributes & (_PLAN_ITEM_ATTRIBUTES - _SHARED_WITH_THE_MEMO)
+
+    # The excluded word, proved where it matters: the P7.10 Stage 2 section
+    # reads no Business Plan attribute, including the ones it does not share.
+    marker = "# Phase 7 Gate P7.10 Stage 2"
+    if marker in source:
+        line = source[: source.index(marker)].count("\n") + 1
+        p7_10 = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and getattr(node, "lineno", 0) >= line
+        }
+        assert not p7_10 & (_PLAN_ITEM_ATTRIBUTES - _SHARED_WITH_THE_MEMO)
 
 
 # =============================================================================

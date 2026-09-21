@@ -21,7 +21,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import date
 from enum import Enum
 from typing import Any
@@ -57,8 +57,34 @@ from ..partnership.contracts import (
     ProRataByContribution,
     WaterfallTier,
 )
+# P7.10 Stage 2. The valuation *shapes* only -- ``anchor.valuation.engine`` and
+# ``anchor.valuation.funding`` are deliberately absent, exactly as no engine
+# calculation module is imported here: this module hashes already-resolved
+# values, it never resolves one.
+from ..valuation.contracts import (
+    AnalystValue,
+    DirectCap,
+    InvestmentValuationResult,
+    UnitValuationResult,
+    ValuationTimepoint,
+)
+# The memo *shapes* only. ``anchor.memo`` imports nothing from this package, so
+# naming its contracts here creates no cycle -- and typing them honestly is what
+# lets a field added to a memo be a fingerprint change someone notices.
+from ..memo.contracts import (
+    InvestmentMemoDraft,
+    InvestmentMemoVersion,
+    MemoEvidenceReference,
+    MemoItem,
+    MemoRiskItem,
+    MemoTermItem,
+    SelectedDecision,
+)
+from ..analysis.scenario import ScenarioDefinition
+from ..analysis.strategy import StrategyDefinition
 from .capital_structure_codec import PositionTermsKind, amount_rule_kind
 from .partnership_codec import condition_kind, recipient_kind, split_rule_kind, subject_kind
+from .valuation_codec import valuation_method_kind
 
 #: The top-level fingerprint key a non-empty Business Plan is recorded under.
 #: No economic contract has a field of this name, so it cannot collide with one.
@@ -448,15 +474,35 @@ def capital_structure_payload(capital_structure: CapitalStructure) -> list[dict[
 
 
 def fingerprint_structured_source(
-    *, project_source_fingerprint: str, capital_structure: CapitalStructure
+    *,
+    project_source_fingerprint: str,
+    capital_structure: CapitalStructure,
+    consumed_valuations: Mapping[str, InvestmentValuationResult] | None = None,
 ) -> str:
     """The source fingerprint of one structured variant: the Project variant's
-    own fingerprint, and the resolved Capital Structure's economics.
+    own fingerprint, the resolved Capital Structure's economics, and -- from
+    P7.10 Stage 2 -- any valuation a ``PctOfValue`` rule actually consumes.
 
     **An empty structure collapses to the Project fingerprint itself** (FP-2),
     returned unchanged rather than hashed with an empty payload. That is what
     makes structured capital neutral: a Deal, a Strategy or an Investment with
-    no authored position has one financial identity, not two."""
+    no authored position has one financial identity, not two.
+
+    **Every pre-P7.10 digest is preserved byte for byte.** ``consumed_valuations``
+    joins the payload only when it is non-empty, exactly as the D6.5 Business
+    Plan rule joins only a non-empty plan. A structure with no ``PctOfValue``
+    rule -- which is every structure that existed before this gate -- hashes the
+    identical payload it hashed at P7.8B, so no stored fingerprint, snapshot or
+    published identity is invalidated by this gate's existence.
+
+    **Why it participates at all.** Section 6: "a valuation consumed by
+    ``PctOfValue`` is an economic dependency of the resolved Capital Structure
+    and therefore participates in its financial identity and downstream
+    invalidation." Changing the cap rate of a consumed timepoint changes the
+    dollars a position is funded with; a structured identity that did not move
+    would report that changed analysis as the same one. A *report-only*
+    valuation no position consumes is deliberately absent: it changes valuation
+    and memo freshness, and not the underlying Acquisition analysis."""
 
     if not isinstance(project_source_fingerprint, str) or not project_source_fingerprint:
         raise UnfingerprintableValueError(project_source_fingerprint)
@@ -464,12 +510,13 @@ def fingerprint_structured_source(
         raise UnfingerprintableValueError(capital_structure)
     if not capital_structure.positions:
         return project_source_fingerprint
-    return _fingerprint_json(
-        {
-            _PROJECT_FINGERPRINT_KEY: project_source_fingerprint,
-            _CAPITAL_STRUCTURE_KEY: capital_structure_payload(capital_structure),
-        }
-    )
+    payload: dict[str, Any] = {
+        _PROJECT_FINGERPRINT_KEY: project_source_fingerprint,
+        _CAPITAL_STRUCTURE_KEY: capital_structure_payload(capital_structure),
+    }
+    if consumed_valuations:
+        payload[_CONSUMED_VALUATIONS_KEY] = consumed_valuation_payload(consumed_valuations)
+    return _fingerprint_json(payload)
 
 
 # =============================================================================
@@ -641,5 +688,559 @@ def fingerprint_partnership_source(
         {
             _STRUCTURED_FINGERPRINT_KEY: structured_source_fingerprint,
             _PARTNERSHIP_KEY: partnership_payload(partnership),
+        }
+    )
+
+
+# =============================================================================
+# Phase 7 Gate P7.10 Stage 2 -- the valuation and memo identities
+#
+# ``docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`` Section 10. P7.10 adds
+# *layered* identity rather than widening any existing fingerprint::
+#
+#     project source fingerprint        P7.2 / P7.4 / P7.6, UNCHANGED
+#             |
+#     structured source fingerprint     P7.8B, unchanged unless a PctOfValue
+#             |                         rule actually consumes a valuation
+#             v                         (see ``fingerprint_structured_source``)
+#     partnership source fingerprint    P7.9, unchanged
+#
+#     valuation-definition fingerprint = f(the authored timepoints' economics)
+#             |
+#     valuation-result fingerprint = f(selected variant fingerprint,
+#             |                        definition fingerprint,
+#             |                        the resolved values and statuses)
+#             v
+#     memo-content fingerprint = f(the authored memo, its item ids, its explicit
+#             |                    display order, the selected decision, the
+#             |                    cited evidence's content)
+#             v
+#     published-version fingerprint = f(every dependency identity above,
+#                                       the immutable version content)
+#
+# **Prose never reaches a financial identity.** No memo field, item text,
+# evidence title or narrative of any kind enters the project, structured,
+# partnership, valuation-definition or valuation-result fingerprint. A memo can
+# therefore be rewritten from end to end without invalidating one number.
+#
+# **Presentation never reaches any identity that claims to be economic.** A
+# valuation ``label`` and a timepoint's display order are excluded from the
+# valuation fingerprints by construction -- they are not in the payloads at all,
+# so renaming a view cannot invalidate a published memo's financial
+# dependencies. Memo item ``display_order`` *is* in the memo-content
+# fingerprint, because Section 10 states it is part of the authored memo.
+#
+# **The IC decision is excluded from the published-version fingerprint**
+# (Section 10). The committee records its outcome after publication; doing so
+# must not alter the identity of the thing it decided on.
+# =============================================================================
+
+#: The keys each P7.10 payload is recorded under. No economic contract has a
+#: field of any of these names, so none can collide with one.
+_VALUATION_DEFINITIONS_KEY = "valuation_definitions"
+_VALUATION_RESULTS_KEY = "valuation_results"
+_VARIANT_FINGERPRINT_KEY = "variant_source_fingerprint"
+_VALUATION_DEFINITION_FINGERPRINT_KEY = "valuation_definition_fingerprint"
+_CONSUMED_VALUATIONS_KEY = "consumed_valuations"
+_MEMO_CONTENT_KEY = "memo_content"
+_EVIDENCE_KEY = "evidence"
+_DEPENDENCIES_KEY = "dependencies"
+_VERSION_CONTENT_KEY = "version_content"
+
+
+def _method_payload(method: object) -> dict[str, Any]:
+    """One unit valuation instruction's method, by kind (Section 10).
+
+    Explicit per method: an unknown one is refused rather than hashed as
+    something else. ``evidence_id`` participates because Section 10 names the
+    *required evidence id* as part of the definition's identity -- repointing an
+    analyst-supplied value at a different source is a different valuation, even
+    when the amount is unchanged."""
+
+    match method:
+        case DirectCap():
+            return {"kind": valuation_method_kind(method).value, "cap_rate": float(method.cap_rate)}
+        case AnalystValue():
+            return {
+                "kind": valuation_method_kind(method).value,
+                "amount": float(method.amount),
+                "evidence_id": method.evidence_id,
+            }
+        case _:
+            raise UnfingerprintableValueError(method)
+
+
+def valuation_timepoint_payload(timepoint: ValuationTimepoint) -> dict[str, Any]:
+    """The canonical economic form of one authored valuation definition.
+
+    Included (Section 10): the timepoint id, its kind, its model month, and
+    every unit instruction's unit id and method economics, in ``unit_id`` order.
+
+    **Excluded: ``label``.** It is analyst-facing presentation. Section 5.2 is
+    explicit -- "a label change is presentation-only; a model-month change is a
+    different valuation definition" -- so renaming a view must never invalidate
+    a published memo's financial dependencies.
+
+    **Excluded: authored order.** Instructions sort by ``unit_id``, so a
+    permutation of the authored tuple changes nothing. Sorting is not
+    deduplication: two instructions for one Unit remain two entries here and are
+    refused by the Stage 1 validator, never collapsed."""
+
+    if not isinstance(timepoint, ValuationTimepoint):
+        raise UnfingerprintableValueError(timepoint)
+    return {
+        "timepoint_id": timepoint.timepoint_id,
+        "kind": timepoint.kind.value,
+        "model_month": int(timepoint.model_month),
+        "unit_instructions": [
+            {"unit_id": instruction.unit_id, "method": _method_payload(instruction.method)}
+            for instruction in sorted(
+                timepoint.unit_instructions, key=lambda item: item.unit_id
+            )
+        ],
+    }
+
+
+def fingerprint_valuation_definitions(timepoints: Iterable[ValuationTimepoint]) -> str:
+    """The identity of every valuation definition an Investment states.
+
+    Canonical by ``timepoint_id``, so the analyst's authored order and the
+    storage ordinal that preserves it never reach the digest. An Investment that
+    states no timepoint has the digest of the empty list -- a real, stable
+    identity, because "no valuation is defined" is itself a state a published
+    memo can depend on and can later stop matching."""
+
+    return _fingerprint_json(
+        {
+            _VALUATION_DEFINITIONS_KEY: [
+                valuation_timepoint_payload(timepoint)
+                for timepoint in sorted(timepoints, key=lambda item: item.timepoint_id)
+            ]
+        }
+    )
+
+
+def _unit_result_payload(result: UnitValuationResult) -> dict[str, Any]:
+    """One Unit's resolved value and status.
+
+    Both halves participate. The value, because it is what the memo cites; the
+    status and typed reason, because "this Unit has no value, for this reason"
+    is a result a memo can cite just as much as an amount, and a later state in
+    which it *does* resolve must not read as unchanged.
+
+    ``analyst_supplied`` participates too: the same number reached by an Anchor
+    direct capitalisation and by an analyst's own statement are different
+    results (Section 5.4), and a fingerprint that could not tell them apart
+    would let one be relabelled as the other."""
+
+    return {
+        "unit_id": result.unit_id,
+        "model_month": int(result.model_month),
+        "method_kind": result.method_kind.value,
+        "analyst_supplied": bool(result.analyst_supplied),
+        "status": result.status.value,
+        "value": None if result.value is None else float(result.value),
+        "unavailable_reason": (
+            None if result.unavailable_reason is None else result.unavailable_reason.value
+        ),
+    }
+
+
+def valuation_result_payload(result: InvestmentValuationResult) -> dict[str, Any]:
+    """The canonical form of one resolved valuation at one timepoint.
+
+    ``label`` is excluded here for the same reason it is excluded from the
+    definition payload; ``unit_results`` is already in canonical ``unit_id``
+    order as Stage 1 produced it, and is re-sorted rather than trusted, so this
+    payload cannot inherit an ordering assumption from another layer."""
+
+    if not isinstance(result, InvestmentValuationResult):
+        raise UnfingerprintableValueError(result)
+    return {
+        "timepoint_id": result.timepoint_id,
+        "kind": result.kind.value,
+        "model_month": int(result.model_month),
+        "scope_kind": result.scope_kind.value,
+        "status": result.status.value,
+        "value": None if result.value is None else float(result.value),
+        "unavailable_reason": (
+            None if result.unavailable_reason is None else result.unavailable_reason.value
+        ),
+        "unit_results": [
+            _unit_result_payload(unit)
+            for unit in sorted(result.unit_results, key=lambda item: item.unit_id)
+        ],
+    }
+
+
+def fingerprint_valuation_results(
+    *,
+    variant_source_fingerprint: str,
+    valuation_definition_fingerprint: str,
+    results: Iterable[InvestmentValuationResult],
+) -> str:
+    """The identity of one Analysis Variant's resolved valuations (Section 10).
+
+    Three layers, each named explicitly rather than merged: the variant that
+    produced the forward NOIs, the definitions that were resolved, and the
+    values and statuses that came out. That is what makes a stale reason
+    specific -- a changed cap rate moves the definition layer, and a changed
+    Strategy moves the variant layer, and the two are distinguishable."""
+
+    if not isinstance(variant_source_fingerprint, str) or not variant_source_fingerprint:
+        raise UnfingerprintableValueError(variant_source_fingerprint)
+    if not isinstance(valuation_definition_fingerprint, str) or not valuation_definition_fingerprint:
+        raise UnfingerprintableValueError(valuation_definition_fingerprint)
+    return _fingerprint_json(
+        {
+            _VARIANT_FINGERPRINT_KEY: variant_source_fingerprint,
+            _VALUATION_DEFINITION_FINGERPRINT_KEY: valuation_definition_fingerprint,
+            _VALUATION_RESULTS_KEY: [
+                valuation_result_payload(result)
+                for result in sorted(results, key=lambda item: item.timepoint_id)
+            ],
+        }
+    )
+
+
+def consumed_valuation_payload(
+    consumed: Mapping[str, InvestmentValuationResult]
+) -> list[dict[str, Any]]:
+    """The resolved valuations a Capital Structure's ``PctOfValue`` rules
+    actually consume, in ``timepoint_id`` order.
+
+    Section 6 is explicit: "a valuation consumed by ``PctOfValue`` is an
+    economic dependency of the resolved Capital Structure and therefore
+    participates in its financial identity and downstream invalidation". Only
+    *consumed* valuations appear -- a report-only timepoint no position reads
+    changes valuation and memo freshness, and deliberately not the structured
+    identity."""
+
+    return [
+        valuation_result_payload(consumed[timepoint_id]) for timepoint_id in sorted(consumed)
+    ]
+
+
+def fingerprint_business_plans(plans: Mapping[str, BusinessPlan]) -> str:
+    """The identity of the Business Plans one memo depends on: the Investment's
+    own under the key ``""``, and each Unit's under its ``unit_id``.
+
+    A *finer* observation than the Project fingerprint, never a replacement for
+    it. A Business Plan edit moves this digest and the Project one; reporting
+    this class first lets a stale memo say "the Business Plan changed" instead
+    of only "the underwriting changed". It is never used to decide a number --
+    ``resolve_business_plan`` remains the only authority on what a plan means."""
+
+    payload: dict[str, Any] = {}
+    for scope_id, plan in plans.items():
+        if not isinstance(plan, BusinessPlan):
+            raise UnfingerprintableValueError(plan)
+        payload[scope_id] = _with_business_plan({}, plan).get(_BUSINESS_PLAN_KEY, None)
+    return _fingerprint_json({_BUSINESS_PLAN_KEY: payload})
+
+
+def _overlay_content_payload(content: object) -> Any:
+    """One Strategy overlay's content, canonically.
+
+    Every overlay content in the ratified contract is a dataclass, so
+    ``dataclasses.asdict`` reaches all of it and a field added to one is covered
+    the day it is added. Anything else raises: a content shape with no defined
+    canonical form must not be hashed by its ``repr``."""
+
+    if dataclasses.is_dataclass(content) and not isinstance(content, type):
+        return dataclasses.asdict(content)
+    raise UnfingerprintableValueError(content)
+
+
+def fingerprint_strategy_definition(strategy: StrategyDefinition | None) -> str:
+    """The identity of one selected Strategy's authored statement.
+
+    Included: every overlay's ``unit_id`` and domain with its content, and every
+    root overlay's domain with its content, each sorted so authored order never
+    participates.
+
+    **Excluded: ``name`` and ``description``.** They are presentation, exactly
+    as a position's name and a partner's name are excluded from the P7.8B and
+    P7.9 payloads. Renaming a Strategy never invalidates a memo.
+
+    ``None`` is the reserved implicit Base Strategy, which states nothing and
+    has a stable identity of its own."""
+
+    if strategy is None:
+        return _fingerprint_json({"strategy": None})
+    return _fingerprint_json(
+        {
+            "strategy": {
+                "strategy_id": strategy.strategy_id,
+                "overlays": sorted(
+                    (
+                        [overlay.unit_id, overlay.domain.value, _overlay_content_payload(overlay.content)]
+                        for overlay in strategy.overlays
+                    ),
+                    key=lambda entry: (entry[0], entry[1], _fingerprint_json({"content": entry[2]})),
+                ),
+                "root_overlays": sorted(
+                    (
+                        [overlay.domain.value, _overlay_content_payload(overlay.content)]
+                        for overlay in strategy.root_overlays
+                    ),
+                    key=lambda entry: (entry[0], _fingerprint_json({"content": entry[1]})),
+                ),
+            }
+        }
+    )
+
+
+def fingerprint_scenario_definition(scenario: ScenarioDefinition | None) -> str:
+    """The identity of one selected Scenario's authored statement.
+
+    Included: every override's Unit, target, operation and value, sorted.
+    Excluded: ``name`` and ``description``, for the same reason as the Strategy
+    above. ``None`` is the reserved implicit Base Scenario."""
+
+    if scenario is None:
+        return _fingerprint_json({"scenario": None})
+    return _fingerprint_json(
+        {
+            "scenario": {
+                "scenario_id": scenario.scenario_id,
+                "overrides": sorted(
+                    [
+                        override.unit_id,
+                        override.target.value,
+                        override.operation.value,
+                        float(override.value),
+                    ]
+                    for override in scenario.overrides
+                ),
+            }
+        }
+    )
+
+
+def fingerprint_investment_membership(unit_ids: Iterable[str]) -> str:
+    """The identity of which Units an Investment holds.
+
+    Membership is a set: sorted, so its storage order never participates. A Unit
+    added to or removed from the Investment changes what the memo is *about*,
+    which is why it is reported ahead of every other financial class."""
+
+    return _fingerprint_json({"investment_membership": sorted(unit_ids)})
+
+
+def fingerprint_unit_underwriting(unit_fingerprints: Mapping[str, str]) -> str:
+    """The identity of every member Unit's own resolved underwriting inputs.
+
+    These are the *existing* per-Unit Project fingerprints, read and combined --
+    never recomputed and never redefined. This layer adds a name for them so a
+    stale memo can say which Unit's underwriting moved."""
+
+    return _fingerprint_json({"underwriting": sorted(unit_fingerprints.items())})
+
+
+def fingerprint_decision_perspective(
+    *, perspective: str, position_id: str | None, partner_id: str | None
+) -> str:
+    """The identity of the selected decision perspective (Section 7.3)."""
+
+    return _fingerprint_json(
+        {
+            "decision_perspective": {
+                "perspective": perspective,
+                "position_id": position_id,
+                "partner_id": partner_id,
+            }
+        }
+    )
+
+
+def evidence_payload(evidence: Iterable[MemoEvidenceReference]) -> list[dict[str, Any]]:
+    """The canonical content of a set of Evidence References, by
+    ``evidence_id``.
+
+    Included: the source kind, title, reference, as-of date and approval state
+    -- the content a claim actually rests on. Approval participates because
+    withdrawing approval changes what the memo may present as sourced, which is
+    exactly the invalidation Section 8 requires.
+
+    **Excluded: ``display_order``.** It is presentation, so reordering the
+    evidence register never invalidates a published memo."""
+
+    return sorted(
+        (
+            {
+                "evidence_id": item.evidence_id,
+                "source_kind": item.source_kind.value,
+                "title": item.title,
+                "reference": item.reference,
+                "as_of_date": None if item.as_of_date is None else item.as_of_date.isoformat(),
+                "approved": bool(item.approved),
+            }
+            for item in evidence
+        ),
+        key=lambda entry: entry["evidence_id"],
+    )
+
+
+def fingerprint_evidence(evidence: Iterable[MemoEvidenceReference]) -> str:
+    """The identity of the Evidence References a memo cites (Section 8).
+
+    Evidence changes no financial fingerprint: this digest is a memo dependency
+    only, and nothing upstream of the memo reads it."""
+
+    return _fingerprint_json({_EVIDENCE_KEY: evidence_payload(evidence)})
+
+
+def _claim_evidence_payload(evidence_ids: Iterable[str]) -> list[str]:
+    """The evidence one claim rests on, in the analyst's authored order.
+
+    Order participates because it is authored, not presentational: it is the
+    order a reader is asked to follow the support in. Re-pointing a claim at a
+    different source, adding one or dropping one therefore changes the memo's
+    content identity, which is what makes an evidence-link change visible to
+    stale analysis (Section 10)."""
+
+    return [str(evidence_id) for evidence_id in evidence_ids]
+
+
+def _memo_item_payload(item: MemoItem) -> dict[str, Any]:
+    return {
+        "item_id": item.item_id,
+        "section": item.section.value,
+        "display_order": int(item.display_order),
+        "text": item.text,
+        "evidence_ids": _claim_evidence_payload(item.evidence_ids),
+    }
+
+
+def _memo_risk_payload(item: MemoRiskItem) -> dict[str, Any]:
+    return {
+        "item_id": item.item_id,
+        "display_order": int(item.display_order),
+        "text": item.text,
+        "severity": item.severity.value,
+        "residual_risk": item.residual_risk.value,
+        "mitigant": item.mitigant,
+        "evidence_ids": _claim_evidence_payload(item.evidence_ids),
+    }
+
+
+def _memo_term_payload(item: MemoTermItem) -> dict[str, Any]:
+    return {
+        "item_id": item.item_id,
+        "display_order": int(item.display_order),
+        "text": item.text,
+        "priority": item.priority.value,
+        "evidence_ids": _claim_evidence_payload(item.evidence_ids),
+    }
+
+
+def _selected_valuation_payload(memo: InvestmentMemoDraft | InvestmentMemoVersion) -> list[str]:
+    """The valuation views this memo selects for inclusion, sorted.
+
+    A draft states its selection directly; a published version carries the
+    selection frozen onto its own valuation rows. Both answer the same question,
+    so both reduce to the same sorted set of ``timepoint_id`` here.
+
+    Sorted, not authored-order: which views the memo includes is the content
+    question. Where they sit on the page is presentation, and Section 10 keeps
+    presentation out of identity."""
+
+    if isinstance(memo, InvestmentMemoDraft):
+        selected: Iterable[str] = memo.selected_valuation_timepoint_ids
+    else:
+        selected = (view.timepoint_id for view in memo.valuations if view.selected)
+    return sorted(str(timepoint_id) for timepoint_id in selected)
+
+
+def _selected_decision_payload(selected: SelectedDecision | None) -> dict[str, Any] | None:
+    if selected is None:
+        return None
+    return {
+        "strategy_id": selected.strategy_id,
+        "scenario_id": selected.scenario_id,
+        "perspective": selected.perspective.value,
+        "position_id": selected.position_id,
+        "partner_id": selected.partner_id,
+    }
+
+
+def memo_content_payload(
+    memo: InvestmentMemoDraft | InvestmentMemoVersion, *, evidence: Iterable[MemoEvidenceReference]
+) -> dict[str, Any]:
+    """The canonical form of one authored memo (Section 10).
+
+    Included: every authoritative field, every item's stable id and text, the
+    **explicit display order** Section 10 names as part of the memo, the
+    selected decision, the *content* of the evidence it cites -- so withdrawing
+    approval from a cited source invalidates the memo that leaned on it -- the
+    **evidence each individual claim rests on**, and the valuation views the
+    memo selects for inclusion.
+
+    Claim-level links participate because re-pointing a risk at a different
+    appraisal changes what the memo asserts, even when every word and every
+    registered source is untouched. The selection participates because which
+    valuation views a memo includes decides which ones must resolve before it
+    can publish.
+
+    Excluded: ``memo_id``, ``investment_id`` and the timestamps. They identify
+    the record, not its content; a memo does not become a different memo by
+    being saved again."""
+
+    return {
+        "prepared_by": memo.prepared_by,
+        "decision_ask": memo.decision_ask,
+        "analyst_recommendation": memo.analyst_recommendation.value,
+        "executive_summary": memo.executive_summary,
+        "execution_complexity": memo.execution_complexity.value,
+        "return_on_time_notes": memo.return_on_time_notes,
+        "selected_decision": _selected_decision_payload(memo.selected_decision),
+        "items": sorted(
+            (_memo_item_payload(item) for item in memo.items), key=lambda entry: entry["item_id"]
+        ),
+        "risk_items": sorted(
+            (_memo_risk_payload(item) for item in memo.risk_items),
+            key=lambda entry: entry["item_id"],
+        ),
+        "term_items": sorted(
+            (_memo_term_payload(item) for item in memo.term_items),
+            key=lambda entry: entry["item_id"],
+        ),
+        "evidence": evidence_payload(evidence),
+        "selected_valuations": _selected_valuation_payload(memo),
+    }
+
+
+def fingerprint_memo_content(
+    memo: InvestmentMemoDraft | InvestmentMemoVersion, *, evidence: Iterable[MemoEvidenceReference]
+) -> str:
+    """The memo-content fingerprint (Section 10).
+
+    Excludes the generated report entirely: no PDF byte, page number or rendered
+    layout participates, because none of them is authored content. Stage 2
+    generates no report at all."""
+
+    return _fingerprint_json({_MEMO_CONTENT_KEY: memo_content_payload(memo, evidence=evidence)})
+
+
+def fingerprint_published_version(
+    *, memo_content_fingerprint: str, dependencies: Iterable[tuple[str, str, str]]
+) -> str:
+    """The published-version fingerprint (Section 10).
+
+    ``dependencies`` is the version's whole dependency ledger as
+    ``(dependency_class, scope_id, fingerprint)`` triples, sorted, so the ledger
+    the version recorded is itself part of the version's identity.
+
+    **The Investment Committee decision is deliberately absent.** It is entered
+    after publication and recording it must not change the identity of the
+    package the committee decided on."""
+
+    if not isinstance(memo_content_fingerprint, str) or not memo_content_fingerprint:
+        raise UnfingerprintableValueError(memo_content_fingerprint)
+    return _fingerprint_json(
+        {
+            _VERSION_CONTENT_KEY: memo_content_fingerprint,
+            _DEPENDENCIES_KEY: sorted([str(a), str(b), str(c)] for a, b, c in dependencies),
         }
     )

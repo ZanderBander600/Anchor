@@ -541,7 +541,7 @@ def test_the_eight_tables_hold_authored_terms_only() -> None:
     # eight Partnership tables are unchanged by either; what this line pins is
     # that the store still declares one version, and that Stage 2's tables
     # were added under 12.
-    assert "_SCHEMA_VERSION = 14" in text
+    assert "_SCHEMA_VERSION = 15" in text
     assert "_SCHEMA_VERSION = 12" in _git("show", f"{_STAGE_2_HEAD}:{_STORE}")
 
 

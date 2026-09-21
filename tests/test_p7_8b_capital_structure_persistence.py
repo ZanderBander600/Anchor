@@ -185,7 +185,11 @@ def test_a_fresh_store_is_schema_11_with_six_empty_capital_tables(db: Path) -> N
     }
     connection.close()
 
-    assert version == 14  # P7.9 Stage 2 added schema 12's Partnership tables; AM1 added schema 13's Asset Management tables; Asset Types 1 schema 14's classification tables
+    # P7.9 Stage 2 added schema 12's Partnership tables; AM1 schema 13's Asset
+    # Management tables; Asset Types 1 schema 14's classification tables; P7.10
+    # Stage 2 schema 15's sixteen valuation and Investment Memo tables. P7.8B's
+    # own six are unchanged by all of them, which is what this test is about.
+    assert version == 15
     assert set(P7_8_TABLES) <= table_names(db)
     assert capital_rows(db) == EMPTY_ROWS
     assert columns == {

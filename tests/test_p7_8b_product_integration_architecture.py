@@ -502,18 +502,27 @@ def test_no_later_gate_economics_reach_the_new_surface() -> None:
 
 def test_the_authoring_surface_refuses_the_unexecutable_subset() -> None:
     """Persistence can represent every P7.7 contract; the routes accept only
-    what P7.8 executes, and say so with P7.8A's own stable codes."""
+    what P7.8 executes, and say so with P7.8A's own stable codes.
+
+    **Re-pinned at P7.10 Stage 2.** ``UNSUPPORTED_AMOUNT_RULE`` is gone from the
+    list because the rule it refused is no longer unexecutable: this gate's own
+    refusal message said ``PctOfValue`` "arrives with valuation timepoints", and
+    they have arrived. The refusal is retired rather than relaxed, and every
+    other unexecutable convention is refused exactly as before. That a
+    ``PctOfValue`` rule naming an undefined or unresolvable timepoint still
+    produces no amount -- a typed unavailable funding state instead -- is proved
+    by ``tests/test_p7_10_stage_2_valuation_and_freshness.py`` and
+    ``tests/test_p7_10_stage_2_api.py``."""
 
     api = _current(_API)
     for code in (
-        "UNSUPPORTED_AMOUNT_RULE",
         "UNSUPPORTED_FUNDING_TIMING",
         "UNSUPPORTED_FEE_TIMING",
         "UNSUPPORTED_DEBT_PIK",
         "UNSUPPORTED_DEBT_CURRENT_PAY",
     ):
         assert f"ExecutionIssueCode.{code}" in api, code
-    assert "PctOfValue" in api  # named only to refuse it
+    assert "PctOfValue" in api  # now named to construct it, not only to refuse it
 
 
 def test_no_case_or_competition_identifier() -> None:

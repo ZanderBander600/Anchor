@@ -53,7 +53,6 @@ _FROZEN = (
     "src/anchor/engine/noi.py",
     "src/anchor/engine/returns.py",
     "src/anchor/consolidation/engine.py",
-    "src/anchor/deals/structured_variants.py",
     *(
         f"src/anchor/capital_structure/{name}.py"
         for name in (
@@ -79,6 +78,26 @@ _P7_10_SEAM = tuple(
 #: The accepted repository baseline P7.10 Stage 1 starts from (PR #48).
 _P7_10_BASE = "9c658437f76e8815cb228d4b71b11aaa473450d4"
 
+#: The accepted P7.10 Stage 1 merge (PR #49), which is the baseline P7.10
+#: Stage 2 starts from.
+_P7_10_STAGE_1_MERGE = "f6f36803cdcb646aa8a4af8cfc658a0e368ae58e"
+
+#: P7.10 Stage 2 re-pin. The ratified P7.10 contract makes Stage 2 supply the
+#: persisted valuation authority a ``PctOfValue`` funding is sized from
+#: (Sections 6 and 6.2), and ``structured_variants.py`` is the one seam where a
+#: persisted Capital Structure already meets the executor -- so it is where the
+#: authority has to be threaded. It therefore leaves this gate's working-tree
+#: freeze and becomes part of P7.10 Stage 2's ledger.
+#:
+#: Nothing is weakened. The assertion below still proves the file was
+#: byte-identical to this gate's base from P7.9 through the accepted P7.10
+#: Stage 1 baseline, and P7.10 Stage 2's own architecture suite proves its
+#: change is confined -- the Project pathway, the consolidation and the P7.8A
+#: executors are untouched, and the P7.8B analysis response stays byte for byte
+#: what it was, which the P7.9 Stage 2 compatibility oracle independently
+#: measures.
+_P7_10_STAGE_2_SEAM = ("src/anchor/deals/structured_variants.py",)
+
 
 @pytest.mark.parametrize("path", _P7_10_SEAM)
 def test_each_p7_10_seam_module_was_frozen_through_the_accepted_baseline(path: str) -> None:
@@ -87,6 +106,18 @@ def test_each_p7_10_seam_module_was_frozen_through_the_accepted_baseline(path: s
     the separately ratified P7.10 Stage 1 changes them."""
 
     assert _git("rev-parse", f"{_P7_10_BASE}:{path}").strip() == _git("rev-parse", f"{_P7_9_BASE}:{path}").strip(), path
+
+
+@pytest.mark.parametrize("path", _P7_10_STAGE_2_SEAM)
+def test_the_structured_variant_seam_was_frozen_through_accepted_p7_10_stage_1(path: str) -> None:
+    """P7.9 Stage 1's claim, still proven: this file was byte-identical to this
+    gate's base from P7.9 through the accepted P7.10 Stage 1 merge. Only the
+    separately ratified P7.10 Stage 2 changes it, to supply the persisted
+    valuation authority the contract obliges it to."""
+
+    assert _git("rev-parse", f"{_P7_10_STAGE_1_MERGE}:{path}").strip() == _git(
+        "rev-parse", f"{_P7_9_BASE}:{path}"
+    ).strip(), path
 
 #: Stage 2 and Stage 3 surfaces, and everything upstream: unchanged.
 _PROTECTED = (

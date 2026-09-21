@@ -295,6 +295,35 @@ ASSET_TYPES_1_TABLES = (
     "managed_asset_classifications",
 )
 
+#: The sixteen valuation and Investment Memo tables schema v15 adds (P7.10
+#: Stage 2): the analyst's valuation definitions and their unit instructions,
+#: the Evidence References, the one mutable memo draft with its item and
+#: citation tables, the immutable published versions with their frozen content,
+#: evidence, valuations and dependency ledger, and the committee's separate
+#: decision. P7 structure, never legacy rows, exactly like the tables above: an
+#: Investment gains one only when the analyst authors it.
+P7_10_TABLES = (
+    "valuation_timepoints",
+    "valuation_unit_instructions",
+    "memo_evidence_references",
+    "investment_memo_drafts",
+    "memo_items",
+    "memo_risk_items",
+    "memo_term_items",
+    "memo_draft_evidence",
+    "memo_claim_evidence",
+    "memo_selected_valuations",
+    "investment_memo_versions",
+    "memo_version_items",
+    "memo_version_risk_items",
+    "memo_version_term_items",
+    "memo_version_evidence",
+    "memo_version_valuations",
+    "memo_version_claim_evidence",
+    "memo_version_dependencies",
+    "investment_committee_decisions",
+)
+
 #: The two keys Asset Types 1 adds to every Deal and Managed Asset response.
 CLASSIFICATION_KEYS = ("asset_type", "asset_subtype")
 
@@ -330,7 +359,12 @@ def without_unstated_classification(current: Any, recorded: Any) -> Any:
 
 
 def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
-    """Every row of every table that is not a P7 table, in rowid order."""
+    """Every row of every table that is not a P7 table, in rowid order.
+
+    A later gate's P7 tables are excluded as each earlier gate's are: this
+    compares the rows a legacy database already held, and a gate that appends
+    empty tables must not read as a row that moved. Each gate's own oracle
+    proves its tables arrive empty."""
 
     return {
         table: rows(db, table)
@@ -342,6 +376,7 @@ def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
             - set(P7_8_TABLES)
             - set(P7_9_TABLES)
             - set(AM1_TABLES)
+            - set(P7_10_TABLES)
         )
         if not table.startswith("sqlite_")
     }

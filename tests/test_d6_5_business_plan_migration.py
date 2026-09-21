@@ -136,8 +136,35 @@ _ASSET_TYPES_1_TABLES = {
     "deal_asset_classifications",
     "managed_asset_classifications",
 }
+#: P7.10 Stage 2 (schema 15) adds the sixteen valuation and Investment Memo
+#: tables, empty for a legacy deal: an Investment gains one only when the
+#: analyst authors it.
+_P7_10_TABLES = {
+    "valuation_timepoints",
+    "valuation_unit_instructions",
+    "memo_evidence_references",
+    "investment_memo_drafts",
+    "memo_items",
+    "memo_risk_items",
+    "memo_term_items",
+    "memo_draft_evidence",
+    "memo_claim_evidence",
+    "memo_selected_valuations",
+    "investment_memo_versions",
+    "memo_version_items",
+    "memo_version_risk_items",
+    "memo_version_term_items",
+    "memo_version_evidence",
+    "memo_version_valuations",
+    "memo_version_claim_evidence",
+    "memo_version_dependencies",
+    "investment_committee_decisions",
+}
 #: The schema version the current store migrates a v6 database to.
-_CURRENT_VERSION = 14
+#: P7.10 Stage 2 (schema 15) added nineteen purely additive valuation and
+#: Investment Memo tables. D6.5's own two plan tables and every row it wrote
+#: are still asserted unchanged below.
+_CURRENT_VERSION = 15
 
 
 @pytest.fixture(scope="module")
@@ -288,6 +315,7 @@ def test_the_version_advances_to_7_exactly_once_and_only_the_plan_tables_appear(
         | _P7_9_TABLES
         | _AM1_TABLES
         | _ASSET_TYPES_1_TABLES
+        | _P7_10_TABLES
     )
     assert migrated["deal_capital_plan_items"] == []
     assert migrated["deal_owner_expense_items"] == []

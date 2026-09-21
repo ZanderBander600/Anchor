@@ -243,23 +243,59 @@ def test_the_investment_routes_read_and_replace_the_base_structure(
 # =============================================================================
 
 
+def test_a_valuation_based_funding_is_now_authorable_and_still_executes_no_amount(
+    client: TestClient, db: Path
+) -> None:
+    """P7.10 Stage 2 activated the rule P7.7 always represented, so the
+    authoring door accepts it.
+
+    What has *not* changed is the money: naming a timepoint this Investment does
+    not define stores the rule and resolves no amount at all. The analysis
+    refuses with the Stage 1 funding reason rather than funding zero, the
+    purchase price, or a percentage of either."""
+
+    deal = round_deal(db, name="Deal")
+    rule = {
+        "funding": [
+            {
+                "event_id": "mezz-f",
+                "model_month": 0,
+                "sequence": 1,
+                "amount_rule": {"kind": "pct_of_value", "timepoint_id": "stabilized", "pct": 0.2},
+            }
+        ]
+    }
+
+    saved = client.put(f"/deals/{deal.id}/capital-structure", json=body(wire_mezz(deal.id, **rule)))
+    assert saved.status_code == 200
+    stored = next(
+        p for p in saved.json()["capital_structure"]["positions"] if p["position_id"] == "mezz-a"
+    )
+    assert stored["funding"][0]["amount_rule"] == {
+        "kind": "pct_of_value",
+        "timepoint_id": "stabilized",
+        "pct": 0.2,
+    }
+
+    investment_id = client.get(f"/deals/{deal.id}/capital-structure").json()["investment_id"]
+    states = client.post(f"/investments/{investment_id}/valuation-views/base/base").json()[
+        "funding_states"
+    ]
+    assert [s["status"] for s in states] == ["unavailable"]
+    assert states[0]["amount"] is None
+    assert states[0]["unavailable"]["reason_code"] == "funding_requirement_unresolved"
+
+
 @pytest.mark.parametrize(
     ("label", "position", "code"),
     [
-        (
-            "valuation-based funding",
-            {
-                "funding": [
-                    {
-                        "event_id": "mezz-f",
-                        "model_month": 0,
-                        "sequence": 1,
-                        "amount_rule": {"kind": "pct_of_value", "timepoint_id": "stabilized", "pct": 0.2},
-                    }
-                ]
-            },
-            "unsupported_amount_rule",
-        ),
+        # Re-pinned at P7.10 Stage 2: "valuation-based funding" is no longer an
+        # unexecutable convention. This gate's own refusal said PctOfValue
+        # "arrives with valuation timepoints", and they have arrived, so the rule
+        # is authorable and the refusal is retired rather than relaxed. That a
+        # rule naming an undefined or unresolvable timepoint still yields no
+        # amount is proved by the P7.10 Stage 2 suites; the case below covers it
+        # from this gate's side.
         (
             "a later funding month",
             {

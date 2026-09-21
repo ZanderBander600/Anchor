@@ -11,9 +11,15 @@ Stage status:
   `main` at `f6f3680` on 2026-09-20. It delivers the deterministic valuation
   layer and `PctOfValue` **closing** execution, and nothing else. Its boundary
   is Section 6.1 and its Stage 2 obligation is Section 6.2.
-- **Stages 2, 3, and 4 are not started.** Each requires its own explicit human
+- **Stage 2 is implemented and pending independent review and human
+  acceptance.** It was explicitly started from accepted `main` at `46650a7`
+  (PR #50) and delivers persistence, the Investment Memo domain, versioning, the
+  unavailable-state adapter and the typed API, and nothing else. Its
+  implementation clarifications are Section 22.
+- **Stages 3 and 4 are not started.** Each requires its own explicit human
   start.
-- **Finishing Stage 1 does not automatically start Stage 2.**
+- **Finishing Stage 1 does not automatically start Stage 2, and accepting
+  Stage 2 does not start Stage 3.**
 
 Gate: P7.10
 
@@ -327,11 +333,23 @@ InvestmentMemoDraft
   terms[]                     REQUIRED | DESIRED | NEGOTIABLE
   conditions_to_approval[]
   selected_decision
-  evidence_references[]
+  evidence_references[]        the reusable register; claims link into it
+  selected_valuations[]        the valuation views this memo includes
 ```
 
 All narrative fields are analyst-authoritative. Empty optional sections remain
 absent; the report never manufactures boilerplate to fill them.
+
+Every structured item that can carry a claim — a thesis item, a risk and its
+mitigant, a condition, a term, a business-plan milestone — additionally states
+the Evidence References it rests on, by id and in authored order. Zero is a
+legitimate answer: the link makes a claim *traceable*, and never makes one
+mandatory. See Section 22.7 for the ratified model.
+
+`selected_valuations[]` is the memo's explicit statement of which valuation
+views it includes. It is the only thing that makes a view a published
+dependency; nothing is inferred from order, existence or recency. See
+Section 22.6.
 
 ### 7.3 Selected decision
 
@@ -645,7 +663,7 @@ Stage 1 was human accepted after PR #49 merged to `main` at `f6f3680` on
 2026-09-20. Its acceptance does not start Stage 2 or authorize any later
 financing event.
 
-### Stage 2 — persistence, fingerprints, memo domain, and API — **not started**
+### Stage 2 — persistence, fingerprints, memo domain, and API — **implemented 2026-09-20, pending review**
 
 - the unavailable / N/A presentation adapter Section 6.2 obliges;
 - additive schema migration;
@@ -654,6 +672,10 @@ financing event.
 - immutable version publication and dependency ledger;
 - layered fingerprints and stale reasons;
 - typed API surface and compatibility oracle.
+
+Stage 2 adds no frontend file, no AI surface, no prompt, no PDF and no report
+layout. Schema version 15 adds nineteen purely additive tables; no table is
+altered and no existing row is read or rewritten.
 
 ### Stage 3 — grounded AI proposals — **not started**
 
@@ -757,7 +779,232 @@ This contract is ratified and closed to further negotiation within P7.10.
   `PctOfValue` closing execution, with no persistence, migration, schema version
   change, API route, memo storage, AI grounding, PDF generation, or frontend
   change.
-- **Stages 2, 3, and 4 are not started.**
-- **Accepting Stage 1 does not start Stage 2.** Stage 2 requires a separate
-  explicit human start.
+- **Stage 2 is implemented and pending independent review and human
+  acceptance.** It is not accepted, not merged, and does not start Stage 3.
+- **Stages 3 and 4 are not started.**
 - P7.10 does not start P7.11.
+
+## 22. Stage 2 implementation record
+
+Stage 2 was implemented from accepted `main` at `46650a7` on branch
+`feature/p7-10-stage-2-memo-persistence-api`. It is **pending independent review
+and human acceptance**; nothing below is ratified by implementation alone.
+
+The clarifications the implementation required are recorded here so a reviewer
+can accept or reject each one deliberately rather than discovering it in a diff.
+
+### 22.1 Identity and fingerprint layering
+
+Section 10 names five identities. The implementation defines **thirteen
+dependency classes** and records one fingerprint per class per scope on a
+published version, rather than one hash per identity, because "which dependency
+class changed" is only answerable if the classes are recorded separately:
+`INVESTMENT_MEMBERSHIP`, `UNDERWRITING`, `BUSINESS_PLAN`, `STRATEGY`,
+`SCENARIO`, `PROJECT_VARIANT`, `CAPITAL_STRUCTURE`, `PARTNERSHIP`,
+`VALUATION_DEFINITIONS`, `VALUATION_RESULTS`, `DECISION_PERSPECTIVE`,
+`EVIDENCE` and `MEMO_CONTENT`.
+
+An Investment whose variant resolves no Partnership records twelve of them; see
+below.
+
+Three of them — Business Plan, Strategy and Scenario — **overlap**
+`PROJECT_VARIANT` by construction, because the ratified P7 identity model folds
+them into the resolved inputs. They are recorded *beside* it, never instead of
+it, and the report order puts the more specific statement first. A reviewer
+should confirm this is the intended reading of "distinguish which dependency
+class changed" rather than a parallel authority.
+
+`PARTNERSHIP` is absent from a version whose variant resolves no Partnership,
+following FP-2.
+
+### 22.2 The consumed valuation joins the structured identity
+
+Section 6 states that a valuation consumed by `PctOfValue` "participates in
+[the resolved Capital Structure's] financial identity and downstream
+invalidation". The implementation therefore extends `fingerprint_structured_source`
+with the resolved valuations a `PctOfValue` rule actually names.
+
+**Every structured digest that existed before this gate is preserved byte for
+byte**: the payload joins only when non-empty, exactly as the D6.5 Business Plan
+rule works, and a structure with no such rule hashes what it always hashed. A
+report-only valuation no position consumes is deliberately excluded — it moves
+valuation and memo freshness, and not the Acquisition analysis.
+
+One consequence a reviewer should weigh: `structured_variant_fingerprint` must
+resolve the Project variant when a `PctOfValue` rule exists, because the
+identity depends on the resolved value. That costs a Project analysis for those
+structures and nothing for any other. It is not optional — an identity that
+differed between the fingerprint door and the analysis door would silently mean
+two different variants.
+
+### 22.3 The evidence gate is Stage 2's own
+
+Stage 1 validates that an analyst-supplied value *names* an Evidence Reference.
+Whether that reference exists and is **approved** is a persisted fact Stage 1
+cannot see, so the gate lives in the Stage 2 resolution layer (Section 8; R-D).
+
+An unapproved source produces no value, and **the amount the analyst typed is
+not reported** — presenting it would be the "silently upgraded to a fact"
+Section 8 forbids. A blocked valuation is also withheld from the `PctOfValue`
+funding authority; because the Stage 1 funding layer would then report
+`TIMEPOINT_NOT_FOUND`, which is misleading for a timepoint that *is* authored,
+the Stage 2 adapter reports `EVIDENCE_NOT_APPROVED` instead. No Stage 1 file was
+changed to achieve this.
+
+### 22.4 Two honest surfaces for an unresolved value-sized funding
+
+The accepted Stage 1 executor refuses an unresolved `PctOfValue` with a typed
+`CapitalStructureExecutionError`. That is a specific refusal and was left
+exactly as accepted.
+
+It is not, however, the "structured unavailable / N/A representation on the API
+surface" Section 6.2 requires, so the valuation-views route additionally reports
+`funding_states`: every `PctOfValue` rule, sized or typed-unavailable **with no
+amount**, read-only and ahead of time. An analyst can see why a value-sized
+funding cannot be sized without running an analysis that would refuse.
+
+A reviewer should confirm that two surfaces is the right answer, rather than
+changing Stage 1 so an unresolved funding becomes a successful analysis with
+N/A returns. The latter would change accepted Stage 1 behaviour and was
+deliberately not done.
+
+### 22.5 `PctOfValue` became authorable
+
+P7.8B refused a `pct_of_value` amount rule at the authoring door, and its own
+message said why: the rule "arrives with valuation timepoints". They have
+arrived, so the refusal was retired. Without this the capability Stage 1
+activated would be unreachable through the product.
+
+Nothing downstream moved. A rule naming a timepoint the Investment does not
+define is stored and resolves to a typed unavailable funding state with no
+amount.
+
+### 22.6 Stale-reason ownership and publication prerequisites
+
+Freshness is computed by comparing a version's recorded ledger against the
+current state. A dependency that can no longer be computed at all — the selected
+Strategy was deleted, the variant no longer resolves — is reported as a named
+stale condition with no current fingerprint, never as an error and never as a
+silent equality.
+
+Publication fails closed on: an ill-formed draft, no selected decision, a
+missing Strategy, Scenario or perspective, a cell that does not resolve, a blank
+decision ask, a cited Evidence Reference that is missing or unapproved, and any
+**required** valuation view with no value.
+
+**Ratified resolution (Correction 1).** The first implementation required
+*every authored* valuation definition to resolve. That was rejected on review
+and is superseded. A valuation is a dependency of the package, and therefore
+blocks publication, in exactly two cases:
+
+- the memo **selected** it for inclusion, through the explicit
+  `selected_valuation_timepoint_ids` relationship on the draft; or
+- a `PctOfValue` funding of the **selected** Capital Structure **consumes** it,
+  whether or not the report ever displays it.
+
+An authored definition that is neither selected nor consumed is exploratory
+working state. It may sit unavailable indefinitely without blocking a memo that
+never leaned on it, and an analyst is never made to delete their own working
+view in order to publish.
+
+Selection is an explicit typed relationship — `memo_selected_valuations`, one
+row per included view, scoped to the same Investment and validated on save. It
+is **never** inferred from display order, from a definition's existence, or from
+recency. Where a required view is unavailable, publication refuses with the
+valuation's *own* structured reason code carried through on the refusal
+(`unavailable_reason`), never a generic failure, and never zero, the purchase
+price, another timepoint's value, or a silent omission. Exit remains
+system-controlled and later timepoints remain reporting-only; neither is
+reachable through selection.
+
+Which views a memo selects is memo **content**: the selection participates in
+`MEMO_CONTENT` and therefore in the published-version fingerprint and in stale
+analysis. It moves no valuation, variant or structured identity, because
+including a view in a memo changes no economics. A published version freezes
+`selected` and `consumed` on each of its own valuation rows, so a later reader
+can see which views that version was required to resolve without recomputing a
+draft that has since moved on.
+
+One consequence is worth naming: resolving valuations does not execute the
+structured positions, so the dependency layer reads the valuation surface
+*before* anything that executes, and keeps it even when execution refuses. That
+is what lets a consumed-but-unavailable valuation refuse publication with its
+specific reason instead of collapsing into "the selected cell does not
+resolve".
+
+### 22.7 Claim-level evidence linkage (R-G)
+
+**Ratified resolution (Correction 2).** The first implementation stored only the
+draft-level `evidence_references[]` register of Section 7.2 and left per-item
+citation out. That was rejected on review and is superseded: R-G requires that
+evidence be traceable to the specific claim it supports, and a flat register
+cannot answer "what does *this* risk rest on".
+
+The draft keeps its reusable register — an Evidence Reference is authored once
+and may support many claims — and in addition every structured item that can
+carry a claim references zero or more Evidence References **explicitly**:
+
+- `MemoItem` (thesis, business-plan milestone, condition to approval, and every
+  other contract-authorized narrative section);
+- `MemoRiskItem` (the risk and its mitigant);
+- `MemoTermItem` (a condition or term).
+
+Links are normalized typed persistence, not an opaque JSON list:
+`memo_claim_evidence(memo_id, claim_kind, item_id, evidence_id, ordinal)` for
+the draft and `memo_version_claim_evidence(version_id, …)` for the frozen
+snapshot, both with `claim_kind` constrained to `item | risk | term`. Evidence
+identity (`evidence_id`) and item identity (`item_id`) are the analyst's own
+stable ids, so a link survives an edit to either side's text.
+
+Scope and validity are enforced at the store: a link may only name an Evidence
+Reference of the *same* Investment and only within a valid draft context, and a
+nonexistent or cross-Investment reference is refused rather than stored. A
+source a claim still cites cannot be deleted out from under it — the link is a
+use, exactly as a citation in the register is — so no dangling reference is ever
+created.
+
+Publishing **snapshots** the item-to-evidence relationships into the immutable
+version alongside the frozen content and the frozen evidence content. Every
+source any claim cites is frozen, including one cited by a claim but absent from
+the register. Nothing an analyst does afterwards reaches that snapshot:
+re-pointing a claim, unlinking one, editing an item, deleting the source, or
+deleting the draft entirely leaves the published rows byte-identical, and
+republishing records the new relationships on a *new* version.
+
+Evidence-link changes participate in the memo-content fingerprint and therefore
+in stale analysis: re-pointing a claim at a different appraisal changes what the
+memo asserts even when every word and every registered source is untouched.
+Authored link order participates too, because it is the order a reader is asked
+to follow the support in.
+
+Two boundaries this does **not** cross. Evidence is never *required*: a claim
+may cite nothing, and purely subjective or decision-authority fields — the
+analyst recommendation, the execution-complexity judgement, the decision ask,
+the committee outcome — demand no citation. And this is claim-level traceability
+for memo items only, not a universal provenance system over every value in the
+product. No AI generates, suggests or verifies a citation; Stage 2 ships no AI
+surface at all.
+
+### 22.8 Guards re-pinned
+
+Each re-pin is documented in place in the test that carries it. No earlier
+invariant was weakened; where a guard genuinely conflicted with this gate, the
+claim it proved was restated as the historical fact it still proves.
+
+- P7.10 Stage 1's ledger, protected paths and API freeze now read Stage 1's
+  committed range `9c65843..7237d7a`, as that file's own docstring anticipated.
+  The accepted package gained a *stronger* freeze: byte-identical to its merge
+  now, not merely unchanged during Stage 1.
+- P7.9 Stage 1 released `deals/structured_variants.py` from its working-tree
+  freeze, restating the claim as "byte-identical from P7.9 through accepted
+  P7.10 Stage 1".
+- P7.1's two scenario-layer guards widened by one named file, the identity
+  module.
+- P7.4's wrapper-collapse guard now asks about all eight kinds a wrapper can
+  hold.
+- P7.8B retired `UNSUPPORTED_AMOUNT_RULE` from its unexecutable-convention list
+  and gained a counterpart test.
+- Excel Export 3's no-migration guard measures its own committed range.
+- The P7.2, P7.4, P7.6 and P7.9 Stage 2 compatibility oracles and four
+  fresh-store assertions moved to schema 15 with P7.10's nineteen tables
+  named, so every set comparison stays exact.

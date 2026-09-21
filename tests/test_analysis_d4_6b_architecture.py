@@ -1923,6 +1923,26 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         #   Stage 1 package is byte-identical to its merge.
         "src/anchor/deals/partnership_codec.py",
         "src/anchor/deals/partnership_variants.py",
+        # P7.10 Stage 2 -- the valuation and memo pathway beside them, three
+        # modules and no financial logic in any of them
+        # (``tests/test_p7_10_stage_2_architecture.py``):
+        #
+        # - ``valuation_codec.py`` names the wire and storage discriminator of
+        #   the DIRECT_CAP | ANALYST_VALUE union. It decides nothing economic,
+        #   and reuses the accepted Stage 1 tokens rather than declaring its own.
+        # - ``valuation_views.py`` is resolution orchestration: it hands stored
+        #   definitions and the completed Project results to the *accepted*
+        #   P7.10 Stage 1 authority and reports what comes back, adding only the
+        #   evidence gate, which can withhold a value and never produce one. A
+        #   guard there proves it contains no arithmetic operator at all, and the
+        #   Stage 1 package is byte-identical to its merge.
+        # - ``memo_dependencies.py`` records one fingerprint per dependency
+        #   class, each read from the authority that already owns it, and
+        #   compares them. It computes no financial value and invents no
+        #   identity.
+        "src/anchor/deals/valuation_codec.py",
+        "src/anchor/deals/valuation_views.py",
+        "src/anchor/deals/memo_dependencies.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
                  "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):

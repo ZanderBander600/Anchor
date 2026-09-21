@@ -662,13 +662,25 @@ def test_no_am1_module_imports_or_invokes_ai() -> None:
             assert token not in lowered, f"{name} mentions {token}"
 
 
+def _am1_section(source: str) -> str:
+    """The AM1 route section, bounded at the next gate's banner.
+
+    Re-pinned at P7.10 Stage 2: this slice previously ran to the end of the
+    file, so every later gate that appends a section fell inside it. Bounding it
+    is what the guard always meant, and it keeps biting -- a route added to
+    *this* section still has to be authorized below."""
+
+    start = source.index("# Gate AM1 -- Managed Assets and Monthly Performance.")
+    section = source[start:]
+    later = section.find("# Phase 7 Gate P7.10 Stage 2")
+    return section if later == -1 else section[:later]
+
+
 def test_no_am1_route_reaches_an_ai_module() -> None:
     """The AM1 route section names no AI symbol, and attention items are
     derived from the deterministic result rather than generated."""
 
-    source = _current(_API)
-    start = source.index("# Gate AM1 -- Managed Assets and Monthly Performance.")
-    section = source[start:]
+    section = _am1_section(_current(_API))
     for token in ("ai_analysis", "AIAnalysis", "openai", "_ai_"):
         assert token not in section, token
     assert "analyze_asset_performance" in section
@@ -680,9 +692,7 @@ def test_the_am1_routes_are_exactly_the_authorized_surface() -> None:
     commentary save cannot overwrite actual results; it carries no figures and
     is held to that in ``tests/test_am1_commentary_update.py``."""
 
-    source = _current(_API)
-    start = source.index("# Gate AM1 -- Managed Assets and Monthly Performance.")
-    section = source[start:]
+    section = _am1_section(_current(_API))
     routes = set(re.findall(r'@app\.(get|post|put|delete|patch)\(\s*"([^"]+)"', section))
     assert routes == {
         ("post", "/managed-assets"),
@@ -718,7 +728,7 @@ def test_the_schema_is_v13_and_the_migration_adds_no_alter() -> None:
     # committed head; the no-ALTER rule below still holds for today's source.
     assert "_SCHEMA_VERSION = 13" in _git("show", f"{_AM1_HEAD}:{_STORE}")
     source = _current(_STORE)
-    assert "_SCHEMA_VERSION = 14" in source
+    assert "_SCHEMA_VERSION = 15" in source
 
     migrate = _function(_STORE, "_migrate")
     for sql in _sql_strings(migrate):

@@ -38,6 +38,7 @@ from _p7_2_fixtures import (  # type: ignore[import-not-found]
     P7_9_TABLES,
     AM1_TABLES,
     ASSET_TYPES_1_TABLES,
+    P7_10_TABLES,
     rows,
     table_names,
 )
@@ -111,7 +112,7 @@ def _every_row(db: Path) -> dict[str, list[tuple[Any, ...]]]:
     return {
         table: rows(db, table)
         for table in sorted(table_names(db) - set(P7_6_TABLES) - set(P7_8_TABLES) - set(P7_9_TABLES) - set(AM1_TABLES)
-            - set(ASSET_TYPES_1_TABLES))
+            - set(ASSET_TYPES_1_TABLES) - set(P7_10_TABLES))
         if not table.startswith("sqlite_")
     }
 
@@ -153,10 +154,12 @@ def test_the_migration_adds_exactly_five_empty_sidecars_and_rewrites_no_row(lega
     store.list_deals(db_path=db)
     migrated_schema, migrated_rows = _schema(db), _every_row(db)
 
-    assert _version(db) == 14  # P7.8B, P7.9 Stage 2, AM1 and Asset Types 1 migrate the same v9 database on to schema 14
+    # P7.8B, P7.9 Stage 2, AM1, Asset Types 1 and P7.10 Stage 2 migrate the same
+    # v9 database on to schema 15, each purely additively.
+    assert _version(db) == 15
     assert table_names(db) == (
         before_tables | set(P7_6_TABLES) | set(P7_8_TABLES) | set(P7_9_TABLES) | set(AM1_TABLES)
-        | set(ASSET_TYPES_1_TABLES)
+        | set(ASSET_TYPES_1_TABLES) | set(P7_10_TABLES)
     )
     assert {table: rows(db, table) for table in P7_9_TABLES} == dict.fromkeys(P7_9_TABLES, [])
     assert {table: rows(db, table) for table in ASSET_TYPES_1_TABLES} == dict.fromkeys(ASSET_TYPES_1_TABLES, [])
@@ -165,13 +168,13 @@ def test_the_migration_adds_exactly_five_empty_sidecars_and_rewrites_no_row(lega
     assert migrated_rows == before_rows
     for _ in range(3):
         store.list_deals(db_path=db)
-        assert (_version(db), _schema(db), _every_row(db)) == (14, migrated_schema, migrated_rows)
+        assert (_version(db), _schema(db), _every_row(db)) == (15, migrated_schema, migrated_rows)
     connection = sqlite3.connect(db)
     connection.row_factory = sqlite3.Row
     store._migrate(connection)
     connection.commit()
     connection.close()
-    assert (_version(db), _schema(db), _every_row(db)) == (14, migrated_schema, migrated_rows)
+    assert (_version(db), _schema(db), _every_row(db)) == (15, migrated_schema, migrated_rows)
 
 
 def test_every_recorded_response_is_identical_after_migration(client: TestClient, legacy: tuple[Path, dict[str, Any]]) -> None:
@@ -187,7 +190,7 @@ def test_every_recorded_response_is_identical_after_migration(client: TestClient
     db, manifest = legacy
     replayed = _replay(client, manifest["exchanges"])
 
-    assert _version(db) == 14
+    assert _version(db) == 15
     mismatched = [
         (exchange["method"], exchange["path"])
         for exchange, now in zip(manifest["exchanges"], replayed, strict=True)

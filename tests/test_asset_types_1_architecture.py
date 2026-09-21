@@ -302,7 +302,7 @@ def test_classification_is_read_by_no_row_converter_fingerprint() -> None:
 
 def test_the_schema_is_v14_and_the_migration_alters_nothing() -> None:
     source = _current(_STORE)
-    assert "_SCHEMA_VERSION = 14" in source
+    assert "_SCHEMA_VERSION = 15" in source
     for sql in _sql_strings(_function(_STORE, "_migrate")):
         if "ALTER TABLE" in sql.upper():
             assert "classification" not in sql and "managed_assets" not in sql, sql
