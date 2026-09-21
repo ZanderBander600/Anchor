@@ -44,6 +44,18 @@ _P7_10_BASE_PARENTS = [
     "2e98937f8871392f7348aaa6bb8cf8e2728504ce",
 ]
 
+#: Stage 1's reviewed head, merged into ``main`` as the second parent of the
+#: Stage 1 merge (PR #49) and human accepted there. **Re-pinned at Stage 2**,
+#: exactly as this module's own docstring said it would be: the ledger, the
+#: protected paths and the API freeze below read Stage 1's committed range
+#: ``9c65843..7237d7a`` rather than the working tree, so Stage 2's files never
+#: read as Stage 1 changes while every Stage 1 claim stays proven against real
+#: history. Stage 2's own ledger and freeze are
+#: ``tests/test_p7_10_stage_2_architecture.py``.
+_STAGE_1_HEAD = "7237d7a8c77967529a9c277ffda581fef112a792"
+_STAGE_1_MERGE = "f6f36803cdcb646aa8a4af8cfc658a0e368ae58e"
+_STAGE_1_COMMITS = ("7fb5fff", "8c35057", "f388fe2", "7237d7a")
+
 _PACKAGE = "src/anchor/valuation"
 _NAMES = ("__init__", "contracts", "validation", "engine", "funding")
 _MODULES = tuple(f"{_PACKAGE}/{name}.py" for name in _NAMES)
@@ -167,12 +179,27 @@ def _is_production(path: str) -> bool:
 
 
 def _changes_since(base: str, *paths: str) -> set[str]:
-    """Committed, staged, unstaged and untracked changes since ``base``, with
-    renames split into their removal and addition.
+    """The paths Stage 1's committed range changed. Objects only: no working
+    tree and no index (protocol 11.2).
 
-    Stage 1's own ledger reads the working tree, because Stage 1 has not been
-    merged. Stage 2 re-pins this to Stage 1's committed range, exactly as P7.9
-    Stage 2 re-pinned P7.9 Stage 1's."""
+    Re-pinned at Stage 2, as this module's docstring always said it would be.
+    Measured against the working tree it read Stage 2's persistence, API and
+    resolution files as unauthorized Stage 1 changes; measured over
+    ``9c65843..7237d7a`` it proves what Stage 1 actually shipped."""
+
+    return {
+        path
+        for path in _git(
+            "diff", "--name-only", "--no-renames", base, _STAGE_1_HEAD, "--", *paths
+        ).split()
+        if path
+    }
+
+
+def _working_tree_changes_since(base: str, *paths: str) -> set[str]:
+    """The paths the working tree differs in from ``base``. Used only where the
+    claim really is "and it is still unchanged now", not merely "Stage 1 did not
+    change it"."""
 
     tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
     untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
@@ -254,6 +281,42 @@ def test_stage_1_changes_exactly_the_declared_production_files() -> None:
 
 def test_the_ledger_base_is_the_accepted_closeout_merge() -> None:
     assert _git("rev-list", "--parents", "-n", "1", _P7_10_BASE).split()[1:] == _P7_10_BASE_PARENTS
+
+
+def test_the_ledger_range_is_exactly_the_merged_stage_1_branch() -> None:
+    """The re-pinned range is real history, is neither empty nor stretched over
+    a later gate, and is the one ``main`` was built from."""
+
+    # PR #49's merge joins the ledger base (first parent) and the ledger head.
+    assert _git("rev-list", "--parents", "-n", "1", _STAGE_1_MERGE).split()[1:] == [
+        _P7_10_BASE,
+        _STAGE_1_HEAD,
+    ]
+    commits = _git("rev-list", "--reverse", "--abbrev-commit", f"{_P7_10_BASE}..{_STAGE_1_HEAD}").split()
+    assert tuple(commits) == _STAGE_1_COMMITS
+    subprocess.run(
+        ["git", "merge-base", "--is-ancestor", _STAGE_1_MERGE, "HEAD"], check=True, cwd=_PROJECT_ROOT
+    )
+
+
+def test_the_ledger_range_is_not_a_no_op() -> None:
+    """Every authorized file really changes inside the range, so the ledger is
+    measuring real history rather than an empty diff."""
+
+    assert _changes_since(_P7_10_BASE, "src", "web") == set(_STAGE_1_PRODUCTION_FILES)
+
+
+def test_the_accepted_stage_1_package_is_still_byte_identical_to_its_merge() -> None:
+    """A *stronger* claim than the one this file could make before Stage 1 was
+    merged: the accepted valuation package is unchanged in the working tree,
+    now, not merely unchanged during Stage 1. Stage 2 consumes it and edits
+    none of it."""
+
+    merged = sorted(_git("ls-tree", "-r", "--name-only", _STAGE_1_MERGE, _PACKAGE).split())
+    assert merged == sorted(_MODULES)
+    for path in merged:
+        assert _git("hash-object", path).strip() == _git("rev-parse", f"{_STAGE_1_MERGE}:{path}").strip(), path
+    assert _working_tree_changes_since(_STAGE_1_MERGE, _PACKAGE) == set()
 
 
 def test_the_valuation_package_is_new_at_this_gate() -> None:
@@ -345,7 +408,29 @@ def test_the_valuation_package_never_reads_the_capital_structure() -> None:
         assert not any("capital_structure" in found for found in _imports(_tree(_module(name)))), name
 
 
-def test_only_the_seam_modules_read_the_valuation_package() -> None:
+#: At Stage 1 only the three Capital Structure seam modules read the valuation
+#: package. Stage 2 connects exactly these further layers, and no others:
+#: persistence, the two identity/codec modules, the resolution service, the
+#: structured variant that supplies the funding authority, the memo
+#: dependency ledger, the unavailable adapter, and the routes. Re-pinned from
+#: "only the seam reads it" -- the Stage 1 claim it supersedes is that nothing
+#: *outside* this named list does.
+_VALUATION_READERS = [
+    "src/anchor/api.py",
+    f"{_CAPITAL}/execution.py",
+    f"{_CAPITAL}/execution_validation.py",
+    f"{_CAPITAL}/funding.py",
+    "src/anchor/deals/fingerprint.py",
+    "src/anchor/deals/memo_dependencies.py",
+    "src/anchor/deals/store.py",
+    "src/anchor/deals/structured_variants.py",
+    "src/anchor/deals/valuation_codec.py",
+    "src/anchor/deals/valuation_views.py",
+    "src/anchor/memo/availability.py",
+]
+
+
+def test_only_the_named_layers_read_the_valuation_package() -> None:
     importers = sorted(
         path.relative_to(_PROJECT_ROOT).as_posix()
         for path in (_PROJECT_ROOT / "src" / "anchor").rglob("*.py")
@@ -355,7 +440,18 @@ def test_only_the_seam_modules_read_the_valuation_package() -> None:
             for found in _imports(ast.parse(path.read_text(encoding="utf-8")))
         )
     )
-    assert importers == [f"{_CAPITAL}/execution.py", f"{_CAPITAL}/execution_validation.py", f"{_CAPITAL}/funding.py"]
+    assert importers == _VALUATION_READERS
+
+
+def test_no_upstream_engine_layer_reads_the_valuation_package() -> None:
+    """The Stage 1 direction is unchanged by Stage 2: the engine, consolidation,
+    leasing, Business Plan, Partnership, ingestion and AI layers still know
+    nothing about valuation, so no cycle and no second authority can appear."""
+
+    for layer in ("engine", "consolidation", "partnership", "investment", "business_plan", "leasing", "ai", "ingestion", "exports"):
+        for path in (_PROJECT_ROOT / "src" / "anchor" / layer).rglob("*.py"):
+            modules = _imports(ast.parse(path.read_text(encoding="utf-8")))
+            assert not any("valuation" in module for module in modules), path
 
 
 def test_upstream_names_are_calculation_free_contracts_and_one_named_helper() -> None:
@@ -422,7 +518,10 @@ def test_no_module_names_a_later_stage_surface() -> None:
             assert offenders == [], (name, word, offenders)
 
 
-def test_the_package_states_no_schema_version() -> None:
+def test_stage_1_stated_no_schema_version() -> None:
+    """Stage 1 adds no persistence, migration or schema version change. Stage 2
+    advances the schema exactly once, which is its own ledger's claim."""
+
     assert _changes_since(_P7_10_BASE, "src/anchor/deals/store.py") == set()
 
 
@@ -492,19 +591,29 @@ def test_no_seam_dataclass_gained_or_lost_a_wire_field(path: str) -> None:
         assert after[name] == fields, f"{path}::{name}"
 
 
-def test_the_api_module_is_byte_identical_to_the_baseline() -> None:
+def test_the_api_module_was_byte_identical_across_stage_1() -> None:
     """The routes, their methods, their payloads and the wire serialiser are
-    all in ``api.py``. Stage 1 adds no route and changes no response."""
+    all in ``api.py``. **Stage 1** adds no route and changes no response.
+
+    Measured over Stage 1's committed range, because Stage 2 does add routes --
+    which is its job. The claim this proves is unchanged and still exact: the
+    accepted Stage 1 tree's ``api.py`` is the baseline's, byte for byte."""
 
     path = "src/anchor/api.py"
-    assert _git("hash-object", path).strip() == _git("rev-parse", f"{_P7_10_BASE}:{path}").strip()
+    assert _git("rev-parse", f"{_STAGE_1_HEAD}:{path}").strip() == _git(
+        "rev-parse", f"{_P7_10_BASE}:{path}"
+    ).strip()
 
 
-def test_the_valuation_package_is_not_reachable_from_the_api() -> None:
-    """Stage 1 is a pure engine layer. Nothing routes to it, so no unresolved
-    valuation state can reach a client as a generic server error -- there is no
-    path to a client at all yet. Translating these states into the established
-    structured unavailable/N/A representation is a Stage 2 obligation."""
+def test_the_valuation_package_was_not_reachable_from_the_stage_1_api() -> None:
+    """Stage 1 is a pure engine layer: nothing routed to it, so no unresolved
+    valuation state could reach a client at all -- there was no path to one.
 
-    api = ast.parse(_current("src/anchor/api.py"))
+    Measured over the accepted Stage 1 tree. Stage 2 deliberately *does* reach
+    it, because translating those states into the established structured
+    unavailable / N/A representation is precisely the Stage 2 obligation
+    Section 6.2 names. That neither state becomes a generic server error is
+    proven by Stage 2's own suites, not relaxed here."""
+
+    api = ast.parse(_git("show", f"{_STAGE_1_HEAD}:src/anchor/api.py"))
     assert not any("valuation" in found for found in _imports(api))

@@ -476,11 +476,11 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # has no classification row, which *is* "Not specified" -- nothing is guessed
 # for it, and it gains a row only when the analyst classifies it.
 #
-# P7.10 Stage 2 -- schema version 15 adds the fourteen valuation and Investment
+# P7.10 Stage 2 -- schema version 15 adds the sixteen valuation and Investment
 # Memo tables, created unconditionally by ``_connect`` exactly as version 14's
 # were. No ALTER and no existing row read or rewritten: an Investment gains a
 # valuation definition, an Evidence Reference or a memo only when the analyst
-# authors one, and a v14 database simply gains fourteen empty tables. Every
+# authors one, and a v14 database simply gains sixteen empty tables. Every
 # pre-existing Deal, Investment, Strategy, Scenario, Capital Structure,
 # Partnership, Managed Asset and export keeps loading and responding exactly as
 # it did, because nothing this gate adds is read on any of those paths.
@@ -1721,9 +1721,9 @@ _ASSET_TYPES_1_TABLES = ("deal_asset_classifications", "managed_asset_classifica
 # Investment Memo and its immutable versions, schema version 15.
 #
 # ``docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`` Sections 5, 7, 8, 9
-# and 15. Fourteen purely additive tables, created by ``_connect`` via CREATE
+# and 15. Sixteen purely additive tables, created by ``_connect`` via CREATE
 # TABLE IF NOT EXISTS exactly as every table since version 2. No ALTER, and no
-# existing row is read or rewritten: a v14 database simply gains fourteen empty
+# existing row is read or rewritten: a v14 database simply gains sixteen empty
 # tables, and every pre-existing Deal, Investment, Strategy, Scenario, Capital
 # Structure, Partnership, Managed Asset and export keeps behaving exactly as it
 # did. An Investment gains a valuation or a memo only when the analyst authors
@@ -2525,13 +2525,13 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # row is written for anything that already exists. Every legacy Deal and
     # Managed Asset reads back as "Not specified" because it has no row -- the
     # migration assigns no type, and neither does any read.
-    # P7.10 Stage 2 -- schema version 15 adds the fourteen valuation and
+    # P7.10 Stage 2 -- schema version 15 adds the sixteen valuation and
     # Investment Memo tables the same way, and for the same reason it is the
     # safest migration available: it touches no existing data. ``_connect``
     # creates them via CREATE TABLE IF NOT EXISTS, no table is altered, and no
     # row is written for any Deal, Investment, Strategy, Scenario, Capital
     # Structure, Partnership or Managed Asset that already exists. A v14
-    # database simply gains fourteen empty tables; an Investment with no
+    # database simply gains sixteen empty tables; an Investment with no
     # valuation definition and no memo has neither, which is exactly its state
     # before this gate, and opening or editing one creates nothing.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
