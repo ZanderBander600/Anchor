@@ -356,7 +356,12 @@ def without_unstated_classification(current: Any, recorded: Any) -> Any:
 
 
 def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
-    """Every row of every table that is not a P7 table, in rowid order."""
+    """Every row of every table that is not a P7 table, in rowid order.
+
+    A later gate's P7 tables are excluded as each earlier gate's are: this
+    compares the rows a legacy database already held, and a gate that appends
+    empty tables must not read as a row that moved. Each gate's own oracle
+    proves its tables arrive empty."""
 
     return {
         table: rows(db, table)
@@ -368,6 +373,7 @@ def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
             - set(P7_8_TABLES)
             - set(P7_9_TABLES)
             - set(AM1_TABLES)
+            - set(P7_10_TABLES)
         )
         if not table.startswith("sqlite_")
     }

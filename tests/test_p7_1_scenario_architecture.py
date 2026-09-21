@@ -222,11 +222,20 @@ def test_no_production_module_imports_the_scenario_layer() -> None:
     # with the P7.1 validator, hands each Unit its own overrides, and runs the
     # unchanged per-Unit resolution. It resolves and validates nothing itself
     # (``tests/test_p7_6_consolidation_architecture.py``).
+    #
+    # **Widened at P7.10 Stage 2 -- by exactly one named file.** The identity
+    # module fingerprints the *selected* Strategy and Scenario definitions, so a
+    # published memo can say which of them moved rather than only that the
+    # underwriting did. It names the two definition contracts for their shape and
+    # nothing else: it resolves nothing, validates nothing, and reads no target,
+    # operation or accessor
+    # (``tests/test_p7_10_stage_2_architecture.py``).
     assert importers == [
         "anchor/analysis/strategy.py",
         "anchor/api.py",
         "anchor/deals/contracts.py",
         "anchor/deals/decision_matrix.py",
+        "anchor/deals/fingerprint.py",
         "anchor/deals/investment_variants.py",
         "anchor/deals/store.py",
         "anchor/deals/variants.py",
@@ -256,11 +265,17 @@ def test_no_other_production_file_defines_or_names_a_scenario_contract() -> None
     # address one and to re-raise its refusal: it resolves and validates nothing
     # itself, and defines no scenario contract
     # (``tests/test_p7_8b_product_integration_architecture.py``).
+    #
+    # Widened at P7.10 Stage 2 by the identity module, which names the two
+    # definition contracts to fingerprint the selected Strategy and Scenario.
+    # It resolves nothing, validates nothing and defines no scenario contract
+    # (``tests/test_p7_10_stage_2_architecture.py``).
     assert offenders == [
         "anchor/analysis/strategy.py",
         "anchor/api.py",
         "anchor/deals/contracts.py",
         "anchor/deals/decision_matrix.py",
+        "anchor/deals/fingerprint.py",
         "anchor/deals/investment_variants.py",
         "anchor/deals/store.py",
         "anchor/deals/structured_variants.py",

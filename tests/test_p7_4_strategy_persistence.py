@@ -119,9 +119,10 @@ def test_a_fresh_store_is_schema_9_with_every_p7_table_empty(db: Path) -> None:
     connection.close()
     # P7.6 added schema 10's visible-Investment sidecars, P7.8B schema 11's
     # Capital Structure tables, P7.9 Stage 2 schema 12's Partnership tables and
-    # AM1 schema 13's two Asset Management tables and Asset Types 1 schema 14's
-    # two classification tables; P7.4's own eight are still empty.
-    assert version == 14
+    # AM1 schema 13's two Asset Management tables, Asset Types 1 schema 14's two
+    # classification tables and P7.10 Stage 2 schema 15's sixteen valuation and
+    # Investment Memo tables; P7.4's own eight are still empty.
+    assert version == 15
     assert f4.p7_row_counts(db) == f4.P7_EMPTY
 
 

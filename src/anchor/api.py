@@ -188,6 +188,51 @@ from .deals.structured_variants import (
 from . import deals as deals_store
 from .deals import Deal, DealNotFoundError, SnapshotValidationError
 from .deals import store as investment_store
+# Gate P7.10 Stage 2. Contracts, the structural validators' error types, and the
+# two services that own resolution and identity. No calculation module is
+# imported here, exactly as none is for any other domain: this layer formats and
+# refuses, and computes nothing.
+from .deals import memo_dependencies
+from .deals.structured_variants import (
+    StructuredValuationSurface,
+    analyze_structured_valuations,
+)
+from .deals.contracts import (
+    EvidenceInUseError,
+    EvidenceReferenceNotFoundError,
+    MemoNotFoundError,
+    MemoVersionNotFoundError,
+    ValuationTimepointNotFoundError,
+)
+from .memo.contracts import (
+    AnalystRecommendation,
+    DecisionPerspectiveKind,
+    EvidenceSourceKind,
+    ExecutionComplexity,
+    InvestmentCommitteeDecision,
+    InvestmentCommitteeOutcome,
+    InvestmentMemoDraft,
+    MemoError,
+    MemoEvidenceReference,
+    MemoItem,
+    MemoRiskItem,
+    MemoSection,
+    MemoTermItem,
+    RiskSeverity,
+    SelectedDecision,
+    TermPriority,
+)
+from .memo.publication import PublicationRefusedError
+from .memo.validation import MemoValidationError, parse_as_of_date
+from .valuation.contracts import (
+    AnalystValue,
+    DirectCap,
+    UnitValuationInstruction,
+    ValuationKind,
+    ValuationMethodKind,
+    ValuationTimepoint,
+    ValuationValidationError,
+)
 from .exports.excel import (
     XLSX_MEDIA_TYPE,
     DetailedAuditExportError,
@@ -5389,3 +5434,892 @@ def read_monthly_asset_performance(
         "result": _wire(result),
         "reported_months": [report.reporting_month.isoformat() for report in reports],
     }
+
+
+# =============================================================================
+# Phase 7 Gate P7.10 Stage 2 -- the valuation and Investment Memo surface
+#
+# ``docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`` Sections 5, 6.2, 7, 8,
+# 9, 15 and 16.
+#
+# Thin routes over ``anchor.deals.store`` (the persisted definitions, evidence,
+# draft and versions), ``anchor.deals.structured_variants`` (the resolved
+# valuation views, through the one variant pathway) and
+# ``anchor.deals.memo_dependencies`` (the dependency ledger, freshness and
+# publication). This module computes nothing, resolves nothing, and adds no
+# second analysis pathway: there is no arithmetic anywhere below, and a test
+# proves it.
+#
+# **One owner, two doors**, exactly as for a Capital Structure and a
+# Partnership: the ``/deals`` routes are the convenience door for a standalone
+# Deal (the GET materializes nothing; the first *save* materializes the hidden
+# one-unit wrapper, Q4), and a Unit of a visible Investment is refused with 409.
+#
+# **Stated, never defaulted.** Every field is stated on the wire, ``null``
+# included. A missing ``analyst_recommendation`` is a structural 422, never
+# ``INSUFFICIENT_INFORMATION``; a missing ``severity`` is a 422, never
+# ``NOT_ASSESSED``. Both of those are real analyst statements.
+#
+# **An expected unavailable state is a 200** (Section 6.2). A valuation that did
+# not resolve, a ``PctOfValue`` funding whose dollars are unknowable, and a
+# stale published version are all successful, deterministic answers carrying
+# ``status``, ``reason_code`` and an analyst-facing ``reason`` -- never a generic
+# server error, never a fabricated amount, and never zero. A genuine defect
+# still fails as an error; that distinction is the point.
+#
+# **The analyst recommendation and the IC decision are different routes.** The
+# recommendation is a field of the draft; the decision is recorded against a
+# *published version* through its own route. No route writes both, and no route
+# can write either on an analyst's behalf. Stage 2 ships no AI surface at all.
+# =============================================================================
+
+#: The keys each P7.10 body may carry. Literal tuples, so an unknown key is
+#: always refused rather than silently ignored -- a misspelled ``cap_rate`` must
+#: never read as "no rate stated".
+_VALUATION_TIMEPOINT_FIELDS = ("timepoint_id", "kind", "label", "model_month", "unit_instructions")
+_UNIT_INSTRUCTION_FIELDS = ("unit_id", "method")
+_DIRECT_CAP_FIELDS = ("kind", "cap_rate")
+_ANALYST_VALUE_FIELDS = ("kind", "amount", "evidence_id")
+_TIMEPOINT_ORDER_FIELDS = ("timepoint_ids",)
+_EVIDENCE_FIELDS = (
+    "evidence_id",
+    "source_kind",
+    "title",
+    "reference",
+    "as_of_date",
+    "approved",
+    "display_order",
+)
+_MEMO_FIELDS = (
+    "prepared_by",
+    "decision_ask",
+    "analyst_recommendation",
+    "executive_summary",
+    "execution_complexity",
+    "return_on_time_notes",
+    "selected_decision",
+    "items",
+    "risk_items",
+    "term_items",
+    "evidence_ids",
+)
+_SELECTED_DECISION_FIELDS = ("strategy_id", "scenario_id", "perspective", "position_id", "partner_id")
+_MEMO_ITEM_FIELDS = ("item_id", "section", "display_order", "text")
+_MEMO_RISK_FIELDS = ("item_id", "display_order", "text", "severity", "residual_risk", "mitigant")
+_MEMO_TERM_FIELDS = ("item_id", "display_order", "text", "priority")
+_IC_DECISION_FIELDS = ("decision", "decision_note", "decided_at")
+
+
+def _memo_token(token_type: type[Enum], raw: Any) -> Any:
+    """A wire token as its member, or ``raw`` itself for the domain validator to
+    refuse by name. ``None`` stays ``None``: an omitted analyst statement is
+    refused as missing, never resolved to a default member."""
+
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        for member in token_type:
+            if member.value == raw:
+                return member
+    return raw
+
+
+def _memo_date(raw: Any, where: str) -> date | None:
+    """An optional ISO-8601 date, parsed by the domain.
+
+    Deliberately not parsed here. Parsing a date means catching the parse
+    failure, and broad exception handling in a route is how a validator's own
+    refusal gets swallowed and reported as something else.
+    ``anchor.memo.validation`` raises the domain's own error, which the route
+    already reports as a structured 422."""
+
+    return parse_as_of_date(raw, field=where)
+
+
+def _valuation_method_request(raw: Any, where: str) -> Any:
+    """A valuation method by its explicit ``kind``.
+
+    A discriminator the codec does not know is refused structurally; everything
+    else reaches the Stage 1 validator, which refuses it by name. Nothing is
+    inferred -- in particular a method with no ``kind`` never reads as a direct
+    capitalisation."""
+
+    if not isinstance(raw, dict):
+        raise _structural_error(f"{where} must be an object.")
+    kind = raw.get("kind")
+    if kind == ValuationMethodKind.DIRECT_CAP:
+        body = _exact_keys(raw, _DIRECT_CAP_FIELDS, where)
+        return DirectCap(cap_rate=body["cap_rate"])
+    if kind == ValuationMethodKind.ANALYST_VALUE:
+        body = _exact_keys(raw, _ANALYST_VALUE_FIELDS, where)
+        return AnalystValue(amount=body["amount"], evidence_id=body["evidence_id"])
+    raise _structural_error(
+        f"{where}.kind must be {ValuationMethodKind.DIRECT_CAP.value!r} or "
+        f"{ValuationMethodKind.ANALYST_VALUE.value!r}; got {kind!r}."
+    )
+
+
+def _valuation_timepoint_request(
+    payload: dict[str, Any], *, investment_id: str, timepoint_id: str | None = None
+) -> ValuationTimepoint:
+    """A valuation definition from its wire object, structurally.
+
+    No contract rule is applied here: the Stage 1 validator reports every
+    structural problem as a structured 422, and the store adds the one rule that
+    is its own -- that every instructed Unit belongs to this Investment."""
+
+    body = _exact_keys(payload, _VALUATION_TIMEPOINT_FIELDS, "The request body")
+    stated_id = body["timepoint_id"]
+    if timepoint_id is not None and stated_id != timepoint_id:
+        raise _structural_error(
+            f"The body states timepoint_id {stated_id!r} and the path names {timepoint_id!r}; they must agree."
+        )
+    return ValuationTimepoint(
+        timepoint_id=stated_id,
+        investment_id=investment_id,
+        kind=_memo_token(ValuationKind, body["kind"]),
+        label=body["label"],
+        model_month=body["model_month"],
+        unit_instructions=tuple(
+            UnitValuationInstruction(
+                unit_id=_exact_keys(item, _UNIT_INSTRUCTION_FIELDS, f"unit_instructions[{index}]")["unit_id"],
+                method=_valuation_method_request(item["method"], f"unit_instructions[{index}].method"),
+            )
+            for index, item in enumerate(_wire_array(body["unit_instructions"], "unit_instructions"))
+        ),
+    )
+
+
+def _evidence_request(
+    payload: dict[str, Any], *, investment_id: str, evidence_id: str | None = None
+) -> MemoEvidenceReference:
+    body = _exact_keys(payload, _EVIDENCE_FIELDS, "The request body")
+    stated_id = body["evidence_id"]
+    if evidence_id is not None and stated_id != evidence_id:
+        raise _structural_error(
+            f"The body states evidence_id {stated_id!r} and the path names {evidence_id!r}; they must agree."
+        )
+    approved = body["approved"]
+    if not isinstance(approved, bool):
+        raise _structural_error("approved must be true or false; an absent approval is never read as approved.")
+    return MemoEvidenceReference(
+        evidence_id=stated_id,
+        investment_id=investment_id,
+        source_kind=_memo_token(EvidenceSourceKind, body["source_kind"]),
+        title=body["title"],
+        reference=body["reference"],
+        as_of_date=_memo_date(body["as_of_date"], "as_of_date"),
+        approved=approved,
+        display_order=body["display_order"],
+    )
+
+
+def _selected_decision_request(raw: Any) -> SelectedDecision | None:
+    """The selected cell, or ``None`` for an explicit ``null`` -- a draft may be
+    authored before its cell is chosen. Publishing without one is refused by the
+    publication rules, not here."""
+
+    if raw is None:
+        return None
+    body = _exact_keys(raw, _SELECTED_DECISION_FIELDS, "selected_decision")
+    return SelectedDecision(
+        strategy_id=body["strategy_id"],
+        scenario_id=body["scenario_id"],
+        perspective=_memo_token(DecisionPerspectiveKind, body["perspective"]),
+        position_id=body["position_id"],
+        partner_id=body["partner_id"],
+    )
+
+
+def _memo_draft_request(payload: dict[str, Any], *, investment_id: str) -> InvestmentMemoDraft:
+    """A memo draft from its wire object, structurally. Every rule about whether
+    it is well formed belongs to ``anchor.memo.validation``."""
+
+    body = _exact_keys(payload, _MEMO_FIELDS, "The request body")
+    return InvestmentMemoDraft(
+        memo_id="",
+        investment_id=investment_id,
+        prepared_by=body["prepared_by"],
+        decision_ask=body["decision_ask"],
+        analyst_recommendation=_memo_token(AnalystRecommendation, body["analyst_recommendation"]),
+        executive_summary=body["executive_summary"],
+        execution_complexity=_memo_token(ExecutionComplexity, body["execution_complexity"]),
+        return_on_time_notes=body["return_on_time_notes"],
+        selected_decision=_selected_decision_request(body["selected_decision"]),
+        items=tuple(
+            MemoItem(
+                item_id=(item := _exact_keys(raw, _MEMO_ITEM_FIELDS, f"items[{index}]"))["item_id"],
+                section=_memo_token(MemoSection, item["section"]),
+                display_order=item["display_order"],
+                text=item["text"],
+            )
+            for index, raw in enumerate(_wire_array(body["items"], "items"))
+        ),
+        risk_items=tuple(
+            MemoRiskItem(
+                item_id=(item := _exact_keys(raw, _MEMO_RISK_FIELDS, f"risk_items[{index}]"))["item_id"],
+                display_order=item["display_order"],
+                text=item["text"],
+                severity=_memo_token(RiskSeverity, item["severity"]),
+                residual_risk=_memo_token(RiskSeverity, item["residual_risk"]),
+                mitigant=item["mitigant"],
+            )
+            for index, raw in enumerate(_wire_array(body["risk_items"], "risk_items"))
+        ),
+        term_items=tuple(
+            MemoTermItem(
+                item_id=(item := _exact_keys(raw, _MEMO_TERM_FIELDS, f"term_items[{index}]"))["item_id"],
+                display_order=item["display_order"],
+                text=item["text"],
+                priority=_memo_token(TermPriority, item["priority"]),
+            )
+            for index, raw in enumerate(_wire_array(body["term_items"], "term_items"))
+        ),
+        evidence_ids=tuple(_wire_array(body["evidence_ids"], "evidence_ids")),
+    )
+
+
+def _valuation_validation_error_response(error: ValuationValidationError) -> HTTPException:
+    """An invalid valuation definition as a structured 422: the Stage 1 issues,
+    in the validator's own order, each with its stable code and location."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "unit_id": issue.unit_id,
+                "field": issue.field,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _memo_validation_error_response(error: MemoValidationError) -> HTTPException:
+    """An ill-formed memo as a structured 422, in the validator's own order."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "item_id": issue.item_id,
+                "field": issue.field,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
+def _publication_refused_response(error: PublicationRefusedError) -> HTTPException:
+    """A draft that may not be published, as a structured 422 naming every
+    specific reason (Section 14).
+
+    Deliberately not a generic failure: the product disables publication with
+    these reasons, and a decision-critical refusal an analyst cannot act on is
+    exactly what the contract forbids."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": refusal.code.value,
+                "message": refusal.message,
+                "scope_id": refusal.scope_id,
+                "field": refusal.field,
+            }
+            for refusal in error.refusals
+        ],
+    )
+
+
+def _evidence_in_use_response(error: EvidenceInUseError) -> HTTPException:
+    """An Evidence Reference live state still cites, refused with what to detach
+    -- never cascaded, because removing it would leave an analyst-supplied value
+    with no source."""
+
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": str(error),
+            "evidence_id": error.evidence_id,
+            "valuation_timepoint_ids": list(error.valuation_timepoint_ids),
+            "cited_by_draft": error.cited_by_draft,
+        },
+    )
+
+
+def _valuation_view_wire(view: Any) -> dict[str, Any]:
+    """One resolved valuation view on the wire.
+
+    An unavailable view carries ``status``, ``reason_code`` and an
+    analyst-facing ``reason`` -- and no ``value`` at all. It is never zero and
+    never the purchase price; ``value`` is ``null`` precisely because there is
+    no value."""
+
+    return {
+        "timepoint_id": view.timepoint_id,
+        "kind": view.kind.value,
+        "label": view.label,
+        "model_month": view.model_month,
+        "scope_kind": view.scope_kind.value,
+        "status": view.status.value,
+        "value": view.value,
+        "unavailable": _wire(view.unavailable),
+        "unit_views": [
+            {
+                "unit_id": unit.unit_id,
+                "status": unit.status.value,
+                "value": unit.value,
+                "analyst_supplied": unit.analyst_supplied,
+                "forward_noi": unit.forward_noi,
+                "cap_rate": unit.cap_rate,
+                "evidence_id": unit.evidence_id,
+                "unavailable": _wire(unit.unavailable),
+            }
+            for unit in view.unit_views
+        ],
+    }
+
+
+def _memo_p7_10_not_found(error: LookupError) -> HTTPException:
+    return _not_found(error)
+
+
+# -----------------------------------------------------------------------------
+# Valuation definitions (Section 5)
+# -----------------------------------------------------------------------------
+
+
+@app.get("/investments/{investment_id}/valuation-timepoints", response_model=None)
+def read_investment_valuation_timepoints(investment_id: str) -> dict[str, Any]:
+    """Every valuation definition the Investment states, in display order.
+    Read-only: it resolves nothing and materializes nothing."""
+
+    try:
+        timepoints = investment_store.list_valuation_timepoints(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "valuation_timepoints": _wire(timepoints)}
+
+
+@app.post("/investments/{investment_id}/valuation-timepoints", response_model=None)
+def create_investment_valuation_timepoint(
+    investment_id: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Author one valuation definition. ``EXIT`` is not an accepted kind: it is
+    the reserved system view (R-B) and has no stored form."""
+
+    timepoint = _valuation_timepoint_request(payload, investment_id=investment_id)
+    try:
+        saved = investment_store.create_valuation_timepoint(investment_id, timepoint)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except ValuationValidationError as error:
+        raise _valuation_validation_error_response(error) from None
+    return {"investment_id": investment_id, "valuation_timepoint": _wire(saved)}
+
+
+@app.get("/investments/{investment_id}/valuation-timepoints/{timepoint_id}", response_model=None)
+def read_investment_valuation_timepoint(investment_id: str, timepoint_id: str) -> dict[str, Any]:
+    """One valuation definition by id. A timepoint of another Investment is
+    reported missing rather than returned."""
+
+    try:
+        found = investment_store.get_valuation_timepoint(investment_id, timepoint_id)
+    except (InvestmentNotFoundError, DealNotFoundError, ValuationTimepointNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "valuation_timepoint": _wire(found)}
+
+
+@app.put("/investments/{investment_id}/valuation-timepoints/{timepoint_id}", response_model=None)
+def update_investment_valuation_timepoint(
+    investment_id: str, timepoint_id: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Replace one valuation definition whole. Its display order is presentation
+    and is left where it was: renaming a view or changing its cap rate is not a
+    reordering."""
+
+    timepoint = _valuation_timepoint_request(
+        payload, investment_id=investment_id, timepoint_id=timepoint_id
+    )
+    try:
+        saved = investment_store.update_valuation_timepoint(investment_id, timepoint)
+    except (InvestmentNotFoundError, DealNotFoundError, ValuationTimepointNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except ValuationValidationError as error:
+        raise _valuation_validation_error_response(error) from None
+    return {"investment_id": investment_id, "valuation_timepoint": _wire(saved)}
+
+
+@app.delete(
+    "/investments/{investment_id}/valuation-timepoints/{timepoint_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_investment_valuation_timepoint(investment_id: str, timepoint_id: str) -> None:
+    """Remove one valuation definition. Published versions that cited it keep
+    the value they froze; what changes is their freshness."""
+
+    try:
+        investment_store.delete_valuation_timepoint(investment_id, timepoint_id)
+    except (InvestmentNotFoundError, DealNotFoundError, ValuationTimepointNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+@app.post("/investments/{investment_id}/valuation-timepoint-order", response_model=None)
+def reorder_investment_valuation_timepoints(
+    investment_id: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Set the presentation order of the Investment's valuation definitions.
+
+    Its own route because it is the only write that touches display order alone.
+    Reordering changes no cap rate, no model month, no method and no identity, so
+    it moves no valuation fingerprint and invalidates no published memo."""
+
+    body = _exact_keys(payload, _TIMEPOINT_ORDER_FIELDS, "The request body")
+    try:
+        ordered = investment_store.reorder_valuation_timepoints(
+            investment_id, tuple(_wire_array(body["timepoint_ids"], "timepoint_ids"))
+        )
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "valuation_timepoints": _wire(ordered)}
+
+
+@app.get("/deals/{deal_id}/valuation-timepoints", response_model=None)
+def read_deal_valuation_timepoints(deal_id: str) -> dict[str, Any]:
+    """The Deal's valuation definitions, and the hidden Investment that owns
+    them when one exists. Read-only and never materializing."""
+
+    try:
+        investment_id, timepoints = investment_store.read_deal_valuation_timepoints(deal_id)
+    except DealNotFoundError as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {
+        "deal_id": deal_id,
+        "investment_id": investment_id,
+        "valuation_timepoints": _wire(timepoints),
+    }
+
+
+@app.post("/deals/{deal_id}/valuation-timepoints", response_model=None)
+def create_deal_valuation_timepoint(
+    deal_id: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Author a valuation definition for a standalone Deal, materializing its
+    hidden one-unit Investment on the first save (Q4). The Deal itself is never
+    altered and no Deal fingerprint moves."""
+
+    timepoint = _valuation_timepoint_request(payload, investment_id="")
+    try:
+        investment_id, saved = investment_store.create_deal_valuation_timepoint(deal_id, timepoint)
+    except DealNotFoundError as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except ValuationValidationError as error:
+        raise _valuation_validation_error_response(error) from None
+    return {"deal_id": deal_id, "investment_id": investment_id, "valuation_timepoint": _wire(saved)}
+
+
+# -----------------------------------------------------------------------------
+# Evidence References (Section 8)
+# -----------------------------------------------------------------------------
+
+
+@app.get("/investments/{investment_id}/evidence-references", response_model=None)
+def read_evidence_references(investment_id: str) -> dict[str, Any]:
+    """Every Evidence Reference the Investment holds, approved or not. Both are
+    real records: an unapproved one exists and is visible, it simply cannot
+    support a claim."""
+
+    try:
+        references = investment_store.list_evidence_references(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "evidence_references": _wire(references)}
+
+
+@app.put("/investments/{investment_id}/evidence-references/{evidence_id}", response_model=None)
+def put_evidence_reference(
+    investment_id: str, evidence_id: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Create or replace one Evidence Reference whole.
+
+    P7.10 stores the reference, never a copy of the source document: nothing
+    here reads, fetches or copies what ``reference`` points at. ``approved`` is
+    written exactly as the analyst states it."""
+
+    evidence = _evidence_request(payload, investment_id=investment_id, evidence_id=evidence_id)
+    try:
+        saved = investment_store.put_evidence_reference(investment_id, evidence)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except MemoValidationError as error:
+        raise _memo_validation_error_response(error) from None
+    return {"investment_id": investment_id, "evidence_reference": _wire(saved)}
+
+
+@app.delete(
+    "/investments/{investment_id}/evidence-references/{evidence_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_evidence_reference(investment_id: str, evidence_id: str) -> None:
+    """Remove one Evidence Reference, or refuse with what still cites it."""
+
+    try:
+        investment_store.delete_evidence_reference(investment_id, evidence_id)
+    except (InvestmentNotFoundError, DealNotFoundError, EvidenceReferenceNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except EvidenceInUseError as error:
+        raise _evidence_in_use_response(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+# -----------------------------------------------------------------------------
+# Resolved valuation views (Sections 5, 6.2)
+# -----------------------------------------------------------------------------
+
+
+@app.post(
+    "/investments/{investment_id}/valuation-views/{strategy_id}/{scenario_id}",
+    response_model=None,
+)
+def read_valuation_views(investment_id: str, strategy_id: str, scenario_id: str) -> dict[str, Any]:
+    """Resolve this Investment's valuation definitions against one Analysis
+    Variant.
+
+    A ``POST`` because it runs the deterministic engine; it writes nothing.
+
+    **An unavailable valuation is a successful answer** (Section 6.2). It
+    carries a typed ``reason_code``, an analyst-facing ``reason``, the affected
+    scope and model month -- and no value at all. It is never a server error,
+    never fabricated, and never zero.
+
+    ``evidence_blocked`` names the definitions whose analyst-supplied value has
+    no approved source, and ``consumed_timepoint_ids`` those a ``PctOfValue``
+    rule actually consumes."""
+
+    try:
+        surface = analyze_structured_valuations(investment_id, strategy_id, scenario_id)
+    except (
+        InvestmentNotFoundError,
+        StrategyNotFoundError,
+        ScenarioNotFoundError,
+        DealNotFoundError,
+    ) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except StrategyValidationError as error:
+        raise _strategy_validation_error_response(error) from None
+    except ScenarioValidationError as error:
+        raise _scenario_validation_error_response(error) from None
+    except LeaseValidationError as error:
+        raise _lease_validation_error_response(error) from None
+    except InvestmentVariantValidationError as error:
+        raise _investment_variant_validation_error_response(error) from None
+    except StructuredVariantConflictError as error:
+        raise _structured_conflict(error) from None
+    return {
+        "investment_id": investment_id,
+        "strategy_id": strategy_id,
+        "scenario_id": scenario_id,
+        "unit_ids": list(surface.unit_ids),
+        "hold_period": surface.hold_period,
+        "views": [_valuation_view_wire(view) for view in surface.views],
+        "evidence_blocked": _wire(surface.evidence_blocked),
+        "consumed_timepoint_ids": list(surface.consumed_timepoint_ids),
+        "project_source_fingerprint": surface.project_source_fingerprint,
+        "structured_source_fingerprint": surface.structured_source_fingerprint,
+        "valuation_definition_fingerprint": surface.valuation_definition_fingerprint,
+        "valuation_result_fingerprint": surface.valuation_result_fingerprint,
+    }
+
+
+# -----------------------------------------------------------------------------
+# The memo draft (Section 7)
+# -----------------------------------------------------------------------------
+
+
+@app.get("/investments/{investment_id}/memo", response_model=None)
+def read_investment_memo(investment_id: str) -> dict[str, Any]:
+    """The Investment's one mutable memo draft, or ``null`` when it has none.
+    Read-only: reading creates nothing."""
+
+    try:
+        draft = investment_store.get_memo_draft(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "memo": _wire(draft)}
+
+
+@app.put("/investments/{investment_id}/memo", response_model=None)
+def put_investment_memo(investment_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Create or replace the Investment's one mutable draft.
+
+    Writes no published version and touches none: publishing is a separate act
+    with its own prerequisites."""
+
+    draft = _memo_draft_request(payload, investment_id=investment_id)
+    try:
+        saved = investment_store.put_memo_draft(investment_id, draft)
+    except (InvestmentNotFoundError, DealNotFoundError, EvidenceReferenceNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except MemoValidationError as error:
+        raise _memo_validation_error_response(error) from None
+    return {"investment_id": investment_id, "memo": _wire(saved)}
+
+
+@app.delete("/investments/{investment_id}/memo", status_code=status.HTTP_204_NO_CONTENT)
+def delete_investment_memo(investment_id: str) -> None:
+    """Discard the Investment's draft. Published versions are untouched:
+    discarding a workspace never rewrites what a committee already read."""
+
+    try:
+        investment_store.delete_memo_draft(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError, MemoNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+
+
+@app.get("/deals/{deal_id}/memo", response_model=None)
+def read_deal_memo(deal_id: str) -> dict[str, Any]:
+    """The Deal's memo draft and the hidden Investment that owns it. Read-only
+    and never materializing."""
+
+    try:
+        investment_id, draft = investment_store.read_deal_memo_draft(deal_id)
+    except DealNotFoundError as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"deal_id": deal_id, "investment_id": investment_id, "memo": _wire(draft)}
+
+
+@app.put("/deals/{deal_id}/memo", response_model=None)
+def put_deal_memo(deal_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Save a Deal's memo draft, materializing its hidden one-unit Investment on
+    the first save (Q4, Section 7.1). The UI keeps saying "Deal" throughout."""
+
+    draft = _memo_draft_request(payload, investment_id="")
+    try:
+        investment_id, saved = investment_store.put_deal_memo_draft(deal_id, draft)
+    except (DealNotFoundError, EvidenceReferenceNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except MemoValidationError as error:
+        raise _memo_validation_error_response(error) from None
+    return {"deal_id": deal_id, "investment_id": investment_id, "memo": _wire(saved)}
+
+
+# -----------------------------------------------------------------------------
+# Publication and versions (Section 9; R-H)
+# -----------------------------------------------------------------------------
+
+
+def _memo_version_wire(version: Any) -> dict[str, Any]:
+    return _wire(version)
+
+
+@app.get("/investments/{investment_id}/memo/publication-readiness", response_model=None)
+def read_memo_publication_readiness(investment_id: str) -> dict[str, Any]:
+    """Whether the draft could be published right now, and every specific reason
+    it could not.
+
+    Read-only, and deliberately separate from publishing: the product disables
+    the publish action with these reasons rather than letting an analyst
+    discover them by failing."""
+
+    try:
+        draft = investment_store.get_memo_draft(investment_id)
+        if draft is None:
+            raise MemoNotFoundError(investment_id)
+        selected = draft.selected_decision
+        dependencies = (
+            None
+            if selected is None
+            else memo_dependencies.dependency_set(
+                investment_id, selected, draft=draft
+            )
+        )
+        refusals = memo_dependencies.publication_refusals_for(investment_id, draft, dependencies)
+    except (InvestmentNotFoundError, DealNotFoundError, MemoNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {
+        "investment_id": investment_id,
+        "publishable": not refusals,
+        "refusals": [
+            {
+                "code": refusal.code.value,
+                "message": refusal.message,
+                "scope_id": refusal.scope_id,
+                "field": refusal.field,
+            }
+            for refusal in refusals
+        ],
+    }
+
+
+@app.post("/investments/{investment_id}/memo/publish", response_model=None)
+def publish_investment_memo(investment_id: str) -> dict[str, Any]:
+    """Publish the draft as an immutable version (Section 9; R-H).
+
+    Fails closed: every prerequisite is checked against the current state first,
+    and a refusal names every reason. One transaction -- the version, its frozen
+    content and evidence, the valuation views it cites and its whole dependency
+    ledger exist, or none of them does.
+
+    The draft is left exactly as it was. Republishing creates a *new* version;
+    no published version is ever edited."""
+
+    try:
+        version = memo_dependencies.publish(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError, MemoNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except PublicationRefusedError as error:
+        raise _publication_refused_response(error) from None
+    except MemoValidationError as error:
+        raise _memo_validation_error_response(error) from None
+    return {"investment_id": investment_id, "memo_version": _memo_version_wire(version)}
+
+
+@app.get("/investments/{investment_id}/memo-versions", response_model=None)
+def read_memo_versions(investment_id: str) -> dict[str, Any]:
+    """Every published version, oldest first by version number."""
+
+    try:
+        versions = investment_store.list_memo_versions(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {
+        "investment_id": investment_id,
+        "memo_versions": [_memo_version_wire(version) for version in versions],
+    }
+
+
+@app.get("/investments/{investment_id}/memo-versions/{version_id}", response_model=None)
+def read_memo_version(investment_id: str, version_id: str) -> dict[str, Any]:
+    """One published version by id.
+
+    Always readable, whatever has happened to its inputs since. Whether it is
+    still current is a separate question, answered by its freshness route."""
+
+    try:
+        version = investment_store.get_memo_version(investment_id, version_id)
+    except (InvestmentNotFoundError, DealNotFoundError, MemoVersionNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "memo_version": _memo_version_wire(version)}
+
+
+@app.get("/investments/{investment_id}/memo-versions/{version_id}/freshness", response_model=None)
+def read_memo_version_freshness(investment_id: str, version_id: str) -> dict[str, Any]:
+    """Whether one published version still matches the state it was published
+    against (Section 9).
+
+    A stale version is a successful answer, never an error: it names which
+    dependency classes moved, most specific first, and the version itself stays
+    readable and unchanged."""
+
+    try:
+        version = investment_store.get_memo_version(investment_id, version_id)
+        report = memo_dependencies.version_freshness(investment_id, version)
+    except (InvestmentNotFoundError, DealNotFoundError, MemoVersionNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {
+        "investment_id": investment_id,
+        "version_id": version_id,
+        "version_number": report.version_number,
+        "freshness": report.freshness.value,
+        "stale_classes": [item.value for item in report.stale_classes],
+        "stale_dependencies": _wire(report.stale_dependencies),
+    }
+
+
+# -----------------------------------------------------------------------------
+# The Investment Committee decision (Section 7.5; R-F)
+# -----------------------------------------------------------------------------
+
+
+@app.get("/investments/{investment_id}/memo-versions/{version_id}/decision", response_model=None)
+def read_committee_decision(investment_id: str, version_id: str) -> dict[str, Any]:
+    """The committee's recorded outcome for one published version, or ``null``.
+
+    ``null`` is deliberately not ``pending``: "the committee has not recorded
+    anything" and "the committee recorded that it is pending" are different
+    facts, and the second is a decision somebody made."""
+
+    try:
+        decision = investment_store.get_committee_decision(investment_id, version_id)
+    except (InvestmentNotFoundError, DealNotFoundError, MemoVersionNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return {"investment_id": investment_id, "version_id": version_id, "decision": _wire(decision)}
+
+
+@app.put("/investments/{investment_id}/memo-versions/{version_id}/decision", response_model=None)
+def put_committee_decision(
+    investment_id: str, version_id: str, payload: dict[str, Any] = Body(...)
+) -> dict[str, Any]:
+    """Record or update the committee's outcome for one published version.
+
+    A different act from the analyst's recommendation (R-F): this route writes
+    no memo content, and the route that writes a draft cannot reach this record.
+    It attaches only to a *published* version -- a committee decides on something
+    immutable -- and it never changes that version or its fingerprint."""
+
+    body = _exact_keys(payload, _IC_DECISION_FIELDS, "The request body")
+    decision = InvestmentCommitteeDecision(
+        memo_version_id=version_id,
+        decision=_memo_token(InvestmentCommitteeOutcome, body["decision"]),
+        decision_note=body["decision_note"],
+        decided_at=body["decided_at"],
+    )
+    try:
+        saved = investment_store.put_committee_decision(investment_id, version_id, decision)
+    except (InvestmentNotFoundError, DealNotFoundError, MemoVersionNotFoundError) as error:
+        raise _memo_p7_10_not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    except MemoError as error:
+        raise _structural_error(str(error)) from None
+    return {"investment_id": investment_id, "version_id": version_id, "decision": _wire(saved)}

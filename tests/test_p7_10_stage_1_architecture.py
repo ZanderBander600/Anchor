@@ -411,8 +411,9 @@ def test_the_valuation_package_never_reads_the_capital_structure() -> None:
 #: At Stage 1 only the three Capital Structure seam modules read the valuation
 #: package. Stage 2 connects exactly these further layers, and no others:
 #: persistence, the two identity/codec modules, the resolution service, the
-#: structured variant that supplies the funding authority, the memo
-#: dependency ledger, the unavailable adapter, and the routes. Re-pinned from
+#: structured variant that supplies the funding authority, the unavailable
+#: adapter, and the routes. The memo dependency ledger is deliberately absent:
+#: it reaches valuation only through those services. Re-pinned from
 #: "only the seam reads it" -- the Stage 1 claim it supersedes is that nothing
 #: *outside* this named list does.
 _VALUATION_READERS = [
@@ -421,7 +422,6 @@ _VALUATION_READERS = [
     f"{_CAPITAL}/execution_validation.py",
     f"{_CAPITAL}/funding.py",
     "src/anchor/deals/fingerprint.py",
-    "src/anchor/deals/memo_dependencies.py",
     "src/anchor/deals/store.py",
     "src/anchor/deals/structured_variants.py",
     "src/anchor/deals/valuation_codec.py",

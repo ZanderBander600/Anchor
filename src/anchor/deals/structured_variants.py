@@ -71,7 +71,7 @@ from ..capital_structure.execution_contracts import StructuredCapitalResult
 from ..capital_structure.validation import economic_order
 from ..contracts import AcquisitionTerms, acquisition_terms_from_inputs
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
-from ..valuation.contracts import InvestmentValuationResult
+from ..valuation.contracts import InvestmentValuationResult, ValuationTimepoint
 from ..valuation.funding import ValuationAuthority
 from . import store
 from .fingerprint import fingerprint_structured_source
@@ -85,6 +85,7 @@ from .valuation_views import (
     evidence_blocked_timepoints,
     funding_authority,
     resolve_views,
+    view_fingerprints,
 )
 from .investment_variants import (
     analyze_investment_variant,
@@ -203,7 +204,13 @@ class StructuredValuationSurface:
 
     ``consumed_timepoint_ids`` are the timepoints a ``PctOfValue`` rule actually
     names -- the ones that participate in the structured financial identity
-    (Section 6). A report-only valuation is deliberately absent."""
+    (Section 6). A report-only valuation is deliberately absent.
+
+    ``valuation_definition_fingerprint`` and ``valuation_result_fingerprint``
+    are the two Section 10 identities, computed here because this is where the
+    authored definitions and the resolved results are both in hand. Computing
+    them anywhere else would mean reading the definitions a second time, and a
+    second read can see a different state."""
 
     investment_id: str
     strategy_id: str
@@ -215,6 +222,8 @@ class StructuredValuationSurface:
     consumed_timepoint_ids: tuple[str, ...]
     project_source_fingerprint: str
     structured_source_fingerprint: str
+    valuation_definition_fingerprint: str
+    valuation_result_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -335,8 +344,13 @@ def _conflict() -> StructuredVariantConflictError:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _ValuationContext:
-    """One variant's resolved valuations, and what they mean for funding."""
+    """One variant's resolved valuations, and what they mean for funding.
 
+    ``timepoints`` is the exact definition set the views were resolved from,
+    carried so the valuation identities are computed from the same read rather
+    than from a second one that could see a different state."""
+
+    timepoints: tuple[ValuationTimepoint, ...]
     views: tuple[ValuationView, ...]
     authority: ValuationAuthority | None
     blocked: Mapping[str, Mapping[str, str]]
@@ -382,7 +396,9 @@ def _valuation_context(
 
     timepoints = store.list_valuation_timepoints(investment_id, db_path=db_path)
     if not timepoints:
-        return _ValuationContext(views=(), authority=None, blocked={}, consumed={})
+        return _ValuationContext(
+            timepoints=(), views=(), authority=None, blocked={}, consumed={}
+        )
     evidence = {
         item.evidence_id: item
         for item in store.list_evidence_references(investment_id, db_path=db_path)
@@ -391,6 +407,7 @@ def _valuation_context(
     views = resolve_views(timepoints, variant=variant, evidence=evidence)
     blocked = evidence_blocked_timepoints(timepoints, evidence)
     return _ValuationContext(
+        timepoints=timepoints,
         views=views,
         authority=funding_authority(investment_id=investment_id, views=views, blocked=blocked),
         blocked=blocked,
@@ -664,6 +681,11 @@ def analyze_structured_valuations(
     valuation = _valuation_context(
         investment_id, strategy_id, scenario_id, resolved.capital_structure, read.units, db_path
     )
+    definition_fingerprint, result_fingerprint = view_fingerprints(
+        timepoints=valuation.timepoints,
+        views=valuation.views,
+        variant_source_fingerprint=read.project_source_fingerprint,
+    )
     return StructuredValuationSurface(
         investment_id=investment_id,
         strategy_id=strategy_id,
@@ -679,6 +701,8 @@ def analyze_structured_valuations(
             capital_structure=resolved.capital_structure,
             consumed=valuation.consumed,
         ),
+        valuation_definition_fingerprint=definition_fingerprint,
+        valuation_result_fingerprint=result_fingerprint,
     )
 
 

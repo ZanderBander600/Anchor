@@ -314,12 +314,18 @@ def test_the_lease_level_export_read_calls_no_writer() -> None:
 
 def test_no_schema_migration_was_added() -> None:
     """Lease-Level Deals deliberately have no ``analysis_snapshot`` column.
-    This export does not add one, and adds no migration of any kind."""
+    **This export** does not add one, and adds no migration of any kind.
+
+    Measured over Excel Export 3's own committed range. Against the working tree
+    it read the separately ratified P7.10 Stage 2 migration as this gate's, which
+    it is not: that gate has its own ledger and its own additive-migration proof.
+    The two standing claims about ``lease_level_deals`` still read the current
+    tree, because they are claims about it now."""
 
     text = _source(_ANCHOR / "deals" / "store.py")
     assert "ALTER TABLE lease_level_deals" not in text
     assert re.search(r"lease_level_deals\s+ADD\s+COLUMN", text) is None
-    added = _git("diff", _BASE, "--", "src/anchor/deals/store.py")
+    added = _git("diff", _BASE, _HEAD, "--", "src/anchor/deals/store.py")
     for line in added.splitlines():
         if not line.startswith("+") or line.startswith("+++"):
             continue

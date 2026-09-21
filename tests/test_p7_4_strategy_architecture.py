@@ -704,13 +704,28 @@ def test_the_wrapper_collapses_only_when_it_holds_neither_scenarios_nor_strategi
     and each kind is asked for explicitly rather than inferred.
 
     P7.4 asked about Scenarios and Strategies; P7.8B added the Capital Structure
-    as the third kind a wrapper can hold, and P7.9 Stage 2 the Partnership as
-    the fourth, so clearing the last one is what releases the Deal -- and a
-    wrapper that still holds any of them stays."""
+    as the third kind a wrapper can hold, P7.9 Stage 2 the Partnership as the
+    fourth, and P7.10 Stage 2 the valuation definitions, Evidence References,
+    memo draft and published memo versions as the fifth through eighth. So
+    clearing the last one is what releases the Deal -- and a wrapper that still
+    holds any of them stays.
+
+    The published version matters most: collapsing a wrapper that still holds
+    one would delete an immutable decision record as a side effect of tidying
+    up an empty workspace."""
 
     function = _functions(ast.parse(_current(_STORE)))["_wrapper_holds_no_structure"]
     selects = sorted(re.findall(r"SELECT 1 FROM (\w+) WHERE investment_id", " ".join(_strings(function))))
-    assert selects == ["capital_structures", "partnerships", "scenarios", "strategies"]
+    assert selects == [
+        "capital_structures",
+        "investment_memo_drafts",
+        "investment_memo_versions",
+        "memo_evidence_references",
+        "partnerships",
+        "scenarios",
+        "strategies",
+        "valuation_timepoints",
+    ]
 
 
 def test_deleting_an_investment_deletes_its_strategy_structure_and_never_a_deal() -> None:

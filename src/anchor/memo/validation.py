@@ -25,6 +25,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 
 from .contracts import (
@@ -69,6 +70,7 @@ class MemoIssueCode(StrEnum):
     UNKNOWN_EVIDENCE_SOURCE_KIND = "unknown_evidence_source_kind"
     BLANK_EVIDENCE_TITLE = "blank_evidence_title"
     BLANK_EVIDENCE_REFERENCE = "blank_evidence_reference"
+    INVALID_AS_OF_DATE = "invalid_as_of_date"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -373,6 +375,34 @@ def validate_evidence_reference(evidence: MemoEvidenceReference) -> tuple[MemoIs
             )
         )
     return tuple(issues)
+
+
+def parse_as_of_date(raw: object, *, field: str = "as_of_date") -> date | None:
+    """An optional ISO-8601 date, or a ``MemoValidationError``.
+
+    Here rather than in the transport layer on purpose. Parsing a date needs
+    ``except ValueError``, and broad ``ValueError`` handling in a route is how
+    a validator's own refusal gets swallowed and reported as something else.
+    The domain raises its own error, and the route catches the error it
+    already catches."""
+
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            return date.fromisoformat(raw)
+        except ValueError:
+            pass
+    raise MemoValidationError(
+        (
+            _issue(
+                MemoIssueCode.INVALID_AS_OF_DATE,
+                f"{field} is {raw!r}; an as-of date is an ISO-8601 date string, or null when the source "
+                "states none. It is never inferred from today's date.",
+                field=field,
+            ),
+        )
+    )
 
 
 def require_valid_evidence_reference(evidence: MemoEvidenceReference) -> MemoEvidenceReference:
