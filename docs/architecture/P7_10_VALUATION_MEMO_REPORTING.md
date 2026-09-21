@@ -11,9 +11,15 @@ Stage status:
   `main` at `f6f3680` on 2026-09-20. It delivers the deterministic valuation
   layer and `PctOfValue` **closing** execution, and nothing else. Its boundary
   is Section 6.1 and its Stage 2 obligation is Section 6.2.
-- **Stages 2, 3, and 4 are not started.** Each requires its own explicit human
+- **Stage 2 is implemented and pending independent review and human
+  acceptance.** It was explicitly started from accepted `main` at `46650a7`
+  (PR #50) and delivers persistence, the Investment Memo domain, versioning, the
+  unavailable-state adapter and the typed API, and nothing else. Its
+  implementation clarifications are Section 22.
+- **Stages 3 and 4 are not started.** Each requires its own explicit human
   start.
-- **Finishing Stage 1 does not automatically start Stage 2.**
+- **Finishing Stage 1 does not automatically start Stage 2, and accepting
+  Stage 2 does not start Stage 3.**
 
 Gate: P7.10
 
@@ -645,7 +651,7 @@ Stage 1 was human accepted after PR #49 merged to `main` at `f6f3680` on
 2026-09-20. Its acceptance does not start Stage 2 or authorize any later
 financing event.
 
-### Stage 2 — persistence, fingerprints, memo domain, and API — **not started**
+### Stage 2 — persistence, fingerprints, memo domain, and API — **implemented 2026-09-20, pending review**
 
 - the unavailable / N/A presentation adapter Section 6.2 obliges;
 - additive schema migration;
@@ -654,6 +660,10 @@ financing event.
 - immutable version publication and dependency ledger;
 - layered fingerprints and stale reasons;
 - typed API surface and compatibility oracle.
+
+Stage 2 adds no frontend file, no AI surface, no prompt, no PDF and no report
+layout. Schema version 15 adds sixteen purely additive tables; no table is
+altered and no existing row is read or rewritten.
 
 ### Stage 3 — grounded AI proposals — **not started**
 
@@ -757,7 +767,144 @@ This contract is ratified and closed to further negotiation within P7.10.
   `PctOfValue` closing execution, with no persistence, migration, schema version
   change, API route, memo storage, AI grounding, PDF generation, or frontend
   change.
-- **Stages 2, 3, and 4 are not started.**
-- **Accepting Stage 1 does not start Stage 2.** Stage 2 requires a separate
-  explicit human start.
+- **Stage 2 is implemented and pending independent review and human
+  acceptance.** It is not accepted, not merged, and does not start Stage 3.
+- **Stages 3 and 4 are not started.**
 - P7.10 does not start P7.11.
+
+## 22. Stage 2 implementation record
+
+Stage 2 was implemented from accepted `main` at `46650a7` on branch
+`feature/p7-10-stage-2-memo-persistence-api`. It is **pending independent review
+and human acceptance**; nothing below is ratified by implementation alone.
+
+The clarifications the implementation required are recorded here so a reviewer
+can accept or reject each one deliberately rather than discovering it in a diff.
+
+### 22.1 Identity and fingerprint layering
+
+Section 10 names five identities. The implementation records **twelve dependency
+classes** on a published version rather than one hash per identity, because
+"which dependency class changed" is only answerable if the classes are recorded
+separately: `INVESTMENT_MEMBERSHIP`, `UNDERWRITING`, `BUSINESS_PLAN`,
+`STRATEGY`, `SCENARIO`, `PROJECT_VARIANT`, `CAPITAL_STRUCTURE`, `PARTNERSHIP`,
+`VALUATION_DEFINITIONS`, `VALUATION_RESULTS`, `DECISION_PERSPECTIVE`,
+`EVIDENCE` and `MEMO_CONTENT`.
+
+Three of them — Business Plan, Strategy and Scenario — **overlap**
+`PROJECT_VARIANT` by construction, because the ratified P7 identity model folds
+them into the resolved inputs. They are recorded *beside* it, never instead of
+it, and the report order puts the more specific statement first. A reviewer
+should confirm this is the intended reading of "distinguish which dependency
+class changed" rather than a parallel authority.
+
+`PARTNERSHIP` is absent from a version whose variant resolves no Partnership,
+following FP-2.
+
+### 22.2 The consumed valuation joins the structured identity
+
+Section 6 states that a valuation consumed by `PctOfValue` "participates in
+[the resolved Capital Structure's] financial identity and downstream
+invalidation". The implementation therefore extends `fingerprint_structured_source`
+with the resolved valuations a `PctOfValue` rule actually names.
+
+**Every structured digest that existed before this gate is preserved byte for
+byte**: the payload joins only when non-empty, exactly as the D6.5 Business Plan
+rule works, and a structure with no such rule hashes what it always hashed. A
+report-only valuation no position consumes is deliberately excluded — it moves
+valuation and memo freshness, and not the Acquisition analysis.
+
+One consequence a reviewer should weigh: `structured_variant_fingerprint` must
+resolve the Project variant when a `PctOfValue` rule exists, because the
+identity depends on the resolved value. That costs a Project analysis for those
+structures and nothing for any other. It is not optional — an identity that
+differed between the fingerprint door and the analysis door would silently mean
+two different variants.
+
+### 22.3 The evidence gate is Stage 2's own
+
+Stage 1 validates that an analyst-supplied value *names* an Evidence Reference.
+Whether that reference exists and is **approved** is a persisted fact Stage 1
+cannot see, so the gate lives in the Stage 2 resolution layer (Section 8; R-D).
+
+An unapproved source produces no value, and **the amount the analyst typed is
+not reported** — presenting it would be the "silently upgraded to a fact"
+Section 8 forbids. A blocked valuation is also withheld from the `PctOfValue`
+funding authority; because the Stage 1 funding layer would then report
+`TIMEPOINT_NOT_FOUND`, which is misleading for a timepoint that *is* authored,
+the Stage 2 adapter reports `EVIDENCE_NOT_APPROVED` instead. No Stage 1 file was
+changed to achieve this.
+
+### 22.4 Two honest surfaces for an unresolved value-sized funding
+
+The accepted Stage 1 executor refuses an unresolved `PctOfValue` with a typed
+`CapitalStructureExecutionError`. That is a specific refusal and was left
+exactly as accepted.
+
+It is not, however, the "structured unavailable / N/A representation on the API
+surface" Section 6.2 requires, so the valuation-views route additionally reports
+`funding_states`: every `PctOfValue` rule, sized or typed-unavailable **with no
+amount**, read-only and ahead of time. An analyst can see why a value-sized
+funding cannot be sized without running an analysis that would refuse.
+
+A reviewer should confirm that two surfaces is the right answer, rather than
+changing Stage 1 so an unresolved funding becomes a successful analysis with
+N/A returns. The latter would change accepted Stage 1 behaviour and was
+deliberately not done.
+
+### 22.5 `PctOfValue` became authorable
+
+P7.8B refused a `pct_of_value` amount rule at the authoring door, and its own
+message said why: the rule "arrives with valuation timepoints". They have
+arrived, so the refusal was retired. Without this the capability Stage 1
+activated would be unreachable through the product.
+
+Nothing downstream moved. A rule naming a timepoint the Investment does not
+define is stored and resolves to a typed unavailable funding state with no
+amount.
+
+### 22.6 Stale-reason ownership and publication prerequisites
+
+Freshness is computed by comparing a version's recorded ledger against the
+current state. A dependency that can no longer be computed at all — the selected
+Strategy was deleted, the variant no longer resolves — is reported as a named
+stale condition with no current fingerprint, never as an error and never as a
+silent equality.
+
+Publication fails closed on: an ill-formed draft, no selected decision, a
+missing Strategy, Scenario or perspective, a cell that does not resolve, a blank
+decision ask, a cited Evidence Reference that is missing or unapproved, and any
+cited valuation view with no value. A reviewer should confirm that requiring
+**every** authored valuation view to resolve before publishing is the intended
+strictness; the alternative would publish a package that shows a view it cannot
+value.
+
+### 22.7 Draft-level evidence, not per-item
+
+Section 7.2 lists `evidence_references[]` on the draft, and the implementation
+stores exactly that. Per-item evidence citation is not implemented, because the
+ratified contract does not describe it.
+
+### 22.8 Guards re-pinned
+
+Each re-pin is documented in place in the test that carries it. No earlier
+invariant was weakened; where a guard genuinely conflicted with this gate, the
+claim it proved was restated as the historical fact it still proves.
+
+- P7.10 Stage 1's ledger, protected paths and API freeze now read Stage 1's
+  committed range `9c65843..7237d7a`, as that file's own docstring anticipated.
+  The accepted package gained a *stronger* freeze: byte-identical to its merge
+  now, not merely unchanged during Stage 1.
+- P7.9 Stage 1 released `deals/structured_variants.py` from its working-tree
+  freeze, restating the claim as "byte-identical from P7.9 through accepted
+  P7.10 Stage 1".
+- P7.1's two scenario-layer guards widened by one named file, the identity
+  module.
+- P7.4's wrapper-collapse guard now asks about all eight kinds a wrapper can
+  hold.
+- P7.8B retired `UNSUPPORTED_AMOUNT_RULE` from its unexecutable-convention list
+  and gained a counterpart test.
+- Excel Export 3's no-migration guard measures its own committed range.
+- The P7.2, P7.4, P7.6 and P7.9 Stage 2 compatibility oracles and four
+  fresh-store assertions moved to schema 15 with P7.10's sixteen tables named,
+  so every set comparison stays exact.
