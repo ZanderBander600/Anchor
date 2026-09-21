@@ -52,9 +52,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from ..analysis.strategy import BASE_SCENARIO_ID, BASE_STRATEGY_ID
-from ..business_plan import BusinessPlan
 from ..memo.contracts import (
     DEPENDENCY_REPORT_ORDER,
     DecisionPerspectiveKind,
@@ -142,15 +142,20 @@ def _unit_ids(investment_id: str, db_path: Path | None) -> tuple[str, ...]:
     return tuple(sorted(unit.unit_id for unit in investment.units))
 
 
-def _business_plans(investment_id: str, db_path: Path | None) -> dict[str, BusinessPlan]:
+def _business_plans(investment_id: str, db_path: Path | None) -> dict[str, Any]:
     """The Investment's own Business Plan under ``''`` and each Unit's under its
     ``unit_id``.
+
+    Typed loosely on purpose: this module reads plans off already-loaded
+    records and hands them to the identity layer, which owns the contract and
+    types it. Importing the Business Plan package here for an annotation alone
+    would widen a boundary two guards deliberately keep narrow.
 
     A hidden one-unit wrapper has no Investment-level plan of its own -- it is
     not a visible Investment -- so only its Unit's plan participates. Nothing is
     fabricated for the missing one."""
 
-    plans: dict[str, BusinessPlan] = {}
+    plans: dict[str, Any] = {}
     investment = store.get_investment(investment_id, db_path=db_path)
     if not investment.hidden:
         plans[WHOLE_INVESTMENT] = store.get_visible_investment(

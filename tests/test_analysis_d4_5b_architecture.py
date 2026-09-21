@@ -1352,7 +1352,7 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     # P7.9 Stage 2 moves it to 12: eight additive Partnership tables, holding
     # the authored Partnership contract only. No Partnership result is
     # persisted either; it is recomputed on every request (Q14).
-    assert "_SCHEMA_VERSION = 14" in store  # Asset Types 1
+    assert "_SCHEMA_VERSION = 15" in store  # Asset Types 1
     assert "deal_sensitivity_snapshots" in store, (
         "D5.8A should persist the latest Lease-Level sensitivity runs"
     )
