@@ -79,6 +79,24 @@ import type {
   PartnershipVariantAnalysis,
   PartnershipVariantFingerprint,
 } from './partnershipTypes';
+// Phase 7 Gate P7.10 Stage 4: the Investment Memo wire contracts. Types only --
+// the client below transports them and computes nothing.
+import type {
+  InvestmentCommitteeDecision,
+  InvestmentCommitteeOutcome,
+  InvestmentMemoDraft,
+  InvestmentMemoVersion,
+  MemoDraftRequest,
+  MemoEvidenceReference,
+  MemoFreshnessReport,
+  MemoIssue,
+  MemoLibraryEntry,
+  MemoReportPackage,
+  PublicationReadiness,
+  PublicationRefusal,
+  ValuationSurface,
+  ValuationTimepoint,
+} from './memoTypes';
 import type {
   InvestmentAddUnitRequest,
   InvestmentCreateRequest,
@@ -3492,4 +3510,486 @@ export async function readAssetPerformance(
     'The monthly performance could not be loaded',
   );
   return (await response.json()) as AssetPerformanceResponse;
+}
+
+
+// ===========================================================================
+// Phase 7 Gate P7.10 Stage 4 -- the Investment Memo client.
+//
+// Transport only. Nothing here computes a financial result, and nothing here
+// formats one: every figure the memo surfaces show arrives already computed and
+// already formatted from `anchor.reporting`, because a percentage rounded on
+// this side could disagree with the same percentage in the exported PDF.
+//
+// Three refusals are told apart deliberately, because the product must react to
+// each differently:
+//
+//   * `MemoError` carries structural issues (422) -- "fix these fields";
+//   * `PublicationRefusedError` carries the typed publication refusals (422) --
+//     the draft is well formed and what is refused is the authority to publish
+//     it, with one reason per problem and the affected scope;
+//   * `EvidenceInUseError` carries the still-cited conflict (409) -- removing
+//     the source would leave a claim pointing at nothing.
+//
+// Stage 4 adds no AI route. Stage 3 is deferred and unstarted.
+// ===========================================================================
+
+/** A structural refusal, carrying the API's own issues in its own order. */
+export class MemoError extends Error {
+  readonly issues: MemoIssue[];
+
+  constructor(message: string, issues: MemoIssue[] = []) {
+    super(message);
+    this.name = 'MemoError';
+    this.issues = issues;
+  }
+}
+
+/** A draft that may not be published, with every specific reason.
+ *
+ * Its own type so the product can never show a decision-critical refusal as a
+ * generic failed toast, which Section 14 forbids. */
+export class PublicationRefusedError extends Error {
+  readonly refusals: PublicationRefusal[];
+
+  constructor(message: string, refusals: PublicationRefusal[] = []) {
+    super(message);
+    this.name = 'PublicationRefusedError';
+    this.refusals = refusals;
+  }
+}
+
+/** An Evidence Reference something still cites, with what to detach. Never
+ * cascaded: removing it would leave a claim, or an analyst-supplied valuation,
+ * with no source. */
+export class EvidenceInUseError extends Error {
+  readonly evidenceId: string;
+  readonly valuationTimepointIds: string[];
+  readonly citedByDraft: boolean;
+
+  constructor(
+    message: string,
+    evidenceId: string,
+    valuationTimepointIds: string[],
+    citedByDraft: boolean,
+  ) {
+    super(message);
+    this.name = 'EvidenceInUseError';
+    this.evidenceId = evidenceId;
+    this.valuationTimepointIds = valuationTimepointIds;
+    this.citedByDraft = citedByDraft;
+  }
+}
+
+/** A refused PDF export, with the backend's own stable code. */
+export class MemoExportRefusedError extends Error {
+  readonly code: string;
+
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = 'MemoExportRefusedError';
+    this.code = code;
+  }
+}
+
+function memoIssues(detail: unknown): MemoIssue[] {
+  if (!Array.isArray(detail)) {
+    return [];
+  }
+  return detail.flatMap((entry) => {
+    if (entry === null || typeof entry !== 'object') {
+      return [];
+    }
+    const issue = entry as Partial<MemoIssue>;
+    return [
+      {
+        code: typeof issue.code === 'string' ? issue.code : '',
+        message: String(issue.message),
+        item_id: typeof issue.item_id === 'string' ? issue.item_id : null,
+        field: typeof issue.field === 'string' ? issue.field : null,
+      },
+    ];
+  });
+}
+
+/** The publication refusals of a structured 422, read structurally.
+ *
+ * A refusal is recognised by carrying `scope_id` or `unavailable_reason`, the
+ * two fields a plain memo issue never has. That keeps the two 422 shapes apart
+ * without asking the caller to know which route it came from. */
+function publicationRefusals(detail: unknown): PublicationRefusal[] {
+  if (!Array.isArray(detail)) {
+    return [];
+  }
+  return detail.flatMap((entry) => {
+    if (entry === null || typeof entry !== 'object') {
+      return [];
+    }
+    const raw = entry as Record<string, unknown>;
+    if (!('scope_id' in raw) && !('unavailable_reason' in raw)) {
+      return [];
+    }
+    return [
+      {
+        code: typeof raw.code === 'string' ? raw.code : '',
+        message: String(raw.message),
+        scope_id: typeof raw.scope_id === 'string' ? raw.scope_id : null,
+        field: typeof raw.field === 'string' ? raw.field : null,
+        unavailable_reason:
+          typeof raw.unavailable_reason === 'string' ? raw.unavailable_reason : null,
+      },
+    ];
+  });
+}
+
+function memoMessage(detail: unknown, issues: MemoIssue[], failureMessage: string): string {
+  if (typeof detail === 'string' && detail !== '') {
+    return detail;
+  }
+  return issues.length === 0 ? failureMessage : issues.map((issue) => issue.message).join('\n');
+}
+
+async function memoFetch(
+  path: string,
+  init: RequestInit,
+  failureMessage: string,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, init);
+  } catch {
+    throw new MemoError(NETWORK_ERROR_MESSAGE);
+  }
+  if (response.ok) {
+    return response;
+  }
+
+  let detail: unknown = null;
+  try {
+    detail = ((await response.json()) as { detail?: unknown }).detail ?? null;
+  } catch {
+    detail = null;
+  }
+
+  if (response.status === 409 && detail !== null && typeof detail === 'object') {
+    const conflict = detail as Record<string, unknown>;
+    if (typeof conflict.evidence_id === 'string') {
+      throw new EvidenceInUseError(
+        String(conflict.message ?? failureMessage),
+        conflict.evidence_id,
+        Array.isArray(conflict.valuation_timepoint_ids)
+          ? conflict.valuation_timepoint_ids.map(String)
+          : [],
+        conflict.cited_by_draft === true,
+      );
+    }
+  }
+
+  const refusals = publicationRefusals(detail);
+  if (refusals.length > 0) {
+    throw new PublicationRefusedError(
+      refusals.map((refusal) => refusal.message).join('\n'),
+      refusals,
+    );
+  }
+
+  if (detail !== null && typeof detail === 'object' && !Array.isArray(detail)) {
+    const refusal = detail as Record<string, unknown>;
+    if (typeof refusal.code === 'string' && typeof refusal.message === 'string') {
+      throw new MemoExportRefusedError(refusal.message, refusal.code);
+    }
+  }
+
+  const issues = memoIssues(detail);
+  throw new MemoError(memoMessage(detail, issues, failureMessage), issues);
+}
+
+function memoInvestmentPath(investmentId: string, suffix: string): string {
+  return `/investments/${encodeURIComponent(investmentId)}${suffix}`;
+}
+
+/** `GET /memo-library`. Read-only and non-materializing: listing memos gives
+ * no Deal an Investment. */
+export async function readMemoLibrary(): Promise<MemoLibraryEntry[]> {
+  const response = await memoFetch(
+    '/memo-library',
+    { method: 'GET' },
+    'The investment memos could not be loaded',
+  );
+  const body = (await response.json()) as { memos: MemoLibraryEntry[] };
+  return body.memos;
+}
+
+/** `GET /investments/{id}/memo`. `null` when the Investment has no draft --
+ * reading one never creates it. */
+export async function readInvestmentMemo(
+  investmentId: string,
+): Promise<InvestmentMemoDraft | null> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, '/memo'),
+    { method: 'GET' },
+    'The memo could not be loaded',
+  );
+  const body = (await response.json()) as { memo: InvestmentMemoDraft | null };
+  return body.memo;
+}
+
+/** `PUT /investments/{id}/memo` -- create or replace the one mutable draft.
+ * Writes no published version and touches none. */
+export async function saveInvestmentMemo(
+  investmentId: string,
+  memo: MemoDraftRequest,
+): Promise<InvestmentMemoDraft> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, '/memo'),
+    jsonBody('PUT', memo as unknown as Record<string, unknown>),
+    'The memo could not be saved',
+  );
+  const body = (await response.json()) as { memo: InvestmentMemoDraft };
+  return body.memo;
+}
+
+/** `GET /deals/{id}/memo` -- a Deal's draft and the hidden Investment that owns
+ * it. Read-only and never materializing. */
+export async function readDealMemo(
+  dealId: string,
+): Promise<{ investment_id: string | null; memo: InvestmentMemoDraft | null }> {
+  const response = await memoFetch(
+    `/deals/${encodeURIComponent(dealId)}/memo`,
+    { method: 'GET' },
+    'The memo could not be loaded',
+  );
+  return (await response.json()) as {
+    investment_id: string | null;
+    memo: InvestmentMemoDraft | null;
+  };
+}
+
+/** `PUT /deals/{id}/memo` -- the first save materializes the Deal's hidden
+ * one-unit Investment. The product keeps saying "Deal" throughout. */
+export async function saveDealMemo(
+  dealId: string,
+  memo: MemoDraftRequest,
+): Promise<{ investment_id: string; memo: InvestmentMemoDraft }> {
+  const response = await memoFetch(
+    `/deals/${encodeURIComponent(dealId)}/memo`,
+    jsonBody('PUT', memo as unknown as Record<string, unknown>),
+    'The memo could not be saved',
+  );
+  return (await response.json()) as { investment_id: string; memo: InvestmentMemoDraft };
+}
+
+/** `GET /investments/{id}/evidence-references`. Approved and unapproved alike:
+ * an unapproved source is a real record that simply cannot support a published
+ * claim. */
+export async function readEvidenceReferences(
+  investmentId: string,
+): Promise<MemoEvidenceReference[]> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, '/evidence-references'),
+    { method: 'GET' },
+    'The sources could not be loaded',
+  );
+  const body = (await response.json()) as { evidence_references: MemoEvidenceReference[] };
+  return body.evidence_references;
+}
+
+/** `PUT /investments/{id}/evidence-references/{evidence_id}`. */
+export async function saveEvidenceReference(
+  investmentId: string,
+  evidence: MemoEvidenceReference,
+): Promise<MemoEvidenceReference> {
+  const response = await memoFetch(
+    memoInvestmentPath(
+      investmentId,
+      `/evidence-references/${encodeURIComponent(evidence.evidence_id)}`,
+    ),
+    jsonBody('PUT', evidence as unknown as Record<string, unknown>),
+    'The source could not be saved',
+  );
+  const body = (await response.json()) as { evidence_reference: MemoEvidenceReference };
+  return body.evidence_reference;
+}
+
+/** `DELETE /investments/{id}/evidence-references/{evidence_id}`. Refuses with
+ * `EvidenceInUseError` while a claim or a valuation still cites it. */
+export async function deleteEvidenceReference(
+  investmentId: string,
+  evidenceId: string,
+): Promise<void> {
+  await memoFetch(
+    memoInvestmentPath(investmentId, `/evidence-references/${encodeURIComponent(evidenceId)}`),
+    { method: 'DELETE' },
+    'The source could not be removed',
+  );
+}
+
+/** `GET /investments/{id}/valuation-timepoints` -- the authored definitions, in
+ * display order. Resolves nothing. */
+export async function readValuationTimepoints(
+  investmentId: string,
+): Promise<ValuationTimepoint[]> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, '/valuation-timepoints'),
+    { method: 'GET' },
+    'The valuation definitions could not be loaded',
+  );
+  const body = (await response.json()) as { valuation_timepoints: ValuationTimepoint[] };
+  return body.valuation_timepoints;
+}
+
+/** `POST /investments/{id}/valuation-views/{strategy}/{scenario}`.
+ *
+ * A `POST` because it runs the deterministic engine; it writes nothing. An
+ * unavailable valuation is a **successful** answer carrying its typed reason and
+ * no value at all -- never an error, never zero. */
+export async function readValuationViews(
+  investmentId: string,
+  strategyId: string,
+  scenarioId: string,
+): Promise<ValuationSurface> {
+  const response = await memoFetch(
+    memoInvestmentPath(
+      investmentId,
+      `/valuation-views/${encodeURIComponent(strategyId)}/${encodeURIComponent(scenarioId)}`,
+    ),
+    { method: 'POST' },
+    'The valuation views could not be resolved',
+  );
+  return (await response.json()) as ValuationSurface;
+}
+
+/** `GET /investments/{id}/memo/publication-readiness` -- whether the draft
+ * could be published now, and every specific reason it could not. */
+export async function readPublicationReadiness(
+  investmentId: string,
+): Promise<PublicationReadiness> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, '/memo/publication-readiness'),
+    { method: 'GET' },
+    'The publication checks could not be run',
+  );
+  return (await response.json()) as PublicationReadiness;
+}
+
+/** `POST /investments/{id}/memo/publish` -- one transaction creating a new
+ * immutable version. Never overwrites an earlier one; the draft is left as it
+ * was. */
+export async function publishInvestmentMemo(
+  investmentId: string,
+): Promise<InvestmentMemoVersion> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, '/memo/publish'),
+    { method: 'POST' },
+    'The memo could not be published',
+  );
+  const body = (await response.json()) as { memo_version: InvestmentMemoVersion };
+  return body.memo_version;
+}
+
+/** `GET /investments/{id}/memo-versions` -- every published version, oldest
+ * first. */
+export async function readMemoVersions(investmentId: string): Promise<InvestmentMemoVersion[]> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, '/memo-versions'),
+    { method: 'GET' },
+    'The published versions could not be loaded',
+  );
+  const body = (await response.json()) as { memo_versions: InvestmentMemoVersion[] };
+  return body.memo_versions;
+}
+
+/** `GET /investments/{id}/memo-versions/{version}/freshness`. A stale version is
+ * a successful answer naming which dependency classes moved; the version itself
+ * stays readable and unchanged. */
+export async function readMemoVersionFreshness(
+  investmentId: string,
+  versionId: string,
+): Promise<MemoFreshnessReport> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, `/memo-versions/${encodeURIComponent(versionId)}/freshness`),
+    { method: 'GET' },
+    'The version freshness could not be read',
+  );
+  return (await response.json()) as MemoFreshnessReport;
+}
+
+/** `GET /investments/{id}/memo-versions/{version}/decision` -- `null` when the
+ * committee has recorded nothing, which is not the same as Pending. */
+export async function readCommitteeDecision(
+  investmentId: string,
+  versionId: string,
+): Promise<InvestmentCommitteeDecision | null> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, `/memo-versions/${encodeURIComponent(versionId)}/decision`),
+    { method: 'GET' },
+    'The committee decision could not be loaded',
+  );
+  const body = (await response.json()) as { decision: InvestmentCommitteeDecision | null };
+  return body.decision;
+}
+
+/** `PUT /investments/{id}/memo-versions/{version}/decision`.
+ *
+ * A different act from the analyst's recommendation (R-F): this writes no memo
+ * content, attaches only to a *published* version, and changes neither that
+ * version nor its identity. */
+export async function saveCommitteeDecision(
+  investmentId: string,
+  versionId: string,
+  decision: {
+    decision: InvestmentCommitteeOutcome;
+    decision_note: string | null;
+    decided_at: string | null;
+  },
+): Promise<InvestmentCommitteeDecision> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, `/memo-versions/${encodeURIComponent(versionId)}/decision`),
+    jsonBody('PUT', decision as unknown as Record<string, unknown>),
+    'The committee decision could not be saved',
+  );
+  const body = (await response.json()) as { decision: InvestmentCommitteeDecision };
+  return body.decision;
+}
+
+/** `GET /investments/{id}/memo/report-preview` -- the draft as a report
+ * package, marked `draft_preview`. */
+export async function readMemoReportPreview(
+  investmentId: string,
+): Promise<MemoReportPackage> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, '/memo/report-preview'),
+    { method: 'GET' },
+    'The report preview could not be built',
+  );
+  const body = (await response.json()) as { report: MemoReportPackage };
+  return body.report;
+}
+
+/** `GET /investments/{id}/memo-versions/{version}/report` -- one published
+ * version as a report package. */
+export async function readMemoVersionReport(
+  investmentId: string,
+  versionId: string,
+): Promise<MemoReportPackage> {
+  const response = await memoFetch(
+    memoInvestmentPath(investmentId, `/memo-versions/${encodeURIComponent(versionId)}/report`),
+    { method: 'GET' },
+    'The report could not be built',
+  );
+  const body = (await response.json()) as { report: MemoReportPackage };
+  return body.report;
+}
+
+/** The download URL of one published version's PDF.
+ *
+ * A URL rather than a fetch: the browser downloads it directly, so the file
+ * lands with the `Content-Disposition` name the backend chose and no blob is
+ * rebuilt on this side. There is no draft equivalent, and there is no route
+ * that would accept one. */
+export function memoPdfUrl(investmentId: string, versionId: string): string {
+  return `${API_BASE_URL}${memoInvestmentPath(
+    investmentId,
+    `/memo-versions/${encodeURIComponent(versionId)}/exports/investment-memo.pdf`,
+  )}`;
 }

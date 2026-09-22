@@ -7,7 +7,17 @@ import { assertNeverMode, operatingModeLabel } from '../operatingMode';
 /** Which global surface is showing. Phase 7 Gate P7.6 adds the Investment
  * surfaces beside the Deal ones: a Deal and an Investment are different
  * things, each with its own library. */
-export type AppView = 'workspace' | 'library' | 'investment-library' | 'new-investment' | 'investment';
+export type AppView =
+  | 'workspace'
+  | 'library'
+  | 'investment-library'
+  | 'new-investment'
+  | 'investment'
+  // Phase 7 Gate P7.10 Stage 4: the Investment Committee surfaces. A memo is a
+  // first-class workspace beside the Deal and Investment ones, never a modal
+  // over either.
+  | 'memo-library'
+  | 'memo';
 
 /** Maximum saved deals surfaced in the sidebar's Recent Deals list. The full
  * list always remains one click away in the Deal Library view -- the sidebar
@@ -116,6 +126,10 @@ export interface AppSidebarProps {
   onOpenInvestmentLibrary?: () => void;
   onNewInvestment?: () => void;
   onOpenInvestment?: (investmentId: string) => void;
+  /** P7.10 Stage 4: opens the Investment Committee library. Optional so every
+   * existing render site keeps working unchanged; the entry simply does not
+   * appear when it is absent. */
+  onOpenMemoLibrary?: () => void;
   /** Gate AM1: switches to the Asset Management workspace. Optional so every
    * existing render site of this component keeps working unchanged; the
    * workspace switch simply does not appear when it is absent. */
@@ -123,6 +137,16 @@ export interface AppSidebarProps {
   /** How many buildings are under management, shown beside the switch so the
    * analyst can see there is something there before going. */
   managedAssetCount?: number;
+}
+
+/** P7.10 Stage 4: the Investment Committee decision package. */
+function IconMemo() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <rect x="3" y="1.8" width="10" height="12.4" rx="1.1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M5.6 5.4h4.8M5.6 8h4.8M5.6 10.6h3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 /** Gate AM1: the owned-asset side of the product. */
@@ -168,6 +192,7 @@ export function AppSidebar({
   onOpenInvestmentLibrary,
   onNewInvestment,
   onOpenInvestment,
+  onOpenMemoLibrary,
   onOpenAssetManagement,
   managedAssetCount = 0,
 }: AppSidebarProps) {
@@ -326,6 +351,22 @@ export function AppSidebar({
               <IconPlus />
               <span className="sidebar-nav-label">New Investment</span>
             </button>
+            {onOpenMemoLibrary !== undefined && (
+            <button
+              type="button"
+              className={
+                view === 'memo-library' || view === 'memo'
+                  ? 'sidebar-nav-item sidebar-nav-item-active'
+                  : 'sidebar-nav-item'
+              }
+              aria-current={view === 'memo-library' || view === 'memo' ? 'page' : undefined}
+              aria-label="Investment Committee"
+              onClick={onOpenMemoLibrary}
+            >
+              <IconMemo />
+              <span className="sidebar-nav-label">Investment Committee</span>
+            </button>
+            )}
           </div>
 
           <p className="sidebar-section-label">Recent Investments</p>
