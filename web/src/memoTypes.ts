@@ -358,7 +358,14 @@ export interface ValuationTimepoint {
  * become a final PDF; only a `published_version` may. */
 export type MemoReportOrigin = 'draft_preview' | 'published_version';
 
-export type ReportFreshness = 'current' | 'stale' | 'not_applicable';
+/** What a report *was* when it was assembled.
+ *
+ * A published report is frozen at publication and records `current` forever: it
+ * was current when issued, and an issued document does not change its mind.
+ * Whether today's analysis still matches is a separate live question, answered
+ * by `MemoFreshnessReport` and shown around the document rather than inside it.
+ * There is deliberately no `stale` member. */
+export type ReportFreshness = 'current' | 'not_applicable';
 
 export interface ReportUnavailable {
   reason_code: string;
@@ -456,7 +463,6 @@ export interface MemoReportPackage {
   scenario_label: string;
   perspective_label: string;
   freshness: ReportFreshness;
-  stale_classes: string[];
   verification_code: string | null;
   key_metrics: MemoReportMetric[];
   valuations: MemoReportValuation[];
@@ -520,4 +526,25 @@ export interface MemoDraftRequest {
   term_items: MemoTermItem[];
   evidence_ids: string[];
   selected_valuation_timepoint_ids: string[];
+}
+
+/** Why a published version has no issued report.
+ *
+ * One code, and it is historical rather than a fault: versions published before
+ * Anchor began storing an immutable report with each version were never issued
+ * one, and nothing reconstructs it from today's numbers. */
+export interface MemoReportUnavailable {
+  code: 'report_snapshot_not_available';
+  message: string;
+}
+
+/** `GET /investments/{id}/memo-versions/{version}/report`.
+ *
+ * Exactly one of `report` and `unavailable` is set. A version with no stored
+ * artifact is a successful answer, not an error. */
+export interface MemoVersionReportResponse {
+  investment_id: string;
+  version_id: string;
+  report: MemoReportPackage | null;
+  unavailable: MemoReportUnavailable | null;
 }

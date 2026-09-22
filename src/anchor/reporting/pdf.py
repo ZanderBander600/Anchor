@@ -16,11 +16,16 @@ package are byte-identical rather than merely semantically identical. The one
 field that legitimately differs between exports -- the generation timestamp --
 is part of the package, so identical input really does mean identical output.
 
-**A draft and a stale version cannot pass as current.** ``status_line`` is
-printed in the masthead, repeated in the footer of every page, and a draft or
-stale package additionally carries a diagonal watermark across each page. The
-export route refuses a draft before reaching this module; the watermark exists
-so a *preview* rendered here is unmistakable too.
+**A draft cannot pass as published.** ``status_line`` is printed in the
+masthead and repeated on every page, and a draft package additionally carries a
+diagonal watermark across each one. The export route refuses a draft before
+reaching this module; the watermark exists so a *preview* rendered here is
+unmistakable too.
+
+**A published PDF is never marked stale.** It is rendered once, at publication,
+and stored; the bytes a committee was issued are the bytes every later download
+returns. Whether the analysis has moved since is reported in the workspace
+around the document, never painted onto it.
 
 **Nothing is invented.** There is no photograph, map, market statistic,
 demographic figure, analyst name or narrative conclusion in this file. A section
@@ -241,7 +246,7 @@ class _MemoDocument(BaseDocTemplate):
         canvas.saveState()
         self._header(canvas)
         self._footer(canvas)
-        if self.package.is_draft or self.package.is_stale:
+        if self.package.is_draft:
             self._watermark(canvas)
         canvas.restoreState()
 
@@ -287,11 +292,11 @@ class _MemoDocument(BaseDocTemplate):
         return f"{self.package.investment_name} – Version {self.package.version_number}"
 
     def _watermark(self, canvas) -> None:  # noqa: ANN001
-        """A diagonal marking a reader cannot miss and cannot mistake.
+        """The diagonal DRAFT marking a reader cannot miss.
 
-        Drawn under nothing -- it is the last thing painted -- but at low alpha,
-        so the page stays readable while being unmistakably not a current
-        published memo.
+        Painted at low alpha, so the page stays readable while being
+        unmistakably not an issued memo. Only a draft preview reaches this: a
+        published PDF carries no watermark, because it is stored as issued.
         """
 
         canvas.saveState()
@@ -303,7 +308,7 @@ class _MemoDocument(BaseDocTemplate):
         canvas.translate(PAGE_WIDTH / 2, PAGE_HEIGHT / 2)
         canvas.rotate(38)
         canvas.setFont("Helvetica-Bold", 58)
-        canvas.drawCentredString(0, 0, "DRAFT" if self.package.is_draft else "SUPERSEDED")
+        canvas.drawCentredString(0, 0, "DRAFT")
         canvas.restoreState()
 
 
@@ -757,8 +762,6 @@ def _version_appendix(package: MemoReportPackage) -> list[Any]:
         ("Status", package.status_line),
         ("Report generated", package.generated_at),
     ]
-    if package.stale_classes:
-        rows.append(("Changed since publication", "; ".join(package.stale_classes)))
     if package.verification_code:
         rows.append(("Verification code", package.verification_code))
 
@@ -768,9 +771,9 @@ def _version_appendix(package: MemoReportPackage) -> list[Any]:
             headers=("Field", "Value"),
             rows=tuple(rows),
             note=(
-                "A published version is immutable. Where the analysis has moved since "
-                "publication, this package reports the change and leaves the published version "
-                "exactly as it was."
+                "This report and its PDF were issued when the version was published and are "
+                "stored unchanged. Where the analysis has moved since, Anchor reports that in "
+                "the workspace beside this document; the document itself is never altered."
             ),
         )
     )

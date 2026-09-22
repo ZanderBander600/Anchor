@@ -92,6 +92,7 @@ import type {
   MemoIssue,
   MemoLibraryEntry,
   MemoReportPackage,
+  MemoVersionReportResponse,
   PublicationReadiness,
   PublicationRefusal,
   ValuationSurface,
@@ -3966,19 +3967,26 @@ export async function readMemoReportPreview(
   return body.report;
 }
 
-/** `GET /investments/{id}/memo-versions/{version}/report` -- one published
- * version as a report package. */
+/** `GET /investments/{id}/memo-versions/{version}/report` -- the frozen report
+ * one published version was issued as.
+ *
+ * Read, never recomputed: the backend returns the stored artifact, so this
+ * response does not change when the underwriting, a Strategy, a Scenario, the
+ * Capital Structure or a valuation definition does.
+ *
+ * A version published before Anchor stored reports answers successfully with
+ * `report: null` and a typed `unavailable`; it is a historical state, not an
+ * error, and the caller says so rather than showing a failure. */
 export async function readMemoVersionReport(
   investmentId: string,
   versionId: string,
-): Promise<MemoReportPackage> {
+): Promise<MemoVersionReportResponse> {
   const response = await memoFetch(
     memoInvestmentPath(investmentId, `/memo-versions/${encodeURIComponent(versionId)}/report`),
     { method: 'GET' },
-    'The report could not be built',
+    'The report could not be loaded',
   );
-  const body = (await response.json()) as { report: MemoReportPackage };
-  return body.report;
+  return (await response.json()) as MemoVersionReportResponse;
 }
 
 /** The download URL of one published version's PDF.

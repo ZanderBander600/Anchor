@@ -26,9 +26,9 @@ from anchor.reporting.assembly import (
     PdfExportRefusalCode,
     PdfExportRefusedError,
     assemble_draft_preview,
-    assemble_version_report,
-    assemble_version_report_for_export,
     export_filename,
+    read_version_pdf,
+    read_version_report,
 )
 from anchor.reporting.contracts import (
     UNSOURCED_CLAIM_LABEL,
@@ -63,6 +63,18 @@ def _published(db: Path) -> tuple[str, str, str]:
     return deal.id, investment_id, version.version_id
 
 
+def _frozen(investment_id: str, version_id: str, db: Path):
+    """The frozen report one version was issued as.
+
+    Every published assertion below reads the stored artifact rather than a
+    fresh assembly, which is the point of Correction 1: what a test sees is
+    what the committee was issued."""
+
+    package = read_version_report(investment_id, version_id, db_path=db)
+    assert package is not None, "the published version has no stored report"
+    return package
+
+
 def _pdf_text(document: bytes) -> str:
     reader = PdfReader(io.BytesIO(document))
     return "\n".join(page.extract_text() for page in reader.pages)
@@ -83,7 +95,7 @@ def test_draft_edits_never_reach_a_published_version(db: Path) -> None:
     draft's evidence."""
 
     _, investment_id, version_id = _published(db)
-    before = assemble_version_report(investment_id, version_id, db_path=db)
+    before = _frozen(investment_id, version_id, db)
 
     store.put_memo_draft(
         investment_id,
@@ -99,7 +111,7 @@ def test_draft_edits_never_reach_a_published_version(db: Path) -> None:
         db_path=db,
     )
 
-    after = assemble_version_report(investment_id, version_id, db_path=db)
+    after = _frozen(investment_id, version_id, db)
     assert after.decision_ask == before.decision_ask
     assert after.executive_summary == before.executive_summary
     assert after.analyst_recommendation == before.analyst_recommendation
@@ -119,33 +131,31 @@ def test_draft_edits_never_reach_a_published_version(db: Path) -> None:
 # =============================================================================
 
 
-def test_a_stale_dependency_is_reported_without_rewriting_the_version(db: Path) -> None:
-    """Section 9: reopening a stale version is allowed; presenting it as current
-    is not. The frozen valuation keeps the value it froze, the package is marked
-    stale and names the classes that moved, and the PDF carries the marking."""
+def test_a_stale_dependency_leaves_the_published_report_untouched(db: Path) -> None:
+    """Section 9, as Correction 1 settles it.
+
+    Moving a valuation definition after publication changes the *current*
+    analysis and nothing about the issued document. The full immutability
+    matrix -- every dependency class, the stored bytes, repeated downloads --
+    is `tests/test_p7_10_stage_4_immutability.py`; this keeps the claim beside
+    the rest of the report's behaviour."""
 
     deal_id, investment_id, version_id = _published(db)
-    fresh = assemble_version_report(investment_id, version_id, db_path=db)
+    fresh = _frozen(investment_id, version_id, db)
     assert fresh.freshness is ReportFreshness.CURRENT
     frozen_values = [view.value for view in fresh.valuations]
+    frozen_pdf, _ = read_version_pdf(investment_id, version_id, db_path=db)
 
-    # Move a valuation definition the version recorded.
     fx.replace_timepoint(db, investment_id, fx.as_is_timepoint(deal_id, cap_rate=0.07))
 
-    stale = assemble_version_report(investment_id, version_id, db_path=db)
-    assert stale.freshness is ReportFreshness.STALE
-    assert stale.is_stale
-    assert "Valuation definitions" in stale.stale_classes
-    assert "ANALYSIS HAS CHANGED SINCE PUBLICATION" in stale.status_line
-    assert stale.status_line.startswith("PUBLISHED")
-    assert stale.disclosures != ()
+    after = _frozen(investment_id, version_id, db)
+    assert after == fresh
+    assert [view.value for view in after.valuations] == frozen_values
+    assert read_version_pdf(investment_id, version_id, db_path=db)[0] == frozen_pdf
 
-    # History is described, never edited: the frozen figures are untouched.
-    assert [view.value for view in stale.valuations] == frozen_values
-
-    text = _pdf_text(render_memo_pdf(stale))
-    assert "SUPERSEDED" in text
-    assert "ANALYSIS HAS CHANGED SINCE PUBLICATION" in text
+    # The document is never marked stale: it says what it said when issued.
+    assert after.status_line == "PUBLISHED"
+    assert "SUPERSEDED" not in _pdf_text(frozen_pdf)
 
 
 # =============================================================================
@@ -176,7 +186,7 @@ def test_an_exploratory_unavailable_valuation_never_reaches_the_report(db: Path)
     )
 
     version = deps.publish(investment_id, db_path=db)
-    report = assemble_version_report(investment_id, version.version_id, db_path=db)
+    report = _frozen(investment_id, version.version_id, db)
 
     included = {view.label for view in report.valuations}
     assert "As-Is" in included
@@ -239,7 +249,7 @@ def test_claim_level_evidence_reaches_the_report_and_the_pdf(db: Path) -> None:
     relationship is legible in both directions."""
 
     _, investment_id, version_id = _published(db)
-    report = assemble_version_report(investment_id, version_id, db_path=db)
+    report = _frozen(investment_id, version_id, db)
 
     thesis = next(section for section in report.sections if section.title == "Investment Thesis")
     sourced = thesis.narrative[0]
@@ -260,7 +270,7 @@ def test_a_claim_with_no_source_is_labelled_an_analyst_assertion(db: Path) -> No
     sourced fact. The fixture's condition item cites nothing."""
 
     _, investment_id, version_id = _published(db)
-    report = assemble_version_report(investment_id, version_id, db_path=db)
+    report = _frozen(investment_id, version_id, db)
 
     conditions = next(
         section for section in report.sections if section.title == "Conditions to Approval"
@@ -281,7 +291,7 @@ def test_stage_4_ships_no_ai_surface(db: Path) -> None:
     rendered word offers, mentions or reserves an AI capability."""
 
     _, investment_id, version_id = _published(db)
-    report = assemble_version_report(investment_id, version_id, db_path=db)
+    report = _frozen(investment_id, version_id, db)
     text = _pdf_text(render_memo_pdf(report)).lower()
 
     for forbidden in (
@@ -305,7 +315,7 @@ def test_every_report_figure_is_a_string_the_backend_formatted(db: Path) -> None
     unavailable -- never a float, and never both."""
 
     _, investment_id, version_id = _published(db)
-    report = assemble_version_report(investment_id, version_id, db_path=db)
+    report = _frozen(investment_id, version_id, db)
 
     metrics = list(report.key_metrics)
     for section in report.sections:
@@ -333,7 +343,7 @@ def test_an_unavailable_figure_is_never_zero_or_the_purchase_price(db: Path) -> 
     unavailable rather than borrowing another number."""
 
     _, investment_id, version_id = _published(db)
-    report = assemble_version_report(investment_id, version_id, db_path=db)
+    report = _frozen(investment_id, version_id, db)
 
     dscr = next(metric for metric in report.key_metrics if metric.label.startswith("DSCR"))
     assert dscr.value is None
@@ -377,7 +387,7 @@ def test_a_draft_preview_is_marked_and_cannot_be_exported(db: Path) -> None:
     # The export door refuses a version id that does not exist, with a typed
     # reason rather than a failed download.
     with pytest.raises(PdfExportRefusedError) as missing:
-        assemble_version_report_for_export(investment_id, "no-such-version", db_path=db)
+        read_version_pdf(investment_id, "no-such-version", db_path=db)
     assert missing.value.code is PdfExportRefusalCode.VERSION_NOT_FOUND
 
     # A rendered draft preview is unmistakable on every page.
@@ -389,13 +399,11 @@ def test_a_published_export_is_reproducible_and_named_for_its_version(db: Path) 
     identical, and the filename carries the Investment and the version."""
 
     _, investment_id, version_id = _published(db)
-    package = assemble_version_report_for_export(investment_id, version_id, db_path=db)
 
-    first = render_memo_pdf(package)
-    second = render_memo_pdf(package)
-    assert first == second, "the same package must render the same bytes"
+    first, name = read_version_pdf(investment_id, version_id, db_path=db)
+    second, _ = read_version_pdf(investment_id, version_id, db_path=db)
+    assert first == second, "the same version must return the same stored bytes"
 
-    name = export_filename(package)
     assert name.endswith("-investment-memo-v1.pdf")
     assert "/" not in name and "\\" not in name
 
@@ -410,16 +418,28 @@ def test_a_published_export_is_reproducible_and_named_for_its_version(db: Path) 
 # =============================================================================
 
 
-def test_the_committee_decision_is_separate_from_the_recommendation(db: Path) -> None:
-    """R-F. Before the committee records anything the report says so in words
-    that are not a recommendation, and recording an outcome changes the memo's
-    content not at all."""
+def test_the_committee_decision_is_separate_and_outside_the_frozen_report(
+    db: Path,
+) -> None:
+    """R-F, and what Correction 1 makes of it.
+
+    The committee decides **after** publication, so its outcome is not one of
+    the facts frozen when the version was issued -- and the issued document
+    therefore never carries one. That is the same reasoning Section 10 already
+    applies to the published-version fingerprint: recording an outcome must not
+    alter the identity of what was decided on, and it must not alter the
+    document either.
+
+    The decision is a real, stored record; the workspace shows it beside the
+    frozen report, and the Stage 2 route remains its authority."""
 
     _, investment_id, version_id = _published(db)
-    before = assemble_version_report(investment_id, version_id, db_path=db)
-    assert before.committee_decision is None
+    before = _frozen(investment_id, version_id, db)
+    pdf_before, _ = read_version_pdf(investment_id, version_id, db_path=db)
+
     assert before.analyst_recommendation == "Approve with Conditions"
-    assert "Not yet recorded" in _pdf_text(render_memo_pdf(before))
+    assert before.committee_decision is None
+    assert "Not yet recorded" in _pdf_text(pdf_before)
 
     store.put_committee_decision(
         investment_id,
@@ -433,18 +453,21 @@ def test_the_committee_decision_is_separate_from_the_recommendation(db: Path) ->
         db_path=db,
     )
 
-    after = assemble_version_report(investment_id, version_id, db_path=db)
-    assert after.committee_decision == "Deferred"
-    # Deferred is a committee outcome with no analyst counterpart, so the two
-    # vocabularies cannot be confused.
-    assert after.analyst_recommendation == before.analyst_recommendation
-    assert after.decision_ask == before.decision_ask
-    assert after.verification_code == before.verification_code
+    # The stored record exists and is readable.
+    recorded = store.get_committee_decision(investment_id, version_id, db_path=db)
+    assert recorded is not None
+    assert recorded.decision is InvestmentCommitteeOutcome.DEFERRED
 
-    text = _pdf_text(render_memo_pdf(after))
+    # And the issued document is untouched by it, bytes included.
+    after = _frozen(investment_id, version_id, db)
+    assert after == before
+    assert read_version_pdf(investment_id, version_id, db_path=db)[0] == pdf_before
+
+    # The two vocabularies still cannot be confused: `Deferred` is a committee
+    # outcome with no analyst counterpart.
+    text = _pdf_text(pdf_before)
     assert "Analyst Recommendation" in text
     assert "Investment Committee Decision" in text
-    assert "Deferred" in text
 
 
 # =============================================================================
@@ -485,7 +508,7 @@ def test_empty_sections_are_omitted_rather_than_printed_empty(db: Path) -> None:
     demo copy to avoid one."""
 
     _, investment_id, version_id = _published(db)
-    report = assemble_version_report(investment_id, version_id, db_path=db)
+    report = _frozen(investment_id, version_id, db)
 
     for section in report.rendered_sections():
         assert not section.is_empty
@@ -528,7 +551,7 @@ def test_the_purchase_price_metric_is_the_stored_acquisition_price(db: Path) -> 
         db_path=db,
     )
     version = deps.publish(investment_id, db_path=db)
-    report = assemble_version_report(investment_id, version.version_id, db_path=db)
+    report = _frozen(investment_id, version.version_id, db)
 
     price = next(metric for metric in report.key_metrics if metric.label == "Purchase Price")
     assert price.value == "$10,000,000", price

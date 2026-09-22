@@ -43,20 +43,21 @@ from pathlib import Path
 from typing import Any
 
 from ..analysis.strategy import BASE_SCENARIO_ID, BASE_STRATEGY_ID
-from ..deals import memo_dependencies, store
+from ..deals import store
 from ..deals.structured_variants import StructuredVariantConflictError, analyze_structured_valuations
 from ..formatting import format_currency, format_multiple, format_percent
 from ..memo.contracts import (
     DecisionPerspectiveKind,
     InvestmentMemoDraft,
+    InvestmentMemoVersion,
     MemoEvidenceReference,
-    MemoFreshness,
     MemoItem,
     MemoRiskItem,
     MemoSection,
     MemoTermItem,
     SelectedDecision,
 )
+from .artifact import REPORT_SNAPSHOT_NOT_AVAILABLE_MESSAGE
 from .contracts import (
     MemoReportDisclosure,
     MemoReportEvidenceEntry,
@@ -94,6 +95,10 @@ class PdfExportRefusalCode(StrEnum):
     #: a frozen selected decision naming a perspective the record does not
     #: carry. Reported rather than rendered around.
     VERSION_INCONSISTENT = "version_inconsistent"
+    #: The version was published before schema 16, so no report or PDF was
+    #: stored with it. A historical condition rather than a fault, and
+    #: deliberately not repaired by recomputing today's numbers.
+    REPORT_SNAPSHOT_NOT_AVAILABLE = "report_snapshot_not_available"
 
 
 class PdfExportRefusedError(Exception):
@@ -511,6 +516,20 @@ def _acquisition_price(investment_id: str, db_path: Path | None) -> float | None
     if deal.terms is not None:
         return deal.terms.purchase_price
     return None
+
+
+def analysis_for_selected_cell(
+    investment_id: str, selected: SelectedDecision, *, db_path: Path | None = None
+) -> _Analysis:
+    """The resolved state one report is assembled from.
+
+    Public so the publication path can resolve the cell **once** and hand the
+    same instant to both the prerequisite checks and the report. Two separate
+    resolutions could disagree, and a document that disagreed with the checks
+    that permitted it would be exactly the drift this gate exists to prevent.
+    """
+
+    return _analysis_for(investment_id, selected, db_path)
 
 
 def _economics(analysis: _Analysis) -> Any:
@@ -1345,32 +1364,6 @@ def _funding_disclosures(analysis: _Analysis) -> tuple[MemoReportDisclosure, ...
     return tuple(disclosures)
 
 
-def _stale_disclosures(report: Any) -> tuple[MemoReportDisclosure, ...]:
-    """One statement per dependency class that has moved since publication.
-
-    Names the class in analyst words and the scope it concerns. The published
-    version itself is untouched -- this describes the distance between what it
-    recorded and what is true now, which is precisely what Section 9 asks a
-    stale package to show.
-    """
-
-    if report is None:
-        return ()
-    return tuple(
-        MemoReportDisclosure(
-            title=f"{_label(_DEPENDENCY_LABELS, entry.dependency_class)} has changed",
-            detail=entry.reason,
-            scope=entry.scope_id or None,
-        )
-        for entry in report.stale_dependencies
-    )
-
-
-# =============================================================================
-# Assembling a package
-# =============================================================================
-
-
 def _published_date(recorded: str) -> str:
     """A stored publication timestamp as the date a committee reads.
 
@@ -1454,30 +1447,36 @@ def _is_multi_unit(investment_id: str, db_path: Path | None) -> bool:
     return not investment.hidden and len(investment.units) > 1
 
 
-def assemble_version_report(
-    investment_id: str, version_id: str, *, db_path: Path | None = None
+def build_version_package(
+    investment_id: str,
+    version: InvestmentMemoVersion,
+    analysis: _Analysis,
+    *,
+    db_path: Path | None = None,
 ) -> MemoReportPackage:
-    """One published version as a finished report package.
+    """Assemble one published version's report, once, at publication.
 
-    The memo content, the evidence, the claim links and the valuations it
-    selected or consumed are read **from the version**, frozen exactly as
-    publication left them. The returns, the Capital Structure and the operating
-    projection are recomputed from the cell the version recorded, and the
-    freshness check says whether those dependencies still match.
+    **This runs exactly once per version** (Stage 4 Correction 1). Its output is
+    serialized, rendered to PDF and stored beside the version in the same
+    transaction, and every later read returns those stored bytes. Nothing calls
+    this to *re-*produce a report for an existing version: a published decision
+    document that could be regenerated from today's numbers would not be a
+    record of what the committee read.
 
-    A stale version assembles normally and is marked stale; it is never
-    withheld, never silently refreshed, and never rewritten.
+    ``analysis`` is the resolved state the publication prerequisites were
+    checked against, passed in rather than recomputed here, so the document and
+    the checks that let it exist describe the same instant.
+
+    ``freshness`` is ``CURRENT`` by construction -- a report is current at the
+    moment it is issued. Whether the analysis has moved *since* is a live
+    question the Stage 2 freshness route answers, reported in the workspace
+    beside this document and never written into it.
     """
 
-    version = store.get_memo_version(investment_id, version_id, db_path=db_path)
     selected = version.selected_decision
-    analysis = _analysis_for(investment_id, selected, db_path)
-    freshness_report = memo_dependencies.version_freshness(investment_id, version, db_path=db_path)
-
     library = {reference.evidence_id: reference for reference in version.evidence}
     citations = _claim_citations(version.items, version.risk_items, version.term_items)
     name, asset_type = _investment_identity(investment_id, db_path)
-    decision = store.get_committee_decision(investment_id, version_id, db_path=db_path)
 
     valuations = tuple(
         _valuation_from_frozen(row, analysis.hold_period) for row in version.valuations
@@ -1486,7 +1485,6 @@ def assemble_version_report(
     if exit_view is not None:
         valuations = valuations + (exit_view,)
 
-    is_stale = freshness_report.freshness is MemoFreshness.STALE
     return MemoReportPackage(
         origin=MemoReportOrigin.PUBLISHED_VERSION,
         investment_id=investment_id,
@@ -1500,18 +1498,18 @@ def assemble_version_report(
         generated_at=_generated_at(),
         decision_ask=version.decision_ask,
         analyst_recommendation=_label(_RECOMMENDATION_LABELS, version.analyst_recommendation),
-        committee_decision=(
-            None if decision is None else _label(_COMMITTEE_LABELS, decision.decision)
-        ),
-        committee_note=None if decision is None else decision.decision_note,
+        # The committee decides *after* publication, so a freshly issued report
+        # records no outcome. It is Section 10's reason for keeping the decision
+        # off the published fingerprint, and the same reason keeps it out of the
+        # frozen document: recording an outcome must not alter what was decided
+        # on. The workspace shows the committee's decision beside the report.
+        committee_decision=None,
+        committee_note=None,
         executive_summary=version.executive_summary,
         strategy_label=_strategy_label(investment_id, selected.strategy_id, db_path),
         scenario_label=_scenario_label(investment_id, selected.scenario_id, db_path),
         perspective_label=_perspective_label(selected, analysis),
-        freshness=ReportFreshness.STALE if is_stale else ReportFreshness.CURRENT,
-        stale_classes=tuple(
-            _label(_DEPENDENCY_LABELS, item) for item in freshness_report.stale_classes
-        ),
+        freshness=ReportFreshness.CURRENT,
         verification_code=version.published_fingerprint,
         key_metrics=_key_metrics(analysis),
         valuations=valuations,
@@ -1524,12 +1522,32 @@ def assemble_version_report(
             _is_multi_unit(investment_id, db_path),
         ),
         evidence=_evidence_register(version.evidence, citations),
-        disclosures=_stale_disclosures(freshness_report if is_stale else None),
         concluding_statement=_concluding_statement(
             name,
             _label(_RECOMMENDATION_LABELS, version.analyst_recommendation),
         ),
     )
+
+
+def read_version_report(
+    investment_id: str, version_id: str, *, db_path: Path | None = None
+) -> MemoReportPackage | None:
+    """One published version's frozen report, exactly as it was issued.
+
+    Reads the stored artifact and decodes it fail-closed. It recomputes nothing:
+    changing the underwriting, the Strategy, the Scenario, the Capital
+    Structure, the Partnership or a valuation definition after publication
+    changes this not at all, and neither does editing the assembly code that
+    produced it.
+
+    ``None`` where the version has no artifact, which is the historical state of
+    every version published before schema 16. The caller reports that as the
+    typed ``REPORT_SNAPSHOT_NOT_AVAILABLE`` state; nothing reconstructs one from
+    current inputs.
+    """
+
+    artifact = store.get_memo_version_artifact(investment_id, version_id, db_path=db_path)
+    return None if artifact is None else artifact.package()
 
 
 def assemble_draft_preview(
@@ -1690,31 +1708,34 @@ def export_filename(package: MemoReportPackage) -> str:
     return f"{safe}-investment-memo-v{package.version_number}.pdf"
 
 
-def assemble_version_report_for_export(
+def read_version_pdf(
     investment_id: str, version_id: str, *, db_path: Path | None = None
-) -> MemoReportPackage:
-    """The export door (Stage 4 §9).
+) -> tuple[bytes, str]:
+    """The exact PDF one published version was issued as, and its filename.
 
-    Refuses with a typed explanation rather than a generic failure when the
-    named version does not exist, and cannot be handed a draft at all: the
-    parameter is a ``version_id``, and ``assemble_draft_preview`` has no route
-    into this function. A stale version is *not* refused -- Section 9 permits
-    exporting one, and the package it returns carries the stale marking the
-    renderer watermarks every page with.
+    **The stored bytes, never a re-render** (Stage 4 Correction 1). Downloading
+    the same version twice returns the same bytes, byte for byte, however much
+    the surrounding analysis has changed and whatever this presentation code
+    does now.
+
+    Refuses with a typed explanation rather than a generic failure: a version
+    that does not exist, and a version published before schema 16 that has no
+    stored artifact. It cannot be handed a draft at all -- the parameter is a
+    ``version_id``, and no draft has one.
     """
 
     try:
-        package = assemble_version_report(investment_id, version_id, db_path=db_path)
+        artifact = store.get_memo_version_artifact(investment_id, version_id, db_path=db_path)
     except LookupError as error:
         raise PdfExportRefusedError(
             PdfExportRefusalCode.VERSION_NOT_FOUND,
             str(error) or f"Memo version {version_id!r} was not found.",
             version_id=version_id,
         ) from None
-    if package.origin is not MemoReportOrigin.PUBLISHED_VERSION:
+    if artifact is None:
         raise PdfExportRefusedError(
-            PdfExportRefusalCode.DRAFT_NOT_EXPORTABLE,
-            "A final PDF is generated only from a published memo version.",
+            PdfExportRefusalCode.REPORT_SNAPSHOT_NOT_AVAILABLE,
+            REPORT_SNAPSHOT_NOT_AVAILABLE_MESSAGE,
             version_id=version_id,
         )
-    return package
+    return artifact.pdf_bytes, artifact.pdf_filename

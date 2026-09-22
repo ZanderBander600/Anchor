@@ -13,9 +13,14 @@
  * and lays out; `web/src/memoArchitecture.test.ts` rejects arithmetic here.
  *
  * **A draft can never pass as published.** A draft package renders a standing
- * `Draft — Not Published` banner and a per-page status; a stale published
- * version renders its own notice naming what has moved. Both are text, not
- * colour alone, so the state survives a monochrome display and a screen reader.
+ * `Draft — Not Published` banner, as text rather than colour alone, so the
+ * state survives a monochrome display and a screen reader.
+ *
+ * **A published report is frozen and is never annotated here.** It is the
+ * document the committee was issued, read back from storage. Whether today's
+ * analysis has moved since is true and worth saying, and the workspace says it
+ * *around* this component -- writing it into the document would change the
+ * document.
  *
  * **Dense tables scroll inside themselves.** Each financial table sits in its
  * own scroll region with a real `<caption>`, so a wide table never widens the
@@ -35,7 +40,6 @@ import {
   COMMITTEE_DECISION_LABEL,
   COMMITTEE_DECISION_UNRECORDED,
   DRAFT_PREVIEW_BANNER,
-  STALE_VERSION_HINT,
   UNSOURCED_CLAIM_LABEL,
   valuationRoleLabel,
 } from '../memoCatalog';
@@ -221,7 +225,6 @@ function Section({ section }: { section: MemoReportSection }) {
 
 export function MemoReportView({ report, actions }: MemoReportViewProps) {
   const isDraft = report.origin === 'draft_preview';
-  const isStale = report.freshness === 'stale';
 
   return (
     <article className={isDraft ? 'memo-report memo-report-draft' : 'memo-report'}>
@@ -230,20 +233,6 @@ export function MemoReportView({ report, actions }: MemoReportViewProps) {
           <span className="memo-report-status">Draft — Not Published</span>
           {DRAFT_PREVIEW_BANNER}
         </p>
-      )}
-
-      {isStale && (
-        <div className="memo-report-stale" role="status">
-          <p className="memo-report-stale-title">
-            <span className="memo-report-status">Analysis has changed</span>
-          </p>
-          <p className="memo-report-stale-detail">{STALE_VERSION_HINT}</p>
-          {report.stale_classes.length > 0 && (
-            <p className="memo-report-stale-classes">
-              Changed since publication: {report.stale_classes.join(', ')}
-            </p>
-          )}
-        </div>
       )}
 
       {actions !== undefined && <div className="memo-report-actions">{actions}</div>}

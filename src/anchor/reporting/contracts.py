@@ -46,15 +46,25 @@ class MemoReportOrigin(StrEnum):
 
 
 class ReportFreshness(StrEnum):
-    """Whether the state a published version recorded still matches.
+    """What this report was, at the moment it was assembled.
 
-    Mirrors ``anchor.memo.contracts.MemoFreshness`` rather than replacing it;
-    a draft preview reports ``NOT_APPLICABLE`` because a draft is not published
-    against anything and so cannot have drifted from it.
+    **Not a live status.** A published report is frozen at publication, so it
+    records ``CURRENT`` forever: it *was* current when it was issued, and an
+    issued document does not change its mind later. Whether today's analysis
+    still matches what that version recorded is a different question, answered
+    by the Stage 2 freshness route against the dependency ledger and displayed
+    *around* the frozen report rather than inside it.
+
+    There is deliberately no ``STALE`` member. Painting a stale marking onto an
+    issued document would be a change to the document, which Correction 1
+    forbids; ``anchor.memo.contracts.MemoFreshness`` owns staleness and is the
+    only place it is decided.
+
+    A draft preview reports ``NOT_APPLICABLE``: a draft is published against
+    nothing and so cannot have drifted from it.
     """
 
     CURRENT = "current"
-    STALE = "stale"
     NOT_APPLICABLE = "not_applicable"
 
 
@@ -247,10 +257,14 @@ class MemoReportPackage:
     performs formatting only" (Section 13.3) is enforced by what it is handed
     rather than by a convention it is asked to respect.
 
-    ``origin`` decides whether this may become a final PDF. ``freshness`` and
-    ``stale_classes`` decide whether it carries a stale watermark: Section 9
-    permits reopening and exporting a stale version, and forbids doing so
-    without a visible mark.
+    ``origin`` decides whether this may become a final PDF, and whether every
+    page is marked a draft.
+
+    **A published package is frozen.** It is assembled once, at publication,
+    stored as an immutable artifact beside the version, and returned unchanged
+    on every later read. Nothing in it tracks the current analysis, because a
+    document that changed after it was issued would not be the document the
+    committee read.
 
     ``analyst_recommendation`` and ``committee_decision`` are separate fields
     that are separately printed (R-F). The committee's outcome is ``None`` until
@@ -281,7 +295,6 @@ class MemoReportPackage:
     perspective_label: str
 
     freshness: ReportFreshness = ReportFreshness.NOT_APPLICABLE
-    stale_classes: tuple[str, ...] = ()
 
     #: The published version's own fingerprint, which Section 13.3 requires the
     #: PDF to carry. It appears in exactly one place -- the closing version
@@ -309,10 +322,6 @@ class MemoReportPackage:
         return self.origin is MemoReportOrigin.DRAFT_PREVIEW
 
     @property
-    def is_stale(self) -> bool:
-        return self.freshness is ReportFreshness.STALE
-
-    @property
     def title(self) -> str:
         return "Investment Committee Memorandum"
 
@@ -320,14 +329,14 @@ class MemoReportPackage:
     def status_line(self) -> str:
         """The one line that says what this document is.
 
-        A draft preview says so on every page, and a stale published version
-        says so too. Neither is ever presentable as a current published memo.
+        Two states, because a report is one of two things: a preview of a draft
+        nobody has published, or an issued version. A published line never
+        changes afterwards: what changed is the analysis around it, and that is
+        reported beside the document rather than stamped onto it.
         """
 
         if self.is_draft:
             return "DRAFT – NOT PUBLISHED"
-        if self.is_stale:
-            return "PUBLISHED – ANALYSIS HAS CHANGED SINCE PUBLICATION"
         return "PUBLISHED"
 
     def rendered_sections(self) -> tuple[MemoReportSection, ...]:

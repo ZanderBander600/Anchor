@@ -28,16 +28,27 @@ from .contracts import (
     MemoReportValuation,
     ReportUnavailable,
 )
+from .artifact import (
+    REPORT_SCHEMA_VERSION,
+    REPORT_SNAPSHOT_NOT_AVAILABLE_MESSAGE,
+    MemoReportArtifact,
+    ReportArtifactError,
+    ReportArtifactUnavailableReason,
+)
 from .assembly import (
     MemoReportError,
+    PdfExportRefusalCode,
     PdfExportRefusedError,
     assemble_draft_preview,
-    assemble_version_report,
+    build_version_package,
     export_filename,
+    read_version_pdf,
+    read_version_report,
 )
 from .pdf import render_memo_pdf
 
 __all__ = [
+    "MemoReportArtifact",
     "MemoReportDisclosure",
     "MemoReportError",
     "MemoReportEvidenceEntry",
@@ -48,10 +59,17 @@ __all__ = [
     "MemoReportSection",
     "MemoReportTable",
     "MemoReportValuation",
+    "PdfExportRefusalCode",
     "PdfExportRefusedError",
+    "REPORT_SCHEMA_VERSION",
+    "REPORT_SNAPSHOT_NOT_AVAILABLE_MESSAGE",
+    "ReportArtifactError",
+    "ReportArtifactUnavailableReason",
     "ReportUnavailable",
     "assemble_draft_preview",
-    "assemble_version_report",
+    "build_version_package",
     "export_filename",
+    "read_version_pdf",
+    "read_version_report",
     "render_memo_pdf",
 ]

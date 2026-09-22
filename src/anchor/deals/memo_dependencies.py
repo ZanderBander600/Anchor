@@ -684,8 +684,20 @@ def publish(investment_id: str, *, db_path: Path | None = None) -> InvestmentMem
     decision package is never published.
 
     The store's single transaction then writes the version, its frozen content,
-    its frozen evidence, the valuation views it cites and its whole dependency
-    ledger -- or none of them.
+    its frozen evidence, the valuation views it cites, its whole dependency
+    ledger **and the report artifact it is issued as** -- or none of them.
+
+    **The report is assembled and rendered once, here** (Stage 4 Correction 1),
+    from the same resolved state the prerequisites were checked against, and
+    stored beside the version. Every later read returns those stored bytes, so a
+    published decision document does not change when the underwriting, the
+    Strategy, the Scenario, the Capital Structure, a valuation definition or
+    this presentation code does. Producing an updated report means publishing a
+    new version.
+
+    If assembly or PDF rendering fails, the whole publication fails: the
+    transaction rolls back and no version is left behind whose document could
+    never be produced.
 
     The draft is left exactly as it was. Publishing copies; it does not consume,
     and it never edits an earlier version: republishing creates a new one."""
@@ -716,7 +728,35 @@ def publish(investment_id: str, *, db_path: Path | None = None) -> InvestmentMem
             for entry in dependencies.dependencies
         ],
     )
-    return store.publish_memo_version(
+    # Imported here rather than at module scope: `anchor.reporting` reads this
+    # module's own analysis seam, and a top-level import would make the two
+    # circular. The publication path is the only thing in this module that
+    # needs a report at all.
+    from ..reporting.artifact import build_artifact
+    from ..reporting.assembly import (
+        analysis_for_selected_cell,
+        build_version_package,
+        export_filename,
+    )
+    from ..reporting.pdf import render_memo_pdf
+
+    analysis = analysis_for_selected_cell(investment_id, selected, db_path=db_path)
+
+    def _artifact(version: InvestmentMemoVersion):
+        """The report this version is issued as, assembled and rendered inside
+        the publication transaction so a failure leaves nothing behind."""
+
+        package = build_version_package(investment_id, version, analysis, db_path=db_path)
+        document = render_memo_pdf(package)
+        return build_artifact(
+            version.version_id,
+            package,
+            document,
+            export_filename(package),
+            _page_count(document),
+        )
+
+    version, _ = store.publish_memo_version(
         investment_id,
         draft=draft,
         evidence=cited,
@@ -724,5 +764,22 @@ def publish(investment_id: str, *, db_path: Path | None = None) -> InvestmentMem
         dependencies=dependencies.dependencies,
         memo_content_fingerprint=content_fingerprint,
         published_fingerprint=published_fingerprint,
+        build_artifact=_artifact,
         db_path=db_path,
     )
+    return version
+
+
+def _page_count(document: bytes) -> int:
+    """How many pages the issued PDF has, read from the document itself.
+
+    Recorded so a reader can tell at a glance whether the file they hold is the
+    whole thing. Read with the library the project already depends on for PDF
+    inspection; a document this cannot parse is refused here rather than stored
+    as an artifact nobody can open."""
+
+    import io
+
+    from pypdf import PdfReader
+
+    return len(PdfReader(io.BytesIO(document)).pages)
