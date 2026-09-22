@@ -317,9 +317,19 @@ def test_xlsxwriter_is_used_only_by_the_shared_workbook_module_and_is_declared()
 
 
 def test_no_new_dependency_was_introduced() -> None:
+    """**Re-pinned at P7.10 Stage 4.** Measured across Excel Export 2's own
+    committed range rather than against the working tree.
+
+    The claim is unchanged -- *Excel Export 2* introduced no dependency -- and
+    is now fixed for good. A later gate that legitimately needs one (P7.10
+    Stage 4 adds ReportLab, because Anchor had no PDF generator at all) is that
+    gate's to justify, and is not evidence about this one."""
+
     added = [
         line[1:]
-        for line in _git("diff", "--no-renames", "-U0", _BASE, "--", "pyproject.toml").splitlines()
+        for line in _git(
+            "diff", "--no-renames", "-U0", _BASE, _HEAD, "--", "pyproject.toml"
+        ).splitlines()
         if line.startswith("+") and not line.startswith("+++")
     ]
     assert added == []
@@ -473,10 +483,21 @@ def test_no_migration_was_added() -> None:
 
 
 def test_exactly_one_get_route_per_supported_mode_exposes_an_export() -> None:
+    """**Re-pinned at P7.10 Stage 4.** Narrowed from every ``/exports/`` path to
+    the workbook paths this gate is about.
+
+    The subject has always been the formula-audit *workbooks*: one GET route per
+    supported underwriting mode, each returning an ``.xlsx``. P7.10 Stage 4
+    serves an Investment Committee memorandum PDF under the same word, which is
+    a different artifact of a different gate. Restating the filter keeps this
+    guard measuring its own claim instead of counting whatever later gates
+    export."""
+
     routes = sorted(
         (sorted(getattr(route, "methods", None) or ()), str(getattr(route, "path", "")))
         for route in app.routes
         if "/exports/" in str(getattr(route, "path", ""))
+        and str(getattr(route, "path", "")).endswith(".xlsx")
     )
     assert routes == _EXPORT_ROUTES
 

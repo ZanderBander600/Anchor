@@ -68,6 +68,15 @@ export interface MemoPublishPanelProps {
   decisionError: string | null;
   isRecordingDecision: boolean;
   onOpenVersion: (versionId: string) => void;
+  /** Which half of this panel to render.
+   *
+   * Preview & Publish shows the readiness checks and the publish action;
+   * Published Versions shows the permanent record and the committee decision.
+   * One component, because the two halves share state and must agree, but
+   * never both halves at once -- two tabs rendering the same section would put
+   * two copies of every heading and control in the accessibility tree, and an
+   * analyst tabbing through would meet each twice. */
+  show: 'publish' | 'versions';
 }
 
 function RefusalGroups({ refusals }: { refusals: PublicationRefusal[] }) {
@@ -123,6 +132,7 @@ export function MemoPublishPanel(props: MemoPublishPanelProps) {
     decisionError,
     isRecordingDecision,
     onOpenVersion,
+    show,
   } = props;
 
   const [isConfirming, setIsConfirming] = useState(false);
@@ -154,6 +164,7 @@ export function MemoPublishPanel(props: MemoPublishPanelProps) {
 
   return (
     <div className="memo-panel">
+      {show === 'publish' && (
       <section className="memo-section">
         <h3 className="memo-section-title">Publication readiness</h3>
 
@@ -247,7 +258,9 @@ export function MemoPublishPanel(props: MemoPublishPanelProps) {
           )}
         </div>
       </section>
+      )}
 
+      {show === 'versions' && (
       <section className="memo-section">
         <h3 className="memo-section-title">Published versions</h3>
         <p className="memo-section-hint">{PUBLISHED_IMMUTABLE_HINT}</p>
@@ -328,6 +341,7 @@ export function MemoPublishPanel(props: MemoPublishPanelProps) {
           </ul>
         )}
       </section>
+      )}
     </div>
   );
 }

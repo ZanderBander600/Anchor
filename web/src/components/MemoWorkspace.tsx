@@ -372,6 +372,7 @@ export function MemoWorkspace({
                     decisionError={memo.decisionError}
                     isRecordingDecision={memo.isRecordingDecision}
                     onOpenVersion={setOpenVersionId}
+                    show="publish"
                   />
 
                   <section className="memo-section">
@@ -416,6 +417,7 @@ export function MemoWorkspace({
                   decisionError={memo.decisionError}
                   isRecordingDecision={memo.isRecordingDecision}
                   onOpenVersion={setOpenVersionId}
+                  show="versions"
                 />
               )}
             </div>
