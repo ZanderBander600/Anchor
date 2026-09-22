@@ -15,10 +15,15 @@ Stage status:
   `main` at `ababa50` on 2026-09-21. It delivers persistence, the Investment
   Memo domain, versioning, the unavailable-state adapter and the typed API, and
   nothing else. Its ratified implementation clarifications are Section 22.
-- **Stages 3 and 4 are not started.** Each requires its own explicit human
-  start.
-- **Finishing Stage 1 does not automatically start Stage 2, and accepting
-  Stage 2 does not start Stage 3.**
+- **Stage 3 is deferred and unstarted.** It is optional, not cancelled, and it
+  is not implied by anything Stage 4 delivers.
+- **Stage 4 is implemented and pending independent review and human
+  acceptance.** The human explicitly authorized it ahead of Stage 3 on
+  2026-09-21. It delivers the Investment Committee memo workstation, the
+  institutional report, PDF export and browser QA, and nothing else. Its
+  implementation record is Section 23.
+- **Finishing Stage 1 does not automatically start Stage 2, accepting Stage 2
+  does not start Stage 3, and Stage 4 does not start Stage 3 either.**
 
 Gate: P7.10
 
@@ -679,7 +684,24 @@ altered and no existing row is read or rewritten.
 Stage 2 was human accepted after PR #51 merged to `main` at `ababa50` on
 2026-09-21. Its acceptance does not start Stage 3 or Stage 4.
 
-### Stage 3 — grounded AI proposals — **not started**
+### Stage 3 — grounded AI proposals — **deferred and unstarted**
+
+Stage 4 was explicitly authorized ahead of this stage, so Stage 3 is now out of
+sequence rather than merely next. It remains **optional and unstarted**: nothing
+in Stage 4 begins it, depends on it, or reserves a place for it. Stage 4 ships
+no AI module, prompt, proposal state, grounding snapshot, AI snapshot, empty AI
+panel, disabled AI control or "coming soon" surface, and
+`tests/test_p7_10_stage_4_architecture.py` and `web/src/memoArchitecture.test.ts`
+both prove that absence rather than asserting it.
+
+A future, explicitly authorized Stage 3 may add field-level proposals into the
+accepted workstation **without changing its financial or publication
+authority**: a proposal would write into the mutable draft through the same
+analyst approval the contract already requires, and the analyst recommendation,
+the Investment Committee decision, publication eligibility and the immutable
+published version would stay exactly where Stage 2 and Stage 4 put them.
+
+Its scope, when started, is unchanged:
 
 - Investment/variant/position/partner grounding package;
 - field-level AI proposal lifecycle;
@@ -687,7 +709,7 @@ Stage 2 was human accepted after PR #51 merged to `main` at `ababa50` on
 - prompt and presentation guards preventing calculation, recommendation,
   unsupported facts, and causal value-creation claims.
 
-### Stage 4 — Memo workstation, institutional report, and browser QA — **not started**
+### Stage 4 — Memo workstation, institutional report, and browser QA — **implemented 2026-09-21, pending review**
 
 - Investment Memo workspace;
 - valuation and decision-support presentation;
@@ -696,7 +718,13 @@ Stage 2 was human accepted after PR #51 merged to `main` at `ababa50` on
 - rendered-PDF visual QA and cross-mode end-to-end proof;
 - final human product acceptance.
 
-Finishing Stage 4 does not start P7.11 automatically.
+Stage 4 is **manual-first**: it works completely with manually authored memo
+content and offers no AI surface of any kind. It adds no schema change, no
+migration and no financial calculation; it adds one presentation package
+(`anchor.reporting`), four read-only API routes and the memo frontend.
+
+Finishing Stage 4 does not start Stage 3 and does not start P7.11
+automatically.
 
 ## 18. Verification contract
 
@@ -784,7 +812,10 @@ This contract is ratified and closed to further negotiation within P7.10.
 - **Stage 2 is implemented, merged, and human accepted.** Its accepted scope is
   limited to Section 17 and the ratified clarifications in Section 22. It does
   not start Stage 3.
-- **Stages 3 and 4 are not started.**
+- **Stage 4 is implemented and pending review**, on the explicit human
+  authorization to take it ahead of Stage 3. Its record is Section 23.
+- **Stage 3 is deferred and unstarted**, and Stage 4 neither starts it nor
+  depends on it.
 - P7.10 does not start P7.11.
 
 ## 22. Stage 2 implementation record
@@ -1013,3 +1044,113 @@ claim it proved was restated as the historical fact it still proves.
 - The P7.2, P7.4, P7.6 and P7.9 Stage 2 compatibility oracles and four
   fresh-store assertions moved to schema 15 with P7.10's nineteen tables
   named, so every set comparison stays exact.
+
+
+## 23. Stage 4 implementation record
+
+Stage 4 was implemented from accepted `main` at `9ca957a` (PR #52, over the
+accepted Stage 2 implementation `ababa50`) on branch
+`feature/p7-10-stage-4-memo-workstation-report`. It is **not merged and not
+accepted**. The clarifications the implementation required are recorded here as
+the interpretation offered for review, rather than left implicit in a diff.
+
+### 23.1 Stage 4 ahead of Stage 3, and what that fixes
+
+The human explicitly authorized Stage 4 before Stage 3 on 2026-09-21. The
+ordering is recorded rather than inferred:
+
+- Stage 3 is **optional and deferred**, not cancelled and not implicitly begun.
+- Stage 4 **does not depend on** Stage 3 and works completely with manually
+  authored memo content.
+- No empty AI panel, disabled AI control, placeholder prompt or "coming soon"
+  surface appears anywhere in the product.
+- A future explicitly authorized Stage 3 may integrate proposals into the
+  accepted workstation without changing its financial or publication authority.
+
+### 23.2 Where a published memo's numbers come from
+
+A published version freezes its memo content, item order, evidence,
+claim-to-evidence links, selected decision, and the valuation views it selected
+or consumed — with their values and their typed unavailable reasons. It does not
+freeze the returns, the Capital Structure or the Partnership; Section 9 records
+their **fingerprints**.
+
+Stage 4 therefore recomputes those from the cell the version recorded, which is
+what the gate brief calls the version's "accepted deterministic dependencies",
+and the Stage 2 freshness check then says whether they still match. A stale
+version exports, carries the status line on every page and a watermark, and
+names the dependency classes that moved; the frozen version itself is never
+rewritten.
+
+### 23.3 The report is handed finished text, not numbers
+
+`anchor.reporting.contracts` carries every figure as a **string the backend has
+already formatted**. A renderer holding raw floats is a renderer one edit away
+from summing two of them; a renderer holding finished text cannot compute even
+by accident, and `pdf.py` is additionally handed nothing but the package — no
+store, no engine, no analysis function, no result contract.
+
+The frontend follows the same rule: report figures are displayed as received.
+The one raw number the memo UI formats is the Stage 2 valuation surface's, which
+is the engine's own surface rather than a report package, and it goes through
+the product's existing `formatCurrency`.
+
+### 23.4 Unavailable states are translated, not repeated
+
+The Stage 2 adapter's `reason` is a precise developer-facing sentence that names
+the Investment, the Unit and the timepoint by their opaque ids. That is correct
+for a log and for a test, and it is exactly the implementation vocabulary
+Section 2 keeps out of an analyst view.
+
+Stage 4 therefore translates the stable `reason_code` — the contract — and never
+repeats the raw message. Nothing is softened: each sentence says what the code
+means, including that there is no value. Two tables, one per side, are held to
+the same key set by a guard, and every member of both reason enums is covered.
+
+### 23.5 Anchor stores no market or location
+
+The accepted visual concept shows a location line and a market panel with
+population, job growth and occupancy statistics. Anchor records none of those:
+there is no location, address or market field anywhere in the product.
+
+They are therefore **omitted entirely** rather than invented, in the report, in
+the PDF and in the library. This is the Section 13.1 rule that the first page
+carries no unsupported market statistic, applied at the point where it would
+have been easiest to fabricate one.
+
+### 23.6 Decision-support reach, disclosed rather than hidden
+
+Ratified decision R-I is unchanged. Investment-scope sensitivity and break-even
+are reported **Unavailable — Not Implemented for This Scope** as a stated
+disclosure rather than a hidden section, and a variant that resolves no
+Partnership produces a disclosure saying so is an absence rather than a zero.
+
+### 23.7 One new dependency
+
+Anchor had no PDF generator: `pypdf` reads, and XlsxWriter writes workbooks
+only. Section 13.3 requires a paginated institutional report with repeated table
+headers, page numbers and a confidentiality footer, so **ReportLab** was added —
+the same shape of dependency as XlsxWriter and for the same reason: write-only,
+no system libraries, and deterministic. Built with `invariant=1` it fixes the
+document id and creation date, so two exports of one memo version are
+byte-identical rather than merely semantically identical.
+
+A reviewer should confirm that adding it is the right answer, rather than
+hand-rolling a PDF writer or deferring the export.
+
+### 23.8 Guards re-pinned
+
+Each re-pin is documented in place in the test that carries it. No earlier
+invariant was weakened; where a guard genuinely reached this gate, the claim it
+proved was restated as the historical fact it still proves.
+
+- P7.10 Stage 2's ledger now measures its own committed range
+  `46650a7..ababa50`, exactly as its `_changes_since` docstring anticipated. Its
+  later-stage identifier scan stops at Stage 4's marker in `api.py`, and its
+  route ledger names and excludes Stage 4's four read-only routes rather than
+  growing into a list of whatever the application serves.
+- Excel Export 2 and Excel Export 3 measure their own committed ranges for the
+  no-new-dependency claim, and their route guards are narrowed to the `.xlsx`
+  workbooks they have always been about. A memorandum PDF is a different
+  artifact of a different gate.
+- D4.6B's G37 frontend allowlist gains the fourteen named Stage 4 modules.
