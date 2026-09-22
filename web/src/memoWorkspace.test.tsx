@@ -613,9 +613,15 @@ describe('publication', () => {
     await openTab(/Preview & Publish/);
 
     expect(await screen.findByText('Resolve the included valuations')).toBeTruthy();
+    // The refusal is translated from its code, and carries its own upstream
+    // reason -- the backend's id-bearing sentence never reaches the analyst.
+    const refusal = document.querySelector('.memo-refusal-message');
+    expect(refusal?.textContent).toContain('A valuation this memo depends on has no value');
+    expect(refusal?.textContent).toContain('This timepoint falls beyond the selected analysis');
     expect(
-      screen.getByText('The view “Stabilized Year 6” has no value at this timepoint.'),
-    ).toBeTruthy();
+      screen.queryByText('The view “Stabilized Year 6” has no value at this timepoint.'),
+    ).toBeNull();
+    // The scope is the timepoint the analyst named, so it is still shown.
     expect(screen.getByText('Affects: exploratory')).toBeTruthy();
   });
 

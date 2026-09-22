@@ -10171,3 +10171,20 @@ body {
   flex-direction: row-reverse;
   justify-content: flex-start;
 }
+
+/* P7.10 Stage 4, added after browser QA at the independent review: a version
+   published before Anchor stored a report with each publication has no PDF to
+   offer, and says so where the download would be. */
+.memo-version-no-report {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  align-self: center;
+}
+
+.memo-version-no-report-detail {
+  margin: 0.5rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  max-width: 62ch;
+}

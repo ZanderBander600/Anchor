@@ -4,9 +4,16 @@
  *
  * **Readiness is the backend's answer, grouped, never re-derived.** Every reason
  * comes from the accepted Stage 2 refusal contract. This panel groups them by
- * the action that fixes each and prints the backend's own message and affected
- * scope beneath -- grouping adds a heading and never replaces a reason, so
- * nothing is reduced to a generic red banner.
+ * the action that fixes each and prints each refusal beneath -- grouping adds a
+ * heading and never replaces a reason, so nothing is reduced to a generic red
+ * banner.
+ *
+ * Each refusal is **translated from its stable code**, exactly as an unavailable
+ * valuation is. Browser QA at the independent review found the alternative on
+ * screen: the backend's own sentence names the Investment, the timepoint and the
+ * Unit by their opaque ids, in the one place the analyst is being asked to go
+ * and fix something. The upstream reason a refusal carries is appended, so the
+ * specific cause survives the translation.
  *
  * **Publishing is explicit and confirmed.** It takes a deliberate second act, it
  * creates a new immutable version, and it never overwrites an earlier one. A
@@ -43,6 +50,8 @@ import {
   RECOMMENDATION_LABELS,
   REFUSAL_GROUP_LABELS,
   REFUSAL_GROUP_ORDER,
+  isOpaqueId,
+  publicationRefusalLabel,
   refusalGroupOf,
 } from '../memoCatalog';
 
@@ -60,6 +69,10 @@ export interface MemoPublishPanelProps {
   versions: InvestmentMemoVersion[];
   freshness: Record<string, MemoFreshnessReport>;
   decisions: Record<string, InvestmentCommitteeDecision | null>;
+  /** Whether each version has an issued report. A version published before
+   * Anchor stored one has no PDF to offer, and is told so in place of a link
+   * that could only refuse (found by browser QA at the independent review). */
+  reportAvailability: Record<string, { issued: boolean; message: string | null }>;
   onLoadVersionDetail: (versionId: string) => void;
   onRecordDecision: (
     versionId: string,
@@ -97,10 +110,15 @@ function RefusalGroups({ refusals }: { refusals: PublicationRefusal[] }) {
             <p className="memo-refusal-action">{meta.action}</p>
             <ul className="memo-refusal-list">
               {(grouped.get(group) ?? []).map((refusal) => (
-                <li key={`${refusal.code}-${refusal.scope_id ?? ''}-${refusal.message}`}>
-                  {/* The backend's own sentence, never paraphrased. */}
-                  <p className="memo-refusal-message">{refusal.message}</p>
-                  {refusal.scope_id !== null && (
+                <li key={`${refusal.code}-${refusal.scope_id ?? ''}-${refusal.field ?? ''}`}>
+                  {/* Translated from the stable code, not the backend's own
+                    * sentence, which names records by their opaque ids. The
+                    * refusal's own upstream reason is appended by the catalog,
+                    * so nothing specific is lost. */}
+                  <p className="memo-refusal-message">
+                    {publicationRefusalLabel(refusal.code, refusal.unavailable_reason)}
+                  </p>
+                  {refusal.scope_id !== null && !isOpaqueId(refusal.scope_id) && (
                     <p className="memo-refusal-scope">Affects: {refusal.scope_id}</p>
                   )}
                 </li>
@@ -128,6 +146,7 @@ export function MemoPublishPanel(props: MemoPublishPanelProps) {
     versions,
     freshness,
     decisions,
+    reportAvailability,
     onLoadVersionDetail,
     onRecordDecision,
     decisionError,
@@ -318,16 +337,33 @@ export function MemoPublishPanel(props: MemoPublishPanelProps) {
                       </button>
                       {/* The download is a plain link so the file lands with
                         * the name the backend chose. There is no draft
-                        * equivalent, and no route that would accept one. */}
-                      <a
-                        className="btn btn-ghost btn-xs"
-                        href={memoPdfUrl(investmentId, version.version_id)}
-                        download
-                      >
-                        Download PDF
-                      </a>
+                        * equivalent, and no route that would accept one.
+                        *
+                        * A version published before Anchor stored a report with
+                        * each publication has no PDF to download, so it is not
+                        * offered one: browser QA at the independent review
+                        * followed that link and landed on a raw refusal
+                        * payload. The sentence beneath says what to do
+                        * instead. */}
+                      {reportAvailability[version.version_id]?.issued === false ? (
+                        <span className="memo-version-no-report">No issued PDF</span>
+                      ) : (
+                        <a
+                          className="btn btn-ghost btn-xs"
+                          href={memoPdfUrl(investmentId, version.version_id)}
+                          download
+                        >
+                          Download PDF
+                        </a>
+                      )}
                     </div>
                   </div>
+
+                  {reportAvailability[version.version_id]?.issued === false && (
+                    <p className="memo-version-no-report-detail">
+                      {reportAvailability[version.version_id]?.message}
+                    </p>
+                  )}
 
                   {report !== undefined && report.stale_classes.length > 0 && (
                     <p className="memo-version-stale">

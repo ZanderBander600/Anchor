@@ -280,6 +280,38 @@ started **ahead of** Stage 3 and is implemented, pending review. Stage 3
 (grounded AI proposals) remains deferred and unstarted; Stage 4 neither starts
 it nor depends on it, and accepting Stage 4 would not begin it.
 
+Stage 4 has since had **one round of independent review**, whose four required
+corrections are implemented on the branch and are also pending review. They are
+recorded in Sections 23.2 and 23.9 of the P7.10 authority, and the load-bearing
+ones are:
+
+- **A published memo version's report and PDF are frozen.** Publication stores
+  the issued report and the exact PDF bytes, so what a committee read does not
+  change when the underwriting, the Strategy, the Scenario, the capital
+  structure, the Partnership, a valuation definition or the presentation code
+  does. Schema **version 16** adds exactly one additive table for it; no table
+  is altered and no existing row is rewritten. The write is atomic with the
+  publication, and no supported operation updates or deletes a stored report or
+  PDF.
+- **Versions published before schema 16** stay fully readable, gain no report,
+  and answer the report and PDF routes with the typed
+  `REPORT_SNAPSHOT_NOT_AVAILABLE` state telling the analyst to publish a new
+  version. They are **not** backfilled by recomputation.
+- **A published artifact and current freshness are different questions.** The
+  workspace says beside a historical version that the analysis has moved, in
+  analyst-facing dependency names, outside the frozen document; the report
+  itself gains no stale watermark and no replaced figure.
+- **No native browser dialog appears in the memo workflow.** The memo-switch
+  warning is an accessible in-application confirmation, and a guard forbids
+  `confirm`, `alert` and `prompt` in every Stage 4 production file.
+- **Cross-mode browser QA is complete** at 1440px and 390px over all twelve
+  enumerated cases, against an isolated QA database, with every page of the
+  representative PDFs inspected. It found three substantive defects -- absent
+  partner returns on every Partner-perspective memo, backend sentences naming
+  records by their opaque ids on analyst surfaces, and a dead PDF link on
+  pre-v16 versions -- all fixed with regression tests. Section 23.10 records the
+  QA and its findings in full.
+
 **P7.11 Competition Closeout has not started.** Finishing Stage 4 does not
 start it.
 

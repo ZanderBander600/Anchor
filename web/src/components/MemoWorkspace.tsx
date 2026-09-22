@@ -113,13 +113,16 @@ export function MemoWorkspace({
    * the next. Browser QA caught exactly that -- an unbounded request loop that
    * ran the tab out of sockets. `loadFreshness` and `loadDecision` are
    * `useCallback`s keyed on the Investment, so this identity is stable. */
-  const { loadFreshness, loadDecision } = memo;
+  const { loadFreshness, loadDecision, loadReportAvailability } = memo;
   const loadVersionDetail = useCallback(
     (versionId: string) => {
       void loadFreshness(versionId);
       void loadDecision(versionId);
+      // Whether the version has an issued report at all, so the list offers a
+      // download only where one exists (Correction 1's pre-v16 versions).
+      void loadReportAvailability(versionId);
     },
-    [loadFreshness, loadDecision],
+    [loadFreshness, loadDecision, loadReportAvailability],
   );
 
   /** The open version's freshness, read as soon as it is opened, so the
@@ -397,6 +400,7 @@ export function MemoWorkspace({
                     versions={memo.versions}
                     freshness={memo.freshness}
                     decisions={memo.decisions}
+                    reportAvailability={memo.reportAvailability}
                     onLoadVersionDetail={loadVersionDetail}
                     onRecordDecision={memo.recordDecision}
                     decisionError={memo.decisionError}
@@ -442,6 +446,7 @@ export function MemoWorkspace({
                   versions={memo.versions}
                   freshness={memo.freshness}
                   decisions={memo.decisions}
+                  reportAvailability={memo.reportAvailability}
                   onLoadVersionDetail={loadVersionDetail}
                   onRecordDecision={memo.recordDecision}
                   decisionError={memo.decisionError}

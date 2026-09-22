@@ -301,11 +301,18 @@ describe('P7.10 Stage 4 -- publication and export authority', () => {
     }
   });
 
-  it('a refusal is grouped into an action and keeps the backend`s own message', () => {
+  it('a refusal is grouped into an action and translated, never the raw message', () => {
+    // Changed after browser QA at the independent review. This used to require
+    // the backend's own sentence on the grounds that a refusal should not be
+    // paraphrased; QA showed that sentence naming an Investment, a timepoint
+    // and a Unit by their opaque ids, on the surface whose whole job is to tell
+    // an analyst what to fix. The refusal's own upstream reason is still shown,
+    // so nothing specific was lost -- only the ids were.
     const publish = sourceOf('components/MemoPublishPanel.tsx');
     expect(publish).toContain('refusalGroupOf');
-    expect(publish).toContain('refusal.message');
+    expect(publish).toContain('publicationRefusalLabel(refusal.code, refusal.unavailable_reason)');
     expect(publish).toContain('refusal.scope_id');
+    expect(publish).not.toContain('refusal.message');
   });
 
   it('readiness comes from the backend rather than a client-side rule', () => {

@@ -385,11 +385,23 @@ class _Analysis:
     """
 
     resolved: bool
+    #: Why it did not resolve, **for this module only**. It is a backend
+    #: sentence and it names opaque ids, so it is never rendered: browser QA
+    #: found one of these in a report's Disclosures, which is exactly the
+    #: implementation vocabulary Section 2 keeps out of an analyst view. The
+    #: disclosure below says the same thing in the analyst's terms instead.
     detail: str = ""
     project: Any = None
     consolidated: Any = None
     structured: Any = None
     surface: Any = None
+    #: The resolved Partnership variant, where this Investment states a
+    #: Partnership. **Added after browser QA at the independent review**: the
+    #: Partnership is analysed by its own variant, not by the structured one,
+    #: and reading it off ``structured.result`` -- which has no such field --
+    #: silently made every Partner-perspective memo report no partner returns
+    #: at all, under a disclosure saying the Investment had no Partnership.
+    partnership: Any = None
     hold_period: int | None = None
     #: The acquisition price this analysis ran against, read from where the
     #: analyst stored it. ``None`` where it could not be read at all, which is
@@ -436,6 +448,19 @@ def _analysis_for(
     except Exception as error:  # noqa: BLE001 -- every layer's typed refusal
         return _Analysis(resolved=False, detail=str(error) or type(error).__name__)
 
+    from ..deals.partnership_variants import analyze_partnership_variant
+
+    try:
+        partnership = analyze_partnership_variant(
+            investment_id, selected.strategy_id, selected.scenario_id, db_path=db_path
+        )
+    except StructuredVariantConflictError:
+        raise
+    except Exception:  # noqa: BLE001 -- an Investment with no Partnership, or one
+        # whose Partnership cannot run over this Common Equity Cash Flow. Both
+        # are absences the disclosures below state; neither is a report failure.
+        partnership = None
+
     investment = store.get_investment(investment_id, db_path=db_path)
     try:
         if investment.hidden:
@@ -464,6 +489,7 @@ def _analysis_for(
             detail=str(error) or type(error).__name__,
             structured=structured,
             surface=surface,
+            partnership=partnership,
         )
 
     if source != structured.project_source_fingerprint:
@@ -478,6 +504,7 @@ def _analysis_for(
         consolidated=consolidated,
         structured=structured,
         surface=surface,
+        partnership=partnership,
         hold_period=structured.hold_period,
         purchase_price=_acquisition_price(investment_id, db_path),
     )
@@ -620,7 +647,7 @@ def _perspective_label(selected: SelectedDecision, analysis: _Analysis) -> str:
         return "Project"
     if selected.perspective is DecisionPerspectiveKind.POSITION:
         return f"Position – {_position_name(analysis, selected.position_id)}"
-    return f"Partner – {_partner_name(selected.partner_id)}"
+    return f"Partner – {_partner_name(analysis, selected.partner_id)}"
 
 
 def _position_name(analysis: _Analysis, position_id: str | None) -> str:
@@ -634,14 +661,28 @@ def _position_name(analysis: _Analysis, position_id: str | None) -> str:
     return "Position no longer defined"
 
 
-def _partner_name(partner_id: str | None) -> str:
-    """The selected Partner, named by the stable id the analyst gave it.
+def _partner_name(analysis: _Analysis, partner_id: str | None) -> str:
+    """The selected Partner, by the name its own Partnership carries.
 
-    P-8 makes ``partner_id`` the partner's identity, and the Partnership
-    contract carries no separate display name, so the id *is* the analyst's own
-    label here rather than an internal key leaking into presentation."""
+    P-8 makes ``partner_id`` the partner's stable identity while its name is
+    presentation, exactly as a position's is -- so the report says "LP", like it
+    says "Senior Loan", and not the token the memo stored. **Corrected after
+    browser QA at the independent review**, which showed a cover reading
+    "Partner – lp": the id was being printed on the reasoning that the contract
+    had no name, and it does.
 
-    return "Unnamed partner" if partner_id is None else partner_id
+    The id is the fallback rather than an invention, for a Partnership that no
+    longer resolves; it is at least a token the analyst chose."""
+
+    if partner_id is None:
+        return "Unnamed partner"
+    resolved = analysis.partnership
+    stated = None if resolved is None else getattr(resolved, "partnership", None)
+    for partner in getattr(stated, "partners", ()) or ():
+        if getattr(partner, "partner_id", None) == partner_id:
+            name = getattr(partner, "name", None)
+            return name if name else partner_id
+    return partner_id
 
 
 # =============================================================================
@@ -993,28 +1034,42 @@ def _position_returns(
 
 
 def _partner_returns(analysis: _Analysis, partner_id: str | None) -> tuple[MemoReportMetric, ...]:
-    """The selected Partner's returns.
+    """The selected Partner's returns, from the resolved Partnership variant.
 
     Reported only where the selected variant actually resolves a Partnership.
     FP-2 makes a Partnership absent rather than empty, so an Investment without
     one produces no partner metrics and the report discloses that instead of
     printing zeros.
+
+    **Corrected after browser QA at the independent review.** This read a
+    ``partnership`` attribute off the *structured capital* result, which has no
+    such field, and named partner totals that the Partnership contract does not
+    carry. Both failures were silent and pointed the same way: every
+    Partner-perspective memo reported no partner returns at all, beneath a
+    disclosure claiming the Investment resolved no Partnership. It is read from
+    ``analyze_partnership_variant`` now -- the same analysis the Partnership
+    surfaces use -- by the field names P7.9 actually defines.
     """
 
-    structured = analysis.structured
-    if structured is None or partner_id is None:
+    resolved = analysis.partnership
+    if resolved is None or partner_id is None:
         return ()
-    partnership = getattr(structured.result, "partnership", None)
-    if partnership is None:
-        return ()
-    for partner in getattr(partnership, "partners", ()):
-        if getattr(partner, "partner_id", None) == partner_id:
-            return (
-                _currency("Capital Contributed", getattr(partner, "total_contributed", None)),
-                _percent("Partner IRR", getattr(partner, "irr", None)),
-                _multiple("Partner Multiple", getattr(partner, "moic", None)),
-                _currency("Total Distributions", getattr(partner, "total_distributed", None)),
-            )
+    result = getattr(resolved, "result", None)
+    for partner in getattr(result, "partners", ()) or ():
+        if getattr(partner, "partner_id", None) != partner_id:
+            continue
+        irr = getattr(partner, "irr", None)
+        return (
+            _currency("Capital Contributed", getattr(partner, "total_contributions", None)),
+            _percent(
+                "Partner IRR",
+                irr,
+                note=None if irr is not None else "Unavailable for this cash flow.",
+            ),
+            _multiple("Partner Multiple", getattr(partner, "moic", None)),
+            _currency("Total Distributions", getattr(partner, "total_distributions", None)),
+            _currency("Profit", getattr(partner, "profit", None)),
+        )
     return ()
 
 
@@ -1307,9 +1362,17 @@ def _scope_disclosures(analysis: _Analysis, multi_unit: bool) -> tuple[MemoRepor
             )
         )
 
+    # Corrected after browser QA at the independent review. This asked the
+    # structured capital result for a ``partnership`` field it does not have, so
+    # it was `None` for every Investment and this disclosure appeared on every
+    # report -- including the ones that did resolve a Partnership, beside the
+    # partner returns it said were absent. The Partnership variant is the thing
+    # that knows, so it is what is asked.
     if analysis.structured is not None:
-        partnership = getattr(analysis.structured.result, "partnership", None)
-        if partnership is None:
+        resolved = analysis.partnership
+        stated = None if resolved is None else getattr(resolved, "partnership", None)
+        result = None if resolved is None else getattr(resolved, "result", None)
+        if stated is None:
             disclosures.append(
                 MemoReportDisclosure(
                     title="Partnership",
@@ -1319,14 +1382,30 @@ def _scope_disclosures(analysis: _Analysis, multi_unit: bool) -> tuple[MemoRepor
                     ),
                 )
             )
+        elif getattr(result, "partners", None) is None:
+            # A Partnership is stated but could not be run over this Common
+            # Equity Cash Flow. Its own typed reason says why; no partner figure
+            # is estimated in its place.
+            disclosures.append(
+                MemoReportDisclosure(
+                    title="Partnership",
+                    detail=_unavailable_reason(
+                        getattr(result, "unavailable_reason", None),
+                        "The Partnership could not be run over this analysis, so no "
+                        "partner returns are reported. This is an absence, not a zero.",
+                    ),
+                )
+            )
 
     if not analysis.resolved:
         disclosures.append(
             MemoReportDisclosure(
                 title="Selected analysis did not resolve",
                 detail=(
-                    analysis.detail
-                    or "The selected Strategy and Scenario did not produce a result."
+                    "The selected Strategy, Scenario and perspective did not produce a "
+                    "result, so no return, capital structure or partnership figure is "
+                    "reported here. Every figure that does not depend on it is "
+                    "unchanged, and nothing is estimated in its place."
                 ),
             )
         )

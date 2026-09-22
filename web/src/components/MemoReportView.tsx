@@ -81,7 +81,7 @@ function ReportTable({ table }: { table: MemoReportTable }) {
             <tr>
               {table.headers.map((header, index) => (
                 <th
-                  key={header}
+                  key={index}
                   scope="col"
                   className={right.has(index) ? 'memo-cell-figure' : undefined}
                 >
@@ -91,18 +91,23 @@ function ReportTable({ table }: { table: MemoReportTable }) {
             </tr>
           </thead>
           <tbody>
+            {/* Keyed by position, not by content. A cell's text is not unique:
+              * a Unit whose NOI and levered cash flow are the same figure, or
+              * two Units with identical numbers, gave React duplicate keys and
+              * a console error. The backend fixes this table's order, and
+              * nothing here reorders it, so position is the stable identity. */}
             {table.rows.map((row, rowIndex) => (
               <tr
-                key={row.join('|')}
+                key={rowIndex}
                 className={emphasized.has(rowIndex) ? 'memo-row-total' : undefined}
               >
                 {row.map((cell, index) =>
                   index === 0 ? (
-                    <th key={cell} scope="row" className="memo-cell-label">
+                    <th key={index} scope="row" className="memo-cell-label">
                       {cell}
                     </th>
                   ) : (
-                    <td key={cell} className={right.has(index) ? 'memo-cell-figure' : undefined}>
+                    <td key={index} className={right.has(index) ? 'memo-cell-figure' : undefined}>
                       {cell}
                     </td>
                   ),

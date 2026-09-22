@@ -927,6 +927,86 @@ def test_every_typed_unavailable_reason_has_an_analyst_sentence() -> None:
             assert member.value in module._UNAVAILABLE_LABELS, member
 
 
+def test_every_publication_refusal_has_an_analyst_sentence() -> None:
+    """**Added after browser QA at the independent review.** Readiness printed
+    the backend's own refusal message, which names the Investment, the timepoint
+    and the Unit by their opaque ids -- on the one surface that exists to tell an
+    analyst what to go and fix. Refusals are now translated from their stable
+    code, like every unavailable state already was, and this holds the table to
+    the accepted Stage 2 enum so a new refusal cannot ship untranslated."""
+
+    from anchor.memo.publication import PublicationRefusalCode
+
+    catalog = _current("web/src/memoCatalog.ts")
+    block = catalog[
+        catalog.index("export const PUBLICATION_REFUSAL_LABELS") : catalog.index(
+            "/** One publication refusal as analyst-facing text"
+        )
+    ]
+    typescript = set(re.findall(r"^\s{2}([a-z_]+):", block, re.MULTILINE))
+    declared = {member.value for member in PublicationRefusalCode}
+    assert typescript == declared, (
+        f"only in Python: {sorted(declared - typescript)}; "
+        f"only in TypeScript: {sorted(typescript - declared)}"
+    )
+
+
+def test_no_refusal_sentence_names_an_internal_id() -> None:
+    """The same rule the unavailable sentences are held to, and for the same
+    reason: a refusal an analyst cannot read is a refusal they cannot act on."""
+
+    catalog = _current("web/src/memoCatalog.ts")
+    block = catalog[
+        catalog.index("export const PUBLICATION_REFUSAL_LABELS") : catalog.index(
+            "/** One publication refusal as analyst-facing text"
+        )
+    ]
+    quoted_identifier = re.compile(r"'[^']{4,}'")
+    opaque_id = re.compile(r"[0-9a-f]{12,}")
+    for line in block.splitlines():
+        sentence = line.strip()
+        if not sentence.startswith("'") and ": '" not in sentence:
+            continue
+        assert not quoted_identifier.search(sentence.split(": ", 1)[-1].strip("',")), sentence
+        assert not opaque_id.search(sentence), sentence
+
+
+def test_the_publish_panel_shows_no_opaque_scope() -> None:
+    """A refusal's scope is shown only when the analyst named it.
+
+    A valuation timepoint id or a position id is the analyst's own word and is
+    worth showing; a stored Investment's 32-character id is not."""
+
+    panel = _current("web/src/components/MemoPublishPanel.tsx")
+    assert "publicationRefusalLabel(refusal.code, refusal.unavailable_reason)" in panel
+    assert "!isOpaqueId(refusal.scope_id)" in panel
+    # And the untranslated message is gone from the surface entirely.
+    assert "refusal.message" not in panel
+
+
+def test_no_disclosure_carries_a_backend_exception() -> None:
+    """**Added after browser QA at the independent review.** The report's
+    "Selected analysis did not resolve" disclosure rendered ``str(error)`` from
+    whichever layer refused, which named an Investment by its id inside the
+    published document and its PDF. The disclosure now says the same thing in
+    the analyst's terms, and ``_Analysis.detail`` reaches no surface."""
+
+    source = _current("src/anchor/reporting/assembly.py")
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        if name != "MemoReportDisclosure":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != "detail":
+                continue
+            rendered = ast.unparse(keyword.value)
+            assert "analysis.detail" not in rendered, rendered
+            assert "str(error)" not in rendered, rendered
+
+
 def test_no_analyst_facing_reason_names_an_internal_id() -> None:
     """The translations say what happened without naming a record.
 

@@ -41,6 +41,7 @@ import {
   readEvidenceReferences,
   readInvestmentMemo,
   readMemoVersionFreshness,
+  readMemoVersionReport,
   readMemoVersions,
   readPublicationReadiness,
   readValuationTimepoints,
@@ -142,6 +143,15 @@ export interface UseInvestmentMemoResult {
   freshness: Record<string, MemoFreshnessReport>;
   loadFreshness: (versionId: string) => Promise<void>;
 
+  /** Whether each version has an issued report, and the reason where it does
+   * not. **Added after browser QA at the independent review**: a version
+   * published before schema 16 has no stored report, and the version list was
+   * still offering it a Download PDF that could only ever refuse -- landing the
+   * analyst on a raw refusal payload instead of the sentence that tells them to
+   * publish a new version. */
+  reportAvailability: Record<string, { issued: boolean; message: string | null }>;
+  loadReportAvailability: (versionId: string) => Promise<void>;
+
   decisions: Record<string, InvestmentCommitteeDecision | null>;
   loadDecision: (versionId: string) => Promise<void>;
   recordDecision: (
@@ -179,6 +189,9 @@ export function useInvestmentMemo({
 
   const [publishedHere, setPublishedHere] = useState<InvestmentMemoVersion[]>([]);
   const [freshness, setFreshness] = useState<Record<string, MemoFreshnessReport>>({});
+  const [reportAvailability, setReportAvailability] = useState<
+    Record<string, { issued: boolean; message: string | null }>
+  >({});
   const [decisions, setDecisions] = useState<
     Record<string, InvestmentCommitteeDecision | null>
   >({});
@@ -493,6 +506,27 @@ export function useInvestmentMemo({
     }
   }, [clearPublishError, investmentId, refreshReadiness]);
 
+  const loadReportAvailability = useCallback(
+    async (versionId: string) => {
+      try {
+        const answer = await readMemoVersionReport(investmentId, versionId);
+        if (liveRef.current) {
+          setReportAvailability((current) => ({
+            ...current,
+            [versionId]: {
+              issued: answer.report !== null,
+              message: answer.unavailable === null ? null : answer.unavailable.message,
+            },
+          }));
+        }
+      } catch {
+        // A read that fails leaves the row as it was: the version is still
+        // readable, and nothing is claimed about its report either way.
+      }
+    },
+    [investmentId],
+  );
+
   const loadFreshness = useCallback(
     async (versionId: string) => {
       try {
@@ -587,6 +621,8 @@ export function useInvestmentMemo({
     versions,
     freshness,
     loadFreshness,
+    reportAvailability,
+    loadReportAvailability,
     decisions,
     loadDecision,
     recordDecision,

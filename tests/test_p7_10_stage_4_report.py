@@ -20,7 +20,12 @@ from pypdf import PdfReader
 import _p7_10_stage_2_fixtures as fx  # type: ignore[import-not-found]
 from anchor.deals import memo_dependencies as deps
 from anchor.deals import store
-from anchor.memo.contracts import InvestmentCommitteeDecision, InvestmentCommitteeOutcome
+from anchor.memo.contracts import (
+    DecisionPerspectiveKind,
+    InvestmentCommitteeDecision,
+    InvestmentCommitteeOutcome,
+    SelectedDecision,
+)
 from anchor.reporting.assembly import (
     MemoReportError,
     PdfExportRefusalCode,
@@ -577,3 +582,130 @@ def test_an_unreadable_purchase_price_is_unavailable_rather_than_substituted(
     assert metric.value is None
     assert metric.unavailable is not None
     assert metric.unavailable.label == "Unavailable"
+
+
+# =============================================================================
+# 8. What cross-mode browser QA found (Correction 4)
+# =============================================================================
+
+
+def _disclosures(package) -> tuple:
+    """Every disclosure in the package, which the assembly groups into its own
+    section rather than hanging off the package."""
+
+    for section in package.sections:
+        if section.title == "Disclosures":
+            return section.disclosures
+    return ()
+
+
+def _partnership_memo(db: Path) -> tuple[str, str]:
+    """A Deal with a real Partnership, and a memo written from the LP's seat."""
+
+    import _p7_9_fixtures as pfx  # type: ignore[import-not-found]
+
+    deal, investment_id = fx.opted_in_deal(db)
+    store.set_base_partnership(investment_id, pfx.f1_terms(), db_path=db)
+    fx.with_approved_evidence(db, investment_id, evidence_id="ev-1", approved=True)
+    store.put_memo_draft(
+        investment_id,
+        fx.memo_draft(
+            investment_id,
+            selected=SelectedDecision(
+                strategy_id=fx.BASE,
+                scenario_id=fx.BASE_SCENARIO,
+                perspective=DecisionPerspectiveKind.PARTNER,
+                position_id=None,
+                partner_id="lp",
+            ),
+            evidence_ids=("ev-1",),
+            selected_valuation_timepoint_ids=("as-is",),
+        ),
+        db_path=db,
+    )
+    return deal.id, investment_id
+
+
+def test_a_partner_memo_reports_that_partner_s_returns(db: Path) -> None:
+    """Found by cross-mode browser QA at the independent review.
+
+    Every Partner-perspective memo reported **no** partner returns, beneath a
+    disclosure saying the Investment resolved no Partnership -- on an Investment
+    that plainly had one. Two silent faults pointed the same way: the
+    Partnership was read from the structured capital result, which carries no
+    such field, and the partner totals were named by fields the P7.9 contract
+    does not define. Backend tests passed throughout, because the disclosure
+    they asserted was exactly the wrong one that always fired."""
+
+    _, investment_id = _partnership_memo(db)
+    package = assemble_draft_preview(investment_id, db_path=db)
+
+    returns = next(section for section in package.sections if section.title == "Returns")
+    labels = {metric.label: metric for metric in returns.metrics}
+    assert set(labels) == {
+        "Capital Contributed",
+        "Partner IRR",
+        "Partner Multiple",
+        "Total Distributions",
+        "Profit",
+    }, labels
+    # Real figures, not an empty section and not zeros.
+    for metric in returns.metrics:
+        assert metric.unavailable is None, metric
+        assert metric.value not in ("", "$0", "0.00%"), metric
+
+    # And the "no Partnership" disclosure is gone, because there is one.
+    titles = [disclosure.title for disclosure in _disclosures(package)]
+    assert "Partnership" not in titles, titles
+
+    # The cover names the partner the way its Partnership does.
+    assert package.perspective_label == "Partner – LP", package.perspective_label
+
+
+def test_an_investment_with_no_partnership_still_discloses_the_absence(db: Path) -> None:
+    """The disclosure was wrong, not unwanted. It must still appear where it is
+    true -- otherwise the fix would have traded a false statement for silence."""
+
+    _, investment_id, _ = _published(db)
+    package = assemble_draft_preview(investment_id, db_path=db)
+
+    partnership = [d for d in _disclosures(package) if d.title == "Partnership"]
+    assert len(partnership) == 1, _disclosures(package)
+    assert "absence, not a zero" in partnership[0].detail
+
+
+def test_no_disclosure_repeats_a_backend_sentence_about_a_record(db: Path) -> None:
+    """Also found by browser QA: the "did not resolve" disclosure rendered the
+    raising layer's own message, which named an Investment by its 32-character
+    id -- inside the published report and its PDF."""
+
+    import re
+
+    deal, investment_id = fx.opted_in_deal(db)
+    fx.with_approved_evidence(db, investment_id, evidence_id="ev-1", approved=True)
+    store.put_memo_draft(
+        investment_id,
+        fx.memo_draft(
+            investment_id,
+            selected=SelectedDecision(
+                strategy_id="a-strategy-that-is-gone",
+                scenario_id=fx.BASE_SCENARIO,
+                perspective=DecisionPerspectiveKind.PROJECT,
+                position_id=None,
+                partner_id=None,
+            ),
+            evidence_ids=("ev-1",),
+        ),
+        db_path=db,
+    )
+    package = assemble_draft_preview(investment_id, db_path=db)
+
+    unresolved = [
+        d for d in _disclosures(package) if d.title == "Selected analysis did not resolve"
+    ]
+    assert len(unresolved) == 1, _disclosures(package)
+    detail = unresolved[0].detail
+    assert investment_id not in detail, detail
+    assert deal.id not in detail, detail
+    assert not re.search(r"\b[0-9a-f]{12,}\b", detail), detail
+    assert not re.search(r"'[^']{4,}'", detail), detail

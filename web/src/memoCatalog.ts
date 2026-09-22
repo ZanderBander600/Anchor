@@ -352,6 +352,66 @@ export function unavailableReasonLabel(reasonCode: string | null | undefined): s
 }
 
 /**
+ * Analyst-facing sentences for every publication refusal.
+ *
+ * **Added after browser QA at the Stage 4 independent review.** Readiness used
+ * to print the backend's own `message`, on the reasoning that a refusal should
+ * not be paraphrased. Cross-mode QA showed what that actually puts on screen:
+ * *"Investment '2fa67abf88a2445a8d41eb27fa1af123' has no value at valuation
+ * timepoint 'as-is-3b93ed': '5889bb98…' (unit_not_valued)"* -- three opaque
+ * ids and a raw code, in the one place an analyst is being asked to go and fix
+ * something. That is the implementation vocabulary Section 2 keeps out of an
+ * analyst view, and it is the same problem the unavailable reasons above were
+ * already translated to avoid.
+ *
+ * So refusals are translated the same way, from the same kind of stable code,
+ * and `tests/test_p7_10_stage_4_architecture.py` holds this table to
+ * `PublicationRefusalCode` exactly as it holds the one above. Nothing is
+ * softened: each sentence says what is wrong and what would fix it. The
+ * upstream `unavailable_reason`, where a refusal carries one, is appended
+ * through the table above, so a valuation still states its own specific
+ * reason.
+ */
+export const PUBLICATION_REFUSAL_LABELS: Record<string, string> = {
+  memo_invalid: 'The memo is not complete enough to publish. Its own issues say what is missing.',
+  no_selected_decision:
+    'No decision cell is selected. A memo recommends one Strategy, Scenario and perspective.',
+  selected_strategy_missing: 'The Strategy this memo was written against no longer exists.',
+  selected_scenario_missing: 'The Scenario this memo was written against no longer exists.',
+  selected_perspective_missing:
+    'The position or partner this memo was written from is not a perspective of this Investment.',
+  selected_cell_unresolved:
+    'The selected Strategy, Scenario and perspective do not currently produce a complete result.',
+  blank_decision_ask: 'The decision being requested is blank.',
+  evidence_not_found: 'A source this memo cites is no longer in the register.',
+  evidence_not_approved:
+    'A source this memo cites has not been approved, so the memo would present it as supporting.',
+  valuation_unavailable_for_required_view:
+    'A valuation this memo depends on has no value, and no version is published with a figure invented in its place.',
+};
+
+/** One publication refusal as analyst-facing text, with its own upstream
+ * reason appended where the refusal carries one. */
+export function publicationRefusalLabel(
+  code: string,
+  unavailableReason?: string | null,
+): string {
+  const sentence =
+    PUBLICATION_REFUSAL_LABELS[code] ?? 'This memo cannot be published yet.';
+  if (unavailableReason === null || unavailableReason === undefined) {
+    return sentence;
+  }
+  return [sentence, unavailableReasonLabel(unavailableReason)].join(' ');
+}
+
+/** Whether a scope is a stored record's opaque id rather than something the
+ * analyst named. Those are shown to nobody; an id the analyst chose, such as a
+ * valuation timepoint or a position, is shown as it is. */
+export function isOpaqueId(scope: string | null | undefined): boolean {
+  return typeof scope === 'string' && /^[0-9a-f]{12,}$/.test(scope);
+}
+
+/**
  * A stored timestamp as a date an analyst reads.
  *
  * The wire carries a full ISO instant, which is exactly right for an identity
