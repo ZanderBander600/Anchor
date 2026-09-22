@@ -26,7 +26,11 @@ import { formatCurrency } from '../format';
 import { toggleSelectedValuation } from '../memoForm';
 import type { MemoDraftForm } from '../memoForm';
 import type { ValuationSurface, ValuationView } from '../memoTypes';
-import { EXPLORATORY_VALUATION_HINT, valuationRoleLabel } from '../memoCatalog';
+import {
+  EXPLORATORY_VALUATION_HINT,
+  unavailableReasonLabel,
+  valuationRoleLabel,
+} from '../memoCatalog';
 
 export interface MemoValuationPanelProps {
   form: MemoDraftForm;
@@ -84,7 +88,10 @@ function ValuationRow({
           <span className="memo-unavailable">
             Unavailable
             {view.unavailable !== null && (
-              <span className="memo-unavailable-reason"> — {view.unavailable.reason}</span>
+              <span className="memo-unavailable-reason">
+                {' '}
+                — {unavailableReasonLabel(view.unavailable.reason_code)}
+              </span>
             )}
           </span>
         )}
@@ -206,7 +213,9 @@ export function MemoValuationPanel({
             {unresolvedFundings.map((state) => (
               <li key={`${state.position_id}-${state.event_id}`} className="memo-disclosure" role="note">
                 <p className="memo-disclosure-title">{state.position_id}</p>
-                <p className="memo-disclosure-detail">{state.unavailable?.reason}</p>
+                <p className="memo-disclosure-detail">
+                  {unavailableReasonLabel(state.unavailable?.reason_code)}
+                </p>
                 <p className="memo-disclosure-detail">
                   No amount is reported for this funding, because there is none to report.
                 </p>

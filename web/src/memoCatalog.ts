@@ -309,3 +309,70 @@ export const BASE_SCENARIO_KEY = 'base';
 
 export const BASE_STRATEGY_NAME = 'Base Strategy';
 export const BASE_SCENARIO_NAME = 'Base Scenario';
+
+/**
+ * Analyst-facing sentences for every typed unavailable reason.
+ *
+ * The backend's own `reason` is a precise developer-facing sentence that names
+ * the Investment, the Unit and the timepoint by their opaque ids -- right for a
+ * log, and exactly what Section 2 keeps out of an analyst view. The stable
+ * thing is the `reason_code`, so the workspace translates that.
+ *
+ * Mirrors `_UNAVAILABLE_LABELS` in `src/anchor/reporting/assembly.py`, and
+ * `tests/test_p7_10_stage_4_architecture.py` holds the two tables to the same
+ * key set so neither can drift.
+ */
+export const UNAVAILABLE_REASON_LABELS: Record<string, string> = {
+  not_authored: 'No valuation is authored at this timepoint.',
+  incomplete_units:
+    'At least one Unit has no value at this timepoint, so the Investment has none.',
+  non_positive_forward_noi:
+    'Forward NOI is not positive at this timepoint, so direct capitalization has no meaning here.',
+  evidence_not_approved:
+    'The analyst-supplied value rests on a source that has not been approved.',
+  variant_invalid: 'The selected Strategy and Scenario did not resolve.',
+  funding_requirement_unresolved: 'A value-sized funding could not be sized.',
+  result_unavailable: 'Anchor did not report this figure for the selected analysis.',
+  stale_dependency: 'This figure rests on state that has changed since publication.',
+  not_implemented_for_scope: 'Unavailable — Not Implemented for This Scope.',
+  reserved_exit_month:
+    'This timepoint falls at the exit month, whose value is the system-derived Exit view.',
+  outside_hold_horizon:
+    'This timepoint falls beyond the selected analysis’s hold period. The same definition may resolve under a longer hold.',
+  unit_not_in_variant: 'This valuation names a Unit the selected analysis does not hold.',
+  unit_not_valued: 'The selected analysis holds a Unit this valuation does not instruct.',
+};
+
+/** One unavailable state as analyst-facing text, by its stable code. */
+export function unavailableReasonLabel(reasonCode: string | null | undefined): string {
+  if (reasonCode === null || reasonCode === undefined) {
+    return 'No value is reported here.';
+  }
+  return UNAVAILABLE_REASON_LABELS[reasonCode] ?? 'No value is reported here.';
+}
+
+/**
+ * A stored timestamp as a date an analyst reads.
+ *
+ * The wire carries a full ISO instant, which is exactly right for an identity
+ * and exactly wrong in a library row or on a memorandum: a reader wants
+ * "Sep 21, 2026", not "2026-09-22T00:41:20.099030+00:00". One function, so the
+ * library and the version list cannot render the same fact two ways.
+ *
+ * An unparseable value is returned as recorded rather than dropped -- a
+ * timestamp nobody can read still beats a row that silently lost it.
+ */
+export function displayDate(value: string | null | undefined): string | null {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}

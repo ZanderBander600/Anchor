@@ -109,12 +109,21 @@ export function MemoWorkspace({
     );
   }, [memo.isDirty, onUnsavedChange]);
 
+  /** Reads one version's freshness and committee decision.
+   *
+   * Depends on the two hook functions rather than on `memo`, which is a fresh
+   * object every render: a callback that changed every render would make the
+   * effect below re-fire every render, and each pass would set state and cause
+   * the next. Browser QA caught exactly that -- an unbounded request loop that
+   * ran the tab out of sockets. `loadFreshness` and `loadDecision` are
+   * `useCallback`s keyed on the Investment, so this identity is stable. */
+  const { loadFreshness, loadDecision } = memo;
   const loadVersionDetail = useCallback(
     (versionId: string) => {
-      void memo.loadFreshness(versionId);
-      void memo.loadDecision(versionId);
+      void loadFreshness(versionId);
+      void loadDecision(versionId);
     },
-    [memo],
+    [loadFreshness, loadDecision],
   );
 
   /** The preview follows the *saved* draft, so what it shows is what would be

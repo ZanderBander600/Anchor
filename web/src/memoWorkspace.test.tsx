@@ -561,7 +561,11 @@ describe('valuation views', () => {
 
     const row = (await screen.findByText('Stabilized Year 6')).closest('tr') as HTMLElement;
     expect(within(row).getByText('Unavailable')).toBeTruthy();
-    expect(within(row).getByText(/beyond this variant/)).toBeTruthy();
+    // The *translated* sentence, not the backend's own: that one names the
+    // Investment and the timepoint by their opaque ids, which is exactly what
+    // must not reach an analyst view.
+    expect(within(row).getByText(/beyond the selected analysis/)).toBeTruthy();
+    expect(within(row).queryByText(/5898557bc6b149c9a4994097272d8aea/)).toBeNull();
     expect(within(row).queryByText('$0')).toBeNull();
   });
 

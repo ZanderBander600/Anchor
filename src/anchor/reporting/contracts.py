@@ -302,7 +302,7 @@ class MemoReportPackage:
     #: Printed at the foot of every page. Stage 4 stores no generated PDF as a
     #: source record (Section 13.3), so this is a marking, not a claim of
     #: custody.
-    confidentiality: str = "Confidential -- For Investment Committee Use Only"
+    confidentiality: str = "Confidential – For Investment Committee Use Only"
 
     @property
     def is_draft(self) -> bool:
@@ -325,9 +325,9 @@ class MemoReportPackage:
         """
 
         if self.is_draft:
-            return "DRAFT -- NOT PUBLISHED"
+            return "DRAFT – NOT PUBLISHED"
         if self.is_stale:
-            return "PUBLISHED -- ANALYSIS HAS CHANGED SINCE PUBLICATION"
+            return "PUBLISHED – ANALYSIS HAS CHANGED SINCE PUBLICATION"
         return "PUBLISHED"
 
     def rendered_sections(self) -> tuple[MemoReportSection, ...]:
@@ -348,7 +348,7 @@ COMMITTEE_DECISION_LABEL = "Investment Committee Decision"
 COMMITTEE_DECISION_UNRECORDED = "Not yet recorded"
 
 #: Section 8's label for a claim that cites no source.
-UNSOURCED_CLAIM_LABEL = "Analyst Assertion -- Source Not Attached"
+UNSOURCED_CLAIM_LABEL = "Analyst Assertion – Source Not Attached"
 
 __all__ = [
     "ANALYST_RECOMMENDATION_LABEL",

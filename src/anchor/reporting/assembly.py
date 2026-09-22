@@ -182,6 +182,63 @@ _ASSET_TYPE_LABELS = {
     "other": "Other",
 }
 
+#: Analyst-facing sentences for every typed unavailable reason.
+#:
+#: The Stage 2 adapter's own ``reason`` is a precise developer-facing sentence
+#: that names the Investment, the Unit and the timepoint by their opaque ids --
+#: exactly right for a log or a test, and exactly what Section 2 keeps out of an
+#: analyst view. The stable thing is the ``reason_code``, so Stage 4 translates
+#: that and never repeats the raw message.
+#:
+#: Nothing is softened in the translation: each sentence says the same thing the
+#: code means, including that there is no value. Where the affected scope
+#: matters it travels separately, as a label the reader already knows.
+_UNAVAILABLE_LABELS = {
+    "not_authored": "No valuation is authored at this timepoint.",
+    "incomplete_units": (
+        "At least one Unit has no value at this timepoint, so the Investment has none. "
+        "A partial sum of the Units that do have one is never the Investment value."
+    ),
+    "non_positive_forward_noi": (
+        "Forward NOI is not positive at this timepoint, so direct capitalization has no "
+        "meaning here. The NOI is not floored, smoothed or substituted."
+    ),
+    "evidence_not_approved": (
+        "The analyst-supplied value rests on a source that has not been approved, so no "
+        "value is reported."
+    ),
+    "variant_invalid": "The selected Strategy and Scenario did not resolve.",
+    "funding_requirement_unresolved": (
+        "A value-sized funding could not be sized, so this figure is not reported."
+    ),
+    "result_unavailable": "Anchor did not report this figure for the selected analysis.",
+    "stale_dependency": "This figure rests on state that has changed since publication.",
+    "not_implemented_for_scope": "Unavailable – Not Implemented for This Scope.",
+    "reserved_exit_month": (
+        "This timepoint falls at the exit month, whose value is the system-derived Exit "
+        "view rather than an authored valuation."
+    ),
+    "outside_hold_horizon": (
+        "This timepoint falls beyond the selected analysis's hold period. The same "
+        "definition may resolve under a longer hold."
+    ),
+    "unit_not_in_variant": "This valuation names a Unit the selected analysis does not hold.",
+    "unit_not_valued": "The selected analysis holds a Unit this valuation does not instruct.",
+}
+
+
+def _unavailable_reason(reason_code: str | None, fallback: str) -> str:
+    """One unavailable state as analyst-facing text.
+
+    Falls back to the backend's own sentence only for a code no later gate has
+    taught this table, which a guard forbids shipping; it is here so an unknown
+    state degrades to something true rather than to silence."""
+
+    if reason_code is None:
+        return fallback
+    return _UNAVAILABLE_LABELS.get(reason_code, fallback)
+
+
 #: Analyst-facing names for the thirteen Stage 2 dependency classes. A stale
 #: report says "the Business Plan changed", never ``business_plan``.
 _DEPENDENCY_LABELS = {
@@ -462,7 +519,10 @@ def _investment_identity(investment_id: str, db_path: Path | None) -> tuple[str,
 def _classification_text(deal: Any) -> str:
     kind = _label(_ASSET_TYPE_LABELS, deal.asset_type)
     subtype = getattr(deal, "asset_subtype", None)
-    return f"{kind} -- {subtype}" if subtype else kind
+    # An en dash, not "--": this string is rendered to a reader, and the
+    # double hyphen this file uses in *comments* would appear literally on the
+    # page and in the PDF.
+    return f"{kind} – {subtype}" if subtype else kind
 
 
 def _strategy_label(investment_id: str, strategy_id: str, db_path: Path | None) -> str:
@@ -500,8 +560,8 @@ def _perspective_label(selected: SelectedDecision, analysis: _Analysis) -> str:
     if selected.perspective is DecisionPerspectiveKind.PROJECT:
         return "Project"
     if selected.perspective is DecisionPerspectiveKind.POSITION:
-        return f"Position -- {_position_name(analysis, selected.position_id)}"
-    return f"Partner -- {_partner_name(selected.partner_id)}"
+        return f"Position – {_position_name(analysis, selected.position_id)}"
+    return f"Partner – {_partner_name(selected.partner_id)}"
 
 
 def _position_name(analysis: _Analysis, position_id: str | None) -> str:
@@ -625,8 +685,11 @@ def _valuation_from_view(
             None
             if view.value is not None or unavailable is None
             else _unavailable(
-                str(getattr(unavailable, "reason_code", "result_unavailable")),
-                str(getattr(unavailable, "reason", "")) or "No value at this timepoint.",
+                (code := str(getattr(unavailable, "reason_code", "result_unavailable"))),
+                _unavailable_reason(
+                    code,
+                    str(getattr(unavailable, "reason", "")) or "No value at this timepoint.",
+                ),
             )
         ),
         selected=selected,
@@ -654,7 +717,10 @@ def _valuation_from_frozen(row: Any, hold_period: int | None) -> MemoReportValua
             if row.value is not None
             else _unavailable(
                 row.unavailable_reason or "result_unavailable",
-                row.unavailable_message or "No value at this timepoint.",
+                _unavailable_reason(
+                    row.unavailable_reason,
+                    row.unavailable_message or "No value at this timepoint.",
+                ),
             )
         ),
         selected=row.selected,
@@ -793,7 +859,7 @@ def _position_na(position: Any) -> str:
     if reason is None:
         return "N/A"
     readable = str(getattr(reason, "value", reason)).replace("_", " ")
-    return f"N/A -- {readable}"
+    return f"N/A – {readable}"
 
 
 def _debt_terms_table(analysis: _Analysis) -> MemoReportTable | None:
@@ -1187,7 +1253,7 @@ def _scope_disclosures(analysis: _Analysis, multi_unit: bool) -> tuple[MemoRepor
             MemoReportDisclosure(
                 title="Sensitivity and break-even at Investment scope",
                 detail=(
-                    "Unavailable -- Not Implemented for This Scope. Anchor provides "
+                    "Unavailable – Not Implemented for This Scope. Anchor provides "
                     "sensitivity and break-even on an individual Unit. No Unit result "
                     "is presented here as an Investment result."
                 ),
@@ -1242,7 +1308,10 @@ def _funding_disclosures(analysis: _Analysis) -> tuple[MemoReportDisclosure, ...
         disclosures.append(
             MemoReportDisclosure(
                 title="Value-sized funding could not be sized",
-                detail=str(getattr(unavailable, "reason", "")) or "No value at this timepoint.",
+                detail=_unavailable_reason(
+                    getattr(unavailable, "reason_code", None),
+                    str(getattr(unavailable, "reason", "")) or "No value at this timepoint.",
+                ),
                 scope=getattr(state, "position_id", None),
             )
         )
@@ -1273,6 +1342,24 @@ def _stale_disclosures(report: Any) -> tuple[MemoReportDisclosure, ...]:
 # =============================================================================
 # Assembling a package
 # =============================================================================
+
+
+def _published_date(recorded: str) -> str:
+    """A stored publication timestamp as the date a committee reads.
+
+    The store records a full ISO instant, which is exactly right for an
+    identity and exactly wrong on a memorandum cover: a reader wants
+    "21 September 2026", not "2026-09-22T00:49:40.295167+00:00". Formatted once
+    here, so the workspace and the PDF cannot disagree about it.
+
+    An unparseable value is returned as recorded rather than dropped -- a
+    timestamp nobody can read is still better than a cover that lost its date.
+    """
+
+    try:
+        return datetime.fromisoformat(recorded).strftime("%d %B %Y")
+    except ValueError:
+        return recorded
 
 
 def _generated_at() -> str:
@@ -1381,7 +1468,7 @@ def assemble_version_report(
         market=None,
         version_number=version.version_number,
         version_id=version.version_id,
-        published_at=version.created_at,
+        published_at=_published_date(version.created_at),
         prepared_by=version.prepared_by,
         generated_at=_generated_at(),
         decision_ask=version.decision_ask,

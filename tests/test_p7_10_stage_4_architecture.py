@@ -777,3 +777,70 @@ def test_the_frontend_covers_every_publication_refusal_code() -> None:
     catalog = _current("web/src/memoCatalog.ts")
     for member in PublicationRefusalCode:
         assert f"{member.value}:" in catalog, f"{member.value} has no analyst grouping"
+
+
+def test_the_two_unavailable_reason_tables_cannot_drift() -> None:
+    """The report and the workspace explain an unavailable state the same way.
+
+    The Stage 2 adapter's own ``reason`` names the Investment, the Unit and the
+    timepoint by their opaque ids -- right for a log, and exactly what Section 2
+    keeps out of an analyst view. Both surfaces therefore translate the stable
+    ``reason_code`` instead, and they must cover the same set: a code one side
+    knows and the other does not would be a sentence in the memo that the
+    workspace could not reproduce."""
+
+    import anchor.reporting.assembly as module
+
+    catalog = _current("web/src/memoCatalog.ts")
+    block = catalog[
+        catalog.index("export const UNAVAILABLE_REASON_LABELS") : catalog.index(
+            "export function unavailableReasonLabel"
+        )
+    ]
+    typescript = set(re.findall(r"^\s{2}([a-z_]+):", block, re.MULTILINE))
+    assert typescript == set(module._UNAVAILABLE_LABELS), (
+        f"only in Python: {sorted(set(module._UNAVAILABLE_LABELS) - typescript)}; "
+        f"only in TypeScript: {sorted(typescript - set(module._UNAVAILABLE_LABELS))}"
+    )
+
+
+def test_every_typed_unavailable_reason_has_an_analyst_sentence() -> None:
+    """Both reason vocabularies are covered, so no state falls through to the
+    backend's id-bearing message."""
+
+    from anchor.memo.availability import UnavailableReasonCode
+    from anchor.valuation.contracts import ValuationUnavailableReason
+    import anchor.reporting.assembly as module
+
+    for enum in (UnavailableReasonCode, ValuationUnavailableReason):
+        for member in enum:
+            assert member.value in module._UNAVAILABLE_LABELS, member
+
+
+def test_no_analyst_facing_reason_names_an_internal_id() -> None:
+    """The translations say what happened without naming a record.
+
+    Seeded rather than assumed: the backend's own sentence is shown to contain
+    the kind of thing these must not, so the rule is measured against a real
+    example rather than a hopeful one."""
+
+    import anchor.reporting.assembly as module
+
+    # A *quoted identifier*, not any apostrophe: "the analysis's hold period" is
+    # ordinary prose, and a rule that banned it would push these sentences into
+    # worse English for no gain.
+    quoted_identifier = re.compile(r"'[^']{4,}'")
+    opaque_id = re.compile(r"\b[0-9a-f]{12,}\b")
+
+    for code, sentence in module._UNAVAILABLE_LABELS.items():
+        assert not quoted_identifier.search(sentence), (code, sentence)
+        assert not opaque_id.search(sentence), (code, sentence)
+
+    # The shape this guard exists to keep out, shown failing it -- so a passing
+    # run means the rule works, not that it is looking for nothing.
+    leaky = "Investment '5898557bc6b149c9a4994097272d8aea' has no value at 'beyond'."
+    assert quoted_identifier.search(leaky) and opaque_id.search(leaky)
+
+    # And ordinary prose with an apostrophe passes, so the rule is not merely
+    # strict enough to be useless.
+    assert not quoted_identifier.search("beyond the analysis's hold period")

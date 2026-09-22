@@ -38,8 +38,10 @@ from reportlab.lib.enums import TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import (
     BaseDocTemplate,
+    CondPageBreak,
     Frame,
     KeepTogether,
     PageBreak,
@@ -182,6 +184,19 @@ def _para(text: str, style: ParagraphStyle) -> Paragraph:
     return Paragraph(_escape(text), style)
 
 
+#: How much room a heading needs below it before it is allowed to stay on the
+#: page. A title alone at the foot of a page, with its table overleaf, is the
+#: orphan heading the rendered-PDF review looks for; `CondPageBreak` moves the
+#: heading rather than leaving it stranded.
+_HEADING_ROOM = 1.5 * inch
+
+
+def _heading(text: str) -> list[Any]:
+    """One section title, kept with whatever follows it."""
+
+    return [CondPageBreak(_HEADING_ROOM), _para(text, SECTION_TITLE)]
+
+
 # =============================================================================
 # Page furniture
 # =============================================================================
@@ -232,12 +247,16 @@ class _MemoDocument(BaseDocTemplate):
 
     def _header(self, canvas) -> None:  # noqa: ANN001
         top = PAGE_HEIGHT - (MARGIN_TOP * 0.58)
+        brand = "ANCHOR"
         canvas.setFillColor(NAVY)
         canvas.setFont("Times-Bold", 10.5)
-        canvas.drawString(MARGIN_X, top, "ANCHOR")
+        canvas.drawString(MARGIN_X, top, brand)
+        # Measured, not assumed: a fixed offset guessed the brand's width and
+        # the two ran together as "ANCHORREAL ASSETS".
+        tagline_x = MARGIN_X + stringWidth(brand, "Times-Bold", 10.5) + 8
         canvas.setFillColor(MUTED)
         canvas.setFont("Helvetica", 7.2)
-        canvas.drawString(MARGIN_X + 46, top + 0.6, "REAL ASSETS. REAL OPPORTUNITIES.")
+        canvas.drawString(tagline_x, top + 0.6, "REAL ASSETS. REAL OPPORTUNITIES.")
         canvas.setFont("Helvetica-Bold", 7.2)
         canvas.drawRightString(PAGE_WIDTH - MARGIN_X, top + 0.6, self.package.status_line)
         canvas.setStrokeColor(RULE)
@@ -264,8 +283,8 @@ class _MemoDocument(BaseDocTemplate):
         """
 
         if self.package.version_number is None:
-            return f"{self.package.investment_name} -- Draft"
-        return f"{self.package.investment_name} -- Version {self.package.version_number}"
+            return f"{self.package.investment_name} – Draft"
+        return f"{self.package.investment_name} – Version {self.package.version_number}"
 
     def _watermark(self, canvas) -> None:  # noqa: ANN001
         """A diagonal marking a reader cannot miss and cannot mistake.
@@ -557,7 +576,7 @@ def _financial_table(spec: MemoReportTable) -> list[Any]:
         style.append(("BACKGROUND", (0, row_index + 1), (-1, row_index + 1), PANEL))
     table.setStyle(TableStyle(style))
 
-    blocks: list[Any] = [_para(spec.caption, TABLE_CAPTION), table]
+    blocks: list[Any] = [CondPageBreak(1.1 * inch), _para(spec.caption, TABLE_CAPTION), table]
     if spec.note:
         blocks.append(_para(spec.note, TABLE_NOTE))
     blocks.append(Spacer(1, 5))
@@ -616,7 +635,7 @@ def _disclosure_block(disclosure) -> KeepTogether:  # noqa: ANN001 -- MemoReport
 
 
 def _section_blocks(section: MemoReportSection) -> list[Any]:
-    blocks: list[Any] = [_para(section.title, SECTION_TITLE)]
+    blocks: list[Any] = _heading(section.title)
     if section.subtitle:
         blocks.append(_para(section.subtitle, SECTION_SUBTITLE))
     if section.body:
@@ -645,6 +664,9 @@ def _valuation_table(package: MemoReportPackage) -> list[Any]:
         return []
 
     rows: list[tuple[str, ...]] = []
+    #: Why each unavailable view has no value, printed under the table rather
+    #: than inside a figure column too narrow to hold a sentence.
+    unavailable_notes: list[str] = []
     for view in package.valuations:
         if view.system_controlled:
             basis = "System-derived (Exit)"
@@ -656,9 +678,22 @@ def _valuation_table(package: MemoReportPackage) -> list[Any]:
             basis = "Included in this memo"
         else:
             basis = "Reference only"
-        value = view.value if view.value is not None else _unavailable_text(view)
         label = f"{view.label} (Analyst-Supplied Value)" if view.analyst_supplied else view.label
+        if view.value is not None:
+            value = view.value
+        else:
+            value = view.unavailable.label if view.unavailable is not None else "Unavailable"
+            if view.unavailable is not None:
+                unavailable_notes.append(f"{view.label}: {view.unavailable.reason}")
         rows.append((label, view.kind, view.timing, view.scope, basis, value))
+
+    note = (
+        "Exit is the system-derived terminal value of the selected analysis and is not an "
+        "editable valuation. As-Is, Stabilized and Custom views are reporting values; only "
+        "a view a PctOfValue funding consumes affects the capital structure."
+    )
+    if unavailable_notes:
+        note = f"{note}  " + "  ".join(unavailable_notes)
 
     return _financial_table(
         MemoReportTable(
@@ -666,19 +701,9 @@ def _valuation_table(package: MemoReportPackage) -> list[Any]:
             headers=("View", "Basis", "Timing", "Scope", "Role in this memo", "Value"),
             rows=tuple(rows),
             align_right=(5,),
-            note=(
-                "Exit is the system-derived terminal value of the selected analysis and is not an "
-                "editable valuation. As-Is, Stabilized and Custom views are reporting values; only "
-                "a view a PctOfValue funding consumes affects the capital structure."
-            ),
+            note=note,
         )
     )
-
-
-def _unavailable_text(view) -> str:  # noqa: ANN001 -- MemoReportValuation
-    if view.unavailable is None:
-        return "Unavailable"
-    return f"{view.unavailable.label} -- {view.unavailable.reason}"
 
 
 def _evidence_table(package: MemoReportPackage) -> list[Any]:
@@ -778,18 +803,18 @@ def render_memo_pdf(package: MemoReportPackage) -> bytes:
     story.extend(_context_strip(package))
 
     if package.decision_ask:
-        story.append(_para("Decision Requested", SECTION_TITLE))
+        story.extend(_heading("Decision Requested"))
         story.append(_para(package.decision_ask, SUMMARY_BODY))
 
     if package.executive_summary:
-        story.append(_para("Executive Summary", SECTION_TITLE))
+        story.extend(_heading("Executive Summary"))
         story.append(
             _panel([[_para(package.executive_summary, SUMMARY_BODY)]], [CONTENT_WIDTH])
         )
         story.append(Spacer(1, 6))
 
     if package.key_metrics:
-        story.append(_para("Key Decision Metrics", SECTION_TITLE))
+        story.extend(_heading("Key Decision Metrics"))
         story.extend(_metric_cards(package.key_metrics))
 
     for disclosure in package.disclosures:
@@ -800,16 +825,16 @@ def render_memo_pdf(package: MemoReportPackage) -> bytes:
 
     valuation_blocks = _valuation_table(package)
     if valuation_blocks:
-        story.append(_para("Valuation Views", SECTION_TITLE))
+        story.extend(_heading("Valuation Views"))
         story.extend(valuation_blocks)
 
     evidence_blocks = _evidence_table(package)
     if evidence_blocks:
-        story.append(_para("Evidence and Sources", SECTION_TITLE))
+        story.extend(_heading("Evidence and Sources"))
         story.extend(evidence_blocks)
 
     if package.concluding_statement:
-        story.append(_para("Recommendation", SECTION_TITLE))
+        story.extend(_heading("Recommendation"))
         story.append(
             _panel([[_para(package.concluding_statement, SUMMARY_BODY)]], [CONTENT_WIDTH])
         )
@@ -817,7 +842,7 @@ def render_memo_pdf(package: MemoReportPackage) -> bytes:
     appendix = _version_appendix(package)
     if appendix:
         story.append(PageBreak())
-        story.append(_para("Version Record", SECTION_TITLE))
+        story.extend(_heading("Version Record"))
         story.extend(appendix)
 
     document.build(story)

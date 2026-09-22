@@ -22,7 +22,7 @@
 
 import { assetTypeLabel } from '../assetTypes';
 import type { AssetType } from '../assetTypes';
-import { COMMITTEE_LABELS, RECOMMENDATION_LABELS } from '../memoCatalog';
+import { COMMITTEE_LABELS, displayDate, RECOMMENDATION_LABELS } from '../memoCatalog';
 import type { MemoLibraryEntry } from '../memoTypes';
 
 export interface MemoLibraryPanelProps {
@@ -84,7 +84,9 @@ function MemoRow({
           ? 'Not yet recorded'
           : COMMITTEE_LABELS[entry.committee_decision]}
       </td>
-      <td>{entry.latest_published_at ?? entry.draft_updated_at ?? 'Not yet saved'}</td>
+      <td>
+        {displayDate(entry.latest_published_at ?? entry.draft_updated_at) ?? 'Not yet saved'}
+      </td>
       <td>
         <button type="button" className="btn btn-secondary btn-xs" onClick={() => onOpen(entry)}>
           Open memo

@@ -9325,6 +9325,14 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--surface);
+  /* Containing block for its descendants.
+     Without this, an absolutely positioned child -- the `.visually-hidden`
+     label on the actions column header -- resolves against the initial
+     containing block, escapes this scroll region entirely, and drags the whole
+     page into a horizontal scroll at 390px. Browser QA measured exactly that:
+     the document could scroll 311px sideways because of a 1px screen-reader
+     label. */
+  position: relative;
 }
 
 .memo-table-scroll:focus-visible {
@@ -9925,7 +9933,10 @@ body {
 
 .memo-metric-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  /* Wide enough for a nine-figure currency value at the metric size below.
+     Browser QA caught "$25,000,000" breaking after the second comma into
+     "$25,000,00 / 0", which reads as a different number entirely. */
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
   gap: var(--sp-3);
   margin-bottom: var(--sp-3);
 }
@@ -9953,11 +9964,14 @@ body {
 
 .memo-metric-value {
   font-family: Georgia, 'Times New Roman', serif;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--memo-navy);
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
+  /* Never inside a figure. A number broken across two lines is not the number
+     the analyst wrote, and no card is worth that. */
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 
 .memo-metric-unavailable {
@@ -10074,7 +10088,8 @@ body {
 
   .memo-metric-grid,
   .memo-metric-grid-key {
-    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    /* Two cards per row at 390px, each still wide enough for a whole figure. */
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
 
   .memo-decision-pair,

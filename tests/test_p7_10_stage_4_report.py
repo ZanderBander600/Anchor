@@ -30,7 +30,11 @@ from anchor.reporting.assembly import (
     assemble_version_report_for_export,
     export_filename,
 )
-from anchor.reporting.contracts import MemoReportOrigin, ReportFreshness
+from anchor.reporting.contracts import (
+    UNSOURCED_CLAIM_LABEL,
+    MemoReportOrigin,
+    ReportFreshness,
+)
 from anchor.reporting.pdf import render_memo_pdf
 
 
@@ -132,7 +136,8 @@ def test_a_stale_dependency_is_reported_without_rewriting_the_version(db: Path) 
     assert stale.freshness is ReportFreshness.STALE
     assert stale.is_stale
     assert "Valuation definitions" in stale.stale_classes
-    assert stale.status_line == "PUBLISHED -- ANALYSIS HAS CHANGED SINCE PUBLICATION"
+    assert "ANALYSIS HAS CHANGED SINCE PUBLICATION" in stale.status_line
+    assert stale.status_line.startswith("PUBLISHED")
     assert stale.disclosures != ()
 
     # History is described, never edited: the frozen figures are untouched.
@@ -263,7 +268,7 @@ def test_a_claim_with_no_source_is_labelled_an_analyst_assertion(db: Path) -> No
     assert conditions.narrative[0].sourced is False
     assert conditions.narrative[0].evidence_labels == ()
 
-    assert "Analyst Assertion -- Source Not Attached" in _pdf_text(render_memo_pdf(report))
+    assert UNSOURCED_CLAIM_LABEL in _pdf_text(render_memo_pdf(report))
 
 
 # =============================================================================
@@ -362,7 +367,8 @@ def test_a_draft_preview_is_marked_and_cannot_be_exported(db: Path) -> None:
     assert preview.origin is MemoReportOrigin.DRAFT_PREVIEW
     assert preview.is_draft
     assert preview.version_number is None
-    assert preview.status_line == "DRAFT -- NOT PUBLISHED"
+    assert preview.status_line.startswith("DRAFT")
+    assert "NOT PUBLISHED" in preview.status_line
 
     with pytest.raises(PdfExportRefusedError) as caught:
         export_filename(preview)

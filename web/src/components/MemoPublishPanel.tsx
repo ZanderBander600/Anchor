@@ -38,6 +38,7 @@ import {
   COMMITTEE_LABELS,
   COMMITTEE_ORDER,
   DEPENDENCY_LABELS,
+  displayDate,
   PUBLISHED_IMMUTABLE_HINT,
   RECOMMENDATION_LABELS,
   REFUSAL_GROUP_LABELS,
@@ -145,11 +146,20 @@ export function MemoPublishPanel(props: MemoPublishPanelProps) {
     void onRefreshReadiness();
   }, [hasSavedDraft, onRefreshReadiness]);
 
+  /** Each published version's freshness and committee decision, read once.
+   *
+   * Guarded on what is already held: a version whose detail has arrived is not
+   * requested again. Without this the panel would re-request on every render
+   * that produced a new `versions` array, and a published memo would keep the
+   * backend busy for as long as the tab was open. */
   useEffect(() => {
     for (const version of versions) {
+      if (version.version_id in freshness && version.version_id in decisions) {
+        continue;
+      }
       onLoadVersionDetail(version.version_id);
     }
-  }, [versions, onLoadVersionDetail]);
+  }, [versions, freshness, decisions, onLoadVersionDetail]);
 
   /** A refusal keeps the analyst in context and puts the first actionable issue
    * in front of them, rather than leaving them to find it. */
@@ -278,7 +288,7 @@ export function MemoPublishPanel(props: MemoPublishPanelProps) {
                     <div>
                       <p className="memo-version-number">Version {version.version_number}</p>
                       <p className="memo-version-meta">
-                        Published {version.created_at}
+                        Published {displayDate(version.created_at)}
                         {version.prepared_by !== null && <> · {version.prepared_by}</>}
                       </p>
                       <p className="memo-version-meta">
