@@ -15,14 +15,14 @@ whenever an accepted gate merges or the active gate changes.
   institutional report and PDF, and cross-mode browser QA). This is the newest
   commit that changed product behavior. Everything merged after it is
   documentation only.
-- **Documentation-only commits since then:** `17db6f8` (P7.10 Stage 4
-  acceptance, merged through PR #54), and the P7.10 closeout / P7.11 waiver
+- **Documentation-only work since then:** the **P7.10 Stage 4 acceptance
+  documentation merged through PR #54**, and the P7.10 closeout / P7.11 waiver
   record described below. They change status and architecture records only;
   they change no calculation, convention, schema, fingerprint, API contract,
   workbook, or product behavior.
-- **Exact current GitHub `main` commit: `174d3b8`** (the PR #54 merge).
-  Verify this against Git and GitHub before relying on it; if `main` has moved,
-  inspect the intervening merge before updating this file.
+- **This closeout branch started from `main` at `174d3b8`.** That is the branch
+  point, not a claim about where `main` sits once the closeout merges.
+  **Git and GitHub remain operational truth for the current `main` commit.**
 - Last financial-engine implementation merge: `f6f3680` (PR #49, P7.10 Stage
   1 deterministic valuation and `PctOfValue` closing execution).
 - **Active gate: none.** There is currently no active development gate. P7.10
@@ -47,18 +47,21 @@ evidence.
 
 ### P7.10 is closed
 
-- **P7.10 Stage 1 is accepted.**
-- **P7.10 Stage 2 is accepted.**
-- **P7.10 Stage 4 is accepted.**
-- **P7.10 Stage 3 remains deferred and unstarted**, and **Stage 3 is not
-  required for P7.10 closeout.**
 - **P7.10 is closed.**
+- **P7.10 Stages 1, 2, and 4 are implemented and human accepted.**
+- **P7.10 Stage 3 remained deferred and unstarted**, and was **explicitly not
+  required for closeout.** It is not completed, accepted, passed, or fulfilled.
 
 Each stage acceptance was recorded when it was made, on that stage's own
-evidence, and is unchanged by this closeout. Stage 3 — grounded AI proposals —
-was never started: no module, prompt, proposal state, grounding snapshot, or AI
-surface of any kind exists, and two guards prove that absence rather than
-asserting it.
+evidence, and is unchanged by this closeout.
+
+Stage 3 — grounded AI memo proposals — was never started. Specifically, **no
+P7.10 Stage 3 grounded memo-proposal module, prompt, proposal lifecycle,
+grounding snapshot, AI snapshot, or product surface was built**, and two guards
+prove that absence rather than asserting it. This statement is about Stage 3
+only. It says nothing about Anchor's existing AI capability: the AI Analyst
+interpretation and AI-assisted ingestion features remain in the product,
+accepted and unchanged.
 
 **A future grounded-AI proposal feature would require a separately authorized
 new program.** Closing P7.10 neither silently starts nor cancels such a
@@ -87,9 +90,12 @@ neither positive nor negative.
 
 P7.11's original ratified contract is preserved unchanged in
 `docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md` §17.3 and §19.2.
-This closeout does not rewrite it and does not imply it was fulfilled. The
-waiver record is Section 25 of
-`docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`.
+This closeout does not rewrite it and does not imply it was fulfilled.
+
+The P7 authority owns the P7.11 contract and owns its waiver. **The waiver
+record is Section 25 of
+`docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md`.** The P7.10
+document is not the authority for P7.11 and only notes the waiver in passing.
 
 ### What the accepted implementation still rests on
 
@@ -104,7 +110,7 @@ closeout does not present it as one.
 
 This closeout starts nothing. Upload / extraction work, new AI surfaces,
 collaboration expansion, and productionization all remain outside it, as do
-refinancing and recoveries (see **Next Work**).
+Refinancing & Capital Events and Recovery Engine V2 (see **Next Work**).
 
 ## 2026-09-21 P7.10 Stage 4 Acceptance
 
@@ -336,8 +342,9 @@ human instruction recorded above.
 - P7.10 Stage 4 manual-first Investment Committee workstation, immutable
   institutional report and PDF, and cross-mode browser QA, human accepted
 - P7.10 Valuation Timepoints, Investment Memo, and Institutional Reporting,
-  **closed 2026-09-22** on Stages 1, 2 and 4, with Stage 3 deferred and
-  unstarted and not required for closeout
+  **closed 2026-09-22**. Stages 1, 2 and 4 are implemented and human accepted;
+  Stage 3 remained deferred and unstarted and was explicitly not required for
+  closeout — it is not completed, accepted, passed, or fulfilled
 - P7.11 Competition Closeout, **waived and administratively closed 2026-09-22**
   by explicit human decision. It was not run; its fixtures, oracles and
   cross-feature acceptance exercise were not executed
@@ -355,10 +362,17 @@ closeout.** Each would need its own explicit authorization, its own contract,
 and its own gate record before any work begins. Nothing in this file should be
 read as a design decision about either one.
 
+**Recovery Engine V2 is a successor gate, not a first implementation.** Anchor
+already has accepted recovery functionality: the Lease-Level D3 recoveries
+implementation is complete and in the product. Nothing here should be read as
+saying Anchor lacks recovery capability. What is unstarted and unratified is
+specifically Recovery Engine V2.
+
 Also explicitly outside this closeout, and unstarted: upload / extraction work,
-new AI surfaces (including any future grounded-AI proposal feature, which would
-require a separately authorized new program), collaboration expansion, and
-productionization.
+new AI surfaces — meaning surfaces beyond the existing accepted AI Analyst
+interpretation and AI-assisted ingestion, including any future grounded-AI memo
+proposal feature, which would require a separately authorized new program —
+collaboration expansion, and productionization.
 
 A bounded stabilization sweep remains available for separate human
 authorization. It is not automatically active. Its source issues are:
@@ -457,8 +471,11 @@ in the ratified P7 sequence. It remains unstarted and unratified; see
   status notices and later amendments
 - D6: `docs/architecture/D6_BUSINESS_PLAN_CONVENTIONS.md`
 - P7: `docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md` — **P7.1
-  through P7.10 complete and human accepted; P7.11 waived and administratively
-  closed 2026-09-22 without being run.** Its §17.3 fixtures and §19.2 gate
+  through P7.9 complete and human accepted. P7.10 closed 2026-09-22, with
+  Stages 1, 2 and 4 implemented and human accepted and Stage 3 deferred,
+  unstarted, and explicitly not required for closeout. P7.11 waived and
+  administratively closed 2026-09-22 without being run; this document owns the
+  waiver record, in its Section 25.** Its §17.3 fixtures and §19.2 gate
   sequence are preserved as the original ratified contract, not as fulfilled
   work.
 - P7.7 and P7.8 implemented records:
@@ -491,8 +508,9 @@ in the ratified P7 sequence. It remains unstarted and unratified; see
   implementation record and every ratified clarification in Section 22; Stage 4
   implemented, merged, and human accepted at `d7e4d75`, with its implementation
   record and every ratified clarification in Section 23; Stage 3 deferred and
-  unstarted. P7.10 closed 2026-09-22 — closeout record in Section 24, P7.11
-  waiver record in Section 25.**
+  unstarted and explicitly not required for closeout. P7.10 closed 2026-09-22 —
+  closeout record in Section 24. The P7.11 waiver is recorded in Section 25 of
+  the P7 authority, not here.**
 
 ## Historical-Document Rule
 

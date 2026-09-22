@@ -14,16 +14,18 @@ Base: `main` @ `0593baa` (Phase 6 complete)
 Historical branch: `feature/p7-0-competition-decision-architecture`
 History: proposed in commit `4cb24c6`; ratified by the P7.0 ratification patch.
 
-Current-state note: P7.1 through P7.10 are complete and human accepted, with
-P7.10 closed on 2026-09-22 while its Stage 3 (grounded AI proposals) stayed
-deferred and unstarted. **P7.11 Competition Closeout was waived and
-administratively closed by explicit human decision on 2026-09-22 without being
-run.** Its contract below — the five §17.3 acceptance fixtures, the
-cross-feature acceptance exercise, and the independent oracles §21.3 leaves to
-it — is **preserved as the original ratified contract and was not fulfilled**.
-Its closure is a scope decision, not evidence that an unperformed acceptance
-exercise passed. The waiver record is Section 25 of
-`docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`. **There is no active
+Current-state note: **P7.1 through P7.9 are complete and human accepted.**
+**P7.10 is closed** as of 2026-09-22: its Stages 1, 2 and 4 are implemented and
+human accepted, while **Stage 3 (grounded AI memo proposals) remained deferred
+and unstarted and was explicitly not required for closeout** — it is not
+completed, accepted, passed, or fulfilled. **P7.11 Competition Closeout was
+waived and administratively closed by explicit human decision on 2026-09-22
+without being run.** Its contract below — the five §17.3 acceptance fixtures,
+the cross-feature acceptance exercise, and the independent oracles §21.3 leaves
+to it — is **preserved as the original ratified contract and was not
+fulfilled**. Its closure is a scope decision, not evidence that an unperformed
+acceptance exercise passed. This document owns the P7.11 contract and owns its
+waiver; the waiver record is **Section 25 below**. **There is no active
 development gate.** Section 19 remains the ratified dependency and gate
 sequence, not a live completion tracker. See `docs/CURRENT_STATE.md` for the
 active baseline.
@@ -1690,12 +1692,13 @@ Each Tier 1 engine gate records its own engine-scope approval (Q16). Each gate
 is started explicitly; finishing one never starts the next.
 
 The table above is the ratified sequence as it was ratified, preserved intact.
-It is not a status tracker. As of 2026-09-22, P7.1 through P7.10 are complete
-and human accepted, and the **P7.11 row was waived and administratively closed
-without being run** — its fixtures and cross-feature acceptance exercise were
-not executed (see the current-state note above and Section 25 of
-`docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`). The refinancing /
-recapitalization sub-gate remains unstarted and unratified.
+It is not a status tracker. As of 2026-09-22: **P7.1 through P7.9 are complete
+and human accepted**; **P7.10 is closed**, with its Stages 1, 2 and 4
+implemented and human accepted and its Stage 3 deferred, unstarted, and
+explicitly not required for closeout; and the **P7.11 row was waived and
+administratively closed without being run** — its fixtures, oracles and
+cross-feature acceptance exercise were not executed (Section 25). The
+refinancing / recapitalization sub-gate remains unstarted and unratified.
 
 ### 19.3 Two-week near-term objective (Part AI)
 
@@ -1979,3 +1982,92 @@ it, the row records the ratified convention, not the original recommendation.
   and P7.1 is started explicitly. P7.1 must add its own production ledger:
   since the D6.9 ledger was frozen at `0593baa`, no ledger guard holds Phase 7
   production changes yet.
+
+---
+
+## 25. Phase 7 Closeout and P7.11 Waiver — 2026-09-22
+
+This section records an explicit human decision. This document owns the P7.11
+contract (§17.3, §19.2) and therefore owns its waiver. It is a
+**documentation-only** record: it changes no calculation, convention, schema,
+fingerprint, API contract, workbook, or product behavior, and it reports no new
+verification evidence.
+
+### 25.1 Phase 7 gate status
+
+- **P7.1 through P7.9 are complete and human accepted.**
+- **P7.10 is closed.** Its Stages 1, 2 and 4 are implemented and human
+  accepted. Its **Stage 3 (grounded AI memo proposals) remained deferred and
+  unstarted and was explicitly not required for closeout**; it is not
+  completed, accepted, passed, or fulfilled. The P7.10 closeout record is
+  Section 24 of `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`.
+- **P7.11 is waived and administratively closed.**
+- **There is no active development gate.**
+
+### 25.2 The P7.11 decision
+
+On **2026-09-22** the human explicitly decided that **P7.11 Competition
+Closeout is waived and administratively closed.** It was not run.
+
+The original P7.11 contract is preserved unchanged: the five acceptance
+fixtures in §17.3, the gate-sequence row in §19.2, and the open question §21.3
+leaves to P7.11 all stand exactly as ratified. This section does not rewrite
+them and does not imply they were fulfilled.
+
+### 25.3 What was not done
+
+To state it without ambiguity:
+
+- **P7.11 was not run.**
+- **Its five §17.3 fixtures were not executed or passed.** They were not built,
+  not run, and not passed.
+- **Its independent source-model oracles were not built or consulted.** The
+  question §21.3 assigns to P7.11 — the sources of the independent acceptance
+  oracles — was never answered, because the gate that would answer it never
+  began.
+- **Its cross-feature acceptance exercise was not performed.**
+
+No claim to the contrary appears anywhere in this repository's live status
+documents, and none may be added.
+
+### 25.4 A scope decision, not acceptance evidence
+
+**P7.11's administrative closure is a scope decision, not acceptance
+evidence.** The gate is closed because the human decided not to run it, not
+because it ran and succeeded. Anyone reading this record later should treat the
+P7.11 acceptance evidence as **absent** — neither positive nor negative.
+
+In particular, the §18 "ANCHOR COMPETITION READY" definition is a ratified
+target, and this waiver makes no claim that the end-to-end archetype exercise
+it describes was carried out.
+
+### 25.5 What the accepted implementation does rest on
+
+Waiving P7.11 withdraws no evidence that already exists. The accepted P7
+implementation remains supported by:
+
+- the gate-specific automated evidence recorded for each accepted gate —
+  targeted and financial-identity tests, neutral and parity oracles,
+  conservation identities, focused mutation proofs, architecture and
+  source-text guards, persistence round-trips, and compatibility oracles;
+- the completed acceptance sweeps already recorded in
+  `docs/CURRENT_STATE.md`, including the 2026-09-20 isolated acceptance sweep
+  over the merged product and the P7.10 Stage 4 cross-mode browser and
+  rendered-PDF QA; and
+- the human acceptances already recorded for each gate.
+
+That evidence is gate-scoped. It is not a substitute for the cross-feature
+exercise P7.11 described, and this record does not present it as one.
+
+### 25.6 What this record does not start
+
+It starts nothing. The refinancing / recapitalization sub-gate in §19.2 remains
+unstarted and unratified, as do Refinancing & Capital Events and Recovery
+Engine V2. Recovery Engine V2 is a **successor** gate: Anchor's accepted
+Lease-Level D3 recovery implementation already exists in the product, and
+nothing here says otherwise.
+
+A future grounded-AI memo-proposal capability would require a **separately
+authorized new program**; this record neither starts nor cancels one, and it
+says nothing about Anchor's existing accepted AI Analyst interpretation and
+AI-assisted ingestion features, which are unaffected.
