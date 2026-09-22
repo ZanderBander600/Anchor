@@ -57,13 +57,18 @@ def db(tmp_path: Path) -> Path:
 # =============================================================================
 
 
-def test_a_fresh_store_is_schema_15_with_nineteen_empty_p7_10_tables(db: Path) -> None:
+def test_a_fresh_store_is_current_with_stage_2s_nineteen_empty_p7_10_tables(
+    db: Path,
+) -> None:
     store.list_deals(db_path=db)
     connection = sqlite3.connect(db)
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     connection.close()
 
-    assert version == 15
+    # **Re-pinned at P7.10 Stage 4.** A fresh store is at *the current* schema
+    # version, not at a number this file freezes: Stage 2's claim is that its
+    # own nineteen tables are created empty, and that is asserted below by name.
+    assert version == store._SCHEMA_VERSION
     assert set(P7_10_TABLES) <= table_names(db)
     assert len(P7_10_TABLES) == 19
     assert {table: fx.row_count(db, table) for table in P7_10_TABLES} == dict.fromkeys(

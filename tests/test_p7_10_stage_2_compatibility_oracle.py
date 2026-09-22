@@ -7,7 +7,12 @@ Section 15.3 (P-10, P-11). Stage 2 advances the schema exactly once and adds a
 valuation and memo layer downstream of everything, so:
 
 - the v14 -> v15 migration adds exactly sixteen empty tables, alters none,
-  rewrites no row, and is idempotent;
+  rewrites no row, and is idempotent. **Re-pinned at P7.10 Stage 4:** a v14
+  database now migrates in one pass to the current schema version, because
+  SQLite's version gate runs every additive step at once. Stage 2's sixteen
+  tables are still asserted by name; what is no longer asserted is that the
+  journey stops at 15, which was never Stage 2's claim to make about later
+  gates;
 - every response the v14 tree recorded -- Deals in all three operating modes,
   the visible Investment, the Capital Structure and Partnership surfaces, every
   Scenario, Strategy, variant fingerprint and analysis, the three Decision
@@ -46,6 +51,14 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _BUILDER = Path(__file__).resolve().parent / "_p7_10_v14_baseline_builder.py"
 #: ``main`` when Stage 2 began: the P7.10 Stage 1 acceptance closeout (PR #50).
 _BASELINE_COMMIT = "46650a7"
+
+#: **Added at P7.10 Stage 4.** Tables later accepted gates add to the same
+#: v14 -> current path. A v14 database migrated by today's tree arrives at
+#: today's schema, so the set of added tables is Stage 2's sixteen *plus* these;
+#: naming them keeps this an exact claim ("these and nothing else") rather than
+#: a loosened one, and each is proved additive by its own gate's oracle --
+#: Stage 4's is ``tests/test_p7_10_stage_4_compatibility_oracle.py``.
+_LATER_GATE_TABLES = frozenset({"memo_version_report_artifacts"})
 
 
 @pytest.fixture(scope="module")
@@ -149,7 +162,7 @@ def test_the_baseline_is_the_v14_tree_and_holds_no_p7_10_record(
 # =============================================================================
 
 
-def test_the_migration_adds_exactly_sixteen_empty_tables_and_rewrites_nothing(
+def test_the_migration_adds_stage_2s_sixteen_empty_tables_and_rewrites_nothing(
     legacy: tuple[Path, dict[str, Any]]
 ) -> None:
     db, _ = legacy
@@ -158,30 +171,39 @@ def test_the_migration_adds_exactly_sixteen_empty_tables_and_rewrites_nothing(
     store.list_deals(db_path=db)  # any store call migrates
     migrated_schema, migrated_rows = _schema(db), _every_row(db)
 
-    assert _version(db) == 15
+    assert _version(db) == store._SCHEMA_VERSION
     added = {name: migrated_schema[name] for name in set(migrated_schema) - set(before_schema)}
     expected = set(P7_10_TABLES)
-    assert {name for name, (kind, _, _) in added.items() if kind == "table"} == expected
+    every_added = expected | _LATER_GATE_TABLES
+    assert {name for name, (kind, _, _) in added.items() if kind == "table"} == every_added
     # Every other new object is one of those tables' own key indexes.
-    assert {table for _, table, _ in added.values()} == expected
+    assert {table for _, table, _ in added.values()} == every_added
     assert {kind for kind, _, _ in added.values()} == {"table", "index"}
     # No table, index or column that existed was altered.
     assert set(before_schema) <= set(migrated_schema)
     assert {name: migrated_schema[name] for name in before_schema} == before_schema
     # Every new table arrives empty, and every pre-existing row is untouched.
-    assert {table: migrated_rows[table] for table in expected} == dict.fromkeys(expected, [])
+    assert {table: migrated_rows[table] for table in every_added} == dict.fromkeys(every_added, [])
     assert {table: migrated_rows[table] for table in before_rows} == before_rows
 
     # Idempotent: repeated connections and an explicit re-migration change nothing.
     for _ in range(3):
         store.list_deals(db_path=db)
-        assert (_version(db), _schema(db), _every_row(db)) == (15, migrated_schema, migrated_rows)
+        assert (_version(db), _schema(db), _every_row(db)) == (
+            store._SCHEMA_VERSION,
+            migrated_schema,
+            migrated_rows,
+        )
     connection = sqlite3.connect(db)
     connection.row_factory = sqlite3.Row
     store._migrate(connection)
     connection.commit()
     connection.close()
-    assert (_version(db), _schema(db), _every_row(db)) == (15, migrated_schema, migrated_rows)
+    assert (_version(db), _schema(db), _every_row(db)) == (
+        store._SCHEMA_VERSION,
+        migrated_schema,
+        migrated_rows,
+    )
 
 
 def test_the_migration_statement_alters_and_drops_nothing(
@@ -240,7 +262,7 @@ def test_every_recorded_response_is_identical(
     db, manifest = legacy
     replayed = _replay(client, manifest["exchanges"])
 
-    assert _version(db) == 15
+    assert _version(db) == store._SCHEMA_VERSION
     mismatched = [
         (exchange["method"], exchange["path"])
         for exchange, now in zip(manifest["exchanges"], replayed, strict=True)

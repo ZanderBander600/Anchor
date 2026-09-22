@@ -41,7 +41,14 @@ _STAGE_2_MERGE = "ababa50"
 
 _API = "src/anchor/api.py"
 _REPORTING = "src/anchor/reporting"
-_REPORTING_NAMES = ("__init__", "contracts", "assembly", "pdf")
+_REPORTING_NAMES = ("__init__", "contracts", "artifact", "assembly", "pdf")
+#: Stage 4 Correction 1 reaches two accepted Stage 2 modules, and only for the
+#: atomic publication of the report artifact: schema 16's one additive table and
+#: the transaction that writes it. Neither memo, fingerprint, evidence,
+#: staleness nor financial rule is touched, which
+#: ``test_correction_1_changed_only_the_publication_seam`` measures.
+_STORE = "src/anchor/deals/store.py"
+_DEPENDENCIES = "src/anchor/deals/memo_dependencies.py"
 _REPORTING_MODULES = tuple(f"{_REPORTING}/{name}.py" for name in _REPORTING_NAMES)
 _ASSEMBLY = f"{_REPORTING}/assembly.py"
 _PDF = f"{_REPORTING}/pdf.py"
@@ -65,6 +72,12 @@ _STAGE_4_WEB_NEW = frozenset(
         "web/src/components/MemoValuationPanel.tsx",
         "web/src/components/MemoPublishPanel.tsx",
         "web/src/components/MemoReportView.tsx",
+        # Correction 2: the in-application confirmation that replaced the
+        # native dialog the gate forbids.
+        "web/src/components/ConfirmDialog.tsx",
+        # Correction 3: the one loading abstraction the six asynchronous flows
+        # now share, so Stage 4 adds no lint warning.
+        "web/src/useAsyncResource.ts",
     }
 )
 
@@ -79,7 +92,9 @@ _STAGE_4_WEB_EDITED = frozenset(
 )
 
 _STAGE_4_PRODUCTION_FILES = (
-    frozenset({*_REPORTING_MODULES, _API}) | _STAGE_4_WEB_NEW | _STAGE_4_WEB_EDITED
+    frozenset({*_REPORTING_MODULES, _API, _STORE, _DEPENDENCIES})
+    | _STAGE_4_WEB_NEW
+    | _STAGE_4_WEB_EDITED
 )
 
 #: Consumed and never changed. Every financial module, both accepted P7.10
@@ -99,7 +114,6 @@ _UNCHANGED = (
     "src/anchor/decision",
     "src/anchor/valuation",
     "src/anchor/memo",
-    "src/anchor/deals",
     "src/anchor/contracts.py",
     "src/anchor/validation.py",
     "src/anchor/formatting.py",
@@ -128,6 +142,16 @@ def _changes_since(base: str, *paths: str) -> set[str]:
     tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
     untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
     return {path for path in (*tracked, *untracked) if path}
+
+
+def _added_lines(base: str, path: str) -> list[str]:
+    """Every line this gate added to one file, without its context."""
+
+    return [
+        line[1:]
+        for line in _git("diff", "--no-renames", "-U0", base, "--", path).splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
 
 
 def _current(path: str) -> str:
@@ -197,15 +221,66 @@ def test_the_ledger_names_real_files_rather_than_patterns() -> None:
         assert (_PROJECT_ROOT / path).is_file(), f"{path} is in the ledger but not on disk"
 
 
-def test_stage_4_adds_no_migration_and_no_schema_change() -> None:
-    """Stage 4 stores nothing. It reads the Stage 2 schema and adds no table, no
-    version bump and no migration: a presentation gate that moved the schema
-    would be doing something other than presentation."""
+def test_schema_16_adds_exactly_one_table_and_alters_none() -> None:
+    """Correction 1's schema advance, measured.
 
-    store = _current("src/anchor/deals/store.py")
-    assert "src/anchor/deals/store.py" not in _changes_since(_STAGE_4_BASE, "src/anchor/deals")
-    # And the schema version the accepted Stage 2 set is still what ships.
-    assert "SCHEMA_VERSION = 15" in store or "_SCHEMA_VERSION = 15" in store
+    One additive table, one version bump, and no ``ALTER`` of anything that
+    existed: the migration's own reasoning is that the safest migration is the
+    one that touches no existing data, and this is that migration one more
+    time."""
+
+    source = _current(_STORE)
+    assert "_SCHEMA_VERSION = 16" in source
+
+    added = _added_lines(_STAGE_4_BASE, _STORE)
+    created = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", "\n".join(added))
+    assert created == ["memo_version_report_artifacts"], created
+
+    # Nothing existing is altered, dropped or rewritten by this gate.
+    for forbidden in ("ALTER TABLE", "DROP TABLE", "DROP COLUMN"):
+        assert not any(forbidden in line for line in added), forbidden
+
+    # And no UPDATE against anything a published version owns.
+    for line in added:
+        assert not re.search(r"UPDATE\s+memo_version", line, re.IGNORECASE), line
+
+
+def test_the_report_artifact_is_write_once() -> None:
+    """A published artifact is never updated or individually deleted.
+
+    It goes only when the whole Investment does, which is exactly how the
+    version rows it belongs to behave."""
+
+    source = _current(_STORE)
+    assert not re.search(r"UPDATE\s+memo_version_report_artifacts", source, re.IGNORECASE)
+    assert not re.search(
+        r"DELETE\s+FROM\s+memo_version_report_artifacts", source, re.IGNORECASE
+    )
+    # It is deleted only through the shared child-table loop.
+    assert '"memo_version_report_artifacts",' in source
+    assert source.count("INSERT INTO memo_version_report_artifacts") == 1
+
+
+def test_correction_1_changed_only_the_publication_seam() -> None:
+    """Stage 4 may change the accepted Stage 2 orchestration only as far as the
+    atomic artifact creation requires, and no further.
+
+    Measured on what the diff added to each file: the store gains the table and
+    the one insert, and the dependency module gains the assembly call. Neither
+    gains a memo rule, a fingerprint, an evidence rule, a staleness rule or a
+    financial rule."""
+
+    for path in (_STORE, _DEPENDENCIES):
+        added = "\n".join(_added_lines(_STAGE_4_BASE, path))
+        for forbidden in (
+            "fingerprint_memo_content(",
+            "fingerprint_published_version(",
+            "def publication_refusals",
+            "def freshness",
+            "def version_freshness",
+            "MemoDependencyClass.",
+        ):
+            assert forbidden not in added, f"{path} changed a Stage 2 rule: {forbidden}"
 
 
 # =============================================================================
@@ -538,9 +613,10 @@ def test_the_pdf_route_takes_a_version_and_refuses_anything_else() -> None:
     }
     export = functions["export_memo_version_pdf"]
     body = ast.unparse(export)
-    # It goes through the export door, never the plain assembler and never the
-    # draft preview.
-    assert "assemble_version_report_for_export" in body
+    # It returns the *stored* bytes and renders nothing: a re-render would be a
+    # different document wearing the same version number.
+    assert "read_version_pdf" in body
+    assert "render_memo_pdf" not in body
     assert "assemble_draft_preview" not in body
     assert "PdfExportRefusedError" in body
 
@@ -550,13 +626,42 @@ def test_the_pdf_route_takes_a_version_and_refuses_anything_else() -> None:
 
 
 def test_the_export_door_cannot_be_handed_a_draft() -> None:
-    """The refusal exists in the assembler, not only in the route, so no future
-    caller can route around it."""
+    """The refusals exist in the assembly layer, not only in the route, so no
+    future caller can route around them."""
 
     body = _code_only(_current(_ASSEMBLY))
-    assert "def assemble_version_report_for_export" in body
+    assert "def read_version_pdf" in body
     assert "DRAFT_NOT_EXPORTABLE" in body
     assert "VERSION_NOT_FOUND" in body
+    assert "REPORT_SNAPSHOT_NOT_AVAILABLE" in body
+
+
+def test_the_published_read_never_recomputes() -> None:
+    """The one structural guarantee behind Correction 1.
+
+    Reading a published version touches the stored artifact and nothing else:
+    it resolves no variant, runs no analysis and assembles no package. A read
+    path that could assemble is a read path that could drift."""
+
+    tree = ast.parse(_current(_ASSEMBLY))
+    functions = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
+    for name in ("read_version_report", "read_version_pdf"):
+        body = ast.unparse(functions[name])
+        for forbidden in (
+            "_analysis_for",
+            "analysis_for_selected_cell",
+            "build_version_package",
+            "analyze_structured",
+            "_key_metrics",
+        ):
+            assert forbidden not in body, f"{name} recomputes: {forbidden}"
+        assert "get_memo_version_artifact" in body
+
+    # And the builder is called from exactly one place: publication.
+    dependencies = _current(_DEPENDENCIES)
+    assert dependencies.count("build_version_package(") == 1
 
 
 def test_the_report_routes_are_read_only() -> None:
@@ -590,9 +695,14 @@ def test_the_recommendation_and_the_committee_decision_are_separate_fields() -> 
     assert "committee_decision" in source
 
     assembly = _code_only(_current(_ASSEMBLY))
-    # The committee's outcome is read from its own record, never from the
-    # analyst's recommendation.
-    assert "get_committee_decision" in assembly
+    # The frozen report carries no committee outcome at all: the committee
+    # decides *after* publication, so its decision is not among the facts the
+    # version froze. It is never derived from the analyst's recommendation
+    # either -- the field is simply `None`, and the workspace shows the stored
+    # decision beside the document.
+    assert "committee_decision=None" in assembly.replace(" ", "").replace(
+        "committee_decision=None", "committee_decision=None"
+    ) or "committee_decision=None" in assembly
     assert "committee_decision=analyst" not in assembly.replace(" ", "")
 
     # The two label tables share no member, so no code path can substitute one.

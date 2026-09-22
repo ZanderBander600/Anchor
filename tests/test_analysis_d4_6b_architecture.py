@@ -186,6 +186,14 @@ _P7_10_STAGE_4_WEB = frozenset(
         "web/src/components/MemoValuationPanel.tsx",
         "web/src/components/MemoPublishPanel.tsx",
         "web/src/components/MemoReportView.tsx",
+        # Added at the Stage 4 independent review. ``ConfirmDialog.tsx`` is the
+        # accessible confirmation that replaced the workflow's native
+        # ``window.confirm`` (Correction 2); ``useAsyncResource.ts`` is the one
+        # loading abstraction the memo hooks and the workspace share
+        # (Correction 3). Neither carries a figure: one renders the analyst's
+        # own words back to them, the other holds a request's status.
+        "web/src/components/ConfirmDialog.tsx",
+        "web/src/useAsyncResource.ts",
     }
 )
 

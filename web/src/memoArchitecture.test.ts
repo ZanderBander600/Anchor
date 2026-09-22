@@ -51,6 +51,11 @@ const MEMO_MODULES = [
   'components/MemoValuationPanel.tsx',
   'components/MemoPublishPanel.tsx',
   'components/MemoReportView.tsx',
+  // Added at the Stage 4 independent review: Correction 2's in-application
+  // confirmation and Correction 3's one loading abstraction. Both are Stage 4
+  // production modules and are held to every rule below.
+  'components/ConfirmDialog.tsx',
+  'useAsyncResource.ts',
 ];
 
 function parse(fileName: string, text: string): ts.SourceFile {
@@ -139,6 +144,14 @@ const ALLOWED_COMPUTATION = new Set([
   'at - 1',
   'at + 1',
   'order.length - 1',
+  // `ConfirmDialog`'s focus trap: the last focusable control in the dialog, so
+  // Tab wraps to the first instead of escaping the modal. A list index, like
+  // the three above, and no more financial than they are.
+  'focusable.length - 1',
+  // A reload counter. `useAsyncResource` and the report preview each bump one
+  // to ask for the same key again after a failure or a publication; it names no
+  // quantity and is never shown.
+  'count + 1',
 ]);
 
 /** The comparison `sort` uses to restore the analyst's own stored order.
@@ -176,7 +189,7 @@ describe('P7.10 Stage 4 -- the memo UI computes nothing', () => {
 
   it('the allowlist admits only list navigation, never a figure', () => {
     for (const allowed of ALLOWED_COMPUTATION) {
-      expect(allowed).toMatch(/^(at|order\.length) [+-] 1$/);
+      expect(allowed).toMatch(/^(at|count|order\.length|focusable\.length) [+-] 1$/);
     }
     expect(ALLOWED_SORT).toContain('display_order');
   });
@@ -401,5 +414,108 @@ describe('P7.10 Stage 4 -- presentation stays free of implementation vocabulary'
     const report = sourceOf('components/MemoReportView.tsx');
     expect(report).toContain('Verification code');
     expect(report).toContain('verification_code');
+  });
+});
+
+describe('P7.10 Stage 4 -- no native browser dialog (Correction 2)', () => {
+  /** `confirm`, `alert` and `prompt`, however they are reached: on `window`, on
+   * `globalThis`, or bare. */
+  const NATIVE_DIALOG = /(^|[^.\w])(window|globalThis)\s*\.\s*(confirm|alert|prompt)\s*\(|(^|[^.\w])(confirm|alert|prompt)\s*\(/;
+
+  it.each(MEMO_MODULES)('%s opens no native dialog', (module) => {
+    // Comments are stripped first: `ConfirmDialog` explains at length *why*
+    // `confirm()` is gone, and that explanation must not be what fails here.
+    const code = sourceOf(module)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    expect(code).not.toMatch(NATIVE_DIALOG);
+  });
+
+  it('would see each of the three, however it is reached', () => {
+    for (const seeded of [
+      'if (window.confirm("go?")) { run(); }',
+      'globalThis.alert("done");',
+      'const name = prompt("name?");',
+      'if (confirm("go?")) { run(); }',
+    ]) {
+      expect(seeded).toMatch(NATIVE_DIALOG);
+    }
+    // And it is not so broad that any call trips it.
+    expect('const answer = await confirmSwitch();').not.toMatch(NATIVE_DIALOG);
+    expect('setPendingMemo(entry);').not.toMatch(NATIVE_DIALOG);
+  });
+
+  it('the memo flow in App.tsx opens none either', () => {
+    // `App.tsx` is a shared file nine gates deep, and older workspaces do use
+    // `window.confirm`. This measures the memo functions Stage 4 added, by
+    // name, rather than the whole file -- and finds a native dialog in any of
+    // them if one ever returns.
+    const source = sourceOf('App.tsx');
+    const tree = parse('App.tsx', source);
+    const memoFunctions: string[] = [];
+    walk(tree, (node) => {
+      if (ts.isFunctionDeclaration(node) && node.name !== undefined && /Memo/.test(node.name.text)) {
+        memoFunctions.push(node.getText(tree));
+      }
+    });
+    expect(memoFunctions.length).toBeGreaterThanOrEqual(4);
+    for (const body of memoFunctions) {
+      expect(body).not.toMatch(NATIVE_DIALOG);
+    }
+  });
+
+  it('the confirmation it uses instead is the accessible one', () => {
+    const app = sourceOf('App.tsx');
+    expect(app).toContain("import { ConfirmDialog } from './components/ConfirmDialog'");
+    expect(app).toContain('<ConfirmDialog');
+
+    const dialog = sourceOf('components/ConfirmDialog.tsx');
+    // Announced as a modal dialog, labelled and described by its own content.
+    expect(dialog).toContain('role="dialog"');
+    expect(dialog).toContain('aria-modal="true"');
+    expect(dialog).toContain('aria-labelledby');
+    expect(dialog).toContain('aria-describedby');
+    // Escape cancels, focus is trapped, and the safe action is the focused one.
+    expect(dialog).toContain("event.key === 'Escape'");
+    expect(dialog).toContain('cancelRef.current?.focus()');
+    expect(dialog).toContain('event.preventDefault()');
+    // Focus goes back where it came from.
+    expect(dialog).toContain('openerRef.current');
+  });
+});
+
+describe('P7.10 Stage 4 -- one loading abstraction (Correction 3)', () => {
+  it('every memo loading flow goes through it', () => {
+    for (const module of ['useInvestmentMemo.ts', 'useMemoLibrary.ts', 'components/MemoWorkspace.tsx']) {
+      expect(sourceOf(module)).toContain('useAsyncResource');
+    }
+  });
+
+  it('loading is derived during render, never set from an effect', () => {
+    // The lint rule this satisfies is `react(set-state-in-effect)`, and the fix
+    // is structural rather than suppressed: nothing sets loading state in an
+    // effect, because loading *is* "the settled key is not the asked-for key".
+    const hook = sourceOf('useAsyncResource.ts');
+    expect(hook).toContain('settled.key !== key');
+    expect(hook).not.toContain('setIsLoading');
+    expect(hook).not.toContain('eslint-disable');
+    expect(hook).not.toContain('oxlint-disable');
+  });
+
+  it('a stale response cannot overwrite a newer one', () => {
+    // The request-loop fix and the cancellation it replaced are both still
+    // here: a resolved promise writes only if it is still the current request.
+    const hook = sourceOf('useAsyncResource.ts');
+    expect(hook).toContain('cancelled');
+  });
+
+  it('no memo module suppresses a lint rule', () => {
+    for (const module of MEMO_MODULES) {
+      const source = sourceOf(module);
+      expect(source).not.toContain('eslint-disable');
+      expect(source).not.toContain('oxlint-disable');
+      expect(source).not.toContain('@ts-ignore');
+      expect(source).not.toContain('@ts-expect-error');
+    }
   });
 });
