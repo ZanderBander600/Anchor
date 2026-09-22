@@ -38,6 +38,17 @@ _STAGE_2_BASE = "46650a7"
 #: The accepted P7.10 Stage 1 merge (PR #49). The valuation package is frozen at
 #: it, and Stage 2 edits none of it.
 _STAGE_1_MERGE = "f6f36803cdcb646aa8a4af8cfc658a0e368ae58e"
+#: **Re-pinned at P7.10 Stage 4.** Stage 2's own merge (PR #51). Until Stage 4
+#: this file measured the working tree, because Stage 2 was the gate in
+#: progress; now that it is merged and accepted, its ledger measures its own
+#: committed range ``46650a7..ababa50`` instead.
+#:
+#: The claim is unchanged and in fact stronger: it was "Stage 2 has changed only
+#: these files so far", and it is now "Stage 2 changed exactly these files",
+#: which no later gate can move. Nothing was weakened to accommodate Stage 4 --
+#: Stage 4's own ledger is ``tests/test_p7_10_stage_4_architecture.py``, and it
+#: is what holds Stage 4 to its scope.
+_STAGE_2_MERGE = "ababa50"
 
 _API = "src/anchor/api.py"
 _STORE = "src/anchor/deals/store.py"
@@ -132,19 +143,39 @@ def _is_production(path: str) -> bool:
 
 
 def _changes_since(base: str, *paths: str) -> set[str]:
-    """Committed, staged, unstaged and untracked changes since ``base``.
+    """Every path Stage 2 changed, measured across its own committed range.
 
-    Stage 2's own ledger reads the working tree, because Stage 2 has not been
-    merged. A later gate re-pins this to Stage 2's committed range, exactly as
-    Stage 2 re-pinned Stage 1's."""
+    **Re-pinned at P7.10 Stage 4.** This read the working tree while Stage 2 was
+    the gate in progress; it now reads ``46650a7..ababa50``, so it keeps proving
+    what Stage 2 changed however later gates move the tree. The untracked sweep
+    is gone with it: a merged range has nothing untracked in it."""
 
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+    return {
+        path
+        for path in _git(
+            "diff", "--name-only", "--no-renames", base, _STAGE_2_MERGE, "--", *paths
+        ).split()
+        if path
+    }
 
 
 def _current(path: str) -> str:
     return (_PROJECT_ROOT / path).read_bytes().decode("utf-8").replace("\r\n", "\n")
+
+
+def _as_merged(path: str) -> str:
+    """The file as Stage 2 merged it, at ``ababa50``.
+
+    **Added at P7.10 Stage 4.** A handful of guards below make claims about what
+    *Stage 2's own migration and modules* did -- how far the schema advanced,
+    which tables that advance created, which libraries this gate reached for.
+    Those are historical facts about a merged gate, and reading the working tree
+    for them turns them into claims about whatever gate is in progress, which is
+    not what they were written to prove. They read Stage 2's merge instead, so
+    they keep proving exactly what they always proved. Stage 4's own additions
+    are held by ``tests/test_p7_10_stage_4_architecture.py``."""
+
+    return _git("show", f"{_STAGE_2_MERGE}:{path}").replace("\r\n", "\n")
 
 
 def _tree(path: str) -> ast.Module:
@@ -331,7 +362,27 @@ _LATER_STAGE = re.compile(
 @pytest.mark.parametrize("path", sorted(_STAGE_2_PRODUCTION_FILES))
 def test_no_stage_3_or_stage_4_identifier(path: str) -> None:
     source = _current(path)
-    region = _p7_10_region(source) if path in {_API, _STORE, _FINGERPRINT, _CONTRACTS, _STRUCTURED} else source
+    # **Re-pinned at P7.10 Stage 4.** The region runs from Stage 2's own marker
+    # to Stage 4's, where there is one: ``api.py`` now carries both gates, and a
+    # slice that ran to end-of-file would read Stage 4's PDF routes as Stage 2
+    # identifiers. Stage 4's own guard holds Stage 4's region.
+    region = (
+        _p7_10_region(source)
+        if path in {_API, _STORE, _FINGERPRINT, _CONTRACTS, _STRUCTURED}
+        else source
+    )
+    # **Re-pinned at P7.10 Stage 4 (Correction 1).** The region stops at Stage
+    # 4's own marker wherever one appears: `api.py`, `store.py` and
+    # `memo_dependencies.py` now carry both gates, and a slice that ran to
+    # end-of-file would read Stage 4's report and PDF identifiers as Stage 2's.
+    # Stage 4's own guard holds Stage 4's region.
+    for stage_4_marker in (
+        "Phase 7 Gate P7.10 Stage 4",
+        "P7.10 Stage 4",
+        "Stage 4 Correction 1",
+    ):
+        if stage_4_marker in region:
+            region = region[: region.index(stage_4_marker)]
     offenders = sorted(
         name for name in _identifiers(ast.parse(source)) if _LATER_STAGE.search(name)
     )
@@ -352,7 +403,18 @@ def test_no_stage_2_module_imports_an_ai_or_document_library() -> None:
         r"|(^|\.)ai(\.|$)|(^|\.)ingestion(\.|$)"
     )
     for path in _NEW_MODULES:
-        assert not {module for module in _imports(_tree(path)) if forbidden.search(module)}, path
+        # **Re-pinned at P7.10 Stage 4.** ``memo_dependencies.py`` is the one
+        # Stage 2 module Stage 4's ratified publication seam reaches: publishing
+        # now generates the immutable report and PDF inside the same
+        # transaction, so the module function-locally imports
+        # ``anchor.reporting``, which reaches ReportLab and pypdf. That is Stage
+        # 4 document *generation* at publication, not a Stage 2 import, and
+        # Stage 4's own guards hold it -- so this guard reads the module as
+        # Stage 2 merged it and keeps proving that *Stage 2* reached for no such
+        # library. Every other module is still measured in the working tree.
+        source = _as_merged(path) if path == _DEPENDENCIES else _current(path)
+        imported = _imports(ast.parse(source))
+        assert not {module for module in imported if forbidden.search(module)}, path
 
 
 def test_the_memo_package_names_no_ai_proposal_shape() -> None:
@@ -618,8 +680,14 @@ def test_the_api_reports_an_unavailable_valuation_with_a_200() -> None:
 # =============================================================================
 
 
-def test_the_store_declares_exactly_one_schema_version_and_it_is_fifteen() -> None:
-    store = _current(_STORE)
+def test_the_store_declared_exactly_one_schema_version_and_it_was_fifteen() -> None:
+    """**Re-pinned at P7.10 Stage 4.** Stage 2 advanced the schema from 14 to
+    15, exactly once, and it still did: the claim is measured at Stage 2's
+    merge, where it is settled, rather than in a tree later gates advance.
+    Stage 4's own single advance to 16 is proved by
+    ``test_schema_16_adds_exactly_one_table_and_alters_none``."""
+
+    store = _as_merged(_STORE)
     versions = re.findall(r"^_SCHEMA_VERSION = (\d+)$", store, re.MULTILINE)
     assert versions == ["15"]
     assert "_SCHEMA_VERSION = 14" in _git("show", f"{_STAGE_2_BASE}:{_STORE}")
@@ -628,11 +696,15 @@ def test_the_store_declares_exactly_one_schema_version_and_it_is_fifteen() -> No
 def test_the_migration_alters_and_drops_nothing_new() -> None:
     """Purely additive: this gate's diff adds no ALTER and no DROP, and every
     new table is created through the unconditional ``CREATE TABLE IF NOT
-    EXISTS`` path."""
+    EXISTS`` path.
+
+    **Re-pinned at P7.10 Stage 4**, like the ledger above: measured across
+    ``46650a7..ababa50``, so it proves what Stage 2's migration did rather than
+    what the working tree's does."""
 
     added = [
         line
-        for line in _git("diff", _STAGE_2_BASE, "--", _STORE).splitlines()
+        for line in _git("diff", _STAGE_2_BASE, _STAGE_2_MERGE, "--", _STORE).splitlines()
         if line.startswith("+") and not line.startswith("+++")
     ]
     for line in added:
@@ -658,9 +730,14 @@ def test_the_migration_alters_and_drops_nothing_new() -> None:
 def test_every_new_table_is_registered_on_the_connection() -> None:
     """A table created only in a migration branch would be missing from a fresh
     database. Every one is created unconditionally, like every table since
-    version 2."""
+    version 2.
 
-    store = _current(_STORE)
+    **Re-pinned at P7.10 Stage 4**, which appends a twentieth table to the same
+    P7.10 region of ``store.py``. Read at Stage 2's merge, this still counts
+    Stage 2's nineteen; Stage 4's table is registered the same way and proved by
+    its own guard."""
+
+    store = _as_merged(_STORE)
     connect = store[store.index("def _connect("):store.index("def _utc_now_iso(")]
     declared = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", _p7_10_region(store)))
     assert len(declared) == 19
@@ -720,6 +797,19 @@ def test_no_upstream_layer_imports_the_memo_package() -> None:
 def test_exactly_the_authorized_routes_are_added() -> None:
     from anchor.api import app
 
+    # **Re-pinned at P7.10 Stage 4.** Stage 4 added four read-only presentation
+    # routes over the same nouns -- the library, the draft preview, one
+    # version's report and the PDF. They are named here and excluded, so this
+    # guard keeps proving *Stage 2's* twenty-four routes exactly rather than
+    # being widened into a list of whatever the app happens to serve. Stage 4's
+    # own routes are held by ``tests/test_p7_10_stage_4_architecture.py``.
+    stage_4_routes = {
+        "/memo-library",
+        "/investments/{investment_id}/memo/report-preview",
+        "/investments/{investment_id}/memo-versions/{version_id}/report",
+        "/investments/{investment_id}/memo-versions/{version_id}"
+        "/exports/investment-memo.pdf",
+    }
     routes = {
         (method, route.path)  # type: ignore[attr-defined]
         for route in app.routes
@@ -728,6 +818,7 @@ def test_exactly_the_authorized_routes_are_added() -> None:
             word in str(getattr(route, "path", ""))
             for word in ("valuation-timepoint", "valuation-views", "evidence-references", "/memo")
         )
+        and str(getattr(route, "path", "")) not in stage_4_routes
     }
     assert routes == {
         ("GET", "/investments/{investment_id}/valuation-timepoints"),

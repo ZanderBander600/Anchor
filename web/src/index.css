@@ -8822,3 +8822,1472 @@ body {
     flex-basis: 100%;
   }
 }
+
+/* =====================================================================
+   Phase 7 Gate P7.10 Stage 4 -- the Investment Committee memo workspace
+   and the institutional report on screen.
+
+   Built on the existing V3 tokens rather than a second palette: the memo is
+   part of the product, not a microsite. The one addition is a restrained
+   navy/teal report treatment, which is the accepted concept's visual
+   character and is scoped to `.memo-report` so it cannot leak into the
+   underwriting surfaces.
+
+   Responsive contract: 1440px desktop and 390px mobile are both required
+   product surfaces. Nothing here sets a fixed width on a container; every
+   dense table scrolls inside its own region, so a wide financial table never
+   widens the page.
+   ===================================================================== */
+
+:root {
+  --memo-navy: #1b2a41;
+  --memo-navy-soft: #33455f;
+  --memo-teal: #1f6f78;
+  --memo-rule: #c9d4df;
+  --memo-panel: #eef3f7;
+  --memo-panel-edge: #d8e2eb;
+  --memo-band: #f6f9fb;
+}
+
+/* ---------------------------------------------------------------------
+   Shell
+   --------------------------------------------------------------------- */
+
+.memo-host {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+.memo-host[hidden] {
+  display: none;
+}
+
+.memo-page {
+  min-width: 0;
+}
+
+.memo-header-identity {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.memo-header-name {
+  font-size: 20px;
+  font-weight: 650;
+  color: var(--text);
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.memo-kind-tag,
+.memo-header-state {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  white-space: nowrap;
+}
+
+.memo-header-state {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: #e7d6b4;
+}
+
+/* ---------------------------------------------------------------------
+   Authoring panels
+   --------------------------------------------------------------------- */
+
+.memo-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  min-width: 0;
+}
+
+.memo-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--sp-5);
+  min-width: 0;
+}
+
+.memo-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.memo-section-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+  margin: 0 0 var(--sp-1);
+}
+
+.memo-section-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 0 0 var(--sp-4);
+}
+
+.memo-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-control);
+  padding: var(--sp-4);
+  margin: 0;
+}
+
+.memo-ready {
+  font-size: 13px;
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid #bfe0cc;
+  border-radius: var(--radius-control);
+  padding: var(--sp-3) var(--sp-4);
+  margin: 0 0 var(--sp-4);
+}
+
+/* Fields ------------------------------------------------------------- */
+
+.memo-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+  margin-bottom: var(--sp-4);
+}
+
+.memo-field-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.memo-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.memo-field-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.memo-field-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin: 0 0 var(--sp-3);
+}
+
+.memo-input,
+.memo-select,
+.memo-textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.memo-textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.memo-input:focus-visible,
+.memo-select:focus-visible,
+.memo-textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.memo-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--sp-4);
+}
+
+/* The recommendation choices ---------------------------------------- */
+
+.memo-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.memo-choice {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: var(--sp-2) var(--sp-4);
+  cursor: pointer;
+}
+
+.memo-choice:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.memo-choice-active {
+  color: #fff;
+  background: var(--memo-navy);
+  border-color: var(--memo-navy);
+}
+
+.memo-choice:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Authored items ----------------------------------------------------- */
+
+.memo-item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.memo-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: var(--sp-4);
+  min-width: 0;
+}
+
+.memo-item-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.memo-row-controls {
+  display: flex;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  padding-top: 18px;
+}
+
+.memo-remove-confirm {
+  margin-top: var(--sp-3);
+  border: 1px solid #e7c9c9;
+  background: var(--danger-soft);
+  border-radius: var(--radius-control);
+  padding: var(--sp-3);
+}
+
+.memo-remove-text {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0 0 var(--sp-2);
+}
+
+.memo-remove-actions,
+.memo-editor-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Evidence ----------------------------------------------------------- */
+
+.memo-evidence-picker {
+  margin-top: var(--sp-3);
+  border-top: 1px dashed var(--border);
+  padding-top: var(--sp-3);
+}
+
+.memo-evidence-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.memo-evidence-chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.memo-evidence-none {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.memo-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: 11px;
+  font-weight: 550;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-secondary);
+  margin-left: var(--sp-2);
+}
+
+.memo-tag:first-child {
+  margin-left: 0;
+}
+
+.memo-tag-approved {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: #bfe0cc;
+}
+
+.memo-tag-open {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: #e7d6b4;
+}
+
+.memo-tag-analyst {
+  color: var(--memo-teal);
+  background: #e7f2f3;
+  border-color: #bcd9dc;
+}
+
+.memo-chip-state {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.memo-evidence-options {
+  margin: var(--sp-3) 0 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: var(--sp-3);
+  background: var(--surface);
+}
+
+.memo-evidence-legend {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0 var(--sp-2);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.memo-evidence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.memo-evidence-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.memo-evidence-option-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.memo-evidence-option-title {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.memo-evidence-option-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.memo-evidence-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.memo-evidence-identity {
+  min-width: 0;
+  flex: 1;
+}
+
+.memo-evidence-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.memo-evidence-meta,
+.memo-evidence-reference,
+.memo-evidence-cited {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.memo-evidence-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.memo-approve {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.memo-evidence-editor {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  border-radius: var(--radius-control);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+
+.memo-include {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------
+   Tables. Every dense table scrolls inside its own region, so no financial
+   table can widen the page at 390px.
+   --------------------------------------------------------------------- */
+
+.memo-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  /* Containing block for its descendants.
+     Without this, an absolutely positioned child -- the `.visually-hidden`
+     label on the actions column header -- resolves against the initial
+     containing block, escapes this scroll region entirely, and drags the whole
+     page into a horizontal scroll at 390px. Browser QA measured exactly that:
+     the document could scroll 311px sideways because of a 1px screen-reader
+     label. */
+  position: relative;
+}
+
+.memo-table-scroll:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.memo-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.memo-table-caption {
+  caption-side: top;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+}
+
+.memo-table th,
+.memo-table td {
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  border-bottom: 1px solid var(--divider, var(--border));
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.memo-table thead th {
+  background: var(--memo-navy);
+  color: #fff;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+}
+
+.memo-table tbody tr:nth-child(even) {
+  background: var(--memo-band);
+}
+
+.memo-row-total {
+  background: var(--memo-panel) !important;
+  font-weight: 650;
+}
+
+.memo-cell-figure {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.memo-cell-label {
+  font-weight: 550;
+  color: var(--text);
+}
+
+.memo-table-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: var(--sp-2) 0 0;
+  line-height: 1.5;
+}
+
+.memo-unavailable {
+  color: var(--text-muted);
+  font-style: italic;
+  white-space: normal;
+}
+
+.memo-unavailable-reason {
+  font-style: normal;
+  font-size: 11px;
+}
+
+.memo-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------
+   Disclosures and refusals
+   --------------------------------------------------------------------- */
+
+.memo-disclosure {
+  border: 1px solid #e7d6b4;
+  background: var(--warning-soft);
+  border-radius: var(--radius-control);
+  padding: var(--sp-3) var(--sp-4);
+  margin: var(--sp-3) 0;
+}
+
+.memo-disclosure-title {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--warning);
+  margin: 0 0 2px;
+}
+
+.memo-disclosure-scope {
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.memo-disclosure-detail {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+  margin: 0;
+}
+
+.memo-refusal-region {
+  margin: var(--sp-4) 0;
+}
+
+.memo-refusal-region:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-control);
+}
+
+.memo-refusals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.memo-refusal-group {
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.memo-refusal-title {
+  font-size: 13px;
+  font-weight: 650;
+  margin: 0 0 2px;
+  color: var(--text);
+}
+
+.memo-refusal-action {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 var(--sp-2);
+}
+
+.memo-refusal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.memo-refusal-message {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.memo-refusal-scope {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.memo-publish-confirm {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  border-radius: var(--radius-control);
+  padding: var(--sp-3);
+  flex: 1;
+  min-width: 260px;
+}
+
+.memo-publish-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------------
+   Versions and the committee decision
+   --------------------------------------------------------------------- */
+
+.memo-version-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.memo-version {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: var(--sp-4);
+  min-width: 0;
+}
+
+.memo-version-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.memo-version-number {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+  margin: 0;
+}
+
+.memo-version-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+}
+
+.memo-version-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.memo-version-stale {
+  font-size: 11px;
+  color: var(--warning);
+  margin: var(--sp-2) 0 0;
+}
+
+.memo-committee {
+  margin-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-3);
+}
+
+.memo-committee-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.memo-committee-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.memo-committee-value {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--memo-navy);
+}
+
+.memo-committee-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: var(--sp-2) 0 0;
+}
+
+.memo-committee-form {
+  margin-top: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  padding: var(--sp-3);
+}
+
+/* ---------------------------------------------------------------------
+   The library
+   --------------------------------------------------------------------- */
+
+.memo-library {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-6);
+  min-width: 0;
+}
+
+.memo-library-title {
+  font-size: 22px;
+  font-weight: 650;
+  color: var(--text);
+  margin: 0;
+}
+
+.memo-library-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: var(--sp-1) 0 0;
+  max-width: 68ch;
+}
+
+.memo-library-group-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-secondary);
+  margin: 0 0 var(--sp-3);
+}
+
+.memo-library-name {
+  display: block;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.memo-library-kind,
+.memo-library-meta {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.memo-start-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.memo-start-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  padding: var(--sp-3) var(--sp-4);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.memo-start-identity {
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------------
+   The institutional report on screen.
+
+   The concept's restrained navy/teal treatment, scoped here so it cannot
+   reach the underwriting surfaces.
+   --------------------------------------------------------------------- */
+
+.memo-report {
+  background: var(--surface);
+  border: 1px solid var(--memo-panel-edge);
+  border-radius: var(--radius-card);
+  padding: var(--sp-6);
+  min-width: 0;
+  color: #1d2733;
+}
+
+.memo-report-draft {
+  border-color: #e7d6b4;
+}
+
+.memo-report-watermark {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid #e7d6b4;
+  border-radius: var(--radius-control);
+  padding: var(--sp-3) var(--sp-4);
+  margin: 0 0 var(--sp-5);
+}
+
+.memo-report-status {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.memo-report-stale {
+  border: 1px solid #e7d6b4;
+  background: var(--warning-soft);
+  border-radius: var(--radius-control);
+  padding: var(--sp-3) var(--sp-4);
+  margin: 0 0 var(--sp-5);
+}
+
+.memo-report-stale-title {
+  margin: 0 0 2px;
+  color: var(--warning);
+}
+
+.memo-report-stale-detail,
+.memo-report-stale-classes {
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  color: var(--text);
+}
+
+.memo-report-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-4);
+}
+
+.memo-report-head {
+  border-bottom: 2px solid var(--memo-navy);
+  padding-bottom: var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+
+.memo-report-kind {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--memo-teal);
+  margin: 0 0 var(--sp-2);
+}
+
+.memo-report-name {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 26px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--memo-navy);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.memo-report-classification {
+  font-size: 13px;
+  color: var(--memo-navy-soft);
+  margin: var(--sp-1) 0 0;
+}
+
+.memo-report-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+  margin: var(--sp-4) 0 0;
+}
+
+.memo-report-meta div {
+  min-width: 0;
+}
+
+.memo-report-meta dt {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.memo-report-meta dd {
+  font-size: 13px;
+  margin: 2px 0 0;
+  color: var(--text);
+}
+
+.memo-decision-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+
+.memo-decision-card {
+  border: 1px solid var(--memo-panel-edge);
+  border-radius: var(--radius-control);
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.memo-decision-analyst {
+  background: var(--memo-panel);
+}
+
+.memo-decision-committee {
+  background: var(--memo-band);
+}
+
+.memo-decision-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.memo-decision-value {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--memo-navy);
+  overflow-wrap: anywhere;
+}
+
+.memo-decision-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.memo-context-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--sp-4);
+  border-top: 1px solid var(--memo-rule);
+  border-bottom: 1px solid var(--memo-rule);
+  padding: var(--sp-3) 0;
+  margin: 0 0 var(--sp-5);
+}
+
+.memo-context-strip dt {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.memo-context-strip dd {
+  font-size: 13px;
+  margin: 2px 0 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.memo-report-section {
+  margin-bottom: var(--sp-6);
+  min-width: 0;
+}
+
+.memo-report-section-title {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--memo-navy);
+  border-bottom: 1px solid var(--memo-rule);
+  padding-bottom: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+}
+
+.memo-report-section-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 var(--sp-3);
+}
+
+.memo-report-lead,
+.memo-report-summary,
+.memo-report-body {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text);
+  margin: 0 0 var(--sp-3);
+  max-width: 78ch;
+}
+
+.memo-report-summary {
+  background: var(--memo-panel);
+  border: 1px solid var(--memo-panel-edge);
+  border-radius: var(--radius-control);
+  padding: var(--sp-4);
+  max-width: none;
+}
+
+.memo-metric-grid {
+  display: grid;
+  /* Wide enough for a nine-figure currency value at the metric size below.
+     Browser QA caught "$25,000,000" breaking after the second comma into
+     "$25,000,00 / 0", which reads as a different number entirely. */
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.memo-metric {
+  border: 1px solid var(--memo-panel-edge);
+  background: var(--memo-band);
+  border-radius: var(--radius-control);
+  padding: var(--sp-3);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.memo-metric-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.memo-metric-value {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--memo-navy);
+  font-variant-numeric: tabular-nums;
+  /* Never inside a figure. A number broken across two lines is not the number
+     the analyst wrote, and no card is worth that. */
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.memo-metric-unavailable {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.memo-metric-note {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.memo-claim-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.memo-claim {
+  border-left: 2px solid var(--memo-rule);
+  padding-left: var(--sp-4);
+  min-width: 0;
+}
+
+.memo-claim-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+  margin: 0;
+  max-width: 78ch;
+}
+
+.memo-claim-labels {
+  margin: var(--sp-1) 0 0;
+}
+
+.memo-claim-detail {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  margin: var(--sp-1) 0 0;
+  max-width: 78ch;
+}
+
+.memo-claim-detail-label,
+.memo-claim-source-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.memo-claim-source {
+  font-size: 11.5px;
+  color: var(--memo-teal);
+  margin: var(--sp-1) 0 0;
+  overflow-wrap: anywhere;
+}
+
+.memo-claim-unsourced {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--text-muted);
+  margin: var(--sp-1) 0 0;
+}
+
+.memo-report-table {
+  margin-bottom: var(--sp-4);
+  min-width: 0;
+}
+
+.memo-report-foot {
+  border-top: 1px solid var(--memo-rule);
+  padding-top: var(--sp-3);
+  margin-top: var(--sp-6);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.memo-report-foot p {
+  margin: 0 0 2px;
+}
+
+.memo-report-verification code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------
+   390px. Comprehension over preserving the desktop report's columns: the
+   metric grid and the decision pair become single columns, and every dense
+   table keeps scrolling inside its own region.
+   --------------------------------------------------------------------- */
+
+@media (max-width: 640px) {
+  .memo-library,
+  .memo-report {
+    padding: var(--sp-4);
+  }
+
+  .memo-section {
+    padding: var(--sp-4);
+  }
+
+  .memo-report-name {
+    font-size: 21px;
+  }
+
+  .memo-metric-grid,
+  .memo-metric-grid-key {
+    /* Two cards per row at 390px, each still wide enough for a whole figure. */
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  .memo-decision-pair,
+  .memo-context-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .memo-item-head {
+    flex-direction: column;
+  }
+
+  .memo-row-controls {
+    padding-top: 0;
+  }
+
+  .memo-report-meta {
+    gap: var(--sp-4);
+  }
+
+  /* A sticky header inside a short scroll region covers rows rather than
+     helping, so it is released at this width. */
+  .memo-table thead th {
+    position: static;
+  }
+}
+
+/* ---------------------------------------------------------------------
+   The in-application confirmation (Stage 4 Correction 2).
+
+   Replaces the native dialog the gate forbids. Sized for the sentence it
+   has to carry rather than for a one-line "Continue?", and reachable at
+   390px without the actions falling off the edge.
+   --------------------------------------------------------------------- */
+
+.memo-dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  background: rgba(17, 24, 38, 0.45);
+}
+
+.memo-dialog {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.22);
+  padding: var(--sp-5);
+  width: 100%;
+  max-width: 440px;
+  min-width: 0;
+}
+
+.memo-dialog-title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+  margin: 0 0 var(--sp-2);
+  overflow-wrap: anywhere;
+}
+
+.memo-dialog-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  margin: 0 0 var(--sp-5);
+  overflow-wrap: anywhere;
+}
+
+.memo-dialog-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  /* The safe action sits first in the DOM for focus order, and last visually,
+     where a confirming click expects it. */
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+}
+
+/* P7.10 Stage 4, added after browser QA at the independent review: a version
+   published before Anchor stored a report with each publication has no PDF to
+   offer, and says so where the download would be. */
+.memo-version-no-report {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  align-self: center;
+}
+
+.memo-version-no-report-detail {
+  margin: 0.5rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  max-width: 62ch;
+}
+
+/* ---------------------------------------------------------------------
+   P7.10 Stage 4, Correction 1 of the second review: the Investment
+   Committee library at phone width.
+
+   The library is a navigation and status surface, not a financial comparison
+   table, so below 640px it becomes a list of cards. Above it the table stays
+   exactly as it was -- comparing a column of recommendations across a portfolio
+   is what a table is for, and a desktop has the width for it.
+
+   Only one presentation is live at a time. `display: none` removes the other
+   from the accessibility tree and from tab order, so there is exactly one
+   reachable action per memo at any width.
+   --------------------------------------------------------------------- */
+
+.memo-library-cards {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: var(--sp-3);
+}
+
+.memo-library-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  /* A long property name wraps; it is never clipped into ambiguity. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.memo-library-card-name {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.memo-library-card-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.memo-library-card-fact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.memo-library-card-fact dt {
+  flex: 0 0 auto;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.memo-library-card-fact dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-default);
+  overflow-wrap: anywhere;
+}
+
+.memo-library-card-action {
+  align-self: flex-start;
+}
+
+@media (max-width: 640px) {
+  .memo-library-cards {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* The table presentation of the same rows steps aside entirely. */
+  .memo-library-group .memo-table-scroll {
+    display: none;
+  }
+
+  /* "Start a memo" stacks rather than pushing its action off the edge. */
+  .memo-start-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-2);
+  }
+
+  .memo-start-identity {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}

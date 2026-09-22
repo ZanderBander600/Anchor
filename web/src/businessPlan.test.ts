@@ -525,12 +525,37 @@ describe('the frontend computes no Business Plan economics', () => {
     }
   });
 
-  it('mints item IDs in exactly one place', () => {
+  it('mints item IDs in exactly one place per identity namespace', () => {
+    /**
+     * Re-pinned at P7.10 Stage 4.
+     *
+     * The claim has always been that *one* module mints the ids of a given
+     * identity namespace, so two modules cannot disagree about what makes an
+     * item that item. It was expressed as "exactly one module in the whole
+     * frontend" because, when it was written, the Business Plan was the only
+     * thing with authored item ids.
+     *
+     * The Investment Memo now has its own: `memoForm.ts` mints the ids of
+     * thesis items, risks and terms, which live in the memo's namespace and
+     * never in a Business Plan's. Each namespace still has exactly one minter,
+     * which is the invariant; the file list is not.
+     */
+    const MINTERS: Record<string, string> = {
+      './businessPlan.ts': 'Business Plan capital and owner-expense items',
+      './memoForm.ts': 'Investment Memo items, risks, terms and sources',
+    };
+
     const minting = Object.entries(SOURCES)
       .filter(([path]) => !/\.test\.tsx?$/.test(path))
       .filter(([, text]) => text.includes('randomUUID') || text.includes('getRandomValues'))
-      .map(([path]) => path);
-    expect(minting).toEqual(['./businessPlan.ts']);
+      .map(([path]) => path)
+      .sort();
+    expect(minting).toEqual(Object.keys(MINTERS).sort());
+
+    // And the two namespaces stay apart: neither minter reaches into the
+    // other's items, so a memo id can never be handed to a plan row.
+    expect(SOURCES['./businessPlan.ts']).not.toContain('memoForm');
+    expect(SOURCES['./memoForm.ts']).not.toContain('businessPlan');
   });
 
   it('shows the analyst no contract or developer vocabulary', () => {

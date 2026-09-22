@@ -15,10 +15,15 @@ Stage status:
   `main` at `ababa50` on 2026-09-21. It delivers persistence, the Investment
   Memo domain, versioning, the unavailable-state adapter and the typed API, and
   nothing else. Its ratified implementation clarifications are Section 22.
-- **Stages 3 and 4 are not started.** Each requires its own explicit human
-  start.
-- **Finishing Stage 1 does not automatically start Stage 2, and accepting
-  Stage 2 does not start Stage 3.**
+- **Stage 3 is deferred and unstarted.** It is optional, not cancelled, and it
+  is not implied by anything Stage 4 delivers.
+- **Stage 4 is implemented and pending independent review and human
+  acceptance.** The human explicitly authorized it ahead of Stage 3 on
+  2026-09-21. It delivers the Investment Committee memo workstation, the
+  institutional report, PDF export and browser QA, and nothing else. Its
+  implementation record is Section 23.
+- **Finishing Stage 1 does not automatically start Stage 2, accepting Stage 2
+  does not start Stage 3, and Stage 4 does not start Stage 3 either.**
 
 Gate: P7.10
 
@@ -679,7 +684,24 @@ altered and no existing row is read or rewritten.
 Stage 2 was human accepted after PR #51 merged to `main` at `ababa50` on
 2026-09-21. Its acceptance does not start Stage 3 or Stage 4.
 
-### Stage 3 — grounded AI proposals — **not started**
+### Stage 3 — grounded AI proposals — **deferred and unstarted**
+
+Stage 4 was explicitly authorized ahead of this stage, so Stage 3 is now out of
+sequence rather than merely next. It remains **optional and unstarted**: nothing
+in Stage 4 begins it, depends on it, or reserves a place for it. Stage 4 ships
+no AI module, prompt, proposal state, grounding snapshot, AI snapshot, empty AI
+panel, disabled AI control or "coming soon" surface, and
+`tests/test_p7_10_stage_4_architecture.py` and `web/src/memoArchitecture.test.ts`
+both prove that absence rather than asserting it.
+
+A future, explicitly authorized Stage 3 may add field-level proposals into the
+accepted workstation **without changing its financial or publication
+authority**: a proposal would write into the mutable draft through the same
+analyst approval the contract already requires, and the analyst recommendation,
+the Investment Committee decision, publication eligibility and the immutable
+published version would stay exactly where Stage 2 and Stage 4 put them.
+
+Its scope, when started, is unchanged:
 
 - Investment/variant/position/partner grounding package;
 - field-level AI proposal lifecycle;
@@ -687,7 +709,7 @@ Stage 2 was human accepted after PR #51 merged to `main` at `ababa50` on
 - prompt and presentation guards preventing calculation, recommendation,
   unsupported facts, and causal value-creation claims.
 
-### Stage 4 — Memo workstation, institutional report, and browser QA — **not started**
+### Stage 4 — Memo workstation, institutional report, and browser QA — **implemented 2026-09-21, pending review**
 
 - Investment Memo workspace;
 - valuation and decision-support presentation;
@@ -696,7 +718,17 @@ Stage 2 was human accepted after PR #51 merged to `main` at `ababa50` on
 - rendered-PDF visual QA and cross-mode end-to-end proof;
 - final human product acceptance.
 
-Finishing Stage 4 does not start P7.11 automatically.
+Stage 4 is **manual-first**: it works completely with manually authored memo
+content and offers no AI surface of any kind. It adds no financial calculation;
+it adds one presentation package (`anchor.reporting`), four read-only API
+routes and the memo frontend.
+
+It advances the schema exactly once, to **version 16**, which adds one purely
+additive table: the immutable report artifact stored with each published memo
+version (Section 23.2). No table is altered and no existing row is rewritten.
+
+Finishing Stage 4 does not start Stage 3 and does not start P7.11
+automatically.
 
 ## 18. Verification contract
 
@@ -784,7 +816,10 @@ This contract is ratified and closed to further negotiation within P7.10.
 - **Stage 2 is implemented, merged, and human accepted.** Its accepted scope is
   limited to Section 17 and the ratified clarifications in Section 22. It does
   not start Stage 3.
-- **Stages 3 and 4 are not started.**
+- **Stage 4 is implemented and pending review**, on the explicit human
+  authorization to take it ahead of Stage 3. Its record is Section 23.
+- **Stage 3 is deferred and unstarted**, and Stage 4 neither starts it nor
+  depends on it.
 - P7.10 does not start P7.11.
 
 ## 22. Stage 2 implementation record
@@ -1013,3 +1048,319 @@ claim it proved was restated as the historical fact it still proves.
 - The P7.2, P7.4, P7.6 and P7.9 Stage 2 compatibility oracles and four
   fresh-store assertions moved to schema 15 with P7.10's nineteen tables
   named, so every set comparison stays exact.
+
+
+## 23. Stage 4 implementation record
+
+Stage 4 was implemented from accepted `main` at `9ca957a` (PR #52, over the
+accepted Stage 2 implementation `ababa50`) on branch
+`feature/p7-10-stage-4-memo-workstation-report`. It is **not merged and not
+accepted**. The clarifications the implementation required are recorded here as
+the interpretation offered for review, rather than left implicit in a diff.
+
+### 23.1 Stage 4 ahead of Stage 3, and what that fixes
+
+The human explicitly authorized Stage 4 before Stage 3 on 2026-09-21. The
+ordering is recorded rather than inferred:
+
+- Stage 3 is **optional and deferred**, not cancelled and not implicitly begun.
+- Stage 4 **does not depend on** Stage 3 and works completely with manually
+  authored memo content.
+- No empty AI panel, disabled AI control, placeholder prompt or "coming soon"
+  surface appears anywhere in the product.
+- A future explicitly authorized Stage 3 may integrate proposals into the
+  accepted workstation without changing its financial or publication authority.
+
+### 23.2 Where a published memo's numbers come from — the frozen report artifact
+
+**Revised at the Stage 4 independent review (Correction 1).** The first
+implementation recomputed a published version's returns, Capital Structure and
+Partnership figures from the cell the version recorded, and relied on the Stage 2
+freshness check plus a watermark to disclose that they had moved. That was
+rejected, and rightly: a published memo version is an **immutable decision
+artifact**, and a record whose numbers change after the decision is not a record
+of it. A stale badge or watermark is not a substitute for historical
+immutability.
+
+Publication therefore **stores the issued report**. Schema version 16 adds one
+additive table, `memo_version_report_artifacts`, one row per published version,
+holding:
+
+- the canonical serialization of the typed report document;
+- the report-schema version it was written under;
+- the content hash of that document;
+- the exact PDF bytes that were generated, and their hash;
+- the stable filename, the page count, and the creation timestamp.
+
+Reading a published version's report decodes that row. Downloading its PDF
+returns those stored bytes. **Neither path recomputes anything**, and no
+supported store or API operation updates or deletes a stored report or PDF.
+The payload is produced exclusively from the typed backend assembly, carries an
+explicit schema version, decodes fail-closed — an unknown version, a missing
+field or a wrong type refuses rather than guesses — and contains no formula and
+no hidden recalculation.
+
+The consequence is what the correction asked for: the displayed figures and the
+downloaded PDF of a published version do not change when the Deal or Investment
+inputs change, when the Strategy or Scenario changes, when the capital structure
+or the Partnership changes, when a valuation definition changes, when the
+current analysis is rerun, when presentation code changes, or when the current
+package becomes stale.
+
+#### 23.2.1 Publication is one transaction
+
+Publishing resolves and validates the draft, assembles the typed report,
+generates the deterministic PDF, and creates the version, its child rows, the
+report snapshot and the PDF **atomically**. A failure anywhere leaves no
+version at all — never a published version with no report, and never a report
+belonging to a version that does not exist.
+
+#### 23.2.2 Versions published before schema 16
+
+They remain fully readable and keep every row they have. They have no report
+artifact, because the tree that published them stored none, so the report and
+PDF endpoints answer with the typed `REPORT_SNAPSHOT_NOT_AVAILABLE` state,
+which tells the analyst plainly that no report was issued with that version and
+that publishing a new version is how to obtain one. They are **not backfilled
+by recomputation** — that would manufacture exactly the fiction this correction
+exists to prevent — and no existing row is mutated.
+
+#### 23.2.3 The published artifact versus current freshness
+
+The two questions are kept apart. The frozen report says what was issued; the
+workspace and the version history say, **outside** the artifact, whether current
+underwriting still matches it, using the Stage 2 freshness check and its stale
+reason classes. The published report document is not altered, the stored PDF
+gains no stale watermark, and no figure in either is replaced.
+
+The draft preview remains current by construction, and is marked plainly as
+`DRAFT — NOT PUBLISHED`, on screen and in the PDF.
+
+#### 23.2.4 One consequence, stated plainly
+
+The analyst recommendation and the committee's decision are separate acts
+(R-F), and the committee records its decision **after** the version is
+published. A frozen report therefore shows the committee outcome as *not yet
+recorded*, because that is what was true when the report was issued. The
+recorded decision is held against the version and is readable on the version
+surface; it is not retrofitted into the issued document.
+
+### 23.3 The report is handed finished text, not numbers
+
+`anchor.reporting.contracts` carries every figure as a **string the backend has
+already formatted**. A renderer holding raw floats is a renderer one edit away
+from summing two of them; a renderer holding finished text cannot compute even
+by accident, and `pdf.py` is additionally handed nothing but the package — no
+store, no engine, no analysis function, no result contract.
+
+The frontend follows the same rule: report figures are displayed as received.
+The one raw number the memo UI formats is the Stage 2 valuation surface's, which
+is the engine's own surface rather than a report package, and it goes through
+the product's existing `formatCurrency`.
+
+### 23.4 Unavailable states are translated, not repeated
+
+The Stage 2 adapter's `reason` is a precise developer-facing sentence that names
+the Investment, the Unit and the timepoint by their opaque ids. That is correct
+for a log and for a test, and it is exactly the implementation vocabulary
+Section 2 keeps out of an analyst view.
+
+Stage 4 therefore translates the stable `reason_code` — the contract — and never
+repeats the raw message. Nothing is softened: each sentence says what the code
+means, including that there is no value. Two tables, one per side, are held to
+the same key set by a guard, and every member of both reason enums is covered.
+
+### 23.5 Anchor stores no market or location
+
+The accepted visual concept shows a location line and a market panel with
+population, job growth and occupancy statistics. Anchor records none of those:
+there is no location, address or market field anywhere in the product.
+
+They are therefore **omitted entirely** rather than invented, in the report, in
+the PDF and in the library. This is the Section 13.1 rule that the first page
+carries no unsupported market statistic, applied at the point where it would
+have been easiest to fabricate one.
+
+### 23.6 Decision-support reach, disclosed rather than hidden
+
+Ratified decision R-I is unchanged. Investment-scope sensitivity and break-even
+are reported **Unavailable — Not Implemented for This Scope** as a stated
+disclosure rather than a hidden section, and a variant that resolves no
+Partnership produces a disclosure saying so is an absence rather than a zero.
+
+### 23.7 One new dependency
+
+Anchor had no PDF generator: `pypdf` reads, and XlsxWriter writes workbooks
+only. Section 13.3 requires a paginated institutional report with repeated table
+headers, page numbers and a confidentiality footer, so **ReportLab** was added —
+the same shape of dependency as XlsxWriter and for the same reason: write-only,
+no system libraries, and deterministic. Built with `invariant=1` it fixes the
+document id and creation date, so two exports of one memo version are
+byte-identical rather than merely semantically identical.
+
+A reviewer should confirm that adding it is the right answer, rather than
+hand-rolling a PDF writer or deferring the export.
+
+### 23.8 Guards re-pinned
+
+Each re-pin is documented in place in the test that carries it. No earlier
+invariant was weakened; where a guard genuinely reached this gate, the claim it
+proved was restated as the historical fact it still proves.
+
+- P7.10 Stage 2's ledger now measures its own committed range
+  `46650a7..ababa50`, exactly as its `_changes_since` docstring anticipated. Its
+  later-stage identifier scan stops at Stage 4's marker in `api.py`, and its
+  route ledger names and excludes Stage 4's four read-only routes rather than
+  growing into a list of whatever the application serves.
+- Excel Export 2 and Excel Export 3 measure their own committed ranges for the
+  no-new-dependency claim, and their route guards are narrowed to the `.xlsx`
+  workbooks they have always been about. A memorandum PDF is a different
+  artifact of a different gate.
+- D4.6B's G37 frontend allowlist gains the fourteen named Stage 4 modules, and
+  at the independent review the two the corrections added: `ConfirmDialog.tsx`
+  and `useAsyncResource.ts`.
+- **Re-pinned at the independent review.** Schema 16 reaches four Stage 2
+  guards that assert facts about *Stage 2's own* migration — that the store
+  declared one schema version and it was fifteen, that the migration created
+  nineteen tables and altered nothing, that every one is registered on the
+  connection, and that no Stage 2 module imported a document library. Those are
+  settled facts about a merged gate, so each now reads Stage 2's merge
+  `ababa50` and its committed range rather than a working tree later gates
+  advance. `memo_dependencies.py` is read as Stage 2 merged it, because
+  generating a document at publication is Stage 4's act and is held by Stage 4's
+  own guards. Stage 2's v14 oracle names the later-gate table explicitly, so it
+  still asserts an exact set of added tables rather than a loosened one.
+
+### 23.9 Corrections applied at the independent review
+
+Four corrections were required before publication; the ratified decisions that
+accompanied them — ReportLab as the PDF engine, omitting the unsupported
+location line and market panel, translating the stable reason codes, and
+Playwright as the browser-QA driver — are recorded above and unchanged.
+
+1. **The published report and PDF are frozen.** Section 23.2, rewritten above.
+2. **No native browser dialog in the Stage 4 workflow.** `window.confirm` is
+   replaced by `ConfirmDialog`, an in-application modal that names the memo
+   being left, the memo being opened and the unsaved work at stake; focuses the
+   safe action; supports Escape; traps focus; restores focus to the control that
+   opened it; navigates nowhere when cancelled; and is not shown at all when
+   nothing would be discarded. An architecture guard proves no native `confirm`,
+   `alert` or `prompt` in any Stage 4 production file, including the memo
+   functions inside the shared `App.tsx`.
+3. **No new lint debt.** The six `react(set-state-in-effect)` warnings the
+   branch introduced are removed by one reusable, tested loading abstraction,
+   `useAsyncResource`, which derives loading during render instead of setting it
+   in an effect. No rule is disabled, no suppression comment is added, and the
+   lint configuration is untouched; the branch's warning set is identical to
+   accepted `main`'s. Request cancellation, stale-response protection, loading
+   behaviour and the Phase 1 request-loop fix are all preserved.
+4. **Cross-mode browser QA.** Recorded in Section 23.10.
+
+### 23.10 Cross-mode browser QA
+
+Driven with Playwright against an **isolated QA database** built by a seed
+script through the real store and contracts, with the backend pointed at it by
+``ANCHOR_DB_PATH``; the product database was never opened. Screenshots are kept
+under the ignored ``scratchpad/`` location and are untracked.
+
+Every enumerated case was exercised at **1440px and 390px** through the memo
+workspace, the preview, publication, the published version and the PDF
+download -- not merely route loading:
+
+| # | Case | Outcome |
+|---|------|---------|
+| 1 | Quick Underwrite Investment | published; 4-page PDF |
+| 2 | Detailed Underwrite Investment | published; 7-year projection; 4-page PDF |
+| 3 | Lease-Level Underwrite Investment | published; 4-page PDF |
+| 4 | Multi-unit Investment | published; Investment-scope disclosure; 4-page PDF |
+| 5 | Capital Structure with ``PctOfValue`` | funding sized from the As-Is view; the view reports "Included; consumed by funding" |
+| 6 | Position decision perspective | Senior Loan funded amount, position IRR, MOIC, cash received, profit, detachment LTV |
+| 7 | Partnership and Partner perspective | LP contributions, IRR, multiple, distributions and profit **after the defect below was fixed** |
+| 8 | No-Partnership case | the absence is disclosed, and no partner figure is printed |
+| 9 | Selected unavailable valuation | publication is refused, in translated analyst language, and no version exists |
+| 10 | Stale historical published version | the frozen report still shows $11.0m against current underwriting of $13.75m; staleness is stated **outside** the document |
+| 11 | Immutable version N, then a changed draft and N+1 | v1 keeps its ask and summary; v2 carries the revised ones; distinct verification codes |
+| 12 | Migrated version with no report snapshot | the typed explanation is shown, no PDF is offered, nothing is backfilled, and publishing a new version issues a working report and PDF |
+
+Representative PDFs from the Quick, Detailed, Lease-Level, multi-unit,
+Position and Partnership cases were rendered and **every page inspected**:
+masthead and status on each page, repeated table headers, right-aligned
+figures, no orphaned heading, no clipped or overlapping text, the
+confidentiality marking and page number in every footer, and the version
+appendix carrying the verification code.
+
+#### What browser QA found, and what was done
+
+Three defects reached the browser that the backend suites did not catch. Each
+is fixed, with a regression test that fails on the old behaviour:
+
+1. **Partner-perspective memos reported no partner returns at all**, beneath a
+   disclosure claiming the Investment resolved no Partnership -- on Investments
+   that plainly had one. The Partnership was read from the structured capital
+   result, which carries no such field, and the partner totals were named by
+   fields the P7.9 contract does not define. Both faults were silent and
+   pointed the same way, and the backend test that existed asserted the very
+   disclosure that always fired. The report now resolves the Partnership
+   variant, reads P7.9's own field names, and discloses an absence only where
+   there is one. The cover also now names the partner as its Partnership does
+   ("Partner – LP", not "Partner – lp").
+2. **Analyst-facing surfaces repeated backend sentences that name records by
+   their opaque ids.** Publication readiness printed the refusal's own message
+   -- *"Investment '2fa67abf…' has no value at valuation timepoint 'as-is-3b93ed':
+   '5889bb98…' (unit_not_valued)"* -- on the surface whose whole job is to tell
+   an analyst what to fix, and the report's "did not resolve" disclosure
+   rendered the raising layer's exception text inside the published document and
+   its PDF. Refusals are now translated from their stable code, exactly as
+   unavailable valuations already were, with the upstream reason appended so
+   nothing specific is lost; the disclosure says the same thing in the analyst's
+   terms. Guards hold the new table to ``PublicationRefusalCode`` and forbid an
+   id in either vocabulary.
+3. **A version published before schema 16 was still offered a "Download PDF"**
+   that could only refuse, landing the analyst on a raw refusal payload. The
+   version list now says "No issued PDF" with the typed explanation beneath.
+
+A fourth was cosmetic and fixed with the rest: report tables keyed their rows
+and cells by their own text, so a Unit whose NOI and levered cash flow were the
+same figure produced duplicate React keys and a console error. They are keyed by
+position, which is what the backend fixes and nothing reorders.
+
+Two further observations were raised at that review as open judgement calls.
+Both were decided against the first implementation and are now closed:
+
+- **the library reflows at phone width.** Below 640px the Investment Committee
+  library is a list of cards rather than a table scrolled sideways, because it
+  is a navigation and status surface rather than a financial comparison table.
+  Both presentations render one `describeEntry` description, so they cannot
+  disagree about a memo, and `display: none` leaves exactly one reachable action
+  per memo at any width. The desktop table is unchanged above that width, where
+  comparing a column of recommendations across a portfolio is what a table is
+  for. A card carries every column the table carries, plus the decision cell,
+  and the Investment name is the card's heading and is never truncated;
+- **an analyst-facing scope is a name, never an id.** A refusal's `scope_id` is
+  an identity the API must carry; what an analyst reads is the label the scope's
+  own register gives it, resolved from the lists the workspace has already
+  loaded. A scope whose record no longer exists says so -- "Selected valuation
+  view (no longer available)" -- and the id is never the fallback. The same rule
+  now holds in the report and the PDF, where a value-sized funding disclosure
+  named its position by the stored key.
+
+### 23.11 No identifier reaches a normal analyst view
+
+Guarded rather than asserted. `tests/test_p7_10_stage_4_architecture.py` proves
+that no Stage 4 presentation module renders an expression whose whole value is a
+stored identifier, that every `MemoReportDisclosure` scope is a fixed word, a
+table label or a resolved display name, that the refusal-scope resolver returns
+a sentence for a code it does not know and never returns its argument, and that
+every "no longer available" sentence names no record.
+
+The rule is deliberately narrow: it looks for an identifier being *rendered*,
+not for one being passed to a function, used as a React key, built into a URL or
+compared. A guard that rejected those would reject the identity the product
+legitimately needs and would be switched off within a gate. As written it found
+two real leaks that had survived the first QA pass -- the valuation panel's
+unresolved-funding heading, and the report disclosure's position scope.
+
+Identifiers remain exactly where they belong: in the API, the store, the
+dependency ledger, React keys, export URLs and the published version's
+verification code, which Section 13.3 requires and which is labelled as what it
+is.

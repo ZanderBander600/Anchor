@@ -670,6 +670,22 @@ def test_every_p7_10_route_is_covered_by_this_suite() -> None:
     import re
 
     source = Path(__file__).read_bytes().decode("utf-8")
+
+    # **Re-pinned at P7.10 Stage 4.** Stage 4 added four read-only presentation
+    # routes over the same nouns -- the library, the draft preview, one
+    # version's report and the PDF. They are named and excluded here so this
+    # test keeps proving that *Stage 2's* twenty-four routes are each covered by
+    # *this* suite, rather than growing into a count of whatever the application
+    # serves. Stage 4's own routes are covered by
+    # `tests/test_p7_10_stage_4_report.py` and held by
+    # `tests/test_p7_10_stage_4_architecture.py`.
+    stage_4_routes = {
+        "/memo-library",
+        "/investments/{investment_id}/memo/report-preview",
+        "/investments/{investment_id}/memo-versions/{version_id}/report",
+        "/investments/{investment_id}/memo-versions/{version_id}"
+        "/exports/investment-memo.pdf",
+    }
     routes = {
         (method, route.path)  # type: ignore[attr-defined]
         for route in api_module.app.routes
@@ -678,6 +694,7 @@ def test_every_p7_10_route_is_covered_by_this_suite() -> None:
             word in str(getattr(route, "path", ""))
             for word in ("valuation-timepoint", "valuation-views", "evidence-references", "/memo")
         )
+        and str(getattr(route, "path", "")) not in stage_4_routes
     }
     assert len(routes) == 24
     for _, path in routes:

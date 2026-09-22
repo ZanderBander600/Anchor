@@ -340,10 +340,19 @@ def test_no_schema_migration_was_added() -> None:
 
 
 def test_one_get_route_per_supported_mode() -> None:
+    """**Re-pinned at P7.10 Stage 4.** Narrowed from every ``/exports/`` path to
+    the workbook paths this gate is about.
+
+    The subject has always been the formula-audit *workbooks*: one GET route per
+    supported underwriting mode, each returning an ``.xlsx``. P7.10 Stage 4
+    serves an Investment Committee memorandum PDF under the same word, which is
+    a different artifact of a different gate."""
+
     routes = sorted(
         (sorted(getattr(route, "methods", None) or ()), str(getattr(route, "path", "")))
         for route in app.routes
         if "/exports/" in str(getattr(route, "path", ""))
+        and str(getattr(route, "path", "")).endswith(".xlsx")
     )
     assert routes == _EXPORT_ROUTES
 
@@ -419,8 +428,15 @@ def test_the_lease_level_workbook_declares_its_own_shape() -> None:
 
 
 def test_no_dependency_was_added() -> None:
-    """XlsxWriter remains the only writer; nothing new is required."""
+    """XlsxWriter remains the only *workbook* writer; Excel Export 3 required
+    nothing new.
 
-    text = _source(_PROJECT_ROOT / "pyproject.toml")
+    **Re-pinned at P7.10 Stage 4.** Compared across this gate's own committed
+    range rather than against the working tree, so it keeps proving what Excel
+    Export 3 did. P7.10 Stage 4 adds ReportLab for the Investment Committee
+    memorandum PDF -- a different artifact, justified in that gate's own ledger,
+    and not evidence about this one."""
+
+    text = _git("show", f"{_HEAD}:pyproject.toml")
     baseline = _git("show", f"{_BASE}:pyproject.toml")
     assert text.replace("\r\n", "\n") == baseline.replace("\r\n", "\n")

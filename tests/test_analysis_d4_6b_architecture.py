@@ -147,6 +147,59 @@ _ASSET_TYPES_1_WEB = frozenset(
     }
 )
 
+#: P7.10 Stage 4 -- the Investment Committee memo workstation and the
+#: institutional report on screen. Fourteen new production modules: the memo
+#: wire contracts (``memoTypes.ts``), its presentation vocabulary
+#: (``memoCatalog.ts``), the draft's one boundary to the wire (``memoForm.ts``),
+#: two state hooks, and nine components.
+#:
+#: None computes economics, and this is a gate where a "harmless" frontend
+#: figure would be especially tempting -- a price per unit on a memo cover, a
+#: year-over-year NOI change beside a thesis, a total under a Sources & Uses
+#: table. Every report figure instead arrives already computed *and already
+#: formatted* from ``anchor.reporting``, because a percentage rounded on this
+#: side could disagree with the same percentage in the exported PDF. The one
+#: raw number the memo UI formats is the Stage 2 valuation surface's, through
+#: the product's existing ``formatCurrency``.
+#:
+#: That they compute nothing is held on the TypeScript side by
+#: ``web/src/memoArchitecture.test.ts``, which parses each of them and rejects
+#: arithmetic, aggregation, ordering by value and re-parsing. The Stage 4
+#: production ledger is ``tests/test_p7_10_stage_4_architecture.py``.
+#:
+#: Every shipped file Stage 4 edits -- App.tsx, api.ts (additions only, the
+#: D4.6A lines untouched), index.css and AppSidebar.tsx -- is already listed
+#: above.
+_P7_10_STAGE_4_WEB = frozenset(
+    {
+        "web/src/memoTypes.ts",
+        "web/src/memoCatalog.ts",
+        "web/src/memoForm.ts",
+        "web/src/useInvestmentMemo.ts",
+        "web/src/useMemoLibrary.ts",
+        "web/src/components/MemoLibraryPanel.tsx",
+        "web/src/components/MemoWorkspace.tsx",
+        "web/src/components/MemoDecisionPanel.tsx",
+        "web/src/components/MemoNarrativePanel.tsx",
+        "web/src/components/MemoEvidencePanel.tsx",
+        "web/src/components/MemoEvidencePicker.tsx",
+        "web/src/components/MemoValuationPanel.tsx",
+        "web/src/components/MemoPublishPanel.tsx",
+        "web/src/components/MemoReportView.tsx",
+        # Added at the Stage 4 independent review. ``ConfirmDialog.tsx`` is the
+        # accessible confirmation that replaced the workflow's native
+        # ``window.confirm`` (Correction 2); ``useAsyncResource.ts`` is the one
+        # loading abstraction the memo hooks and the workspace share
+        # (Correction 3). Neither carries a figure: one renders the analyst's
+        # own words back to them, the other holds a request's status.
+        "web/src/components/ConfirmDialog.tsx",
+        "web/src/useAsyncResource.ts",
+        # Added at the second review (Correction 1): the library row every
+        # presentation renders. It relabels stored facts and computes none.
+        "web/src/memoLibraryRow.ts",
+    }
+)
+
 _AM1_WEB = frozenset(
     {
         "web/src/assetManagementTypes.ts",
@@ -461,7 +514,7 @@ _PERMITTED_WEB = frozenset(
         # file; ratified at the P7.9 Stage 1 review.
         "web/README.md",
     }
-) | _P7_9_STAGE_3_WEB | _AM1_WEB | _ASSET_TYPES_1_WEB
+) | _P7_9_STAGE_3_WEB | _AM1_WEB | _ASSET_TYPES_1_WEB | _P7_10_STAGE_4_WEB
 
 #: Each later gate's group, by the committed range that added it: the proof, in
 #: ``test_g37_each_later_gate_entry_was_added_by_its_gate``, that no entry was

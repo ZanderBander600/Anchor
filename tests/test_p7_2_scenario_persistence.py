@@ -85,10 +85,11 @@ def test_a_fresh_store_is_schema_8_with_the_five_tables_empty(db: Path) -> None:
     # sidecars, P7.8B schema 11's Capital Structure tables, and P7.9 Stage 2
     # schema 12's Partnership tables, and AM1 schema 13's two Asset Management
     # tables, and Asset Types 1 schema 14's two classification tables, and
-    # P7.10 Stage 2 schema 15's sixteen valuation and Investment Memo tables.
+    # P7.10 Stage 2 schema 15's sixteen valuation and Investment Memo tables,
+    # and P7.10 Stage 4 schema 16's one immutable report-artifact table.
     # P7.2's own five are still empty in a fresh store, which is what this test
     # is about.
-    assert version == 15
+    assert version == 16
     assert row_counts(db) == EMPTY
 
 

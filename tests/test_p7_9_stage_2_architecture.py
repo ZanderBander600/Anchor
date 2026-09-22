@@ -537,11 +537,11 @@ def test_the_eight_tables_hold_authored_terms_only() -> None:
     assert "target_profit_share" in columns  # the catch-up term itself, authored
     for forbidden in (r"irr", r"moic", r"(?<!target_)profit", r"promote_earned", r"distribution(?!_order)", r"amount", r"result", r"snapshot", r"json", r"blob"):
         assert not {column for column in columns if re.search(forbidden, column)}, forbidden
-    # AM1 advanced the store to schema 13 and Asset Types 1 to 14. Stage 2's
-    # eight Partnership tables are unchanged by either; what this line pins is
-    # that the store still declares one version, and that Stage 2's tables
-    # were added under 12.
-    assert "_SCHEMA_VERSION = 15" in text
+    # AM1 advanced the store to schema 13, Asset Types 1 to 14, P7.10 Stage 2
+    # to 15 and P7.10 Stage 4 to 16. Stage 2's eight Partnership tables are
+    # unchanged by any of them; what this line pins is that the store still
+    # declares one version, and that Stage 2's tables were added under 12.
+    assert "_SCHEMA_VERSION = 16" in text
     assert "_SCHEMA_VERSION = 12" in _git("show", f"{_STAGE_2_HEAD}:{_STORE}")
 
 

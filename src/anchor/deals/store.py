@@ -146,7 +146,7 @@ import os
 import sqlite3
 import uuid
 from enum import Enum
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -486,7 +486,7 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # pre-existing Deal, Investment, Strategy, Scenario, Capital Structure,
 # Partnership, Managed Asset and export keeps loading and responding exactly as
 # it did, because nothing this gate adds is read on any of those paths.
-_SCHEMA_VERSION = 15
+_SCHEMA_VERSION = 16
 
 
 class PersistedDealDataError(RuntimeError):
@@ -2050,6 +2050,36 @@ CREATE TABLE IF NOT EXISTS memo_version_dependencies (
 )
 """
 
+#: P7.10 Stage 4, schema 16 -- the immutable report artifact of one published
+#: version (Correction 1).
+#:
+#: One row per published version, written only by the publication transaction.
+#: It holds the canonical serialization of the typed report document Anchor
+#: assembled at publication, that payload's hash, and the exact PDF bytes the
+#: committee was issued.
+#:
+#: **Nothing updates or deletes a row here.** There is no UPDATE and no
+#: per-version DELETE anywhere in this module; an artifact goes only when the
+#: whole Investment does, exactly as the version rows themselves do. That is the
+#: point: a decision document that could be rewritten afterwards is not a record
+#: of what was decided.
+#:
+#: ``pdf_bytes`` is a BLOB rather than a path because a file beside the database
+#: is a file that can be moved, replaced or lost while the row still claims it.
+_CREATE_MEMO_VERSION_REPORT_ARTIFACTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_report_artifacts (
+    version_id            TEXT PRIMARY KEY,
+    report_schema_version INTEGER NOT NULL,
+    report_document       TEXT NOT NULL,
+    report_hash           TEXT NOT NULL,
+    pdf_bytes             BLOB NOT NULL,
+    pdf_hash              TEXT NOT NULL,
+    pdf_filename          TEXT NOT NULL,
+    page_count            INTEGER NOT NULL,
+    created_at            TEXT NOT NULL
+)
+"""
+
 #: The committee's own record, against a published version (Section 7.5). It is
 #: the one P7.10 record attached to a version that may be updated after
 #: publication, which is precisely why it is not a column on the version itself:
@@ -2086,6 +2116,9 @@ _MEMO_VERSION_CHILD_TABLES = (
     "memo_version_claim_evidence",
     "memo_version_valuations",
     "memo_version_dependencies",
+    # Schema 16. Deleted only with the whole Investment, exactly like its
+    # siblings: no function removes one version's artifact on its own.
+    "memo_version_report_artifacts",
 )
 
 _P7_10_TABLES = (
@@ -2600,6 +2633,19 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # database simply gains nineteen empty tables; an Investment with no
     # valuation definition and no memo has neither, which is exactly its state
     # before this gate, and opening or editing one creates nothing.
+    # P7.10 Stage 4 -- schema version 16 adds ``memo_version_report_artifacts``
+    # the same way, and the same reasoning applies one more time: ``_connect``
+    # creates it via CREATE TABLE IF NOT EXISTS, no table is altered, and no row
+    # is written for anything that already exists. A v15 database simply gains
+    # one empty table.
+    #
+    # **Existing published versions are deliberately not backfilled.** A version
+    # published before this gate was never issued a frozen report, and the only
+    # way to manufacture one now would be to assemble today's numbers and
+    # present them as what that committee read. So it gains no artifact, its
+    # rows are not touched, and its report endpoint reports the typed
+    # ``REPORT_SNAPSHOT_NOT_AVAILABLE`` state instead. Publishing a new version
+    # is how an analyst gets a current issuable report.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -2698,6 +2744,7 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_MEMO_VERSION_CLAIM_EVIDENCE_TABLE_SQL)
     connection.execute(_CREATE_MEMO_VERSION_VALUATIONS_TABLE_SQL)
     connection.execute(_CREATE_MEMO_VERSION_DEPENDENCIES_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_REPORT_ARTIFACTS_TABLE_SQL)
     connection.execute(_CREATE_INVESTMENT_COMMITTEE_DECISIONS_TABLE_SQL)
     _migrate(connection)
     try:
@@ -10936,14 +10983,28 @@ def publish_memo_version(
     dependencies: tuple[MemoDependency, ...],
     memo_content_fingerprint: str,
     published_fingerprint: str,
+    build_artifact: Callable[[InvestmentMemoVersion], Any],
     db_path: Path | None = None,
-) -> InvestmentMemoVersion:
-    """Write one immutable published version and its dependency ledger
-    (Section 9; R-H).
+) -> tuple[InvestmentMemoVersion, Any]:
+    """Write one immutable published version, its dependency ledger and the
+    report artifact it is issued as (Section 9; R-H; Stage 4 Correction 1).
 
     **One transaction** (Section 15): either the complete version, its content,
-    its frozen evidence, its cited valuations and its whole dependency ledger
-    exist, or none of them does. There is no partial publication.
+    its frozen evidence, its cited valuations, its whole dependency ledger *and*
+    its frozen report and PDF exist, or none of them does. There is no partial
+    publication, and in particular no version that exists without the document
+    its committee was issued.
+
+    ``build_artifact`` is handed the version exactly as it was written and
+    returns the artifact to store beside it. It is called **inside** the
+    transaction deliberately: if assembling the report or rendering the PDF
+    fails, the whole publication rolls back rather than leaving a version whose
+    report can never be produced. It is a callback rather than an argument
+    because the version id and number are minted here, and the report carries
+    them.
+
+    Keeping assembly *behind* a callback also keeps it out of this module: the
+    store still writes what it is given and decides nothing about a report.
 
     **The caller decides; this writes.** Whether the draft *may* be published is
     ``anchor.memo.publication``'s question and the resolution layer's, and both
@@ -11095,7 +11156,73 @@ def publish_memo_version(
         written = connection.execute(
             "SELECT * FROM investment_memo_versions WHERE version_id = ?", (version_id,)
         ).fetchone()
-        return _read_memo_version(connection, written)
+        version = _read_memo_version(connection, written)
+
+        # The report is assembled and rendered from the version just written,
+        # inside this transaction. A failure here raises, `_connect` rolls back,
+        # and no version row survives -- which is the point: a published version
+        # with no issued document would be a decision record nobody can read.
+        artifact = build_artifact(version)
+        connection.execute(
+            "INSERT INTO memo_version_report_artifacts "
+            "(version_id, report_schema_version, report_document, report_hash, pdf_bytes, "
+            "pdf_hash, pdf_filename, page_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                version_id,
+                artifact.report_schema_version,
+                artifact.report_document,
+                artifact.report_hash,
+                artifact.pdf_bytes,
+                artifact.pdf_hash,
+                artifact.pdf_filename,
+                artifact.page_count,
+                artifact.created_at,
+            ),
+        )
+        return version, artifact
+
+
+def get_memo_version_artifact(
+    investment_id: str, version_id: str, *, db_path: Path | None = None
+) -> Any | None:
+    """One published version's frozen report and PDF, or ``None``.
+
+    ``None`` is a real and historical answer, not a failure: a version published
+    before schema 16 was never issued a stored report, and the migration
+    deliberately did not manufacture one from today's numbers. The caller
+    reports that as the typed ``REPORT_SNAPSHOT_NOT_AVAILABLE`` state.
+
+    Read-only, and read by id within the owning Investment, so a version of
+    another Investment is reported missing rather than returned."""
+
+    from ..reporting.artifact import MemoReportArtifact
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        # The version must exist and belong to this Investment: an artifact is
+        # never returned for a version of another Investment, and a version id
+        # that does not exist is reported missing rather than as "no artifact".
+        if connection.execute(
+            "SELECT 1 FROM investment_memo_versions WHERE version_id = ? AND investment_id = ?",
+            (version_id, investment_id),
+        ).fetchone() is None:
+            raise MemoVersionNotFoundError(investment_id, version_id)
+        row = connection.execute(
+            "SELECT * FROM memo_version_report_artifacts WHERE version_id = ?", (version_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return MemoReportArtifact(
+            version_id=row["version_id"],
+            report_schema_version=row["report_schema_version"],
+            report_document=row["report_document"],
+            report_hash=row["report_hash"],
+            pdf_bytes=bytes(row["pdf_bytes"]),
+            pdf_hash=row["pdf_hash"],
+            pdf_filename=row["pdf_filename"],
+            page_count=row["page_count"],
+            created_at=row["created_at"],
+        )
 
 
 # -----------------------------------------------------------------------------

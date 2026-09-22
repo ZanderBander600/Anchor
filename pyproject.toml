@@ -26,6 +26,16 @@ dependencies = [
     # write-only, dependency-free generator with deterministic packages,
     # per-formula cached-value control, sheet protection and defined names.
     "XlsxWriter>=3.2,<4",
+    # P7.10 Stage 4: writes the Investment Committee memorandum PDF. Anchor had
+    # no PDF *generator* -- pypdf reads and XlsxWriter writes only workbooks --
+    # and Section 13.3 requires a paginated institutional report with repeated
+    # table headers, page numbers and a confidentiality footer. ReportLab is the
+    # same shape of dependency as XlsxWriter above: write-only, no system
+    # libraries, and deterministic. Built with `invariant=1` it fixes the
+    # document id and creation date, so two exports of one memo version are
+    # byte-identical rather than merely semantically identical, which is what
+    # lets `tests/test_p7_10_stage_4_pdf.py` assert on rendered output.
+    "reportlab>=4.2,<5",
 ]
 
 [project.optional-dependencies]

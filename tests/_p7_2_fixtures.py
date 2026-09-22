@@ -324,6 +324,13 @@ P7_10_TABLES = (
     "investment_committee_decisions",
 )
 
+#: The one table schema v16 adds (P7.10 Stage 4): the immutable report and PDF
+#: stored with each published memo version, so what a committee was issued does
+#: not change when the underwriting does. Like every table above, it is P7
+#: structure a legacy database never holds, and a version gains a row only when
+#: an analyst publishes one.
+P7_10_STAGE_4_TABLES = ("memo_version_report_artifacts",)
+
 #: The two keys Asset Types 1 adds to every Deal and Managed Asset response.
 CLASSIFICATION_KEYS = ("asset_type", "asset_subtype")
 
@@ -377,6 +384,7 @@ def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
             - set(P7_9_TABLES)
             - set(AM1_TABLES)
             - set(P7_10_TABLES)
+            - set(P7_10_STAGE_4_TABLES)
         )
         if not table.startswith("sqlite_")
     }
