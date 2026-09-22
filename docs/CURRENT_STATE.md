@@ -1,6 +1,6 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-21 (P7.10 Stage 4 implemented, pending review)
+Last synchronized: 2026-09-21 (P7.10 Stage 4 implemented; its four independent-review corrections implemented, pending review)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it

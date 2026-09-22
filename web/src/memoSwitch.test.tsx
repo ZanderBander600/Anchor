@@ -81,6 +81,9 @@ function entry(id: string, name: string): MemoLibraryEntry {
     latest_version_number: null,
     latest_published_at: null,
     version_count: 0,
+    strategy_id: 'base',
+    scenario_id: 'base',
+    perspective: 'project',
   };
 }
 
