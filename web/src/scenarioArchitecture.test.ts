@@ -257,12 +257,60 @@ describe('Deal Context is never called a Strategy', () => {
     expect(CSS).toContain('.deal-context-strip-label');
   });
 
+  /**
+   * Surfaces that label a *real* P7.4 Strategy, widened at P7.10 Stage 4.
+   *
+   * This rule was written when the only thing in the product that could be
+   * labelled "Strategy" was the Deal Context field under its old, wrong name,
+   * so banning the bare token everywhere and banning the mislabel were the same
+   * rule. P7.4 then introduced actual Strategies, and the Investment Memo is the
+   * first surface that has to *name* one: its decision context asks the analyst
+   * which Strategy the recommendation is made from, and the report prints that
+   * Strategy's name under the same word.
+   *
+   * Each file is named literally, and the claim below is unchanged for every
+   * other file: the Deal Context is still never called a Strategy, and
+   * `StrategyStrip` / `strategy-strip` are still banned outright by the test
+   * above, which no exemption reaches.
+   */
+  const STRATEGY_SELECTORS = [
+    './components/MemoDecisionPanel.tsx',
+    './components/MemoReportView.tsx',
+  ];
+
   it('no production source renders "Strategy" as a label of its own', () => {
     for (const [path, text] of PRODUCTION) {
+      if (STRATEGY_SELECTORS.includes(path)) {
+        continue;
+      }
       expect(
         textTokens(path, text).filter((token) => token.trim() === 'Strategy'),
         path,
       ).toEqual([]);
+    }
+  });
+
+  it('the exemption is two named files, and the rule still bites elsewhere', () => {
+    // A guard widened until everything passes looks exactly like one that finds
+    // nothing, so the exemption is bounded and the rule is shown still firing.
+    expect(STRATEGY_SELECTORS).toHaveLength(2);
+    for (const path of STRATEGY_SELECTORS) {
+      expect(PRODUCTION.map(([candidate]) => candidate)).toContain(path);
+    }
+    expect(
+      textTokens('seeded.tsx', '<span className="deal-context-label">Strategy</span>').filter(
+        (token) => token.trim() === 'Strategy',
+      ),
+    ).toEqual(['Strategy']);
+  });
+
+  it('the memo names a Strategy, and never the Deal Context', () => {
+    // The exemption is for the P7.4 entity, not a licence to relabel the Deal
+    // Context inside the memo.
+    for (const path of STRATEGY_SELECTORS) {
+      const source = SOURCES[path];
+      expect(source).not.toContain('deal-context');
+      expect(source).not.toContain('dealContext');
     }
   });
 
