@@ -17,11 +17,10 @@ Stage status:
   nothing else. Its ratified implementation clarifications are Section 22.
 - **Stage 3 is deferred and unstarted.** It is optional, not cancelled, and it
   is not implied by anything Stage 4 delivers.
-- **Stage 4 is implemented and pending independent review and human
-  acceptance.** The human explicitly authorized it ahead of Stage 3 on
-  2026-09-21. It delivers the Investment Committee memo workstation, the
-  institutional report, PDF export and browser QA, and nothing else. Its
-  implementation record is Section 23.
+- **Stage 4 is implemented, merged, and human accepted.** PR #53 merged to
+  `main` at `d7e4d75` on 2026-09-21. It delivers the Investment Committee memo
+  workstation, the institutional report, PDF export and browser QA, and nothing
+  else. Its ratified implementation record is Section 23.
 - **Finishing Stage 1 does not automatically start Stage 2, accepting Stage 2
   does not start Stage 3, and Stage 4 does not start Stage 3 either.**
 
@@ -709,7 +708,7 @@ Its scope, when started, is unchanged:
 - prompt and presentation guards preventing calculation, recommendation,
   unsupported facts, and causal value-creation claims.
 
-### Stage 4 — Memo workstation, institutional report, and browser QA — **implemented 2026-09-21, pending review**
+### Stage 4 — Memo workstation, institutional report, and browser QA — **implemented and accepted 2026-09-21**
 
 - Investment Memo workspace;
 - valuation and decision-support presentation;
@@ -729,6 +728,10 @@ version (Section 23.2). No table is altered and no existing row is rewritten.
 
 Finishing Stage 4 does not start Stage 3 and does not start P7.11
 automatically.
+
+Stage 4 was human accepted after PR #53 merged to `main` at `d7e4d75` on
+2026-09-21. Its acceptance does not start Stage 3, P7.11, or any AI proposal
+workflow.
 
 ## 18. Verification contract
 
@@ -816,8 +819,8 @@ This contract is ratified and closed to further negotiation within P7.10.
 - **Stage 2 is implemented, merged, and human accepted.** Its accepted scope is
   limited to Section 17 and the ratified clarifications in Section 22. It does
   not start Stage 3.
-- **Stage 4 is implemented and pending review**, on the explicit human
-  authorization to take it ahead of Stage 3. Its record is Section 23.
+- **Stage 4 is implemented, merged, and human accepted**, on the explicit human
+  authorization to take it ahead of Stage 3. Its accepted record is Section 23.
 - **Stage 3 is deferred and unstarted**, and Stage 4 neither starts it nor
   depends on it.
 - P7.10 does not start P7.11.
@@ -1054,9 +1057,10 @@ claim it proved was restated as the historical fact it still proves.
 
 Stage 4 was implemented from accepted `main` at `9ca957a` (PR #52, over the
 accepted Stage 2 implementation `ababa50`) on branch
-`feature/p7-10-stage-4-memo-workstation-report`. It is **not merged and not
-accepted**. The clarifications the implementation required are recorded here as
-the interpretation offered for review, rather than left implicit in a diff.
+`feature/p7-10-stage-4-memo-workstation-report`, merged through PR #53, and
+human accepted at `d7e4d75` on 2026-09-21. The implementation clarifications
+below, including every independent-review correction, are ratified as part of
+that acceptance.
 
 ### 23.1 Stage 4 ahead of Stage 3, and what that fixes
 

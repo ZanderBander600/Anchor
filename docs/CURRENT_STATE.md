@@ -1,6 +1,6 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-21 (P7.10 Stage 4 implemented; its four independent-review corrections implemented, pending review)
+Last synchronized: 2026-09-22 (P7.10 Stage 4 accepted after PR #53)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -9,9 +9,9 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- Accepted repository and product implementation baseline: `main` at `ababa50`
-  (PR #51, P7.10 Stage 2 persistence, fingerprints, Investment Memo domain,
-  immutable versioning, unavailable-state adapter, and typed API).
+- Accepted repository and product implementation baseline: `main` at `d7e4d75`
+  (PR #53, P7.10 Stage 4 manual-first Investment Committee workstation,
+  immutable institutional report and PDF, and cross-mode browser QA).
 - Last financial-engine implementation merge: `f6f3680` (PR #49, P7.10 Stage
   1 deterministic valuation and `PctOfValue` closing execution).
 - Active gate: **P7.10 Valuation Timepoints + remaining Decision Support / AI
@@ -19,10 +19,9 @@ whenever an accepted gate merges or the active gate changes.
   are closed within the gate and recorded in Section 20 of
   `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`, the ratified
   authority. **Stage 1 is implemented, merged, and human accepted at
-  `f6f3680`. Stage 2 is implemented, merged, and human accepted at
-  `ababa50`.** **Stage 4 is implemented and pending independent review and
-  human acceptance**; it is not merged and not accepted. **Stage 3 is deferred
-  and unstarted**, and Stage 4 neither starts it nor depends on it.
+  `f6f3680`. Stage 2 is implemented, merged, and human accepted at `ababa50`.
+  Stage 4 is implemented, merged, and human accepted at `d7e4d75`.** **Stage 3
+  is deferred and unstarted**, and Stage 4 neither starts it nor depends on it.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active.
 - Autonomous merge: not authorized.
@@ -32,11 +31,34 @@ Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
 
-## 2026-09-21 P7.10 Stage 4 Implementation (pending review)
+## 2026-09-21 P7.10 Stage 4 Acceptance
+
+The human explicitly accepted P7.10 Stage 4 after PR #53 merged to `main` at
+`d7e4d75`. The accepted scope is the manual-first Investment Committee memo
+library and workstation, valuation and decision-support presentation, claim-
+level evidence workflow, preview and immutable publication flow, version
+history, institutional report, exact issued PDF, responsive accessibility, and
+cross-mode browser and rendered-PDF QA.
+
+Schema version 16's single additive report-artifact table freezes the canonical
+report document and exact PDF bytes atomically with each new memo version.
+Later underwriting or presentation changes may alter current freshness but
+never alter what the committee received. Versions published before schema 16
+remain readable and honestly report that no issued report snapshot exists.
+
+The Investment Committee decision remains a separate act under R-F. A decision
+recorded after publication appears in the workspace and version history but
+does not rewrite the issued report or PDF.
+
+This acceptance does not start Stage 3, P7.11, refinancing, another reporting
+format, or any AI proposal workflow. P7.10 remains open pending an explicit
+human decision on its deferred Stage 3 and final closeout.
+
+## 2026-09-21 P7.10 Stage 4 Implementation (accepted)
 
 Stage 4 was explicitly started from accepted `main` at `9ca957a` and is
-implemented on `feature/p7-10-stage-4-memo-workstation-report`. It is **not
-merged, not accepted, and does not start Stage 3 or P7.11.**
+implemented on `feature/p7-10-stage-4-memo-workstation-report`, merged through
+PR #53, and human accepted at `d7e4d75`. It does not start Stage 3 or P7.11.
 
 The human explicitly authorized Stage 4 **ahead of** Stage 3. That ordering is
 recorded as a contract clarification in Section 23 of the P7.10 authority:
@@ -51,29 +73,24 @@ recorded as a contract clarification in Section 23 of the P7.10 authority:
   accepted workstation without changing its financial or publication authority.
 
 Its scope is Section 17's Stage 4 list and nothing else: the Investment
-Committee memo workstation, the institutional report on screen, the PDF export,
-and desktop and 390px browser QA. It adds one presentation package
-(`anchor.reporting`), four read-only API routes and fourteen frontend modules.
+Committee memo workstation, the institutional report on screen, the exact PDF
+export, and desktop and 390px browser QA. It adds the `anchor.reporting`
+presentation package, four read-only API routes, the memo frontend, and schema
+version 16's one additive immutable-artifact table. It adds no financial
+calculation and redefines no Stage 1 or Stage 2 authority.
 
-**It adds no schema change, no migration, and no financial calculation.** Stage
-1's valuation package and Stage 2's memo package are byte-identical to their
-accepted merges; Stage 4 presents them and redefines neither.
+The accepted clarifications in Section 23 include:
 
-Four things a reviewer should look at deliberately, each recorded with its
-reasoning in Section 23:
-
-- a published version freezes its content, evidence and valuations but not its
-  returns, so those are **recomputed** from the cell the version recorded and
-  the freshness check says whether they still match. A stale version exports,
-  watermarked, and is never rewritten;
-- the Stage 2 unavailable `reason` names records by their opaque ids, so Stage 4
-  translates the stable `reason_code` instead of repeating the message;
-- **Anchor stores no market or location**, so the concept's location line and
-  market panel are omitted rather than invented;
-- **ReportLab was added.** Anchor had no PDF generator at all, and Section 13.3
-  requires a paginated institutional report. It is the same shape of dependency
-  as XlsxWriter, and under `invariant=1` two exports of one version are
-  byte-identical.
+- publication freezes a canonical typed report document and exact PDF bytes in
+  one transaction; published values are never recomputed;
+- current freshness is presented outside the frozen historical artifact;
+- a later Investment Committee decision remains separate and does not rewrite
+  the issued document;
+- Stage 4 translates stable unavailable `reason_code` values into analyst-
+  facing labels and never exposes opaque record ids;
+- Anchor stores no market or location, so the concept's unsupported location
+  line and Market Snapshot are omitted rather than invented;
+- ReportLab is the accepted deterministic PDF renderer.
 
 Browser and rendered-PDF QA found six defects, all fixed and all recorded in the
 commit that fixes them: an unbounded request loop, internal ids in an analyst
@@ -241,6 +258,8 @@ human instruction recorded above.
   execution, human accepted
 - P7.10 Stage 2 persistence, fingerprints, Investment Memo domain, immutable
   versioning, unavailable-state adapter, and typed API, human accepted
+- P7.10 Stage 4 manual-first Investment Committee workstation, immutable
+  institutional report and PDF, and cross-mode browser QA, human accepted
 
 ## Next Work
 
@@ -250,8 +269,8 @@ R-J are closed within this gate and recorded in Section 20 of
 `docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`. Stage 1 is implemented,
 merged, and human accepted. **Stage 2 is implemented, merged, and human
 accepted at `ababa50`; its two ratified review corrections are part of the
-accepted implementation.** **Stage 4 is implemented and awaiting review and
-human acceptance.** **Stage 3 is deferred and unstarted.**
+accepted implementation.** **Stage 4 is implemented, merged, and human
+accepted at `d7e4d75`. Stage 3 is deferred and unstarted.**
 
 Stage 1 implements the deterministic valuation layer and `PctOfValue`
 **closing** execution only. It adds no persistence, migration, schema version
@@ -276,14 +295,12 @@ Two boundaries carry into Stage 2 and are recorded in the contract:
 
 Stage 2 was separately started, implemented, merged, and accepted. Stage 4
 (the Memo workstation, institutional report and PDF export) was then explicitly
-started **ahead of** Stage 3 and is implemented, pending review. Stage 3
+started **ahead of** Stage 3, implemented, merged, and accepted. Stage 3
 (grounded AI proposals) remains deferred and unstarted; Stage 4 neither starts
-it nor depends on it, and accepting Stage 4 would not begin it.
+it nor depends on it.
 
-Stage 4 has since had **one round of independent review**, whose four required
-corrections are implemented on the branch and are also pending review. They are
-recorded in Sections 23.2 and 23.9 of the P7.10 authority, and the load-bearing
-ones are:
+Stage 4's independent-review corrections are accepted and recorded in Sections
+23.2 and 23.9 of the P7.10 authority. The load-bearing ones are:
 
 - **A published memo version's report and PDF are frozen.** Publication stores
   the issued report and the exact PDF bytes, so what a committee read does not
@@ -371,8 +388,9 @@ scoped independently.
   2026-09-20; Stage 1 implemented, merged, and human accepted at `f6f3680`;
   Stage 2 implemented, merged, and human accepted at `ababa50`, with its
   implementation record and every ratified clarification in Section 22; Stage 4
-  implemented and pending review, with its implementation record in Section 23;
-  Stage 3 deferred and unstarted.**
+  implemented, merged, and human accepted at `d7e4d75`, with its implementation
+  record and every ratified clarification in Section 23; Stage 3 deferred and
+  unstarted.**
 
 ## Historical-Document Rule
 
