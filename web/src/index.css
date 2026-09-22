@@ -10115,3 +10115,59 @@ body {
     position: static;
   }
 }
+
+/* ---------------------------------------------------------------------
+   The in-application confirmation (Stage 4 Correction 2).
+
+   Replaces the native dialog the gate forbids. Sized for the sentence it
+   has to carry rather than for a one-line "Continue?", and reachable at
+   390px without the actions falling off the edge.
+   --------------------------------------------------------------------- */
+
+.memo-dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  background: rgba(17, 24, 38, 0.45);
+}
+
+.memo-dialog {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.22);
+  padding: var(--sp-5);
+  width: 100%;
+  max-width: 440px;
+  min-width: 0;
+}
+
+.memo-dialog-title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+  margin: 0 0 var(--sp-2);
+  overflow-wrap: anywhere;
+}
+
+.memo-dialog-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  margin: 0 0 var(--sp-5);
+  overflow-wrap: anywhere;
+}
+
+.memo-dialog-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  /* The safe action sits first in the DOM for focus order, and last visually,
+     where a confirming click expects it. */
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+}

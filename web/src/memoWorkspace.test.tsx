@@ -253,7 +253,6 @@ function reportPackage(overrides: Partial<MemoReportPackage> = {}): MemoReportPa
     scenario_label: 'Base Scenario',
     perspective_label: 'Project',
     freshness: 'not_applicable',
-    stale_classes: [],
     verification_code: null,
     key_metrics: [
       { label: 'Purchase Price', value: '$10,000,000', unavailable: null, note: null },
@@ -633,9 +632,16 @@ describe('publication', () => {
 
   it('publishing asks for an explicit confirmation first', async () => {
     mockPublish.mockResolvedValue(VERSION);
-    mockVersionReport.mockResolvedValue(
-      reportPackage({ origin: 'published_version', version_number: 1, version_id: 'ver-1' }),
-    );
+    mockVersionReport.mockResolvedValue({
+      investment_id: 'inv-1',
+      version_id: 'ver-1',
+      report: reportPackage({
+        origin: 'published_version',
+        version_number: 1,
+        version_id: 'ver-1',
+      }),
+      unavailable: null,
+    });
     renderWorkspace();
     await openTab(/Preview & Publish/);
 
@@ -681,8 +687,10 @@ describe('publication', () => {
 describe('published versions', () => {
   beforeEach(() => {
     mockVersions.mockResolvedValue([VERSION]);
-    mockVersionReport.mockResolvedValue(
-      reportPackage({
+    mockVersionReport.mockResolvedValue({
+      investment_id: 'inv-1',
+      version_id: 'ver-1',
+      report: reportPackage({
         origin: 'published_version',
         version_number: 1,
         version_id: 'ver-1',
@@ -690,7 +698,8 @@ describe('published versions', () => {
         freshness: 'current',
         verification_code: 'fp-published',
       }),
-    );
+      unavailable: null,
+    });
   });
 
   it('offers a PDF download for a published version and for nothing else', async () => {

@@ -24,8 +24,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { readMemoReportPreview, readMemoVersionReport } from '../api';
-import { memoId } from '../memoCatalog';
-import type { MemoReportPackage } from '../memoTypes';
+import { DEPENDENCY_LABELS, memoId, STALE_VERSION_HINT } from '../memoCatalog';
+import { useAsyncResource } from '../useAsyncResource';
 import { useInvestmentMemo, useMemoDecisionContext } from '../useInvestmentMemo';
 import { MemoDecisionPanel } from './MemoDecisionPanel';
 import { MemoEvidencePanel } from './MemoEvidencePanel';
@@ -96,12 +96,8 @@ export function MemoWorkspace({
   const memo = useInvestmentMemo({ investmentId, isActive: isShown });
   const context = useMemoDecisionContext(investmentId, isShown);
   const [tab, setTab] = useState<MemoTabId>('decision');
-  const [preview, setPreview] = useState<MemoReportPackage | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewToken, setPreviewToken] = useState(0);
   const [openVersionId, setOpenVersionId] = useState<string | null>(initialVersionId);
-  const [versionReport, setVersionReport] = useState<MemoReportPackage | null>(null);
-  const [versionError, setVersionError] = useState<string | null>(null);
 
   useEffect(() => {
     onUnsavedChange?.(
@@ -126,61 +122,57 @@ export function MemoWorkspace({
     [loadFreshness, loadDecision],
   );
 
+  /** The open version's freshness, read as soon as it is opened, so the
+   * workspace can say beside the frozen report whether the analysis has moved.
+   * Declared after `loadVersionDetail`, which it calls. */
+  useEffect(() => {
+    if (openVersionId !== null) {
+      loadVersionDetail(openVersionId);
+    }
+  }, [openVersionId, loadVersionDetail]);
+
   /** The preview follows the *saved* draft, so what it shows is what would be
    * published. A dirty draft says so rather than previewing edits the backend
-   * has not seen. */
-  const loadPreview = useCallback(async () => {
-    setIsPreviewLoading(true);
-    setPreviewError(null);
-    try {
-      setPreview(await readMemoReportPreview(investmentId));
-    } catch (error) {
-      setPreview(null);
-      setPreviewError(
-        error instanceof Error && error.message !== ''
-          ? error.message
-          : 'The report preview could not be built.',
-      );
-    } finally {
-      setIsPreviewLoading(false);
-    }
-  }, [investmentId]);
+   * has not seen.
+   *
+   * Keyed on the tab being open and on `previewToken`, which publishing bumps:
+   * the preview is only read while it is on screen, and is re-read after a
+   * publication because the draft's relationship to the history has changed. */
+  const previewKey =
+    tab === 'publish' && memo.hasSavedDraft && isShown
+      ? `${investmentId}|preview|${previewToken}`
+      : null;
+  const loadPreview = useCallback(() => readMemoReportPreview(investmentId), [investmentId]);
+  const previewResource = useAsyncResource(
+    previewKey,
+    loadPreview,
+    'The report preview could not be built.',
+  );
+  const preview = previewResource.data;
+  const previewError = previewResource.error;
+  const isPreviewLoading = previewResource.isLoading;
 
-  useEffect(() => {
-    if (tab === 'publish' && memo.hasSavedDraft && isShown) {
-      void loadPreview();
-    }
-  }, [tab, memo.hasSavedDraft, isShown, loadPreview]);
-
-  useEffect(() => {
-    if (openVersionId === null) {
-      setVersionReport(null);
-      return;
-    }
-    let cancelled = false;
-    setVersionError(null);
-    void readMemoVersionReport(investmentId, openVersionId)
-      .then((report) => {
-        if (!cancelled) {
-          setVersionReport(report);
-        }
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setVersionReport(null);
-          setVersionError(
-            error instanceof Error && error.message !== ''
-              ? error.message
-              : 'The published version could not be opened.',
-          );
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [investmentId, openVersionId]);
+  /** The open published version's frozen report.
+   *
+   * Read, never recomputed: the backend returns the artifact stored when that
+   * version was published, so this does not move when the analysis does. A
+   * version published before Anchor stored reports answers with a typed
+   * `unavailable` rather than an error, and the view says so. */
+  const loadVersionReport = useCallback(
+    () => readMemoVersionReport(investmentId, openVersionId ?? ''),
+    [investmentId, openVersionId],
+  );
+  const versionResource = useAsyncResource(
+    openVersionId === null ? null : `${investmentId}|${openVersionId}`,
+    loadVersionReport,
+    'The published version could not be opened.',
+  );
+  const versionReport = versionResource.data?.report ?? null;
+  const versionUnavailable = versionResource.data?.unavailable ?? null;
+  const versionError = versionResource.error;
 
   const citations = buildCitations(memo.form);
+  const openFreshness = openVersionId === null ? undefined : memo.freshness[openVersionId];
 
   if (memo.status === 'loading') {
     return (
@@ -233,6 +225,35 @@ export function MemoWorkspace({
               <span>{versionError}</span>
             </div>
           )}
+
+          {/* Current freshness is reported *around* the frozen document, never
+            * inside it. The report below is what the committee was issued; this
+            * says whether the analysis has moved since, which is a different
+            * fact and belongs in the workspace. */}
+          {openFreshness !== undefined && openFreshness.freshness === 'stale' && (
+            <div className="memo-report-stale" role="status">
+              <p className="memo-report-stale-title">
+                <span className="memo-report-status">Analysis has changed</span>
+              </p>
+              <p className="memo-report-stale-detail">{STALE_VERSION_HINT}</p>
+              {openFreshness.stale_classes.length > 0 && (
+                <p className="memo-report-stale-classes">
+                  Changed since publication:{' '}
+                  {openFreshness.stale_classes
+                    .map((entry) => DEPENDENCY_LABELS[entry] ?? entry)
+                    .join(', ')}
+                </p>
+              )}
+            </div>
+          )}
+
+          {versionUnavailable !== null && (
+            <div className="memo-disclosure" role="note">
+              <p className="memo-disclosure-title">No issued report for this version</p>
+              <p className="memo-disclosure-detail">{versionUnavailable.message}</p>
+            </div>
+          )}
+
           {versionReport !== null && <MemoReportView report={versionReport} />}
         </div>
       </>
@@ -365,7 +386,7 @@ export function MemoWorkspace({
                     onPublish={async () => {
                       const version = await memo.publish();
                       if (version !== null) {
-                        await loadPreview();
+                        setPreviewToken((count) => count + 1);
                         setOpenVersionId(version.version_id);
                       }
                       return version;

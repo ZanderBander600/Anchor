@@ -7,11 +7,17 @@
  * Deliberately thin. The library reports stored facts; freshness is a
  * per-version question and is answered in the memo workspace, for the one
  * version it is showing, rather than by running an analysis for every row.
+ *
+ * Loading and cancellation belong to `useAsyncResource`, so this hook holds no
+ * loading flag of its own and writes no state in an effect (Correction 3).
+ * Re-reading is `reload()` rather than a changing signal object, because a
+ * caller that mints a key to force a refresh is doing the hook's job for it.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback } from 'react';
 import { readMemoLibrary } from './api';
 import type { MemoLibraryEntry } from './memoTypes';
+import { useAsyncResource } from './useAsyncResource';
 
 export interface UseMemoLibraryResult {
   entries: MemoLibraryEntry[];
@@ -20,47 +26,22 @@ export interface UseMemoLibraryResult {
   reload: () => void;
 }
 
-export function useMemoLibrary(refreshSignal?: object): UseMemoLibraryResult {
-  const [entries, setEntries] = useState<MemoLibraryEntry[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadToken, setReloadToken] = useState({});
-  const liveRef = useRef(true);
+/** One shared empty list, so a loading render does not hand consumers a new
+ * array identity every time and invalidate their memoisation. */
+const NO_ENTRIES: MemoLibraryEntry[] = [];
 
-  useEffect(() => {
-    liveRef.current = true;
-    return () => {
-      liveRef.current = false;
-    };
-  }, []);
+export function useMemoLibrary(): UseMemoLibraryResult {
+  const load = useCallback(() => readMemoLibrary(), []);
+  const resource = useAsyncResource(
+    'memo-library',
+    load,
+    'The investment memos could not be loaded.',
+  );
 
-  useEffect(() => {
-    setIsLoading(true);
-    setError(null);
-    void readMemoLibrary()
-      .then((result) => {
-        if (liveRef.current) {
-          setEntries(result);
-        }
-      })
-      .catch((cause: unknown) => {
-        if (liveRef.current) {
-          setEntries([]);
-          setError(
-            cause instanceof Error && cause.message !== ''
-              ? cause.message
-              : 'The investment memos could not be loaded.',
-          );
-        }
-      })
-      .finally(() => {
-        if (liveRef.current) {
-          setIsLoading(false);
-        }
-      });
-  }, [refreshSignal, reloadToken]);
-
-  const reload = useCallback(() => setReloadToken({}), []);
-
-  return { entries, isLoading, error, reload };
+  return {
+    entries: resource.data ?? NO_ENTRIES,
+    isLoading: resource.isLoading,
+    error: resource.error,
+    reload: resource.reload,
+  };
 }

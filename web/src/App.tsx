@@ -54,6 +54,7 @@ import { WorkspaceNav } from './components/WorkspaceNav';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import type { AppView } from './components/AppSidebar';
 // Phase 7 Gate P7.10 Stage 4 -- the Investment Committee surfaces.
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { MemoLibraryPanel } from './components/MemoLibraryPanel';
 import { MemoWorkspace } from './components/MemoWorkspace';
 import { useMemoLibrary } from './useMemoLibrary';
@@ -1309,8 +1310,10 @@ export default function App() {
   // throughout rather than exposing the hidden one-unit Investment.
   const [openMemo, setOpenMemo] = useState<MemoLibraryEntry | null>(null);
   const [memoUnsaved, setMemoUnsaved] = useState<string | null>(null);
-  const [memoRefresh, setMemoRefresh] = useState({});
-  const memoLibrary = useMemoLibrary(memoRefresh);
+  /** The memo the analyst asked for while another holds unsaved work. Held
+   * until they answer; cancelling drops it and navigates nowhere. */
+  const [pendingMemo, setPendingMemo] = useState<MemoLibraryEntry | null>(null);
+  const memoLibrary = useMemoLibrary();
   // Gate AM1: which primary workspace is showing. Acquisitions and Asset
   // Management are different products over the same building -- one underwrites
   // a purchase, the other reports on what is already owned -- so the switch is
@@ -2748,25 +2751,40 @@ export default function App() {
    * memo and materializes no hidden Investment. */
   function handleOpenMemoLibrary() {
     setUnitReturnId(null);
-    setMemoRefresh({});
+    memoLibrary.reload();
     setView('memo-library');
   }
 
   /** Opens one memo workspace.
    *
    * Switching to a *different* memo remounts the workspace and would discard an
-   * unsaved draft, so it asks first -- the app shell's one existing convention
-   * for this exact situation, the same guard that protects switching Deals and
-   * Investments. Every destructive action *inside* the memo confirms inline
-   * instead, because a native dialog cannot be labelled, styled or dismissed by
-   * keyboard consistently. */
+   * unsaved draft, so it asks first -- through `ConfirmDialog`, which names the
+   * memo, says what would be lost, focuses the safe action, traps focus and
+   * restores it. No native dialog appears anywhere in the memo workflow
+   * (Correction 2).
+   *
+   * When nothing is unsaved the switch is not destructive and nothing is
+   * asked. */
   function handleOpenMemo(entry: MemoLibraryEntry) {
-    if (openMemo !== null && openMemo.investment_id !== entry.investment_id) {
-      if (memoUnsaved !== null && !window.confirm(memoUnsaved)) {
-        return;
-      }
-      setMemoUnsaved(null);
+    const wouldDiscard =
+      openMemo !== null && openMemo.investment_id !== entry.investment_id && memoUnsaved !== null;
+    if (wouldDiscard) {
+      setPendingMemo(entry);
+      return;
     }
+    setOpenMemo(entry);
+    setView('memo');
+  }
+
+  /** Confirmed: the pending memo becomes the open one and the warning it would
+   * have discarded is cleared with it. */
+  function handleConfirmMemoSwitch() {
+    const entry = pendingMemo;
+    setPendingMemo(null);
+    if (entry === null) {
+      return;
+    }
+    setMemoUnsaved(null);
     setOpenMemo(entry);
     setView('memo');
   }
@@ -2779,7 +2797,7 @@ export default function App() {
    * discard work is opening a *different* memo, and that is the one the
    * confirmation above guards. */
   function handleCloseMemo() {
-    setMemoRefresh({});
+    memoLibrary.reload();
     setView('memo-library');
   }
 
@@ -3846,6 +3864,21 @@ export default function App() {
               onCancel={handleCloseInvestmentPage}
             />
           </div>
+        )}
+
+        {pendingMemo !== null && (
+          <ConfirmDialog
+            title={`Open ${pendingMemo.name}?`}
+            body={
+              openMemo === null
+                ? 'This will discard unsaved work.'
+                : `${openMemo.name} has unsaved changes that have not been saved. Opening ${pendingMemo.name} discards them.`
+            }
+            confirmLabel="Discard and open"
+            cancelLabel="Keep editing"
+            onConfirm={handleConfirmMemoSwitch}
+            onCancel={() => setPendingMemo(null)}
+          />
         )}
 
         {view === 'memo-library' && (
