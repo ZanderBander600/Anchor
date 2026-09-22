@@ -188,7 +188,12 @@ describe('P7.10 Stage 4 -- switching memos', () => {
     // it is on screen and nothing of theirs was replaced.
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(vi.mocked(readInvestmentMemo).mock.calls.map(([id]) => id)).not.toContain('inv-2');
-    expect(screen.queryByRole('heading', { name: /Harbor Point/ })).toBeNull();
+    // No memo workspace is open for it. (The library's own card still names it,
+    // which is the point of a library.)
+    const openMemoNames = Array.from(document.querySelectorAll('.memo-header-name')).map(
+      (node) => node.textContent ?? '',
+    );
+    expect(openMemoNames.some((name) => name.includes('Harbor Point'))).toBe(false);
 
     // And the work is still there: going back into the memo they were editing
     // finds the sentence they had typed, unsaved and intact.

@@ -1324,13 +1324,43 @@ and cells by their own text, so a Unit whose NOI and levered cash flow were the
 same figure produced duplicate React keys and a console error. They are keyed by
 position, which is what the backend fixes and nothing reorders.
 
-Two further observations are recorded rather than changed, as judgement calls a
-reviewer should confirm:
+Two further observations were raised at that review as open judgement calls.
+Both were decided against the first implementation and are now closed:
 
-- the Investment Committee library is a wide table; at 390px it scrolls
-  horizontally inside its own labelled, keyboard-reachable container rather than
-  reflowing into cards. The page itself has no horizontal overflow at either
-  width;
-- a refusal's "Affects:" line shows the analyst's own timepoint or position id.
-  Showing the *label* instead would read better; the id is what the refusal
-  carries, and it is a token the analyst chose rather than a stored record's key.
+- **the library reflows at phone width.** Below 640px the Investment Committee
+  library is a list of cards rather than a table scrolled sideways, because it
+  is a navigation and status surface rather than a financial comparison table.
+  Both presentations render one `describeEntry` description, so they cannot
+  disagree about a memo, and `display: none` leaves exactly one reachable action
+  per memo at any width. The desktop table is unchanged above that width, where
+  comparing a column of recommendations across a portfolio is what a table is
+  for. A card carries every column the table carries, plus the decision cell,
+  and the Investment name is the card's heading and is never truncated;
+- **an analyst-facing scope is a name, never an id.** A refusal's `scope_id` is
+  an identity the API must carry; what an analyst reads is the label the scope's
+  own register gives it, resolved from the lists the workspace has already
+  loaded. A scope whose record no longer exists says so -- "Selected valuation
+  view (no longer available)" -- and the id is never the fallback. The same rule
+  now holds in the report and the PDF, where a value-sized funding disclosure
+  named its position by the stored key.
+
+### 23.11 No identifier reaches a normal analyst view
+
+Guarded rather than asserted. `tests/test_p7_10_stage_4_architecture.py` proves
+that no Stage 4 presentation module renders an expression whose whole value is a
+stored identifier, that every `MemoReportDisclosure` scope is a fixed word, a
+table label or a resolved display name, that the refusal-scope resolver returns
+a sentence for a code it does not know and never returns its argument, and that
+every "no longer available" sentence names no record.
+
+The rule is deliberately narrow: it looks for an identifier being *rendered*,
+not for one being passed to a function, used as a React key, built into a URL or
+compared. A guard that rejected those would reject the identity the product
+legitimately needs and would be switched off within a gate. As written it found
+two real leaks that had survived the first QA pass -- the valuation panel's
+unresolved-funding heading, and the report disclosure's position scope.
+
+Identifiers remain exactly where they belong: in the API, the store, the
+dependency ledger, React keys, export URLs and the published version's
+verification code, which Section 13.3 requires and which is labelled as what it
+is.

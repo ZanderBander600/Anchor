@@ -20,9 +20,9 @@
  * forbids.
  */
 
-import { assetTypeLabel } from '../assetTypes';
-import type { AssetType } from '../assetTypes';
-import { COMMITTEE_LABELS, displayDate, RECOMMENDATION_LABELS } from '../memoCatalog';
+
+import { describeEntry } from '../memoLibraryRow';
+import type { MemoLibraryRow } from '../memoLibraryRow';
 import type { MemoLibraryEntry } from '../memoTypes';
 
 export interface MemoLibraryPanelProps {
@@ -33,66 +33,73 @@ export interface MemoLibraryPanelProps {
   onRetry: () => void;
 }
 
-function classificationOf(entry: MemoLibraryEntry): string {
-  if (entry.asset_type === null) {
-    return 'Not classified';
-  }
-  const kind = assetTypeLabel(entry.asset_type as AssetType);
-  return entry.asset_subtype === null ? kind : `${kind} — ${entry.asset_subtype}`;
-}
-
-function unitsOf(entry: MemoLibraryEntry): string {
-  return entry.unit_count === 1 ? '1 Unit' : `${entry.unit_count} Units`;
-}
-
-function statusOf(entry: MemoLibraryEntry): string {
-  if (entry.latest_version_number !== null && entry.has_draft) {
-    return `Published v${entry.latest_version_number} · draft open`;
-  }
-  if (entry.latest_version_number !== null) {
-    return `Published v${entry.latest_version_number}`;
-  }
-  return 'Draft';
-}
-
-function MemoRow({
-  entry,
-  onOpen,
-}: {
-  entry: MemoLibraryEntry;
-  onOpen: (entry: MemoLibraryEntry) => void;
-}) {
+function MemoRow({ row, onOpen }: { row: MemoLibraryRow; onOpen: (entry: MemoLibraryEntry) => void }) {
   return (
     <tr>
       <th scope="row" className="memo-cell-label">
-        <span className="memo-library-name">{entry.name}</span>
-        <span className="memo-library-kind">{entry.deal_id !== null ? 'Deal' : 'Investment'}</span>
+        <span className="memo-library-name">{row.name}</span>
+        <span className="memo-library-kind">{row.kind}</span>
       </th>
-      <td>{classificationOf(entry)}</td>
-      <td>{unitsOf(entry)}</td>
-      <td>{statusOf(entry)}</td>
+      <td>{row.classification}</td>
+      <td>{row.units}</td>
+      <td>{row.status}</td>
+      <td>{row.recommendation}</td>
+      <td>{row.decision}</td>
+      <td>{row.activity}</td>
       <td>
-        {entry.analyst_recommendation === null
-          ? 'Not stated'
-          : RECOMMENDATION_LABELS[entry.analyst_recommendation]}
-      </td>
-      <td>
-        {/* The committee's own decision, never the analyst's echoed back.
-          * "Not yet recorded" is not "Pending": one is an absence, the other is
-          * an outcome somebody chose. */}
-        {entry.committee_decision === null
-          ? 'Not yet recorded'
-          : COMMITTEE_LABELS[entry.committee_decision]}
-      </td>
-      <td>
-        {displayDate(entry.latest_published_at ?? entry.draft_updated_at) ?? 'Not yet saved'}
-      </td>
-      <td>
-        <button type="button" className="btn btn-secondary btn-xs" onClick={() => onOpen(entry)}>
-          Open memo
+        <button type="button" className="btn btn-secondary btn-xs" onClick={() => onOpen(row.entry)}>
+          {row.action}
         </button>
       </td>
     </tr>
+  );
+}
+
+/**
+ * The same row as a card, for phone width.
+ *
+ * Every field the table shows is here, labelled, stacked and wrapping: nothing
+ * is dropped to make it fit, because a status an analyst cannot see is a status
+ * the library did not report. The name is the heading and is never truncated --
+ * two memos on neighbouring properties must not read as the same memo.
+ *
+ * Only one presentation is ever live: the stylesheet gives the other
+ * `display: none`, which removes it from the accessibility tree and from tab
+ * order, so there is exactly one reachable action per memo at any width.
+ */
+function MemoCard({ row, onOpen }: { row: MemoLibraryRow; onOpen: (entry: MemoLibraryEntry) => void }) {
+  const facts: { label: string; value: string }[] = [
+    { label: 'Asset type', value: row.classification },
+    { label: 'Scope', value: row.units },
+    { label: 'Status', value: row.status },
+    { label: 'Analyst recommendation', value: row.recommendation },
+    { label: 'Committee decision', value: row.decision },
+    ...(row.cell === null ? [] : [{ label: 'Decision cell', value: row.cell }]),
+    { label: 'Last activity', value: row.activity },
+  ];
+
+  return (
+    <li className="memo-library-card">
+      <h3 className="memo-library-card-name">
+        {row.name} <span className="memo-library-kind">{row.kind}</span>
+      </h3>
+      <dl className="memo-library-card-facts">
+        {facts.map((fact) => (
+          <div key={fact.label} className="memo-library-card-fact">
+            <dt>{fact.label}</dt>
+            <dd>{fact.value}</dd>
+          </div>
+        ))}
+      </dl>
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm memo-library-card-action"
+        onClick={() => onOpen(row.entry)}
+      >
+        {row.action}
+        <span className="visually-hidden"> — {row.name}</span>
+      </button>
+    </li>
   );
 }
 
@@ -105,6 +112,8 @@ export function MemoLibraryPanel({
 }: MemoLibraryPanelProps) {
   const active = entries.filter((entry) => entry.has_draft || entry.version_count > 0);
   const available = entries.filter((entry) => !entry.has_draft && entry.version_count === 0);
+  // Described once; the table and the cards below both render these.
+  const activeRows = active.map(describeEntry);
 
   return (
     <section className="memo-library" aria-labelledby="memo-library-title">
@@ -139,10 +148,18 @@ export function MemoLibraryPanel({
         </p>
       )}
 
-      {active.length > 0 && (
+      {activeRows.length > 0 && (
         <div className="memo-library-group">
           <h2 className="memo-library-group-title">In progress</h2>
-          <div className="memo-table-scroll" tabIndex={0} role="group" aria-label="Memos in progress">
+          {/* Phone width: the same rows as cards. Which of the two is live is
+            * the stylesheet's decision, and `display: none` takes the other out
+            * of the accessibility tree and out of tab order entirely. */}
+          <ul className="memo-library-cards" aria-label="Memos in progress">
+            {activeRows.map((row) => (
+              <MemoCard key={row.entry.investment_id} row={row} onOpen={onOpen} />
+            ))}
+          </ul>
+          <div className="memo-table-scroll" tabIndex={0} role="group" aria-label="Memos in progress, as a table">
             <table className="memo-table">
               <caption className="memo-table-caption">Memos with a draft or a published version</caption>
               <thead>
@@ -160,8 +177,8 @@ export function MemoLibraryPanel({
                 </tr>
               </thead>
               <tbody>
-                {active.map((entry) => (
-                  <MemoRow key={entry.investment_id} entry={entry} onOpen={onOpen} />
+                {activeRows.map((row) => (
+                  <MemoRow key={row.entry.investment_id} row={row} onOpen={onOpen} />
                 ))}
               </tbody>
             </table>
@@ -178,7 +195,7 @@ export function MemoLibraryPanel({
                 <span className="memo-start-identity">
                   <span className="memo-library-name">{entry.name}</span>
                   <span className="memo-library-meta">
-                    {classificationOf(entry)} · {unitsOf(entry)}
+                    {describeEntry(entry).classification} · {describeEntry(entry).units}
                   </span>
                 </span>
                 <button

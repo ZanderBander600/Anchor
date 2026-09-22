@@ -56,6 +56,9 @@ const MEMO_MODULES = [
   // production modules and are held to every rule below.
   'components/ConfirmDialog.tsx',
   'useAsyncResource.ts',
+  // Second review, Correction 1: the one library-row description the table and
+  // the phone-width cards both render.
+  'memoLibraryRow.ts',
 ];
 
 function parse(fileName: string, text: string): ts.SourceFile {

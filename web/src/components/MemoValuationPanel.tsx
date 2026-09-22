@@ -28,9 +28,11 @@ import type { MemoDraftForm } from '../memoForm';
 import type { ValuationSurface, ValuationView } from '../memoTypes';
 import {
   EXPLORATORY_VALUATION_HINT,
+  publicationScopeLabel,
   unavailableReasonLabel,
   valuationRoleLabel,
 } from '../memoCatalog';
+import type { MemoScopeSources } from '../memoCatalog';
 
 export interface MemoValuationPanelProps {
   form: MemoDraftForm;
@@ -41,6 +43,9 @@ export interface MemoValuationPanelProps {
   /** True when the draft has not chosen a Strategy and Scenario yet, which is a
    * real state rather than a failure: there is nothing to resolve against. */
   hasSelectedCell: boolean;
+  /** The registers a position or view is named from, so this panel shows the
+   * analyst's own words rather than a stored key (Correction 2). */
+  scopes: MemoScopeSources;
 }
 
 function ValuationRow({
@@ -125,6 +130,7 @@ export function MemoValuationPanel({
   isLoading,
   error,
   hasSelectedCell,
+  scopes,
 }: MemoValuationPanelProps) {
   const selectedIds = new Set(form.selectedValuationTimepointIds);
   const consumedIds = new Set(surface?.consumed_timepoint_ids ?? []);
@@ -212,7 +218,12 @@ export function MemoValuationPanel({
           <ul className="memo-item-list">
             {unresolvedFundings.map((state) => (
               <li key={`${state.position_id}-${state.event_id}`} className="memo-disclosure" role="note">
-                <p className="memo-disclosure-title">{state.position_id}</p>
+                {/* The position by the name its own Capital Structure gives
+                  * it. Found by the identifier guard at the second Stage 4
+                  * review: this printed the stored key. */}
+                <p className="memo-disclosure-title">
+                  {publicationScopeLabel('selected_perspective_missing', state.position_id, scopes)}
+                </p>
                 <p className="memo-disclosure-detail">
                   {unavailableReasonLabel(state.unavailable?.reason_code)}
                 </p>

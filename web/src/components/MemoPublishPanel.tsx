@@ -50,10 +50,11 @@ import {
   RECOMMENDATION_LABELS,
   REFUSAL_GROUP_LABELS,
   REFUSAL_GROUP_ORDER,
-  isOpaqueId,
   publicationRefusalLabel,
+  publicationScopeLabel,
   refusalGroupOf,
 } from '../memoCatalog';
+import type { MemoScopeSources } from '../memoCatalog';
 
 export interface MemoPublishPanelProps {
   investmentId: string;
@@ -69,6 +70,11 @@ export interface MemoPublishPanelProps {
   versions: InvestmentMemoVersion[];
   freshness: Record<string, MemoFreshnessReport>;
   decisions: Record<string, InvestmentCommitteeDecision | null>;
+  /** The registers a refusal's scope is named from: the workspace's own loaded
+   * valuation views, Strategies, Scenarios, perspectives, sources and memo
+   * items. Presentation reads them; it never prints a stored id (Correction 2
+   * of the second Stage 4 review). */
+  scopes: MemoScopeSources;
   /** Whether each version has an issued report. A version published before
    * Anchor stored one has no PDF to offer, and is told so in place of a link
    * that could only refuse (found by browser QA at the independent review). */
@@ -93,7 +99,13 @@ export interface MemoPublishPanelProps {
   show: 'publish' | 'versions';
 }
 
-function RefusalGroups({ refusals }: { refusals: PublicationRefusal[] }) {
+function RefusalGroups({
+  refusals,
+  scopes,
+}: {
+  refusals: PublicationRefusal[];
+  scopes: MemoScopeSources;
+}) {
   const grouped = new Map<string, PublicationRefusal[]>();
   for (const refusal of refusals) {
     const group = refusalGroupOf(refusal.code);
@@ -118,8 +130,12 @@ function RefusalGroups({ refusals }: { refusals: PublicationRefusal[] }) {
                   <p className="memo-refusal-message">
                     {publicationRefusalLabel(refusal.code, refusal.unavailable_reason)}
                   </p>
-                  {refusal.scope_id !== null && !isOpaqueId(refusal.scope_id) && (
-                    <p className="memo-refusal-scope">Affects: {refusal.scope_id}</p>
+                  {/* Named from the register the refusal's own code points at,
+                    * never printed as the stored id. */}
+                  {publicationScopeLabel(refusal.code, refusal.scope_id, scopes) !== null && (
+                    <p className="memo-refusal-scope">
+                      Affects: {publicationScopeLabel(refusal.code, refusal.scope_id, scopes)}
+                    </p>
                   )}
                 </li>
               ))}
@@ -146,6 +162,7 @@ export function MemoPublishPanel(props: MemoPublishPanelProps) {
     versions,
     freshness,
     decisions,
+    scopes,
     reportAvailability,
     onLoadVersionDetail,
     onRecordDecision,
@@ -227,7 +244,7 @@ export function MemoPublishPanel(props: MemoPublishPanelProps) {
             role="group"
             aria-label="Reasons this memo cannot be published"
           >
-            <RefusalGroups refusals={refusals} />
+            <RefusalGroups refusals={refusals} scopes={scopes} />
           </div>
         )}
 

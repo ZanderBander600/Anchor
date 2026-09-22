@@ -22,7 +22,7 @@
  * workspace's authority.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { readMemoReportPreview, readMemoVersionReport } from '../api';
 import { DEPENDENCY_LABELS, memoId, STALE_VERSION_HINT } from '../memoCatalog';
 import { useAsyncResource } from '../useAsyncResource';
@@ -123,6 +123,49 @@ export function MemoWorkspace({
       void loadReportAvailability(versionId);
     },
     [loadFreshness, loadDecision, loadReportAvailability],
+  );
+
+  /**
+   * The registers a refusal's scope is named from.
+   *
+   * **Correction 2 of the second Stage 4 review.** Every one of these lists is
+   * already loaded here for the analyst's own use, so naming a scope costs
+   * nothing and needs no second source of truth: the valuation views are the
+   * ones this Investment defines, the perspectives are the ones the decision
+   * selector offers, the sources are the memo's own register, and the items are
+   * the claims the analyst wrote. A scope that resolves to none of them is
+   * reported as no longer available rather than as its id.
+   */
+  const scopes = useMemo(
+    () => ({
+      timepoints: memo.timepoints.map((definition) => ({
+        id: definition.timepoint_id,
+        label: definition.label,
+      })),
+      strategies: context.strategies.map((entry) => ({ id: entry.id, label: entry.name })),
+      scenarios: context.scenarios.map((entry) => ({ id: entry.id, label: entry.name })),
+      perspectives: [...context.positions, ...context.partners].map((entry) => ({
+        id: entry.id,
+        label: entry.name,
+      })),
+      evidence: memo.evidence.map((source) => ({ id: source.evidence_id, label: source.title })),
+      items: [
+        ...memo.form.items.map((item) => ({ id: item.itemId, label: item.text })),
+        ...memo.form.riskItems.map((item) => ({ id: item.itemId, label: item.text })),
+        ...memo.form.termItems.map((item) => ({ id: item.itemId, label: item.text })),
+      ],
+    }),
+    [
+      memo.timepoints,
+      memo.evidence,
+      memo.form.items,
+      memo.form.riskItems,
+      memo.form.termItems,
+      context.strategies,
+      context.scenarios,
+      context.positions,
+      context.partners,
+    ],
   );
 
   /** The open version's freshness, read as soon as it is opened, so the
@@ -353,6 +396,7 @@ export function MemoWorkspace({
                   isLoading={memo.isSurfaceLoading}
                   error={memo.surfaceError}
                   hasSelectedCell={memo.form.selectedDecision !== null}
+                  scopes={scopes}
                 />
               )}
 
@@ -400,6 +444,7 @@ export function MemoWorkspace({
                     versions={memo.versions}
                     freshness={memo.freshness}
                     decisions={memo.decisions}
+                    scopes={scopes}
                     reportAvailability={memo.reportAvailability}
                     onLoadVersionDetail={loadVersionDetail}
                     onRecordDecision={memo.recordDecision}
@@ -438,6 +483,7 @@ export function MemoWorkspace({
                   hasSavedDraft={memo.hasSavedDraft}
                   readiness={memo.readiness}
                   isReadinessLoading={memo.isReadinessLoading}
+                  scopes={scopes}
                   onRefreshReadiness={memo.refreshReadiness}
                   onPublish={memo.publish}
                   isPublishing={memo.isPublishing}

@@ -609,6 +609,19 @@ describe('publication', () => {
         },
       ],
     });
+    // The Investment defines the view the refusal names, so the workspace can
+    // say which one it is in the analyst's own words.
+    vi.mocked(readValuationTimepoints).mockResolvedValue([
+      {
+        timepoint_id: 'exploratory',
+        investment_id: 'inv-1',
+        kind: 'stabilized',
+        label: 'Stabilized Year 6',
+        model_month: 72,
+        display_order: 1,
+        unit_instructions: [],
+      },
+    ]);
     renderWorkspace();
     await openTab(/Preview & Publish/);
 
@@ -621,8 +634,11 @@ describe('publication', () => {
     expect(
       screen.queryByText('The view “Stabilized Year 6” has no value at this timepoint.'),
     ).toBeNull();
-    // The scope is the timepoint the analyst named, so it is still shown.
-    expect(screen.getByText('Affects: exploratory')).toBeTruthy();
+    // The scope is named, not keyed: "exploratory" is the stored timepoint id
+    // and the analyst never sees it (Correction 2 of the second review).
+    const scope = document.querySelector('.memo-refusal-scope');
+    expect(scope?.textContent).toBe('Affects: Stabilized Year 6');
+    expect(scope?.textContent).not.toContain('exploratory');
   });
 
   it('cannot publish while the draft has unsaved changes', async () => {

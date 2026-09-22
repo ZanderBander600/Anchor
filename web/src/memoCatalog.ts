@@ -404,11 +404,78 @@ export function publicationRefusalLabel(
   return [sentence, unavailableReasonLabel(unavailableReason)].join(' ');
 }
 
-/** Whether a scope is a stored record's opaque id rather than something the
- * analyst named. Those are shown to nobody; an id the analyst chose, such as a
- * valuation timepoint or a position, is shown as it is. */
-export function isOpaqueId(scope: string | null | undefined): boolean {
-  return typeof scope === 'string' && /^[0-9a-f]{12,}$/.test(scope);
+/**
+ * What a refusal's scope *is*, so it can be named rather than printed.
+ *
+ * **Ratified at the second Stage 4 review (Correction 2).** A refusal's
+ * ``scope_id`` is an identity, and an identity is not a name: "Affects:
+ * as-is-3b93ed" tells an analyst nothing and tells a reader of the memo less.
+ * Each refusal code says which register its scope belongs to, so the scope is
+ * looked up there and shown by the label its own domain gives it.
+ */
+const SCOPE_REGISTER: Record<string, keyof MemoScopeSources> = {
+  valuation_unavailable_for_required_view: 'timepoints',
+  selected_strategy_missing: 'strategies',
+  selected_scenario_missing: 'scenarios',
+  selected_perspective_missing: 'perspectives',
+  evidence_not_found: 'evidence',
+  evidence_not_approved: 'evidence',
+  memo_invalid: 'items',
+};
+
+/** The honest thing to say when a record is gone. Never the id: an analyst
+ * cannot act on an id, and a reader of a memo should not be shown one. */
+const SCOPE_MISSING: Record<keyof MemoScopeSources, string> = {
+  timepoints: 'Selected valuation view (no longer available)',
+  strategies: 'Selected Strategy (no longer available)',
+  scenarios: 'Selected Scenario (no longer available)',
+  perspectives: 'Selected position (no longer available)',
+  evidence: 'Cited source (no longer available)',
+  items: 'Affected memo item (no longer available)',
+};
+
+/** The registers a scope can be named from. Each is the authoritative display
+ * list the workspace has already loaded, not a second copy of it. */
+export interface MemoScopeSources {
+  timepoints: { id: string; label: string }[];
+  strategies: { id: string; label: string }[];
+  scenarios: { id: string; label: string }[];
+  perspectives: { id: string; label: string }[];
+  evidence: { id: string; label: string }[];
+  items: { id: string; label: string }[];
+}
+
+export const NO_SCOPE_SOURCES: MemoScopeSources = {
+  timepoints: [],
+  strategies: [],
+  scenarios: [],
+  perspectives: [],
+  evidence: [],
+  items: [],
+};
+
+/**
+ * One refusal's scope as the analyst's own words, or an honest absence.
+ *
+ * Returns `null` when the refusal names no scope at all, so the caller renders
+ * nothing rather than a line that says nothing.
+ */
+export function publicationScopeLabel(
+  code: string,
+  scopeId: string | null | undefined,
+  sources: MemoScopeSources,
+): string | null {
+  if (scopeId === null || scopeId === undefined || scopeId === '') {
+    return null;
+  }
+  const register = SCOPE_REGISTER[code];
+  if (register === undefined) {
+    // A refusal whose scope belongs to no register this build knows. Naming it
+    // by its id would be the leak this exists to prevent.
+    return 'Affected record (no longer available)';
+  }
+  const found = sources[register].find((entry) => entry.id === scopeId);
+  return found === undefined ? SCOPE_MISSING[register] : found.label;
 }
 
 /**

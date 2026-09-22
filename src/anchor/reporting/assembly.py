@@ -1413,6 +1413,24 @@ def _scope_disclosures(analysis: _Analysis, multi_unit: bool) -> tuple[MemoRepor
     return tuple(disclosures)
 
 
+def _position_label(analysis: _Analysis, position_id: str | None) -> str | None:
+    """One capital position by the name its own contract carries.
+
+    ``None`` when the disclosure names no position at all, so nothing is
+    rendered; the honest absence when a position cannot be found, because a
+    published document that prints a stored key tells its reader nothing and
+    tells an auditor the wrong thing."""
+
+    if position_id is None:
+        return None
+    structured = analysis.structured
+    if structured is not None:
+        for position in structured.result.positions:
+            if position.position_id == position_id:
+                return position.name
+    return "Selected position (no longer available)"
+
+
 def _funding_disclosures(analysis: _Analysis) -> tuple[MemoReportDisclosure, ...]:
     """Every value-sized funding that could not be sized, with its own reason.
 
@@ -1437,7 +1455,10 @@ def _funding_disclosures(analysis: _Analysis) -> tuple[MemoReportDisclosure, ...
                     getattr(unavailable, "reason_code", None),
                     str(getattr(unavailable, "reason", "")) or "No value at this timepoint.",
                 ),
-                scope=getattr(state, "position_id", None),
+                # Named, never the stored id: browser QA at the second
+                # review found "senior" on a committee document where the
+                # position's own name belongs (Correction 2).
+                scope=_position_label(analysis, getattr(state, "position_id", None)),
             )
         )
     return tuple(disclosures)

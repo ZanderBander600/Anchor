@@ -78,7 +78,26 @@ _STAGE_4_WEB_NEW = frozenset(
         # Correction 3: the one loading abstraction the six asynchronous flows
         # now share, so Stage 4 adds no lint warning.
         "web/src/useAsyncResource.ts",
+        # Second review, Correction 1: the one description the library table
+        # and its phone-width cards both render.
+        "web/src/memoLibraryRow.ts",
     }
+)
+
+#: Every Stage 4 module that renders text an analyst reads. Named rather than
+#: derived: the identifier guard below is only as good as the surfaces it looks
+#: at, and a glob would quietly stop covering a renamed one.
+_STAGE_4_WEB_PRESENTATION = (
+    "web/src/memoLibraryRow.ts",
+    "web/src/components/MemoLibraryPanel.tsx",
+    "web/src/components/MemoWorkspace.tsx",
+    "web/src/components/MemoDecisionPanel.tsx",
+    "web/src/components/MemoNarrativePanel.tsx",
+    "web/src/components/MemoEvidencePanel.tsx",
+    "web/src/components/MemoEvidencePicker.tsx",
+    "web/src/components/MemoValuationPanel.tsx",
+    "web/src/components/MemoPublishPanel.tsx",
+    "web/src/components/MemoReportView.tsx",
 )
 
 #: The shipped frontend files Stage 4 edits, and the only ones it may.
@@ -962,7 +981,7 @@ def test_no_refusal_sentence_names_an_internal_id() -> None:
         )
     ]
     quoted_identifier = re.compile(r"'[^']{4,}'")
-    opaque_id = re.compile(r"[0-9a-f]{12,}")
+    opaque_id = re.compile(r"\b[0-9a-f]{12,}\b")
     for line in block.splitlines():
         sentence = line.strip()
         if not sentence.startswith("'") and ": '" not in sentence:
@@ -979,7 +998,10 @@ def test_the_publish_panel_shows_no_opaque_scope() -> None:
 
     panel = _current("web/src/components/MemoPublishPanel.tsx")
     assert "publicationRefusalLabel(refusal.code, refusal.unavailable_reason)" in panel
-    assert "!isOpaqueId(refusal.scope_id)" in panel
+    # Superseded at the second review: a scope is not filtered by whether its id
+    # *looks* opaque, it is named from its own register or reported missing.
+    assert "publicationScopeLabel(refusal.code, refusal.scope_id, scopes)" in panel
+    assert "isOpaqueId" not in panel
     # And the untranslated message is gone from the surface entirely.
     assert "refusal.message" not in panel
 
@@ -1034,3 +1056,173 @@ def test_no_analyst_facing_reason_names_an_internal_id() -> None:
     # And ordinary prose with an apostrophe passes, so the rule is not merely
     # strict enough to be useless.
     assert not quoted_identifier.search("beyond the analysis's hold period")
+
+
+# =============================================================================
+# 12. No identifier reaches a normal analyst view (second review, Correction 2)
+# =============================================================================
+
+
+def test_no_report_disclosure_carries_a_raw_identifier() -> None:
+    """A disclosure's ``scope`` is a name, never a stored key.
+
+    Browser QA at the second review found ``senior`` -- a position's stored id --
+    printed on a committee document where the position's own name belongs, and
+    the same shape reached the PDF. Every ``scope=`` in the assembler is now
+    either a fixed analyst word, a label looked up from a typed table, or a
+    resolved display name; an identifier attribute cannot be passed straight
+    through."""
+
+    source = _current("src/anchor/reporting/assembly.py")
+    tree = ast.parse(source)
+    forbidden = re.compile(r"_id\b")
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        if name != "MemoReportDisclosure":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != "scope":
+                continue
+            rendered = ast.unparse(keyword.value)
+            # A resolver that *takes* an id and returns a name is the fix, not
+            # the fault: what is forbidden is the id reaching the field.
+            if rendered.startswith(("_position_label(", "_label(")):
+                continue
+            if forbidden.search(rendered):
+                offenders.append(rendered)
+    assert offenders == [], offenders
+
+
+def test_the_position_label_resolver_never_returns_an_identifier() -> None:
+    """Including when the position is gone: the honest answer is that it is."""
+
+    from anchor.reporting.assembly import _Analysis, _position_label
+
+    empty = _Analysis(resolved=False)
+    assert _position_label(empty, None) is None
+    missing = _position_label(empty, "senior-loan-2")
+    assert missing is not None
+    assert "senior-loan-2" not in missing
+    assert "no longer available" in missing
+
+
+def test_the_workspace_names_a_refusal_scope_and_never_prints_it() -> None:
+    """The same rule on the other side of the wire.
+
+    ``PublicationRefusal.scope_id`` is an identity the API must carry; what the
+    analyst is shown is the label its own register gives it. The panel therefore
+    renders ``publicationScopeLabel`` and nothing else, and the fallbacks in the
+    catalog say a record is gone rather than naming it."""
+
+    panel = _current("web/src/components/MemoPublishPanel.tsx")
+    assert "publicationScopeLabel(refusal.code, refusal.scope_id, scopes)" in panel
+    # The raw id reaches no JSX expression of its own.
+    assert "{refusal.scope_id}" not in panel
+    assert "refusal.message" not in panel
+
+    catalog = _current("web/src/memoCatalog.ts")
+    block = catalog[
+        catalog.index("const SCOPE_MISSING") : catalog.index("export interface MemoScopeSources")
+    ]
+    sentences = re.findall(r": '([^']+)'", block)
+    assert len(sentences) == 6, sentences
+    for sentence in sentences:
+        assert "no longer available" in sentence, sentence
+        assert not re.search(r"\b[0-9a-f]{8,}\b", sentence), sentence
+
+
+def test_every_refusal_code_has_a_scope_register_or_an_honest_fallback() -> None:
+    """A refusal this build has never seen still cannot print an id.
+
+    The register table is allowed to be incomplete -- a later gate may add a
+    refusal -- but the resolver's default must be a sentence, which is what
+    ``publicationScopeLabel`` returns for an unknown code."""
+
+    catalog = _current("web/src/memoCatalog.ts")
+    resolver = catalog[catalog.index("export function publicationScopeLabel") :]
+    resolver = resolver[: resolver.index("\n}\n")]
+    assert "return 'Affected record (no longer available)';" in resolver
+    # No branch returns the argument it was given.
+    assert "return scopeId" not in resolver
+
+
+def _rendered_identifiers(source: str) -> list[str]:
+    """Every JSX expression whose whole value *is* a stored identifier.
+
+    The rule is deliberately exact: an expression that is nothing but an
+    identifier puts that key on screen. That is what separates
+    ``<p>{entry.deal_id}</p>`` from every place a component legitimately holds
+    identity -- ``key={entry.deal_id}``, ``onOpen={() => open(entry.deal_id)}``,
+    ``{lookup[version.version_id].message}``, ``{nameOf(state.position_id)}`` --
+    where the identifier is an input and what reaches the screen is something
+    else.
+
+    Narrow on purpose, and not a pattern over *content*: a rule that rejected
+    anything hex-looking would reject a date, an amount and the analyst's own
+    prose, and would be turned off within a gate. This one has found two real
+    leaks and has no false positive to excuse."""
+
+    identifier = re.compile(r"\{[ \t]*[A-Za-z_][\w.]*_id[ \t]*\}")
+    #: A brace that follows one of these is code, not a rendered expression.
+    #: A colon is deliberately absent: "Affects: {scope}" is JSX text, and the
+    #: whole point of this guard is the line that used to read exactly that.
+    code_context = set("=(,[&|+")
+    found = []
+    for match in identifier.finditer(source):
+        rendered = match.group(0)
+        # A template placeholder, `${id}`, is a string being built -- a React
+        # key, a URL, a test id -- not text on screen.
+        if match.start() > 0 and source[match.start() - 1] == "$":
+            continue
+        # An identifier *passed into* a call is the call's input; what reaches
+        # the screen is what the call returns, which is the whole fix here.
+        if "(" in rendered:
+            continue
+        before = source[: match.start()].rstrip()
+        if before and before[-1] in code_context:
+            continue
+        if before.endswith(("return", "=>")):
+            continue
+        found.append(rendered)
+    return found
+
+
+def test_no_stage_4_presentation_module_prints_a_stored_identifier() -> None:
+    """Measured across every Stage 4 surface, not asserted about one of them.
+
+    The identifiers Anchor stores are opaque keys -- ``investment_id``,
+    ``timepoint_id``, ``position_id``, ``partner_id``, ``evidence_id``,
+    ``item_id``, ``memo_id``, ``version_id``, ``deal_id``, ``unit_id``. None may
+    be rendered as text an analyst reads.
+
+    Deliberately narrow, and deliberately not a pattern over *content*: a rule
+    that rejected anything hex-looking would reject a date, an amount and the
+    analyst's own prose, and would be turned off within a gate."""
+
+    for module in _STAGE_4_WEB_PRESENTATION:
+        offenders = _rendered_identifiers(_current(module))
+        assert offenders == [], (module, offenders)
+
+
+def test_the_identifier_guard_would_see_one() -> None:
+    """Seeded: the rule is measured against the shape it exists to reject, and
+    against the shapes it must leave alone."""
+
+    assert _rendered_identifiers("<p>Affects: {refusal.scope_id}</p>") == ["{refusal.scope_id}"]
+    assert _rendered_identifiers("<span>{entry.timepoint_id}</span>") == ["{entry.timepoint_id}"]
+    assert _rendered_identifiers("<p>{version.version_id}</p>") == ["{version.version_id}"]
+
+    for legitimate in (
+        "key={row.entry.investment_id}",
+        "onClick={() => onOpen(entry.deal_id)}",
+        "id={memoId(item.item_id)}",
+        "href={memoPdfUrl(investmentId, version.version_id)}",
+        "sources.map((entry) => ({ id: entry.evidence_id, label: entry.title }))",
+        "const row = { id: entry.investment_id };",
+        "<p>{publicationScopeLabel(code, refusal.scope_id, scopes)}</p>",
+        "key={`${state.position_id}-${state.event_id}`}",
+    ):
+        assert _rendered_identifiers(legitimate) == [], legitimate

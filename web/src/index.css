@@ -10188,3 +10188,106 @@ body {
   color: var(--text-muted);
   max-width: 62ch;
 }
+
+/* ---------------------------------------------------------------------
+   P7.10 Stage 4, Correction 1 of the second review: the Investment
+   Committee library at phone width.
+
+   The library is a navigation and status surface, not a financial comparison
+   table, so below 640px it becomes a list of cards. Above it the table stays
+   exactly as it was -- comparing a column of recommendations across a portfolio
+   is what a table is for, and a desktop has the width for it.
+
+   Only one presentation is live at a time. `display: none` removes the other
+   from the accessibility tree and from tab order, so there is exactly one
+   reachable action per memo at any width.
+   --------------------------------------------------------------------- */
+
+.memo-library-cards {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: var(--sp-3);
+}
+
+.memo-library-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  /* A long property name wraps; it is never clipped into ambiguity. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.memo-library-card-name {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.memo-library-card-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.memo-library-card-fact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.memo-library-card-fact dt {
+  flex: 0 0 auto;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.memo-library-card-fact dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-default);
+  overflow-wrap: anywhere;
+}
+
+.memo-library-card-action {
+  align-self: flex-start;
+}
+
+@media (max-width: 640px) {
+  .memo-library-cards {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* The table presentation of the same rows steps aside entirely. */
+  .memo-library-group .memo-table-scroll {
+    display: none;
+  }
+
+  /* "Start a memo" stacks rather than pushing its action off the edge. */
+  .memo-start-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-2);
+  }
+
+  .memo-start-identity {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}

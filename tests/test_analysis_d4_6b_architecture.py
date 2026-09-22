@@ -194,6 +194,9 @@ _P7_10_STAGE_4_WEB = frozenset(
         # own words back to them, the other holds a request's status.
         "web/src/components/ConfirmDialog.tsx",
         "web/src/useAsyncResource.ts",
+        # Added at the second review (Correction 1): the library row every
+        # presentation renders. It relabels stored facts and computes none.
+        "web/src/memoLibraryRow.ts",
     }
 )
 
