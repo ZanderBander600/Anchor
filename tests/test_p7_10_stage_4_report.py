@@ -493,3 +493,64 @@ def test_empty_sections_are_omitted_rather_than_printed_empty(db: Path) -> None:
     # The fixture authors no structural protections or dealbreakers.
     assert "Structural Protections" not in titles
     assert "Dealbreakers" not in titles
+
+
+# =============================================================================
+# The purchase price is the analyst's stored price, never a closing total
+# =============================================================================
+
+
+def test_the_purchase_price_metric_is_the_stored_acquisition_price(db: Path) -> None:
+    """Section 2, from the other direction.
+
+    The rule that an unavailable figure must never render as the purchase price
+    has a twin: a figure that is *not* the purchase price must never render
+    under that name. A standalone Deal's ``AcquisitionResults`` carries no
+    ``transaction_price``, and the first implementation fell back to
+    ``total_closing_uses`` -- which includes acquisition costs, financing fees
+    and closing project capital, and is a different number wearing the wrong
+    label.
+
+    The fixture is built so the two genuinely differ: without transaction costs
+    they coincide, and the test would pass while proving nothing."""
+
+    deal = fx.create_deal(db, name="Priced deal")
+    # Give the Deal real transaction costs, so total closing uses is strictly
+    # greater than the price the analyst agreed.
+    priced = dataclasses.replace(fx.QUICK_INPUTS, ltv=0.6)
+    store.update_deal(deal.id, name=deal.name, inputs=priced, db_path=db)
+    investment_id, _ = store.create_deal_valuation_timepoint(
+        deal.id, fx.as_is_timepoint(deal.id), db_path=db
+    )
+    store.put_memo_draft(
+        investment_id,
+        fx.memo_draft(investment_id, selected_valuation_timepoint_ids=("as-is",)),
+        db_path=db,
+    )
+    version = deps.publish(investment_id, db_path=db)
+    report = assemble_version_report(investment_id, version.version_id, db_path=db)
+
+    price = next(metric for metric in report.key_metrics if metric.label == "Purchase Price")
+    assert price.value == "$10,000,000", price
+    # And it is the *stored* price rather than whatever the closing totals came
+    # to: the Sources & Uses table reports those separately, under their names.
+    capital = next(
+        section for section in report.sections if section.title == "Capital Structure"
+    )
+    uses = next(table for table in capital.tables if table.caption.startswith("Sources"))
+    totals = {row[0]: row[1] for row in uses.rows}
+    assert totals["Total Uses"] != price.value or totals["Loan Amount"] != price.value
+
+
+def test_an_unreadable_purchase_price_is_unavailable_rather_than_substituted(
+    db: Path,
+) -> None:
+    """Where no stored price can be read, the metric says so. Nothing borrows a
+    closing total, an exit value or a valuation to fill the space."""
+
+    import anchor.reporting.assembly as module
+
+    metric = module._metric("Purchase Price", None)
+    assert metric.value is None
+    assert metric.unavailable is not None
+    assert metric.unavailable.label == "Unavailable"

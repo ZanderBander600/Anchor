@@ -386,6 +386,10 @@ class _Analysis:
     structured: Any = None
     surface: Any = None
     hold_period: int | None = None
+    #: The acquisition price this analysis ran against, read from where the
+    #: analyst stored it. ``None`` where it could not be read at all, which is
+    #: reported as unavailable rather than substituted.
+    purchase_price: float | None = None
 
 
 def _project_economics(results: Any) -> Any:
@@ -470,7 +474,43 @@ def _analysis_for(
         structured=structured,
         surface=surface,
         hold_period=structured.hold_period,
+        purchase_price=_acquisition_price(investment_id, db_path),
     )
+
+
+def _acquisition_price(investment_id: str, db_path: Path | None) -> float | None:
+    """The transaction's acquisition price, read from where the analyst stored
+    it.
+
+    A visible Investment states its own ``transaction_price``. A hidden one-unit
+    wrapper does not -- it is not a visible Investment -- so its Unit's stored
+    purchase price is read from the Deal, exactly as the Deal library and the
+    sidebar already read it: ``inputs`` for a Quick Unit and ``terms`` for every
+    other mode, never one substituted for the other.
+
+    This is a *stored analyst input*, selected and not derived. It is
+    deliberately not ``total_closing_uses``, which is a different figure: uses
+    include acquisition costs, financing fees and closing project capital, and
+    labelling that sum "Purchase Price" would put a number on the cover of a
+    memorandum under a name that is not its own. Where neither source can be
+    read the figure is reported unavailable.
+    """
+
+    investment = store.get_investment(investment_id, db_path=db_path)
+    if not investment.hidden:
+        return store.get_visible_investment(
+            investment_id, db_path=db_path
+        ).transaction_price
+
+    units = sorted(unit.unit_id for unit in investment.units)
+    if not units:
+        return None
+    deal = store.get_deal(units[0], db_path=db_path)
+    if deal.inputs is not None:
+        return deal.inputs.purchase_price
+    if deal.terms is not None:
+        return deal.terms.purchase_price
+    return None
 
 
 def _economics(analysis: _Analysis) -> Any:
@@ -607,14 +647,13 @@ def _key_metrics(analysis: _Analysis) -> tuple[MemoReportMetric, ...]:
     if economics is None:
         return ()
 
-    price = getattr(economics, "transaction_price", None)
     noi_by_year = getattr(economics, "noi_by_year", ())
     dscr = getattr(economics, "headline_aggregate_dscr", None)
     if dscr is None:
         dscr = getattr(economics, "headline_dscr", None)
 
     return (
-        _currency("Purchase Price", price if price is not None else _closing_basis(economics)),
+        _currency("Purchase Price", analysis.purchase_price),
         _percent("Going-in Cap Rate", getattr(economics, "going_in_cap_rate", None)),
         _currency("Year 1 NOI", noi_by_year[0] if noi_by_year else None),
         _metric(
@@ -627,18 +666,6 @@ def _key_metrics(analysis: _Analysis) -> tuple[MemoReportMetric, ...]:
         _multiple("Equity Multiple", getattr(economics, "equity_multiple", None)),
         _multiple("DSCR (Year 1)", dscr),
     )
-
-
-def _closing_basis(economics: Any) -> float | None:
-    """A single Unit's acquisition basis.
-
-    ``ConsolidatedResults`` publishes ``transaction_price``; a single Unit's
-    ``AcquisitionResults`` does not carry its own purchase price, so the total
-    closing uses -- the figure the cash flows actually used -- is reported
-    instead, under its own label. It is never a fabricated purchase price.
-    """
-
-    return getattr(economics, "total_closing_uses", None)
 
 
 # =============================================================================
