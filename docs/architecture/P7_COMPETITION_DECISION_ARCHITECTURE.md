@@ -14,9 +14,19 @@ Base: `main` @ `0593baa` (Phase 6 complete)
 Historical branch: `feature/p7-0-competition-decision-architecture`
 History: proposed in commit `4cb24c6`; ratified by the P7.0 ratification patch.
 
-Current-state note: P7.1 through P7.8 are complete. Section 19 remains the
-ratified dependency and gate sequence, not a live completion tracker. See
-`docs/CURRENT_STATE.md` for the active baseline and next gate.
+Current-state note: P7.1 through P7.10 are complete and human accepted, with
+P7.10 closed on 2026-09-22 while its Stage 3 (grounded AI proposals) stayed
+deferred and unstarted. **P7.11 Competition Closeout was waived and
+administratively closed by explicit human decision on 2026-09-22 without being
+run.** Its contract below — the five §17.3 acceptance fixtures, the
+cross-feature acceptance exercise, and the independent oracles §21.3 leaves to
+it — is **preserved as the original ratified contract and was not fulfilled**.
+Its closure is a scope decision, not evidence that an unperformed acceptance
+exercise passed. The waiver record is Section 25 of
+`docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`. **There is no active
+development gate.** Section 19 remains the ratified dependency and gate
+sequence, not a live completion tracker. See `docs/CURRENT_STATE.md` for the
+active baseline.
 
 > Phase 5 forecasts the property. Phase 6 models the cost of executing the
 > business plan. Phase 7 lets an analyst ask: *given this opportunity, what
@@ -1678,6 +1688,14 @@ Property / Business Plan
 
 Each Tier 1 engine gate records its own engine-scope approval (Q16). Each gate
 is started explicitly; finishing one never starts the next.
+
+The table above is the ratified sequence as it was ratified, preserved intact.
+It is not a status tracker. As of 2026-09-22, P7.1 through P7.10 are complete
+and human accepted, and the **P7.11 row was waived and administratively closed
+without being run** — its fixtures and cross-feature acceptance exercise were
+not executed (see the current-state note above and Section 25 of
+`docs/architecture/P7_10_VALUATION_MEMO_REPORTING.md`). The refinancing /
+recapitalization sub-gate remains unstarted and unratified.
 
 ### 19.3 Two-week near-term objective (Part AI)
 
