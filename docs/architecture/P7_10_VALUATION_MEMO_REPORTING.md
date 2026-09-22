@@ -1,9 +1,12 @@
 # P7.10 Valuation Timepoints, Investment Memo, and Institutional Reporting
 
-Status: **Ratified.** P7.10 was explicitly started on 2026-09-20 from accepted
-`main` at `9c65843` (PR #48). Decisions R-A through R-J were ratified on
-2026-09-20 by the human's delegation of P7.10 architecture ratification; the
-completed ratification record is Section 20.
+Status: **Ratified and closed.** P7.10 was explicitly started on 2026-09-20
+from accepted `main` at `9c65843` (PR #48). Decisions R-A through R-J were
+ratified on 2026-09-20 by the human's delegation of P7.10 architecture
+ratification; the completed ratification record is Section 20. **P7.10 was
+closed by explicit human decision on 2026-09-22. Stages 1, 2 and 4 are
+implemented and human accepted; Stage 3 remained deferred and unstarted and was
+explicitly not required for closeout.** The closeout record is Section 24.
 
 Stage status:
 
@@ -15,8 +18,11 @@ Stage status:
   `main` at `ababa50` on 2026-09-21. It delivers persistence, the Investment
   Memo domain, versioning, the unavailable-state adapter and the typed API, and
   nothing else. Its ratified implementation clarifications are Section 22.
-- **Stage 3 is deferred and unstarted.** It is optional, not cancelled, and it
-  is not implied by anything Stage 4 delivers.
+- **Stage 3 remained deferred and unstarted**, and was **explicitly not
+  required for P7.10 closeout**. It is not completed, accepted, passed, or
+  fulfilled. It is optional, not cancelled, and it is not implied by anything
+  Stage 4 delivers. No part of it was built, and closing P7.10 neither started
+  nor cancelled it.
 - **Stage 4 is implemented, merged, and human accepted.** PR #53 merged to
   `main` at `d7e4d75` on 2026-09-21. It delivers the Investment Committee memo
   workstation, the institutional report, PDF export and browser QA, and nothing
@@ -683,17 +689,30 @@ altered and no existing row is read or rewritten.
 Stage 2 was human accepted after PR #51 merged to `main` at `ababa50` on
 2026-09-21. Its acceptance does not start Stage 3 or Stage 4.
 
-### Stage 3 — grounded AI proposals — **deferred and unstarted**
+### Stage 3 — grounded AI proposals — **deferred and unstarted; not required for closeout**
 
 Stage 4 was explicitly authorized ahead of this stage, so Stage 3 is now out of
-sequence rather than merely next. It remains **optional and unstarted**: nothing
+sequence rather than merely next. On 2026-09-22 the human closed P7.10 with
+this stage **deferred and unstarted**, and explicitly decided that **Stage 3 is
+not required for P7.10 closeout** (Section 24). It was never begun and no part
+of it was implemented. It remains **optional and unstarted**: nothing
 in Stage 4 begins it, depends on it, or reserves a place for it. Stage 4 ships
 no AI module, prompt, proposal state, grounding snapshot, AI snapshot, empty AI
 panel, disabled AI control or "coming soon" surface, and
 `tests/test_p7_10_stage_4_architecture.py` and `web/src/memoArchitecture.test.ts`
 both prove that absence rather than asserting it.
 
-A future, explicitly authorized Stage 3 may add field-level proposals into the
+Every "no AI" statement in this document is scoped to P7.10 — to the Stage 3
+grounded memo-proposal capability and to what Stage 4 shipped. None of them
+claims that Anchor contains no AI capability. Anchor's existing AI Analyst
+interpretation and AI-assisted ingestion features are accepted, in the product,
+and outside P7.10's scope; the guards above constrain the memo surface, not
+those features.
+
+Because P7.10 closed without it, a grounded-AI proposal capability is no longer
+a stage waiting inside an open gate. Building one would require a **separately
+authorized new program**. Closing P7.10 neither starts nor cancels such a
+program. Should one be authorized, it may add field-level proposals into the
 accepted workstation **without changing its financial or publication
 authority**: a proposal would write into the mutable draft through the same
 analyst approval the contract already requires, and the analyst recommendation,
@@ -787,6 +806,15 @@ P7.10 is not complete until the human can:
 7. export and review the PDF decision package; and
 8. confirm that unavailable features are disclosed rather than approximated.
 
+**Closeout note (2026-09-22).** The list above is the original ratified
+criteria list and is preserved unchanged. Criterion 4 — generating, accepting,
+editing and rejecting AI proposals — belongs to Stage 3, which was never
+started. It was therefore **not exercised and is not claimed as satisfied**.
+The human closed P7.10 on 2026-09-22 having accepted Stages 1, 2 and 4 on their
+own evidence, and having decided that the deferred Stage 3 is not required for
+closeout (Section 24). Criteria 1, 2, 3, 5, 6, 7 and 8 were exercised against
+the merged product.
+
 ## 20. Ratification record
 
 All ten decisions were **ratified on 2026-09-20**. The human delegated P7.10
@@ -810,6 +838,8 @@ human instruction and a new gate; a later stage may not quietly widen one.
 ## 21. Current position and next action
 
 This contract is ratified and closed to further negotiation within P7.10.
+**P7.10 itself is closed as of 2026-09-22** (Section 24); there is no active
+development gate.
 
 - **Stage 1 is implemented, merged, and human accepted.** Its accepted scope is
   limited to Section 17: the deterministic valuation layer and safe
@@ -821,9 +851,15 @@ This contract is ratified and closed to further negotiation within P7.10.
   not start Stage 3.
 - **Stage 4 is implemented, merged, and human accepted**, on the explicit human
   authorization to take it ahead of Stage 3. Its accepted record is Section 23.
-- **Stage 3 is deferred and unstarted**, and Stage 4 neither starts it nor
-  depends on it.
-- P7.10 does not start P7.11.
+- **Stage 3 remained deferred and unstarted**, and Stage 4 neither starts it
+  nor depends on it. It was explicitly not required for closeout, and it is not
+  completed, accepted, passed, or fulfilled.
+- P7.10 does not start P7.11. P7.11 was separately **waived and
+  administratively closed** by explicit human decision on 2026-09-22. This
+  document is not the authority for P7.11; its waiver record is Section 25 of
+  `docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md`.
+- The next action is **no action**. There is no active gate, and none begins
+  by implication.
 
 ## 22. Stage 2 implementation record
 
@@ -1368,3 +1404,63 @@ Identifiers remain exactly where they belong: in the API, the store, the
 dependency ledger, React keys, export URLs and the published version's
 verification code, which Section 13.3 requires and which is labelled as what it
 is.
+
+---
+
+## 24. P7.10 closeout record — 2026-09-22
+
+This section records an explicit human decision. It is a **documentation-only**
+record: it changes no calculation, convention, schema, fingerprint, API
+contract, workbook, or product behavior, and it reports no new verification
+evidence.
+
+### 24.1 The decision
+
+On **2026-09-22** the human explicitly decided:
+
+- **P7.10 is closed.**
+- **P7.10 Stages 1, 2, and 4 are implemented and human accepted.**
+- **P7.10 Stage 3 remained deferred and unstarted**, and was **explicitly not
+  required for P7.10 closeout.** It is not completed, accepted, passed, or
+  fulfilled.
+
+Each stage acceptance above was recorded when it was made, on its own gate
+evidence, and is unchanged by this record. This section adds only the closure
+of the gate as a whole.
+
+### 24.2 Stage 3 and any future grounded-AI capability
+
+Stage 3 — grounded AI memo proposals — was **never started**. Precisely: **no
+P7.10 Stage 3 grounded memo-proposal module, prompt, proposal lifecycle,
+grounding snapshot, AI snapshot, or product surface was built**, and two guards
+prove that absence rather than asserting it (Section 17, Stage 4).
+
+That statement is scoped to Stage 3. It is **not** a claim that Anchor contains
+no AI capability. Anchor's existing AI Analyst interpretation and AI-assisted
+ingestion features are accepted, in the product, and untouched by P7.10. What
+was never built is the Stage 3 grounded memo-proposal capability this contract
+describes.
+
+Closing P7.10 does not cancel the idea and does not quietly begin it. **A
+future grounded-AI proposal feature would require a separately authorized new
+program.** Closing P7.10 neither starts nor cancels such a program. Until one
+is explicitly authorized, the Stage 3 text in this document is a preserved
+design contract for work that has not been done.
+
+### 24.3 P7.11 was separately waived
+
+**P7.11 Competition Closeout was separately waived and administratively closed
+by explicit human decision on 2026-09-22.** It was not run.
+
+This document is **not** the authority for P7.11. The P7 authority owns the
+P7.11 contract and owns its waiver: the full waiver record, including what was
+not executed and why the closure is a scope decision rather than acceptance
+evidence, is **Section 25 of
+`docs/architecture/P7_COMPETITION_DECISION_ARCHITECTURE.md`**.
+
+### 24.4 What this record does not do
+
+It does not start Stage 3, P7.11, Refinancing & Capital Events, Recovery
+Engine V2, ingestion, extraction, a new AI surface, collaboration expansion,
+productionization, or any other development gate. **There is currently no
+active development gate.**
