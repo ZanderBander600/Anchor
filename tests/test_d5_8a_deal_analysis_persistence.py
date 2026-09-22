@@ -1079,7 +1079,7 @@ def test_a_pre_gate_database_opens_and_starts_empty(tmp_path: Path) -> None:
     # P7.8B six Capital Structure tables, and P7.9 Stage 2 eight Partnership
     # tables. Every one is appended empty: this pre-gate database opted into
     # none of them, and opening it creates no row.
-    assert version == 15  # AM1 added schema 13's two Asset Management tables; Asset Types 1 schema 14's two classification tables
+    assert version == 16  # AM1 added schema 13's two Asset Management tables; Asset Types 1 schema 14's two classification tables; P7.10 Stage 2 schema 15's nineteen valuation and memo tables; P7.10 Stage 4 schema 16's one report-artifact table
     assert empty == 0
 
 

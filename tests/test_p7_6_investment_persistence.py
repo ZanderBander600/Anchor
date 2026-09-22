@@ -87,10 +87,11 @@ def test_a_fresh_store_is_schema_10_with_five_empty_sidecars(db: Path) -> None:
 
     # P7.8B added schema 11's Capital Structure tables, P7.9 Stage 2 schema
     # 12's Partnership tables, AM1 schema 13's Asset Management tables, Asset
-    # Types 1 schema 14's classification tables, and P7.10 Stage 2 schema 15's
-    # sixteen valuation and Investment Memo tables. P7.6's own five sidecars
-    # are unchanged by all of them, which is what this test is about.
-    assert version == 15
+    # Types 1 schema 14's classification tables, P7.10 Stage 2 schema 15's
+    # sixteen valuation and Investment Memo tables, and P7.10 Stage 4 schema
+    # 16's one immutable report-artifact table. P7.6's own five sidecars are
+    # unchanged by all of them, which is what this test is about.
+    assert version == 16
     assert p7_6_row_counts(db) == P7_6_EMPTY
     assert columns == {
         "investment_details": ["investment_id", "name", "transaction_price"],

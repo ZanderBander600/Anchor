@@ -33,6 +33,7 @@ from fastapi.testclient import TestClient
 
 from _p7_2_fixtures import (  # type: ignore[import-not-found]
     ASSET_TYPES_1_TABLES,
+    P7_10_STAGE_4_TABLES,
     P7_10_TABLES,
     without_unstated_classification,
 )
@@ -171,8 +172,8 @@ def test_the_migration_adds_exactly_two_empty_tables_and_rewrites_nothing(
     # Stage 2 (schema 15) its sixteen valuation and Investment Memo tables, both
     # in the same additive way; all are named so the table set stays an exact
     # comparison rather than loosening to a subset check.
-    assert _version(db) == 15
-    expected_tables = set(AM1_TABLES) | set(ASSET_TYPES_1_TABLES) | set(P7_10_TABLES)
+    assert _version(db) == 16
+    expected_tables = set(AM1_TABLES) | set(ASSET_TYPES_1_TABLES) | set(P7_10_TABLES) | set(P7_10_STAGE_4_TABLES)
     added = {name: migrated_schema[name] for name in set(migrated_schema) - set(before_schema)}
     assert {name for name, (kind, _, _) in added.items() if kind == "table"} == expected_tables
     # Every other new object is one of those tables' own key indexes.

@@ -723,12 +723,13 @@ def test_the_store_has_no_independent_report_delete_function() -> None:
 
 
 def test_the_schema_is_v13_and_the_migration_adds_no_alter() -> None:
-    # AM1 introduced schema 13; Asset Types 1 later moved the store to 14 with
-    # two more additive tables. The pin is AM1's own, so it is read at AM1's
-    # committed head; the no-ALTER rule below still holds for today's source.
+    # AM1 introduced schema 13; Asset Types 1 later moved the store to 14, P7.10
+    # Stage 2 to 15 and P7.10 Stage 4 to 16, each with additive tables of its
+    # own. The pin is AM1's own, so it is read at AM1's committed head; the
+    # no-ALTER rule below still holds for today's source.
     assert "_SCHEMA_VERSION = 13" in _git("show", f"{_AM1_HEAD}:{_STORE}")
     source = _current(_STORE)
-    assert "_SCHEMA_VERSION = 15" in source
+    assert "_SCHEMA_VERSION = 16" in source
 
     migrate = _function(_STORE, "_migrate")
     for sql in _sql_strings(migrate):

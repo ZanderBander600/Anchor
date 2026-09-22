@@ -159,12 +159,15 @@ _P7_10_TABLES = {
     "memo_version_claim_evidence",
     "memo_version_dependencies",
     "investment_committee_decisions",
+    # P7.10 Stage 4 (schema 16): the immutable report and PDF stored with each
+    # published memo version. Empty for a legacy deal, like every table above.
+    "memo_version_report_artifacts",
 }
 #: The schema version the current store migrates a v6 database to.
 #: P7.10 Stage 2 (schema 15) added nineteen purely additive valuation and
-#: Investment Memo tables. D6.5's own two plan tables and every row it wrote
-#: are still asserted unchanged below.
-_CURRENT_VERSION = 15
+#: Investment Memo tables, and P7.10 Stage 4 (schema 16) one more. D6.5's own
+#: two plan tables and every row it wrote are still asserted unchanged below.
+_CURRENT_VERSION = 16
 
 
 @pytest.fixture(scope="module")

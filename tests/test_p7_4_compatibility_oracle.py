@@ -45,7 +45,7 @@ from _p7_2_fixtures import (  # type: ignore[import-not-found]
     rows,
     table_names,
 )
-from _p7_2_fixtures import P7_10_TABLES, without_unstated_classification  # type: ignore[import-not-found]
+from _p7_2_fixtures import P7_10_STAGE_4_TABLES, P7_10_TABLES, without_unstated_classification  # type: ignore[import-not-found]
 import _p7_4_fixtures as f4  # type: ignore[import-not-found]
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -121,7 +121,7 @@ def _every_row(db: Path) -> dict[str, list[tuple[Any, ...]]]:
         table: rows(db, table)
         for table in sorted(
             table_names(db) - set(P7_4_TABLES) - set(P7_6_TABLES) - set(P7_8_TABLES) - set(P7_9_TABLES) - set(AM1_TABLES)
-            - set(ASSET_TYPES_1_TABLES) - set(P7_10_TABLES)
+            - set(ASSET_TYPES_1_TABLES) - set(P7_10_TABLES) - set(P7_10_STAGE_4_TABLES)
         )
         if not table.startswith("sqlite_")
     }
@@ -176,12 +176,12 @@ def test_the_migration_adds_exactly_eight_empty_tables_and_rewrites_no_row(legac
 
     # P7.6, P7.8B, P7.9 Stage 2, AM1, Asset Types 1 and P7.10 Stage 2 migrate the
     # same v8 database on to schema 15, each purely additively.
-    assert _version(db) == 15
+    assert _version(db) == 16
     assert table_names(db) == (
         before_tables | set(P7_4_TABLES) | set(P7_6_TABLES) | set(P7_8_TABLES) | set(P7_9_TABLES) | set(AM1_TABLES)
         | set(ASSET_TYPES_1_TABLES)
         # P7.10 Stage 2 (schema 15) adds its sixteen valuation and Investment Memo tables the same additive way; named so the comparison stays exact.
-        | set(P7_10_TABLES)
+        | set(P7_10_TABLES) | set(P7_10_STAGE_4_TABLES)
     )
     assert {table: rows(db, table) for table in P7_9_TABLES} == dict.fromkeys(P7_9_TABLES, [])
     assert {table: rows(db, table) for table in ASSET_TYPES_1_TABLES} == dict.fromkeys(ASSET_TYPES_1_TABLES, [])
@@ -191,14 +191,14 @@ def test_the_migration_adds_exactly_eight_empty_tables_and_rewrites_no_row(legac
     assert migrated_rows == before_rows
     for _ in range(3):
         store.list_deals(db_path=db)
-        assert (_version(db), _schema(db), _every_row(db)) == (15, migrated_schema, migrated_rows)
+        assert (_version(db), _schema(db), _every_row(db)) == (16, migrated_schema, migrated_rows)
 
     connection = sqlite3.connect(db)
     connection.row_factory = sqlite3.Row
     store._migrate(connection)
     connection.commit()
     connection.close()
-    assert (_version(db), _schema(db), _every_row(db)) == (15, migrated_schema, migrated_rows)
+    assert (_version(db), _schema(db), _every_row(db)) == (16, migrated_schema, migrated_rows)
 
 
 # =============================================================================
@@ -216,7 +216,7 @@ def test_every_recorded_response_is_identical_after_migration(client: TestClient
     db, manifest = legacy
     replayed = _replay(client, manifest["exchanges"])
 
-    assert _version(db) == 15
+    assert _version(db) == 16
     mismatched = [
         (exchange["method"], exchange["path"])
         for exchange, now in zip(manifest["exchanges"], replayed, strict=True)
