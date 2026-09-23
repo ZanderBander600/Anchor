@@ -1,7 +1,8 @@
 # Anchor Current State
 
 Last synchronized: 2026-09-22 (P7.10 closed; P7.11 waived and administratively
-closed)
+closed; Refinance & Capital Events V1 contract ratified — implementation not
+started)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -25,10 +26,16 @@ whenever an accepted gate merges or the active gate changes.
   **Git and GitHub remain operational truth for the current `main` commit.**
 - Last financial-engine implementation merge: `f6f3680` (PR #49, P7.10 Stage
   1 deterministic valuation and `PctOfValue` closing execution).
-- **Active gate: none.** There is currently no active development gate. P7.10
-  is closed (see the 2026-09-22 closeout below) and P7.11 is waived and
-  administratively closed. No gate begins by implication; the next one starts
-  only on an explicit human instruction.
+- **Accepted baseline: `main` at `0e9f8cc`** (the PR #55 merge of the P7.10
+  closeout and P7.11 waiver). It is unchanged by the Refinance & Capital Events
+  V1 contract ratification, which is documentation only.
+- **Active gate: none.** The Refinance & Capital Events V1 contract-design gate
+  (documentation only, on `design/refinance-capital-events-v1-contract`) is
+  complete: the contract is **ratified**. Its **Stage 1 deterministic engine
+  has not started** and requires an explicit start. See the 2026-09-22 entry
+  below. P7.10 is closed, and P7.11 is waived and administratively closed. No
+  gate begins by implication; the next one starts only on an explicit human
+  instruction.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active.
 - Autonomous merge: not authorized.
@@ -37,6 +44,31 @@ whenever an accepted gate merges or the active gate changes.
 Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
+
+## 2026-09-22 Refinance & Capital Events V1 Contract Ratified
+
+By explicit instruction, the Refinance & Capital Events V1 contract-design
+gate ran as documentation and architecture work only.
+
+- **The contract is ratified.** `docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md`
+  was approved by Codex's independent architecture review on 2026-09-22. That
+  approval incorporated two corrections:
+  - a DSCR-only refinance consumes no valuation;
+  - the legacy-payoff authority is an explicit, narrow engine extension.
+
+  All decisions R-A to R-S are resolved in its Section 22, including the
+  narrow amendments to P7.7, P7.8, P7.9 and P7.10 listed in Section 22.3.
+- **Stage 1 deterministic engine: not started.** Stage 1 requires an explicit
+  start. No implementation stage starts automatically. No engine, schema
+  migration, API, UI, test, workbook or financial calculation has been
+  written.
+- **Recovery Engine V2: not started.**
+- **Upload / extraction integration: deferred.**
+- **The accepted baseline is unchanged:**
+  - `main` is at `0e9f8cc`;
+  - the last accepted product implementation commit is still `d7e4d75`;
+  - this entry changes no calculation, convention, schema, fingerprint, API
+    contract, workbook or product behavior.
 
 ## 2026-09-22 P7.10 Closeout and P7.11 Waiver
 
@@ -357,10 +389,14 @@ begins by implication; the next one starts only on an explicit human
 instruction.
 
 **Refinancing & Capital Events** and **Recovery Engine V2** are the next
-product priorities. **Neither is started, and neither is ratified by this
-closeout.** Each would need its own explicit authorization, its own contract,
-and its own gate record before any work begins. Nothing in this file should be
-read as a design decision about either one.
+product priorities. Neither was started or ratified by the P7.10 closeout. Each
+needs its own explicit authorization, its own contract, and its own gate record
+before any work begins. Their status is now:
+
+- **Refinance & Capital Events V1:** contract ratified on 2026-09-22 (see the
+  entry above). Stage 1 (deterministic engine) has not started and requires
+  an explicit start. The contract, not this file, holds the design decisions.
+- **Recovery Engine V2:** unstarted and unratified.
 
 **Recovery Engine V2 is a successor gate, not a first implementation.** Anchor
 already has accepted recovery functionality: the Lease-Level D3 recoveries
@@ -456,8 +492,8 @@ acceptance exercise were **not executed**. Its closure is a scope decision, not
 evidence that an unperformed acceptance exercise passed.
 
 Refinancing / recapitalization was a separately authorized potential sub-gate
-in the ratified P7 sequence. It remains unstarted and unratified; see
-**Refinancing & Capital Events** above.
+in the ratified P7 sequence. Its V1 contract is ratified, and its
+implementation has not started; see **Refinancing & Capital Events** above.
 
 ## Current Architecture Authorities
 
@@ -511,6 +547,12 @@ in the ratified P7 sequence. It remains unstarted and unratified; see
   unstarted and explicitly not required for closeout. P7.10 closed 2026-09-22 —
   closeout record in Section 24. The P7.11 waiver is recorded in Section 25 of
   the P7 authority, not here.**
+- Refinance & Capital Events V1:
+  `docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md` — **ratified
+  2026-09-22** (Codex independent architecture approval, Corrections 1 and 2
+  incorporated). It is the authority for its narrow amendments to P7.7, P7.8,
+  P7.9 and P7.10 (its Section 22.3). **Implementation not started**; Stage 1
+  requires an explicit start.
 
 ## Historical-Document Rule
 
