@@ -116,15 +116,29 @@ def test_the_execution_enumerations_have_exactly_their_members() -> None:
         # funding the supplied valuation authority cannot size is refused.
         # Every pre-existing member keeps its place and its meaning.
         "unresolved_valuation_funding",
+        # Refinance & Capital Events V1 Stage 1 appends exactly the ratified
+        # execution refusals (Section 15.1). Every pre-existing member keeps its
+        # place and its meaning.
+        "unsupported_event_scope",
+        "investment_refinance_with_unit_debt",
+        "legacy_payoff_reconciliation_failure",
+        "forward_noi_authority_mismatch",
+        "legacy_authority_splice_mismatch",
     ]
     assert [member.value for member in Kind] == [
         "funding", "fee", "scheduled_debt_service", "balloon", "preferred_current_pay", "preferred_redemption",
+        # Refinance & Capital Events V1 Stage 1 (Section 6.8), appended.
+        "refinance_payoff", "refinance_funding",
     ]
     assert [member.value for member in PositionResultStatus] == [
         "complete", "unresolved_funding", "blocked_by_senior_unresolved",
+        # Refinance & Capital Events V1 Stage 1 (Section 15.4), appended.
+        "refinance_unavailable",
     ]
     assert [member.value for member in PositionUnavailableReason] == [
         "unresolved_funding_requirement", "senior_unresolved_funding_requirement",
+        # Refinance & Capital Events V1 Stage 1 (Section 15.4), appended.
+        "refinance_unavailable",
     ]
     assert [member.value for member in PriceBasisKind] == ["unit_purchase_price", "investment_transaction_price"]
 

@@ -263,7 +263,25 @@ def test_the_package_is_new_at_this_gate() -> None:
 # =============================================================================
 
 
-@pytest.mark.parametrize("path", _FROZEN)
+#: Refinance & Capital Events V1 Stage 1 re-pin. The ratified contract extends
+#: two of the frozen P7.7 modules (the ``RefinanceProceeds`` rule and refusal
+#: codes; the succession exception and event validation) and gives the Common
+#: Equity seam exactly one more accepted upstream reason (R-O). Those leave the
+#: working-tree freeze and the deferred-scope scan as the P7.10 seam did; the
+#: assertions below still prove this gate's claims through the accepted
+#: baseline ``2e1f84a``. The refinance change is held by
+#: ``tests/test_refinance_v1_stage_1_architecture.py``.
+_REFINANCE_V1_BASE = "2e1f84aaa7c93b3247e8dbc6ded8b4397124d36b"
+_REFINANCE_V1_CHANGED = tuple(f"src/anchor/capital_structure/{name}.py" for name in ("contracts", "validation"))
+_REFINANCE_V1_SEAM_NAMES = ("common_equity",)
+
+
+@pytest.mark.parametrize("path", _REFINANCE_V1_CHANGED)
+def test_each_refinance_seam_module_was_frozen_through_the_accepted_baseline(path: str) -> None:
+    assert _git("rev-parse", f"{_REFINANCE_V1_BASE}:{path}").strip() == _git("rev-parse", f"{_P7_9_BASE}:{path}").strip(), path
+
+
+@pytest.mark.parametrize("path", tuple(path for path in _FROZEN if path not in _REFINANCE_V1_CHANGED))
 def test_each_frozen_module_is_byte_identical_to_the_base(path: str) -> None:
     assert _git("hash-object", path).strip() == _git("rev-parse", f"{_P7_9_BASE}:{path}").strip(), path
 
@@ -493,7 +511,16 @@ _LATER = re.compile(r"fee|tax|clawback|claw_back|monthly|refinanc|recapitali|val
 
 @pytest.mark.parametrize("name", _NAMES)
 def test_no_deferred_scope_identifier(name: str) -> None:
-    assert not {identifier for identifier in _identifiers(_tree(_module(name))) if _LATER.search(identifier)}, name
+    """Refinance & Capital Events V1 re-pin: the Common Equity seam now names
+    the one refinance reason it accepts, so "Stage 1 used no deferred-scope
+    identifier" is judged there in the accepted baseline's tree."""
+
+    tree = (
+        ast.parse(_git("show", f"{_REFINANCE_V1_BASE}:{_module(name)}").replace("\r\n", "\n"))
+        if name in _REFINANCE_V1_SEAM_NAMES
+        else _tree(_module(name))
+    )
+    assert not {identifier for identifier in _identifiers(tree) if _LATER.search(identifier)}, name
 
 
 def test_the_deferred_scope_guard_has_teeth() -> None:

@@ -93,6 +93,25 @@ _P7_8_PRODUCTION_FILES = frozenset(_P7_8_MODULES)
 #: The P7.7 modules P7.8 executes on and changes none of.
 _P7_7_MODULES = tuple(f"{_PACKAGE}/{name}.py" for name in ("contracts", "validation", "legacy", "foundation"))
 
+#: Refinance & Capital Events V1 Stage 1 re-pin. The ratified contract
+#: (``docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md``) adds the
+#: ``RefinanceProceeds`` funding rule and the refinance refusal codes to the
+#: P7.7 contracts, and the priority-succession exception (R-N) and the
+#: capital-event validation to the P7.7 validator. These two leave this gate's
+#: working-tree freeze exactly as the P7.10 seam modules did: the assertion
+#: below still proves they were byte-identical to the P7.7 merge from P7.8
+#: through the accepted baseline ``2e1f84a``, and the refinance change is held
+#: by ``tests/test_refinance_v1_stage_1_architecture.py``.
+_REFINANCE_V1_BASE = "2e1f84aaa7c93b3247e8dbc6ded8b4397124d36b"
+_REFINANCE_V1_P7_7_SEAM = tuple(f"{_PACKAGE}/{name}.py" for name in ("contracts", "validation"))
+
+#: The P7.8 modules the refinance seam also touches: the execution contracts
+#: (appended enum members, one widened annotation), execution validation (the
+#: two narrowed refusals) and the executor (the dispatch to the refinance
+#: executor). "P7.8 has no refinancing" is P7.8's own claim, so for them it is
+#: judged in the accepted baseline's tree, the last before refinancing existed.
+_REFINANCE_V1_P7_8_SEAM = (_EXEC_CONTRACTS, _EXEC_VALIDATION, _EXECUTION)
+
 #: Everything P7.8 consumes and changes none of.
 _PROTECTED = (
     "src/anchor/engine",
@@ -334,13 +353,24 @@ def test_a_protected_path_is_unchanged_since_p7_7(path: str) -> None:
     assert _changes_between(_P7_8_BASE, _P7_8A_HEAD, path) == set(), f"{path} changed at P7.8A"
 
 
-@pytest.mark.parametrize("path", (*_MATURE, *_P7_7_MODULES))
+@pytest.mark.parametrize(
+    "path", (*_MATURE, *(path for path in _P7_7_MODULES if path not in _REFINANCE_V1_P7_7_SEAM))
+)
 def test_each_mature_module_is_byte_identical_to_the_p7_7_merge(path: str) -> None:
     """In the **working tree**: the mature engine, consolidation and the four
     P7.7 modules are byte-identical to the P7.7 merge, today, whatever any later
     session has built on them."""
 
     assert _git("hash-object", path).strip() == _git("rev-parse", f"{_P7_8_BASE}:{path}").strip(), path
+
+
+@pytest.mark.parametrize("path", _REFINANCE_V1_P7_7_SEAM)
+def test_each_refinance_seam_p7_7_module_was_frozen_through_the_accepted_baseline(path: str) -> None:
+    """The mature-module claim above, still proven for the two P7.7 modules
+    the ratified refinance contract extends: every gate from P7.8 to the
+    accepted baseline ``2e1f84a`` left them byte-identical to the P7.7 merge."""
+
+    assert _git("rev-parse", f"{_REFINANCE_V1_BASE}:{path}").strip() == _git("rev-parse", f"{_P7_8_BASE}:{path}").strip(), path
 
 
 @pytest.mark.parametrize("path", _STILL_FROZEN)
@@ -396,8 +426,13 @@ _EXPECTED_IMPORTS = {
     # P7.10 Stage 1 re-pin: the three seam modules gain the valuation layer they
     # size a ``PctOfValue`` funding from. The direction is one way -- Capital
     # Structure reads valuation, never the reverse -- and nothing else is added.
+    # Refinance & Capital Events V1 Stage 1 re-pin: execution validation reads
+    # the capital-event contracts to admit a replacement's funding and fees and
+    # to refuse an Investment-scoped event in a standalone Unit, and the executor
+    # reads them to hand an evented structure to the refinance executor. Both
+    # are shape-only or same-package reads; nothing that calculates is added.
     _EXEC_VALIDATION: {
-        "__future__", "..valuation.contracts", "..valuation.funding", ".contracts", ".execution_contracts",
+        "__future__", "..valuation.contracts", "..valuation.funding", ".contracts", ".events", ".execution_contracts",
         ".funding", ".preferred", ".validation",
     },
     _FUNDING: {
@@ -409,8 +444,9 @@ _EXPECTED_IMPORTS = {
     _METRICS: {"__future__", "collections.abc", "..engine.contracts", "..engine.returns", ".execution_contracts", ".foundation"},
     _EXECUTION: {
         "__future__", "collections", "collections.abc", "..consolidation.contracts", "..contracts", "..engine.contracts",
-        "..valuation.funding", ".contracts", ".debt_position", ".execution_contracts", ".execution_validation",
-        ".foundation", ".funding", ".metrics", ".preferred", ".validation",
+        "..valuation.funding", ".contracts", ".debt_position", ".events", ".execution_contracts",
+        ".execution_validation", ".foundation", ".funding", ".metrics", ".preferred", ".refinance_execution",
+        ".validation",
     },
 }
 
@@ -719,7 +755,12 @@ _LATER = re.compile(
 
 @pytest.mark.parametrize("path", _P7_8_MODULES)
 def test_no_refinancing_partnership_or_valuation_timepoint_economics(path: str) -> None:
-    assert not {name for name in _identifiers(_code(path)) if _LATER.search(name)}, path
+    code = (
+        _without_docstrings(ast.parse(_git("show", f"{_REFINANCE_V1_BASE}:{path}").replace("\r\n", "\n")))
+        if path in _REFINANCE_V1_P7_8_SEAM
+        else _code(path)
+    )
+    assert not {name for name in _identifiers(code) if _LATER.search(name)}, path
 
 
 def test_the_later_gate_guard_has_teeth() -> None:
@@ -760,8 +801,13 @@ def test_pct_of_value_is_valued_only_through_the_one_valuation_authority() -> No
 
 
 def test_later_funding_months_and_fees_are_refused_never_moved_to_closing() -> None:
+    # Refinance & Capital Events V1 Stage 1 re-pin: the two refusals are
+    # narrowed by exactly the ratified exception (Section 19) -- a replacement's
+    # one RefinanceProceeds funding, and that replacement's fees -- and by
+    # nothing else. Every other later funding or fee is still refused.
     validation = _current(_EXEC_VALIDATION)
-    assert "if event.model_month != 0:" in validation and "if fee.model_month != 0" in validation
+    assert "if event.model_month != 0 and not isinstance(event.amount_rule, RefinanceProceeds):" in validation
+    assert "if fee.model_month != 0 and not replacement" in validation
     for path in (_FUNDING, _EXECUTION):
         assert "model_month=0" not in ast.unparse(_code(path)), path
 

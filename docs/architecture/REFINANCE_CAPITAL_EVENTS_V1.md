@@ -15,11 +15,14 @@ It also resolved every open question. The decision record is Section 22.
   `main` at `0e9f8cc` (PR #55, the P7.10 closeout and P7.11 waiver).
 - Risk tier: Tier 1 contract (financial / contract critical). The contract
   itself is documentation only.
-- **Production implementation has not started.** No engine, schema, API, UI,
-  test or workbook exists for it.
-- **Stage 1 requires an explicit start.** Ratification starts no stage, and
-  **no implementation stage starts automatically** when another is accepted
-  (Section 20).
+- **Stage 1 (deterministic engine) was explicitly started** on 2026-09-22
+  from `main` at `2e1f84a` (the PR #56 merge of this ratified contract), on
+  `feature/refinance-capital-events-v1-stage-1-engine`. It is **implemented
+  locally and pending independent review. It is not accepted.** Its
+  implementation record is Section 23.
+- **Stage 2 and Stage 3 have not started.** No schema, persistence, codec, API,
+  UI, memo, report or workbook exists for a refinance. **No implementation
+  stage starts automatically** when another is accepted (Section 20).
 - Recovery Engine V2 is a separate future program. Nothing here touches it.
 
 ### 1.1 Authorities this contract builds on
@@ -2059,15 +2062,16 @@ database from before that version gains empty tables and nothing else.
 
 ## 20. Staged implementation roadmap
 
-**Production implementation has not started.** Each stage starts only on an
-explicit human instruction, and Stage 1 in particular requires an explicit
-start. **No stage begins automatically** when the previous one is accepted.
-Recovery Engine V2 is not part of any stage.
+Each stage starts only on an explicit human instruction. **Stage 1 was
+explicitly started on 2026-09-22 from `2e1f84a`; it is implemented locally,
+pending independent review, and not accepted** (Section 23). Stage 2 and Stage 3
+have not started. **No stage begins automatically** when the previous one is
+accepted. Recovery Engine V2 is not part of any stage.
 
 | Stage | Scope | Tier | Exit evidence |
 | --- | --- | --- | --- |
 | Contract ratification — **complete, 2026-09-22** | This document. Documentation only | 1 (contract) | ratification record (Section 22); `CURRENT_STATE.md` updated |
-| Stage 1 — deterministic engine (not started) | Contracts (Section 6); structural and execution validation (Section 15.1); the shared NOI-at-month seam; the acquisition-debt balance service and its reconciliation; sizing (Section 9); the legacy splice; the retiring-schedule cut and replacement offset through the existing wrapper; the event bridge; the Common Equity decomposition; unavailable states; the P7.9 adapter reason; F1–F12, F14–F17, F15b, F19, F21, F22 with exact-rational oracles; F20 engine parity; the Section 18.3 mutation proofs. No persistence, API or UI | 1 | focused and identity tests; mutation kills; domain regression; one final full backend suite |
+| Stage 1 — deterministic engine (implemented locally 2026-09-22; pending independent review; not accepted) | Contracts (Section 6); structural and execution validation (Section 15.1); the shared NOI-at-month seam; the acquisition-debt balance service and its reconciliation; sizing (Section 9); the legacy splice; the retiring-schedule cut and replacement offset through the existing wrapper; the event bridge; the Common Equity decomposition; unavailable states; the P7.9 adapter reason; F1–F12, F14–F17, F15b, F19, F21, F22 with exact-rational oracles; F20 engine parity; the Section 18.3 mutation proofs. No persistence, API or UI | 1 | focused and identity tests; mutation kills; domain regression; one final full backend suite |
 | Stage 2 — persistence and integration (not started) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
 | Stage 3 — product surfaces (not started) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
 
@@ -2228,4 +2232,123 @@ Two points are clarifications rather than amendments:
 | --- | --- | --- |
 | Codex independent architecture review | Approved, with Corrections 1 and 2 incorporated | 2026-09-22 |
 | Contract status | Ratified | 2026-09-22 |
-| Stage 1 | Not started; requires an explicit start | — |
+| Stage 1 | Explicitly started 2026-09-22 from `2e1f84a`; implemented locally, pending independent review; not accepted (Section 23) | 2026-09-22 |
+
+---
+
+## 23. Stage 1 implementation record
+
+**Status: implemented locally, pending independent review. Not accepted.**
+Stage 1 was explicitly started on 2026-09-22 from `main` at `2e1f84a` on
+`feature/refinance-capital-events-v1-stage-1-engine`. It implements Section
+20's Stage 1 row and nothing else: no persistence, schema, codec, fingerprint,
+API route or payload, frontend, memo, report or workbook. Stage 2 and Stage 3
+have not started. Recovery Engine V2 is untouched.
+
+### 23.1 What shipped
+
+| Module | Responsibility |
+| --- | --- |
+| `engine/acquisition_debt_balance.py` (new) | R-M: the acquisition loan's balance immediately after the scheduled payment of month `m`, from the unchanged `debt.py` functions, reconciled bit for bit to `AcquisitionResults` on every call; `AcquisitionDebtBalanceReconciliationError` names the first figure that disagrees |
+| `capital_structure/events.py` (new) | Shapes only: `CapitalEventKind`, `EventTiming`, the retiring references, the three constraints, `RefinanceSizing`, `RefinanceValuationRef`, the cost lines, `RefinanceEvent`, and `CapitalStructureWithEvents` |
+| `capital_structure/event_validation.py` (new) | Every Section 15.1 authoring refusal wholly inside a structure, and the R-N succession pairs |
+| `capital_structure/refinance_contracts.py` (new) | Shapes only: statuses and reasons, capacities and their operands, the value and NOI dependencies, payoffs, replacement funding, the bridge, `RefinanceResult`, `UnexecutedPosition`, and the two result subclasses |
+| `capital_structure/refinance.py` (new) | The plan of one event for one variant: horizon, retirement through each payoff authority, continuing senior debt, the separate value (LTV) and forward-NOI (DSCR) dependencies, capacities, the minimum and binding set, the replacement schedule offset to the event month, and the bridge |
+| `capital_structure/refinance_execution.py` (new) | Execution of an evented structure through P7.8's own admission, scheduling, settlement, returns and Common Equity functions: the INV-16 splice, settlement views without event cash, event cash after settlement, the Common Equity decomposition, and the Section 15.4 unavailability |
+| `capital_structure/contracts.py` | Additive: `RefinanceProceeds` joins `FundingAmountRule`; appended refusal codes; `CapitalStructureStatus.REFINANCE_UNAVAILABLE`; `CommonEquityUnavailableReason.REFINANCE_UNAVAILABLE` |
+| `capital_structure/validation.py` | Accepts `RefinanceProceeds`, applies the succession exception, and adds the event validation; a structure with no event and no `RefinanceProceeds` validates exactly as before |
+| `capital_structure/execution_contracts.py` | Appended enum members only (`REFINANCE_PAYOFF`, `REFINANCE_FUNDING`, the execution refusals, the `REFINANCE_UNAVAILABLE` status and reason) and one widened annotation |
+| `capital_structure/execution_validation.py` | The two narrowed refusals of Section 19 and the `unsupported_event_scope` refusal |
+| `capital_structure/execution.py` | A dispatch prepended to each executor: a `CapitalStructureWithEvents` goes to the refinance executor; every other structure runs the accepted path statement for statement |
+| `partnership/common_equity.py` | R-O: exactly one more accepted upstream reason, `refinance_unavailable`; the waterfall is untouched |
+
+### 23.2 Implementation decisions a reviewer should check
+
+1. **Additive by subclass, not by defaulted field.** `api.py`'s `_wire`
+   serializes every field of every dataclass it is handed. So a defaulted
+   `CapitalStructure.events`, `StructuredCapitalResult.capital_events` or
+   Common Equity decomposition would appear in existing responses. The Section
+   6.8 additions therefore live on three subclasses produced only when a
+   refinance exists: `CapitalStructureWithEvents`,
+   `RefinancedCommonEquityReturns` and `RefinancedCapitalResult`. A plain
+   structure and every no-refinance result keep exactly their fields, which is
+   how F20 parity holds by construction. Stage 2 must teach the codec,
+   fingerprint and API these subclasses; no Stage 1 path produces one from
+   stored data.
+2. **`UnexecutedPosition`.** The replacement of an event that did not execute
+   has no principal, so no schedule, return or structural metric exists for it.
+   It is reported in `RefinancedCapitalResult.unexecuted_positions` with the
+   event's reason, rather than as a `PositionReturns` with invented zeros.
+3. **`CapitalStructureStatus.REFINANCE_UNAVAILABLE`** is the status companion of
+   the ratified `refinance_unavailable` reason. The P7.9 adapter accepts exactly
+   that status-and-reason pair and nothing else.
+4. **Result detail beyond Section 6.8's indicative shapes.** `RetiringPayoff`
+   carries `payoff_authority` and, for the acquisition loan only,
+   `provider_cash_flows` (P7.7 reports that loan's schedule only to the sale).
+   `RefinanceResult` carries separate `value_dependency` and `noi_dependency`
+   records (R-C). A retired position's identity is its `RetiringPayoff`; no
+   field is added to `PositionReturns`, which would leak.
+5. **BLOCKED.** An event is blocked by an unresolved Funding Requirement in its
+   scope at or before the event year, or by an unresolved continuing senior
+   position. Positions that depend on the event are reported N/A, except a
+   position whose own settlement already reports an unresolved or blocked
+   claim: that truer root cause is kept, with its requirements. Common Equity
+   keeps P7.7's `unresolved_funding_requirement` reason.
+6. **The Investment root after a Unit's acquisition loan retires.** The
+   Investment residual starts from the consolidated levered series, as P7.8
+   does. For each year after the event it gains that Unit's accepted
+   `unlevered - levered` difference once. The splice identity check (INV-16)
+   proves that difference is exactly the retired loan's claims.
+7. **The Investment-scope event with Unit debt**
+   (`investment_refinance_with_unit_debt`) is judged after the Unit scopes
+   settle, from their final schedules (a replacement's included) and from the
+   balance service for acquisition loans.
+8. **A Unit event that does not execute inside an Investment** makes every
+   Investment-scoped position N/A. An Investment event in the same variant is
+   then reported `BLOCKED`.
+9. **The DSCR proportionality guard** (Section 9.3) raises the package's typed
+   internal `CapitalStructureError`, never a plain error.
+10. **Stage 2 scope, not implemented here.** `capital_event_kind_conflict` and
+    `capital_event_scope_conflict` (P-8 across the Base and a Strategy's
+    structures) need persisted structures. `evidence_not_approved` is produced
+    only by Stage 2's valuation adapter. F13 and F18 are Stage 2 fixtures and
+    F23 is Stage 3.
+11. **Fixture F19, adapted.** The ratified P7.1 registry has no `current_noi`
+    target, so "scales current NOI by 0.90" cannot run through the accepted
+    Scenario path. F19 uses the accepted `noi_growth` target (SET -5%): forward
+    NOI 722,000, both capacities 7,220,000 in a tie, and `N = 1,700,000`. The
+    property proven is the contract's.
+
+### 23.3 Guards re-pinned
+
+Each accepted guard keeps its own claim. Where a claim was about its own gate,
+it is now judged in committed history. No invariant is weakened or deleted.
+
+- **P7.7 architecture:** the "no later-gate economics" scan of `contracts.py`
+  and `validation.py` reads the P7.7 merge. Validation's expected imports name
+  the pure event validator.
+- **P7.8 architecture:** `contracts.py` and `validation.py` leave the
+  working-tree freeze, and a test proves they were byte-identical to the P7.7
+  merge through `2e1f84a`. The three P7.8 seam modules' "no refinancing" scan
+  reads `2e1f84a`. The expected imports name `.events` and
+  `.refinance_execution`. The later-funding test asserts the exact narrowed
+  conditions.
+- **P7.8 execution contracts:** the enum-member pins append the ratified
+  members, following the P7.10 precedent.
+- **P7.8B architecture:** the refinance files leave its freeze and
+  protected-path set. Tests prove the changed files were byte-identical to
+  P7.8A's head through `2e1f84a`, and the added files did not exist there.
+- **P7.9 architecture and Stage 2:** `contracts.py`, `validation.py` and
+  `common_equity.py` are proven frozen through `2e1f84a`. The deferred-scope
+  identifier scan of the seam reads `2e1f84a`.
+- **P7.10:** Stage 1's frozen and seam-definition claims read `2e1f84a`. The
+  valuation-reader allowlist names the three refinance modules. The amount-rule
+  claim is proven in the Stage 1 merge and admits exactly `RefinanceProceeds`.
+  Stage 4's ledger reads its committed range `9ca957a..a6f1b2b`, exactly as its
+  own docstring anticipated.
+- **D4.6B G37 and D6.3:** G37's engine freeze is narrowed by exactly the one new
+  balance-service file, following its per-gate pattern. D6.3's engine ledger
+  reads D6.3's committed range, as its persistence ledger already did.
+
+Stage 1's own guard is `tests/test_refinance_v1_stage_1_architecture.py`. A
+later gate re-pins it to Stage 1's committed range.

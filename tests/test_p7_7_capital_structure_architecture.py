@@ -300,7 +300,10 @@ _EXPECTED_IMPORTS = {
         ".legacy", ".validation",
     },
     _CONTRACTS: {"__future__", "collections.abc", "dataclasses", "enum", "typing", "..contracts", "..engine.contracts"},
-    _VALIDATION: {"__future__", "collections", "collections.abc", "math", ".contracts"},
+    # Refinance & Capital Events V1 Stage 1 re-pin: validation also calls the
+    # capital-event validator, a pure sibling that imports only the package's
+    # own contracts. The direction is unchanged -- nothing that calculates.
+    _VALIDATION: {"__future__", "collections", "collections.abc", "math", ".contracts", ".event_validation"},
     _LEGACY: {"__future__", "math", "..contracts", "..engine.contracts", ".contracts"},
     _FOUNDATION: {
         "__future__", "collections.abc", "math", "..consolidation.contracts", "..contracts",
@@ -543,9 +546,21 @@ _LATER_FUNCTIONS = re.compile(
 _LATER_IDENTIFIERS = re.compile(r"refinanc|recapitali|waterfall|partner|promote|hurdle|catch_up|(^|_)irr(_|$)|moic", re.IGNORECASE)
 
 
+#: Refinance & Capital Events V1 Stage 1 re-pin. The ratified contract
+#: (``docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md``, R-G and R-N) adds the
+#: ``RefinanceProceeds`` funding rule and the refinance refusal codes to
+#: ``contracts.py``, and the succession exception and the capital-event
+#: validation to ``validation.py``. "P7.7 added no later-gate economics" is
+#: P7.7's own claim, so for these two modules it is judged in P7.7's committed
+#: tree, exactly as the ledger above is. Nothing is weakened: every other
+#: module is still judged in the working tree, and the refinance additions are
+#: held by ``tests/test_refinance_v1_stage_1_architecture.py``.
+_REFINANCE_V1_SEAM = (_CONTRACTS, _VALIDATION)
+
+
 @pytest.mark.parametrize("path", _MODULES)
 def test_no_position_return_accrual_refinancing_or_partnership_economics(path: str) -> None:
-    code = _code(path)
+    code = _without_docstrings(ast.parse(_merged(path))) if path in _REFINANCE_V1_SEAM else _code(path)
     functions = {node.name for node in ast.walk(code) if isinstance(node, ast.FunctionDef)}
     assert not {name for name in functions if _LATER_FUNCTIONS.search(name)}, path
     assert not {name for name in _identifiers(code) if _LATER_IDENTIFIERS.search(name)}, path

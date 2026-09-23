@@ -380,7 +380,12 @@ def test_engine_package_contains_only_expected_phase_2a_2b_2c_2d_modules() -> No
     ``operating_projection.py`` -- the Detailed operating-schedule
     calculation module (``docs/detailed_operating_model_v2_1_architecture.md``
     Section 3) -- as an approved, intentional addition to this closed set,
-    updated here rather than left to silently drift."""
+    updated here rather than left to silently drift.
+
+    Refinance & Capital Events V1 Stage 1 adds ``acquisition_debt_balance.py``
+    the same way: the ratified, engine-owned acquisition-debt balance service
+    (``docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md`` decision R-M), which
+    calls the unchanged ``debt.py`` functions and restates none of them."""
 
     engine_dir = Path(__file__).resolve().parents[1] / "src" / "anchor" / "engine"
     module_names = {path.name for path in engine_dir.glob("*.py")}
@@ -393,6 +398,7 @@ def test_engine_package_contains_only_expected_phase_2a_2b_2c_2d_modules() -> No
         "acquisition.py",
         "returns.py",
         "operating_projection.py",
+        "acquisition_debt_balance.py",
     }
 
 

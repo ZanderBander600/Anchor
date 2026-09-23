@@ -111,6 +111,26 @@ _P7_10_SEAM = tuple(
 #: The accepted repository baseline P7.10 Stage 1 starts from (PR #48).
 _P7_10_BASE = "9c658437f76e8815cb228d4b71b11aaa473450d4"
 
+#: Refinance & Capital Events V1 Stage 1 re-pin. The ratified contract
+#: (``docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md``) extends two P7.7
+#: modules -- the ``RefinanceProceeds`` rule and refusal codes, the succession
+#: exception and the event validation -- and adds a refinance layer beside the
+#: P7.8A engine and one acquisition-debt balance service to ``anchor.engine``
+#: (R-M). Those files leave this gate's working-tree freeze exactly as the P7.10
+#: seam did. Nothing is weakened: the assertions below still prove every changed
+#: file was byte-identical to P7.8A's reviewed head through the accepted
+#: baseline ``2e1f84a``, and every added file did not exist there. The
+#: refinance change is held by ``tests/test_refinance_v1_stage_1_architecture.py``.
+_REFINANCE_V1_BASE = "2e1f84aaa7c93b3247e8dbc6ded8b4397124d36b"
+_REFINANCE_V1_CHANGED = tuple(f"{_PACKAGE}/{name}.py" for name in ("contracts", "validation"))
+_REFINANCE_V1_ADDED = (
+    "src/anchor/engine/acquisition_debt_balance.py",
+    *(
+        f"{_PACKAGE}/{name}.py"
+        for name in ("events", "event_validation", "refinance", "refinance_contracts", "refinance_execution")
+    ),
+)
+
 #: The P7.8A financial engine: executed by this gate, edited by none of it.
 #: P7.10 Stage 1 re-pin: the four seam modules move to the assertion above.
 _P7_8A_FINANCIAL = tuple(
@@ -272,7 +292,7 @@ def test_the_p7_8b_ledger_head_is_the_second_parent_of_the_p7_8_merge() -> None:
     assert parents == [_P7_7_MERGE, _P7_8B_HEAD]
 
 
-@pytest.mark.parametrize("path", _FROZEN)
+@pytest.mark.parametrize("path", tuple(path for path in _FROZEN if path not in _REFINANCE_V1_CHANGED))
 def test_the_financial_engine_is_frozen_at_session_as_reviewed_head(path: str) -> None:
     """The P7.8A economics, the P7.7 foundation and the mature engine are byte
     for byte what the human review approved."""
@@ -286,7 +306,22 @@ def test_a_protected_path_is_unchanged(path: str) -> None:
     proven separately below. Every other file under every protected path is
     still unchanged."""
 
-    assert _changes_since(_P7_8A_HEAD, path) - set(_P7_10_SEAM) == set(), f"{path} changed at P7.8B"
+    excepted = {*_P7_10_SEAM, *_REFINANCE_V1_CHANGED, *_REFINANCE_V1_ADDED}
+    assert _changes_since(_P7_8A_HEAD, path) - excepted == set(), f"{path} changed at P7.8B"
+
+
+@pytest.mark.parametrize("path", _REFINANCE_V1_CHANGED)
+def test_each_refinance_seam_module_was_frozen_through_the_accepted_baseline(path: str) -> None:
+    """P7.8B's claim, still proven: these P7.7 modules were byte-identical to
+    P7.8A's reviewed head from this gate through the accepted baseline
+    ``2e1f84a``. Only the separately ratified refinance contract changes them."""
+
+    assert _git("rev-parse", f"{_REFINANCE_V1_BASE}:{path}").strip() == _git("rev-parse", f"{_P7_8A_HEAD}:{path}").strip(), path
+
+
+@pytest.mark.parametrize("path", _REFINANCE_V1_ADDED)
+def test_each_refinance_module_did_not_exist_through_the_accepted_baseline(path: str) -> None:
+    assert _git("ls-tree", "--name-only", _REFINANCE_V1_BASE, path).strip() == "", path
 
 
 @pytest.mark.parametrize("path", _P7_10_SEAM)

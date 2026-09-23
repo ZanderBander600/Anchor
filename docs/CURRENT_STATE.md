@@ -1,8 +1,8 @@
 # Anchor Current State
 
 Last synchronized: 2026-09-22 (P7.10 closed; P7.11 waived and administratively
-closed; Refinance & Capital Events V1 contract ratified — implementation not
-started)
+closed; Refinance & Capital Events V1 contract ratified; Stage 1 deterministic
+engine implemented locally, pending independent review — not accepted)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -26,16 +26,17 @@ whenever an accepted gate merges or the active gate changes.
   **Git and GitHub remain operational truth for the current `main` commit.**
 - Last financial-engine implementation merge: `f6f3680` (PR #49, P7.10 Stage
   1 deterministic valuation and `PctOfValue` closing execution).
-- **Accepted baseline: `main` at `0e9f8cc`** (the PR #55 merge of the P7.10
-  closeout and P7.11 waiver). It is unchanged by the Refinance & Capital Events
-  V1 contract ratification, which is documentation only.
-- **Active gate: none.** The Refinance & Capital Events V1 contract-design gate
-  (documentation only, on `design/refinance-capital-events-v1-contract`) is
-  complete: the contract is **ratified**. Its **Stage 1 deterministic engine
-  has not started** and requires an explicit start. See the 2026-09-22 entry
-  below. P7.10 is closed, and P7.11 is waived and administratively closed. No
-  gate begins by implication; the next one starts only on an explicit human
-  instruction.
+- **Accepted baseline: `main` at `2e1f84a`** (the PR #56 merge of the ratified
+  Refinance & Capital Events V1 contract, documentation only, on top of the
+  PR #55 merge `0e9f8cc`). It remains the accepted baseline until the Stage 1
+  work below is accepted and merged.
+- **Active gate: Refinance & Capital Events V1 Stage 1 (deterministic
+  engine).** Explicitly started on 2026-09-22 from `main` at `2e1f84a`, on
+  `feature/refinance-capital-events-v1-stage-1-engine`. It is **implemented
+  locally and pending independent review. It is not accepted.** See the
+  2026-09-22 Stage 1 entry below. P7.10 is closed, and P7.11 is waived and
+  administratively closed. No gate begins by implication; the next one starts
+  only on an explicit human instruction.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active.
 - Autonomous merge: not authorized.
@@ -44,6 +45,32 @@ whenever an accepted gate merges or the active gate changes.
 Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
+
+## 2026-09-22 Refinance & Capital Events V1 Stage 1 (implemented locally, not accepted)
+
+By explicit instruction, Stage 1 -- the deterministic refinance engine -- was
+started from `main` at `2e1f84a` on
+`feature/refinance-capital-events-v1-stage-1-engine`.
+
+- **Implementation is complete locally and pending independent review.**
+  **Stage 1 is not accepted.** Nothing is pushed or merged.
+- Its scope is the contract's Section 20 Stage 1 row only: the refinance
+  contracts and validation, the engine's acquisition-debt balance service
+  (R-M), sizing on separate LTV value and DSCR forward-NOI dependencies,
+  retirement, replacement scheduling, the event bridge, the Common Equity
+  decomposition, typed unavailable states, and the one P7.9 adapter reason.
+- No persistence, schema, codec, fingerprint, API, frontend, memo, report or
+  workbook changed. Without a refinance, every result is bit-identical to the
+  accepted product baseline.
+- The implementation record, including the decisions a reviewer should check
+  and every guard re-pin, is Section 23 of
+  `docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md`.
+- **Stage 2 and Stage 3: not started.**
+- **Recovery Engine V2: not started.**
+- **Upload / extraction integration: deferred.**
+- **The accepted baseline is unchanged:** `main` at `2e1f84a`, and the last
+  accepted product implementation commit is still `d7e4d75`, until Stage 1 is
+  accepted.
 
 ## 2026-09-22 Refinance & Capital Events V1 Contract Ratified
 
@@ -393,9 +420,11 @@ product priorities. Neither was started or ratified by the P7.10 closeout. Each
 needs its own explicit authorization, its own contract, and its own gate record
 before any work begins. Their status is now:
 
-- **Refinance & Capital Events V1:** contract ratified on 2026-09-22 (see the
-  entry above). Stage 1 (deterministic engine) has not started and requires
-  an explicit start. The contract, not this file, holds the design decisions.
+- **Refinance & Capital Events V1:** contract ratified on 2026-09-22. Stage 1
+  (deterministic engine) was explicitly started from `2e1f84a` and is
+  implemented locally, pending independent review, and **not accepted** (see
+  the entry above). Stage 2 and Stage 3 have not started. The contract, not
+  this file, holds the design decisions.
 - **Recovery Engine V2:** unstarted and unratified.
 
 **Recovery Engine V2 is a successor gate, not a first implementation.** Anchor
@@ -492,8 +521,9 @@ acceptance exercise were **not executed**. Its closure is a scope decision, not
 evidence that an unperformed acceptance exercise passed.
 
 Refinancing / recapitalization was a separately authorized potential sub-gate
-in the ratified P7 sequence. Its V1 contract is ratified, and its
-implementation has not started; see **Refinancing & Capital Events** above.
+in the ratified P7 sequence. Its V1 contract is ratified, and its Stage 1
+engine is implemented locally and pending review, not accepted; see
+**Refinancing & Capital Events** above.
 
 ## Current Architecture Authorities
 
@@ -551,8 +581,9 @@ implementation has not started; see **Refinancing & Capital Events** above.
   `docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md` — **ratified
   2026-09-22** (Codex independent architecture approval, Corrections 1 and 2
   incorporated). It is the authority for its narrow amendments to P7.7, P7.8,
-  P7.9 and P7.10 (its Section 22.3). **Implementation not started**; Stage 1
-  requires an explicit start.
+  P7.9 and P7.10 (its Section 22.3). **Stage 1 implemented locally, pending
+  independent review, not accepted** (its Section 23); Stage 2 and Stage 3 not
+  started.
 
 ## Historical-Document Rule
 

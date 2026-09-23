@@ -504,14 +504,27 @@ def test_the_over_funded_closing_rule_still_refuses_a_valuation_sized_excess() -
 
 
 def test_no_second_amount_rule_shape_was_added() -> None:
-    """``PctOfValue`` is activated, not replaced: the funding amount rules are
-    still exactly the three P7.7 authored."""
+    """``PctOfValue`` is activated, not replaced: P7.10 left the funding amount
+    rules exactly the three P7.7 authored.
 
-    from anchor.capital_structure.contracts import FundingAmountRule
+    Refinance & Capital Events V1 Stage 1 re-pin: the separately ratified
+    refinance contract adds exactly one rule, ``RefinanceProceeds`` (Section
+    6.6). P7.10's own claim is still proven in its merged tree."""
 
-    assert set(FundingAmountRule.__args__) == {FixedAmount, __import__(
-        "anchor.capital_structure.contracts", fromlist=["PctOfPrice"]
-    ).PctOfPrice, PctOfValue}
+    import subprocess
+    from pathlib import Path
+
+    from anchor.capital_structure.contracts import FundingAmountRule, PctOfPrice, RefinanceProceeds
+
+    assert set(FundingAmountRule.__args__) == {FixedAmount, PctOfPrice, PctOfValue, RefinanceProceeds}
+    merged = subprocess.run(
+        ["git", "show", "f6f36803cdcb646aa8a4af8cfc658a0e368ae58e:src/anchor/capital_structure/contracts.py"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).resolve().parents[1],
+    ).stdout
+    assert "FundingAmountRule = FixedAmount | PctOfPrice | PctOfValue\n" in merged.replace("\r\n", "\n")
 
 
 # =============================================================================

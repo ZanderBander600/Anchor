@@ -151,16 +151,34 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and re.search(r"\.test\.tsx?$", path) is None
 
 
+#: Stage 4's reviewed head, merged into ``main`` as the second parent of the
+#: Stage 4 merge (PR #53, ``d7e4d75``) and human accepted there.
+#:
+#: **Re-pinned at Refinance & Capital Events V1 Stage 1**, exactly as this
+#: helper's own docstring anticipated: the ledger and the freezes below read
+#: Stage 4's committed range ``9ca957a..a6f1b2b`` rather than the working tree,
+#: so a later gate's files never read as Stage 4 changes while every Stage 4
+#: claim stays proven against real history. The refinance gate's own ledger is
+#: ``tests/test_refinance_v1_stage_1_architecture.py``.
+_STAGE_4_HEAD = "a6f1b2b4ccad3f6322e415564491bd7e4d9c7132"
+_STAGE_4_MERGE = "d7e4d757780461ee9113787c29d987370fe5c83f"
+
+
 def _changes_since(base: str, *paths: str) -> set[str]:
-    """Committed, staged, unstaged and untracked changes since ``base``.
+    """The changes of Stage 4's committed range ``base..a6f1b2b``, renames
+    split into removal and addition. Reads Git objects only."""
 
-    Stage 4's own ledger reads the working tree, because Stage 4 has not been
-    merged. A later gate re-pins this to Stage 4's committed range, exactly as
-    Stage 2 re-pinned Stage 1's and as that file's docstring anticipated."""
+    changed = _git("diff", "--name-only", "--no-renames", base, _STAGE_4_HEAD, "--", *paths).split()
+    return {path for path in changed if path}
 
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path}
+
+def test_the_stage_4_ledger_range_is_exactly_the_merged_branch() -> None:
+    """The re-pinned range is the merged Stage 4 branch, and it is ancestry of
+    the tree under test, so the ledger measures real, merged history."""
+
+    parents = _git("rev-list", "--parents", "-n", "1", _STAGE_4_MERGE).split()[1:]
+    assert parents == [_git("rev-parse", _STAGE_4_BASE).strip(), _STAGE_4_HEAD]
+    subprocess.run(["git", "merge-base", "--is-ancestor", _STAGE_4_MERGE, "HEAD"], check=True, cwd=_PROJECT_ROOT)
 
 
 def _added_lines(base: str, path: str) -> list[str]:

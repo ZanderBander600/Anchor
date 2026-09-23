@@ -251,13 +251,29 @@ def test_the_stage_1_package_holds_exactly_its_merged_files() -> None:
     assert len(current) == 9
 
 
-@pytest.mark.parametrize("path", _stage_1_files())
+#: Refinance & Capital Events V1 Stage 1 re-pin. The ratified decision R-O
+#: gives the Common Equity seam exactly one more accepted upstream reason,
+#: ``refinance_unavailable``; the waterfall is untouched. That one module leaves
+#: the working-tree freeze, and the assertion below still proves it was
+#: byte-identical to the Stage 1 merge through the accepted baseline
+#: ``2e1f84a``. The change is held by
+#: ``tests/test_refinance_v1_stage_1_architecture.py``.
+_REFINANCE_V1_BASE = "2e1f84aaa7c93b3247e8dbc6ded8b4397124d36b"
+_REFINANCE_V1_SEAM = (f"{_PACKAGE}/common_equity.py",)
+
+
+@pytest.mark.parametrize("path", [path for path in _stage_1_files() if path not in _REFINANCE_V1_SEAM])
 def test_each_stage_1_module_is_byte_identical_to_its_merge(path: str) -> None:
     assert _git("hash-object", path).strip() == _git("rev-parse", f"{_STAGE_1_MERGE}:{path}").strip(), path
 
 
+@pytest.mark.parametrize("path", _REFINANCE_V1_SEAM)
+def test_the_refinance_seam_module_was_frozen_through_the_accepted_baseline(path: str) -> None:
+    assert _git("rev-parse", f"{_REFINANCE_V1_BASE}:{path}").strip() == _git("rev-parse", f"{_STAGE_1_MERGE}:{path}").strip(), path
+
+
 def test_the_stage_1_package_is_unchanged_since_its_merge() -> None:
-    assert _working_tree_changes_since(_STAGE_1_MERGE, _PACKAGE) == set()
+    assert _working_tree_changes_since(_STAGE_1_MERGE, _PACKAGE) - set(_REFINANCE_V1_SEAM) == set()
 
 
 @pytest.mark.parametrize("path", _UNCHANGED)
