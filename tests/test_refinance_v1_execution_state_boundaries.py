@@ -413,10 +413,49 @@ def test_an_unexecuted_unit_event_outranks_a_blocked_one_downstream() -> None:
     assert [u.position_id for u in result.unexecuted_positions].count(INVESTMENT_REPLACEMENT_ID) == 1
     assert all(position.position_id != INVESTMENT_REPLACEMENT_ID for position in result.positions)
 
-    # Common Equity is unavailable, with nothing reported. An unresolved
-    # Funding Requirement keeps P7.7's reason as its root cause (Section 15.4).
+    # Common Equity follows the dominant non-executed refinance, not the
+    # simultaneous unresolved funding (Section 15.4): resolving that funding
+    # alone would not make it reportable.
     equity = result.common_equity
+    assert equity.status is CapitalStructureStatus.REFINANCE_UNAVAILABLE
+    assert equity.unavailable_reason is CommonEquityUnavailableReason.REFINANCE_UNAVAILABLE
     assert equity.cash_flows is None
     assert equity.event_cash_flows is None and equity.recurring_cash_flows is None
+    assert equity.irr is None and equity.equity_multiple is None and equity.total_profit is None
+    for opaque in ("refi-b", "b-refi", "b-junior", "hold_year", INVESTMENT_EVENT_ID, INVESTMENT_REPLACEMENT_ID):
+        assert opaque not in equity.unavailable_message, opaque
+
+
+def _blocked_only_structure() -> Any:
+    """The mixed structure with Unit 'a''s event executing: Unit 'b' is the
+    only non-executing Unit event, and it is ``BLOCKED``."""
+
+    mixed = _mixed_structure()
+    executing = next(item for item in _upstream_structure(unit_executes=True).events if item.scope.unit_id == "a")
+    return evented(*mixed.positions, events=tuple(executing if item.scope.unit_id == "a" else item for item in mixed.events))
+
+
+def test_a_blocked_only_upstream_blocks_the_investment_event_and_keeps_unresolved_funding() -> None:
+    """Section 23.4: with no Unit event ``UNAVAILABLE`` or ``NOT_EXECUTABLE``
+    and one ``BLOCKED`` by unresolved funding, the downstream event is
+    ``BLOCKED`` -- never ``EXECUTED`` with nothing settled -- and Common Equity
+    keeps P7.7's unresolved-funding reason."""
+
+    units, consolidated = _two_units()
+    result = run_investment(_blocked_only_structure(), units=units, consolidated=consolidated)
+
+    a_outcome, b_outcome, investment_outcome = result.capital_events
+    assert a_outcome.status is RefinanceStatus.EXECUTED
+    assert b_outcome.status is RefinanceStatus.BLOCKED
+    assert investment_outcome.status is RefinanceStatus.BLOCKED
+    assert investment_outcome.unavailable_reason is RefinanceUnavailableReason.UPSTREAM_UNRESOLVED_FUNDING
+    assert investment_outcome.funding is None and investment_outcome.bridge is None
+    message = investment_outcome.unavailable_message
+    assert f"'{INVESTMENT_EVENT_LABEL}' is blocked" in message and "B Junior in Hold Year 1" in message
+    for opaque in ("b-junior", "hold_year", INVESTMENT_EVENT_ID, INVESTMENT_REPLACEMENT_ID, "portfolio-senior"):
+        assert opaque not in message, opaque
+
+    equity = result.common_equity
     assert equity.status is CapitalStructureStatus.UNRESOLVED_FUNDING
     assert equity.unavailable_reason is CommonEquityUnavailableReason.UNRESOLVED_FUNDING_REQUIREMENT
+    assert equity.cash_flows is None and equity.event_cash_flows is None

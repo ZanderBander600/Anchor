@@ -28,6 +28,7 @@ import pytest
 
 import test_refinance_v1_execution as execution_tests
 import test_refinance_v1_execution_state_boundaries as boundary_tests
+import test_refinance_v1_message_boundaries as message_tests
 import test_refinance_v1_partnership as partnership_tests
 import test_refinance_v1_payoff_authority as payoff_tests
 import test_refinance_v1_sizing as sizing_tests
@@ -316,7 +317,7 @@ def test_m17_negative_event_cash_withheld_from_common_equity_is_killed(monkeypat
 
 
 def test_m18_zero_filling_an_unavailable_result_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
-    _killed(monkeypatch, _f11, cs_refinance_execution, ("    if not_executed and not unresolved:\n", "    if False:\n"))
+    _killed(monkeypatch, _f11, cs_refinance_execution, ("    if not_executed:\n", "    if False:\n"))
 
 
 def test_m19_a_proceeds_cure_of_an_earlier_shortfall_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -424,6 +425,85 @@ def test_m25_an_unsettled_investment_event_reported_executed_is_killed(monkeypat
             "    if investment_plan is not None and unit_event_unavailable:\n        investment_plan = _upstream_not_executed(",
             "    if False:\n        investment_plan = _upstream_not_executed(",
         ),
+    )
+
+
+# =============================================================================
+# Downstream status and message boundaries (Sections 15.3, 15.4, 23.4)
+# =============================================================================
+
+
+def test_m26_unresolved_funding_outranking_a_non_executed_refinance_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        boundary_tests.test_an_unexecuted_unit_event_outranks_a_blocked_one_downstream,
+        cs_refinance_execution,
+        (
+            "    if not_executed:\n",
+            "    if not_executed and not any(\n"
+            "        requirement.status is FundingRequirementStatus.UNRESOLVED for requirement in requirements\n"
+            "    ):\n",
+        ),
+    )
+
+
+def test_m27_raw_requirement_ids_in_the_blocked_message_are_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        message_tests.no_identity_in_any_message,
+        cs_refinance_execution,
+        (
+            "        f\"'{plan.event.label}' is blocked: the Funding Requirement(s) of {_requirements_text(found, names)} are \"\n",
+            "        f\"'{plan.event.label}' is blocked: the Funding Requirement(s) of "
+            "{', '.join(requirement.requirement_id for requirement in found)} are \"\n",
+        ),
+    )
+
+
+def test_m28_inherited_position_messages_escaping_unchanged_are_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        message_tests.no_identity_in_any_message,
+        cs_refinance_execution,
+        (
+            "        positions=tuple(_presented_position(position, names=names, requirements=requirements) for position in base.positions),\n",
+            "        positions=base.positions,\n",
+        ),
+    )
+
+
+def test_m29_inherited_requirement_explanations_escaping_unchanged_are_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        message_tests.no_identity_in_any_message,
+        cs_refinance_execution,
+        (
+            "        funding_requirements=tuple(requirements[requirement.requirement_id] for requirement in base.funding_requirements),\n",
+            "        funding_requirements=base.funding_requirements,\n",
+        ),
+    )
+
+
+def test_m30_the_inherited_common_equity_message_escaping_unchanged_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        message_tests.no_identity_in_any_message,
+        cs_refinance_execution,
+        (
+            "        common_equity=_presented_common_equity(common_equity, names=names, requirements=base.funding_requirements),\n",
+            "        common_equity=common_equity,\n",
+        ),
+    )
+
+
+def test_m31_an_investment_event_executed_over_upstream_unresolved_funding_is_killed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _killed(
+        monkeypatch,
+        boundary_tests.test_a_blocked_only_upstream_blocks_the_investment_event_and_keeps_unresolved_funding,
+        cs_refinance_execution,
+        ("    if upstream:\n", "    if False:\n"),
     )
 
 

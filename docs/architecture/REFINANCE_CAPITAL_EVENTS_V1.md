@@ -1449,7 +1449,15 @@ When the event is `UNAVAILABLE`, `NOT_EXECUTABLE` or `BLOCKED`:
   §14.4).
 - **Common Equity:** `cash_flows = None`.
   - The reason is `refinance_unavailable`, with the event named.
-  - `BLOCKED` keeps P7.7's `unresolved_funding_requirement`, the root cause.
+  - An event that is `UNAVAILABLE` or `NOT_EXECUTABLE` dominates any
+    simultaneous unresolved Funding Requirement: Common Equity is then
+    `refinance_unavailable`, because resolving the funding alone would not make
+    it reportable (clarified at Section 23.4).
+  - `BLOCKED` keeps P7.7's `unresolved_funding_requirement`, the root cause,
+    only when no event is `UNAVAILABLE` or `NOT_EXECUTABLE`.
+- **Messages:** P7.7 and P7.8 keep their accepted internals and messages. A
+  refinance result restates every analyst-facing message it carries under
+  Section 15.3 (clarified at Section 23.4).
 - **Partnership:** `UNAVAILABLE`, with the upstream reason (Section 12.3).
 - **Presentation:** the state is shown in the primary view (Section 12.5).
 - **Nothing is zero-filled,** and nothing falls back to "no refinance".
@@ -2421,9 +2429,52 @@ M22–M25 kill each defect's reinstatement.
    - An Investment event that already does not execute for its own reason
      keeps that reason in every case.
 
-   This precedence governs the event status only. Common Equity keeps Section
-   15.4's rule: where any Funding Requirement is unresolved, it keeps P7.7's
-   `unresolved_funding_requirement` reason, in the mixed case as elsewhere.
+   A second review round corrected three more boundaries in a fourth local
+   commit. It is recorded in items 4 to 6 below.
+
+4. **Common Equity follows the dominant non-executed refinance (Section 15.4,
+   ratified).**
+   - If any event is `UNAVAILABLE` or `NOT_EXECUTABLE`, Common Equity is
+     `REFINANCE_UNAVAILABLE` with reason `refinance_unavailable`.
+   - Every cash-flow and return field is then unavailable, never partial or
+     zero-filled.
+   - This dominates any simultaneous unresolved Funding Requirement.
+   - Only when no event is `UNAVAILABLE` or `NOT_EXECUTABLE`, but an event is
+     `BLOCKED` by unresolved funding, does Common Equity keep P7.7's
+     `UNRESOLVED_FUNDING` / `unresolved_funding_requirement`.
+   - The rule reads the typed event status, never a message.
+5. **A blocked-only upstream blocks the Investment event.**
+   - Before: an unresolved Unit requirement blocked every Investment-scoped
+     position's settlement, yet a would-be-executed Investment event was still
+     reported `EXECUTED`, with a bridge, and nothing of it settled. The first
+     correction round missed this case.
+   - Now the event is `BLOCKED` with `upstream_unresolved_funding`, so the
+     precedence rule above holds end to end.
+   - The upstream requirements are the typed objects behind the blocking ids.
+6. **No opaque identity in any analyst-facing refinance message (Section
+   15.3).**
+   - P7.7 and P7.8 build their messages from identities, and they stay exactly
+     as accepted. No P7.7 or P7.8 production file changes, and a structure
+     without a refinance never reaches the refinance executor.
+   - A refinance result restates, from typed objects, every analyst-facing
+     message it carries:
+     - the capital-event messages, `BLOCKED` included;
+     - each position's unresolved and senior-blocked messages;
+     - each Funding Requirement's `explanation`, wherever it appears (the
+       result, the position and the annual claim carry one object);
+     - Common Equity's unresolved-funding message.
+   - Positions are named by `name`; the acquisition loan, which has no authored
+     name, is "the acquisition loan of Unit X". Events are named by label, and
+     periods as Hold Year N or Model Month N.
+   - Identities stay in their typed fields. No identity, amount, status or
+     order changes, and no message is edited by string replacement.
+   - Units carry no analyst name at this layer, so a Unit is still named by its
+     id, as throughout P7.7.
+   - The guard is `tests/test_refinance_v1_message_boundaries.py`. It walks
+     every message of eight representative states under seeded identities, and
+     proves the presentation changes messages only.
+
+   Mutation proofs M26–M31 kill the reinstatement of each of items 4 to 6.
 
    `RefinanceUnavailableReason` gains that one appended member. No other
    contract, schema, persistence, API or presentation surface changes.

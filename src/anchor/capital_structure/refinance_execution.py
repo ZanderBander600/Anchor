@@ -45,12 +45,16 @@ from .contracts import (
     CapitalStructureStatus,
     CapitalStructureUnit,
     CommonEquityUnavailableReason,
+    CapitalStructureError,
     FundingRequirement,
     FundingRequirementStatus,
     HoldYearPeriod,
+    LegacyAcquisitionLoan,
+    ModelMonthPeriod,
     PositionClass,
     PositionScope,
     ScopeKind,
+    ShortfallResolution,
 )
 from .events import CapitalStructureWithEvents, RefinanceEvent
 from .execution import (
@@ -216,14 +220,23 @@ def _settlement_view(view: ScheduledPosition, *, model_month: int) -> ScheduledP
     )
 
 
-def _is_blocked(plan: RefinancePlan, settled: dict[str, _Settled], positions: dict[str, CapitalPosition]) -> str | None:
+def _is_blocked(
+    plan: RefinancePlan,
+    settled: dict[str, _Settled],
+    positions: dict[str, CapitalPosition],
+    *,
+    names: dict[str, str],
+    upstream: tuple[FundingRequirement, ...],
+) -> str | None:
     """Why an executed plan is blocked, or ``None``: an unresolved Funding
-    Requirement in the scope at or before the event year, or an unresolved
-    continuing senior position."""
+    Requirement in the scope at or before the event year, an unresolved
+    continuing senior position, or -- for the Investment scope -- an unresolved
+    Unit requirement that blocks the scope's settlement (``upstream``), which
+    leaves nothing settled for the event."""
 
     hold_year = event_hold_year(plan.event)
     replacement = positions[plan.event.replacement_position_id]
-    found: list[str] = []
+    found: list[FundingRequirement] = []
     for position_id, (claims, _) in sorted(settled.items()):
         senior = positions[position_id].priority < replacement.priority
         for claim in claims or ():
@@ -233,12 +246,17 @@ def _is_blocked(plan: RefinancePlan, settled: dict[str, _Settled], positions: di
                 and requirement.status is FundingRequirementStatus.UNRESOLVED
                 and (claim.hold_year <= hold_year or senior)
             ):
-                found.append(requirement.requirement_id)
+                found.append(requirement)
+    if upstream:
+        return (
+            f"'{plan.event.label}' is blocked: the Funding Requirement(s) of {_requirements_text(upstream, names)} "
+            "are unresolved in the Investment's Units, so the cash reaching the refinanced scope is unknowable."
+        )
     if not found:
         return None
     return (
-        f"'{plan.event.label}' is blocked: Funding Requirement(s) {', '.join(found)} are unresolved at or before its "
-        "event, so the cash of the refinanced scope is unknowable."
+        f"'{plan.event.label}' is blocked: the Funding Requirement(s) of {_requirements_text(found, names)} are "
+        "unresolved at or before its event, so the cash of the refinanced scope is unknowable."
     )
 
 
@@ -250,11 +268,14 @@ def _run_scope(
     hold_period: int,
     price_basis: PriceBasis,
     valuations: ValuationAuthority | None,
+    names: dict[str, str],
     blocking: tuple[str, ...] = (),
+    upstream: tuple[FundingRequirement, ...] = (),
 ) -> tuple[_ScopeRun, tuple[str, ...]]:
     """Schedule and settle one scope's claim-bearing positions against
     ``authority``, in economic order, and return what blocks the scopes after
-    it."""
+    it. ``upstream`` holds the unresolved requirements that ``blocking``
+    names, as typed objects."""
 
     by_id = {position.position_id: position for position in positions}
     special: dict[str, ScheduledPosition] = {}
@@ -287,7 +308,7 @@ def _run_scope(
         blocking=blocking,
     )
     if plan is not None and plan.executed:
-        reason = _is_blocked(plan, settled, by_id)
+        reason = _is_blocked(plan, settled, by_id, names=names, upstream=upstream)
         if reason is not None:
             plan = blocked(plan, message=reason)
             unavailable = frozenset(plan.affected_position_ids)
@@ -446,11 +467,13 @@ def _common_equity_result(
 ) -> RefinancedCommonEquityReturns:
     """Common Equity after the events. With every event executed, it is P7.8's
     own result on the final series, decomposed into recurring and event cash.
-    An unresolved Funding Requirement keeps P7.7's reason; otherwise a
-    non-executed event makes it unavailable with ``refinance_unavailable``."""
+    An event that is ``UNAVAILABLE`` or ``NOT_EXECUTABLE`` makes it unavailable
+    with ``refinance_unavailable`` whatever else is unresolved: resolving the
+    funding alone would not make it reportable (Section 15.4). Otherwise an
+    unresolved Funding Requirement -- a ``BLOCKED`` event's root cause
+    included -- keeps P7.7's reason."""
 
-    unresolved = any(requirement.status is FundingRequirementStatus.UNRESOLVED for requirement in requirements)
-    if not_executed and not unresolved:
+    if not_executed:
         names = ", ".join(f"'{plan.event.label}'" for plan in not_executed)
         details = " ".join(plan.result.unavailable_message or "" for plan in not_executed)
         return RefinancedCommonEquityReturns(
@@ -499,22 +522,164 @@ def _common_equity_result(
     )
 
 
+# =============================================================================
+# Analyst-facing messages (Section 15.3)
+# =============================================================================
+#
+# P7.7 and P7.8 build their messages from identities, and they stay exactly as
+# accepted: a structure without a refinance never reaches this module. A
+# refinance result is analyst-facing under Section 15.3, so every message it
+# carries that P7.7 or P7.8 wrote is rebuilt here from the typed objects --
+# positions by name, events by label, periods as Hold Year or Model Month.
+# Identities stay in their typed fields; no identity, amount, status or order
+# changes, and no message is edited by string replacement.
+
+
+def _position_names(positions: Iterable[CapitalPosition], loans: Iterable[LegacyAcquisitionLoan]) -> dict[str, str]:
+    """Each claim-bearing position's analyst name by identity. The acquisition
+    loan has no authored name; it is named by its Unit."""
+
+    names = {position.position_id: position.name for position in positions}
+    for loan in loans:
+        names[loan.position_id] = f"the acquisition loan of Unit {loan.scope.unit_id}"
+    return names
+
+
+def _period_text(period: HoldYearPeriod | ModelMonthPeriod) -> str:
+    if isinstance(period, HoldYearPeriod):
+        return f"Hold Year {period.hold_year}"
+    return f"Model Month {period.model_month}"
+
+
+def _scope_text(scope: PositionScope) -> str:
+    return f"Unit {scope.unit_id}" if scope.kind is ScopeKind.UNIT else "the Investment"
+
+
+def _name_of(position_id: str, names: dict[str, str]) -> str:
+    name = names.get(position_id)
+    if name is None:
+        raise CapitalStructureError(
+            "Engine defect: a Funding Requirement names a position this result does not carry, so its message "
+            "cannot be stated without an identity."
+        )
+    return name
+
+
+def _requirements_text(requirements: Iterable[FundingRequirement], names: dict[str, str]) -> str:
+    return ", ".join(
+        f"{_name_of(requirement.position_id, names)} in {_period_text(requirement.period)}" for requirement in requirements
+    )
+
+
+def _presented_requirement(requirement: FundingRequirement, names: dict[str, str]) -> FundingRequirement:
+    """The requirement with P7.7's explanation restated by name. Every other
+    field, the identity included, is unchanged."""
+
+    head = (
+        f"{_name_of(requirement.position_id, names)} ({_scope_text(requirement.scope)}) was owed "
+        f"{requirement.claim_amount:,.2f} in {_period_text(requirement.period)}, but only "
+        f"{requirement.cash_available:,.2f} of eligible cash was available to it."
+    )
+    if requirement.resolution is ShortfallResolution.COMMON_EQUITY_CONTRIBUTION:
+        tail = (
+            f"The {requirement.amount:,.2f} shortfall is met by an additional common-equity contribution, as this "
+            "position's terms state, so the claim is paid in full."
+        )
+    else:
+        tail = (
+            f"The {requirement.amount:,.2f} shortfall is unresolved: only the available cash is paid, the rest of the "
+            "claim stays unpaid, and every figure downstream of it is incomplete."
+        )
+    return replace(requirement, explanation=f"{head} {tail}")
+
+
+def _presented_position(
+    position: PositionReturns, *, names: dict[str, str], requirements: dict[str, FundingRequirement]
+) -> PositionReturns:
+    """The position with P7.8's identity-bearing text restated by name: its
+    requirements' explanations, and the unresolved or senior-blocked message.
+    A refinance-unavailable message is already this module's."""
+
+    claims = tuple(
+        claim
+        if claim.settlement.funding_requirement is None
+        else replace(
+            claim,
+            settlement=replace(
+                claim.settlement,
+                funding_requirement=requirements[claim.settlement.funding_requirement.requirement_id],
+            ),
+        )
+        for claim in position.annual_claims
+    )
+    blocking = [requirements[requirement_id] for requirement_id in position.blocking_requirement_ids]
+    message = position.unavailable_message
+    if position.status is PositionResultStatus.UNRESOLVED_FUNDING:
+        message = (
+            f"The returns of {position.name} are not reported: its Funding Requirement(s) in "
+            f"{', '.join(_period_text(requirement.period) for requirement in blocking)} are unresolved, so the cash "
+            "it receives is incomplete. Property, Business Plan and project results are unaffected."
+        )
+    elif position.status is PositionResultStatus.BLOCKED_BY_SENIOR_UNRESOLVED:
+        message = (
+            f"The returns of {position.name} are not reported: the senior Funding Requirement(s) of "
+            f"{_requirements_text(blocking, names)} are unresolved, so the cash available to it is unknown and "
+            "nothing was settled for it. Property, Business Plan and project results are unaffected."
+        )
+    return replace(
+        position,
+        unavailable_message=message,
+        funding_requirements=tuple(requirements[requirement.requirement_id] for requirement in position.funding_requirements),
+        annual_claims=claims,
+    )
+
+
+def _presented_common_equity(
+    common_equity: RefinancedCommonEquityReturns,
+    *,
+    names: dict[str, str],
+    requirements: tuple[FundingRequirement, ...],
+) -> RefinancedCommonEquityReturns:
+    """P7.7's unresolved-funding message, restated by name. The refinance
+    message is already this module's."""
+
+    if common_equity.unavailable_reason is not CommonEquityUnavailableReason.UNRESOLVED_FUNDING_REQUIREMENT:
+        return common_equity
+    unresolved = [requirement for requirement in requirements if requirement.status is FundingRequirementStatus.UNRESOLVED]
+    return replace(
+        common_equity,
+        unavailable_message=(
+            f"The Common Equity Cash Flow is not reported: the Funding Requirement(s) of "
+            f"{_requirements_text(unresolved, names)} are unresolved, so every figure downstream of the unpaid claim "
+            "is incomplete. Property, Business Plan and project results are unaffected."
+        ),
+    )
+
+
 def _result(
     *,
     base: StructuredCapitalResult,
     common_equity: RefinancedCommonEquityReturns,
     plans: tuple[RefinancePlan, ...],
     unexecuted: tuple[UnexecutedPosition, ...],
+    names: dict[str, str],
 ) -> RefinancedCapitalResult:
+    requirements = {
+        requirement.requirement_id: _presented_requirement(requirement, names)
+        for requirement in (
+            *base.funding_requirements,
+            *(requirement for position in base.positions for requirement in position.funding_requirements),
+        )
+    }
     return RefinancedCapitalResult(
         analysis_scope=base.analysis_scope,
         unit_ids=base.unit_ids,
         hold_period=base.hold_period,
         status=common_equity.status,
         legacy_acquisition_loans=base.legacy_acquisition_loans,
-        positions=base.positions,
-        funding_requirements=base.funding_requirements,
-        common_equity=common_equity,
+        positions=tuple(_presented_position(position, names=names, requirements=requirements) for position in base.positions),
+        funding_requirements=tuple(requirements[requirement.requirement_id] for requirement in base.funding_requirements),
+        common_equity=_presented_common_equity(common_equity, names=names, requirements=base.funding_requirements),
         capital_events=tuple(plan.result for plan in plans),
         unexecuted_positions=unexecuted,
     )
@@ -562,8 +727,15 @@ def execute_unit_refinance(
     source = foundation.cash_authority.post_acquisition_debt_cash_flows
     if retired_in is not None:
         source = spliced_unit_authority(results, hold_year=retired_in)
+    names = _position_names(claim_bearing, () if loan is None else (loan,))
     run, _ = _run_scope(
-        claim_bearing, plan=plan, authority=source, hold_period=hold_period, price_basis=basis, valuations=valuations
+        claim_bearing,
+        plan=plan,
+        authority=source,
+        hold_period=hold_period,
+        price_basis=basis,
+        valuations=valuations,
+        names=names,
     )
     _require_funded_closing(tuple(run.settlement_views.values()), closing_source=source[0], root="Unit")
     # A blocked plan was settled on the spliced authority: the retirement it
@@ -604,6 +776,7 @@ def execute_unit_refinance(
         common_equity=common_equity,
         plans=(plan,),
         unexecuted=_unexecuted(run, {position.position_id: position for position in claim_bearing}),
+        names=names,
     )
 
 
@@ -710,6 +883,7 @@ def execute_investment_refinance(
     )
     marker, claim_bearing = _split(admitted)
     by_position = {position.position_id: position for position in claim_bearing}
+    names = _position_names(claim_bearing, foundation.legacy_acquisition_loans)
     events = _events(capital_structure)
     unit_events = {event.scope.unit_id: event for event in events if event.scope.kind is ScopeKind.UNIT}
     investment_event = next((event for event in events if event.scope.kind is ScopeKind.INVESTMENT), None)
@@ -757,7 +931,13 @@ def execute_investment_refinance(
             retired_in = event_hold_year(plan.event)
             source = spliced_unit_authority(unit.results, hold_year=retired_in)
         run, unresolved = _run_scope(
-            in_unit, plan=plan, authority=source, hold_period=hold_period, price_basis=basis, valuations=valuations
+            in_unit,
+            plan=plan,
+            authority=source,
+            hold_period=hold_period,
+            price_basis=basis,
+            valuations=valuations,
+            names=names,
         )
         unit_blocking.extend(unresolved)
         closing_views.extend(run.settlement_views.values())
@@ -836,6 +1016,13 @@ def execute_investment_refinance(
             "reaching the Investment scope is unknowable."
         )
     else:
+        unit_requirements = {
+            requirement.requirement_id: requirement
+            for _, run in unit_runs
+            for claims, _ in run.settled.values()
+            for claim in claims or ()
+            if (requirement := claim.settlement.funding_requirement) is not None
+        }
         investment_run, _ = _run_scope(
             investment_positions,
             plan=investment_plan,
@@ -843,7 +1030,9 @@ def execute_investment_refinance(
             hold_period=hold_period,
             price_basis=investment_basis,
             valuations=valuations,
+            names=names,
             blocking=tuple(unit_blocking),
+            upstream=tuple(unit_requirements[requirement_id] for requirement_id in dict.fromkeys(unit_blocking)),
         )
         blocked_investment_message = None
     closing_views.extend(investment_run.settlement_views.values())
@@ -929,7 +1118,13 @@ def execute_investment_refinance(
         funding_requirements=tuple(requirements),
         common_equity=common_equity,
     )
-    return _result(base=base, common_equity=common_equity, plans=tuple(plans), unexecuted=tuple(unexecuted))
+    return _result(
+        base=base,
+        common_equity=common_equity,
+        plans=tuple(plans),
+        unexecuted=tuple(unexecuted),
+        names=names,
+    )
 
 
 __all__ = [
