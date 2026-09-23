@@ -59,6 +59,13 @@ refused while the Investment root is not.
 
 **Neutral.** With no authored claim-bearing position the Common Equity Cash
 Flow *is* the P7.7 authority series, passed through untouched.
+
+**Refinance & Capital Events V1.** A ``CapitalStructureWithEvents`` -- a
+structure that states a refinance -- is handed whole to
+``refinance_execution``, which executes it with this module's own admission,
+scheduling, settlement and returns. A plain ``CapitalStructure`` never reaches
+it, so every analysis without a refinance runs exactly the path above, and no
+event is ever silently ignored.
 """
 
 from __future__ import annotations
@@ -102,6 +109,7 @@ from .execution_contracts import (
     ScheduledPosition,
     StructuredCapitalResult,
 )
+from .events import CapitalStructureWithEvents
 from .execution_validation import validate_structured_execution
 from .foundation import (
     analyze_investment_capital_structure,
@@ -564,6 +572,12 @@ def execute_unit_capital_structure(
     from (R-E). ``None`` is the default and the pre-P7.10 behaviour: such a
     rule is refused, and an analysis without one is unchanged."""
 
+    if isinstance(capital_structure, CapitalStructureWithEvents):
+        from .refinance_execution import execute_unit_refinance  # imports this module
+
+        return execute_unit_refinance(
+            unit_id=unit_id, terms=terms, results=results, capital_structure=capital_structure, valuations=valuations
+        )
     foundation = analyze_unit_capital_structure(unit_id=unit_id, terms=terms, results=results)
     loan = foundation.legacy_acquisition_loan
     hold_period = terms.hold_period
@@ -643,6 +657,12 @@ def execute_investment_capital_structure(
     an Investment-scoped one from the Investment value, which exists only when
     every member Unit has a value at the same model month."""
 
+    if isinstance(capital_structure, CapitalStructureWithEvents):
+        from .refinance_execution import execute_investment_refinance  # imports this module
+
+        return execute_investment_refinance(
+            units=units, consolidated=consolidated, capital_structure=capital_structure, valuations=valuations
+        )
     given = tuple(units)
     foundation = analyze_investment_capital_structure(units=given, consolidated=consolidated)
     ordered = tuple(sorted(given, key=lambda unit: unit.unit_id))

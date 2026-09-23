@@ -31,6 +31,15 @@ The first executor runs:
 - at most one common-equity marker, scoped to the analysis root (that Unit, or
   the Investment), with no claim below it.
 
+Refinance & Capital Events V1 narrows two of these refusals, and removes
+neither (Section 19). A replacement position's one ``RefinanceProceeds``
+funding is executed at its refinance event's month, and that replacement's
+lender fees at the same month; the structural validator has already proved the
+funding names its event, at the event month, and that every fee is there. Every
+other non-closing funding or fee is refused exactly as before. An
+Investment-scoped refinance event is refused in a standalone Unit analysis,
+which has no Investment scope.
+
 Issues come in economic order, each position's in field order, then the
 cross-position issues. List order never participates.
 """
@@ -48,8 +57,10 @@ from .contracts import (
     PositionClass,
     PositionFee,
     PreferredEquityTerms,
+    RefinanceProceeds,
     ScopeKind,
 )
+from .events import CapitalStructureWithEvents, RefinanceEvent
 from .execution_contracts import ExecutionIssue, ExecutionIssueCode
 from .funding import resolve_valuation_funding
 from .preferred import modeled_redemption_month
@@ -88,7 +99,7 @@ def _funding_issues(position: CapitalPosition, valuations: ValuationAuthority | 
     issues: list[ExecutionIssue] = []
     for event in sorted(position.funding, key=_order):
         where = f"funding[{event.event_id}]"
-        if event.model_month != 0:
+        if event.model_month != 0 and not isinstance(event.amount_rule, RefinanceProceeds):
             issues.append(
                 _issue(
                     ExecutionIssueCode.UNSUPPORTED_FUNDING_TIMING,
@@ -125,7 +136,15 @@ def _funding_issues(position: CapitalPosition, valuations: ValuationAuthority | 
     return issues
 
 
+def _is_refinance_replacement(position: CapitalPosition) -> bool:
+    """A replacement position: funded by ``RefinanceProceeds``, which the
+    structural validator admits only on the replacement its event names."""
+
+    return any(isinstance(event.amount_rule, RefinanceProceeds) for event in position.funding)
+
+
 def _debt_issues(position: CapitalPosition, terms: DebtTerms) -> list[ExecutionIssue]:
+    replacement = _is_refinance_replacement(position)
     issues = [
         _issue(
             ExecutionIssueCode.UNSUPPORTED_FEE_TIMING,
@@ -135,7 +154,7 @@ def _debt_issues(position: CapitalPosition, terms: DebtTerms) -> list[ExecutionI
             f"terms.fees[{fee.fee_id}].model_month",
         )
         for fee in sorted(terms.fees, key=_order)
-        if fee.model_month != 0
+        if fee.model_month != 0 and not replacement
     ]
     if terms.pik_rate != 0.0:
         issues.append(
@@ -245,6 +264,20 @@ def validate_structured_execution(
             issues.extend(_common_equity_issues(position, analysis_scope))
         else:
             issues.extend(_claim_issues(position, analysis_scope, hold_period, valuations))
+
+    if analysis_scope is ScopeKind.UNIT and isinstance(structure, CapitalStructureWithEvents):
+        issues.extend(
+            ExecutionIssue(
+                code=ExecutionIssueCode.UNSUPPORTED_EVENT_SCOPE,
+                message=(
+                    f"Refinance {event.label!r} is Investment-scoped, but a standalone Unit analysis has no Investment "
+                    "scope."
+                ),
+                field="events",
+            )
+            for event in sorted(structure.events, key=lambda event: event.event_id)
+            if isinstance(event, RefinanceEvent) and event.scope.kind is ScopeKind.INVESTMENT
+        )
 
     markers = [position for position in ordered if position.position_class is PositionClass.COMMON_EQUITY]
     if len(markers) > 1:

@@ -46,9 +46,11 @@ from .contracts import (
     PositionFee,
     PositionScope,
     PreferredEquityTerms,
+    RefinanceProceeds,
     ScopeKind,
     ShortfallResolution,
 )
+from .event_validation import succession_pairs, validate_capital_events
 
 _MAX_SAFE_REPR_LENGTH = 200
 
@@ -291,6 +293,20 @@ def _amount_rule_issues(rule: object, position_id: str | None, where: str) -> li
                     _issue(code, f"pct_of_value {_safe_repr(rule.pct)} {fraction}.", position_id=position_id, field=f"{field}.pct")
                 )
             return issues
+        case RefinanceProceeds():
+            # Refinance & Capital Events V1: whether the named event exists and
+            # names this position as its replacement is judged with the events.
+            if _is_nonblank_text(rule.capital_event_id):
+                return []
+            return [
+                _issue(
+                    code,
+                    f"refinance_proceeds names its refinance event by a nonblank capital_event_id; got "
+                    f"{_safe_repr(rule.capital_event_id)}.",
+                    position_id=position_id,
+                    field=f"{field}.capital_event_id",
+                )
+            ]
         case _:
             return [
                 _issue(
@@ -642,7 +658,19 @@ def _duplicate_position_ids(positions: list[CapitalPosition]) -> list[CapitalStr
     ]
 
 
-def _duplicate_priorities(positions: list[CapitalPosition], loan_units: frozenset[str]) -> list[CapitalStructureIssue]:
+def _duplicate_priorities(
+    positions: list[CapitalPosition],
+    loan_units: frozenset[str],
+    succession: tuple[frozenset[frozenset[str]], frozenset[str]] = (frozenset(), frozenset()),
+) -> list[CapitalStructureIssue]:
+    """Priority is unique within a scope, and priority 1 of a Unit carrying an
+    acquisition loan is the loan's. ``succession`` names the one exception
+    (Refinance & Capital Events V1, decision R-N): a retiring position and its
+    replacement, whose outstanding intervals never overlap, and a replacement
+    that succeeds to the acquisition loan's rank. Without a refinance it is
+    empty and nothing is excused."""
+
+    pairs, legacy_successors = succession
     ranked: dict[tuple[tuple[int, str], int], list[str]] = {}
     for position in positions:
         if _scope_is_valid(position.scope) and _is_whole_number(position.priority) and position.priority >= 1:
@@ -652,6 +680,10 @@ def _duplicate_priorities(positions: list[CapitalPosition], loan_units: frozense
     issues: list[CapitalStructureIssue] = []
     for ((rank, unit_id), priority), position_ids in sorted(ranked.items()):
         scope = f"Unit {unit_id!r}" if rank == 0 else "the Investment"
+        if len(position_ids) == 2 and frozenset(position_ids) in pairs:
+            continue
+        if len(position_ids) == 1 and position_ids[0] in legacy_successors:
+            continue
         if len(position_ids) > 1:
             issues.append(
                 _issue(
@@ -756,7 +788,10 @@ def validate_capital_structure(
     for position in ordered:
         issues.extend(_position_issues(position, members))
     issues.extend(_duplicate_position_ids(positions))
-    issues.extend(_duplicate_priorities(positions, loan_units))
+    issues.extend(_duplicate_priorities(positions, loan_units, succession_pairs(structure)))
     issues.extend(_duplicate_event_ids(positions))
     issues.extend(_double_financing(positions, loan_units))
+    # Refinance & Capital Events V1: a structure that states no event and no
+    # RefinanceProceeds funding adds nothing here.
+    issues.extend(validate_capital_events(structure, member_unit_ids=member_unit_ids))
     return tuple(issues)

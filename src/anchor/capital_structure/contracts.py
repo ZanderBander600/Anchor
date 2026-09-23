@@ -137,7 +137,19 @@ class PctOfValue:
     pct: float
 
 
-FundingAmountRule = FixedAmount | PctOfPrice | PctOfValue
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RefinanceProceeds:
+    """Refinance & Capital Events V1 (Section 6.6): the funding of a
+    replacement debt position, sized by the refinance event
+    ``capital_event_id`` at that event's model month. It states no amount: the
+    event's enabled constraints decide it for each variant, and it is valid
+    only on the one funding event of the position that event names as its
+    replacement."""
+
+    capital_event_id: str
+
+
+FundingAmountRule = FixedAmount | PctOfPrice | PctOfValue | RefinanceProceeds
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -292,6 +304,38 @@ class CapitalStructureIssueCode(StrEnum):
     INVALID_SHORTFALL_RESOLUTION = "invalid_shortfall_resolution"
     INVESTMENT_SENIOR_DEBT_WITH_ACQUISITION_LOAN = "investment_senior_debt_with_acquisition_loan"
     UNSUPPORTED_POSITION = "unsupported_position"
+    #: Refinance & Capital Events V1 (Section 15.1), appended so every
+    #: pre-existing member keeps its place: authoring faults wholly inside a
+    #: Capital Structure that carries a refinance event, or a ``RefinanceProceeds``
+    #: funding. None of them can arise from a structure without either.
+    INVALID_CAPITAL_EVENT = "invalid_capital_event"
+    UNSUPPORTED_CAPITAL_EVENT_KIND = "unsupported_capital_event_kind"
+    EVENT_MONTH_NOT_HOLD_YEAR_END = "event_month_not_hold_year_end"
+    UNSUPPORTED_EVENT_SEQUENCE = "unsupported_event_sequence"
+    DUPLICATE_CAPITAL_EVENT_ID = "duplicate_capital_event_id"
+    MULTIPLE_REFINANCES_IN_SCOPE = "multiple_refinances_in_scope"
+    NO_RETIRING_POSITION = "no_retiring_position"
+    RETIRING_POSITION_NOT_FOUND = "retiring_position_not_found"
+    RETIRING_POSITION_DUPLICATED = "retiring_position_duplicated"
+    RETIRING_POSITION_SCOPE_MISMATCH = "retiring_position_scope_mismatch"
+    RETIRING_POSITION_NOT_DEBT = "retiring_position_not_debt"
+    REPLACEMENT_POSITION_NOT_FOUND = "replacement_position_not_found"
+    REPLACEMENT_POSITION_NOT_DEBT = "replacement_position_not_debt"
+    REPLACEMENT_SCOPE_MISMATCH = "replacement_scope_mismatch"
+    REPLACEMENT_FUNDING_MISMATCH = "replacement_funding_mismatch"
+    ORPHANED_REFINANCE_PROCEEDS = "orphaned_refinance_proceeds"
+    REPLACEMENT_PRIORITY_NOT_SUCCESSOR = "replacement_priority_not_successor"
+    REPLACEMENT_MATURITY_TOO_EARLY = "replacement_maturity_too_early"
+    REPLACEMENT_FEE_TIMING = "replacement_fee_timing"
+    NO_SIZING_CONSTRAINT = "no_sizing_constraint"
+    INVALID_FIXED_CAP = "invalid_fixed_cap"
+    INVALID_MAX_LTV = "invalid_max_ltv"
+    INVALID_MIN_DSCR = "invalid_min_dscr"
+    VALUATION_REFERENCE_REQUIRED = "valuation_reference_required"
+    VALUATION_REFERENCE_UNUSED = "valuation_reference_unused"
+    DSCR_ZERO_FIRST_YEAR_SERVICE = "dscr_zero_first_year_service"
+    INVALID_RETIRING_LENDER_FEE_RECIPIENT = "invalid_retiring_lender_fee_recipient"
+    INVALID_COST_LINE = "invalid_cost_line"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -571,6 +615,11 @@ class CapitalStructureStatus(StrEnum):
 
     COMPLETE = "complete"
     UNRESOLVED_FUNDING = "unresolved_funding"
+    #: Refinance & Capital Events V1 (Section 15.4), appended: a configured
+    #: refinance could not execute for this variant (unavailable or not
+    #: executable), so the Common Equity after it is unknowable. Upstream
+    #: results stay valid.
+    REFINANCE_UNAVAILABLE = "refinance_unavailable"
 
 
 class CommonEquityUnavailableReason(StrEnum):
@@ -578,6 +627,8 @@ class CommonEquityUnavailableReason(StrEnum):
     returns downstream of the same point report N/A with this reason."""
 
     UNRESOLVED_FUNDING_REQUIREMENT = "unresolved_funding_requirement"
+    #: Refinance & Capital Events V1 (Section 6.8), appended.
+    REFINANCE_UNAVAILABLE = "refinance_unavailable"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

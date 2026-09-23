@@ -14,11 +14,21 @@ positions and the unresolved-funding rule.
 unavailable Partnership reports live on the result's
 ``funding_requirements``; ``CommonEquityReturns`` carries the reason and
 message but not the ids.
+
+Refinance & Capital Events V1 (decision R-O) adds exactly one accepted upstream
+reason: ``refinance_unavailable``, when a configured refinance did not execute
+for the variant. It is propagated as it stands, with no requirement ids -- none
+exists -- and the waterfall is not run. Every other missing series is refused
+exactly as before.
 """
 
 from __future__ import annotations
 
-from ..capital_structure.contracts import CapitalStructureStatus, FundingRequirementStatus
+from ..capital_structure.contracts import (
+    CapitalStructureStatus,
+    CommonEquityUnavailableReason,
+    FundingRequirementStatus,
+)
 from ..capital_structure.execution_contracts import StructuredCapitalResult
 from .contracts import (
     CashFlowCadence,
@@ -39,7 +49,13 @@ def common_equity_input(structured: StructuredCapitalResult) -> CommonEquityCash
 
     common_equity = structured.common_equity
     if common_equity.cash_flows is None:
-        if common_equity.status is not CapitalStructureStatus.UNRESOLVED_FUNDING or common_equity.unavailable_reason is None:
+        refinance_unavailable = (
+            common_equity.status is CapitalStructureStatus.REFINANCE_UNAVAILABLE
+            and common_equity.unavailable_reason is CommonEquityUnavailableReason.REFINANCE_UNAVAILABLE
+        )
+        if not refinance_unavailable and (
+            common_equity.status is not CapitalStructureStatus.UNRESOLVED_FUNDING or common_equity.unavailable_reason is None
+        ):
             raise PartnershipExecutionError((PartnershipExecutionIssue(
                 code=PartnershipExecutionIssueCode.INVALID_COMMON_EQUITY_SERIES,
                 message="The Common Equity Cash Flow is missing without an unresolved-funding reason.",
