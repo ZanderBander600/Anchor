@@ -668,7 +668,11 @@ def _duplicate_priorities(
     (Refinance & Capital Events V1, decision R-N): a retiring position and its
     replacement, whose outstanding intervals never overlap, and a replacement
     that succeeds to the acquisition loan's rank. Without a refinance it is
-    empty and nothing is excused."""
+    empty and nothing is excused.
+
+    The pair excuses only the pair's own collision. It never excuses the
+    acquisition loan's reserved priority 1: that rank stays the loan's unless
+    the one replacement that succeeds to it holds it alone."""
 
     pairs, legacy_successors = succession
     ranked: dict[tuple[tuple[int, str], int], list[str]] = {}
@@ -680,11 +684,10 @@ def _duplicate_priorities(
     issues: list[CapitalStructureIssue] = []
     for ((rank, unit_id), priority), position_ids in sorted(ranked.items()):
         scope = f"Unit {unit_id!r}" if rank == 0 else "the Investment"
-        if len(position_ids) == 2 and frozenset(position_ids) in pairs:
-            continue
         if len(position_ids) == 1 and position_ids[0] in legacy_successors:
             continue
-        if len(position_ids) > 1:
+        succeeding_pair = len(position_ids) == 2 and frozenset(position_ids) in pairs
+        if len(position_ids) > 1 and not succeeding_pair:
             issues.append(
                 _issue(
                     CapitalStructureIssueCode.DUPLICATE_PRIORITY,

@@ -27,11 +27,13 @@ from types import ModuleType
 import pytest
 
 import test_refinance_v1_execution as execution_tests
+import test_refinance_v1_execution_state_boundaries as boundary_tests
 import test_refinance_v1_partnership as partnership_tests
 import test_refinance_v1_payoff_authority as payoff_tests
 import test_refinance_v1_sizing as sizing_tests
 from anchor.capital_structure import refinance as cs_refinance
 from anchor.capital_structure import refinance_execution as cs_refinance_execution
+from anchor.capital_structure import validation as cs_validation
 from anchor.capital_structure.contracts import CapitalStructureError
 from anchor.capital_structure.execution_contracts import CapitalStructureExecutionError
 from anchor.engine import acquisition_debt_balance as engine_balance
@@ -358,6 +360,73 @@ def test_m21_refusing_the_refinance_reason_at_the_seam_is_killed(monkeypatch: py
     )
 
 
+# =============================================================================
+# Execution-state boundaries (Section 23.4)
+# =============================================================================
+
+
+def test_m22_a_succession_pair_excusing_the_reserved_priority_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        boundary_tests.test_a_priority_1_succession_pair_is_refused_while_the_acquisition_loan_continues,
+        cs_validation,
+        (
+            "        succeeding_pair = len(position_ids) == 2 and frozenset(position_ids) in pairs\n",
+            "        succeeding_pair = len(position_ids) == 2 and frozenset(position_ids) in pairs\n"
+            "        if succeeding_pair:\n            continue\n",
+        ),
+    )
+
+
+def test_m23_sizing_without_a_continuing_acquisition_loan_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        boundary_tests.test_sizing_never_omits_a_continuing_acquisition_loan,
+        cs_refinance,
+        (
+            "    if unit is not None and unit.legacy_loan is not None and not retires_legacy:\n",
+            "    if unit is not None and unit.legacy_loan is not None and not retires_legacy and replacement.priority > 1:\n",
+        ),
+    )
+
+
+def test_m24_a_broad_catch_of_valuation_errors_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reinstating the broad ``except ValuationError: return None`` turns a
+    malformed NOI authority into ``forward_noi_unavailable``."""
+
+    _killed(
+        monkeypatch,
+        boundary_tests.malformed_noi_authorities_are_never_unavailability,
+        cs_refinance,
+        (
+            "        return _unit_forward_noi(unit, model_month=model_month)\n    if investment is None",
+            "        try:\n            return _unit_forward_noi(unit, model_month=model_month)\n"
+            "        except ValuationError:\n            return None\n    if investment is None",
+        ),
+        (
+            "    values = [_unit_forward_noi(member, model_month=model_month) for member in investment.units]\n",
+            "    try:\n        values = [_unit_forward_noi(member, model_month=model_month) for member in investment.units]\n"
+            "    except ValuationError:\n        return None\n",
+        ),
+        (
+            "    if index >= len(series):\n        raise ValuationError(",
+            "    if index >= len(series):\n        return None\n        raise ValuationError(",
+        ),
+    )
+
+
+def test_m25_an_unsettled_investment_event_reported_executed_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        boundary_tests.test_an_investment_event_after_an_unexecuted_unit_event_is_upstream_unavailable,
+        cs_refinance_execution,
+        (
+            "    if investment_plan is not None and unit_event_unavailable:\n        investment_plan = _upstream_not_executed(",
+            "    if False:\n        investment_plan = _upstream_not_executed(",
+        ),
+    )
+
+
 def test_the_mutation_harness_patches_this_repositorys_modules() -> None:
-    for module in (cs_refinance, cs_refinance_execution, engine_balance, partnership_seam):
+    for module in (cs_refinance, cs_refinance_execution, cs_validation, engine_balance, partnership_seam):
         assert Path(module.__file__ or "").resolve().is_relative_to(_SRC), module.__file__  # type: ignore[arg-type]

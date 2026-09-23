@@ -58,6 +58,7 @@ from ..valuation.contracts import (
 from ..valuation.engine import forward_noi_at, unit_inputs
 from ..valuation.funding import ValuationAuthority
 from .contracts import (
+    LEGACY_ACQUISITION_LOAN_PRIORITY,
     MONTHS_PER_HOLD_YEAR,
     CapitalPosition,
     CapitalStructureError,
@@ -394,24 +395,35 @@ def forward_noi(
     investment: InvestmentRefinanceAuthority | None,
 ) -> float | None:
     """The scope's forward NOI at ``model_month`` from the shared NOI-at-month
-    authority, or ``None`` when the variant yields none. The Investment's is
-    the canonical Unit sum, reconciled bit for bit to the consolidated NOI."""
+    authority, or ``None`` only when the scope's authority is absent. The
+    Investment's is the canonical Unit sum, reconciled bit for bit to the
+    consolidated NOI.
 
-    try:
-        if scope.kind is ScopeKind.UNIT:
-            if unit is None:
-                return None
-            return _unit_forward_noi(unit, model_month=model_month)
-        if investment is None or not investment.units:
+    A present authority that cannot answer -- a month that is not a valuation
+    timepoint of its hold, or an NOI series that does not span it -- is a
+    programming error. P7.10's ``ValuationError`` propagates: it is never read
+    as an unavailable forward NOI. A non-positive NOI is a value, not an
+    absence; the caller reports it as ``non_positive_forward_noi``."""
+
+    if scope.kind is ScopeKind.UNIT:
+        if unit is None:
             return None
-        values = [_unit_forward_noi(member, model_month=model_month) for member in investment.units]
-    except ValuationError:
+        return _unit_forward_noi(unit, model_month=model_month)
+    if investment is None or not investment.units:
         return None
+    values = [_unit_forward_noi(member, model_month=model_month) for member in investment.units]
     total = values[0]
     for value in values[1:]:
         total = total + value
     total = ensure_finite("investment_forward_noi", total)
-    consolidated = investment.consolidated.noi_by_year[model_month // MONTHS_PER_HOLD_YEAR]
+    index = model_month // MONTHS_PER_HOLD_YEAR
+    series = investment.consolidated.noi_by_year
+    if index >= len(series):
+        raise ValuationError(
+            f"The consolidated results report {len(series)} NOI years, with no forward NOI at model month "
+            f"{model_month}; they do not span the hold."
+        )
+    consolidated = series[index]
     if total != consolidated:
         raise _mismatch(
             f"The Investment's forward NOI at model month {model_month} sums to {total!r} over its Units, but the "
@@ -643,7 +655,14 @@ def _continuing_seniors(
     retires_legacy = any(isinstance(ref, LegacyAcquisitionLoanRef) for ref in event.retiring)
     balances: list[float] = []
     service: list[float] = []
-    if unit is not None and unit.legacy_loan is not None and not retires_legacy and replacement.priority > 1:
+    if unit is not None and unit.legacy_loan is not None and not retires_legacy:
+        if replacement.priority <= LEGACY_ACQUISITION_LOAN_PRIORITY:
+            # Structural validation refuses this (R-N): priority 1 stays the
+            # continuing loan's. Never size as though the loan were not there.
+            raise CapitalStructureError(
+                f"Engine defect: '{event.label}' places its replacement at priority {replacement.priority}, which "
+                "this Unit's continuing acquisition loan holds. Nothing is sized."
+            )
         balance = legacy_balance(unit, model_month=model_month)
         balances.append(balance.balance_after_month)
         service.append(unit.results.annual_debt_service[hold_year])

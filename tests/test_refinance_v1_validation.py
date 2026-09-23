@@ -105,6 +105,7 @@ def test_the_enumerations_have_exactly_their_ratified_members() -> None:
         "retiring_position_not_outstanding",
         "non_positive_capacity",
         "upstream_unresolved_funding",
+        "upstream_capital_event_not_executed",  # Section 23.4 clarification
     ]
 
 

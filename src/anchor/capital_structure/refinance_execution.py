@@ -94,6 +94,7 @@ from .refinance import (
 )
 from .refinance_contracts import (
     RefinanceStatus,
+    RefinanceUnavailableReason,
     RefinancedCapitalResult,
     RefinancedCommonEquityReturns,
     UnexecutedPosition,
@@ -606,6 +607,41 @@ def execute_unit_refinance(
     )
 
 
+def _upstream_not_executed(plan: RefinancePlan, *, upstream: tuple[RefinancePlan, ...]) -> RefinancePlan:
+    """An Investment-scope plan after a Unit event that did not execute. The
+    cash reaching the Investment scope is unknowable, so the plan is never
+    settled, and a plan that would otherwise execute is reported
+    ``UNAVAILABLE`` with ``upstream_capital_event_not_executed``: no gross
+    proceeds, payoffs, funding or bridge. A plan already not executing on its
+    own facts keeps its own reason. Capacities stay, as contractual facts."""
+
+    if not plan.executed:
+        return plan
+    names = ", ".join(f"'{other.event.label}'" for other in upstream)
+    sizing = plan.result.sizing
+    result = replace(
+        plan.result,
+        status=RefinanceStatus.UNAVAILABLE,
+        sizing=None if sizing is None else replace(sizing, gross_proceeds=None, binding=(), tie=False),
+        payoffs=None,
+        funding=None,
+        bridge=None,
+        unavailable_reason=RefinanceUnavailableReason.UPSTREAM_CAPITAL_EVENT_NOT_EXECUTED,
+        unavailable_message=(
+            f"'{plan.event.label}' did not execute: refinance {names} of one of the Investment's Units did not "
+            "execute for this variant, so the cash reaching the Investment scope is unknowable."
+        ),
+    )
+    return replace(
+        plan,
+        result=result,
+        replacement_view=None,
+        retiring_views=(),
+        retired_legacy_unit_id=None,
+        continuing_senior_balance=0.0,
+    )
+
+
 def _require_no_unit_debt_after(
     event: RefinanceEvent,
     *,
@@ -774,6 +810,10 @@ def execute_investment_refinance(
             valuations=valuations,
             unit=None,
             investment=InvestmentRefinanceAuthority(units=ordered, consolidated=consolidated),
+        )
+    if investment_plan is not None and unit_event_unavailable:
+        investment_plan = _upstream_not_executed(
+            investment_plan, upstream=tuple(plan for plan in plans if plan.result.status in _NOT_EXECUTED)
         )
     if unit_event_unavailable:
         # A Unit event that did not execute leaves the cash reaching the

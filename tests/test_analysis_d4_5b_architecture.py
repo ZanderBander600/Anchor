@@ -960,6 +960,13 @@ def test_g33_the_whole_engine_package_is_unchanged_since_d4_5a() -> None:
     outside D6.3's enumerated surface unchanged, and the IRR solver's
     arithmetic identical. ``debt.py``, ``noi.py``, ``operating_projection.py``
     and ``__init__.py`` remain byte-identical to D4.5A.
+
+    **Narrowed at Refinance & Capital Events V1 Stage 1 -- by exactly one new
+    file.** ``engine/acquisition_debt_balance.py`` is the ratified
+    acquisition-debt balance service (R-M). It calls the unchanged ``debt.py``
+    functions and adds none, and no existing engine file changes for it. It is
+    held by ``tests/test_refinance_v1_stage_1_architecture.py``, exactly as
+    G37 in ``tests/test_analysis_d4_6b_architecture.py`` records.
     """
 
     changed = [
@@ -970,6 +977,7 @@ def test_g33_the_whole_engine_package_is_unchanged_since_d4_5a() -> None:
             "src/anchor/engine/contracts.py",
             "src/anchor/engine/acquisition.py",
             "src/anchor/engine/returns.py",
+            "src/anchor/engine/acquisition_debt_balance.py",
         )
     ]
 

@@ -2305,7 +2305,9 @@ have not started. Recovery Engine V2 is untouched.
    balance service for acquisition loans.
 8. **A Unit event that does not execute inside an Investment** makes every
    Investment-scoped position N/A. An Investment event in the same variant is
-   then reported `BLOCKED`.
+   then reported `UNAVAILABLE` with `upstream_capital_event_not_executed`
+   (Section 23.4, correction 3). As first implemented it was reported
+   `EXECUTED` with no settlement, contrary to this item's original text.
 9. **The DSCR proportionality guard** (Section 9.3) raises the package's typed
    internal `CapitalStructureError`, never a plain error.
 10. **Stage 2 scope, not implemented here.** `capital_event_kind_conflict` and
@@ -2352,3 +2354,76 @@ it is now judged in committed history. No invariant is weakened or deleted.
 
 Stage 1's own guard is `tests/test_refinance_v1_stage_1_architecture.py`. A
 later gate re-pins it to Stage 1's committed range.
+
+### 23.4 Independent-review corrections (execution-state boundaries)
+
+The independent review of Stage 1 found three defects. They are corrected in
+one local commit on the same branch. **Stage 1 remains pending review and is
+not accepted.** The regressions are in
+`tests/test_refinance_v1_execution_state_boundaries.py`; mutation proofs
+M22–M25 kill each defect's reinstatement.
+
+1. **The reserved priority 1 (R-N, Section 10.3).** The succession pair
+   `{retiring, replacement}` excused the pair's shared priority before the
+   acquisition-loan reservation was checked. So an authored priority-1
+   position and its priority-1 replacement were accepted beside a continuing
+   acquisition loan, and sizing then omitted that loan from the continuing
+   senior debt. Now:
+   - A pair excuses only its own collision. Unit priority 1 stays the
+     acquisition loan's unless the Unit's one event retires the
+     `LegacyAcquisitionLoanRef` and its replacement holds that rank alone.
+   - An authored priority-1 position that was outstanding beside the loan
+     before the event is refused, even when the same event retires both.
+   - A priority-2-or-lower pair with no other occupant stays valid, and
+     ordinary duplicate-priority refusals are unchanged.
+   - Below validation, a replacement at priority 1 beside a continuing
+     acquisition loan is an engine defect (`CapitalStructureError`). It is never
+     sized as though the loan were absent.
+2. **The forward-NOI authority boundary (Section 8.3).** `forward_noi` caught
+   P7.10's `ValuationError` and returned `None`, which reported an engine
+   defect as `forward_noi_unavailable`. `ValuationError` is a programming
+   error by P7.10's contract (an invalid internal month, or an NOI series that
+   does not span its hold). Now:
+   - `forward_noi` returns `None` only when the scope's authority is absent.
+   - Every `ValuationError` propagates, and a consolidated NOI series that does
+     not reach the event year raises one too.
+   - A non-positive NOI is a value. It stays the typed
+     `non_positive_forward_noi` state, and F12 is unchanged:
+     `noi_by_year[...] <= 0`.
+3. **An Investment event after a Unit event that did not execute (Sections
+   12.4, 15.2, 15.4).** The Investment scope was correctly left unsettled, but
+   its plan was reported as sized. That gave an impossible state: `EXECUTED`,
+   with no settlement, no event cash, and its replacement among
+   `unexecuted_positions`. **Ratified clarification:**
+   - When a Unit event is `UNAVAILABLE` or `NOT_EXECUTABLE`, an Investment-scope
+     event that would otherwise execute is `UNAVAILABLE`, with the appended
+     reason `upstream_capital_event_not_executed`. Its message names the events
+     by label.
+   - Gross proceeds, the binding set, payoffs, funding and the bridge are
+     absent. The capacities stay, as contractual facts. No event cash is added.
+   - Its replacement appears exactly once in `unexecuted_positions`. Common
+     Equity stays `refinance_unavailable`.
+   - An Investment event that already does not execute on its own facts keeps
+     its own reason.
+   - No event is reported `EXECUTED` unless its settlement occurred.
+
+   **Precedence when Unit events fail in different ways (ratified).** For an
+   Investment event that would otherwise execute:
+   - If any upstream Unit event is `UNAVAILABLE` or `NOT_EXECUTABLE`, the
+     Investment event is `UNAVAILABLE` with
+     `upstream_capital_event_not_executed`.
+   - That stays true when another Unit event is also `BLOCKED` by unresolved
+     funding. Resolving that funding alone would not let the Investment event
+     execute, so `BLOCKED` would mislead.
+   - The Investment event is `BLOCKED`, keeping its unresolved-funding meaning
+     unchanged, only when no upstream Unit event is `UNAVAILABLE` or
+     `NOT_EXECUTABLE` and at least one is blocked by unresolved funding.
+   - An Investment event that already does not execute for its own reason
+     keeps that reason in every case.
+
+   This precedence governs the event status only. Common Equity keeps Section
+   15.4's rule: where any Funding Requirement is unresolved, it keeps P7.7's
+   `unresolved_funding_requirement` reason, in the mixed case as elsewhere.
+
+   `RefinanceUnavailableReason` gains that one appended member. No other
+   contract, schema, persistence, API or presentation surface changes.

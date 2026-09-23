@@ -66,6 +66,7 @@ class RefinanceUnavailableReason(StrEnum):
     RETIRING_POSITION_NOT_OUTSTANDING = "retiring_position_not_outstanding"
     NON_POSITIVE_CAPACITY = "non_positive_capacity"
     UPSTREAM_UNRESOLVED_FUNDING = "upstream_unresolved_funding"
+    UPSTREAM_CAPITAL_EVENT_NOT_EXECUTED = "upstream_capital_event_not_executed"
 
 
 class ConstraintKind(StrEnum):
@@ -145,7 +146,8 @@ class ConstraintCapacity:
 class SizingOutcome:
     """Every enabled capacity in canonical order, and the executed gross
     proceeds: the exact minimum when every capacity is available and that
-    minimum is positive, else ``None``. ``binding`` lists every capacity within
+    minimum is positive, else ``None`` -- and ``None`` too when the event cannot
+    execute for an upstream reason. ``binding`` lists every capacity within
     the tie tolerance of the proceeds; ``tie`` is ``len(binding) > 1``."""
 
     capacities: tuple[ConstraintCapacity, ...]
