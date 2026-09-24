@@ -813,7 +813,12 @@ def test_the_store_guardrail_rejects_an_unauthorized_change(old: str, new: str) 
 
 
 def _assert_engine_ledger() -> None:
-    assert _files_changed_since(_D6_2_MERGE, "src/anchor/engine") == [
+    # Pinned at Refinance & Capital Events V1 Stage 1 to D6.3's committed
+    # range, as the persistence ledger above was pinned at D6.5: that gate adds
+    # one acquisition-debt balance service to the engine on purpose (R-M,
+    # ``tests/test_refinance_v1_stage_1_architecture.py``), and D6.3's claim is
+    # about what D6.3 changed.
+    assert _files_changed_between(_D6_2_MERGE, _D6_3_MERGE, "src/anchor/engine") == [
         "src/anchor/engine/acquisition.py",
         "src/anchor/engine/contracts.py",
         "src/anchor/engine/returns.py",

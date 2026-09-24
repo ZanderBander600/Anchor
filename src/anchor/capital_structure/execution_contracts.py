@@ -42,6 +42,7 @@ from .contracts import (
     PctOfValue,
     PositionClass,
     PositionScope,
+    RefinanceProceeds,
     ScopeKind,
 )
 
@@ -82,6 +83,16 @@ class ExecutionIssueCode(StrEnum):
     #: value for that scope is unknowable, so the funding is left unresolved
     #: rather than read as zero. It cannot arise without a P7.10 authority.
     UNRESOLVED_VALUATION_FUNDING = "unresolved_valuation_funding"
+    #: Refinance & Capital Events V1 (Section 15.1), appended. The first two
+    #: are execution facts of a well-formed event: a standalone Unit has no
+    #: Investment scope, and an Investment-scope refinance is deferred while
+    #: Unit-scoped debt is outstanding after the event. The last three are
+    #: engine-defect guards and are never tolerated.
+    UNSUPPORTED_EVENT_SCOPE = "unsupported_event_scope"
+    INVESTMENT_REFINANCE_WITH_UNIT_DEBT = "investment_refinance_with_unit_debt"
+    LEGACY_PAYOFF_RECONCILIATION_FAILURE = "legacy_payoff_reconciliation_failure"
+    FORWARD_NOI_AUTHORITY_MISMATCH = "forward_noi_authority_mismatch"
+    LEGACY_AUTHORITY_SPLICE_MISMATCH = "legacy_authority_splice_mismatch"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -153,7 +164,7 @@ class ResolvedFundingEvent:
     event_id: str
     model_month: int
     sequence: int
-    amount_rule: FixedAmount | PctOfPrice | PctOfValue
+    amount_rule: FixedAmount | PctOfPrice | PctOfValue | RefinanceProceeds
     price_basis: PriceBasis | None
     amount: float
 
@@ -168,6 +179,12 @@ class PositionCashFlowKind(StrEnum):
     BALLOON = "balloon"
     PREFERRED_CURRENT_PAY = "preferred_current_pay"
     PREFERRED_REDEMPTION = "preferred_redemption"
+    #: Refinance & Capital Events V1 (Section 6.8), appended: a retiring
+    #: position's payoff at the event month, settled by the event rather than
+    #: by its annual claim, and the replacement's funding at the event month.
+    #: Neither is ever a ``BALLOON`` or a closing ``FUNDING``.
+    REFINANCE_PAYOFF = "refinance_payoff"
+    REFINANCE_FUNDING = "refinance_funding"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -302,6 +319,10 @@ class PositionResultStatus(StrEnum):
     COMPLETE = "complete"
     UNRESOLVED_FUNDING = "unresolved_funding"
     BLOCKED_BY_SENIOR_UNRESOLVED = "blocked_by_senior_unresolved"
+    #: Refinance & Capital Events V1 (Section 15.4), appended: the position's
+    #: cash after the event month depends on a refinance that did not execute
+    #: for this variant, so its returns are unknowable.
+    REFINANCE_UNAVAILABLE = "refinance_unavailable"
 
 
 class PositionUnavailableReason(StrEnum):
@@ -309,6 +330,8 @@ class PositionUnavailableReason(StrEnum):
 
     UNRESOLVED_FUNDING_REQUIREMENT = "unresolved_funding_requirement"
     SENIOR_UNRESOLVED_FUNDING_REQUIREMENT = "senior_unresolved_funding_requirement"
+    #: Refinance & Capital Events V1 (Section 15.4), appended.
+    REFINANCE_UNAVAILABLE = "refinance_unavailable"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

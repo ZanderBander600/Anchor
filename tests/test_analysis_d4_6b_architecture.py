@@ -1684,6 +1684,12 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
     # Narrowed at D6.3 by exactly ``engine/returns.py`` (the IRR status and
     # the project-return summary), held to a source-region claim against
     # b828956 by ``tests/test_d6_3_project_returns_architecture.py``.
+    #
+    # Narrowed at Refinance & Capital Events V1 Stage 1 by exactly one *new*
+    # file, ``engine/acquisition_debt_balance.py``: the ratified acquisition-
+    # debt balance service (R-M), which calls the unchanged ``debt.py``
+    # functions and adds none. No existing engine file changes; it is held by
+    # ``tests/test_refinance_v1_stage_1_architecture.py``.
     engine_changed = [
         path
         for path in _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine")
@@ -1692,6 +1698,7 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
             "src/anchor/engine/contracts.py",
             "src/anchor/engine/acquisition.py",
             "src/anchor/engine/returns.py",
+            "src/anchor/engine/acquisition_debt_balance.py",
         )
     ]
     assert engine_changed == [], f"src/anchor/engine changed: {engine_changed}"
@@ -2146,8 +2153,11 @@ def test_g37_detects_a_real_difference_rather_than_reporting_none() -> None:
     # helper must name those three and none of their unchanged siblings (debt,
     # NOI, the Detailed projection): discrimination inside a single directory,
     # which is a sharper proof than an empty result.
+    # Refinance & Capital Events V1 Stage 1 adds one new file, the R-M
+    # acquisition-debt balance service; the discrimination is unchanged.
     assert _files_changed_since(_D4_6A_COMMIT, "src/anchor/engine") == [
         "src/anchor/engine/acquisition.py",
+        "src/anchor/engine/acquisition_debt_balance.py",
         "src/anchor/engine/contracts.py",
         "src/anchor/engine/returns.py",
     ]

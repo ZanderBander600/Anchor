@@ -335,7 +335,24 @@ def test_no_frontend_file_changed() -> None:
 # =============================================================================
 
 
-@pytest.mark.parametrize("path", _FROZEN)
+#: Refinance & Capital Events V1 Stage 1 re-pin. The ratified refinance
+#: contract extends two P7.7 modules this gate froze (``contracts.py`` and
+#: ``validation.py``) and three of this gate's own seam modules
+#: (``execution_contracts.py``, ``execution_validation.py``, ``execution.py``).
+#: Stage 1's claims about them are its own, so they are judged through the
+#: accepted baseline ``2e1f84a``, the last tree before refinancing existed; the
+#: refinance change is held by ``tests/test_refinance_v1_stage_1_architecture.py``.
+_REFINANCE_V1_BASE = "2e1f84aaa7c93b3247e8dbc6ded8b4397124d36b"
+_REFINANCE_V1_FROZEN = tuple(f"{_CAPITAL}/{name}.py" for name in ("contracts", "validation"))
+_REFINANCE_V1_SEAM = tuple(f"{_CAPITAL}/{name}.py" for name in ("execution_contracts", "execution_validation", "execution"))
+
+
+@pytest.mark.parametrize("path", _REFINANCE_V1_FROZEN)
+def test_each_refinance_seam_module_was_frozen_through_the_accepted_baseline(path: str) -> None:
+    assert _git("rev-parse", f"{_REFINANCE_V1_BASE}:{path}").strip() == _git("rev-parse", f"{_P7_10_BASE}:{path}").strip(), path
+
+
+@pytest.mark.parametrize("path", tuple(path for path in _FROZEN if path not in _REFINANCE_V1_FROZEN))
 def test_each_frozen_module_is_byte_identical_to_the_base(path: str) -> None:
     assert _git("hash-object", path).strip() == _git("rev-parse", f"{_P7_10_BASE}:{path}").strip(), path
 
@@ -358,7 +375,11 @@ def test_each_seam_module_changed_only_its_declared_definitions(path: str) -> No
     accepted baseline's, and none is added or removed beyond them."""
 
     before = _definitions(_at_base(path))
-    after = _definitions(_current(path))
+    after = _definitions(
+        _git("show", f"{_REFINANCE_V1_BASE}:{path}").replace("\r\n", "\n")
+        if path in _REFINANCE_V1_SEAM
+        else _current(path)
+    )
     declared = _SEAM_CHANGES[path]
     changed = {name for name in before.keys() & after.keys() if before[name] != after[name]}
     added = after.keys() - before.keys()
@@ -421,6 +442,13 @@ _VALUATION_READERS = [
     f"{_CAPITAL}/execution.py",
     f"{_CAPITAL}/execution_validation.py",
     f"{_CAPITAL}/funding.py",
+    # Refinance & Capital Events V1 Stage 1: an LTV-enabled refinance consumes
+    # the referenced valuation cell, and DSCR reads forward NOI through the
+    # valuation package's own ``forward_noi_at`` (R-C). Same direction: Capital
+    # Structure reads valuation, never the reverse.
+    f"{_CAPITAL}/refinance.py",
+    f"{_CAPITAL}/refinance_contracts.py",
+    f"{_CAPITAL}/refinance_execution.py",
     "src/anchor/deals/fingerprint.py",
     "src/anchor/deals/store.py",
     "src/anchor/deals/structured_variants.py",
