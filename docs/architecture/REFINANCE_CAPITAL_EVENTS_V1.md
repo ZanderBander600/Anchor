@@ -2367,8 +2367,10 @@ later gate re-pins it to Stage 1's committed range.
 ### 23.4 Independent-review corrections (execution-state boundaries)
 
 The independent review of Stage 1 found three defects. They are corrected in
-one local commit on the same branch. **Stage 1 remains pending review and is
-not accepted.** The regressions are in
+one local commit on the same branch. These corrections were made before
+PR #57 was opened, and Stage 1 remained pending review at that point.
+**Stage 1 was subsequently merged through PR #57 as `6de7644` and accepted on
+2026-09-24.** The regressions are in
 `tests/test_refinance_v1_execution_state_boundaries.py`; mutation proofs
 M22–M25 kill each defect's reinstatement.
 
