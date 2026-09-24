@@ -20,9 +20,14 @@ It also resolved every open question. The decision record is Section 22.
   `feature/refinance-capital-events-v1-stage-1-engine`. It was **merged
   through PR #57 as `6de7644` and accepted on 2026-09-24.** Its
   implementation record is Section 23.
-- **Stage 2 and Stage 3 have not started.** No schema, persistence, codec, API,
-  UI, memo, report or workbook exists for a refinance. **No implementation
-  stage starts automatically** when another is accepted (Section 20).
+- **Stage 2 (persistence and integration) was explicitly started** on
+  2026-09-24 from `main` at `f2b5cef` (the PR #59 merge, whose product tree is
+  `6de7644`), on
+  `feature/refinance-capital-events-v1-stage-2-persistence-integration`. It is
+  **in progress and not accepted**; its implementation record is Section 24.
+- **Stage 3 has not started.** No UI, memo section, report or workbook exists
+  for a refinance. **No implementation stage starts automatically** when
+  another is accepted (Section 20).
 - Recovery Engine V2 is a separate future program. Nothing here touches it.
 
 ### 1.1 Authorities this contract builds on
@@ -2072,15 +2077,17 @@ database from before that version gains empty tables and nothing else.
 
 Each stage starts only on an explicit human instruction. **Stage 1 was
 explicitly started on 2026-09-22 from `2e1f84a`; it was merged through PR #57
-as `6de7644` and accepted on 2026-09-24** (Section 23). Stage 2 and Stage 3
-have not started. **No stage begins automatically** when the previous one is
-accepted. Recovery Engine V2 is not part of any stage.
+as `6de7644` and accepted on 2026-09-24** (Section 23). **Stage 2 was
+explicitly started on 2026-09-24 from `f2b5cef` and is in progress, not
+accepted** (Section 24). Stage 3 has not started. **No stage begins
+automatically** when the previous one is accepted. Recovery Engine V2 is not
+part of any stage.
 
 | Stage | Scope | Tier | Exit evidence |
 | --- | --- | --- | --- |
 | Contract ratification — **complete, 2026-09-22** | This document. Documentation only | 1 (contract) | ratification record (Section 22); `CURRENT_STATE.md` updated |
 | Stage 1 — deterministic engine — **accepted, 2026-09-24** (PR #57, merged as `6de7644`) | Contracts (Section 6); structural and execution validation (Section 15.1); the shared NOI-at-month seam; the acquisition-debt balance service and its reconciliation; sizing (Section 9); the legacy splice; the retiring-schedule cut and replacement offset through the existing wrapper; the event bridge; the Common Equity decomposition; unavailable states; the P7.9 adapter reason; F1–F12, F14–F17, F15b, F19, F21, F22 with exact-rational oracles; F20 engine parity; the Section 18.3 mutation proofs. No persistence, API or UI | 1 | focused and identity tests; mutation kills; domain regression; one final full backend suite |
-| Stage 2 — persistence and integration (not started) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
+| Stage 2 — persistence and integration (in progress, not accepted; Section 24) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
 | Stage 3 — product surfaces (not started) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
 
 **Stage 3 acceptance requires**, in addition to the above:
@@ -2481,3 +2488,202 @@ M22–M25 kill each defect's reinstatement.
 
    `RefinanceUnavailableReason` gains that one appended member. No other
    contract, schema, persistence, API or presentation surface changes.
+
+## 24. Stage 2 implementation record
+
+**Status: in progress, not accepted.** Stage 2 was explicitly started on
+2026-09-24 from `main` at `f2b5cef` (the PR #59 merge; its product tree is the
+accepted Stage 1 baseline `6de7644`) on
+`feature/refinance-capital-events-v1-stage-2-persistence-integration`. It
+implements Section 20's Stage 2 row and nothing else. It adds no frontend
+component, report layout, memo section, PDF change, workbook change or browser
+surface. Stage 3 has not started.
+
+The Stage 1 engine is frozen: no file of PR #57's production set, and no file
+under `capital_structure`, `engine`, `valuation` or `partnership`, changes.
+
+### 24.1 What shipped
+
+| Module | Responsibility |
+| --- | --- |
+| `deals/store.py` | Schema 17: six additive, typed, relational tables; the event rows written with their structure, read back fail-closed, and deleted explicitly with it |
+| `deals/capital_structure_codec.py` | The one spelling of the `refinance_proceeds` rule and the two retiring-reference kinds |
+| `deals/capital_event_identity.py` (new) | P-8 for capital events: `capital_event_kind_conflict`, `capital_event_scope_conflict` |
+| `deals/fingerprint.py` | The canonical capital-event payload, joined to the structured fingerprint only when an event exists (FP-2) |
+| `deals/refinance_integration.py` (new) | The LTV-only consumed timepoints, the evidence gate's typed reason, and the primary-return facts. No arithmetic |
+| `deals/structured_variants.py` | LTV consumption joins the existing consumed-valuation mechanism; evented variants return `RefinancedStructuredVariantAnalysis` |
+| `deals/partnership_variants.py` | Evented variants return `RefinancedPartnershipVariantAnalysis`, carrying the same primary-return facts |
+| `api.py` | `capital_events` on the Capital Structure payloads, the narrowed closing doors, the wire kinds, and the P-8 event conflict as a typed 422 |
+
+### 24.2 Schema 17 and `RefinanceProceeds`
+
+Schema 16 advances to 17. The six new tables are `capital_events`,
+`capital_event_retirements`, `capital_event_constraints`,
+`capital_event_valuation_refs`, `capital_event_costs` and
+`capital_refinance_proceeds`.
+
+- Every table is a child of one `capital_structures` row. Every primary key
+  leads with `structure_id`. Base and each Strategy structure therefore hold
+  independent, whole-domain event sets.
+- `UNIQUE (structure_id, capital_event_id)` on the sidecar is the "one
+  replacement funding per event" rule.
+- No JSON blob and no `ALTER TABLE` is used. No accepted table is redefined,
+  and no existing row is rewritten.
+
+**`RefinanceProceeds` needed no change to `capital_funding_events`.** The
+replacement's funding row states the codec token `refinance_proceeds` in
+`amount_rule`, which is the column's existing purpose as the rule's
+discriminator. Its `amount`, `pct` and `timepoint_id` are all NULL. The event
+the rule names lives in the sidecar, keyed by the funding row's own
+`(structure_id, event_id)`. No existing column holds an event id. The Section
+16.1 stop condition therefore did not arise.
+
+The legacy acquisition loan is stored as a typed `(ref_kind, unit_id)` row. The
+reserved identity string is never stored.
+
+### 24.3 Codec and fail-closed decoding
+
+A structure with no event row reads back as the plain `CapitalStructure`. One
+with events reads back as `CapitalStructureWithEvents`. "No refinance" has one
+representation, and an absent or empty `capital_events` on the wire is the
+empty set.
+
+The decoder refuses, and never partially decodes or drops an event, when it
+finds any of the following:
+
+- an unknown event, scope, constraint, cost or reference token (a reserve-like
+  member has no token);
+- a child row naming no stored event;
+- a sidecar link naming no `refinance_proceeds` funding;
+- a `refinance_proceeds` funding with no link, or one stating an amount, a
+  percentage or a timepoint;
+- a reference whose columns disagree with its kind;
+- a recipient id with no recipient kind;
+- anything the accepted Stage 1 validator refuses, including an unused or
+  missing valuation reference, a malformed scope, a duplicate identity and a
+  missing replacement.
+
+### 24.4 Strategy resolution and P-8
+
+Events travel inside the `CAPITAL_STRUCTURE` domain's whole structure.
+
+- An inheriting Strategy is bit-identical to the Base.
+- Removing a replacement restores the Base.
+- An explicit empty structure is empty.
+- An event cannot be stated without the positions it names.
+
+P-8 for events runs in the store's one coherence function. That covers every
+path that writes a structure: the Deal and Investment Base saves, and Strategy
+create and update. It runs beside, and independently of, the accepted position
+P-8.
+
+Identity is `event_id`, never `label`.
+
+### 24.5 Fingerprints
+
+- **FP-2.** A structure with no event hashes exactly as at `f2b5cef`. A test
+  proves this against that archived tree's own digests.
+- **Canonical order.** Events sort by `event_id`, retiring references by
+  `(kind, id)`, and cost lines by `cost_id`. Absent constraints add nothing.
+- **Excluded.** The event label, cost descriptions, position names, valuation
+  labels, row order, timestamps and database ids.
+- **LTV only.** For an LTV-enabled event, the referenced timepoint joins the
+  established consumed-valuation payload. The event's own entry adds the
+  definition as authored (or its absence) and the evidence gate's withheld
+  Units. A DSCR-only, fixed-only or fixed-plus-DSCR event holds no reference and
+  adds no valuation data.
+- **No cache.** No structured result is cached (Q14). Each request recomputes
+  from its dependencies. A mutation proof shows that a cache keyed on less than
+  the whole structured identity would serve a stale refinance.
+
+### 24.6 API and primary-return facts
+
+- **Authoring.** An evented body round-trips exactly. A reserve-like member
+  anywhere is an unknown-field 422. Authoring faults are the established typed
+  422s.
+- **Narrowed closing doors.** Only a `refinance_proceeds` funding, and a
+  replacement position's fees, may be non-closing. The validator judges their
+  months.
+- **Results.** A refinance-bearing analysis carries the Stage 1
+  `RefinancedCapitalResult` unchanged, with every unavailable amount `null`,
+  and a typed `primary_return`:
+  - Common Equity after Capital Structure is the primary equity namespace;
+  - `partner` is the primary investor namespace where a Partnership resolves;
+  - the acquisition-financing reference is stated as excluding later capital
+    events;
+  - an unavailable refinance is reported as the primary state.
+- **No-event responses.** These stay byte-identical, because the additions live
+  on subclasses produced only for evented variants.
+- **Deferred.** The optional readiness endpoint is not built. The structured
+  analysis already carries every capacity and reason. Stage 3 may revisit it
+  if it proves necessary.
+
+### 24.7 Memo publication dependencies
+
+An LTV-enabled event's referenced timepoint joins `consumed_timepoint_ids`
+through the P7.10 mechanism. Consequences:
+
+- **Publication.** A defined but unavailable referenced valuation blocks
+  publication, as a `PctOfValue` consumption does. A DSCR-only, fixed-only or
+  fixed-plus-DSCR refinance creates no valuation dependency.
+- **Refinance edit.** Changing the refinance structure stales
+  `CAPITAL_STRUCTURE` only.
+- **Consumed LTV valuation edit.** Changing it stales the valuation classes and
+  `CAPITAL_STRUCTURE`.
+- **Frozen artifacts.** Published versions and their frozen reports are not
+  touched.
+
+### 24.8 Decisions a reviewer should check
+
+1. **The evidence gate's reason is restated after execution.** P7.10 withholds
+   an evidence-blocked valuation from the authority the executor reads, so the
+   frozen engine reports `timepoint_not_found`. `refinance_integration`
+   restates `evidence_not_approved` on the typed fields, replacing only that
+   event's own sentence where downstream messages embed it verbatim. No amount,
+   status, identity or order changes.
+2. **Evidence gating is timepoint-granular.** This is inherited from P7.10's
+   funding authority. A Unit event is unavailable when any Unit of its
+   referenced timepoint is evidence-blocked, not only its own. Cell-granular
+   gating would change the shared authority and so accepted `PctOfValue`
+   behavior.
+3. **An LTV reference to an undefined timepoint** is not a publication
+   dependency, exactly as for `PctOfValue`. The refinance reports
+   `timepoint_not_found` in its own typed result.
+4. **An LTV event's identity includes the whole referenced definition.** So
+   another Unit's instruction on the same timepoint can stale a Unit event.
+   This errs toward staleness, never toward serving a stale result.
+5. **The Position Decision Matrix and a non-executed replacement.** A
+   replacement whose event did not execute is in `unexecuted_positions`, not in
+   `positions`. The accepted Position matrix therefore refuses that one cell's
+   request loudly rather than reporting a figure. The executed case is
+   unaffected. Presenting it is Stage 3's Decision Matrix work.
+6. **`primary_investor_namespace` on the structured analysis** reads the
+   accepted P7.9 resolution (`resolve_partnership`) directly, because
+   `partnership_variants` imports `structured_variants`.
+
+### 24.9 Guards re-pinned
+
+No guard is weakened or deleted. The accepted guards all passed on the
+untouched baseline before Stage 2 changed anything, so none was stale; each
+failure came from a Stage 2 change.
+
+- **Current-schema pins** move from 16 to 17. Each migration oracle names the
+  six tables explicitly (`REFINANCE_V1_STAGE_2_TABLES`), so no comparison
+  loosens to a subset. This covers AM1, Asset Types 1, D4.5B, D5.4, D5.8A, Excel
+  Exports 1 and 2, P7.2, P7.4, P7.6, P7.7, P7.8, P7.9 Stage 2, P7.10 Stage 2 and
+  P7.10 Stage 4.
+- **Claims about a closed gate's own modules** now read that gate's committed
+  tree or range:
+  - P7.8B's "no later-gate economics" reads `f2b5cef`;
+  - P7.9 Stage 2's deferred-identifier scan reads `f2b5cef`, and a new test
+    proves only this stage's ledger touched that file since;
+  - P7.10 Stage 2's "no later funding event" reads its merge;
+  - P7.10 Stage 4's "adds exactly one table" reads `9ca957a..a6f1b2b`;
+  - Refinance Stage 1's ledger, protected paths and "nothing upstream imports
+    the refinance layer" read `2e1f84a..6de7644`. Its byte-freeze and seam
+    claims still read the working tree.
+- **Named allowlists** gain exactly the two new `deals` modules: D4.6B G37 and
+  P7.8B's importer list.
+
+Stage 2's own guard is `tests/test_refinance_v1_stage_2_architecture.py`. A
+later gate re-pins it to Stage 2's committed range.
