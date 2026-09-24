@@ -123,7 +123,8 @@ def test_a_fresh_store_is_schema_9_with_every_p7_table_empty(db: Path) -> None:
     # classification tables, P7.10 Stage 2 schema 15's sixteen valuation and
     # Investment Memo tables and P7.10 Stage 4 schema 16's one immutable
     # report-artifact table; P7.4's own eight are still empty.
-    assert version == 16
+    # Refinance V1 Stage 2 added schema 17's six capital-event tables, additively.
+    assert version == 17
     assert f4.p7_row_counts(db) == f4.P7_EMPTY
 
 

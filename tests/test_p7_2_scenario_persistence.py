@@ -89,7 +89,8 @@ def test_a_fresh_store_is_schema_8_with_the_five_tables_empty(db: Path) -> None:
     # and P7.10 Stage 4 schema 16's one immutable report-artifact table.
     # P7.2's own five are still empty in a fresh store, which is what this test
     # is about.
-    assert version == 16
+    # Refinance V1 Stage 2 added schema 17's six capital-event tables, additively.
+    assert version == 17
     assert row_counts(db) == EMPTY
 
 

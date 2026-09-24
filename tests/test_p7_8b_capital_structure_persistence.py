@@ -190,7 +190,8 @@ def test_a_fresh_store_is_schema_11_with_six_empty_capital_tables(db: Path) -> N
     # Stage 2 schema 15's sixteen valuation and Investment Memo tables; and
     # P7.10 Stage 4 schema 16's one immutable report-artifact table. P7.8B's
     # own six are unchanged by all of them, which is what this test is about.
-    assert version == 16
+    # Refinance V1 Stage 2 added schema 17's six capital-event tables, additively.
+    assert version == 17
     assert set(P7_8_TABLES) <= table_names(db)
     assert capital_rows(db) == EMPTY_ROWS
     assert columns == {
