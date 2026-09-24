@@ -43,7 +43,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from _p7_2_fixtures import P7_10_TABLES, rows, table_names  # type: ignore[import-not-found]
+from _p7_2_fixtures import P7_10_TABLES, REFINANCE_V1_STAGE_2_TABLES, rows, table_names  # type: ignore[import-not-found]
 from anchor import api as api_module
 from anchor.deals import store
 
@@ -58,7 +58,7 @@ _BASELINE_COMMIT = "46650a7"
 #: naming them keeps this an exact claim ("these and nothing else") rather than
 #: a loosened one, and each is proved additive by its own gate's oracle --
 #: Stage 4's is ``tests/test_p7_10_stage_4_compatibility_oracle.py``.
-_LATER_GATE_TABLES = frozenset({"memo_version_report_artifacts"})
+_LATER_GATE_TABLES = frozenset({"memo_version_report_artifacts", *REFINANCE_V1_STAGE_2_TABLES})
 
 
 @pytest.fixture(scope="module")

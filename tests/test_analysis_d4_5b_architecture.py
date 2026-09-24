@@ -1364,7 +1364,9 @@ def test_hd_d4_9_superseded_analysis_is_wired_and_the_rest_still_is_not() -> Non
     # report and PDF issued with a published memo version. That is a published
     # *document*, not a stored financial result, and it belongs to no
     # Lease-Level analysis, so the assertion above stands undiminished.
-    assert "_SCHEMA_VERSION = 16" in store  # P7.10 Stage 4
+    # Refinance V1 Stage 2 moves it to 17: six tables of *authored* capital
+    # events. No analysis result is stored there either.
+    assert "_SCHEMA_VERSION = 17" in store  # Refinance V1 Stage 2
     assert "deal_sensitivity_snapshots" in store, (
         "D5.8A should persist the latest Lease-Level sensitivity runs"
     )

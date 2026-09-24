@@ -368,7 +368,7 @@ def test_the_schema_version_is_unchanged_and_no_ddl_was_added() -> None:
     it always was."""
 
     store = (_ANCHOR / "deals" / "store.py").read_bytes().decode("utf-8").replace("\r\n", "\n")
-    assert re.search(r"^_SCHEMA_VERSION = 16$", store, re.M)
+    assert re.search(r"^_SCHEMA_VERSION = 17$", store, re.M)  # Refinance V1 Stage 2
     added = [
         line[1:]
         for line in _git(

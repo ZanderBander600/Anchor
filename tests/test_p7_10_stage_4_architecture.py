@@ -266,10 +266,19 @@ def test_schema_16_adds_exactly_one_table_and_alters_none() -> None:
     one that touches no existing data, and this is that migration one more
     time."""
 
-    source = _current(_STORE)
-    assert "_SCHEMA_VERSION = 16" in source
+    # Refinance V1 Stage 2 re-pin: that later gate moved the store to 17 with its
+    # own six additive tables and its own ledger. This gate's claim is about its
+    # own migration, so it reads Stage 4's committed range ``9ca957a..a6f1b2b``,
+    # where it holds unchanged; the working tree only has to agree that the store
+    # still declares one, later, version.
+    assert "_SCHEMA_VERSION = 16" in _git("show", f"{_STAGE_4_HEAD}:{_STORE}")
+    assert "_SCHEMA_VERSION = 17" in _current(_STORE)
 
-    added = _added_lines(_STAGE_4_BASE, _STORE)
+    added = [
+        line[1:]
+        for line in _git("diff", "--no-renames", "-U0", _STAGE_4_BASE, _STAGE_4_HEAD, "--", _STORE).splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
     created = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", "\n".join(added))
     assert created == ["memo_version_report_artifacts"], created
 

@@ -452,8 +452,14 @@ def test_no_stage_2_module_implements_a_later_funding_event() -> None:
     authorized refinancing or event-timing stage. Stage 2 adds neither."""
 
     forbidden = re.compile(r"refinanc|recapitali|payoff_event|redraw|second_draw|paydown", re.IGNORECASE)
+    # Refinance & Capital Events V1 Stage 2 re-pin: that separately ratified
+    # stage *is* the authorized refinancing stage Section 6.1 names, and it
+    # extends several of these files. The claim is about what P7.10 Stage 2's own
+    # modules added, so it reads them as Stage 2 merged them -- where it holds
+    # unchanged. Refinance persistence is held by its own guard,
+    # ``tests/test_refinance_v1_stage_2_architecture.py``.
     for path in sorted(_STAGE_2_PRODUCTION_FILES):
-        source = _current(path)
+        source = _as_merged(path)
         region = _p7_10_region(source) if path in {_API, _STORE, _FINGERPRINT, _CONTRACTS, _STRUCTURED} else source
         offenders = sorted(name for name in _identifiers(ast.parse(source)) if forbidden.search(name))
         assert [name for name in offenders if name in region] == [], (path, offenders)

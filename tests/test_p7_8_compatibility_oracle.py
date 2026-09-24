@@ -38,7 +38,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from _p7_2_fixtures import P7_8_TABLES, rows, table_names, without_unstated_classification  # type: ignore[import-not-found]
+from _p7_2_fixtures import P7_8_TABLES, REFINANCE_V1_STAGE_2_TABLES, rows, table_names, without_unstated_classification  # type: ignore[import-not-found]
 from _p7_7_fixtures import analyze_visible_investment  # type: ignore[import-not-found]
 from anchor import api as api_module
 from anchor.capital_structure import (
@@ -187,7 +187,8 @@ def test_no_schema_change_and_no_read_triggered_materialization(client: TestClie
     # never opted into structured capital has no position, and no read makes it
     # one (P-11).
     capital_tables = sorted(table for table in table_names(db) if table.startswith("capital_"))
-    assert capital_tables == sorted(P7_8_TABLES)
+    # Refinance V1 Stage 2 appends six capital-event tables the same way, empty.
+    assert capital_tables == sorted((*P7_8_TABLES, *REFINANCE_V1_STAGE_2_TABLES))
     assert {table: rows(db, table) for table in capital_tables} == dict.fromkeys(capital_tables, [])
     assert not {table for table in table_names(db) if "funding_requirement" in table}
 
