@@ -17,8 +17,8 @@ It also resolved every open question. The decision record is Section 22.
   itself is documentation only.
 - **Stage 1 (deterministic engine) was explicitly started** on 2026-09-22
   from `main` at `2e1f84a` (the PR #56 merge of this ratified contract), on
-  `feature/refinance-capital-events-v1-stage-1-engine`. It is **implemented
-  locally and pending independent review. It is not accepted.** Its
+  `feature/refinance-capital-events-v1-stage-1-engine`. It was **merged
+  through PR #57 as `6de7644` and accepted on 2026-09-24.** Its
   implementation record is Section 23.
 - **Stage 2 and Stage 3 have not started.** No schema, persistence, codec, API,
   UI, memo, report or workbook exists for a refinance. **No implementation
@@ -2071,15 +2071,15 @@ database from before that version gains empty tables and nothing else.
 ## 20. Staged implementation roadmap
 
 Each stage starts only on an explicit human instruction. **Stage 1 was
-explicitly started on 2026-09-22 from `2e1f84a`; it is implemented locally,
-pending independent review, and not accepted** (Section 23). Stage 2 and Stage 3
+explicitly started on 2026-09-22 from `2e1f84a`; it was merged through PR #57
+as `6de7644` and accepted on 2026-09-24** (Section 23). Stage 2 and Stage 3
 have not started. **No stage begins automatically** when the previous one is
 accepted. Recovery Engine V2 is not part of any stage.
 
 | Stage | Scope | Tier | Exit evidence |
 | --- | --- | --- | --- |
 | Contract ratification — **complete, 2026-09-22** | This document. Documentation only | 1 (contract) | ratification record (Section 22); `CURRENT_STATE.md` updated |
-| Stage 1 — deterministic engine (implemented locally 2026-09-22; pending independent review; not accepted) | Contracts (Section 6); structural and execution validation (Section 15.1); the shared NOI-at-month seam; the acquisition-debt balance service and its reconciliation; sizing (Section 9); the legacy splice; the retiring-schedule cut and replacement offset through the existing wrapper; the event bridge; the Common Equity decomposition; unavailable states; the P7.9 adapter reason; F1–F12, F14–F17, F15b, F19, F21, F22 with exact-rational oracles; F20 engine parity; the Section 18.3 mutation proofs. No persistence, API or UI | 1 | focused and identity tests; mutation kills; domain regression; one final full backend suite |
+| Stage 1 — deterministic engine — **accepted, 2026-09-24** (PR #57, merged as `6de7644`) | Contracts (Section 6); structural and execution validation (Section 15.1); the shared NOI-at-month seam; the acquisition-debt balance service and its reconciliation; sizing (Section 9); the legacy splice; the retiring-schedule cut and replacement offset through the existing wrapper; the event bridge; the Common Equity decomposition; unavailable states; the P7.9 adapter reason; F1–F12, F14–F17, F15b, F19, F21, F22 with exact-rational oracles; F20 engine parity; the Section 18.3 mutation proofs. No persistence, API or UI | 1 | focused and identity tests; mutation kills; domain regression; one final full backend suite |
 | Stage 2 — persistence and integration (not started) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
 | Stage 3 — product surfaces (not started) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
 
@@ -2240,13 +2240,14 @@ Two points are clarifications rather than amendments:
 | --- | --- | --- |
 | Codex independent architecture review | Approved, with Corrections 1 and 2 incorporated | 2026-09-22 |
 | Contract status | Ratified | 2026-09-22 |
-| Stage 1 | Explicitly started 2026-09-22 from `2e1f84a`; implemented locally, pending independent review; not accepted (Section 23) | 2026-09-22 |
+| Stage 1 | Explicitly started 2026-09-22 from `2e1f84a`; independently reviewed; merged through PR #57 as `6de7644`; accepted (Section 23) | 2026-09-24 |
 
 ---
 
 ## 23. Stage 1 implementation record
 
-**Status: implemented locally, pending independent review. Not accepted.**
+**Status: accepted 2026-09-24. Merged to `main` through PR #57 as
+`6de7644`.**
 Stage 1 was explicitly started on 2026-09-22 from `main` at `2e1f84a` on
 `feature/refinance-capital-events-v1-stage-1-engine`. It implements Section
 20's Stage 1 row and nothing else: no persistence, schema, codec, fingerprint,

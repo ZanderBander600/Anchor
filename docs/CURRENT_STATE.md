@@ -1,9 +1,8 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-22 (P7.10 closed; P7.11 waived and administratively
+Last synchronized: 2026-09-24 (P7.10 closed; P7.11 waived and administratively
 closed; Refinance & Capital Events V1 contract ratified; Stage 1 deterministic
-engine implemented on the published feature branch, pending acceptance — not
-accepted)
+engine merged through PR #57 and accepted; Stage 2 not started)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -16,29 +15,29 @@ whenever an accepted gate merges or the active gate changes.
   P7.10 Stage 4 manual-first Investment Committee workstation, immutable
   institutional report and PDF, and cross-mode browser QA). This is the newest
   commit that changed product behavior. Everything merged after it is
-  documentation only.
+  documentation only, except the Refinance & Capital Events V1 Stage 1 engine
+  (PR #57), which adds an engine capability with no persistence, API or UI
+  surface and leaves every no-refinance result bit-identical.
 - **Documentation-only work since then:** the **P7.10 Stage 4 acceptance
   documentation merged through PR #54**, and the P7.10 closeout / P7.11 waiver
   record described below. They change status and architecture records only;
   they change no calculation, convention, schema, fingerprint, API contract,
   workbook, or product behavior.
-- **This closeout branch started from `main` at `174d3b8`.** That is the branch
+- **This closeout branch started from `main` at `6de7644`.** That is the branch
   point, not a claim about where `main` sits once the closeout merges.
   **Git and GitHub remain operational truth for the current `main` commit.**
-- Last financial-engine implementation merge: `f6f3680` (PR #49, P7.10 Stage
-  1 deterministic valuation and `PctOfValue` closing execution).
-- **Accepted baseline: `main` at `2e1f84a`** (the PR #56 merge of the ratified
-  Refinance & Capital Events V1 contract, documentation only, on top of the
-  PR #55 merge `0e9f8cc`). It remains the accepted baseline until the Stage 1
-  work below is accepted and merged.
-- **Active gate: Refinance & Capital Events V1 Stage 1 (deterministic
-  engine).** Explicitly started on 2026-09-22 from `main` at `2e1f84a`, on
-  `feature/refinance-capital-events-v1-stage-1-engine`. It is **implemented
-  on the published feature branch and pending acceptance. It is not
-  accepted.** See the
-  2026-09-22 Stage 1 entry below. P7.10 is closed, and P7.11 is waived and
-  administratively closed. No gate begins by implication; the next one starts
-  only on an explicit human instruction.
+- Last financial-engine implementation merge: `6de7644` (PR #57, Refinance &
+  Capital Events V1 Stage 1 deterministic engine). The previous one was
+  `f6f3680` (PR #49, P7.10 Stage 1 deterministic valuation and `PctOfValue`
+  closing execution).
+- **Accepted baseline: `main` at `6de7644`** (the PR #57 merge of the accepted
+  Refinance & Capital Events V1 Stage 1 deterministic engine, on top of the
+  PR #56 contract merge `2e1f84a`).
+- **Active gate: none.** Refinance & Capital Events V1 Stage 1 is **accepted**
+  (see the 2026-09-24 entry below). **Stage 2 has not started** and requires
+  an explicit start. P7.10 is closed, and P7.11 is waived and administratively
+  closed. No gate begins by implication; the next one starts only on an
+  explicit human instruction.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active.
 - Autonomous merge: not authorized.
@@ -48,15 +47,33 @@ Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
 
-## 2026-09-22 Refinance & Capital Events V1 Stage 1 (implemented on the published feature branch, not accepted)
+## 2026-09-24 Refinance & Capital Events V1 Stage 1 Acceptance
+
+By explicit human instruction, Refinance & Capital Events V1 Stage 1 is
+**accepted**.
+
+- Stage 1 PR: #57 (https://github.com/ZanderBander600/Anchor/pull/57), five
+  commits `a4dc802`, `1171f17`, `c08c4a1`, `cbebaa2`, `4f248e7`; the
+  production and test tree is the independently reviewed `cbebaa2` tree.
+- Merged to `main` on 2026-09-24 as `6de7644` (parents `2e1f84a` and
+  `4f248e7`).
+- **The accepted baseline advances to `main` at `6de7644`.**
+- **Stage 2 and Stage 3: not started.** Stage 2 requires an explicit start.
+- **Recovery Engine V2: not started.**
+- **Upload / extraction integration: deferred.**
+- This entry is documentation only. It changes no calculation, convention,
+  schema, fingerprint, API contract, workbook or product behavior, and reports
+  no new verification evidence.
+
+## 2026-09-22 Refinance & Capital Events V1 Stage 1 (implemented; accepted 2026-09-24)
 
 By explicit instruction, Stage 1 -- the deterministic refinance engine -- was
 started from `main` at `2e1f84a` on
 `feature/refinance-capital-events-v1-stage-1-engine`.
 
-- **Implementation is complete on the published feature branch and pending
-  acceptance.** **Stage 1 is not accepted.** The feature branch is published,
-  but nothing is merged.
+- **Implementation was completed on the feature branch, published, and merged
+  through PR #57 as `6de7644`.** It was accepted on 2026-09-24 (see the entry
+  above).
 - Its scope is the contract's Section 20 Stage 1 row only: the refinance
   contracts and validation, the engine's acquisition-debt balance service
   (R-M), sizing on separate LTV value and DSCR forward-NOI dependencies,
@@ -71,9 +88,8 @@ started from `main` at `2e1f84a` on
 - **Stage 2 and Stage 3: not started.**
 - **Recovery Engine V2: not started.**
 - **Upload / extraction integration: deferred.**
-- **The accepted baseline is unchanged:** `main` at `2e1f84a`, and the last
-  accepted product implementation commit is still `d7e4d75`, until Stage 1 is
-  accepted.
+- Until its acceptance, the accepted baseline stayed `main` at `2e1f84a`. On
+  acceptance it advanced to `main` at `6de7644`.
 
 ## 2026-09-22 Refinance & Capital Events V1 Contract Ratified
 
@@ -424,10 +440,9 @@ needs its own explicit authorization, its own contract, and its own gate record
 before any work begins. Their status is now:
 
 - **Refinance & Capital Events V1:** contract ratified on 2026-09-22. Stage 1
-  (deterministic engine) was explicitly started from `2e1f84a` and is
-  implemented on the published feature branch, pending acceptance, and **not
-  accepted** (see
-  the entry above). Stage 2 and Stage 3 have not started. The contract, not
+  (deterministic engine) was explicitly started from `2e1f84a`, merged
+  through PR #57 as `6de7644`, and **accepted** on 2026-09-24 (see the
+  entries above). Stage 2 and Stage 3 have not started. The contract, not
   this file, holds the design decisions.
 - **Recovery Engine V2:** unstarted and unratified.
 
@@ -526,8 +541,8 @@ evidence that an unperformed acceptance exercise passed.
 
 Refinancing / recapitalization was a separately authorized potential sub-gate
 in the ratified P7 sequence. Its V1 contract is ratified, and its Stage 1
-engine is implemented on the published feature branch and pending
-acceptance, not accepted; see
+engine is merged (PR #57, `6de7644`) and accepted; Stage 2 has not started;
+see
 **Refinancing & Capital Events** above.
 
 ## Current Architecture Authorities
@@ -586,9 +601,9 @@ acceptance, not accepted; see
   `docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md` — **ratified
   2026-09-22** (Codex independent architecture approval, Corrections 1 and 2
   incorporated). It is the authority for its narrow amendments to P7.7, P7.8,
-  P7.9 and P7.10 (its Section 22.3). **Stage 1 implemented on the published
-  feature branch, pending acceptance, not accepted** (its Section 23); Stage 2
-  and Stage 3 not started.
+  P7.9 and P7.10 (its Section 22.3). **Stage 1 accepted 2026-09-24, merged
+  through PR #57 as `6de7644`** (its Section 23); Stage 2 and Stage 3 not
+  started.
 
 ## Historical-Document Rule
 
