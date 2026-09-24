@@ -51,7 +51,9 @@ from ..analysis.strategy import (
 from ..partnership import Partner, Partnership, PartnershipResult, execute_partnership
 from . import store
 from .fingerprint import fingerprint_partnership_source
+from .refinance_integration import PrimaryReturnView
 from .structured_variants import (
+    RefinancedStructuredVariantAnalysis,
     StructuredRootKind,
     analyze_structured_variant,
     structured_variant_fingerprint,
@@ -122,6 +124,20 @@ class PartnershipVariantAnalysis:
     partnership_source_fingerprint: str | None
     project_cache_status: str
     result: PartnershipResult | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RefinancedPartnershipVariantAnalysis(PartnershipVariantAnalysis):
+    """A Partnership variant whose structured variant states capital events
+    (Refinance & Capital Events V1 Stage 2, Section 16.2).
+
+    Additive by subclass, so every Partnership response without a refinance
+    keeps exactly its fields and bytes. ``primary_return`` is the structured
+    variant's own statement of which namespace is primary -- Partner returns
+    wherever this variant resolves a Partnership -- carried unchanged, never
+    re-derived here."""
+
+    primary_return: PrimaryReturnView
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -238,7 +254,7 @@ def analyze_partnership_variant(
         if resolved.partnership is None
         else execute_partnership(resolved.partnership, structured.result)
     )
-    return PartnershipVariantAnalysis(
+    fields = dict(
         investment_id=investment_id,
         strategy_id=strategy_id,
         scenario_id=scenario_id,
@@ -255,6 +271,11 @@ def analyze_partnership_variant(
         project_cache_status=structured.project_cache_status,
         result=result,
     )
+    if isinstance(structured, RefinancedStructuredVariantAnalysis):
+        return RefinancedPartnershipVariantAnalysis(
+            **fields, primary_return=structured.primary_return  # type: ignore[arg-type]
+        )
+    return PartnershipVariantAnalysis(**fields)  # type: ignore[arg-type]
 
 
 def partner_perspectives(

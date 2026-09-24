@@ -135,17 +135,34 @@ from .capital_structure.contracts import (
     PositionFee,
     PositionScope,
     PreferredEquityTerms,
+    RefinanceProceeds,
     ScopeKind,
     ShortfallResolution,
     TimingBasis,
     UnsupportedCapitalPositionError,
 )
 from .capital_structure.contracts import AccrualConvention as PreferredAccrualConvention
+from .capital_structure.events import (
+    AuthoredPositionRef,
+    CapitalEventKind,
+    CapitalStructureWithEvents,
+    EventTiming,
+    FixedProceedsCap,
+    LegacyAcquisitionLoanRef,
+    MaxLtvConstraint,
+    MinDscrConstraint,
+    RefinanceCostKind,
+    RefinanceCostLine,
+    RefinanceEvent,
+    RefinanceSizing,
+    RefinanceValuationRef,
+)
 from .capital_structure.execution_contracts import (
     CapitalStructureExecutionError,
     ExecutionIssueCode,
 )
-from .deals.capital_structure_codec import FundingAmountRuleKind, PositionTermsKind
+from .deals.capital_event_identity import CapitalEventIdentityConflictError
+from .deals.capital_structure_codec import FundingAmountRuleKind, PositionTermsKind, RetiringRefKind
 from .deals.partnership_codec import HurdleConditionKind
 from .deals.partnership_variants import (
     analyze_partnership_variant,
@@ -3356,6 +3373,8 @@ def create_deal_strategy(deal_id: str, payload: dict[str, Any] = Body(...)) -> d
         raise _strategy_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
+    except CapitalEventIdentityConflictError as error:
+        raise _capital_event_identity_conflict_response(error) from None
 
 
 @app.get("/deals/{deal_id}/strategies", response_model=None)
@@ -3405,6 +3424,8 @@ def create_investment_strategy(
         raise _strategy_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
+    except CapitalEventIdentityConflictError as error:
+        raise _capital_event_identity_conflict_response(error) from None
 
 
 @app.get("/investments/{investment_id}/strategies/{strategy_id}", response_model=None)
@@ -3445,6 +3466,8 @@ def update_investment_strategy(
         raise _strategy_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
+    except CapitalEventIdentityConflictError as error:
+        raise _capital_event_identity_conflict_response(error) from None
 
 
 @app.delete(
@@ -4060,6 +4083,19 @@ _CAPITAL_WIRE_KINDS: Mapping[type, str] = {
     ProRataByContribution: SplitRule.PRO_RATA_BY_CONTRIBUTION.value,
     IrrHurdle: HurdleConditionKind.IRR.value,
     MoicHurdle: HurdleConditionKind.MOIC.value,
+    # Refinance & Capital Events V1 Stage 2: the replacement's funding rule and
+    # a retiring reference, spelled by the one codec. A refinance event and a
+    # cost line carry their own ``kind`` field already.
+    RefinanceProceeds: FundingAmountRuleKind.REFINANCE_PROCEEDS.value,
+    AuthoredPositionRef: RetiringRefKind.AUTHORED_POSITION.value,
+    LegacyAcquisitionLoanRef: RetiringRefKind.LEGACY_ACQUISITION_LOAN.value,
+}
+
+#: A dataclass field whose wire member is spelled differently from its Python
+#: name. The one entry: a Capital Structure's events travel as
+#: ``capital_events``, the member the authoring payload accepts (Section 16.2).
+_WIRE_FIELD_NAMES: Mapping[tuple[type, str], str] = {
+    (CapitalStructureWithEvents, "events"): "capital_events",
 }
 
 
@@ -4075,7 +4111,9 @@ def _wire(value: Any) -> Any:
 
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         fields = {
-            field.name: _wire(getattr(value, field.name))
+            _WIRE_FIELD_NAMES.get((type(value), field.name), field.name): _wire(
+                getattr(value, field.name)
+            )
             for field in dataclasses.fields(value)
         }
         kind = _CAPITAL_WIRE_KINDS.get(type(value))
@@ -4092,7 +4130,7 @@ def _wire(value: Any) -> Any:
 #: The keys each Capital Structure body may carry. Literal tuples, so an unknown
 #: key is always refused rather than silently ignored -- a misspelled
 #: ``maturity_month`` must never read as "no maturity stated".
-_CAPITAL_STRUCTURE_FIELDS = ("positions",)
+_CAPITAL_STRUCTURE_FIELDS = ("positions", "capital_events")
 _POSITION_FIELDS = (
     "position_id",
     "name",
@@ -4129,6 +4167,31 @@ _PREFERRED_TERMS_FIELDS = (
     "redemption_month",
 )
 _STRATEGY_ROOT_OVERLAY_FIELDS = ("domain", "content")
+#: Refinance & Capital Events V1 Stage 2: the capital-event body, exactly. No
+#: reserve, holdback, escrow or release member exists anywhere in it, so one
+#: sent is an unknown field and is refused, never dropped (Section 11.5).
+_REFINANCE_PROCEEDS_FIELDS = ("kind", "capital_event_id")
+_CAPITAL_EVENT_FIELDS = (
+    "event_id",
+    "kind",
+    "scope",
+    "timing",
+    "label",
+    "retiring",
+    "replacement_position_id",
+    "sizing",
+    "valuation",
+    "costs",
+)
+_EVENT_TIMING_FIELDS = ("model_month", "sequence")
+_AUTHORED_REF_FIELDS = ("kind", "position_id")
+_LEGACY_REF_FIELDS = ("kind", "unit_id")
+_SIZING_FIELDS = ("fixed_cap", "max_ltv", "min_dscr")
+_FIXED_CAP_FIELDS = ("amount",)
+_MAX_LTV_FIELDS = ("max_ltv",)
+_MIN_DSCR_FIELDS = ("min_dscr",)
+_VALUATION_REF_FIELDS = ("timepoint_id",)
+_COST_LINE_FIELDS = ("cost_id", "kind", "amount", "recipient", "description")
 
 
 def _capital_token(token_type: type[Enum], raw: Any) -> Any:
@@ -4212,18 +4275,33 @@ def _amount_rule_request(raw: Any, where: str) -> Any:
         # amount.
         body = _exact_keys(raw, _PCT_OF_VALUE_FIELDS, where)
         return PctOfValue(timepoint_id=body["timepoint_id"], pct=body["pct"])
+    if kind == FundingAmountRuleKind.REFINANCE_PROCEEDS:
+        # Refinance & Capital Events V1 Stage 2 (Section 6.6): a replacement's
+        # funding names the event that sizes it and states no amount. Whether
+        # that event exists and names this position is the validator's call.
+        body = _exact_keys(raw, _REFINANCE_PROCEEDS_FIELDS, where)
+        return RefinanceProceeds(capital_event_id=body["capital_event_id"])
     raise _structural_error(
         f"{where}.kind must be {FundingAmountRuleKind.FIXED_AMOUNT.value!r}, "
-        f"{FundingAmountRuleKind.PCT_OF_PRICE.value!r} or "
-        f"{FundingAmountRuleKind.PCT_OF_VALUE.value!r}; got {kind!r}."
+        f"{FundingAmountRuleKind.PCT_OF_PRICE.value!r}, "
+        f"{FundingAmountRuleKind.PCT_OF_VALUE.value!r} or "
+        f"{FundingAmountRuleKind.REFINANCE_PROCEEDS.value!r}; got {kind!r}."
     )
+
+
+def _is_refinance_proceeds(raw_rule: Any) -> bool:
+    return isinstance(raw_rule, dict) and raw_rule.get("kind") == FundingAmountRuleKind.REFINANCE_PROCEEDS
 
 
 def _funding_event_request(raw: Any, where: str) -> FundingEvent:
     body = _exact_keys(raw, _FUNDING_EVENT_FIELDS, where)
-    _require_closing(
-        body["model_month"], ExecutionIssueCode.UNSUPPORTED_FUNDING_TIMING, where, "Funding"
-    )
+    # Refinance & Capital Events V1 (Section 19): every non-closing funding is
+    # still refused here, except a ``RefinanceProceeds`` funding, whose month
+    # the validator judges against its event.
+    if not _is_refinance_proceeds(body["amount_rule"]):
+        _require_closing(
+            body["model_month"], ExecutionIssueCode.UNSUPPORTED_FUNDING_TIMING, where, "Funding"
+        )
     return FundingEvent(
         event_id=body["event_id"],
         model_month=body["model_month"],
@@ -4232,9 +4310,15 @@ def _funding_event_request(raw: Any, where: str) -> FundingEvent:
     )
 
 
-def _fee_request(raw: Any, where: str) -> PositionFee:
+def _fee_request(raw: Any, where: str, *, replacement: bool = False) -> PositionFee:
     body = _exact_keys(raw, _FEE_FIELDS, where)
-    _require_closing(body["model_month"], ExecutionIssueCode.UNSUPPORTED_FEE_TIMING, where, "A fee")
+    # Refinance & Capital Events V1 (Section 19): a replacement position's fee
+    # is paid at its event month, which the validator judges
+    # (``replacement_fee_timing``). Every other non-closing fee is refused here.
+    if not replacement:
+        _require_closing(
+            body["model_month"], ExecutionIssueCode.UNSUPPORTED_FEE_TIMING, where, "A fee"
+        )
     return PositionFee(
         fee_id=body["fee_id"],
         description=body["description"],
@@ -4244,7 +4328,7 @@ def _fee_request(raw: Any, where: str) -> PositionFee:
     )
 
 
-def _debt_terms_request(raw: dict[str, Any], where: str) -> DebtTerms:
+def _debt_terms_request(raw: dict[str, Any], where: str, *, replacement: bool = False) -> DebtTerms:
     """Cash-pay debt, exactly (Section 6). The request states the whole approved
     contract -- ``current_pay_rate`` equal to the coupon and ``pik_rate`` zero --
     and any other split is refused here rather than stored unexecutable."""
@@ -4272,7 +4356,8 @@ def _debt_terms_request(raw: dict[str, Any], where: str) -> DebtTerms:
         io_period=body["io_period"],
         maturity_month=body["maturity_month"],
         fees=tuple(
-            _fee_request(item, f"{where}.fees[{index}]") for index, item in enumerate(raw_fees)
+            _fee_request(item, f"{where}.fees[{index}]", replacement=replacement)
+            for index, item in enumerate(raw_fees)
         ),
         current_pay_rate=current_pay,
         pik_rate=pik,
@@ -4292,7 +4377,7 @@ def _preferred_terms_request(raw: dict[str, Any], where: str) -> PreferredEquity
     )
 
 
-def _position_terms_request(raw: Any, where: str) -> Any:
+def _position_terms_request(raw: Any, where: str, *, replacement: bool = False) -> Any:
     """A position's typed terms, by explicit ``kind`` -- or ``None``, which is
     the common-equity marker's honest answer: the residual has no terms."""
 
@@ -4302,7 +4387,7 @@ def _position_terms_request(raw: Any, where: str) -> Any:
         raise _structural_error(f"{where} must be an object or null.")
     kind = raw.get("kind")
     if kind == PositionTermsKind.DEBT:
-        return _debt_terms_request(raw, where)
+        return _debt_terms_request(raw, where, replacement=replacement)
     if kind == PositionTermsKind.PREFERRED_EQUITY:
         return _preferred_terms_request(raw, where)
     raise _structural_error(
@@ -4321,35 +4406,134 @@ def _capital_position_request(raw: Any, where: str) -> CapitalPosition:
     raw_funding = body["funding"]
     if not isinstance(raw_funding, list):
         raise _structural_error(f"{where}.funding must be an array of funding events.")
+    funding = tuple(
+        _funding_event_request(item, f"{where}.funding[{index}]")
+        for index, item in enumerate(raw_funding)
+    )
     return CapitalPosition(
         position_id=body["position_id"],
         name=body["name"],
         position_class=_capital_token(PositionClass, body["position_class"]),
         priority=body["priority"],
         scope=_scope_request(body["scope"], f"{where}.scope"),
-        funding=tuple(
-            _funding_event_request(item, f"{where}.funding[{index}]")
-            for index, item in enumerate(raw_funding)
+        funding=funding,
+        terms=_position_terms_request(
+            body["terms"],
+            f"{where}.terms",
+            replacement=any(isinstance(event.amount_rule, RefinanceProceeds) for event in funding),
         ),
-        terms=_position_terms_request(body["terms"], f"{where}.terms"),
         shortfall_resolution=_capital_token(ShortfallResolution, body["shortfall_resolution"]),
+    )
+
+
+def _retiring_ref_request(raw: Any, where: str) -> Any:
+    """A retiring reference, by its explicit ``kind``: an authored position by
+    ``position_id``, or a Unit's acquisition loan by ``unit_id``. The legacy
+    loan's reserved identity string is never a reference."""
+
+    if not isinstance(raw, dict):
+        raise _structural_error(f"{where} must be an object.")
+    kind = raw.get("kind")
+    if kind == RetiringRefKind.AUTHORED_POSITION:
+        return AuthoredPositionRef(position_id=_exact_keys(raw, _AUTHORED_REF_FIELDS, where)["position_id"])
+    if kind == RetiringRefKind.LEGACY_ACQUISITION_LOAN:
+        return LegacyAcquisitionLoanRef(unit_id=_exact_keys(raw, _LEGACY_REF_FIELDS, where)["unit_id"])
+    raise _structural_error(
+        f"{where}.kind must be {RetiringRefKind.AUTHORED_POSITION.value!r} or "
+        f"{RetiringRefKind.LEGACY_ACQUISITION_LOAN.value!r}; got {kind!r}."
+    )
+
+
+def _optional_constraint(raw: Any, keys: tuple[str, ...], where: str) -> dict[str, Any] | None:
+    """An enabled constraint's body, or ``None`` for a disabled one. There is no
+    separate "enabled" flag: an absent constraint has no target (Section 6.4)."""
+
+    if raw is None:
+        return None
+    return _exact_keys(raw, keys, where)
+
+
+def _capital_event_request(raw: Any, where: str) -> RefinanceEvent:
+    """One capital event from its wire object, structurally. Every member is
+    stated, ``null`` included; the Stage 1 validator judges the contract."""
+
+    body = _exact_keys(raw, _CAPITAL_EVENT_FIELDS, where)
+    timing = _exact_keys(body["timing"], _EVENT_TIMING_FIELDS, f"{where}.timing")
+    sizing = _exact_keys(body["sizing"], _SIZING_FIELDS, f"{where}.sizing")
+    raw_retiring, raw_costs = body["retiring"], body["costs"]
+    if not isinstance(raw_retiring, list):
+        raise _structural_error(f"{where}.retiring must be an array of retiring references.")
+    if not isinstance(raw_costs, list):
+        raise _structural_error(f"{where}.costs must be an array of cost lines.")
+    fixed = _optional_constraint(sizing["fixed_cap"], _FIXED_CAP_FIELDS, f"{where}.sizing.fixed_cap")
+    ltv = _optional_constraint(sizing["max_ltv"], _MAX_LTV_FIELDS, f"{where}.sizing.max_ltv")
+    dscr = _optional_constraint(sizing["min_dscr"], _MIN_DSCR_FIELDS, f"{where}.sizing.min_dscr")
+    valuation = _optional_constraint(body["valuation"], _VALUATION_REF_FIELDS, f"{where}.valuation")
+    costs = []
+    for index, item in enumerate(raw_costs):
+        line = _exact_keys(item, _COST_LINE_FIELDS, f"{where}.costs[{index}]")
+        costs.append(
+            RefinanceCostLine(
+                cost_id=line["cost_id"],
+                kind=_capital_token(RefinanceCostKind, line["kind"]),
+                amount=line["amount"],
+                recipient=(
+                    None
+                    if line["recipient"] is None
+                    else _retiring_ref_request(line["recipient"], f"{where}.costs[{index}].recipient")
+                ),
+                description=line["description"],
+            )
+        )
+    return RefinanceEvent(
+        event_id=body["event_id"],
+        kind=_capital_token(CapitalEventKind, body["kind"]),
+        scope=_scope_request(body["scope"], f"{where}.scope"),
+        timing=EventTiming(model_month=timing["model_month"], sequence=timing["sequence"]),
+        label=body["label"],
+        retiring=tuple(
+            _retiring_ref_request(item, f"{where}.retiring[{index}]")
+            for index, item in enumerate(raw_retiring)
+        ),
+        replacement_position_id=body["replacement_position_id"],
+        sizing=RefinanceSizing(
+            fixed_cap=None if fixed is None else FixedProceedsCap(amount=fixed["amount"]),
+            max_ltv=None if ltv is None else MaxLtvConstraint(max_ltv=ltv["max_ltv"]),
+            min_dscr=None if dscr is None else MinDscrConstraint(min_dscr=dscr["min_dscr"]),
+        ),
+        valuation=None if valuation is None else RefinanceValuationRef(timepoint_id=valuation["timepoint_id"]),
+        costs=tuple(costs),
     )
 
 
 def _capital_structure_request(raw: Any, where: str) -> CapitalStructure:
     """A Capital Structure from its wire object, structurally. No contract rule
     is applied here: the P7.7 validator -- the one authority -- reports every
-    structural problem, in its own deterministic order, as a structured 422."""
+    structural problem, in its own deterministic order, as a structured 422.
+
+    Refinance & Capital Events V1 Stage 2: an absent or empty
+    ``capital_events`` is the empty set and yields the plain contract, exactly
+    as before; a non-empty one yields the Stage 1 evented structure."""
 
     body = _content_object(raw, _CAPITAL_STRUCTURE_FIELDS, where)
     raw_positions = body.get("positions", [])
     if not isinstance(raw_positions, list):
         raise _structural_error(f"{where}.positions must be an array of position objects.")
-    return CapitalStructure(
-        positions=tuple(
-            _capital_position_request(item, f"{where}.positions[{index}]")
-            for index, item in enumerate(raw_positions)
-        )
+    raw_events = body.get("capital_events", [])
+    if not isinstance(raw_events, list):
+        raise _structural_error(f"{where}.capital_events must be an array of capital event objects.")
+    positions = tuple(
+        _capital_position_request(item, f"{where}.positions[{index}]")
+        for index, item in enumerate(raw_positions)
+    )
+    if not raw_events:
+        return CapitalStructure(positions=positions)
+    return CapitalStructureWithEvents(
+        positions=positions,
+        events=tuple(
+            _capital_event_request(item, f"{where}.capital_events[{index}]")
+            for index, item in enumerate(raw_events)
+        ),
     )
 
 
@@ -4438,6 +4622,26 @@ def _position_identity_conflict_response(error: PositionIdentityConflictError) -
     )
 
 
+def _capital_event_identity_conflict_response(error: CapitalEventIdentityConflictError) -> HTTPException:
+    """One capital-event id that would name two economic events in one
+    Investment (P-8 carried over, Section 6.1), as a structured 422 with its
+    stable code. The analyst gives the different event its own id; no id is
+    ever regenerated for them."""
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=[
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "event_id": issue.event_id,
+                "field": issue.field,
+            }
+            for issue in error.issues
+        ],
+    )
+
+
 def _structured_conflict(error: Exception) -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
 
@@ -4487,6 +4691,8 @@ def update_deal_capital_structure(
         raise _capital_structure_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
+    except CapitalEventIdentityConflictError as error:
+        raise _capital_event_identity_conflict_response(error) from None
     return {"deal_id": deal_id, "investment_id": investment_id, "capital_structure": _wire(saved)}
 
 
@@ -4522,6 +4728,8 @@ def update_investment_capital_structure(
         raise _capital_structure_validation_error_response(error) from None
     except PositionIdentityConflictError as error:
         raise _position_identity_conflict_response(error) from None
+    except CapitalEventIdentityConflictError as error:
+        raise _capital_event_identity_conflict_response(error) from None
     return {"investment_id": investment_id, "capital_structure": _wire(saved)}
 
 

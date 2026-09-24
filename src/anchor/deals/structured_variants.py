@@ -53,6 +53,7 @@ from ..analysis.strategy import (
     BASE_STRATEGY_ID,
     StrategyDefinition,
     resolve_capital_structure,
+    resolve_partnership,
     strategy_capital_structure,
 )
 from ..capital_structure.contracts import (
@@ -85,6 +86,12 @@ from ..valuation.funding import (
 )
 from . import store
 from .fingerprint import fingerprint_structured_source
+from .refinance_integration import (
+    PrimaryReturnView,
+    primary_return_view,
+    refinance_valuation_timepoints,
+    with_evidence_not_approved,
+)
 from .valuation_views import (
     EvidenceBlockedValuation,
     ValuationUnitSource,
@@ -195,6 +202,25 @@ class StructuredVariantAnalysis:
     structured_source_fingerprint: str
     project_cache_status: str
     result: StructuredCapitalResult
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RefinancedStructuredVariantAnalysis(StructuredVariantAnalysis):
+    """A structured variant whose resolved Capital Structure states capital
+    events (Refinance & Capital Events V1 Stage 2, Section 16.2).
+
+    Additive by subclass, for the reason ``StructuredVariantAnalysis`` explains:
+    it is a wire contract, so a defaulted field would change every existing
+    response. Produced only for an evented structure, so every analysis without
+    a refinance keeps exactly its fields and bytes.
+
+    ``primary_return`` is the server's typed statement of which return
+    namespace is primary (Section 12.5). The refinance results themselves --
+    capacities, binding constraints, dependencies, payoffs, funding, the bridge,
+    the Common Equity decomposition and every typed unavailable state -- are
+    already on ``result``, which is a ``RefinancedCapitalResult``."""
+
+    primary_return: PrimaryReturnView
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -487,6 +513,22 @@ def pct_of_value_timepoints(capital_structure: CapitalStructure) -> tuple[str, .
     )
 
 
+def consumed_timepoints(capital_structure: CapitalStructure) -> tuple[str, ...]:
+    """Every valuation timepoint the resolved structure economically consumes:
+    each one a ``PctOfValue`` rule names and, from Refinance & Capital Events V1
+    Stage 2, each one an **LTV-enabled** refinance references (R-C, R-R).
+
+    A DSCR-only, fixed-only or fixed-plus-DSCR refinance adds none. So does a
+    structure with no event, which keeps every earlier identity exactly."""
+
+    return tuple(
+        sorted(
+            set(pct_of_value_timepoints(capital_structure))
+            | set(refinance_valuation_timepoints(capital_structure))
+        )
+    )
+
+
 def _valuation_context(
     investment_id: str,
     strategy_id: str,
@@ -524,7 +566,7 @@ def _valuation_context(
         authority=funding_authority(investment_id=investment_id, views=views, blocked=blocked),
         blocked=blocked,
         consumed=consumed_valuations(
-            views=views, timepoint_ids=pct_of_value_timepoints(capital_structure)
+            views=views, timepoint_ids=consumed_timepoints(capital_structure)
         ),
     )
 
@@ -533,7 +575,7 @@ def _structured_fingerprint(
     *,
     project_source_fingerprint: str,
     capital_structure: CapitalStructure,
-    consumed: Mapping[str, InvestmentValuationResult],
+    valuation: _ValuationContext,
 ) -> str:
     """The structured source fingerprint, with any consumed valuation in it.
 
@@ -541,13 +583,24 @@ def _structured_fingerprint(
     drift: a variant's reported identity must be the same whichever door the
     caller came through, or the P7.5 coherence check and the P7.9 Partnership
     fingerprint built on top of it would both be reading a different variant
-    than they thought."""
+    than they thought.
+
+    The authored definitions and the evidence-gate finding are passed for the
+    refinance payload of an LTV-enabled event only; the fingerprint authority
+    never reads them for any other structure."""
 
     return fingerprint_structured_source(
         project_source_fingerprint=project_source_fingerprint,
         capital_structure=capital_structure,
-        consumed_valuations=consumed,
+        consumed_valuations=valuation.consumed,
+        valuation_definitions={
+            timepoint.timepoint_id: timepoint for timepoint in valuation.timepoints
+        },
+        evidence_blocked=valuation.blocked,
     )
+
+
+_NO_VALUATIONS = _ValuationContext(timepoints=(), views=(), authority=None, blocked={}, consumed={})
 
 
 def structured_variant_fingerprint(
@@ -586,17 +639,21 @@ def structured_variant_fingerprint(
                 ).units
             )
         )
-    consumed: Mapping[str, InvestmentValuationResult] = {}
-    if pct_of_value_timepoints(resolved.capital_structure):
+    valuation = _NO_VALUATIONS
+    # Refinance & Capital Events V1 Stage 2: an LTV-enabled refinance consumes
+    # its referenced valuation exactly as a ``PctOfValue`` rule does, so it
+    # resolves the Project variant for the same reason. A DSCR-only or fixed
+    # refinance consumes none and costs nothing here.
+    if consumed_timepoints(resolved.capital_structure):
         read = _variant_units(investment_id, strategy_id, scenario_id, db_path)
-        consumed = _valuation_context(
+        valuation = _valuation_context(
             investment_id,
             strategy_id,
             scenario_id,
             resolved.capital_structure,
             read.units,
             db_path,
-        ).consumed
+        )
     return StructuredVariantFingerprint(
         investment_id=investment_id,
         strategy_id=strategy_id,
@@ -609,7 +666,7 @@ def structured_variant_fingerprint(
         structured_source_fingerprint=_structured_fingerprint(
             project_source_fingerprint=project_fingerprint,
             capital_structure=resolved.capital_structure,
-            consumed=consumed,
+            valuation=valuation,
         ),
     )
 
@@ -751,7 +808,7 @@ def analyze_structured_variant(
         investment_id, strategy_id, scenario_id, resolved.capital_structure, read.units, db_path
     )
     result = _execute_root(root_kind, read, resolved.capital_structure, valuation.authority)
-    return StructuredVariantAnalysis(
+    fields = dict(
         investment_id=investment_id,
         strategy_id=strategy_id,
         scenario_id=scenario_id,
@@ -764,11 +821,41 @@ def analyze_structured_variant(
         structured_source_fingerprint=_structured_fingerprint(
             project_source_fingerprint=read.project_source_fingerprint,
             capital_structure=resolved.capital_structure,
-            consumed=valuation.consumed,
+            valuation=valuation,
         ),
         project_cache_status=read.cache_status,
-        result=result,
     )
+    # Refinance & Capital Events V1 Stage 2. A structure with no event returns
+    # the accepted contract, exactly. An evented one reports the evidence
+    # gate's own reason where it withheld an LTV value, and states which return
+    # namespace is primary.
+    primary = primary_return_view(result, partnership_resolved=False)
+    if primary is None:
+        return StructuredVariantAnalysis(**fields, result=result)  # type: ignore[arg-type]
+    result = with_evidence_not_approved(
+        result,
+        capital_structure=resolved.capital_structure,
+        withheld=valuation.blocked,
+        valuation_labels={timepoint.timepoint_id: timepoint.label for timepoint in valuation.timepoints},
+    )
+    return RefinancedStructuredVariantAnalysis(
+        **fields,  # type: ignore[arg-type]
+        result=result,
+        primary_return=primary_return_view(
+            result,
+            partnership_resolved=_partnership_resolves(investment_id, strategy_id, db_path),
+        ),  # type: ignore[arg-type]
+    )
+
+
+def _partnership_resolves(investment_id: str, strategy_id: str, db_path: Path | None) -> bool:
+    """Whether this variant resolves a Partnership: the Base Partnership, replaced
+    whole by the Strategy's own where it states one -- the P7.9 resolution
+    itself, read here only to name the primary investor namespace."""
+
+    strategy = _strategy(investment_id, strategy_id, db_path)
+    base = store.get_base_partnership(investment_id, db_path=db_path)
+    return resolve_partnership(base, strategy) is not None
 
 
 def analyze_structured_valuations(
@@ -816,7 +903,7 @@ def analyze_structured_valuations(
         structured_source_fingerprint=_structured_fingerprint(
             project_source_fingerprint=read.project_source_fingerprint,
             capital_structure=resolved.capital_structure,
-            consumed=valuation.consumed,
+            valuation=valuation,
         ),
         valuation_definition_fingerprint=definition_fingerprint,
         valuation_result_fingerprint=result_fingerprint,
