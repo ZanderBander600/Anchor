@@ -50,6 +50,7 @@ import {
 } from './api';
 import { businessPlanDraftFromInput, placeBusinessPlanApiIssues } from './businessPlan';
 import type { BusinessPlanDraft } from './businessPlan';
+import { analystCapitalIssues, isCapitalEventIssue } from './capitalEventForm';
 import { formFromStructure } from './capitalStructureForm';
 import type { CapitalStructureForm } from './capitalStructureForm';
 import { formFromPartnership } from './partnershipForm';
@@ -277,7 +278,13 @@ function feedbackFor(
     feedback.general.push(issue.message);
   }
   if (error.strategyIssues.length === 0 && !placedPlanIssues && feedback.general.length === 0) {
-    feedback.general.push(...error.reasons.map(named));
+    // Refinance V1 Stage 3: a capital-event refusal names records by their
+    // opaque ids, so it is restated in the analyst's terms; every other reason
+    // is shown exactly as before.
+    const reasons = error.capitalIssues.some(isCapitalEventIssue)
+      ? analystCapitalIssues(error.capitalIssues, editor.capitalStructure.form).map((issue) => issue.message)
+      : error.reasons;
+    feedback.general.push(...reasons.map(named));
   }
   return feedback;
 }

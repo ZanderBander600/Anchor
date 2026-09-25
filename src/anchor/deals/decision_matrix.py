@@ -44,6 +44,7 @@ touch are the P7.4 variant cache rows ``analyze_variant`` itself maintains.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from collections.abc import Iterable
@@ -69,7 +70,9 @@ from ..capital_structure.execution_contracts import (
     CapitalStructureExecutionError,
     CommonEquityReturns,
     ExecutionIssue,
+    PositionResultStatus,
     PositionReturns,
+    PositionUnavailableReason,
 )
 from ..decision.comparison import (
     CLAIM_BEARING_POSITION_METRIC_CATALOG,
@@ -116,7 +119,9 @@ from .partnership_variants import (
     partner_perspective,
     resolved_partner,
 )
+from .refinance_presentation import common_equity_unavailable_sentence, not_executed
 from .structured_variants import (
+    IMPLICIT_COMMON_EQUITY_ID,
     PositionPerspective,
     StructuredRootKind,
     analyze_structured_variant,
@@ -764,6 +769,7 @@ def _position_cell(
         *,
         position: PositionReturns | None = None,
         equity: CommonEquityReturns | None = None,
+        unexecuted: tuple[PositionUnavailableReason, str] | None = None,
     ) -> PositionCellInput:
         """This analysed variant as one cell: both fingerprints and the hold it
         ran, with the structured one as the cell's own identity."""
@@ -777,8 +783,25 @@ def _position_cell(
             project_source_fingerprint=analysis.project_source_fingerprint,
             source_fingerprint=analysis.structured_source_fingerprint,
             hold_period=analysis.hold_period,
+            unexecuted_reason=None if unexecuted is None else unexecuted[0],
+            unexecuted_message=None if unexecuted is None else unexecuted[1],
         )
 
+    # Refinance & Capital Events V1 Stage 3: a refinance that did not execute
+    # leaves its dependants unknowable. Their messages are restated from typed
+    # facts -- the refinance by its label -- because the engine's own names a
+    # Unit by its id (Section 15.3). Nothing else about the cell changes.
+    missed = not_executed(analysis.result)
+    missed_names = ", ".join(f"“{event.label}”" for event in missed)
+    if perspective.is_common_equity_marker and missed and common_equity.cash_flows is None:
+        common_equity = dataclasses.replace(
+            common_equity, unavailable_message=common_equity_unavailable_sentence(missed)
+        )
+
+    if position_id == IMPLICIT_COMMON_EQUITY_ID:
+        # Refinance V1 Stage 3: Common Equity after Capital Structure without an
+        # authored marker is the residual every structured variant reports.
+        return analysed(PositionApplicability.PRESENT, equity=common_equity)
     if authored is None:
         return analysed(PositionApplicability.NOT_PRESENT)
     if perspective.is_common_equity_marker:
@@ -788,6 +811,37 @@ def _position_cell(
     returns = next(
         (result for result in analysis.result.positions if result.position_id == position_id), None
     )
+    unexecuted = next(
+        (
+            result
+            for result in getattr(analysis.result, "unexecuted_positions", ())
+            if result.position_id == position_id
+        ),
+        None,
+    )
+    if returns is None and unexecuted is not None:
+        # The replacement of a refinance that did not execute has no principal,
+        # so no schedule and no figure: present, and N/A with the reason. It is
+        # neither an invalid variant nor a zero (Stage 2 record item 24.8.4).
+        label = next(
+            (event.label for event in missed if event.event_id == unexecuted.event_id), "the refinance"
+        )
+        return analysed(
+            PositionApplicability.PRESENT,
+            unexecuted=(
+                unexecuted.unavailable_reason,
+                f"Not reported: this loan is funded by “{label}”, which did not execute for this variant, so "
+                "it has no principal and no figures.",
+            ),
+        )
+    if returns is not None and returns.status is PositionResultStatus.REFINANCE_UNAVAILABLE and missed:
+        returns = dataclasses.replace(
+            returns,
+            unavailable_message=(
+                f"Not reported: its cash after the refinance depends on {missed_names}, which did not execute "
+                "for this variant."
+            ),
+        )
     if returns is None:
         raise DecisionComparisonError(
             f"The resolved Capital Structure of ({strategy_id!r}, {scenario_id!r}) holds "

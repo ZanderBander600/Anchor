@@ -4824,6 +4824,28 @@ def read_position_perspectives(investment_id: str) -> dict[str, Any]:
     return {"investment_id": investment_id, "positions": _wire(perspectives)}
 
 
+@app.get("/investments/{investment_id}/capital-event-presence", response_model=None)
+def read_capital_event_presence(investment_id: str) -> dict[str, Any]:
+    """Refinance & Capital Events V1 Stage 3: whether the Base Strategy's and
+    each persisted Strategy's resolved Capital Structure configures a capital
+    event.
+
+    A typed presentation fact, resolved through the accepted whole-domain
+    authority, so a Project surface can name its acquisition-loan levered
+    figures as the acquisition-financing reference (R-P rules 3 to 5) without
+    resolving a Strategy itself. It computes no figure and executes nothing."""
+
+    from .deals.refinance_presentation import capital_event_presence
+
+    try:
+        presence = capital_event_presence(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return _wire(presence)
+
+
 @app.post(
     "/investments/{investment_id}/position-decision-matrix/{position_id}", response_model=None
 )

@@ -133,9 +133,10 @@ export function useCapitalStructure({
   const scope = investmentId ?? dealId;
 
   /** The saved state an analysis belongs to: the underwriting's save and the
-   * saved structure's economics. A rename of nothing else moves it. */
+   * saved structure's economics -- its positions and, from Refinance V1 Stage
+   * 3, its capital events. A rename of nothing else moves it. */
   const savedToken = useMemo(
-    () => JSON.stringify([scope, savedAt, saved.positions]),
+    () => JSON.stringify([scope, savedAt, saved.positions, saved.capital_events ?? null]),
     [scope, savedAt, saved],
   );
 
@@ -190,7 +191,8 @@ export function useCapitalStructure({
 
   const isDirtyDraft =
     draft !== null &&
-    JSON.stringify(draft.positions) !== JSON.stringify(formFromStructure(saved).positions);
+    JSON.stringify([draft.positions, draft.events ?? []]) !==
+      JSON.stringify([formFromStructure(saved).positions, formFromStructure(saved).events]);
   const canSave = draft !== null && !isSaving && !isDirty && scope !== null;
 
   const save = useCallback(async () => {

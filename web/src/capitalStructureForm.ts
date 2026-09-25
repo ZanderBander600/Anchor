@@ -24,6 +24,14 @@
  */
 
 import { formatDisplayNumber, parseNumber, parsePercent, parseWholeNumber } from './convert';
+import {
+  capitalEventsOf,
+  eventFormsOf,
+  eventFundingOf,
+  feeMonthOf,
+  isEventProceeds,
+} from './capitalEventForm';
+import type { CapitalEventForm } from './capitalEventForm';
 import type {
   CapitalPosition,
   CapitalStructure,
@@ -35,8 +43,12 @@ import type {
 } from './capitalTypes';
 
 /** The funding shapes P7.8 executes. `pct_of_value` is not authored here: it
- * arrives with valuation timepoints, and the backend refuses it meanwhile. */
-export type FundingRuleKind = 'fixed_amount' | 'pct_of_price';
+ * arrives with valuation timepoints, and the backend refuses it meanwhile.
+ *
+ * `capital_event` (Refinance V1 Stage 3) marks a position funded by a capital
+ * event rather than at closing. It carries no amount: the event's own module,
+ * `capitalEventForm.ts`, states its funding and its fee month. */
+export type FundingRuleKind = 'fixed_amount' | 'pct_of_price' | 'capital_event';
 
 /** One position as the editor holds it: every field a string, so a half-typed
  * number is never silently committed as a different one. */
@@ -71,9 +83,13 @@ export interface PositionForm {
 
 export interface CapitalStructureForm {
   positions: PositionForm[];
+  /** Refinance V1 Stage 3: the structure's capital events, authored by
+   * `capitalEventForm.ts` and read through its `formEvents`. Absent or empty
+   * for a structure with none. */
+  events?: CapitalEventForm[];
 }
 
-export const EMPTY_FORM: CapitalStructureForm = { positions: [] };
+export const EMPTY_FORM: CapitalStructureForm = { positions: [], events: [] };
 
 /** Whether the class carries a contractual claim -- and therefore funding,
  * terms and an explicit shortfall resolution. Common equity names the residual
@@ -195,6 +211,9 @@ export function withClassOrScope(
 
 function fundingFormOf(position: CapitalPosition): Pick<PositionForm, 'fundingKind' | 'fundingAmount' | 'fundingPct'> {
   const rule: FundingAmountRule | undefined = position.funding[0]?.amount_rule;
+  if (isEventProceeds(rule)) {
+    return { fundingKind: 'capital_event', fundingAmount: '', fundingPct: '' };
+  }
   if (rule === undefined || rule.kind === 'pct_of_value') {
     // A valuation-based rule cannot be authored here. It is shown as blank and
     // the editor refuses to save over it, rather than silently rewriting it.
@@ -235,7 +254,7 @@ export function formFromStructure(structure: CapitalStructure): CapitalStructure
   return {
     positions: structure.positions.map((position) => {
       const blank = newPosition(
-        { positions: [] },
+        EMPTY_FORM,
         position.position_class,
         { kind: position.scope.kind, unitId: position.scope.unit_id },
       );
@@ -249,6 +268,7 @@ export function formFromStructure(structure: CapitalStructure): CapitalStructure
         shortfallResolution: position.shortfall_resolution ?? '',
       };
     }),
+    events: eventFormsOf(structure),
   };
 }
 
@@ -262,9 +282,12 @@ function scopeOf(position: PositionForm): PositionScope {
     : { kind: 'unit', unit_id: position.scopeUnitId };
 }
 
-function fundingOf(position: PositionForm, where: string): CapitalPosition['funding'] {
+function fundingOf(form: CapitalStructureForm, position: PositionForm, where: string): CapitalPosition['funding'] {
   if (!isClaimBearing(position.positionClass)) {
     return [];
+  }
+  if (position.fundingKind === 'capital_event') {
+    return eventFundingOf(form, position);
   }
   const amountRule: FundingAmountRule =
     position.fundingKind === 'pct_of_price'
@@ -280,7 +303,7 @@ function fundingOf(position: PositionForm, where: string): CapitalPosition['fund
   ];
 }
 
-function termsOf(position: PositionForm, where: string): PositionTerms | null {
+function termsOf(form: CapitalStructureForm, position: PositionForm, where: string): PositionTerms | null {
   if (!isClaimBearing(position.positionClass)) {
     return null;
   }
@@ -294,7 +317,7 @@ function termsOf(position: PositionForm, where: string): PositionTerms | null {
               fee_id: `${position.positionId}-fee`,
               description: position.feeDescription.trim() === '' ? 'Closing fee' : position.feeDescription,
               amount: parseNumber(`${where} closing fee`, position.feeAmount),
-              model_month: 0,
+              model_month: feeMonthOf(form, position),
               sequence: 2,
             },
           ];
@@ -331,7 +354,8 @@ function termsOf(position: PositionForm, where: string): PositionTerms | null {
  * stated, what the executor can schedule -- belongs to the backend, and its
  * refusals are shown as they arrive. */
 export function structureFromForm(form: CapitalStructureForm): CapitalStructure {
-  return {
+  const capitalEvents = capitalEventsOf(form);
+  const structure: CapitalStructure = {
     positions: form.positions.map((position) => {
       const where = position.name.trim() === '' ? position.positionId : position.name.trim();
       return {
@@ -340,14 +364,17 @@ export function structureFromForm(form: CapitalStructureForm): CapitalStructure 
         position_class: position.positionClass,
         priority: parseWholeNumber(`${where} priority`, position.priority),
         scope: scopeOf(position),
-        funding: fundingOf(position, where),
-        terms: termsOf(position, where),
+        funding: fundingOf(form, position, where),
+        terms: termsOf(form, position, where),
         shortfall_resolution: isClaimBearing(position.positionClass)
           ? (position.shortfallResolution === '' ? null : position.shortfallResolution)
           : null,
       };
     }),
   };
+  // A structure with no capital event is sent exactly as it always was: the
+  // member is absent, never an empty array.
+  return capitalEvents === undefined ? structure : { ...structure, capital_events: capitalEvents };
 }
 
 /** One choice the analyst must still state, and the position it belongs to.

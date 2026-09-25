@@ -38,7 +38,7 @@ no Partnership result and no Partnership fingerprint. It is reported with
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -52,6 +52,7 @@ from ..partnership import Partner, Partnership, PartnershipResult, execute_partn
 from . import store
 from .fingerprint import fingerprint_partnership_source
 from .refinance_integration import PrimaryReturnView
+from .refinance_presentation import blanked_by_refinance, common_equity_unavailable_sentence, not_executed
 from .structured_variants import (
     RefinancedStructuredVariantAnalysis,
     StructuredRootKind,
@@ -272,6 +273,16 @@ def analyze_partnership_variant(
         result=result,
     )
     if isinstance(structured, RefinancedStructuredVariantAnalysis):
+        # Refinance V1 Stage 3: a Partnership blanked by a refinance that did not
+        # execute says why in the analyst's words, rebuilt from typed facts --
+        # the upstream reason and the refinance labels -- rather than quoting an
+        # upstream sentence that carries machine tokens (Section 15.3).
+        missed = not_executed(structured.result)
+        if result is not None and missed and blanked_by_refinance(result):
+            fields["result"] = replace(
+                result,
+                unavailable_message=f"The Partnership is not reported. {common_equity_unavailable_sentence(missed)}",
+            )
         return RefinancedPartnershipVariantAnalysis(
             **fields, primary_return=structured.primary_return  # type: ignore[arg-type]
         )

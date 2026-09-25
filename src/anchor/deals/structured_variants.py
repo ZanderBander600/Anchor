@@ -63,6 +63,7 @@ from ..capital_structure.contracts import (
     PctOfValue,
     PositionClass,
     PositionScope,
+    ScopeKind,
 )
 from ..capital_structure.execution import (
     execute_investment_capital_structure,
@@ -88,6 +89,7 @@ from ..valuation.funding import (
 from . import store
 from .fingerprint import fingerprint_structured_source
 from .refinance_integration import (
+    has_capital_events,
     PrimaryReturnView,
     primary_return_view,
     refinance_valuation_scopes,
@@ -958,6 +960,15 @@ def analyze_structured_valuations(
     )
 
 
+#: Refinance & Capital Events V1 Stage 3 (R-P rule 1, Section 16.3): the
+#: perspective id of Common Equity after Capital Structure where no Common
+#: Equity marker is authored. It names the residual every structured variant
+#: already reports, so the Position matrix can compare the primary refinance-
+#: adjusted equity return without an analyst authoring a marker first.
+IMPLICIT_COMMON_EQUITY_ID = "common-equity-after-capital-structure"
+IMPLICIT_COMMON_EQUITY_NAME = "Common Equity after Capital Structure"
+
+
 def position_perspectives(
     investment_id: str, *, db_path: Path | None = None
 ) -> tuple[PositionPerspective, ...]:
@@ -990,7 +1001,7 @@ def position_perspectives(
             named.setdefault(position.position_id, position)
             holders.setdefault(position.position_id, []).append(entry.strategy_id)
 
-    return tuple(
+    authored = tuple(
         PositionPerspective(
             position_id=position.position_id,
             name=position.name,
@@ -1002,6 +1013,32 @@ def position_perspectives(
         )
         for position in economic_order(named.values())
     )
+    # Refinance V1 Stage 3: where any stored structure configures a refinance
+    # and none authors a Common Equity marker, Common Equity after Capital
+    # Structure -- the primary refinance-adjusted equity return -- is offered
+    # first. Every other Investment's perspectives are exactly as before.
+    refinance_bearing = has_capital_events(structures.base) or any(
+        has_capital_events(entry.capital_structure) for entry in structures.strategies
+    )
+    if not refinance_bearing or any(perspective.is_common_equity_marker for perspective in authored):
+        return authored
+    investment = store.get_investment(investment_id, db_path=db_path)
+    units = sorted(unit.unit_id for unit in investment.units)
+    scope = (
+        PositionScope(kind=ScopeKind.UNIT, unit_id=units[0])
+        if investment.hidden and units
+        else PositionScope(kind=ScopeKind.INVESTMENT, unit_id=None)
+    )
+    implicit = PositionPerspective(
+        position_id=IMPLICIT_COMMON_EQUITY_ID,
+        name=IMPLICIT_COMMON_EQUITY_NAME,
+        position_class=PositionClass.COMMON_EQUITY,
+        scope=scope,
+        is_common_equity_marker=True,
+        present_in_base=True,
+        strategy_ids=tuple(sorted(record.strategy.strategy_id for record in store.list_strategies(investment_id, db_path=db_path))),
+    )
+    return (implicit, *authored)
 
 
 def position_perspective(

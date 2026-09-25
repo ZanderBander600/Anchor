@@ -64,7 +64,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from ..capital_structure.contracts import CapitalStructureStatus, PositionClass, PositionScope
+from ..capital_structure.contracts import (
+    CapitalStructureStatus,
+    CommonEquityUnavailableReason,
+    PositionClass,
+    PositionScope,
+)
 from ..capital_structure.execution_contracts import (
     CommonEquityReturns,
     PositionResultStatus,
@@ -333,6 +338,10 @@ class FigureReason(StrEnum):
     NOT_APPLICABLE_TO_PERSPECTIVE = "not_applicable_to_perspective"
     UNRESOLVED_FUNDING_REQUIREMENT = "unresolved_funding_requirement"
     SENIOR_UNRESOLVED_FUNDING_REQUIREMENT = "senior_unresolved_funding_requirement"
+    #: Refinance & Capital Events V1 Stage 3, appended: the figure depends on a
+    #: refinance that did not execute for this variant, so it is unknowable.
+    #: Not an invalid variant, not an unresolved funding, and never zero.
+    REFINANCE_UNAVAILABLE = "refinance_unavailable"
 
 
 class OmissionReason(StrEnum):
@@ -447,6 +456,11 @@ class PositionCellInput:
     source_fingerprint: str | None = None
     hold_period: int | None = None
     issues: tuple[CellIssue, ...] = ()
+    #: Refinance & Capital Events V1 Stage 3: a present position with no
+    #: schedule at all -- the replacement of a refinance that did not execute.
+    #: Its figures are N/A with this reason and message; none is invented.
+    unexecuted_reason: PositionUnavailableReason | None = None
+    unexecuted_message: str | None = None
 
 
 class PartnerApplicability(StrEnum):
@@ -1330,6 +1344,7 @@ _POSITION_UNAVAILABLE_REASONS = {
     PositionUnavailableReason.SENIOR_UNRESOLVED_FUNDING_REQUIREMENT: (
         FigureReason.SENIOR_UNRESOLVED_FUNDING_REQUIREMENT
     ),
+    PositionUnavailableReason.REFINANCE_UNAVAILABLE: FigureReason.REFINANCE_UNAVAILABLE,
 }
 
 
@@ -1461,12 +1476,21 @@ def _position_metric_value(cell: PositionCellInput, spec: MetricSpec) -> MetricV
             "Not present in this Strategy's Capital Structure.",
         )
 
+    if cell.unexecuted_reason is not None:
+        return _unavailable(
+            spec,
+            _POSITION_UNAVAILABLE_REASONS.get(cell.unexecuted_reason, FigureReason.NOT_REPORTED),
+            cell.unexecuted_message or f"{spec.label} is not available for this position.",
+        )
+
     if cell.common_equity is not None:
         common_equity = cell.common_equity
         if common_equity.status is not CapitalStructureStatus.COMPLETE:
             return _unavailable(
                 spec,
-                FigureReason.UNRESOLVED_FUNDING_REQUIREMENT,
+                FigureReason.REFINANCE_UNAVAILABLE
+                if common_equity.status is CapitalStructureStatus.REFINANCE_UNAVAILABLE
+                else FigureReason.UNRESOLVED_FUNDING_REQUIREMENT,
                 common_equity.unavailable_message
                 or f"{spec.label} is not available while a Funding Requirement is unresolved.",
             )
@@ -1532,7 +1556,11 @@ def _require_position_cell(cell: PositionCellInput) -> None:
             f"Cell ({cell.strategy_id!r}, {cell.scenario_id!r}) was analysed but does not carry "
             "exactly a structured source fingerprint and a hold period with no issues."
         )
-    results = [carried for carried in (cell.position, cell.common_equity) if carried is not None]
+    results = [
+        carried
+        for carried in (cell.position, cell.common_equity, cell.unexecuted_reason)
+        if carried is not None
+    ]
     expected = 1 if cell.applicability is PositionApplicability.PRESENT else 0
     if len(results) != expected:
         raise DecisionComparisonError(
@@ -1665,11 +1693,13 @@ def compare_position_decision_matrix(
                     source_fingerprint=cell.source_fingerprint,
                     hold_period=cell.hold_period,
                     position_status=None if position is None else position.status,
-                    unavailable_reason=None if position is None else position.unavailable_reason,
+                    unavailable_reason=cell.unexecuted_reason
+                    if position is None
+                    else position.unavailable_reason,
                     unavailable_message=(
                         cell.common_equity.unavailable_message
                         if cell.common_equity is not None
-                        else None
+                        else cell.unexecuted_message
                         if position is None
                         else position.unavailable_message
                     ),
@@ -1953,7 +1983,12 @@ def _partner_metric_value(cell: PartnerCellInput, spec: MetricSpec) -> MetricVal
     if partnership.status is not PartnershipStatus.COMPLETE:
         return _unavailable(
             spec,
-            FigureReason.UNRESOLVED_FUNDING_REQUIREMENT,
+            # Refinance V1 Stage 3: a Partnership blanked by a refinance that
+            # did not execute says so, rather than reporting a Funding
+            # Requirement no one owes.
+            FigureReason.REFINANCE_UNAVAILABLE
+            if partnership.upstream_reason is CommonEquityUnavailableReason.REFINANCE_UNAVAILABLE
+            else FigureReason.UNRESOLVED_FUNDING_REQUIREMENT,
             partnership.unavailable_message
             or f"{spec.label} is not available while the Common Equity Cash Flow is unavailable.",
         )

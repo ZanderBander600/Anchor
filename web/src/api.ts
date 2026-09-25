@@ -60,6 +60,7 @@ import type {
 } from './strategyTypes';
 import type { DecisionMatrixReport } from './decisionTypes';
 import type {
+  CapitalEventPresence,
   CapitalStructure,
   CapitalStructureIssue,
   DealCapitalStructure,
@@ -2103,6 +2104,10 @@ export class StrategyApiError extends ApiError {
   planIssues: BusinessPlanApiIssue[];
   /** Every reason the backend gave, in its order and in its own words. */
   reasons: string[];
+  /** Refinance V1 Stage 3: the Capital Structure refusals among them, with
+   * their stable codes, so a capital-event refusal can be restated in the
+   * analyst's terms rather than quoted with its opaque ids. */
+  capitalIssues: CapitalStructureIssue[];
 
   constructor(
     message: string,
@@ -2112,6 +2117,7 @@ export class StrategyApiError extends ApiError {
       strategyIssues: StrategyIssue[];
       planIssues: BusinessPlanApiIssue[];
       reasons: string[];
+      capitalIssues?: CapitalStructureIssue[];
     },
   ) {
     super(message, detail.issues);
@@ -2120,6 +2126,7 @@ export class StrategyApiError extends ApiError {
     this.strategyIssues = detail.strategyIssues;
     this.planIssues = detail.planIssues;
     this.reasons = detail.reasons;
+    this.capitalIssues = detail.capitalIssues ?? [];
   }
 }
 
@@ -2197,6 +2204,7 @@ async function strategyRequestError(
   const message =
     reasons.length > 0 ? reasons.join(' ') : `${failureMessage} (HTTP ${response.status}).`;
   return new StrategyApiError(message, response.status, {
+    capitalIssues: capitalIssues(entries),
     issues: entries.filter(isValidationIssue),
     strategyIssues: entries.filter(isStrategyIssue),
     planIssues: entries
@@ -2407,10 +2415,16 @@ async function capitalFetch(
 }
 
 function structureBody(capitalStructure: CapitalStructure): RequestInit {
+  // Refinance V1 Stage 3: a structure's capital events travel beside its
+  // positions. A structure with none sends exactly the body it always did.
   return {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ positions: capitalStructure.positions }),
+    body: JSON.stringify(
+      capitalStructure.capital_events === undefined
+        ? { positions: capitalStructure.positions }
+        : { positions: capitalStructure.positions, capital_events: capitalStructure.capital_events },
+    ),
   };
 }
 
@@ -2504,6 +2518,21 @@ export async function analyzeStructuredVariant(
     'The capital structure analysis could not be completed',
   );
   return (await response.json()) as StructuredVariantAnalysis;
+}
+
+/** Refinance V1 Stage 3: `GET /investments/{id}/capital-event-presence` --
+ * whether the Base Strategy's and each Strategy's resolved Capital Structure
+ * configures a capital event. A typed fact the server resolves; this client
+ * decides nothing. */
+export async function readCapitalEventPresence(investmentId: string): Promise<CapitalEventPresence> {
+  const response = await capitalFetch(
+    `/investments/${encodeURIComponent(investmentId)}/capital-event-presence`,
+    { method: 'GET' },
+    'The capital events could not be read',
+  );
+  return (await response.json()) as CapitalEventPresence;
+}
+
 }
 
 /** `GET /investments/{id}/position-perspectives` -- the addressable positions,
