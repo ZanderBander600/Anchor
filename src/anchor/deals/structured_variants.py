@@ -312,7 +312,7 @@ def funding_states(
                     pct=float(rule.pct),
                     status=AvailabilityStatus.UNAVAILABLE,
                     amount=None,
-                    unavailable=funding_unavailable(resolution, blocked=blocked),
+                    unavailable=funding_unavailable(resolution, authority=resolved_authority),
                 )
             )
     return tuple(

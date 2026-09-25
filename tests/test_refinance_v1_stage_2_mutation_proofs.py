@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient
 import test_refinance_v1_stage_2_api as api_tests
 import test_refinance_v1_stage_2_exact_scope as scope_tests
 import test_refinance_v1_stage_2_fingerprints as fingerprint_tests
+import test_refinance_v1_stage_2_mixed_cause as mixed_tests
 import test_refinance_v1_stage_2_persistence as persistence_tests
 import test_refinance_v1_stage_2_reporting_boundary as boundary_tests
 import test_refinance_v1_stage_2_strategy_identity as identity_tests
@@ -261,8 +262,8 @@ def test_m13_the_evidence_gate_reported_as_a_missing_timepoint_is_killed(monkeyp
         lambda: fingerprint_tests.test_an_unapproved_analyst_value_is_evidence_not_approved_and_approval_moves_the_identity(_db()),
         refinance_integration,
         (
-            "    if not _evidence_withheld(result, event, authority):\n",
-            "    if True or not _evidence_withheld(result, event, authority):\n",
+            "    if cause is EvidenceCause.NONE:\n        return None\n",
+            "    if True:\n        return None\n",
         ),
     )
 
@@ -406,8 +407,9 @@ def test_m11b_a_withheld_capacity_restated_as_zero_is_killed(monkeypatch: pytest
         lambda: fingerprint_tests.test_an_unapproved_analyst_value_is_evidence_not_approved_and_approval_moves_the_identity(_db()),
         refinance_integration,
         (
-            "            unavailable_reason=RefinanceUnavailableReason.EVIDENCE_NOT_APPROVED,\n            unavailable_message=message,\n        )\n        if capacity is ltv",
-            "            unavailable_reason=RefinanceUnavailableReason.EVIDENCE_NOT_APPROVED,\n            unavailable_message=message,\n            capacity=0.0,\n        )\n        if capacity is ltv",
+            "        replace(capacity, unavailable_reason=stated, unavailable_message=message) if capacity is ltv else capacity",
+            "        replace(capacity, unavailable_reason=stated, unavailable_message=message, capacity=0.0) "
+            "if capacity is ltv else capacity",
         ),
     )
 
@@ -633,6 +635,53 @@ def test_m24_deduplication_erasing_consumer_provenance_is_killed(monkeypatch: py
             "                found.setdefault(requirement.key(), requirement)\n",
             "                found.setdefault(requirement.scope_key(), requirement)  # type: ignore[arg-type]\n",
         ),
+    )
+
+
+# =============================================================================
+# Investment-scope reason precedence (third review correction)
+# =============================================================================
+
+
+def _mixed(test: Callable[[dict], None]) -> Callable[[], None]:
+    def run() -> None:
+        test(mixed_tests.build_mixed(_db()))
+
+    return run
+
+
+#: "Any evidence-blocked member makes the whole Investment evidence-not-approved."
+_ANY_EVIDENCE_MEMBER = (
+    "    return EvidenceCause.EVIDENCE_ONLY if len(evidence) == len(reasons) else EvidenceCause.MIXED\n",
+    "    return EvidenceCause.EVIDENCE_ONLY\n",
+)
+
+
+def test_m25_any_evidence_member_relabelling_an_ltv_event_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _mixed(mixed_tests.test_an_investment_ltv_event_is_valuation_unavailable_not_evidence_only),
+        valuation_views,
+        _ANY_EVIDENCE_MEMBER,
+    )
+
+
+def test_m25b_any_evidence_member_relabelling_a_pct_of_value_funding_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _mixed(mixed_tests.test_an_investment_pct_of_value_follows_the_same_precedence),
+        valuation_views,
+        _ANY_EVIDENCE_MEMBER,
+    )
+
+
+def test_m26_stale_pre_gate_investment_prose_kept_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _mixed(mixed_tests.test_each_member_cell_keeps_its_own_precise_reason),
+        valuation_views,
+        ("    if not incomplete:\n        return replace(result, unit_results=cells)\n",
+         "    if True:\n        return replace(result, unit_results=cells)\n"),
     )
 
 

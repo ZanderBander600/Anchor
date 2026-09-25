@@ -57,6 +57,7 @@ from ..capital_structure.refinance_contracts import (
 )
 from ..valuation.contracts import ValuationUnavailableReason
 from ..valuation.funding import ValuationAuthority
+from .valuation_views import MIXED_CAUSE_SENTENCE, EvidenceCause, investment_evidence_cause
 
 # =============================================================================
 # 1. Consumed valuations: LTV only, exact scope
@@ -121,6 +122,18 @@ def evidence_message(event: RefinanceEvent, *, valuation_label: str) -> str:
     )
 
 
+def mixed_cause_message(event: RefinanceEvent, *, valuation_label: str) -> str:
+    """The event's and its LTV capacity's sentence when the Investment value is
+    incomplete for evidence *and* another reason (third review correction). It
+    directs the analyst to the valuation state and never implies that approving
+    evidence alone would resolve it. No Unit, reference or amount is named."""
+
+    return (
+        f"'{event.label}' sizes by LTV, but in the valuation '{valuation_label}' the Investment has no value: "
+        f"{MIXED_CAUSE_SENTENCE}. It is never read as zero or replaced by the purchase price."
+    )
+
+
 def _position_message(event: RefinanceEvent, restated: RefinanceResult) -> str:
     return (
         f"Not reported: its cash after model month {restated.model_month} depends on '{event.label}', which did "
@@ -138,29 +151,29 @@ def _common_equity_message(not_executed: tuple[RefinanceResult, ...]) -> str:
     return " ".join(sentences)
 
 
-def _evidence_withheld(result: RefinanceResult, event: RefinanceEvent, authority: ValuationAuthority) -> bool:
-    """Whether the value this LTV event consumed is unknown because the
-    evidence gate withheld it -- read from typed reasons only.
+def _evidence_cause(result: RefinanceResult, event: RefinanceEvent, authority: ValuationAuthority) -> EvidenceCause:
+    """What the evidence gate contributes to the value this LTV event consumed
+    -- read from typed reasons only, with the ratified precedence (third review
+    correction).
 
     A Unit event reads its own ``ValueDependency``: the engine copied the
-    consumed cell's reason onto it, and the gate states
-    ``EVIDENCE_NOT_APPROVED`` on every cell it withholds. An Investment event's
-    dependency is ``INCOMPLETE_UNITS``, so the member cells of the same gated
-    authority the engine read say whether a withheld cell made it incomplete.
-    No message is read."""
+    consumed cell's reason onto it, so it is ``EVIDENCE_ONLY`` exactly when that
+    one cell was withheld for evidence, and another Unit's reason never enters.
+    An Investment event's dependency is ``INCOMPLETE_UNITS``; the member cells
+    of the same gated authority the engine read say whether evidence is the
+    *only* reason (``EVIDENCE_ONLY``), one reason among others (``MIXED``), or
+    none (``NONE``). No message is read."""
 
     dependency = result.value_dependency
     if dependency is None or dependency.value is not None:
-        return False
+        return EvidenceCause.NONE
     reason = dependency.valuation_unavailable_reason
     if event.scope.kind is ScopeKind.UNIT:
-        return reason is ValuationUnavailableReason.EVIDENCE_NOT_APPROVED
+        return EvidenceCause.EVIDENCE_ONLY if reason is ValuationUnavailableReason.EVIDENCE_NOT_APPROVED else EvidenceCause.NONE
     if reason is not ValuationUnavailableReason.INCOMPLETE_UNITS:
-        return False
+        return EvidenceCause.NONE
     found = next((item for item in authority.valuations if item.timepoint_id == dependency.timepoint_id), None)
-    return found is not None and any(
-        cell.unavailable_reason is ValuationUnavailableReason.EVIDENCE_NOT_APPROVED for cell in found.unit_results
-    )
+    return EvidenceCause.NONE if found is None else investment_evidence_cause(found)
 
 
 def _classified(
@@ -169,45 +182,45 @@ def _classified(
     *,
     authority: ValuationAuthority,
     valuation_labels: Mapping[str, str],
-) -> RefinanceResult | None:
-    """The event's result with ``evidence_not_approved`` stated, or ``None``
-    when the evidence gate did not cause any of its unavailability.
+) -> tuple[RefinanceResult, bool] | None:
+    """The event's result restated for the evidence gate's typed cause, and
+    whether the event's own sentence was rebuilt -- or ``None`` when the gate
+    had no part in its unavailability.
 
-    Typed facts only: the event sizes by LTV; the value its **exact scope**
-    consumed is unknown for the evidence gate's typed reason
-    (``_evidence_withheld``); and the engine reported that LTV capacity
-    unavailable for want of the value -- ``valuation_unavailable``, which only
-    the LTV capacity produces. The event itself is restated only when that same
-    reason is the one it reports; a retirement or other reason that preceded it
-    is kept."""
+    Typed facts only: the event sizes by LTV; the engine reported that LTV
+    capacity ``valuation_unavailable``, which only the LTV capacity produces;
+    and ``_evidence_cause`` says what the gate contributed.
+
+    - ``EVIDENCE_ONLY``: the LTV capacity -- and the event, where that is the
+      reason it reports -- becomes ``evidence_not_approved``.
+    - ``MIXED``: every reason is kept -- ``valuation_unavailable``, and the
+      dependency's ``incomplete_units`` -- and only the sentence is rebuilt, so
+      it no longer implies that approving evidence would resolve it.
+
+    A retirement or other reason that preceded the capacity's is kept."""
 
     reference = event.valuation
     if event.sizing.max_ltv is None or reference is None or result.sizing is None:
         return None
-    if not _evidence_withheld(result, event, authority):
+    cause = _evidence_cause(result, event, authority)
+    if cause is EvidenceCause.NONE:
         return None
     ltv = next((capacity for capacity in result.sizing.capacities if capacity.kind is ConstraintKind.MAX_LTV), None)
     if ltv is None or ltv.unavailable_reason is not RefinanceUnavailableReason.VALUATION_UNAVAILABLE:
         return None
-    message = evidence_message(event, valuation_label=valuation_labels.get(reference.timepoint_id, "referenced"))
+    label = valuation_labels.get(reference.timepoint_id, "referenced")
+    if cause is EvidenceCause.EVIDENCE_ONLY:
+        stated, message = RefinanceUnavailableReason.EVIDENCE_NOT_APPROVED, evidence_message(event, valuation_label=label)
+    else:
+        stated, message = RefinanceUnavailableReason.VALUATION_UNAVAILABLE, mixed_cause_message(event, valuation_label=label)
     capacities = tuple(
-        replace(
-            capacity,
-            unavailable_reason=RefinanceUnavailableReason.EVIDENCE_NOT_APPROVED,
-            unavailable_message=message,
-        )
-        if capacity is ltv
-        else capacity
+        replace(capacity, unavailable_reason=stated, unavailable_message=message) if capacity is ltv else capacity
         for capacity in result.sizing.capacities
     )
     restated = replace(result, sizing=replace(result.sizing, capacities=capacities))
-    if result.unavailable_reason is RefinanceUnavailableReason.VALUATION_UNAVAILABLE:
-        restated = replace(
-            restated,
-            unavailable_reason=RefinanceUnavailableReason.EVIDENCE_NOT_APPROVED,
-            unavailable_message=message,
-        )
-    return restated
+    if result.unavailable_reason is not RefinanceUnavailableReason.VALUATION_UNAVAILABLE:
+        return restated, False
+    return replace(restated, unavailable_reason=stated, unavailable_message=message), True
 
 
 def with_evidence_not_approved(
@@ -239,23 +252,22 @@ def with_evidence_not_approved(
     events = {event.event_id: event for event in capital_structure.events}
 
     restated: dict[str, RefinanceResult] = {}
+    # Only an event whose *own* sentence was rebuilt -- evidence alone, or a
+    # mixed cause -- changes what the messages that restate it say. Tracked as a
+    # typed flag from the classification, never by comparing prose.
+    reason_changed: set[str] = set()
     for event_result in result.capital_events:
         event = events.get(event_result.event_id)
         if event is None:
             continue
         classified = _classified(event_result, event, authority=authority, valuation_labels=valuation_labels)
         if classified is not None:
-            restated[event_result.event_id] = classified
+            restated[event_result.event_id], rebuilt = classified
+            if rebuilt:
+                reason_changed.add(event_result.event_id)
     if not restated:
         return result
 
-    # Only an event whose *own* reason became evidence_not_approved changes what
-    # the messages that restate it say.
-    reason_changed = {
-        event_id
-        for event_id, event_result in restated.items()
-        if event_result.unavailable_reason is RefinanceUnavailableReason.EVIDENCE_NOT_APPROVED
-    }
     capital_events = tuple(restated.get(item.event_id, item) for item in result.capital_events)
     by_scope = {events[event_id].scope: event_id for event_id in reason_changed}
 
@@ -384,6 +396,7 @@ __all__ = [
     "primary_return_view",
     "evidence_message",
     "has_capital_events",
+    "mixed_cause_message",
     "refinance_valuation_scopes",
     "refinance_valuation_timepoints",
     "with_evidence_not_approved",

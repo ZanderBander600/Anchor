@@ -322,8 +322,11 @@ def test_4_classification_reads_the_typed_dependency_not_the_blocked_map(world: 
     untyped = dataclasses.replace(
         event, value_dependency=dataclasses.replace(event.value_dependency, valuation_unavailable_reason=None)
     )
-    assert refinance_integration._evidence_withheld(event, authored, _gated(world, world["unit_b"]))
-    assert not refinance_integration._evidence_withheld(untyped, authored, _gated(world, world["unit_b"]))
+    from anchor.deals.valuation_views import EvidenceCause
+
+    authority = _gated(world, world["unit_b"])
+    assert refinance_integration._evidence_cause(event, authored, authority) is EvidenceCause.EVIDENCE_ONLY
+    assert refinance_integration._evidence_cause(untyped, authored, authority) is EvidenceCause.NONE
 
 
 # =============================================================================

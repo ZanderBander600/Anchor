@@ -70,6 +70,10 @@ accepted Stage 1 baseline `6de7644`) on
   `EVIDENCE_NOT_APPROVED` valuation reason, typed consumers with truthful
   refusal wording, exact-scope report rows, and a hardened consumption record.
   They are pending re-review and change no ratified financial decision.
+- **The third review's correction is applied locally** (contract Section
+  24.12). An Investment-scoped value reports `evidence_not_approved` only when
+  evidence is the sole cause; a mixed cause keeps `valuation_unavailable` /
+  `incomplete_units`. It is pending re-review.
 - **Stage 3 has not started.** It alone removes the temporary report gate,
   once refinance-aware returns, memo sections and headlines exist and are
   tested.

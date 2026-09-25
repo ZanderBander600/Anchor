@@ -2510,7 +2510,7 @@ upstream edits are the narrow P7.10 amendments of Section 24.11, each held by a
 guard to exactly its declared change.
 
 This record describes the final implementation, including the review
-corrections of Sections 24.10 and 24.11.
+corrections of Sections 24.10, 24.11 and 24.12.
 
 ### 24.1 What shipped
 
@@ -2690,6 +2690,23 @@ reasons only:
 The blocked-Unit map is not consulted. The LTV capacity always takes the
 reason; the event takes it when that is the reason it reports.
 
+**Investment-scope precedence** (Section 24.12). `investment_evidence_cause`
+reads the gated member cells:
+
+- `EVIDENCE_ONLY` when every unavailable member is withheld for evidence --
+  then, and only then, the event and capacity report `evidence_not_approved`;
+- `MIXED` when another member is unavailable for another reason -- then the
+  event and capacity keep `valuation_unavailable`, the dependency keeps
+  `incomplete_units`, and the rebuilt sentence says the valuation is
+  incomplete for more than one reason, that approving evidence alone will not
+  resolve it, and to review each Unit's valuation state.
+
+An Investment `PctOfValue` funding state follows the same precedence. In the
+mixed case it stays `funding_requirement_unresolved` with valuation reason
+`incomplete_units`. Each member cell keeps its own typed reason. A Unit-scoped
+consumer reads its own cell alone. `gated_result` rebuilds the Investment-level
+sentence from the gated cells and never keeps Stage 1's pre-gate prose.
+
 The messages that restate such an event are rebuilt from typed objects: its
 own, its LTV capacity's, the positions of its scope, its unexecuted replacement
 and Common Equity's. No message is read, parsed or edited, so Stage 1 prose can
@@ -2783,11 +2800,9 @@ Published versions and their frozen reports are not touched.
 
 ### 24.8 Decisions a reviewer should check
 
-1. **The Investment evidence classification** reads "any member cell withheld
-   for evidence", as the `PctOfValue` funding state does. An Investment also
-   incomplete for another reason (for example a non-positive NOI in a second
-   Unit) is still reported `evidence_not_approved`. Approving the evidence
-   would then leave it unavailable for that other reason, which the view names.
+1. **A mixed Investment cause is not evidence.** This was resolved by the
+   third review (Section 24.12): the Investment reports `evidence_not_approved`
+   only when evidence is the sole reason.
 2. **`PctOfValue` identity is unchanged.** Its whole-timepoint consumed payload
    is kept byte for byte, as no-event fingerprint parity with `f2b5cef`
    requires. It therefore still does not move with evidence approval and still
@@ -2943,3 +2958,50 @@ reinstatement of:
 - refinance publication and refinance preview;
 - a cross-Investment read;
 - provenance-erasing de-duplication.
+
+### 24.12 Third review correction (Investment-scope reason precedence)
+
+Review accepted the second-round corrections except one mixed-cause case. An
+Investment-scoped LTV event was relabelled `evidence_not_approved` whenever any
+member cell was withheld for evidence -- even when another Unit was unavailable
+for a different reason (for example a non-positive forward NOI). Approving the
+evidence then did not resolve the Investment value, although the event had
+named evidence approval as its reason.
+
+The ratified rule, now implemented:
+
+1. Unit scope reports its own cell's reason.
+2. Investment scope reports `evidence_not_approved` only when every unavailable
+   member cell is withheld for evidence.
+3. Otherwise the event and capacity keep `valuation_unavailable`, and the
+   dependency keeps `incomplete_units`.
+4. The message says the valuation is incomplete for more than one reason,
+   directs the analyst to the valuation state, and never implies that evidence
+   approval alone resolves it.
+5. Each member cell keeps its precise typed reason.
+6. Investment-scoped `PctOfValue` funding states follow the same precedence.
+7. No amount, Unit id, evidence id or other opaque identity appears in any of
+   these messages.
+8. A Unit-scoped consumer is unaffected by another Unit's reason.
+
+One typed classifier, `investment_evidence_cause`, serves both consumers, and
+the mixed-cause sentence is one shared constant. `gated_result` now rebuilds
+its Investment-level sentence from the gated cells.
+
+The `PctOfValue` evidence sentence is also rebuilt without identities. It
+previously named the funding event, the position and the blocked Units by id.
+
+The regression file `test_refinance_v1_stage_2_mixed_cause.py` builds Unit A
+with a non-positive forward NOI and Unit B with unapproved evidence. It proves:
+
+- the mixed state for the LTV event and for the `PctOfValue` funding;
+- that approving B alone resolves neither;
+- that repairing A alone makes evidence the sole cause;
+- that both fixes resolve the value;
+- that the all-evidence case is still `evidence_not_approved`;
+- that Unit consumers keep their exact cell;
+- that no message names an amount or identity.
+
+Mutation proofs M25 and M25b kill the restoration of "any evidence-blocked
+member makes the whole Investment evidence-not-approved" through both
+consumers. M26 kills keeping Stage 1's pre-gate Investment prose.
