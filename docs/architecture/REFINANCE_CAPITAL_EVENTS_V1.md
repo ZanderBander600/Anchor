@@ -27,9 +27,13 @@ It also resolved every open question. The decision record is Section 22.
   three independent review rounds it was **merged through PR #60 as `879f577`
   (reviewed head `ff12d04`) and accepted on 2026-09-24.** Its implementation
   record is Section 24.
-- **Stage 3 has not started.** No UI, memo section, report or workbook exists
-  for a refinance. **No implementation stage starts automatically** when
-  another is accepted (Section 20).
+- **Stage 3 (product surfaces) was explicitly started** on 2026-09-24 from
+  `main` at `bd77433` (the PR #61 acceptance-record merge, whose product tree
+  is the accepted Stage 2 baseline `879f577`), on
+  `feature/refinance-capital-events-v1-stage-3-product-surfaces`. It is **in
+  progress and not accepted.** Its ratified export sub-contract and its
+  implementation record are Section 25. **No implementation stage starts
+  automatically** when another is accepted (Section 20).
 - Recovery Engine V2 is a separate future program. Nothing here touches it.
 
 ### 1.1 Authorities this contract builds on
@@ -2081,8 +2085,9 @@ Each stage starts only on an explicit human instruction. **Stage 1 was
 explicitly started on 2026-09-22 from `2e1f84a`; it was merged through PR #57
 as `6de7644` and accepted on 2026-09-24** (Section 23). **Stage 2 was
 explicitly started on 2026-09-24 from `f2b5cef`; it was merged through PR #60
-as `879f577` and accepted on 2026-09-24** (Section 24). Stage 3 has not
-started. **No stage begins
+as `879f577` and accepted on 2026-09-24** (Section 24). **Stage 3 was
+explicitly started on 2026-09-24 from `bd77433`; it is in progress and not
+accepted** (Section 25). **No stage begins
 automatically** when the previous one is accepted. Recovery Engine V2 is not
 part of any stage.
 
@@ -2091,7 +2096,7 @@ part of any stage.
 | Contract ratification — **complete, 2026-09-22** | This document. Documentation only | 1 (contract) | ratification record (Section 22); `CURRENT_STATE.md` updated |
 | Stage 1 — deterministic engine — **accepted, 2026-09-24** (PR #57, merged as `6de7644`) | Contracts (Section 6); structural and execution validation (Section 15.1); the shared NOI-at-month seam; the acquisition-debt balance service and its reconciliation; sizing (Section 9); the legacy splice; the retiring-schedule cut and replacement offset through the existing wrapper; the event bridge; the Common Equity decomposition; unavailable states; the P7.9 adapter reason; F1–F12, F14–F17, F15b, F19, F21, F22 with exact-rational oracles; F20 engine parity; the Section 18.3 mutation proofs. No persistence, API or UI | 1 | focused and identity tests; mutation kills; domain regression; one final full backend suite |
 | Stage 2 — persistence and integration — **accepted, 2026-09-24** (PR #60, merged as `879f577`; Section 24) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
-| Stage 3 — product surfaces (not started) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
+| Stage 3 — product surfaces — **in progress, not accepted** (started 2026-09-24 from `bd77433`; Section 25) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
 
 **Stage 3 acceptance requires**, in addition to the above:
 
@@ -3010,3 +3015,60 @@ with a non-positive forward NOI and Unit B with unapproved evidence. It proves:
 Mutation proofs M25 and M25b kill the restoration of "any evidence-blocked
 member makes the whole Investment evidence-not-approved" through both
 consumers. M26 kills keeping Stage 1's pre-gate Investment prose.
+
+## 25. Stage 3 implementation record
+
+**Status: in progress, not accepted.** Stage 3 was explicitly started on
+2026-09-24 from `main` at `bd77433` (the PR #61 acceptance-record merge; its
+product tree is the accepted Stage 2 baseline `879f577`) on
+`feature/refinance-capital-events-v1-stage-3-product-surfaces`. It implements
+Section 20's Stage 3 row: it presents the accepted Stage 1 and Stage 2 results
+and creates no second refinance engine. The accepted product baseline stays
+`879f577` until Stage 3 is reviewed, merged and accepted.
+
+### 25.1 Ratified Stage 3 refinance formula-audit export sub-contract
+
+Section 16.3 requires the refinance formula-audit export to be "separately
+ratified in Stage 3". The following decisions were stated by explicit human
+instruction when Stage 3 was started, and are recorded here as that ratified
+sub-contract. They settle no new economics: every figure the workbook audits
+is defined by Sections 7 to 12.
+
+1. **A separate workbook.** The product offers a separate
+   `Refinance & Capital Structure Audit.xlsx`, beside Excel Exports 1–3.
+2. **What it audits.** It audits the currently selected saved Analysis Variant
+   (a Strategy under a Scenario of one Investment, the hidden one-unit
+   Investment of a Deal included).
+3. **When it is available.** Only when the selected variant's resolved Capital
+   Structure configures at least one refinance event and the current saved
+   analysis is fresh. Unsaved edits, or an analysis whose structured source
+   fingerprint no longer matches the saved state, are refused with a typed
+   reason.
+4. **Refusal, never a partial audit.** When the required refinance result is
+   unavailable -- any event `UNAVAILABLE`, `NOT_EXECUTABLE` or `BLOCKED`, or
+   Common Equity unavailable -- the workbook is refused with a typed reason
+   rather than produced partially or misleadingly.
+5. **Every executed event.** It audits every executed refinance event in the
+   selected structure.
+6. **Frozen inputs, live formulas.** Inputs and accepted dependency figures
+   (the P7.10 value an LTV constraint consumed, the forward NOI a DSCR
+   constraint consumed, continuing senior balances and service, and the
+   provider flows of positions the event does not touch) are frozen as
+   workbook inputs. The calculations -- retiring amortization and payoff, each
+   capacity, the minimum and the binding set, the bridge, the replacement
+   schedule to sale, the Common Equity decomposition and the returns -- are
+   reproduced with live Excel formulas and reconciled against Anchor's figures.
+7. **An audit artifact only.** The workbook never becomes an application
+   financial authority. No production module other than the API route reads
+   it, and no workbook formula feeds an application result.
+8. **Exports 1–3 are unchanged without a refinance.** Their output stays
+   financially and byte-compatible whenever the Deal's Base Capital Structure
+   configures no refinance.
+9. **Headline namespace.** The workbook's headline return is the Common Equity
+   (or, where a Partnership exists, the Partner) return.
+10. **Acquisition financing is a reference only.** Acquisition-loan levered
+    returns appear only under the label "Acquisition financing — excludes later
+    capital events".
+
+If implementation reveals an economic decision these items and Sections 7 to
+12 do not settle, Stage 3 stops and reports rather than inventing one.

@@ -3,7 +3,8 @@
 Last synchronized: 2026-09-24 (P7.10 closed; P7.11 waived and administratively
 closed; Refinance & Capital Events V1 contract ratified; Stage 1 deterministic
 engine merged through PR #57 and accepted; Stage 2 persistence and integration
-merged through PR #60 and accepted; Stage 3 not started; no active gate)
+merged through PR #60 and accepted; Stage 3 product surfaces explicitly
+started and in progress, not accepted)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -34,10 +35,11 @@ whenever an accepted gate merges or the active gate changes.
   Refinance & Capital Events V1 Stage 2 persistence and integration; reviewed
   head `ff12d04`). It is the product merge, not the later documentation-only
   acceptance merge.
-- **Active gate: none.** Refinance & Capital Events V1 Stage 1 and Stage 2 are
-  **accepted**. **Stage 3 has not started.** P7.10 is closed, and P7.11 is
-  waived and administratively closed. No gate begins by implication; the next
-  one starts only on an explicit human instruction.
+- **Active gate: Refinance & Capital Events V1 Stage 3 (product surfaces),
+  in progress and not accepted** (see the 2026-09-24 Stage 3 entry below).
+  Stage 1 and Stage 2 are **accepted**. P7.10 is closed, and P7.11 is waived
+  and administratively closed. No gate begins by implication; the next one
+  starts only on an explicit human instruction.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active.
 - Autonomous merge: not authorized.
@@ -46,6 +48,27 @@ whenever an accepted gate merges or the active gate changes.
 Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
+
+## 2026-09-24 Refinance & Capital Events V1 Stage 3 (started; in progress)
+
+By explicit human instruction, Stage 3 -- product surfaces, refinance-aware
+reporting and the refinance formula-audit export -- was started from `main` at
+`bd77433` (the PR #61 acceptance-record merge, whose product tree is the
+accepted Stage 2 baseline `879f577`) on
+`feature/refinance-capital-events-v1-stage-3-product-surfaces`.
+
+- **Stage 3 is in progress and not accepted.** It is implemented locally on
+  the feature branch; it is not pushed, has no PR and is not merged. It awaits
+  independent review and human QA.
+- **The accepted product baseline remains `main` at `879f577`** until Stage 3
+  is reviewed, merged and explicitly accepted.
+- Stage 1 and Stage 2 remain accepted; their engine and persistence are not
+  reopened.
+- Its scope is the contract's Section 20 Stage 3 row. The ratified Stage 3
+  refinance formula-audit export sub-contract and the implementation record
+  are Section 25 of `docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md`.
+- **Recovery Engine V2: not started.**
+- **Upload / extraction integration: deferred.**
 
 ## 2026-09-24 Refinance & Capital Events V1 Stage 2 Acceptance
 
@@ -505,8 +528,9 @@ before any work begins. Their status is now:
   through PR #57 as `6de7644`, and **accepted** on 2026-09-24 (see the
   entries above). Stage 2 (persistence and integration) was explicitly started
   from `f2b5cef`, merged through PR #60 as `879f577`, and **accepted** on
-  2026-09-24; Stage 3 has not started. The contract, not this file, holds the
-  design decisions.
+  2026-09-24. Stage 3 (product surfaces) was explicitly started from
+  `bd77433` and is in progress, not accepted. The contract, not this file,
+  holds the design decisions.
 - **Recovery Engine V2:** unstarted and unratified.
 
 **Recovery Engine V2 is a successor gate, not a first implementation.** Anchor
@@ -605,7 +629,7 @@ evidence that an unperformed acceptance exercise passed.
 Refinancing / recapitalization was a separately authorized potential sub-gate
 in the ratified P7 sequence. Its V1 contract is ratified, and its Stage 1
 engine is merged (PR #57, `6de7644`) and accepted; Stage 2 is merged (PR #60,
-`879f577`) and accepted; Stage 3 has not started; see
+`879f577`) and accepted; Stage 3 is in progress and not accepted; see
 **Refinancing & Capital Events** above.
 
 ## Current Architecture Authorities
@@ -666,8 +690,8 @@ engine is merged (PR #57, `6de7644`) and accepted; Stage 2 is merged (PR #60,
   incorporated). It is the authority for its narrow amendments to P7.7, P7.8,
   P7.9 and P7.10 (its Section 22.3). **Stage 1 accepted 2026-09-24, merged
   through PR #57 as `6de7644`** (its Section 23); **Stage 2 accepted
-  2026-09-24, merged through PR #60 as `879f577`** (its Section 24); Stage 3
-  not started.
+  2026-09-24, merged through PR #60 as `879f577`** (its Section 24); **Stage
+  3 in progress, not accepted** (its Section 25).
 
 ## Historical-Document Rule
 
