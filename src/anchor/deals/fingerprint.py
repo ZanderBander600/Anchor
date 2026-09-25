@@ -46,6 +46,7 @@ from ..capital_structure.contracts import (
     PositionFee,
     PreferredEquityTerms,
     RefinanceProceeds,
+    ScopeKind,
 )
 from ..capital_structure.events import (
     CapitalStructureWithEvents,
@@ -518,14 +519,14 @@ def capital_structure_payload(capital_structure: CapitalStructure) -> list[dict[
 # value dependency (below). Excluded: the event label, cost descriptions,
 # position names, valuation labels, row order, timestamps and database ids.
 #
-# **Only LTV consumes a valuation** (R-C, R-K). An LTV-enabled event's referenced
-# timepoint also joins the P7.10 consumed-valuation payload, through the same
-# mechanism ``PctOfValue`` uses, and its own entry here adds what that payload
-# cannot see: the definition as authored (or its absence) and which Units the
-# evidence gate withholds. Approving a source, or creating the timepoint, then
-# moves the identity exactly as it moves the executed result. A DSCR-only,
-# fixed-only or fixed-plus-DSCR event holds no reference and has no entry, so
-# no valuation definition, result or evidence can move its identity.
+# **Only LTV consumes a valuation, and only for its exact scope** (R-C, R-K;
+# review correction). An LTV-enabled event's own entry carries its value
+# dependency ``(timepoint_id, scope)``: for a Unit event, that Unit's
+# instruction, cell and evidence state; for an Investment event, the whole
+# Investment value. It never joins the whole-timepoint ``PctOfValue`` payload,
+# so another Unit's valuation cannot move a Unit event's identity. A
+# DSCR-only, fixed-only or fixed-plus-DSCR event holds no reference and has no
+# entry, so no valuation definition, result or evidence can move its identity.
 # =============================================================================
 
 _CAPITAL_EVENTS_KEY = "capital_events"
@@ -565,21 +566,63 @@ def _event_valuation_payload(
     event: RefinanceEvent,
     *,
     valuation_definitions: Mapping[str, ValuationTimepoint],
+    valuation_results: Mapping[str, InvestmentValuationResult],
     evidence_blocked: Mapping[str, Mapping[str, str]],
 ) -> dict[str, Any] | None:
-    """An LTV-enabled event's value dependency beyond the consumed result: the
-    referenced definition as authored (``None`` while it is not defined), and
-    the Units whose analyst-supplied value the evidence gate withholds. A
-    non-LTV event states no reference, and so has none."""
+    """An LTV-enabled event's value dependency, for its **exact scope** only
+    (Sections 8.1 and 14.1; review correction).
+
+    The dependency is ``(timepoint_id, scope)``:
+
+    - a **Unit** event depends on the timepoint's economic identity and model
+      month, that Unit's authored instruction, that Unit cell's Stage 1 result
+      (value, method, ``analyst_supplied``, status and typed unavailable state)
+      and that Unit's evidence-gate state -- and on nothing another Unit states;
+    - an **Investment** event depends on the complete Investment value: the
+      whole definition, the whole Stage 1 result and every member's
+      evidence-gate state.
+
+    A timepoint the Investment does not define is the typed absence
+    ``defined: False``, never a value. A non-LTV event states no reference, and
+    so has none: no valuation definition, result or evidence can move it."""
 
     reference = event.valuation
     if reference is None:
         return None
-    definition = valuation_definitions.get(reference.timepoint_id)
-    return {
+    scope = event.scope
+    stated: dict[str, Any] = {
         "timepoint_id": reference.timepoint_id,
-        "definition": None if definition is None else valuation_timepoint_payload(definition),
-        "evidence_blocked_unit_ids": sorted(evidence_blocked.get(reference.timepoint_id, {})),
+        "scope": {"kind": scope.kind.value, "unit_id": scope.unit_id},
+    }
+    definition = valuation_definitions.get(reference.timepoint_id)
+    if definition is None:
+        return {**stated, "defined": False}
+    result = valuation_results.get(reference.timepoint_id)
+    blocked = evidence_blocked.get(reference.timepoint_id, {})
+    if scope.kind is ScopeKind.UNIT:
+        instruction = next(
+            (item for item in definition.unit_instructions if item.unit_id == scope.unit_id), None
+        )
+        cell = (
+            None
+            if result is None
+            else next((item for item in result.unit_results if item.unit_id == scope.unit_id), None)
+        )
+        return {
+            **stated,
+            "defined": True,
+            "kind": definition.kind.value,
+            "model_month": int(definition.model_month),
+            "instruction": None if instruction is None else _method_payload(instruction.method),
+            "result": None if cell is None else _unit_result_payload(cell),
+            "evidence_blocked": scope.unit_id in blocked,
+        }
+    return {
+        **stated,
+        "defined": True,
+        "definition": valuation_timepoint_payload(definition),
+        "result": None if result is None else valuation_result_payload(result),
+        "evidence_blocked_unit_ids": sorted(blocked),
     }
 
 
@@ -587,6 +630,7 @@ def _capital_event_payload(
     event: RefinanceEvent,
     *,
     valuation_definitions: Mapping[str, ValuationTimepoint],
+    valuation_results: Mapping[str, InvestmentValuationResult],
     evidence_blocked: Mapping[str, Mapping[str, str]],
 ) -> dict[str, Any]:
     """One capital event's economics. ``label`` and every cost ``description``
@@ -607,7 +651,10 @@ def _capital_event_payload(
         "replacement_position_id": event.replacement_position_id,
         "constraints": _constraints_payload(event),
         "valuation": _event_valuation_payload(
-            event, valuation_definitions=valuation_definitions, evidence_blocked=evidence_blocked
+            event,
+            valuation_definitions=valuation_definitions,
+            valuation_results=valuation_results,
+            evidence_blocked=evidence_blocked,
         ),
         "costs": [
             {
@@ -625,6 +672,7 @@ def capital_events_payload(
     capital_structure: CapitalStructure,
     *,
     valuation_definitions: Mapping[str, ValuationTimepoint] | None = None,
+    valuation_results: Mapping[str, InvestmentValuationResult] | None = None,
     evidence_blocked: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """The canonical economic form of a resolved structure's capital events, in
@@ -636,6 +684,7 @@ def capital_events_payload(
         _capital_event_payload(
             event,
             valuation_definitions=valuation_definitions or {},
+            valuation_results=valuation_results or {},
             evidence_blocked=evidence_blocked or {},
         )
         for event in sorted(capital_structure.events, key=lambda item: item.event_id)
@@ -648,6 +697,7 @@ def fingerprint_structured_source(
     capital_structure: CapitalStructure,
     consumed_valuations: Mapping[str, InvestmentValuationResult] | None = None,
     valuation_definitions: Mapping[str, ValuationTimepoint] | None = None,
+    valuation_results: Mapping[str, InvestmentValuationResult] | None = None,
     evidence_blocked: Mapping[str, Mapping[str, str]] | None = None,
 ) -> str:
     """The source fingerprint of one structured variant: the Project variant's
@@ -677,8 +727,10 @@ def fingerprint_structured_source(
 
     **Refinance & Capital Events V1 Stage 2.** A structure that states capital
     events adds their canonical payload under its own key, and only then (FP-2).
-    ``valuation_definitions`` and ``evidence_blocked`` are read for LTV-enabled
-    events alone; with no event they are never consulted, so the digest of every
+    ``valuation_definitions``, ``valuation_results`` and ``evidence_blocked``
+    are read for LTV-enabled events alone, and only for each event's exact
+    scope; an LTV event never joins ``consumed_valuations``, whose whole-
+    timepoint payload belongs to ``PctOfValue``; with no event they are never consulted, so the digest of every
     structure without one is exactly what it was. An evented structure always
     has a replacement position, so it never collapses onto the Project
     fingerprint."""
@@ -698,6 +750,7 @@ def fingerprint_structured_source(
     events = capital_events_payload(
         capital_structure,
         valuation_definitions=valuation_definitions,
+        valuation_results=valuation_results,
         evidence_blocked=evidence_blocked,
     )
     if events:

@@ -89,12 +89,13 @@ from .fingerprint import fingerprint_structured_source
 from .refinance_integration import (
     PrimaryReturnView,
     primary_return_view,
-    refinance_valuation_timepoints,
+    refinance_valuation_scopes,
     with_evidence_not_approved,
 )
 from .valuation_views import (
     EvidenceBlockedValuation,
     ValuationUnitSource,
+    ValuationRequirement,
     ValuationView,
     blocked_records,
     build_variant_inputs,
@@ -339,7 +340,15 @@ class StructuredValuationSurface:
     funding cannot be sized without running an analysis that would refuse
     (Section 6.2).
 
-    ``consumed_timepoint_ids`` are the timepoints a ``PctOfValue`` rule actually
+    ``consumed_requirements`` are the exact-scope values the structure consumes
+    (``valuation_requirements``): a Unit consumer requires its own cell, an
+    Investment consumer the complete Investment value. Publication reads these,
+    so an unrelated Unit's evidence never blocks a package (review correction).
+    ``consumed_requirements`` is not part of the valuation-views wire response.
+
+    ``consumed_timepoint_ids`` are the defined timepoints those requirements
+    name -- for a structure with no refinance, exactly the timepoints a
+    ``PctOfValue`` rule actually
     names -- the ones that participate in the structured financial identity
     (Section 6). A report-only valuation is deliberately absent.
 
@@ -358,6 +367,7 @@ class StructuredValuationSurface:
     evidence_blocked: tuple[EvidenceBlockedValuation, ...]
     funding_states: tuple[FundingState, ...]
     consumed_timepoint_ids: tuple[str, ...]
+    consumed_requirements: tuple[ValuationRequirement, ...]
     project_source_fingerprint: str
     structured_source_fingerprint: str
     valuation_definition_fingerprint: str
@@ -513,20 +523,32 @@ def pct_of_value_timepoints(capital_structure: CapitalStructure) -> tuple[str, .
     )
 
 
-def consumed_timepoints(capital_structure: CapitalStructure) -> tuple[str, ...]:
-    """Every valuation timepoint the resolved structure economically consumes:
-    each one a ``PctOfValue`` rule names and, from Refinance & Capital Events V1
-    Stage 2, each one an **LTV-enabled** refinance references (R-C, R-R).
+def valuation_requirements(capital_structure: CapitalStructure) -> tuple[ValuationRequirement, ...]:
+    """Every exact-scope value the resolved structure consumes, in canonical
+    ``(timepoint, scope)`` order and without duplicates (P7.10 Section 6 and
+    R-E; Refinance V1 Sections 8.1 and 14.3; review correction):
 
-    A DSCR-only, fixed-only or fixed-plus-DSCR refinance adds none. So does a
-    structure with no event, which keeps every earlier identity exactly."""
+    - each ``PctOfValue`` funding requires the value of **its position's
+      scope** -- that Unit's cell, or the complete Investment value;
+    - each **LTV-enabled** refinance requires the value of **its event's
+      scope** in the same way.
 
-    return tuple(
-        sorted(
-            set(pct_of_value_timepoints(capital_structure))
-            | set(refinance_valuation_timepoints(capital_structure))
-        )
-    )
+    A DSCR-only, fixed-only or fixed-plus-DSCR refinance requires none, and a
+    requirement never widens to a scope its consumer does not read."""
+
+    found: dict[tuple[str, str, str], ValuationRequirement] = {}
+    for position in capital_structure.positions:
+        for event in position.funding:
+            rule = event.amount_rule
+            if isinstance(rule, PctOfValue):
+                scope_kind, unit_id = valuation_scope(position.scope)
+                requirement = ValuationRequirement(timepoint_id=rule.timepoint_id, scope_kind=scope_kind, unit_id=unit_id)
+                found.setdefault(requirement.key(), requirement)
+    for timepoint_id, scope in refinance_valuation_scopes(capital_structure):
+        scope_kind, unit_id = valuation_scope(scope)
+        requirement = ValuationRequirement(timepoint_id=timepoint_id, scope_kind=scope_kind, unit_id=unit_id)
+        found.setdefault(requirement.key(), requirement)
+    return tuple(found[key] for key in sorted(found))
 
 
 def _valuation_context(
@@ -565,8 +587,11 @@ def _valuation_context(
         views=views,
         authority=funding_authority(investment_id=investment_id, views=views, blocked=blocked),
         blocked=blocked,
+        # The whole-timepoint consumed payload is ``PctOfValue``'s, exactly as at
+        # P7.10 Stage 2. An LTV refinance's dependency is exact-scope and is
+        # fingerprinted on the event itself, never here (review correction).
         consumed=consumed_valuations(
-            views=views, timepoint_ids=consumed_timepoints(capital_structure)
+            views=views, timepoint_ids=pct_of_value_timepoints(capital_structure)
         ),
     )
 
@@ -585,8 +610,9 @@ def _structured_fingerprint(
     fingerprint built on top of it would both be reading a different variant
     than they thought.
 
-    The authored definitions and the evidence-gate finding are passed for the
-    refinance payload of an LTV-enabled event only; the fingerprint authority
+    The authored definitions, the Stage 1 results and the evidence-gate
+    finding are passed for the refinance payload of an LTV-enabled event only,
+    which reads them for that event's exact scope; the fingerprint authority
     never reads them for any other structure."""
 
     return fingerprint_structured_source(
@@ -596,6 +622,7 @@ def _structured_fingerprint(
         valuation_definitions={
             timepoint.timepoint_id: timepoint for timepoint in valuation.timepoints
         },
+        valuation_results={view.timepoint_id: view.result for view in valuation.views},
         evidence_blocked=valuation.blocked,
     )
 
@@ -644,7 +671,7 @@ def structured_variant_fingerprint(
     # its referenced valuation exactly as a ``PctOfValue`` rule does, so it
     # resolves the Project variant for the same reason. A DSCR-only or fixed
     # refinance consumes none and costs nothing here.
-    if consumed_timepoints(resolved.capital_structure):
+    if valuation_requirements(resolved.capital_structure):
         read = _variant_units(investment_id, strategy_id, scenario_id, db_path)
         valuation = _valuation_context(
             investment_id,
@@ -880,6 +907,7 @@ def analyze_structured_valuations(
     valuation = _valuation_context(
         investment_id, strategy_id, scenario_id, resolved.capital_structure, read.units, db_path
     )
+    requirements = valuation_requirements(resolved.capital_structure)
     definition_fingerprint, result_fingerprint = view_fingerprints(
         timepoints=valuation.timepoints,
         views=valuation.views,
@@ -898,7 +926,13 @@ def analyze_structured_valuations(
             authority=valuation.authority,
             blocked=valuation.blocked,
         ),
-        consumed_timepoint_ids=tuple(sorted(valuation.consumed)),
+        consumed_timepoint_ids=tuple(
+            sorted(
+                {requirement.timepoint_id for requirement in requirements}
+                & {view.timepoint_id for view in valuation.views}
+            )
+        ),
+        consumed_requirements=requirements,
         project_source_fingerprint=read.project_source_fingerprint,
         structured_source_fingerprint=_structured_fingerprint(
             project_source_fingerprint=read.project_source_fingerprint,

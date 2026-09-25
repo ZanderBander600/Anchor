@@ -52,7 +52,7 @@ never be served from a state that has moved.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..contracts import AcquisitionTerms
 from ..engine.contracts import AcquisitionResults
@@ -75,6 +75,8 @@ from ..valuation.contracts import (
     ValuationKind,
     ValuationScopeKind,
     ValuationTimepoint,
+    UnresolvedFundingReason,
+    ValuationUnavailableReason,
     ValuationVariantInputs,
 )
 from ..valuation.engine import resolve_investment_valuation, unit_inputs, variant_inputs
@@ -439,26 +441,95 @@ def resolve_views(
 # =============================================================================
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ValuationRequirement:
+    """One exact-scope value a resolved Capital Structure consumes (P7.10
+    Section 6, R-E; Refinance V1 Sections 8.1 and 14.1).
+
+    ``UNIT`` names one Unit's cell at the timepoint; ``INVESTMENT`` names the
+    complete Investment value, which exists only when every member Unit's does.
+    A requirement never widens: a Unit consumer depends on its own cell alone,
+    so another Unit's value, evidence or availability is not its dependency."""
+
+    timepoint_id: str
+    scope_kind: ValuationScopeKind
+    unit_id: str | None
+
+    def key(self) -> tuple[str, str, str]:
+        return self.timepoint_id, self.scope_kind.value, self.unit_id or ""
+
+
+def _withheld_cell(cell: UnitValuationResult, *, detail: str) -> UnitValuationResult:
+    """One analyst-supplied cell whose Evidence Reference cannot support it:
+    unavailable, with no value and no operand. The amount the analyst typed is
+    never carried. P7.10's valuation reasons have no evidence member -- the
+    evidence gate is Stage 2's own -- so the typed fact lives in the gate's
+    ``blocked`` map, and this cell states only that it has no value, and why,
+    in words."""
+
+    return replace(
+        cell,
+        status=ValuationAvailability.UNAVAILABLE,
+        value=None,
+        forward_noi=None,
+        cap_rate=None,
+        unavailable_reason=None,
+        unavailable_message=(
+            f"The analyst-supplied value is not used: {detail} its Evidence Reference. It is never read as zero or "
+            "replaced by another value."
+        ),
+    )
+
+
+def gated_result(
+    result: InvestmentValuationResult, *, blocked_units: Mapping[str, str]
+) -> InvestmentValuationResult:
+    """``result`` as the evidence gate lets consumers read it, cell by cell.
+
+    Each evidence-blocked Unit cell is withheld; every other cell is Stage 1's
+    own, unchanged. The Investment value exists only when every member Unit
+    does (Section 5.5), so a withheld cell makes it unavailable -- never a
+    partial sum of the cells that remain. A result the gate does not touch is
+    returned as the very same object."""
+
+    if not blocked_units:
+        return result
+    cells = tuple(
+        _withheld_cell(cell, detail=blocked_units[cell.unit_id]) if cell.unit_id in blocked_units else cell
+        for cell in result.unit_results
+    )
+    if result.status is not ValuationAvailability.AVAILABLE:
+        return replace(result, unit_results=cells)
+    return replace(
+        result,
+        status=ValuationAvailability.UNAVAILABLE,
+        value=None,
+        unit_results=cells,
+        unavailable_reason=ValuationUnavailableReason.INCOMPLETE_UNITS,
+        unavailable_message=(
+            "The Investment has no value at this timepoint: the analyst-supplied value of at least one Unit has no "
+            "approved Evidence Reference. A partial sum of the Units that do have a value is never the Investment value."
+        ),
+    )
+
+
 def funding_authority(
     *,
     investment_id: str,
     views: Iterable[ValuationView],
     blocked: Mapping[str, Mapping[str, str]],
 ) -> ValuationAuthority:
-    """The Stage 1 authority a ``PctOfValue`` funding is sized from.
+    """The Stage 1 authority a ``PctOfValue`` funding and an LTV-sized
+    refinance are sized from.
 
-    **An evidence-blocked valuation is withheld** (Section 6, "if the
-    definition, forward NOI, evidence, unit membership, or valuation is missing
-    or invalid, the Funding Requirement remains unresolved with a typed
-    reason"). It is left out of the authority entirely rather than offered with
-    a value, so no position can be funded from an amount whose source the
-    analyst has not approved.
-
-    The Stage 1 reason that withholding produces is ``TIMEPOINT_NOT_FOUND``,
-    which would be misleading on its own -- the timepoint *is* authored. Stage 2
-    never shows it: ``funding_unavailable`` below knows which timepoints were
-    withheld and reports ``EVIDENCE_NOT_APPROVED`` instead, which is the
-    specific reason Section 6.2 requires.
+    **The evidence gate is exact-scope** (P7.10 Section 6 and R-E; Refinance
+    V1 Section 8.1; review correction). Every authored timepoint is offered,
+    each as ``gated_result`` presents it: a Unit whose analyst-supplied value
+    has no approved source has no value, the Investment has none while any
+    member Unit has none, and every other Unit cell keeps its value. A consumer
+    reads exactly its own scope, so an unrelated Unit's evidence never makes
+    another Unit's value unknown, and no position is ever funded or sized from
+    an amount whose source the analyst has not approved.
 
     Every other unavailable valuation is passed through with its own Stage 1
     result, so its typed reason survives to the analyst unchanged."""
@@ -466,9 +537,27 @@ def funding_authority(
     return valuation_authority(
         investment_id=investment_id,
         valuations=tuple(
-            view.result for view in views if view.timepoint_id not in blocked
+            gated_result(view.result, blocked_units=blocked.get(view.timepoint_id, {})) for view in views
         ),
     )
+
+
+def scope_evidence_blocked(
+    blocked: Mapping[str, Mapping[str, str]],
+    *,
+    timepoint_id: str,
+    scope_kind: ValuationScopeKind,
+    unit_id: str | None,
+) -> dict[str, str]:
+    """The evidence-blocked Units that the exact scope depends on, with each
+    finding: that Unit alone for a Unit scope, every blocked member for the
+    Investment scope. Empty when the scope's value does not depend on any
+    withheld cell."""
+
+    units = blocked.get(timepoint_id, {})
+    if scope_kind is ValuationScopeKind.INVESTMENT:
+        return dict(units)
+    return {unit_id: units[unit_id]} if unit_id is not None and unit_id in units else {}
 
 
 def funding_unavailable(
@@ -479,9 +568,11 @@ def funding_unavailable(
     """One unresolved ``PctOfValue`` funding as the structured representation
     (Section 6.2).
 
-    When the timepoint was withheld by the evidence gate, the reason reported is
-    ``EVIDENCE_NOT_APPROVED`` and names the Units concerned -- never the
-    ``TIMEPOINT_NOT_FOUND`` the authority's absence would otherwise imply.
+    When the evidence gate withheld a cell the funding's **exact scope**
+    depends on, the reason reported is ``EVIDENCE_NOT_APPROVED`` and names the
+    Units concerned: the position's own Unit for a Unit scope, the blocked
+    members for the Investment scope. An unrelated Unit's evidence is never a
+    reason here, because it never made this scope's value unknown.
 
     In every case the state carries **no amount**: the advance itself is
     unknown, and ``UnavailableState`` has no field that could hold a number.
@@ -489,8 +580,19 @@ def funding_unavailable(
     estimated, resized or filled in from the purchase price."""
 
     timepoint_id = getattr(requirement, "timepoint_id", None)
-    units = blocked.get(timepoint_id or "")
-    if units is None:
+    scope_kind = getattr(requirement, "scope_kind", None)
+    units = (
+        scope_evidence_blocked(
+            blocked,
+            timepoint_id=timepoint_id or "",
+            scope_kind=scope_kind,  # type: ignore[arg-type]
+            unit_id=getattr(requirement, "unit_id", None),
+        )
+        if isinstance(scope_kind, ValuationScopeKind)
+        and getattr(requirement, "reason", None) is UnresolvedFundingReason.VALUATION_UNAVAILABLE
+        else {}
+    )
+    if not units:
         return funding_unresolved(requirement)  # type: ignore[arg-type]
     named = ", ".join(repr(unit_id) for unit_id in sorted(units))
     return UnavailableState(

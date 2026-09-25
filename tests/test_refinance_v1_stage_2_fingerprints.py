@@ -158,16 +158,51 @@ def test_an_exact_semantic_revert_restores_the_fingerprint() -> None:
     assert _fp(reverted) == _fp(original)
 
 
-def test_only_an_ltv_event_reads_the_valuation_arguments() -> None:
+def _two_unit_definition(u_cap: float = 0.064, v_cap: float = 0.07) -> dict[str, Any]:
+    from anchor.valuation.contracts import DirectCap, UnitValuationInstruction
+
+    point = fx.value_timepoint("u", cap_rate=u_cap)
+    point = dataclasses.replace(
+        point,
+        unit_instructions=(
+            UnitValuationInstruction(unit_id="u", method=DirectCap(cap_rate=u_cap)),
+            UnitValuationInstruction(unit_id="v", method=DirectCap(cap_rate=v_cap)),
+        ),
+    )
+    return {fx.TIMEPOINT_ID: point}
+
+
+def test_only_an_ltv_event_reads_the_valuation_arguments_and_only_for_its_scope() -> None:
+    """Review correction (Sections 8.1 and 14.1): a Unit event's identity holds
+    its own Unit's instruction and evidence state, never another Unit's; an
+    Investment event's holds every member's."""
+
+    from anchor.capital_structure.contracts import PositionScope, ScopeKind
+
     dscr_only = fx.evented("u", dscr=2.0)
     ltv = fx.evented("u", ltv=0.65, dscr=2.0)
-    one = {fx.TIMEPOINT_ID: fx.value_timepoint("u", cap_rate=0.064)}
-    two = {fx.TIMEPOINT_ID: fx.value_timepoint("u", cap_rate=0.08)}
+    one, two = _two_unit_definition(u_cap=0.064), _two_unit_definition(u_cap=0.08)
     assert _fp(dscr_only, valuation_definitions=one) == _fp(dscr_only, valuation_definitions=two)
     assert _fp(dscr_only, evidence_blocked={fx.TIMEPOINT_ID: {"u": "no"}}) == _fp(dscr_only)
+    # The Unit event: its own Unit moves it, and the other Unit never does.
     assert _fp(ltv, valuation_definitions=one) != _fp(ltv, valuation_definitions=two)
-    assert _fp(ltv, evidence_blocked={fx.TIMEPOINT_ID: {"u": "no"}}) != _fp(ltv)
+    assert _fp(ltv, valuation_definitions=one, evidence_blocked={fx.TIMEPOINT_ID: {"u": "no"}}) != _fp(
+        ltv, valuation_definitions=one
+    )
+    assert _fp(ltv, valuation_definitions=_two_unit_definition(v_cap=0.09)) == _fp(ltv, valuation_definitions=one)
+    assert _fp(ltv, valuation_definitions=one, evidence_blocked={fx.TIMEPOINT_ID: {"v": "no"}}) == _fp(
+        ltv, valuation_definitions=one
+    )
     assert _fp(ltv) != _fp(ltv, valuation_definitions=one)  # "not defined" is a state too
+    # The Investment event: any member moves it.
+    whole = CapitalStructureWithEvents(
+        positions=(dataclasses.replace(ltv.positions[0], scope=PositionScope(kind=ScopeKind.INVESTMENT, unit_id=None)),),
+        events=(dataclasses.replace(ltv.events[0], scope=PositionScope(kind=ScopeKind.INVESTMENT, unit_id=None)),),
+    )
+    assert _fp(whole, valuation_definitions=_two_unit_definition(v_cap=0.09)) != _fp(whole, valuation_definitions=one)
+    assert _fp(whole, valuation_definitions=one, evidence_blocked={fx.TIMEPOINT_ID: {"v": "no"}}) != _fp(
+        whole, valuation_definitions=one
+    )
 
 
 # =============================================================================

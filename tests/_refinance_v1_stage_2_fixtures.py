@@ -54,7 +54,8 @@ EVENT_MONTH = rf.EVENT_MONTH
 #: acquisition loan at 0% over 25 years, and a 6.4% exit cap.
 BASE_CASE = {"interest_rate": 0.0, "amortization": 25, "io_period": 0, "exit_cap_rate": 0.064}
 
-#: Every table schema 17 adds.
+#: Every capital-event table schema 17 adds (the seventh, the memo version's
+#: consumed-valuation record, is not a Capital Structure child).
 STAGE_2_TABLES = (
     "capital_events",
     "capital_event_retirements",

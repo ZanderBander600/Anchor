@@ -517,17 +517,38 @@ def _version_valuations(
     )
 
 
+def _consumed_requirements(surface: StructuredValuationSurface | None) -> tuple:
+    """The exact-scope values the selected Capital Structure consumes from a
+    **defined** view, in canonical order. A requirement naming a timepoint the
+    Investment does not define is not a publication dependency -- the P7.10
+    ``PctOfValue`` rule, which an LTV refinance follows -- because its consumer
+    already reports the typed absence itself."""
+
+    if surface is None:
+        return ()
+    defined = {view.timepoint_id for view in surface.views}
+    return tuple(item for item in surface.consumed_requirements if item.timepoint_id in defined)
+
+
+def _scope_text(requirement: object) -> str:
+    unit_id = getattr(requirement, "unit_id", None)
+    return "the Investment" if unit_id is None else f"Unit {unit_id!r}"
+
+
 def _required_valuations(
     draft: InvestmentMemoDraft, surface: StructuredValuationSurface | None
 ) -> tuple[RequiredValuation, ...]:
     """The valuation views this draft is actually required to resolve.
 
     Two sources, and only two. A view the memo **selected** for inclusion must
-    resolve, because the package would otherwise present a valuation with no
-    value. A view the resolved Capital Structure **consumes** through a
-    ``PctOfValue`` rule must resolve whether or not the memo displays it,
-    because the funding cannot be sized without it and the whole structured
-    result rests on the advance.
+    resolve **as a whole**, because the package would otherwise present a
+    valuation with no value. A value the resolved Capital Structure
+    **consumes** must resolve **at the exact scope its consumer reads** (P7.10
+    Section 6 and R-E; Refinance V1 Section 14.3; review correction): a
+    ``PctOfValue`` funding requires its position's scope, and an LTV-enabled
+    refinance its event's scope -- one Unit's cell, or the complete Investment
+    value. Another Unit's missing value or unapproved evidence is not this
+    package's dependency, and does not block it.
 
     Everything else the analyst authored is exploratory. An unselected,
     unconsumed definition may sit unavailable indefinitely without blocking a
@@ -536,11 +557,10 @@ def _required_valuations(
     made an analyst delete their own working views to publish.
 
     Selection is read from the draft's explicit relationship, never inferred
-    from display order, existence or recency.
-
-    A selected definition the surface no longer holds is reported as
-    ``NOT_AUTHORED`` rather than quietly dropped: it was selected, so its
-    disappearance is a refusal."""
+    from display order, existence or recency. A selected definition the surface
+    no longer holds is reported as ``NOT_AUTHORED`` rather than quietly dropped:
+    it was selected, so its disappearance is a refusal. A selected view already
+    requires every scope of itself, so a consumption of it adds nothing."""
 
     if surface is None:
         return ()
@@ -548,36 +568,53 @@ def _required_valuations(
 
     views = {view.timepoint_id: view for view in surface.views}
     selected = set(draft.selected_valuation_timepoint_ids)
-    consumed = set(surface.consumed_timepoint_ids)
     required: list[RequiredValuation] = []
-    for timepoint_id in sorted(selected | consumed):
-        reason = (
-            RequiredValuationReason.SELECTED
-            if timepoint_id in selected
-            else RequiredValuationReason.CONSUMED
-        )
+    for timepoint_id in sorted(selected):
         view = views.get(timepoint_id)
         if view is None:
             required.append(
                 RequiredValuation(
                     timepoint_id=timepoint_id,
-                    reason=reason,
+                    reason=RequiredValuationReason.SELECTED,
                     available=False,
                     unavailable_reason=UnavailableReasonCode.NOT_AUTHORED.value,
                     unavailable_detail="No valuation definition exists for this timepoint.",
                 )
             )
             continue
-        available = view.status is AvailabilityStatus.AVAILABLE
         required.append(
             RequiredValuation(
                 timepoint_id=timepoint_id,
-                reason=reason,
-                available=available,
-                unavailable_reason=(
-                    None if view.unavailable is None else view.unavailable.reason_code.value
-                ),
+                reason=RequiredValuationReason.SELECTED,
+                available=view.status is AvailabilityStatus.AVAILABLE,
+                unavailable_reason=None if view.unavailable is None else view.unavailable.reason_code.value,
                 unavailable_detail="" if view.unavailable is None else view.unavailable.reason,
+            )
+        )
+    for requirement in _consumed_requirements(surface):
+        if requirement.timepoint_id in selected:
+            continue
+        view = views[requirement.timepoint_id]
+        if requirement.unit_id is None:  # the complete Investment value
+            available = view.status is AvailabilityStatus.AVAILABLE
+            state = view.unavailable
+        else:
+            cell = next((item for item in view.unit_views if item.unit_id == requirement.unit_id), None)
+            available = cell is not None and cell.status is AvailabilityStatus.AVAILABLE
+            state = None if cell is None else cell.unavailable
+        detail = ""
+        if not available:
+            because = (
+                "no value is stated for it" if state is None else state.reason
+            )
+            detail = f"The value required is that of {_scope_text(requirement)}: {because}"
+        required.append(
+            RequiredValuation(
+                timepoint_id=requirement.timepoint_id,
+                reason=RequiredValuationReason.CONSUMED,
+                available=available,
+                unavailable_reason=None if available or state is None else state.reason_code.value,
+                unavailable_detail=detail,
             )
         )
     return tuple(required)
@@ -765,6 +802,9 @@ def publish(investment_id: str, *, db_path: Path | None = None) -> InvestmentMem
         memo_content_fingerprint=content_fingerprint,
         published_fingerprint=published_fingerprint,
         build_artifact=_artifact,
+        # Schema 17 (review correction): the exact-scope values consumed,
+        # frozen with the version beside the whole-view ``consumed`` flag.
+        consumed_valuations=_consumed_requirements(dependencies.surface),
         db_path=db_path,
     )
     return version

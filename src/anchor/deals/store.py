@@ -513,8 +513,10 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # it did, because nothing this gate adds is read on any of those paths.
 #
 # Refinance & Capital Events V1 Stage 2 -- schema version 17 adds the six
-# capital-event tables the same way. A v16 database gains six empty tables; every
-# stored Capital Structure reads back with no event, exactly as it did.
+# capital-event tables and, by review correction, one frozen record of the
+# exact-scope valuations a published memo version consumed -- seven tables, the
+# same way. A v16 database gains seven empty tables; every stored Capital
+# Structure reads back with no event, and every version exactly as it did.
 _SCHEMA_VERSION = 17
 
 
@@ -1574,6 +1576,23 @@ CREATE TABLE IF NOT EXISTS capital_refinance_proceeds (
     capital_event_id  TEXT NOT NULL,
     PRIMARY KEY (structure_id, funding_event_id),
     UNIQUE (structure_id, capital_event_id)
+)
+"""
+
+#: Schema 17 (review correction) -- what one published memo version consumed,
+#: at exact scope. ``memo_version_valuations.consumed`` says only that a
+#: consumer named a view; a Unit consumer depends on its own Unit's cell alone,
+#: so the frozen record names the scope too: ``scope_kind`` is ``unit`` with
+#: ``unit_id`` the Unit, or ``investment`` with ``unit_id`` ``''`` (not NULL, for
+#: the reason ``memo_version_dependencies.scope_id`` is not). Written only by the
+#: publication transaction and never updated; deleted only with the Investment.
+_CREATE_MEMO_VERSION_CONSUMED_VALUATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_consumed_valuations (
+    version_id    TEXT NOT NULL,
+    timepoint_id  TEXT NOT NULL,
+    scope_kind    TEXT NOT NULL CHECK (scope_kind IN ('unit', 'investment')),
+    unit_id       TEXT NOT NULL,
+    PRIMARY KEY (version_id, timepoint_id, scope_kind, unit_id)
 )
 """
 
@@ -2824,11 +2843,13 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # ``REPORT_SNAPSHOT_NOT_AVAILABLE`` state instead. Publishing a new version
     # is how an analyst gets a current issuable report.
     # Refinance & Capital Events V1 Stage 2 -- schema version 17 adds the six
-    # capital-event tables the same way: ``_connect`` creates them via CREATE
-    # TABLE IF NOT EXISTS, no table is altered, and no row is written for
-    # anything that already exists. A v16 database simply gains six empty
-    # tables, so every stored Capital Structure reads back with no event and no
-    # refinance is ever synthesized for it.
+    # capital-event tables, and the one exact-scope consumption record of a
+    # published memo version, the same way: ``_connect`` creates them via
+    # CREATE TABLE IF NOT EXISTS, no table is altered, and no row is written for
+    # anything that already exists. A v16 database simply gains seven empty
+    # tables, so every stored Capital Structure reads back with no event, no
+    # refinance is ever synthesized for it, and a version published before this
+    # gate records no scoped consumption rather than an invented one.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -2935,6 +2956,7 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_CAPITAL_EVENT_VALUATION_REFS_TABLE_SQL)
     connection.execute(_CREATE_CAPITAL_EVENT_COSTS_TABLE_SQL)
     connection.execute(_CREATE_CAPITAL_REFINANCE_PROCEEDS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_CONSUMED_VALUATIONS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -11178,7 +11200,7 @@ def _delete_investment_memos(connection: sqlite3.Connection, investment_id: str)
         ).fetchall()
     ]
     for version_id in version_ids:
-        for table in _MEMO_VERSION_CHILD_TABLES:
+        for table in (*_MEMO_VERSION_CHILD_TABLES, "memo_version_consumed_valuations"):
             connection.execute(f"DELETE FROM {table} WHERE version_id = ?", (version_id,))
         connection.execute(
             "DELETE FROM investment_committee_decisions WHERE version_id = ?", (version_id,)
@@ -11508,6 +11530,7 @@ def publish_memo_version(
     memo_content_fingerprint: str,
     published_fingerprint: str,
     build_artifact: Callable[[InvestmentMemoVersion], Any],
+    consumed_valuations: tuple[Any, ...] = (),
     db_path: Path | None = None,
 ) -> tuple[InvestmentMemoVersion, Any]:
     """Write one immutable published version, its dependency ledger and the
@@ -11665,6 +11688,16 @@ def publish_memo_version(
                     1 if view.consumed else 0,
                 ),
             )
+        # Schema 17 (review correction): each exact-scope value the selected
+        # Capital Structure consumed, frozen with the version.
+        connection.executemany(
+            "INSERT INTO memo_version_consumed_valuations (version_id, timepoint_id, scope_kind, unit_id) "
+            "VALUES (?, ?, ?, ?)",
+            [
+                (version_id, item.timepoint_id, _encode_enum(item.scope_kind), item.unit_id or "")
+                for item in consumed_valuations
+            ],
+        )
         for dependency in dependencies:
             connection.execute(
                 "INSERT INTO memo_version_dependencies "
@@ -11704,6 +11737,37 @@ def publish_memo_version(
             ),
         )
         return version, artifact
+
+
+def list_memo_version_consumed_valuations(
+    investment_id: str, version_id: str, *, db_path: Path | None = None
+) -> tuple[Any, ...]:
+    """The exact-scope values one published version consumed, as frozen when it
+    was published, in ``(timepoint, scope)`` order -- the empty tuple for a
+    version that consumed none, and for every version published before schema
+    17, which recorded none and gains none. Read-only."""
+
+    from ..valuation.contracts import ValuationScopeKind
+    from .valuation_views import ValuationRequirement
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        rows = connection.execute(
+            "SELECT * FROM memo_version_consumed_valuations WHERE version_id = ? "
+            "ORDER BY timepoint_id, scope_kind, unit_id",
+            (version_id,),
+        ).fetchall()
+    found = []
+    for row in rows:
+        scope_kind = _decode_enum(row["scope_kind"], ValuationScopeKind, path="memo_version_consumed_valuations.scope_kind")
+        unit_id = row["unit_id"] or None
+        if (scope_kind is ValuationScopeKind.UNIT) is (unit_id is None):
+            raise PersistedDealDataError(
+                f"Version {version_id!r} records a consumed {row['scope_kind']} value whose Unit column disagrees "
+                "with its scope."
+            )
+        found.append(ValuationRequirement(timepoint_id=row["timepoint_id"], scope_kind=scope_kind, unit_id=unit_id))
+    return tuple(found)
 
 
 def get_memo_version_artifact(

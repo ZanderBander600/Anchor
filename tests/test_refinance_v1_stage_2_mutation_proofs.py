@@ -32,11 +32,20 @@ import pytest
 from fastapi.testclient import TestClient
 
 import test_refinance_v1_stage_2_api as api_tests
+import test_refinance_v1_stage_2_exact_scope as scope_tests
 import test_refinance_v1_stage_2_fingerprints as fingerprint_tests
 import test_refinance_v1_stage_2_persistence as persistence_tests
 import test_refinance_v1_stage_2_strategy_identity as identity_tests
 from anchor import api as api_module
-from anchor.deals import capital_event_identity, fingerprint, refinance_integration, store, structured_variants
+from anchor.deals import (
+    capital_event_identity,
+    fingerprint,
+    memo_dependencies,
+    refinance_integration,
+    store,
+    structured_variants,
+    valuation_views,
+)
 
 _SRC = (Path(__file__).resolve().parents[1] / "src" / "anchor").resolve()
 
@@ -49,7 +58,9 @@ def _referencing_modules() -> tuple[ModuleType, ...]:
         and (
             name == "anchor"
             or name.startswith("anchor.")
-            or name.startswith(("test_refinance_v1_stage_2", "_refinance_v1_stage_2", "_refinance_v1_fixtures"))
+            or name.startswith(
+                ("test_refinance_v1_stage_2", "_refinance_v1_stage_2", "_refinance_v1_fixtures", "_p7_10_stage_2_fixtures")
+            )
         )
     )
 
@@ -201,7 +212,7 @@ def test_m5_a_dscr_only_refinance_consuming_a_valuation_is_killed(monkeypatch: p
         monkeypatch,
         _investment(fingerprint_tests.test_f13_b_a_dscr_only_refinance_is_invariant_under_every_valuation_change),
         structured_variants,
-        ("timepoint_ids=consumed_timepoints(capital_structure)", "timepoint_ids=[view.timepoint_id for view in views]"),
+        ("timepoint_ids=pct_of_value_timepoints(capital_structure)", "timepoint_ids=[view.timepoint_id for view in views]"),
     )
 
 
@@ -210,7 +221,7 @@ def test_m6_an_ltv_refinance_failing_to_consume_its_valuation_is_killed(monkeypa
         monkeypatch,
         _investment(fingerprint_tests.test_the_ltv_timepoint_is_consumed_and_the_dscr_structure_consumes_none),
         structured_variants,
-        ("| set(refinance_valuation_timepoints(capital_structure))", "| set()"),
+        ("for timepoint_id, scope in refinance_valuation_scopes(capital_structure):", "for timepoint_id, scope in ():"),
     )
 
 
@@ -219,7 +230,7 @@ def test_m6b_an_ltv_identity_blind_to_the_evidence_gate_is_killed(monkeypatch: p
         monkeypatch,
         lambda: fingerprint_tests.test_an_unapproved_analyst_value_is_evidence_not_approved_and_approval_moves_the_identity(_db()),
         fingerprint,
-        ("    if reference is None:\n        return None\n    definition", "    if True:\n        return None\n    definition"),
+        ('"evidence_blocked": scope.unit_id in blocked,', '"evidence_blocked": False,'),
     )
 
 
@@ -246,10 +257,7 @@ def test_m13_the_evidence_gate_reported_as_a_missing_timepoint_is_killed(monkeyp
         monkeypatch,
         lambda: fingerprint_tests.test_an_unapproved_analyst_value_is_evidence_not_approved_and_approval_moves_the_identity(_db()),
         refinance_integration,
-        (
-            "        if timepoint_id is None or timepoint_id not in withheld or event.sizing is None:",
-            "        if True:",
-        ),
+        ("    if not scope_evidence_blocked(\n", "    if True or not scope_evidence_blocked(\n"),
     )
 
 
@@ -392,8 +400,8 @@ def test_m11b_a_withheld_capacity_restated_as_zero_is_killed(monkeypatch: pytest
         lambda: fingerprint_tests.test_an_unapproved_analyst_value_is_evidence_not_approved_and_approval_moves_the_identity(_db()),
         refinance_integration,
         (
-            "                capacity = replace(\n                    capacity,\n",
-            "                capacity = replace(\n                    capacity,\n                    capacity=0.0,\n",
+            "            unavailable_reason=RefinanceUnavailableReason.EVIDENCE_NOT_APPROVED,\n            unavailable_message=message,\n        )\n        if capacity is ltv",
+            "            unavailable_reason=RefinanceUnavailableReason.EVIDENCE_NOT_APPROVED,\n            unavailable_message=message,\n            capacity=0.0,\n        )\n        if capacity is ltv",
         ),
     )
 
@@ -419,6 +427,82 @@ def test_m12b_an_unavailable_refinance_reported_as_an_available_primary_is_kille
     )
 
 
+# =============================================================================
+# Exact scope (review correction: P7.10 Section 6, R-E; Sections 8.1, 14.1,
+# 14.3; F15 and INV-1) and typed propagation (Section 15.3)
+# =============================================================================
+
+
+def _world(test: Callable[[dict], None]) -> Callable[[], None]:
+    def run() -> None:
+        test(scope_tests.build(_db()))
+
+    return run
+
+
+def test_m14_whole_timepoint_evidence_withholding_restored_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _world(scope_tests.test_1_a_unit_a_ltv_refinance_executes_beside_a_blocked_unit_b),
+        valuation_views,
+        (
+            "            gated_result(view.result, blocked_units=blocked.get(view.timepoint_id, {})) for view in views\n",
+            "            view.result for view in views if view.timepoint_id not in blocked\n",
+        ),
+    )
+
+
+def test_m15_whole_timepoint_unit_event_fingerprinting_restored_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _world(scope_tests.test_2_unit_a_is_invariant_under_every_unit_b_change),
+        fingerprint,
+        ("    if scope.kind is ScopeKind.UNIT:\n        instruction = next(", "    if False:\n        instruction = next("),
+    )
+
+
+def test_m16_timepoint_only_publication_requirements_restored_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _world(scope_tests.test_3_publication_is_not_blocked_by_an_unrelated_units_evidence),
+        memo_dependencies,
+        ("        if requirement.unit_id is None:  # the complete Investment value\n", "        if True:\n"),
+    )
+
+
+def test_m17_string_based_downstream_message_replacement_restored_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The replaced sentence is whatever Stage 1 wrote. Under reworded Stage 1
+    prose a string replacement leaves the reworded text in place, which only
+    typed reconstruction avoids."""
+
+    def fixture() -> None:
+        with monkeypatch.context() as inner:
+            scope_tests.test_changing_stage_1_prose_changes_neither_classification_nor_downstream_messages(
+                scope_tests.build(_db()), inner
+            )
+
+    _killed(
+        monkeypatch,
+        fixture,
+        refinance_integration,
+        (
+            "        return replace(position, unavailable_message=_position_message(events[event_id], restated[event_id]))",
+            "        return replace(position, unavailable_message=(position.unavailable_message or '').replace("
+            "next(item for item in result.capital_events if item.event_id == event_id).unavailable_message or '', "
+            "restated[event_id].unavailable_message or ''))",
+        ),
+    )
+
+
 def test_the_mutation_harness_patches_this_repositorys_modules() -> None:
-    for module in (fingerprint, store, structured_variants, capital_event_identity, refinance_integration, api_module):
+    for module in (
+        fingerprint,
+        store,
+        structured_variants,
+        capital_event_identity,
+        refinance_integration,
+        valuation_views,
+        memo_dependencies,
+        api_module,
+    ):
         assert Path(module.__file__ or "").resolve().is_relative_to(_SRC), module.__name__
