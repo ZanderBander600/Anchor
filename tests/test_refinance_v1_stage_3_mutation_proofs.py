@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 
 import test_refinance_v1_stage_2_mutation_proofs as harness
 import test_refinance_v1_stage_3_audit_workbook as workbook_tests
+import test_refinance_v1_stage_3_export_ownership as ownership_tests
 import test_refinance_v1_stage_3_presentation as presentation_tests
 import test_refinance_v1_stage_3_report as report_tests
 from anchor import api as api_module
@@ -86,6 +87,14 @@ def _with_client(test: Callable[[Path, TestClient], None]) -> Callable[[], None]
     def run() -> None:
         with _database() as db:
             test(db, TestClient(api_module.app))
+
+    return run
+
+
+def _with_monkeypatch(test: Callable[[pytest.MonkeyPatch], None]) -> Callable[[], None]:
+    def run() -> None:
+        with pytest.MonkeyPatch.context() as patch:
+            test(patch)
 
     return run
 
@@ -165,7 +174,7 @@ _MUTANTS: dict[str, tuple[Callable[[], None], ModuleType, tuple[tuple[str, str],
     "m9_exports_unlabeled": (
         _with_client(presentation_tests.test_a_quick_export_labels_the_levered_figures_when_a_refinance_exists),
         api_module,
-        (("    return dataclasses.replace(source, refinance_configured=True)", "    return source"),),
+        (("    return dataclasses.replace(source, refinance_configured=True) if applies else source", "    return source"),),
     ),
     # 10. The audit exported for an analysis that is no longer the saved state.
     "m10_audit_ignores_staleness": (
@@ -185,6 +194,34 @@ _MUTANTS: dict[str, tuple[Callable[[], None], ModuleType, tuple[tuple[str, str],
                 "    if False:",
             ),
             ("    if common.cash_flows is None or common.irr_status is None:", "    if False:"),
+        ),
+    ),
+    # 12. Correction round: a refinance of another Unit labels this Unit's export.
+    "m12_another_units_refinance_labels_this_unit": (
+        _with_db(ownership_tests.test_2_3_a_unit_is_labelled_by_its_own_refinance_and_never_by_another_units),
+        refinance_presentation,
+        (
+            (
+                "and (event.scope.kind is ScopeKind.INVESTMENT or event.scope.unit_id == deal_id)",
+                "and True",
+            ),
+        ),
+    ),
+    # 13. Correction round: an unreadable owner structure exports unlabelled.
+    "m13_unreadable_owner_exports_unlabelled": (
+        _with_client(lambda db, client: ownership_tests.test_5_every_mode_refuses_a_corrupt_owner_structure("quick", db, client)),
+        api_module,
+        (("        raise refuse(_CAPITAL_STRUCTURE_UNAVAILABLE_MESSAGE) from None", "        return source"),),
+    ),
+    # 14. Correction round: corruption is worded as a Unit that no longer exists.
+    "m14_corruption_worded_as_missing_unit": (
+        _with_monkeypatch(ownership_tests.test_persisted_data_corruption_is_not_worded_as_a_missing_unit),
+        refinance_presentation,
+        (
+            (
+                "        except DealNotFoundError:\n            names[unit_id] =",
+                "        except Exception:\n            names[unit_id] =",
+            ),
         ),
     ),
 }

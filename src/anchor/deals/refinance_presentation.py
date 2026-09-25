@@ -31,7 +31,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..analysis.strategy import BASE_STRATEGY_ID
+from ..analysis.strategy import BASE_SCENARIO_ID, BASE_STRATEGY_ID
 from ..capital_structure.contracts import CommonEquityUnavailableReason, PositionScope, ScopeKind
 from ..decision.comparison import DecisionMetric
 from ..capital_structure.refinance_contracts import (
@@ -41,6 +41,7 @@ from ..capital_structure.refinance_contracts import (
     RefinancedCapitalResult,
 )
 from . import store
+from .contracts import DealNotFoundError
 from .refinance_integration import has_capital_events
 from .structured_variants import resolve_variant_capital_structure
 
@@ -115,6 +116,78 @@ def base_capital_events_configured(investment_id: str | None, *, db_path: Path |
         return False
     return has_capital_events(
         resolve_variant_capital_structure(investment_id, BASE_STRATEGY_ID, db_path=db_path).capital_structure
+    )
+
+
+class AcquisitionReferenceUnavailableError(RuntimeError):
+    """Whether a Deal's acquisition figures are the acquisition-financing
+    reference could not be decided: its owning Base Capital Structure could not
+    be read or analysed. Never to be read as "no refinance"."""
+
+
+def _visible_owner(deal_id: str, *, db_path: Path | None) -> str | None:
+    """The visible Investment ``deal_id`` is a Unit of, or ``None``."""
+
+    for investment in store.list_visible_investments(db_path=db_path):
+        if any(unit.unit_id == deal_id for unit in investment.units):
+            return investment.id
+    return None
+
+
+def acquisition_reference_applies(deal_id: str, *, db_path: Path | None = None) -> bool:
+    """Whether Excel Exports 1-3 must name this Deal's acquisition-loan levered
+    figures as the acquisition-financing reference (Section 25.1 item 10).
+
+    The Deal's *Base* Capital Structure is read from its true owner: its own
+    (hidden) wrapper for a standalone Deal, and the owning visible Investment
+    for a Unit -- never through the Deal route that rightly refuses a visible
+    Investment's Unit. Strategy replacements are not consulted: an export is of
+    the saved Base underwriting. The reference applies when an **executed**
+    refinance of the Base Strategy under the Base Scenario applies to this
+    Deal: one scoped to it, or one of the whole Investment. A refinance of
+    another Unit does not. Nothing is computed; statuses and scopes are read.
+
+    Raises ``AcquisitionReferenceUnavailableError`` when the owner's structure
+    or its analysis cannot be read, so the export is refused rather than
+    produced without a label it may need. ``DealNotFoundError`` and any
+    unexpected error propagate unchanged."""
+
+    from ..capital_structure.contracts import CapitalStructureValidationError, UnsupportedCapitalPositionError
+    from ..capital_structure.execution_contracts import CapitalStructureExecutionError
+    from .contracts import InvestmentNotFoundError, InvestmentStructureError
+    from .investment_variants import InvestmentVariantValidationError
+    from .structured_variants import StructuredVariantConflictError, analyze_structured_variant
+
+    try:
+        owner = _visible_owner(deal_id, db_path=db_path)
+        if owner is None:
+            investment_id, structure = store.read_deal_capital_structure(deal_id, db_path=db_path)
+        else:
+            investment_id, structure = owner, store.get_base_capital_structure(owner, db_path=db_path)
+        if investment_id is None or not has_capital_events(structure):
+            return False
+        result = analyze_structured_variant(
+            investment_id, BASE_STRATEGY_ID, BASE_SCENARIO_ID, db_path=db_path
+        ).result
+    except DealNotFoundError:
+        raise
+    except (
+        store.PersistedDealDataError,
+        InvestmentStructureError,
+        InvestmentNotFoundError,
+        CapitalStructureValidationError,
+        UnsupportedCapitalPositionError,
+        CapitalStructureExecutionError,
+        StructuredVariantConflictError,
+        InvestmentVariantValidationError,
+    ) as error:
+        raise AcquisitionReferenceUnavailableError(str(error)) from error
+    if not isinstance(result, RefinancedCapitalResult):
+        raise AcquisitionReferenceUnavailableError("The Base analysis carries no refinance result.")
+    return any(
+        event.status is RefinanceStatus.EXECUTED
+        and (event.scope.kind is ScopeKind.INVESTMENT or event.scope.unit_id == deal_id)
+        for event in result.capital_events
     )
 
 
@@ -270,19 +343,26 @@ def blanked_by_refinance(partnership_result: object) -> bool:
 
 
 def unit_names_of(unit_ids: tuple[str, ...], *, db_path: Path | None = None) -> dict[str, str]:
-    """Each Unit by its Deal's name -- the name the analyst has always seen."""
+    """Each Unit by its Deal's name -- the name the analyst has always seen.
+
+    A Unit whose Deal no longer exists is named honestly, never by its id.
+    Only that: persisted-data corruption, a database failure or a programming
+    error propagates to the caller's typed refusal boundary rather than being
+    worded as a removed Unit (Stage 3 correction round)."""
 
     names: dict[str, str] = {}
     for unit_id in unit_ids:
         try:
             names[unit_id] = store.get_deal(unit_id, db_path=db_path).name
-        except Exception:  # noqa: BLE001 -- a removed Unit is named honestly, never by its id
+        except DealNotFoundError:
             names[unit_id] = "the selected Unit (no longer available)"
     return names
 
 
 __all__ = [
     "ACQUISITION_REFERENCE_LABEL",
+    "AcquisitionReferenceUnavailableError",
+    "acquisition_reference_applies",
     "CapitalEventPresence",
     "DSCR_BASIS",
     "REFINANCE_REASON_SENTENCES",

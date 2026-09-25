@@ -13,7 +13,7 @@ sensitivity math of its own.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, datetime, timezone
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
@@ -163,7 +163,7 @@ from .capital_structure.execution_contracts import (
 )
 from .deals.capital_event_identity import CapitalEventIdentityConflictError
 from .deals.capital_structure_codec import FundingAmountRuleKind, PositionTermsKind, RetiringRefKind
-from .deals.refinance_integration import has_capital_events
+from .deals.refinance_presentation import AcquisitionReferenceUnavailableError, acquisition_reference_applies
 from .deals.partnership_codec import HurdleConditionKind
 from .deals.partnership_variants import (
     analyze_partnership_variant,
@@ -2476,6 +2476,7 @@ _EXPORT_REFUSAL_STATUS: dict[QuickAuditRefusalCode, int] = {
     QuickAuditRefusalCode.ANALYSIS_MISSING: status.HTTP_409_CONFLICT,
     QuickAuditRefusalCode.ANALYSIS_STALE: status.HTTP_409_CONFLICT,
     QuickAuditRefusalCode.ANALYSIS_INCONSISTENT: status.HTTP_409_CONFLICT,
+    QuickAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE: status.HTTP_409_CONFLICT,
     QuickAuditRefusalCode.HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT: status.HTTP_422_UNPROCESSABLE_CONTENT,
     QuickAuditRefusalCode.EXPORT_GENERATION_FAILED: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
@@ -2522,12 +2523,15 @@ def export_quick_underwrite_workbook(deal_id: str) -> Response:
         ) from None
 
     try:
-        source = _with_refinance_reference(quick_audit_source(
+        base = quick_audit_source(
             provenance,
             generated_at=datetime.now(timezone.utc),
             anchor_version=anchor_version(),
             source_commit=source_commit(),
-        ))
+        )
+        source = _with_refinance_reference(
+            base, lambda message: QuickAuditExportError(QuickAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE, message)
+        )
         workbook = build_quick_audit_workbook(source)
     except QuickAuditExportError as error:
         raise _export_refusal(error.code, error.message) from None
@@ -2548,20 +2552,31 @@ def export_quick_underwrite_workbook(deal_id: str) -> Response:
     )
 
 
-def _with_refinance_reference(source: Any) -> Any:
-    """Refinance V1 Stage 3: an Excel Export 1-3 source, flagged when the Deal's
-    saved Base Capital Structure configures a refinance, so the workbook names
-    its acquisition-loan levered figures as the acquisition-financing
-    reference. A Deal without one is returned unchanged, and so builds exactly
-    the workbook it always did."""
+#: The analyst's words when the owning Capital Structure cannot be read.
+_CAPITAL_STRUCTURE_UNAVAILABLE_MESSAGE = (
+    "This Deal's Capital Structure could not be read, so whether its levered figures must be labelled as the "
+            "acquisition-financing reference is unknown and no workbook is produced. Open Risk -> Capital Structure, "
+            "then export again."
+)
+
+
+def _with_refinance_reference(source: Any, refuse: Callable[[str], Exception]) -> Any:
+    """Refinance V1 Stage 3: an Excel Export 1-3 source, flagged when an
+    executed refinance of the Deal's Base Capital Structure applies to it, so
+    the workbook names its acquisition-loan levered figures as the
+    acquisition-financing reference. A Deal with none is returned unchanged,
+    and so builds exactly the workbook it always did.
+
+    Correction round: the Base structure is read from its true owner -- a
+    visible Investment for its Unit -- and a structure that cannot be read or
+    analysed is refused with the mode's typed ``capital_structure_unavailable``
+    (``refuse``), never exported unlabelled."""
 
     try:
-        _, structure = investment_store.read_deal_capital_structure(source.deal_id)
-    except (DealNotFoundError, InvestmentStructureError):
-        return source
-    if not has_capital_events(structure):
-        return source
-    return dataclasses.replace(source, refinance_configured=True)
+        applies = acquisition_reference_applies(source.deal_id)
+    except AcquisitionReferenceUnavailableError:
+        raise refuse(_CAPITAL_STRUCTURE_UNAVAILABLE_MESSAGE) from None
+    return dataclasses.replace(source, refinance_configured=True) if applies else source
 
 
 _DETAILED_EXPORT_REFUSAL_STATUS: dict[DetailedAuditRefusalCode, int] = {
@@ -2570,6 +2585,7 @@ _DETAILED_EXPORT_REFUSAL_STATUS: dict[DetailedAuditRefusalCode, int] = {
     DetailedAuditRefusalCode.ANALYSIS_MISSING: status.HTTP_409_CONFLICT,
     DetailedAuditRefusalCode.ANALYSIS_STALE: status.HTTP_409_CONFLICT,
     DetailedAuditRefusalCode.ANALYSIS_INCONSISTENT: status.HTTP_409_CONFLICT,
+    DetailedAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE: status.HTTP_409_CONFLICT,
     DetailedAuditRefusalCode.HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT: status.HTTP_422_UNPROCESSABLE_CONTENT,
     DetailedAuditRefusalCode.EXPORT_GENERATION_FAILED: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
@@ -2611,12 +2627,15 @@ def export_detailed_underwrite_workbook(deal_id: str) -> Response:
         ) from None
 
     try:
-        source = _with_refinance_reference(detailed_audit_source(
+        base = detailed_audit_source(
             provenance,
             generated_at=datetime.now(timezone.utc),
             anchor_version=anchor_version(),
             source_commit=source_commit(),
-        ))
+        )
+        source = _with_refinance_reference(
+            base, lambda message: DetailedAuditExportError(DetailedAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE, message)
+        )
         workbook = build_detailed_audit_workbook(source)
     except DetailedAuditExportError as error:
         raise _detailed_export_refusal(error.code, error.message) from None
@@ -2657,6 +2676,7 @@ _LEASE_LEVEL_EXPORT_REFUSAL_STATUS: dict[LeaseLevelAuditRefusalCode, int] = {
     LeaseLevelAuditRefusalCode.LEASE_LEVEL_INPUTS_INVALID: status.HTTP_409_CONFLICT,
     LeaseLevelAuditRefusalCode.TERMINAL_VALUE_NOT_CAPITALIZABLE: status.HTTP_422_UNPROCESSABLE_CONTENT,
     LeaseLevelAuditRefusalCode.EXCEL_CAPACITY_EXCEEDED: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    LeaseLevelAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE: status.HTTP_409_CONFLICT,
     LeaseLevelAuditRefusalCode.EXPORT_GENERATION_FAILED: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
 
@@ -2700,12 +2720,15 @@ def export_lease_level_workbook(deal_id: str) -> Response:
         ) from None
 
     try:
-        source = _with_refinance_reference(lease_level_audit_source(
+        base = lease_level_audit_source(
             provenance,
             generated_at=datetime.now(timezone.utc),
             anchor_version=anchor_version(),
             source_commit=source_commit(),
-        ))
+        )
+        source = _with_refinance_reference(
+            base, lambda message: LeaseLevelAuditExportError(LeaseLevelAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE, message)
+        )
         workbook = build_lease_level_audit_workbook(source)
     except LeaseLevelAuditExportError as error:
         raise _lease_level_export_refusal(error.code, error.message) from None

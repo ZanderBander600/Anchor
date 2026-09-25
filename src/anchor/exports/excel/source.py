@@ -80,6 +80,11 @@ class QuickAuditRefusalCode(Enum):
     ANALYSIS_STALE = "analysis_stale"
     ANALYSIS_INCONSISTENT = "analysis_inconsistent"
     HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT = "hold_period_exceeds_export_limit"
+    #: Refinance V1 Stage 3 correction round: whether this Deal's acquisition
+    #: figures must be labelled as the acquisition-financing reference could not
+    #: be decided -- its owning Base Capital Structure could not be read or
+    #: analysed -- so no workbook is produced rather than one missing that label.
+    CAPITAL_STRUCTURE_UNAVAILABLE = "capital_structure_unavailable"
     EXPORT_GENERATION_FAILED = "export_generation_failed"
 
 
@@ -188,6 +193,11 @@ class DetailedAuditRefusalCode(Enum):
     ANALYSIS_STALE = "analysis_stale"
     ANALYSIS_INCONSISTENT = "analysis_inconsistent"
     HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT = "hold_period_exceeds_export_limit"
+    #: Refinance V1 Stage 3 correction round: whether this Deal's acquisition
+    #: figures must be labelled as the acquisition-financing reference could not
+    #: be decided -- its owning Base Capital Structure could not be read or
+    #: analysed -- so no workbook is produced rather than one missing that label.
+    CAPITAL_STRUCTURE_UNAVAILABLE = "capital_structure_unavailable"
     EXPORT_GENERATION_FAILED = "export_generation_failed"
 
 
@@ -375,6 +385,11 @@ class LeaseLevelAuditRefusalCode(Enum):
     TERMINAL_VALUE_NOT_CAPITALIZABLE = "terminal_value_not_capitalizable"
     #: The Deal is larger than an Excel worksheet can hold.
     EXCEL_CAPACITY_EXCEEDED = "excel_capacity_exceeded"
+    #: Refinance V1 Stage 3 correction round: whether this Deal's acquisition
+    #: figures must be labelled as the acquisition-financing reference could not
+    #: be decided -- its owning Base Capital Structure could not be read or
+    #: analysed -- so no workbook is produced rather than one missing that label.
+    CAPITAL_STRUCTURE_UNAVAILABLE = "capital_structure_unavailable"
     EXPORT_GENERATION_FAILED = "export_generation_failed"
 
 
