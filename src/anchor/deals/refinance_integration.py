@@ -15,10 +15,12 @@ carried through unchanged.
    event holds no reference, so it can never name one.
 2. **The evidence gate's typed reason** (Section 15.2; Stage 1 record item 10;
    review correction). The evidence-aware authority presents a withheld
-   analyst-supplied cell as having no value, so the frozen engine reports its
-   generic ``valuation_unavailable``. Which of those the evidence gate caused is
-   a typed fact -- the event, its scope, its referenced timepoint and the
-   blocked Units -- and this module classifies from those facts alone. It then
+   analyst-supplied cell as having no value, with the typed valuation reason
+   ``evidence_not_approved``, so the frozen engine reports its generic
+   ``valuation_unavailable`` and carries that cell reason on the event's
+   ``ValueDependency``. This module classifies from typed facts alone: the
+   dependency's own reason for a Unit event, and for an Investment event the
+   member cells of the same gated authority the engine read. It then
    rebuilds, from typed objects, every analyst-facing message that restates the
    event: the event's own, its LTV capacity's, the positions of its scope, its
    unexecuted replacement and Common Equity's. **No message is read, parsed or
@@ -45,7 +47,6 @@ from ..capital_structure.execution_contracts import (
     PositionReturns,
     StructuredCapitalResult,
 )
-from ..capital_structure.funding import valuation_scope
 from ..capital_structure.refinance_contracts import (
     ConstraintKind,
     RefinanceResult,
@@ -54,7 +55,8 @@ from ..capital_structure.refinance_contracts import (
     RefinancedCapitalResult,
     UnexecutedPosition,
 )
-from .valuation_views import scope_evidence_blocked
+from ..valuation.contracts import ValuationUnavailableReason
+from ..valuation.funding import ValuationAuthority
 
 # =============================================================================
 # 1. Consumed valuations: LTV only, exact scope
@@ -75,6 +77,15 @@ def refinance_valuation_scopes(capital_structure: CapitalStructure) -> tuple[tup
         for event in sorted(capital_structure.events, key=lambda item: item.event_id)
         if event.sizing.max_ltv is not None and event.valuation is not None
     )
+
+
+def has_capital_events(capital_structure: CapitalStructure) -> bool:
+    """Whether the structure configures at least one capital event. The one
+    test the temporary Stage 3 report gate reads (review correction), so the
+    readiness route, the publish route and the draft preview can never
+    disagree about which structures it covers."""
+
+    return isinstance(capital_structure, CapitalStructureWithEvents) and bool(capital_structure.events)
 
 
 def refinance_valuation_timepoints(capital_structure: CapitalStructure) -> tuple[str, ...]:
@@ -127,30 +138,53 @@ def _common_equity_message(not_executed: tuple[RefinanceResult, ...]) -> str:
     return " ".join(sentences)
 
 
+def _evidence_withheld(result: RefinanceResult, event: RefinanceEvent, authority: ValuationAuthority) -> bool:
+    """Whether the value this LTV event consumed is unknown because the
+    evidence gate withheld it -- read from typed reasons only.
+
+    A Unit event reads its own ``ValueDependency``: the engine copied the
+    consumed cell's reason onto it, and the gate states
+    ``EVIDENCE_NOT_APPROVED`` on every cell it withholds. An Investment event's
+    dependency is ``INCOMPLETE_UNITS``, so the member cells of the same gated
+    authority the engine read say whether a withheld cell made it incomplete.
+    No message is read."""
+
+    dependency = result.value_dependency
+    if dependency is None or dependency.value is not None:
+        return False
+    reason = dependency.valuation_unavailable_reason
+    if event.scope.kind is ScopeKind.UNIT:
+        return reason is ValuationUnavailableReason.EVIDENCE_NOT_APPROVED
+    if reason is not ValuationUnavailableReason.INCOMPLETE_UNITS:
+        return False
+    found = next((item for item in authority.valuations if item.timepoint_id == dependency.timepoint_id), None)
+    return found is not None and any(
+        cell.unavailable_reason is ValuationUnavailableReason.EVIDENCE_NOT_APPROVED for cell in found.unit_results
+    )
+
+
 def _classified(
     result: RefinanceResult,
     event: RefinanceEvent,
     *,
-    withheld: Mapping[str, Mapping[str, str]],
+    authority: ValuationAuthority,
     valuation_labels: Mapping[str, str],
 ) -> RefinanceResult | None:
     """The event's result with ``evidence_not_approved`` stated, or ``None``
     when the evidence gate did not cause any of its unavailability.
 
-    Typed facts only: the event sizes by LTV; the evidence gate withheld a cell
-    its **exact scope** depends on (its own Unit's, or any member's for the
-    Investment); and the engine reported that LTV capacity unavailable for want
-    of the value -- ``valuation_unavailable``, which only the LTV capacity
-    produces. The event itself is restated only when that same reason is the
-    one it reports; a retirement or other reason that preceded it is kept."""
+    Typed facts only: the event sizes by LTV; the value its **exact scope**
+    consumed is unknown for the evidence gate's typed reason
+    (``_evidence_withheld``); and the engine reported that LTV capacity
+    unavailable for want of the value -- ``valuation_unavailable``, which only
+    the LTV capacity produces. The event itself is restated only when that same
+    reason is the one it reports; a retirement or other reason that preceded it
+    is kept."""
 
     reference = event.valuation
     if event.sizing.max_ltv is None or reference is None or result.sizing is None:
         return None
-    scope_kind, unit_id = valuation_scope(event.scope)
-    if not scope_evidence_blocked(
-        withheld, timepoint_id=reference.timepoint_id, scope_kind=scope_kind, unit_id=unit_id
-    ):
+    if not _evidence_withheld(result, event, authority):
         return None
     ltv = next((capacity for capacity in result.sizing.capacities if capacity.kind is ConstraintKind.MAX_LTV), None)
     if ltv is None or ltv.unavailable_reason is not RefinanceUnavailableReason.VALUATION_UNAVAILABLE:
@@ -180,16 +214,17 @@ def with_evidence_not_approved(
     result: StructuredCapitalResult,
     *,
     capital_structure: CapitalStructure,
-    withheld: Mapping[str, Mapping[str, str]],
+    authority: ValuationAuthority | None,
     valuation_labels: Mapping[str, str],
 ) -> StructuredCapitalResult:
     """``result`` with ``evidence_not_approved`` stated wherever the evidence
     gate, and not another fact, left an LTV capacity unknowable -- and every
     message that restates such an event rebuilt from typed objects.
 
-    ``withheld`` is the P7.10 evidence gate's own finding, by ``timepoint_id``
-    then ``unit_id``. A result with no refinance, or no event the gate
-    affected, is returned as the very same object.
+    ``authority`` is the gated valuation authority the engine itself read, so
+    classification sees exactly the cells the event consumed. A result with no
+    refinance, or no event the gate affected, is returned as the very same
+    object.
 
     What is rebuilt, and why exactly that: Stage 1 restates a non-executed
     event's sentence in the positions of **that event's own scope**, in **its
@@ -197,7 +232,7 @@ def with_evidence_not_approved(
     blocked by a Unit event and an upstream Investment event carry sentences
     that name no event's reason, and are left as they are."""
 
-    if not isinstance(result, RefinancedCapitalResult) or not withheld:
+    if not isinstance(result, RefinancedCapitalResult) or authority is None:
         return result
     if not isinstance(capital_structure, CapitalStructureWithEvents):
         return result
@@ -208,7 +243,7 @@ def with_evidence_not_approved(
         event = events.get(event_result.event_id)
         if event is None:
             continue
-        classified = _classified(event_result, event, withheld=withheld, valuation_labels=valuation_labels)
+        classified = _classified(event_result, event, authority=authority, valuation_labels=valuation_labels)
         if classified is not None:
             restated[event_result.event_id] = classified
     if not restated:
@@ -348,6 +383,7 @@ __all__ = [
     "ReturnNamespace",
     "primary_return_view",
     "evidence_message",
+    "has_capital_events",
     "refinance_valuation_scopes",
     "refinance_valuation_timepoints",
     "with_evidence_not_approved",

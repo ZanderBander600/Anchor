@@ -128,6 +128,7 @@ _VALUATION_REASON_CODES: dict[ValuationUnavailableReason, UnavailableReasonCode]
     ValuationUnavailableReason.OUTSIDE_HOLD_HORIZON: UnavailableReasonCode.OUTSIDE_HOLD_HORIZON,
     ValuationUnavailableReason.RESERVED_EXIT_MONTH: UnavailableReasonCode.RESERVED_EXIT_MONTH,
     ValuationUnavailableReason.NOT_IMPLEMENTED_FOR_SCOPE: UnavailableReasonCode.NOT_IMPLEMENTED_FOR_SCOPE,
+    ValuationUnavailableReason.EVIDENCE_NOT_APPROVED: UnavailableReasonCode.EVIDENCE_NOT_APPROVED,
 }
 
 

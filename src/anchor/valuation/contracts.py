@@ -243,7 +243,14 @@ class ValuationUnavailableReason(StrEnum):
       The same definition may resolve under a longer hold.
     - ``RESERVED_EXIT_MONTH``: the model month is the exit month, whose value
       is the reserved system Exit view and is never a stored definition (R-B).
-    - ``NOT_IMPLEMENTED_FOR_SCOPE``: the scope has no implemented valuation."""
+    - ``NOT_IMPLEMENTED_FOR_SCOPE``: the scope has no implemented valuation.
+    - ``EVIDENCE_NOT_APPROVED``: an analyst-supplied value whose Evidence
+      Reference is missing or not approved. Stage 1 never produces it -- it
+      cannot see evidence -- and the P7.10 Stage 2 evidence gate states it on
+      the Unit cell it withholds, with no value. An Investment made incomplete
+      by such a cell is ``INCOMPLETE_UNITS``; its member cell keeps this
+      precise reason. (Additive amendment, Refinance V1 Stage 2 review
+      correction; no valuation arithmetic changes.)"""
 
     NOT_AUTHORED = "not_authored"
     INCOMPLETE_UNITS = "incomplete_units"
@@ -254,6 +261,7 @@ class ValuationUnavailableReason(StrEnum):
     OUTSIDE_HOLD_HORIZON = "outside_hold_horizon"
     RESERVED_EXIT_MONTH = "reserved_exit_month"
     NOT_IMPLEMENTED_FOR_SCOPE = "not_implemented_for_scope"
+    EVIDENCE_NOT_APPROVED = "evidence_not_approved"
 
 
 class ValuationScopeKind(StrEnum):

@@ -458,6 +458,23 @@ class MemoDependency:
     fingerprint: str
 
 
+class ValuationConsumerKind(StrEnum):
+    """What in the selected Capital Structure consumes one exact-scope value
+    (Refinance V1 Stage 2 review correction).
+
+    - ``PCT_OF_VALUE``: a ``PctOfValue`` funding is sized from it (P7.10
+      Section 6).
+    - ``REFINANCE_LTV``: an LTV-enabled refinance sizes its LTV capacity from
+      it (Refinance V1 Section 8.1).
+
+    Kept as provenance on every consumed requirement, so one value both
+    consumers read is recorded as consumed by both, and a refusal says truly
+    which one depends on it."""
+
+    PCT_OF_VALUE = "pct_of_value"
+    REFINANCE_LTV = "refinance_ltv"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MemoVersionValuation:
     """One valuation view as it stood when the version was published
@@ -469,7 +486,10 @@ class MemoVersionValuation:
     at this timepoint" keeps saying so forever.
 
     ``selected`` says the memo *included* this view, and ``consumed`` that a
-    ``PctOfValue`` funding of the selected variant sized itself from it. Both
+    ``PctOfValue`` funding of the selected variant sized itself from its
+    complete Investment value. A consumer of one Unit's cell does not consume
+    the whole view, so it leaves ``consumed`` false; that exact-scope fact is
+    frozen in the version's consumption record instead (schema 17). Both
     are recorded because they are different reasons for a valuation to be a
     dependency, and only one of them is visible in the report: a consumed
     valuation the memo never displays is still load-bearing.

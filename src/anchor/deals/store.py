@@ -1579,20 +1579,26 @@ CREATE TABLE IF NOT EXISTS capital_refinance_proceeds (
 )
 """
 
-#: Schema 17 (review correction) -- what one published memo version consumed,
-#: at exact scope. ``memo_version_valuations.consumed`` says only that a
-#: consumer named a view; a Unit consumer depends on its own Unit's cell alone,
-#: so the frozen record names the scope too: ``scope_kind`` is ``unit`` with
+#: Schema 17 (review corrections) -- the typed audit record of what one
+#: published memo version consumed, at exact scope, and what consumed it.
+#: ``memo_version_valuations.consumed`` says only that the complete Investment
+#: value of a view was consumed; a Unit consumer depends on its own Unit's cell
+#: alone, so this record names the scope too: ``scope_kind`` is ``unit`` with
 #: ``unit_id`` the Unit, or ``investment`` with ``unit_id`` ``''`` (not NULL, for
-#: the reason ``memo_version_dependencies.scope_id`` is not). Written only by the
-#: publication transaction and never updated; deleted only with the Investment.
+#: the reason ``memo_version_dependencies.scope_id`` is not). ``consumer_kind``
+#: is the typed provenance, so a scope a funding and a refinance both read is
+#: two rows. Every row names a view its own version froze. Written only by the
+#: publication transaction and never updated; deleted only with the Investment,
+#: as a member of ``_MEMO_VERSION_CHILD_TABLES``.
 _CREATE_MEMO_VERSION_CONSUMED_VALUATIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS memo_version_consumed_valuations (
-    version_id    TEXT NOT NULL,
-    timepoint_id  TEXT NOT NULL,
-    scope_kind    TEXT NOT NULL CHECK (scope_kind IN ('unit', 'investment')),
-    unit_id       TEXT NOT NULL,
-    PRIMARY KEY (version_id, timepoint_id, scope_kind, unit_id)
+    version_id     TEXT NOT NULL,
+    timepoint_id   TEXT NOT NULL,
+    scope_kind     TEXT NOT NULL CHECK (scope_kind IN ('unit', 'investment')),
+    unit_id        TEXT NOT NULL,
+    consumer_kind  TEXT NOT NULL CHECK (consumer_kind IN ('pct_of_value', 'refinance_ltv')),
+    CHECK ((scope_kind = 'unit') = (unit_id <> '')),
+    PRIMARY KEY (version_id, timepoint_id, scope_kind, unit_id, consumer_kind)
 )
 """
 
@@ -2315,6 +2321,10 @@ _MEMO_VERSION_CHILD_TABLES = (
     # Schema 16. Deleted only with the whole Investment, exactly like its
     # siblings: no function removes one version's artifact on its own.
     "memo_version_report_artifacts",
+    # Schema 17 (Refinance V1 Stage 2 review correction): the exact-scope
+    # consumption record. Deleted only with the whole Investment, like every
+    # sibling.
+    "memo_version_consumed_valuations",
 )
 
 _P7_10_TABLES = (
@@ -11200,7 +11210,7 @@ def _delete_investment_memos(connection: sqlite3.Connection, investment_id: str)
         ).fetchall()
     ]
     for version_id in version_ids:
-        for table in (*_MEMO_VERSION_CHILD_TABLES, "memo_version_consumed_valuations"):
+        for table in _MEMO_VERSION_CHILD_TABLES:
             connection.execute(f"DELETE FROM {table} WHERE version_id = ?", (version_id,))
         connection.execute(
             "DELETE FROM investment_committee_decisions WHERE version_id = ?", (version_id,)
@@ -11688,13 +11698,27 @@ def publish_memo_version(
                     1 if view.consumed else 0,
                 ),
             )
-        # Schema 17 (review correction): each exact-scope value the selected
-        # Capital Structure consumed, frozen with the version.
+        # Schema 17 (review corrections): each exact-scope value the selected
+        # Capital Structure consumed, and what consumed it, frozen with the
+        # version. Every row names a view this version froze just above.
+        frozen_timepoints = {view.timepoint_id for view in valuations}
+        for item in consumed_valuations:
+            if item.timepoint_id not in frozen_timepoints:
+                raise ValueError(
+                    "A consumed valuation must name a valuation view the version freezes; the consumption "
+                    "record never outlives what it describes."
+                )
         connection.executemany(
-            "INSERT INTO memo_version_consumed_valuations (version_id, timepoint_id, scope_kind, unit_id) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO memo_version_consumed_valuations "
+            "(version_id, timepoint_id, scope_kind, unit_id, consumer_kind) VALUES (?, ?, ?, ?, ?)",
             [
-                (version_id, item.timepoint_id, _encode_enum(item.scope_kind), item.unit_id or "")
+                (
+                    version_id,
+                    item.timepoint_id,
+                    _encode_enum(item.scope_kind),
+                    item.unit_id or "",
+                    _encode_enum(item.consumer),
+                )
                 for item in consumed_valuations
             ],
         )
@@ -11742,33 +11766,66 @@ def publish_memo_version(
 def list_memo_version_consumed_valuations(
     investment_id: str, version_id: str, *, db_path: Path | None = None
 ) -> tuple[Any, ...]:
-    """The exact-scope values one published version consumed, as frozen when it
-    was published, in ``(timepoint, scope)`` order -- the empty tuple for a
-    version that consumed none, and for every version published before schema
-    17, which recorded none and gains none. Read-only."""
+    """The exact-scope values one published version consumed, and what consumed
+    each, as frozen when it was published, in ``(timepoint, scope, consumer)``
+    order -- the empty tuple for a version that consumed none, and for every
+    version published before schema 17, which recorded none and gains none:
+    nothing is backfilled or inferred. Read-only.
 
+    Read within the owning Investment: a version of another Investment, or one
+    that does not exist, is ``MemoVersionNotFoundError`` and none of its rows is
+    returned. Fails closed on an unknown scope or consumer token, a Unit column
+    that disagrees with the scope, and a row naming a view its version did not
+    freeze."""
+
+    from ..memo.contracts import ValuationConsumerKind
     from ..valuation.contracts import ValuationScopeKind
     from .valuation_views import ValuationRequirement
 
     with _connect(db_path) as connection:
         _require_memo_owner(connection, investment_id)
+        if connection.execute(
+            "SELECT 1 FROM investment_memo_versions WHERE version_id = ? AND investment_id = ?",
+            (version_id, investment_id),
+        ).fetchone() is None:
+            raise MemoVersionNotFoundError(investment_id, version_id)
         rows = connection.execute(
             "SELECT * FROM memo_version_consumed_valuations WHERE version_id = ? "
-            "ORDER BY timepoint_id, scope_kind, unit_id",
+            "ORDER BY timepoint_id, scope_kind, unit_id, consumer_kind",
             (version_id,),
         ).fetchall()
+        frozen = {
+            row["timepoint_id"]
+            for row in connection.execute(
+                "SELECT timepoint_id FROM memo_version_valuations WHERE version_id = ?", (version_id,)
+            ).fetchall()
+        }
     found = []
     for row in rows:
         scope_kind = _decode_enum(row["scope_kind"], ValuationScopeKind, path="memo_version_consumed_valuations.scope_kind")
         if not isinstance(scope_kind, ValuationScopeKind):
             raise PersistedDealDataError(f"Version {version_id!r} records a consumed value with no scope.")
+        consumer = _decode_enum(
+            row["consumer_kind"], ValuationConsumerKind, path="memo_version_consumed_valuations.consumer_kind"
+        )
+        if not isinstance(consumer, ValuationConsumerKind):
+            raise PersistedDealDataError(f"Version {version_id!r} records a consumed value with no consumer.")
         unit_id = row["unit_id"] or None
         if (scope_kind is ValuationScopeKind.UNIT) is (unit_id is None):
             raise PersistedDealDataError(
                 f"Version {version_id!r} records a consumed {row['scope_kind']} value whose Unit column disagrees "
                 "with its scope."
             )
-        found.append(ValuationRequirement(timepoint_id=row["timepoint_id"], scope_kind=scope_kind, unit_id=unit_id))
+        if row["timepoint_id"] not in frozen:
+            raise PersistedDealDataError(
+                f"Version {version_id!r} records a consumed value at timepoint {row['timepoint_id']!r}, which it "
+                "did not freeze. The consumption record is orphaned."
+            )
+        found.append(
+            ValuationRequirement(
+                timepoint_id=row["timepoint_id"], scope_kind=scope_kind, unit_id=unit_id, consumer=consumer
+            )
+        )
     return tuple(found)
 
 

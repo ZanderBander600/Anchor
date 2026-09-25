@@ -65,7 +65,7 @@ from ..memo.availability import (
     investment_unavailable,
     unit_unavailable,
 )
-from ..memo.contracts import MemoEvidenceReference
+from ..memo.contracts import MemoEvidenceReference, ValuationConsumerKind
 from ..valuation.contracts import (
     AnalystValue,
     ExitValuationView,
@@ -443,29 +443,40 @@ def resolve_views(
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ValuationRequirement:
-    """One exact-scope value a resolved Capital Structure consumes (P7.10
-    Section 6, R-E; Refinance V1 Sections 8.1 and 14.1).
+    """One exact-scope value a resolved Capital Structure consumes, and what
+    consumes it (P7.10 Section 6, R-E; Refinance V1 Sections 8.1 and 14.1).
 
     ``UNIT`` names one Unit's cell at the timepoint; ``INVESTMENT`` names the
     complete Investment value, which exists only when every member Unit's does.
     A requirement never widens: a Unit consumer depends on its own cell alone,
-    so another Unit's value, evidence or availability is not its dependency."""
+    so another Unit's value, evidence or availability is not its dependency.
+
+    ``consumer`` is the typed provenance (review correction): a value both a
+    ``PctOfValue`` funding and an LTV refinance read is two requirements, one
+    per consumer, so de-duplication never erases which of them depends on it."""
 
     timepoint_id: str
     scope_kind: ValuationScopeKind
     unit_id: str | None
+    consumer: ValuationConsumerKind
 
-    def key(self) -> tuple[str, str, str]:
+    def key(self) -> tuple[str, str, str, str]:
+        return self.timepoint_id, self.scope_kind.value, self.unit_id or "", self.consumer.value
+
+    def scope_key(self) -> tuple[str, str, str]:
+        """The exact scope alone, without the consumer."""
+
         return self.timepoint_id, self.scope_kind.value, self.unit_id or ""
 
 
 def _withheld_cell(cell: UnitValuationResult, *, detail: str) -> UnitValuationResult:
     """One analyst-supplied cell whose Evidence Reference cannot support it:
-    unavailable, with no value and no operand. The amount the analyst typed is
-    never carried. P7.10's valuation reasons have no evidence member -- the
-    evidence gate is Stage 2's own -- so the typed fact lives in the gate's
-    ``blocked`` map, and this cell states only that it has no value, and why,
-    in words."""
+    unavailable, with no value and no operand, and the typed reason
+    ``EVIDENCE_NOT_APPROVED`` (the additive P7.10 amendment; review
+    correction). Every unavailable cell carries a stable reason, so every
+    consumer -- a ``PctOfValue`` funding's ``valuation_reason``, an LTV
+    refinance's ``ValueDependency`` -- reads the evidence fact from the cell it
+    consumed. The amount the analyst typed is never carried."""
 
     return replace(
         cell,
@@ -473,7 +484,7 @@ def _withheld_cell(cell: UnitValuationResult, *, detail: str) -> UnitValuationRe
         value=None,
         forward_noi=None,
         cap_rate=None,
-        unavailable_reason=None,
+        unavailable_reason=ValuationUnavailableReason.EVIDENCE_NOT_APPROVED,
         unavailable_message=(
             f"The analyst-supplied value is not used: {detail} its Evidence Reference. It is never read as zero or "
             "replaced by another value."

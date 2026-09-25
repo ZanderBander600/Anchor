@@ -73,6 +73,7 @@ from ..capital_structure.funding import valuation_scope
 from ..capital_structure.validation import economic_order
 from ..contracts import AcquisitionTerms, acquisition_terms_from_inputs
 from ..memo.availability import AvailabilityStatus, UnavailableState
+from ..memo.contracts import ValuationConsumerKind
 from ..engine.contracts import AcquisitionResults, DetailedAcquisitionResults
 from ..valuation.contracts import (
     FundingResolutionStatus,
@@ -524,29 +525,42 @@ def pct_of_value_timepoints(capital_structure: CapitalStructure) -> tuple[str, .
 
 
 def valuation_requirements(capital_structure: CapitalStructure) -> tuple[ValuationRequirement, ...]:
-    """Every exact-scope value the resolved structure consumes, in canonical
-    ``(timepoint, scope)`` order and without duplicates (P7.10 Section 6 and
-    R-E; Refinance V1 Sections 8.1 and 14.3; review correction):
+    """Every exact-scope value the resolved structure consumes, with its typed
+    consumer, in canonical ``(timepoint, scope, consumer)`` order (P7.10
+    Section 6 and R-E; Refinance V1 Sections 8.1 and 14.3; review correction):
 
     - each ``PctOfValue`` funding requires the value of **its position's
-      scope** -- that Unit's cell, or the complete Investment value;
+      scope** -- that Unit's cell, or the complete Investment value --
+      consumed as ``PCT_OF_VALUE``;
     - each **LTV-enabled** refinance requires the value of **its event's
-      scope** in the same way.
+      scope** in the same way, consumed as ``REFINANCE_LTV``.
 
-    A DSCR-only, fixed-only or fixed-plus-DSCR refinance requires none, and a
-    requirement never widens to a scope its consumer does not read."""
+    Duplicates collapse only within one consumer: a value both kinds read is
+    two requirements, so its provenance survives. A DSCR-only, fixed-only or
+    fixed-plus-DSCR refinance requires none, and a requirement never widens to
+    a scope its consumer does not read."""
 
-    found: dict[tuple[str, str, str], ValuationRequirement] = {}
+    found: dict[tuple[str, str, str, str], ValuationRequirement] = {}
     for position in capital_structure.positions:
         for event in position.funding:
             rule = event.amount_rule
             if isinstance(rule, PctOfValue):
                 scope_kind, unit_id = valuation_scope(position.scope)
-                requirement = ValuationRequirement(timepoint_id=rule.timepoint_id, scope_kind=scope_kind, unit_id=unit_id)
+                requirement = ValuationRequirement(
+                    timepoint_id=rule.timepoint_id,
+                    scope_kind=scope_kind,
+                    unit_id=unit_id,
+                    consumer=ValuationConsumerKind.PCT_OF_VALUE,
+                )
                 found.setdefault(requirement.key(), requirement)
     for timepoint_id, scope in refinance_valuation_scopes(capital_structure):
         scope_kind, unit_id = valuation_scope(scope)
-        requirement = ValuationRequirement(timepoint_id=timepoint_id, scope_kind=scope_kind, unit_id=unit_id)
+        requirement = ValuationRequirement(
+            timepoint_id=timepoint_id,
+            scope_kind=scope_kind,
+            unit_id=unit_id,
+            consumer=ValuationConsumerKind.REFINANCE_LTV,
+        )
         found.setdefault(requirement.key(), requirement)
     return tuple(found[key] for key in sorted(found))
 
@@ -862,7 +876,7 @@ def analyze_structured_variant(
     result = with_evidence_not_approved(
         result,
         capital_structure=resolved.capital_structure,
-        withheld=valuation.blocked,
+        authority=valuation.authority,
         valuation_labels={timepoint.timepoint_id: timepoint.label for timepoint in valuation.timepoints},
     )
     return RefinancedStructuredVariantAnalysis(

@@ -35,6 +35,7 @@ from .contracts import (
     InvestmentMemoDraft,
     MemoEvidenceReference,
     SelectedDecision,
+    ValuationConsumerKind,
 )
 from .validation import validate_memo_draft
 
@@ -64,6 +65,14 @@ class PublicationRefusalCode(StrEnum):
       consumed -- has no value. The version is not published with a fabricated
       or omitted figure in its place. An authored but unselected and unconsumed
       definition is not a dependency and never reaches this code.
+    - ``REFINANCE_REPORTING_NOT_AVAILABLE``: the selected Capital Structure
+      configures a capital event, and the refinance-aware report -- the
+      Common Equity / Partner primary returns, the sizing and bridge sections
+      and the refinance headlines (Refinance V1 R-P, Sections 12.5 and 16.3) --
+      is Stage 3 work. Until it exists, a report of the acquisition financing
+      alone would misstate the recommended case, so none is issued or
+      previewed. **Temporary:** Stage 3 removes this gate only once that
+      presentation is implemented and tested.
     """
 
     MEMO_INVALID = "memo_invalid"
@@ -76,6 +85,7 @@ class PublicationRefusalCode(StrEnum):
     EVIDENCE_NOT_FOUND = "evidence_not_found"
     EVIDENCE_NOT_APPROVED = "evidence_not_approved"
     VALUATION_UNAVAILABLE_FOR_REQUIRED_VIEW = "valuation_unavailable_for_required_view"
+    REFINANCE_REPORTING_NOT_AVAILABLE = "refinance_reporting_not_available"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -105,6 +115,35 @@ class PublicationRefusedError(Exception):
         super().__init__("; ".join(refusal.message for refusal in self.refusals))
 
 
+class ReportPreviewRefusedError(PublicationRefusedError):
+    """A draft whose report cannot be previewed yet, with the same typed
+    refusals publication states. A subclass so every surface reports it
+    through the one established refusal shape."""
+
+
+#: The analyst-facing statement of the temporary Stage 3 report gate. No
+#: identity of any event, position or Unit is named: the analyst knows which
+#: Capital Structure they selected.
+REFINANCE_REPORTING_NOT_AVAILABLE_MESSAGE = (
+    "The selected Capital Structure includes a refinance, and Anchor cannot yet issue a report for it: the "
+    "refinance-aware returns, the refinance sizing and bridge sections and the report headlines are not available "
+    "yet. A report of the acquisition financing alone would misstate the recommended case, so none is issued or "
+    "previewed. Select a Strategy whose Capital Structure has no refinance to publish now."
+)
+
+
+def refinance_reporting_refusal() -> PublicationRefusal:
+    """The one refusal the temporary Stage 3 report gate states, shared by the
+    readiness route, the publish route and the draft preview so the three can
+    never word or code it differently."""
+
+    return PublicationRefusal(
+        code=PublicationRefusalCode.REFINANCE_REPORTING_NOT_AVAILABLE,
+        message=REFINANCE_REPORTING_NOT_AVAILABLE_MESSAGE,
+        field="capital_structure",
+    )
+
+
 class RequiredValuationReason(StrEnum):
     """Why one valuation is a dependency of the package being published.
 
@@ -112,9 +151,11 @@ class RequiredValuationReason(StrEnum):
     the report and a reader deserves to know which applies:
 
     - ``SELECTED``: the memo explicitly included this view. It will be shown.
-    - ``CONSUMED``: a ``PctOfValue`` funding of the selected variant sized
-      itself from this valuation (Section 6). The memo may never display it,
-      and the decision package still rests on it.
+    - ``CONSUMED``: the selected Capital Structure sized itself from this
+      valuation at one exact scope -- a ``PctOfValue`` funding (Section 6), an
+      LTV refinance (Refinance V1 Section 8.1), or both; ``consumers`` on the
+      requirement says which. The memo may never display it, and the decision
+      package still rests on it.
 
     An authored definition with neither reason is not a dependency at all."""
 
@@ -136,6 +177,12 @@ class RequiredValuation:
     available: bool
     unavailable_reason: str | None = None
     unavailable_detail: str = ""
+    #: What consumes a ``CONSUMED`` requirement, canonical and never empty for
+    #: one; empty for ``SELECTED``. The refusal's wording is chosen from it.
+    consumers: tuple[ValuationConsumerKind, ...] = ()
+    #: The valuation's analyst-facing label, named by a refusal that must not
+    #: print an opaque identity. ``""`` where none is known.
+    label: str = ""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -171,6 +218,9 @@ class PublicationContext:
     cell_detail: str = ""
     evidence: Mapping[str, MemoEvidenceReference]
     required_valuations: tuple[RequiredValuation, ...] = ()
+    #: Whether the selected Capital Structure configures a capital event, so
+    #: the temporary Stage 3 report gate applies.
+    capital_events_selected: bool = False
 
 
 def _selection_refusals(
@@ -293,6 +343,41 @@ _REQUIRED_VALUATION_WORDING: dict[RequiredValuationReason, tuple[str, str]] = {
 }
 
 
+#: How a consumed requirement reads, by what consumes it. ``PctOfValue`` alone
+#: keeps the accepted P7.10 wording word for word; a refinance, alone or beside
+#: a funding, is named for what it is and by the valuation's label.
+_REFINANCE_CONSUMED_WORDING = "the selected refinance sizes its LTV capacity from it"
+_BOTH_CONSUMED_WORDING = (
+    "the selected Capital Structure sizes both a percentage-of-value funding and a refinance's LTV capacity from it"
+)
+
+
+def _required_valuation_message(required: RequiredValuation) -> tuple[str, str]:
+    """One refusal's message and field, chosen from the typed reason and
+    consumers -- never from any text."""
+
+    because, field = _REQUIRED_VALUATION_WORDING[required.reason]
+    detail = f" {required.unavailable_detail}" if required.unavailable_detail else ""
+    consumers = set(required.consumers)
+    if required.reason is RequiredValuationReason.CONSUMED and ValuationConsumerKind.REFINANCE_LTV in consumers:
+        because = (
+            _BOTH_CONSUMED_WORDING if ValuationConsumerKind.PCT_OF_VALUE in consumers else _REFINANCE_CONSUMED_WORDING
+        )
+        named = f"The valuation '{required.label}'" if required.label else "A valuation"
+        return (
+            f"{named} has no value for the selected variant, and {because}, so the decision package depends on "
+            f"it.{detail} It is never published as zero, as the acquisition price, as another valuation, or "
+            "silently omitted.",
+            field,
+        )
+    return (
+        f"Valuation timepoint {required.timepoint_id!r} has no value for the selected variant, and "
+        f"{because}, so the decision package depends on it.{detail} It is never published as zero, as "
+        "the acquisition price, as another valuation, or silently omitted.",
+        field,
+    )
+
+
 def _valuation_refusals(context: PublicationContext) -> list[PublicationRefusal]:
     """Every valuation the package **depends on** currently has a value.
 
@@ -314,16 +399,11 @@ def _valuation_refusals(context: PublicationContext) -> list[PublicationRefusal]
     ):
         if required.available:
             continue
-        because, field = _REQUIRED_VALUATION_WORDING[required.reason]
-        detail = f" {required.unavailable_detail}" if required.unavailable_detail else ""
+        message, field = _required_valuation_message(required)
         refusals.append(
             PublicationRefusal(
                 code=PublicationRefusalCode.VALUATION_UNAVAILABLE_FOR_REQUIRED_VIEW,
-                message=(
-                    f"Valuation timepoint {required.timepoint_id!r} has no value for the selected variant, and "
-                    f"{because}, so the decision package depends on it.{detail} It is never published as zero, as "
-                    "the acquisition price, as another valuation, or silently omitted."
-                ),
+                message=message,
                 scope_id=required.timepoint_id,
                 field=field,
                 unavailable_reason=required.unavailable_reason,
@@ -339,7 +419,9 @@ def publication_refusals(
 
     Ordered: the draft's own well-formedness first, then the selected cell, then
     evidence, then the valuations the package depends on -- so the analyst reads
-    the most fundamental problem first."""
+    the most fundamental problem first -- and last the temporary Stage 3 report
+    gate, which is stated *beside* every specific finding rather than instead
+    of them."""
 
     refusals: list[PublicationRefusal] = [
         PublicationRefusal(
@@ -376,6 +458,8 @@ def publication_refusals(
         refusals.extend(_selection_refusals(selected, context))
     refusals.extend(_evidence_refusals(draft.cited_evidence_ids(), context))
     refusals.extend(_valuation_refusals(context))
+    if context.capital_events_selected:
+        refusals.append(refinance_reporting_refusal())
     return tuple(refusals)
 
 
