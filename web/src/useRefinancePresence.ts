@@ -11,17 +11,19 @@
  *
  * **Unknown is not "no refinance"** (Stage 3 correction round). Presence is a
  * typed state -- `loading`, `error` or `ready` -- and only `ready` answers the
- * question. Each read is kept with the exact identity, freshness token and
- * attempt it was made for, so a new analysis or a Retry reads `loading` at
- * once, during render: a previous answer is never shown for a new question,
- * and nothing is reset from an effect.
+ * question. Each read belongs to one *epoch*: a fresh token minted whenever the
+ * identity, freshness token or attempt changes. An answer is shown only for
+ * the epoch it was read in, so every change -- including a return to an earlier
+ * token -- reads `loading` at once, during render, until its own answer
+ * arrives. A previous answer is never reused, and nothing is reset from an
+ * effect.
  *
  * The fact read here is the saved structure's own -- whether it states a
  * capital event -- and the Decision Matrix reads the server's typed
  * per-Strategy statement. Nothing is resolved, sized or computed.
  */
 
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   readCapitalEventPresence,
   readDealCapitalStructure,
@@ -94,7 +96,9 @@ export function useBaseCapitalEvents({
 }): RefinancePresence {
   const [attempt, setAttempt] = useState<object>(newAttempt);
   const key = `${dealId ?? ''}|${investmentId ?? ''}|${unitId ?? ''}|${token}`;
-  const [settled, setSettled] = useState<{ key: string; attempt: object; value: boolean | 'error' } | null>(null);
+  // A fresh epoch for every change of question or Retry, never a cached one.
+  const epoch = useMemo<object>(() => ({ key, attempt }), [key, attempt]);
+  const [settled, setSettled] = useState<{ epoch: object; value: boolean | 'error' } | null>(null);
   const retry = useCallback(() => setAttempt(newAttempt()), []);
 
   useEffect(() => {
@@ -111,8 +115,7 @@ export function useBaseCapitalEvents({
         if (live) {
           const events = payload.capital_structure.capital_events ?? [];
           setSettled({
-            key,
-            attempt,
+            epoch,
             value: events.some(
               (event) => unitId === null || event.scope.kind === 'investment' || event.scope.unit_id === unitId,
             ),
@@ -121,18 +124,18 @@ export function useBaseCapitalEvents({
       })
       .catch(() => {
         if (live) {
-          setSettled({ key, attempt, value: 'error' });
+          setSettled({ epoch, value: 'error' });
         }
       });
     return () => {
       live = false;
     };
-  }, [dealId, investmentId, unitId, key, attempt]);
+  }, [dealId, investmentId, unitId, epoch]);
 
   if (dealId === null && investmentId === null) {
     return NO_REFINANCE;
   }
-  if (settled === null || settled.key !== key || settled.attempt !== attempt) {
+  if (settled === null || settled.epoch !== epoch) {
     return { status: 'loading' };
   }
   return settled.value === 'error' ? { status: 'error', retry } : { status: 'ready', configured: settled.value };
@@ -161,9 +164,8 @@ const NO_STRATEGY_PRESENCE: StrategyPresence = { status: 'ready', strategies: ne
 export function useStrategyCapitalEvents(investmentId: string | null, token: string): StrategyPresence {
   const [attempt, setAttempt] = useState<object>(newAttempt);
   const key = `${investmentId ?? ''}|${token}`;
-  const [settled, setSettled] = useState<{ key: string; attempt: object; value: StrategyCapitalEvents | 'error' } | null>(
-    null,
-  );
+  const epoch = useMemo<object>(() => ({ key, attempt }), [key, attempt]);
+  const [settled, setSettled] = useState<{ epoch: object; value: StrategyCapitalEvents | 'error' } | null>(null);
   const retry = useCallback(() => setAttempt(newAttempt()), []);
 
   useEffect(() => {
@@ -175,8 +177,7 @@ export function useStrategyCapitalEvents(investmentId: string | null, token: str
       .then((payload) => {
         if (live) {
           setSettled({
-            key,
-            attempt,
+            epoch,
             value: {
               strategies: new Set(
                 payload.strategies.filter((entry) => entry.capital_events_configured).map((entry) => entry.strategy_id),
@@ -188,18 +189,18 @@ export function useStrategyCapitalEvents(investmentId: string | null, token: str
       })
       .catch(() => {
         if (live) {
-          setSettled({ key, attempt, value: 'error' });
+          setSettled({ epoch, value: 'error' });
         }
       });
     return () => {
       live = false;
     };
-  }, [investmentId, key, attempt]);
+  }, [investmentId, epoch]);
 
   if (investmentId === null) {
     return NO_STRATEGY_PRESENCE;
   }
-  if (settled === null || settled.key !== key || settled.attempt !== attempt) {
+  if (settled === null || settled.epoch !== epoch) {
     return { status: 'loading' };
   }
   return settled.value === 'error' ? { status: 'error', retry } : { status: 'ready', ...settled.value };

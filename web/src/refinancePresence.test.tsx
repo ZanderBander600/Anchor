@@ -149,6 +149,28 @@ describe('presence fails closed on a real surface', () => {
     expect(screen.getAllByText(ACQUISITION_REFERENCE_LABEL)).toHaveLength(2);
   });
 
+  it('4b. returning to an earlier token still waits for its own answer (A -> B -> A)', async () => {
+    const third = deferred<never>();
+    vi.mocked(readDealCapitalStructure)
+      .mockResolvedValueOnce(NONE)
+      .mockResolvedValueOnce(NONE)
+      .mockReturnValueOnce(third.promise);
+    const { rerender } = render(<DealSurface token="underwrite" />);
+    await waitFor(() => expect(screen.getByText('25.22%')).toBeTruthy());
+    rerender(<DealSurface token="overview" />);
+    await waitFor(() => expect(screen.getByText('25.22%')).toBeTruthy());
+
+    // Back to the first token: its earlier answer is not reused while the
+    // structure is read again (a Capital Structure may have been saved since).
+    rerender(<DealSurface token="underwrite" />);
+
+    expect(leveredShown()).toBe(false);
+    expect(screen.getAllByText(REFERENCE_CHECKING_VALUE)).toHaveLength(2);
+    await act(async () => third.resolve(REFINANCED as never));
+    expect(screen.getAllByText(ACQUISITION_REFERENCE_LABEL)).toHaveLength(2);
+    expect(readDealCapitalStructure).toHaveBeenCalledTimes(3);
+  });
+
   it('6. settled answers keep their presentations: no refinance, and a refinance', async () => {
     vi.mocked(readDealCapitalStructure).mockResolvedValueOnce(NONE);
     const { unmount } = render(<DealSurface token="t1" />);
@@ -197,6 +219,25 @@ describe('5. Strategy presence cannot masquerade as "no refinance"', () => {
       }
     });
     await waitFor(() => expect(result.current.status).toBe('ready'));
+  });
+
+  it('returns to loading when a matrix run returns to an earlier fingerprint', async () => {
+    const third = deferred<never>();
+    const none = { investment_id: 'inv-1', strategies: [], acquisition_financing_metrics: [] };
+    vi.mocked(readCapitalEventPresence)
+      .mockResolvedValueOnce(none)
+      .mockResolvedValueOnce(none)
+      .mockReturnValueOnce(third.promise);
+    const { result, rerender } = renderHook(({ token }) => useStrategyCapitalEvents('inv-1', token), {
+      initialProps: { token: 'm1' },
+    });
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    rerender({ token: 'm2' });
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    rerender({ token: 'm1' });
+
+    expect(result.current.status).toBe('loading');
   });
 
   it('returns to loading for a new matrix run', async () => {
