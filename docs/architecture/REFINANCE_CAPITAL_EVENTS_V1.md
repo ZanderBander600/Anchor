@@ -3267,6 +3267,19 @@ Added as normal commits on top of the seven reviewed Stage 3 commits
    (`LiveCaseRail.tsx`, named in the G37 and Stage 3 ledgers; `liveMetrics.ts`
    untouched). The Sensitivity and Break-Even panels, which vary inputs over
    the acquisition model rather than report a headline return, are unchanged.
+6. **No earlier answer when a token recurs** (found by the round's browser
+   QA). Presence kept only its last settled answer by key, so returning to an
+   earlier token (Underwrite -> Overview -> Underwrite) showed that answer
+   while the new read was in flight. Each read now belongs to an epoch minted
+   on every change of identity, token or attempt, and an answer is shown only
+   for its own epoch; every change reads `loading` until its own answer
+   arrives.
+7. **Test fixtures** (found by the full frontend suite): four App-level test
+   files now answer the Deal Capital Structure read with the accepted
+   standalone reply, so their surfaces settle as "no refinance".
+
+Correction-round commits: `8b8b459`, `e544231`, `2aa31f5`, `a41c2e0`,
+`0a68677`, `72ee170`, and this record.
 
 Guards and proofs: fail-closed surface tests (first render, rejected read,
 Retry, token change, Strategy matrix loading and failure, settled true and
