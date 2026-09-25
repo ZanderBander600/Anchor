@@ -112,7 +112,7 @@ function ReturnsSection({
       <p className="investment-note">
         Base Strategy under the Base Scenario · {hold}-year common hold · every Unit consolidated.
       </p>
-      {reference && <RefinanceReferenceNotice />}
+      {reference && <RefinanceReferenceNotice subject="investment" />}
       <div className="investment-ledgers">
         <Ledger
           caption="Returns"

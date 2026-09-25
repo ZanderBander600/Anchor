@@ -134,16 +134,27 @@ def _is_production(path: str) -> bool:
     return path.startswith(("src/", "web/")) and not path.endswith((".test.ts", ".test.tsx"))
 
 
-def _changes_since(base: str, *paths: str) -> set[str]:
-    """Committed, staged, unstaged and untracked changes since ``base``."""
+#: Stage 2's merge: PR #60, parents ``f2b5cef`` (main) and the reviewed head
+#: ``ff12d04``. **Re-pinned by Refinance V1 Stage 3**, exactly as this guard's
+#: own docstring anticipated: every claim is now judged in Stage 2's committed
+#: history -- the ledger over ``f2b5cef..879f577`` and each source claim at the
+#: merge -- rather than in the working tree Stage 3 is changing. No claim is
+#: weakened; each still describes what Stage 2 shipped, byte for byte.
+_STAGE_2_MERGE = "879f577e399dc93494e4984fd3262642e9085d2c"
+_STAGE_2_HEAD = "ff12d0444b9dfc833723d271e58dacf2a36fbcd9"
 
-    tracked = _git("diff", "--name-only", "--no-renames", base, "--", *paths).split()
-    untracked = _git("ls-files", "--others", "--exclude-standard", "--", *paths).split()
-    return {path for path in (*tracked, *untracked) if path and "__pycache__" not in path}
+
+def _changes_since(base: str, *paths: str) -> set[str]:
+    """The changes Stage 2 committed since ``base``: ``base..879f577``."""
+
+    tracked = _git("diff", "--name-only", "--no-renames", base, _STAGE_2_MERGE, "--", *paths).split()
+    return {path for path in tracked if path and "__pycache__" not in path}
 
 
 def _current(path: str) -> str:
-    return (_PROJECT_ROOT / path).read_bytes().decode("utf-8").replace("\r\n", "\n")
+    """The file as Stage 2 merged it."""
+
+    return _at(_STAGE_2_MERGE, path)
 
 
 def _at(commit: str, path: str) -> str:
@@ -595,11 +606,11 @@ def test_the_deals_modules_that_read_the_refinance_layer_are_exactly_named() -> 
     (plan, execution, validation) is reached only through the P7.8 executor."""
 
     readers = {
-        path.relative_to(_PROJECT_ROOT).as_posix()
-        for path in (_PROJECT_ROOT / _DEALS).rglob("*.py")
+        path
+        for path in _merged_python_files(_DEALS)
         if {
             module
-            for module in _imports(ast.parse(path.read_text(encoding="utf-8")))
+            for module in _imports(ast.parse(_current(path)))
             if "refinance" in module or module.endswith(".events") or "event_validation" in module
         }
     }
@@ -609,8 +620,16 @@ def test_the_deals_modules_that_read_the_refinance_layer_are_exactly_named() -> 
         _STORE, _CODEC, _FINGERPRINT, _IDENTITY, _INTEGRATION, _STRUCTURED, _PARTNERSHIP, _MEMO_DEPENDENCIES,
     }
     engine = re.compile(r"capital_structure\.(refinance|refinance_execution|event_validation)$")
-    for path in (_PROJECT_ROOT / _DEALS).rglob("*.py"):
-        assert not {module for module in _imports(ast.parse(path.read_text(encoding="utf-8"))) if engine.search(module)}, path
+    for path in _merged_python_files(_DEALS):
+        assert not {module for module in _imports(ast.parse(_current(path))) if engine.search(module)}, path
+
+
+def _merged_python_files(root: str) -> list[str]:
+    """Every Python file under ``root`` as Stage 2 merged it (the Stage 3
+    re-pin): the scan reads the committed tree, not the working tree."""
+
+    listed = _git("ls-tree", "-r", "--name-only", _STAGE_2_MERGE, "--", root).split()
+    return [path for path in listed if path.endswith(".py")]
 
 
 # =============================================================================
@@ -641,9 +660,9 @@ def test_one_gate_serves_readiness_publication_and_preview() -> None:
     route = ast.unparse(_function(_API, "read_memo_report_preview"))
     assert "except PublicationRefusedError" in route and "_publication_refused_response(" in route
     defining = [
-        path.relative_to(_PROJECT_ROOT).as_posix()
-        for path in (_PROJECT_ROOT / "src" / "anchor").rglob("*.py")
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        path
+        for path in _merged_python_files("src/anchor")
+        for node in ast.walk(ast.parse(_current(path)))
         if isinstance(node, ast.FunctionDef) and node.name in {"has_capital_events", "refinance_reporting_refusal"}
     ]
     assert sorted(defining) == sorted([_INTEGRATION, _PUBLICATION])
@@ -688,3 +707,26 @@ def test_whole_view_consumption_is_claimed_only_at_investment_scope() -> None:
     assert "requirement.unit_id is None" in ast.unparse(_function(_MEMO_DEPENDENCIES, "whole_view_consumed_timepoints"))
     preview = ast.unparse(_function(_ASSEMBLY, "_draft_valuations"))
     assert "_whole_view_consumed(" in preview and "consumed_timepoint_ids" not in preview
+
+
+# =============================================================================
+# The Stage 3 re-pin
+# =============================================================================
+
+
+def test_the_repinned_range_is_exactly_the_merged_stage_2_branch() -> None:
+    """``879f577`` is the PR #60 merge of ``f2b5cef`` and the reviewed head
+    ``ff12d04``, and its product tree is that head's: the re-pin reads what was
+    reviewed and accepted, nothing else."""
+
+    parents = _git("rev-list", "--parents", "-n", "1", _STAGE_2_MERGE).split()[1:]
+    assert parents == [_BASE, _STAGE_2_HEAD]
+    assert _git("diff", "--name-only", _STAGE_2_HEAD, _STAGE_2_MERGE, "--", "src", "web").split() == []
+
+
+def test_the_repinned_ledger_still_sees_what_stage_2_changed() -> None:
+    """Teeth: the committed ledger is not empty -- it still names Stage 2's own
+    files -- and it does not see Stage 3's working tree."""
+
+    assert _changes_since(_BASE, _INTEGRATION) == {_INTEGRATION}
+    assert "src/anchor/reporting/refinance.py" not in _changes_since(_BASE, "src")

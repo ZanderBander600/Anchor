@@ -2610,20 +2610,6 @@ export default function App() {
     lease_level: leaseLevel.currentDealId,
   });
 
-  /** Refinance V1 Stage 3: whether the open Deal's Base Capital Structure
-   * configures a refinance, so its underwriting results name the acquisition-
-   * loan levered figures as the acquisition-financing reference. Re-read when
-   * the Deal is saved or the analyst moves between workspaces, because the
-   * structure is saved from Risk -> Capital Structure. */
-  const dealRefinance = useBaseCapitalEvents({
-    dealId: activeDealId,
-    token: `${byMode(operatingMode, {
-      quick: lastSavedAt,
-      detailed: lastDetailedSavedAt,
-      lease_level: leaseLevel.lastSavedAt,
-    }) ?? ''}:${workspace}:${riskView}`,
-  });
-
   /** P7.3: Scenarios request nothing until the Risk workspace is on screen. */
   const isRiskVisible = view === 'workspace' && workspace === 'risk';
 
@@ -2879,6 +2865,28 @@ export default function App() {
         };
   const returnInvestmentName =
     investments.investments.find((investment) => investment.id === unitReturnId)?.name ?? 'Investment';
+
+  /** Refinance V1 Stage 3: whether the open Deal's Base Capital Structure
+   * configures a refinance, so its underwriting results name the acquisition-
+   * loan levered figures as the acquisition-financing reference. Re-read when
+   * the Deal is saved or the analyst moves between workspaces, because the
+   * structure is saved from Risk -> Capital Structure.
+   *
+   * A Unit of a visible Investment has no Base Capital Structure of its own --
+   * the Investment owns it, and the Deal route says so with a 409 -- however
+   * the Unit was opened. So the owning Investment's structure is read, counting
+   * only refinances of that Unit or of the whole Investment. */
+  const dealRefinance = useBaseCapitalEvents({
+    dealId: activeDealInvestment === undefined ? activeDealId : null,
+    investmentId: activeDealInvestment?.id ?? null,
+    unitId: activeDealInvestment === undefined ? null : activeDealId,
+    token: `${byMode(operatingMode, {
+      quick: lastSavedAt,
+      detailed: lastDetailedSavedAt,
+      lease_level: leaseLevel.lastSavedAt,
+    }) ?? ''}:${workspace}:${riskView}`,
+  });
+
 
   /** Deal-header overflow actions. Both reuse the same by-id handlers the
    * Deal Library rows use, and delete asks for the same `window.confirm`

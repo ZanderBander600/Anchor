@@ -4871,6 +4871,7 @@ _REFINANCE_AUDIT_STATUS = {
     "analysis_stale": status.HTTP_409_CONFLICT,
     "refinance_unavailable": status.HTTP_409_CONFLICT,
     "analysis_inconsistent": status.HTTP_409_CONFLICT,
+    "partnership_unavailable": status.HTTP_409_CONFLICT,
     "hold_period_exceeds_export_limit": status.HTTP_422_UNPROCESSABLE_CONTENT,
     "export_generation_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
@@ -4925,6 +4926,14 @@ def export_refinance_capital_structure_audit(
         raise refusal(
             "analysis_stale",
             "The saved underwriting changed while the audit was being built. Run the analysis again, then export.",
+        ) from None
+    except (PartnershipValidationError, PartnershipExecutionError):
+        # A configured Partnership that cannot run: a typed refusal, never a
+        # workbook silently missing its Partners sheet.
+        raise refusal(
+            "partnership_unavailable",
+            "The Partnership of the selected analysis could not be run, so the audit would be missing its partner "
+            "returns. Resolve it in Risk -> Partnership, run the analysis again, then export.",
         ) from None
     except Exception:
         raise refusal(

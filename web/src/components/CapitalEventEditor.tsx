@@ -751,7 +751,7 @@ export function CapitalEventEditor({
   const valuations = useValuationChoices(valuationOwnerId);
   const [pending, setPending] = useState<CapitalEventForm | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
-  const [focusAdd, setFocusAdd] = useState(false);
+  const focusAdd = useRef(false);
   const [newScope, setNewScope] = useState<string>('');
 
   const scopesInUse = new Set(formEvents(form).map((event) => scopeKeyOf(event.scopeKind, event.scopeUnitId)));
@@ -762,12 +762,13 @@ export function CapitalEventEditor({
   const chosenScope = scopeChoices.find((choice) => choice.key === newScope) ?? scopeChoices[0];
   const unstated = unstatedEventChoices(form);
 
+  // After a confirmed removal, once the Add control has rendered again.
   useEffect(() => {
-    if (focusAdd) {
+    if (focusAdd.current) {
+      focusAdd.current = false;
       addButton.current?.focus();
-      setFocusAdd(false);
     }
-  }, [focusAdd]);
+  });
 
   function add() {
     if (chosenScope === undefined) {
@@ -795,7 +796,7 @@ export function CapitalEventEditor({
     setPending(null);
     // The control that opened the confirmation is gone with the refinance, so
     // focus moves to the one that can add it back.
-    setFocusAdd(true);
+    focusAdd.current = true;
   }
 
   const replacementName = (event: CapitalEventForm) =>

@@ -10676,7 +10676,7 @@ body {
   color: var(--danger);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 640px) {
   .refinance-headline {
     grid-template-columns: minmax(0, 1fr);
   }

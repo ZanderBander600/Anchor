@@ -27,33 +27,37 @@ export interface ValuationChoices {
 }
 
 const NONE: ValuationChoices = { status: 'none', choices: [] };
+const LOADING: ValuationChoices = { status: 'loading', choices: [] };
 
 export function useValuationChoices(investmentId: string | null): ValuationChoices {
-  const [state, setState] = useState<ValuationChoices>(NONE);
+  // Each read is kept with the Investment it was read for, so a stale read is
+  // never shown for another Investment and nothing is reset from an effect.
+  const [loaded, setLoaded] = useState<{ investmentId: string; choices: ValuationChoices } | null>(null);
 
   useEffect(() => {
     if (investmentId === null) {
-      setState(NONE);
       return;
     }
     let live = true;
-    setState({ status: 'loading', choices: [] });
     readValuationTimepoints(investmentId)
       .then((timepoints) => {
         if (live) {
-          setState({
-            status: 'ready',
-            choices: timepoints.map((timepoint) => ({
-              timepointId: timepoint.timepoint_id,
-              label: timepoint.label,
-              modelMonth: timepoint.model_month,
-            })),
+          setLoaded({
+            investmentId,
+            choices: {
+              status: 'ready',
+              choices: timepoints.map((timepoint) => ({
+                timepointId: timepoint.timepoint_id,
+                label: timepoint.label,
+                modelMonth: timepoint.model_month,
+              })),
+            },
           });
         }
       })
       .catch(() => {
         if (live) {
-          setState({ status: 'error', choices: [] });
+          setLoaded({ investmentId, choices: { status: 'error', choices: [] } });
         }
       });
     return () => {
@@ -61,5 +65,8 @@ export function useValuationChoices(investmentId: string | null): ValuationChoic
     };
   }, [investmentId]);
 
-  return state;
+  if (investmentId === null) {
+    return NONE;
+  }
+  return loaded !== null && loaded.investmentId === investmentId ? loaded.choices : LOADING;
 }

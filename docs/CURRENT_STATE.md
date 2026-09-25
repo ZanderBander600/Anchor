@@ -36,7 +36,7 @@ whenever an accepted gate merges or the active gate changes.
   head `ff12d04`). It is the product merge, not the later documentation-only
   acceptance merge.
 - **Active gate: Refinance & Capital Events V1 Stage 3 (product surfaces),
-  in progress and not accepted** (see the 2026-09-24 Stage 3 entry below).
+  implemented locally, pending review, not accepted** (see the 2026-09-24 Stage 3 entry below).
   Stage 1 and Stage 2 are **accepted**. P7.10 is closed, and P7.11 is waived
   and administratively closed. No gate begins by implication; the next one
   starts only on an explicit human instruction.
@@ -49,7 +49,7 @@ Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
 
-## 2026-09-24 Refinance & Capital Events V1 Stage 3 (started; in progress)
+## 2026-09-24 Refinance & Capital Events V1 Stage 3 (implemented; pending review)
 
 By explicit human instruction, Stage 3 -- product surfaces, refinance-aware
 reporting and the refinance formula-audit export -- was started from `main` at
@@ -57,9 +57,12 @@ reporting and the refinance formula-audit export -- was started from `main` at
 accepted Stage 2 baseline `879f577`) on
 `feature/refinance-capital-events-v1-stage-3-product-surfaces`.
 
-- **Stage 3 is in progress and not accepted.** It is implemented locally on
-  the feature branch; it is not pushed, has no PR and is not merged. It awaits
-  independent review and human QA.
+- **Stage 3 is implemented locally and not accepted.** It is committed on
+  the feature branch (the start record `ef2711f`, then `1952683`, `3696254`,
+  `e9660af`, `68a497c`, `1984eb7` and its tests, guards and record); it is not
+  pushed, has no PR and is not merged. It awaits independent review and human
+  acceptance. The temporary `refinance_reporting_not_available` report gate is
+  removed on this branch only; on `main` it remains in force.
 - **The accepted product baseline remains `main` at `879f577`** until Stage 3
   is reviewed, merged and explicitly accepted.
 - Stage 1 and Stage 2 remain accepted; their engine and persistence are not

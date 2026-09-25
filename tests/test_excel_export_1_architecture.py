@@ -142,6 +142,27 @@ _EXPORT_IMPORTS = {
     "anchor.exports.excel.filenames": set(),
     "anchor.exports.excel.provenance": set(),
     "anchor.exports.excel": set(),
+    # Refinance V1 Stage 3 (contract Section 25.1): the separate Refinance &
+    # Capital Structure Audit, a package of its own beside Exports 1-3. Its
+    # modules are enumerated here so the equality below stays exact; Exports
+    # 1-3's own entries are unchanged.
+    "anchor.exports.refinance": set(),
+    "anchor.exports.refinance.audit": set(),
+    "anchor.exports.refinance.source": {
+        "anchor.analysis.strategy",
+        "anchor.capital_structure.contracts",
+        "anchor.capital_structure.events",
+        "anchor.capital_structure.refinance_contracts",
+        "anchor.deals",
+        "anchor.deals.contracts",
+        "anchor.deals.investment_variants",
+        "anchor.deals.partnership_variants",
+        "anchor.deals.refinance_integration",
+        "anchor.deals.refinance_presentation",
+        "anchor.deals.structured_variants",
+        "anchor.deals.variants",
+        "anchor.engine.contracts",
+    },
     "anchor.exports": set(),
 }
 

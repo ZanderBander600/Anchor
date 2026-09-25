@@ -37,17 +37,25 @@ export function useAcquisitionReference(): boolean {
 export function useBaseCapitalEvents({
   dealId = null,
   investmentId = null,
+  unitId = null,
   token,
 }: {
   dealId?: string | null;
   investmentId?: string | null;
+  /** With an Investment: count only refinances of this Unit or of the whole
+   * Investment, so a Unit opened from its Investment is labeled only when a
+   * refinance actually replaces its acquisition financing. */
+  unitId?: string | null;
   token: string;
 }): boolean {
-  const [configured, setConfigured] = useState(false);
+  // The read is kept with the Deal or Investment it describes: a re-read on a
+  // new `token` keeps the last answer for the same one until it resolves, and
+  // another one's answer is never shown.
+  const identity = `${dealId ?? ''}|${investmentId ?? ''}|${unitId ?? ''}`;
+  const [configured, setConfigured] = useState<{ identity: string; value: boolean } | null>(null);
 
   useEffect(() => {
     if (dealId === null && investmentId === null) {
-      setConfigured(false);
       return;
     }
     let live = true;
@@ -58,20 +66,29 @@ export function useBaseCapitalEvents({
     request
       .then((payload) => {
         if (live) {
-          setConfigured((payload.capital_structure.capital_events ?? []).length > 0);
+          const events = payload.capital_structure.capital_events ?? [];
+          setConfigured({
+            identity,
+            value: events.some(
+              (event) => unitId === null || event.scope.kind === 'investment' || event.scope.unit_id === unitId,
+            ),
+          });
         }
       })
       .catch(() => {
         if (live) {
-          setConfigured(false);
+          setConfigured({ identity, value: false });
         }
       });
     return () => {
       live = false;
     };
-  }, [dealId, investmentId, token]);
+  }, [dealId, investmentId, unitId, token, identity]);
 
-  return configured;
+  if (dealId === null && investmentId === null) {
+    return false;
+  }
+  return configured !== null && configured.identity === identity && configured.value;
 }
 
 export interface StrategyCapitalEvents {
@@ -87,11 +104,10 @@ const NO_PRESENCE: StrategyCapitalEvents = { strategies: new Set(), metrics: new
  * refinance-bearing, and which Project metrics that makes the acquisition-
  * financing reference. Empty until read, and on a failed read. */
 export function useStrategyCapitalEvents(investmentId: string | null, token: string): StrategyCapitalEvents {
-  const [presence, setPresence] = useState<StrategyCapitalEvents>(NO_PRESENCE);
+  const [presence, setPresence] = useState<{ investmentId: string; value: StrategyCapitalEvents } | null>(null);
 
   useEffect(() => {
     if (investmentId === null) {
-      setPresence(NO_PRESENCE);
       return;
     }
     let live = true;
@@ -99,16 +115,19 @@ export function useStrategyCapitalEvents(investmentId: string | null, token: str
       .then((payload) => {
         if (live) {
           setPresence({
-            strategies: new Set(
-              payload.strategies.filter((entry) => entry.capital_events_configured).map((entry) => entry.strategy_id),
-            ),
-            metrics: new Set(payload.acquisition_financing_metrics),
+            investmentId,
+            value: {
+              strategies: new Set(
+                payload.strategies.filter((entry) => entry.capital_events_configured).map((entry) => entry.strategy_id),
+              ),
+              metrics: new Set(payload.acquisition_financing_metrics),
+            },
           });
         }
       })
       .catch(() => {
         if (live) {
-          setPresence(NO_PRESENCE);
+          setPresence({ investmentId, value: NO_PRESENCE });
         }
       });
     return () => {
@@ -116,5 +135,6 @@ export function useStrategyCapitalEvents(investmentId: string | null, token: str
     };
   }, [investmentId, token]);
 
-  return presence;
+  // Another Investment's presence is never shown while this one is read.
+  return presence !== null && presence.investmentId === investmentId ? presence.value : NO_PRESENCE;
 }

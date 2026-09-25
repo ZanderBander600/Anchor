@@ -20,10 +20,13 @@ saved Analysis Variant of one Investment:
   every position the refinance does not touch) and Anchor's own results for
   reconciliation. The workbook reproduces the refinance with Excel formulas.
 
-It computes no application figure. The one comparison it makes -- that the
-frozen dependencies reproduce Anchor's Common Equity series under the Section
-17 INV-5 identity -- is a refusal check, like Excel Export 1's final-balance
-check: an audit whose own dependencies could not reconcile would mislead.
+It computes no figure, application or otherwise: it has no arithmetic at all.
+Whether an audit may be produced is decided from typed accepted facts only --
+the refinance exists, every event executed, Common Equity and its totals are
+reported, every position settled, the analysis is the saved state's, and every
+series spans the analysis's periods. Whether the frozen dependencies reproduce
+Anchor's Common Equity series (the Section 17 INV-5 identity) is answered by
+the workbook's own live formulas on its Checks sheet, never by Python here.
 """
 
 from __future__ import annotations
@@ -38,21 +41,18 @@ from ...analysis.strategy import BASE_SCENARIO_ID, BASE_STRATEGY_ID
 from ...capital_structure.contracts import DebtTerms, PositionClass
 from ...capital_structure.events import AuthoredPositionRef, CapitalStructureWithEvents, RefinanceCostKind
 from ...capital_structure.refinance_contracts import (
+    RefinancedCapitalResult,
+    RefinancedCommonEquityReturns,
     ConstraintKind,
     FixedCapOperands,
     MaxLtvOperands,
     MinDscrOperands,
     RefinanceStatus,
 )
-from ...engine.contracts import IrrStatus
+from ...engine.contracts import AcquisitionResults, IrrStatus
 
 #: Excel Export 1's layout limit, shared so every audit refuses the same way.
 MAX_EXPORT_HOLD_PERIOD = 100
-
-#: The Section 9.7 conservation tolerance ``1e-6 + 1e-12 x |x|``, for the one
-#: refusal check this module makes.
-_IDENTITY_ABSOLUTE = 1e-6
-_IDENTITY_RELATIVE = 1e-12
 
 
 class RefinanceAuditRefusalCode(Enum):
@@ -64,6 +64,7 @@ class RefinanceAuditRefusalCode(Enum):
     ANALYSIS_STALE = "analysis_stale"
     REFINANCE_UNAVAILABLE = "refinance_unavailable"
     ANALYSIS_INCONSISTENT = "analysis_inconsistent"
+    PARTNERSHIP_UNAVAILABLE = "partnership_unavailable"
     HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT = "hold_period_exceeds_export_limit"
     EXPORT_GENERATION_FAILED = "export_generation_failed"
 
@@ -227,6 +228,18 @@ def _refuse(code: RefinanceAuditRefusalCode, message: str) -> RefinanceAuditExpo
     return RefinanceAuditExportError(code, message)
 
 
+def _inconsistent() -> RefinanceAuditExportError:
+    """A typed refusal, never an assertion: an accepted result that does not
+    carry a fact the audit lays out is refused rather than exported partially
+    (and an ``assert`` would vanish under ``python -O``)."""
+
+    return _refuse(
+        RefinanceAuditRefusalCode.ANALYSIS_INCONSISTENT,
+        "This analysis does not report every refinance fact the audit lays out, so no workbook is produced. Run "
+        "the analysis again, then export.",
+    )
+
+
 _CLASS_LABELS = {
     PositionClass.SENIOR_DEBT: "Senior Debt",
     PositionClass.MEZZANINE_DEBT: "Mezzanine Debt",
@@ -235,45 +248,39 @@ _CLASS_LABELS = {
 }
 
 
-def _close(actual: float, expected: float) -> bool:
-    return abs(actual - expected) <= _IDENTITY_ABSOLUTE + _IDENTITY_RELATIVE * abs(expected)
-
-
-def _common_equity_reconciles(
+def _series_are_complete(
     hold: int,
     pre_debt: tuple[float, ...],
     continuing: tuple[ContinuingLoan, ...],
     other_providers: tuple[OtherProvider, ...],
     event_sources: list[EventSource] | tuple[EventSource, ...],
-    common_cash_flows: Any,
+    common: Any,
 ) -> bool:
-    """INV-5 (Section 17): whether the frozen dependencies reproduce Anchor's
-    Common Equity series, before an audit is laid beside it.
+    """Whether every series the audit lays out is present and spans the same
+    periods as the analysis: closing plus each hold year.
 
-    A refusal check only -- the same convention as the accepted exports'
-    ``_consistency_problems``. It answers yes or no; nothing it adds up is
-    returned or written to the workbook."""
+    **Structural, never financial** (Stage 3 review correction). It inspects
+    presence and lengths only -- it adds, subtracts and compares no amount, so
+    it cannot reach a different financial answer from Anchor's. Whether the
+    frozen dependencies reproduce Anchor's Common Equity series (INV-5) is
+    answered where the audit exists to answer it: by the workbook's own live
+    formulas on its Checks sheet, never by a Python recomputation deciding
+    whether the export may exist."""
 
-    for t in range(hold + 1):
-        providers = 0.0
-        for loan in continuing:
-            providers += (
-                loan.financing_fee - loan.loan_amount
-                if t == 0
-                else loan.annual_debt_service[t - 1] + (loan.remaining_loan_balance if t == hold else 0.0)
-            )
-        for provider in other_providers:
-            providers += provider.cash_flows[t]
-        third = 0.0
-        for source in event_sources:
-            providers += source.replacement.provider_cash_flows[t]
-            for loan in source.retiring:
-                providers += loan.provider_cash_flows[t]
-            if t == source.hold_year:
-                third += source.third_party_costs_total
-        if not _close(pre_debt[t] - providers - third, common_cash_flows[t]):
-            return False
-    return True
+    periods = len(common.cash_flows)
+    series = [
+        pre_debt,
+        common.recurring_cash_flows,
+        common.event_cash_flows,
+        *(provider.cash_flows for provider in other_providers),
+        *(source.replacement.provider_cash_flows for source in event_sources),
+        *(loan.provider_cash_flows for source in event_sources for loan in source.retiring),
+    ]
+    if any(values is None or len(values) != periods for values in series):
+        return False
+    return all(len(loan.annual_debt_service) == hold for loan in continuing) and len(pre_debt) == len(
+        common.cash_flows
+    )
 
 
 def refinance_audit_source(
@@ -330,8 +337,12 @@ def refinance_audit_source(
         )
 
     result = analysis.result
+    if not isinstance(result, RefinancedCapitalResult) or not isinstance(
+        result.common_equity, RefinancedCommonEquityReturns
+    ):
+        raise _inconsistent()
     common = result.common_equity
-    events = tuple(getattr(result, "capital_events", ()))
+    events = tuple(result.capital_events)
     if any(event.status is not RefinanceStatus.EXECUTED for event in events):
         raise _refuse(
             RefinanceAuditRefusalCode.REFINANCE_UNAVAILABLE,
@@ -344,12 +355,17 @@ def refinance_audit_source(
             "Common Equity is not reported for this analysis, so the cash it received around the refinance cannot be "
             "audited. Resolve the reason shown in Capital Structure, run the analysis again, then export.",
         )
-    if None in (common.total_equity_invested, common.total_cash_returned, common.total_profit):
+    total_equity_invested = common.total_equity_invested
+    total_cash_returned = common.total_cash_returned
+    total_profit = common.total_profit
+    if total_equity_invested is None or total_cash_returned is None or total_profit is None:
         raise _refuse(
             RefinanceAuditRefusalCode.ANALYSIS_INCONSISTENT,
             "This analysis reports a Common Equity cash flow without its totals, so no workbook is produced. Run the "
             "analysis again, then export.",
         )
+    if common.recurring_cash_flows is None or common.event_cash_flows is None:
+        raise _inconsistent()
     if any(position.status.value != "complete" for position in result.positions):
         raise _refuse(
             RefinanceAuditRefusalCode.REFINANCE_UNAVAILABLE,
@@ -358,7 +374,8 @@ def refinance_audit_source(
         )
 
     structure = resolved.capital_structure
-    assert isinstance(structure, CapitalStructureWithEvents)
+    if not isinstance(structure, CapitalStructureWithEvents):
+        raise _inconsistent()
     authored = {position.position_id: position for position in structure.positions}
     stated_events = {event.event_id: event for event in structure.events}
     returns = {position.position_id: position for position in result.positions}
@@ -378,13 +395,15 @@ def refinance_audit_source(
     event_sources: list[EventSource] = []
     for event in events:
         stated = stated_events[event.event_id]
-        assert event.bridge is not None and event.funding is not None and event.sizing is not None
+        if event.bridge is None or event.funding is None or event.sizing is None:
+            raise _inconsistent()
         retiring: list[RetiringLoanSource] = []
         for payoff in event.payoffs or ():
             if isinstance(payoff.ref, AuthoredPositionRef):
                 position = authored[payoff.ref.position_id]
                 terms = position.terms
-                assert isinstance(terms, DebtTerms)
+                if not isinstance(terms, DebtTerms):
+                    raise _inconsistent()
                 position_returns = returns[payoff.ref.position_id]
                 event_positions.add(payoff.ref.position_id)
                 retiring.append(
@@ -431,7 +450,8 @@ def refinance_audit_source(
 
         replacement_position = authored[event.funding.position_id]
         replacement_terms = replacement_position.terms
-        assert isinstance(replacement_terms, DebtTerms)
+        if not isinstance(replacement_terms, DebtTerms):
+            raise _inconsistent()
         event_positions.add(event.funding.position_id)
         names = {
             **{ref_name.position_id: authored[ref_name.position_id].name for ref_name in stated.retiring if isinstance(ref_name, AuthoredPositionRef)},
@@ -453,7 +473,8 @@ def refinance_audit_source(
         capacities: dict[str, float] = {}
         fixed = ltv = dscr = None
         for capacity in event.sizing.capacities:
-            assert capacity.capacity is not None
+            if capacity.capacity is None:
+                raise _inconsistent()
             capacities[capacity.kind.value] = capacity.capacity
             if capacity.kind is ConstraintKind.FIXED_CAP and isinstance(capacity.operands, FixedCapOperands):
                 fixed = capacity.operands
@@ -531,7 +552,7 @@ def refinance_audit_source(
         from ...deals.variants import analyze_variant
 
         variant = analyze_variant(investment_id, strategy_id, scenario_id, db_path=db_path)
-        economics = getattr(variant.results, "results", variant.results)
+        economics = variant.results if isinstance(variant.results, AcquisitionResults) else variant.results.results
         name = store.get_deal(result.unit_ids[0], db_path=db_path).name
     else:
         from ...deals.investment_variants import analyze_investment_variant
@@ -541,21 +562,29 @@ def refinance_audit_source(
         name = store.get_visible_investment(investment_id, db_path=db_path).name
     pre_debt = tuple(economics.unlevered_cash_flows)
 
-    hold = analysis.hold_period
-    if not _common_equity_reconciles(hold, pre_debt, continuing, other_providers, event_sources, common.cash_flows):
+    if not _series_are_complete(analysis.hold_period, pre_debt, continuing, other_providers, event_sources, common):
         raise _refuse(
             RefinanceAuditRefusalCode.ANALYSIS_INCONSISTENT,
-            "The refinance audit could not reconcile this analysis's Common Equity cash flow from its accepted "
-            "dependencies, so no workbook is produced. Run the analysis again; if this persists, the structure "
-            "is outside what the audit reproduces.",
+            "This analysis does not report every cash-flow series the audit lays out for each period, so no "
+            "workbook is produced. Run the analysis again, then export.",
         )
 
     partners: tuple[PartnerSource, ...] | None = None
-    try:
-        partnership = analyze_partnership_variant(investment_id, strategy_id, scenario_id, db_path=db_path)
-    except Exception:  # noqa: BLE001 -- no Partnership, or one that does not run: no partner audit
-        partnership = None
-    if partnership is not None and partnership.result is not None and partnership.result.partners is not None:
+    # A configured Partnership that cannot run raises its own typed error,
+    # which the route states as ``partnership_unavailable``; no Partnership at
+    # all is the neutral absence (``partnership`` is ``None``).
+    partnership = analyze_partnership_variant(investment_id, strategy_id, scenario_id, db_path=db_path)
+    if partnership.partnership is not None and partnership.result is not None and partnership.result.partners is None:
+        raise _refuse(
+            RefinanceAuditRefusalCode.PARTNERSHIP_UNAVAILABLE,
+            "The Partnership of the selected analysis reports no partner returns, so the audit would be missing "
+            "them. Resolve it in Risk -> Partnership, run the analysis again, then export.",
+        )
+    if (
+        partnership.partnership is not None
+        and partnership.result is not None
+        and partnership.result.partners is not None
+    ):
         stated_partners = {partner.partner_id: partner.name for partner in partnership.partnership.partners}
         partners = tuple(
             PartnerSource(
@@ -582,7 +611,7 @@ def refinance_audit_source(
         investment_name=name,
         strategy_label=strategy_label,
         scenario_label=scenario_label,
-        hold_period=hold,
+        hold_period=analysis.hold_period,
         events=tuple(event_sources),
         pre_debt_cash_flows=pre_debt,
         continuing_loans=continuing,
@@ -593,9 +622,9 @@ def refinance_audit_source(
         common_irr=common.irr,
         common_irr_status=common.irr_status,
         equity_multiple=common.equity_multiple,
-        total_equity_invested=common.total_equity_invested,
-        total_cash_returned=common.total_cash_returned,
-        total_profit=common.total_profit,
+        total_equity_invested=total_equity_invested,
+        total_cash_returned=total_cash_returned,
+        total_profit=total_profit,
         reference_levered_irr=getattr(economics, "levered_irr", None),
         reference_equity_multiple=getattr(economics, "equity_multiple", None),
         partners=partners,

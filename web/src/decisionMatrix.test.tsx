@@ -21,8 +21,11 @@ import {
   getDeal,
   listDealScenarios,
   listDealStrategies,
+  readCapitalEventPresence,
   updateInvestmentStrategy,
 } from './api';
+import { MATRIX_NAMESPACE_NOTICE } from './components/DecisionMatrixPanel';
+import { ACQUISITION_REFERENCE_LABEL } from './refinanceCatalog';
 import { RiskDecisionWorkspace } from './components/RiskDecisionWorkspace';
 import type { RiskDecisionWorkspaceProps } from './components/RiskDecisionWorkspace';
 import {
@@ -54,6 +57,7 @@ vi.mock('./api', async () => {
     getDeal: vi.fn(),
     listDealScenarios: vi.fn(),
     listDealStrategies: vi.fn(),
+    readCapitalEventPresence: vi.fn(),
     updateInvestmentStrategy: vi.fn(),
   };
 });
@@ -339,7 +343,9 @@ function table(): HTMLElement {
 /** The cell of one metric row inside one Strategy's row group, in one column. */
 function cell(strategyName: string, metric: string, column: string): HTMLElement {
   const group = within(table()).getByRole('rowheader', { name: new RegExp(`^${strategyName}`) }).closest('tbody') as HTMLElement;
-  const row = within(group).getByRole('rowheader', { name: `${metric}, ${strategyName}` }).closest('tr') as HTMLElement;
+  // Refinance V1 Stage 3: a reference label may follow the Strategy name.
+  const name = new RegExp(`^${metric}, ${strategyName}(, |$)`);
+  const row = within(group).getByRole('rowheader', { name }).closest('tr') as HTMLElement;
   const found = row.querySelector(`[data-column="${column}"]`);
   if (found === null) {
     throw new Error(`No ${column} cell for ${strategyName} / ${metric}`);
@@ -353,6 +359,13 @@ beforeEach(() => {
   vi.mocked(fetchScenarioTargetCatalog).mockResolvedValue({ quick: [], detailed: [], lease_level: [] });
   vi.mocked(fetchStrategyTargetCatalog).mockResolvedValue({ quick: [], detailed: [], lease_level: [] });
   vi.mocked(getDeal).mockRejectedValue(new ApiError('not used'));
+  // Refinance V1 Stage 3: no Strategy configures a refinance unless a test
+  // says so, and the matrix is then exactly what it always was.
+  vi.mocked(readCapitalEventPresence).mockResolvedValue({
+    investment_id: 'inv-1',
+    strategies: [],
+    acquisition_financing_metrics: [],
+  });
 });
 
 afterEach(() => {
@@ -650,5 +663,44 @@ describe('a failed request', () => {
     mockAnalyze.mockResolvedValue(fullReport());
     await user.click(within(alert).getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('table')).toBeTruthy();
+  });
+});
+
+describe('a Strategy with a refinance (Refinance V1 Stage 3)', () => {
+  it('names its Project figures as the acquisition-financing reference, and only its', async () => {
+    saved([HOLD, RENO], [DOWN, UP]);
+    mockAnalyze.mockResolvedValue(fullReport());
+    vi.mocked(readCapitalEventPresence).mockResolvedValue({
+      investment_id: 'inv-1',
+      strategies: [
+        { strategy_id: 'st-hold', capital_events_configured: true },
+        { strategy_id: 'st-reno', capital_events_configured: false },
+      ],
+      // The backend's own list; the browser keeps none (P7.5 guard).
+      acquisition_financing_metrics: ['levered_irr'],
+    });
+    const { user } = renderMatrix();
+    await run(user);
+
+    expect(await screen.findByText(MATRIX_NAMESPACE_NOTICE)).toBeTruthy();
+    // The figure itself is the backend's, unchanged: labeled, not recomputed.
+    expect(cell('Hold / Lease-Up', 'Levered IRR', 'base').textContent).toContain('12.00%');
+    // Read as one phrase: metric, Strategy, then the reference.
+    expect(
+      screen.getByRole('rowheader', { name: `Levered IRR, Hold / Lease-Up, ${ACQUISITION_REFERENCE_LABEL}` }),
+    ).toBeTruthy();
+    expect(document.body.textContent).toContain('Includes a refinance');
+    // A Strategy without a refinance carries no reference label.
+    expect(cell('Renovate', 'Levered IRR', 'base').textContent).toBe('12.00%');
+  });
+
+  it('shows no refinance wording when no Strategy has one', async () => {
+    saved([HOLD, RENO], [DOWN, UP]);
+    mockAnalyze.mockResolvedValue(fullReport());
+    const { user } = renderMatrix();
+    await run(user);
+
+    expect(screen.queryByText(MATRIX_NAMESPACE_NOTICE)).toBeNull();
+    expect(screen.queryByText(ACQUISITION_REFERENCE_LABEL)).toBeNull();
   });
 });

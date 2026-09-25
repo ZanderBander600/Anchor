@@ -16,12 +16,17 @@ import { ACQUISITION_REFERENCE_LABEL } from '../refinanceCatalog';
 export const REFINANCE_REFERENCE_NOTICE =
   'This deal’s Capital Structure includes a refinance. The levered IRR and equity multiple here hold the acquisition loan to the sale, so they are the acquisition-financing reference and exclude later capital events. The refinance-adjusted return is Common Equity after Capital Structure, in Risk → Capital Structure.';
 
+// prettier-ignore
+export const INVESTMENT_REFINANCE_REFERENCE_NOTICE =
+  'This Investment’s Capital Structure includes a refinance. The levered IRR and equity multiple here hold each acquisition loan to the sale, so they are the acquisition-financing reference and exclude later capital events. The refinance-adjusted return is Common Equity after Capital Structure, in Risk → Capital Structure.';
+
 export { ACQUISITION_REFERENCE_LABEL };
 
-export function RefinanceReferenceNotice() {
+/** The notice, naming the Deal or the Investment whose structure it is. */
+export function RefinanceReferenceNotice({ subject = 'deal' }: { subject?: 'deal' | 'investment' }) {
   return (
     <p className="refinance-reference-notice" role="note">
-      {REFINANCE_REFERENCE_NOTICE}
+      {subject === 'investment' ? INVESTMENT_REFINANCE_REFERENCE_NOTICE : REFINANCE_REFERENCE_NOTICE}
     </p>
   );
 }

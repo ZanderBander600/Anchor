@@ -200,6 +200,27 @@ _P7_10_STAGE_4_WEB = frozenset(
     }
 )
 
+#: Refinance & Capital Events V1 Stage 3 -- the refinance editor, results,
+#: presentation facts and the refinance audit's action. Ten new modules, each
+#: added by Stage 3's committed range (``bd77433..1984eb7``, proved below).
+#: That they compute nothing is held on the TypeScript side by
+#: ``web/src/refinanceArchitecture.test.ts``; the Stage 3 production ledger is
+#: ``tests/test_refinance_v1_stage_3_architecture.py``.
+_REFINANCE_V1_STAGE_3_WEB = frozenset(
+    {
+        "web/src/capitalEventForm.ts",
+        "web/src/refinanceCatalog.ts",
+        "web/src/useCapitalEventAudit.ts",
+        "web/src/useCapitalEventChoices.ts",
+        "web/src/useRefinancePresence.ts",
+        "web/src/components/AcquisitionReference.tsx",
+        "web/src/components/CapitalEventAuditAction.tsx",
+        "web/src/components/CapitalEventEditor.tsx",
+        "web/src/components/CapitalEventMatrixNote.tsx",
+        "web/src/components/CapitalEventResults.tsx",
+    }
+)
+
 _AM1_WEB = frozenset(
     {
         "web/src/assetManagementTypes.ts",
@@ -513,8 +534,13 @@ _PERMITTED_WEB = frozenset(
         # a documentation-only rewrite of the frontend README. Not a source
         # file; ratified at the P7.9 Stage 1 review.
         "web/README.md",
+        # Refinance V1 Stage 3 -- the one shipped file it edits that no earlier
+        # gate ratified: the Quick results summary labels its acquisition-loan
+        # levered IRR and multiple as the acquisition-financing reference when
+        # a refinance is configured (R-P rule 5). The figures are unchanged.
+        "web/src/components/ResultsSummaryPanel.tsx",
     }
-) | _P7_9_STAGE_3_WEB | _AM1_WEB | _ASSET_TYPES_1_WEB | _P7_10_STAGE_4_WEB
+) | _P7_9_STAGE_3_WEB | _AM1_WEB | _ASSET_TYPES_1_WEB | _P7_10_STAGE_4_WEB | _REFINANCE_V1_STAGE_3_WEB
 
 #: Each later gate's group, by the committed range that added it: the proof, in
 #: ``test_g37_each_later_gate_entry_was_added_by_its_gate``, that no entry was
@@ -528,6 +554,10 @@ _GATE_ADDED_WEB = {
     # from main at 2e6ca8e: it adds exactly the two modules above (and one test
     # source, excused by the extension filter).
     ("2e6ca8ee0d540aba4fe22b806d150fb55e615152", "984c6c1c08b3be9f551da7d999f3bcd039467cff"): _ASSET_TYPES_1_WEB,
+    # Refinance V1 Stage 3 on feature/refinance-capital-events-v1-stage-3-product-surfaces,
+    # from main at bd77433 through its workbook commit: exactly the ten modules
+    # above (and test sources, excused by the extension filter).
+    ("bd77433a36f08b042ced51e9cc2c6fe086991889", "1984eb7ad61f666283f339ddf7782f17b539ae60"): _REFINANCE_V1_STAGE_3_WEB,
 }
 
 
@@ -2019,6 +2049,15 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         #   the Stage 1 engine is byte-identical to its accepted merge.
         "src/anchor/deals/capital_event_identity.py",
         "src/anchor/deals/refinance_integration.py",
+        # Refinance & Capital Events V1 Stage 3 -- one presentation module and
+        # no financial logic (``tests/test_refinance_v1_stage_3_architecture.py``
+        # proves it contains no arithmetic operator at all):
+        #
+        # - ``refinance_presentation.py`` states which Strategies are
+        #   refinance-bearing, through the accepted whole-domain resolution, and
+        #   words each typed refinance state for an analyst. Every figure is the
+        #   accepted engine's, unchanged.
+        "src/anchor/deals/refinance_presentation.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
                  "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):

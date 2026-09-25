@@ -137,6 +137,13 @@ export function InvestmentWorkspace({
 
   const investment = workspace.investment;
 
+  // Refinance V1 Stage 3: the overview names the acquisition-loan levered
+  // figures as the acquisition-financing reference when the Base Capital
+  // Structure configures a refinance. Re-read on every tab change, because the
+  // structure is saved from the Risk tab. Called before any early return, as
+  // every hook must be.
+  const baseRefinance = useBaseCapitalEvents({ investmentId, token: `${tab}:${riskView}` });
+
   if (investment === null) {
     return (
       <div className="workspace-scroll">
@@ -155,12 +162,6 @@ export function InvestmentWorkspace({
       </div>
     );
   }
-
-  // Refinance V1 Stage 3: the overview names the acquisition-loan levered
-  // figures as the acquisition-financing reference when the Base Capital
-  // Structure configures a refinance. Re-read on every tab change, because the
-  // structure is saved from the Risk tab.
-  const baseRefinance = useBaseCapitalEvents({ investmentId, token: `${tab}:${riskView}` });
 
   return (
     <>
