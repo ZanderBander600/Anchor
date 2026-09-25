@@ -242,6 +242,12 @@ async function backend(url: RequestInfo | URL, init?: RequestInit): Promise<Resp
   if (path.endsWith('/exports/quick-underwrite.xlsx')) {
     return exportReply();
   }
+  // Refinance V1 Stage 3: a standalone Deal's Base Capital Structure, which the
+  // results read to know whether a refinance is configured. None is.
+  const structure = /^\/deals\/([^/]+)\/capital-structure$/.exec(path);
+  if (method === 'GET' && structure !== null) {
+    return reply(200, { deal_id: decodeURIComponent(structure[1]), investment_id: null, capital_structure: { positions: [] } });
+  }
   const single = /^\/deals\/([^/]+)$/.exec(path);
   if (method === 'GET' && single !== null) {
     const deal = deals.find((candidate) => candidate.id === decodeURIComponent(single[1]));
