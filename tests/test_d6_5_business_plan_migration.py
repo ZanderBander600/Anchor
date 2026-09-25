@@ -170,6 +170,9 @@ _P7_10_TABLES = {
     "capital_event_valuation_refs",
     "capital_event_costs",
     "capital_refinance_proceeds",
+    # Refinance V1 Stage 2 review correction: the frozen exact-scope record of
+    # what a published memo version consumed. Empty for a legacy deal.
+    "memo_version_consumed_valuations",
 }
 #: The schema version the current store migrates a v6 database to.
 #: P7.10 Stage 2 (schema 15) added nineteen purely additive valuation and

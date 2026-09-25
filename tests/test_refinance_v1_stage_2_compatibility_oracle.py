@@ -46,7 +46,7 @@ _BUILDER = Path(__file__).resolve().parent / "_refinance_v1_v16_baseline_builder
 #: (PR #59), whose product tree is the accepted Stage 1 baseline ``6de7644``.
 _BASELINE_COMMIT = "f2b5cefa7fca3ecde7621927c5818cbc40c068cd"
 
-#: The six tables schema 17 adds.
+#: The seven tables schema 17 adds.
 _NEW_TABLES = {
     "capital_events",
     "capital_event_retirements",
@@ -54,6 +54,7 @@ _NEW_TABLES = {
     "capital_event_valuation_refs",
     "capital_event_costs",
     "capital_refinance_proceeds",
+    "memo_version_consumed_valuations",
 }
 
 _FROZEN_NOW = _datetime.datetime(2026, 9, 24, 12, 0, tzinfo=_datetime.timezone.utc)
@@ -195,7 +196,7 @@ def test_the_baseline_is_a_real_v16_database_without_any_event_table(legacy: tup
 # =============================================================================
 
 
-def test_the_migration_adds_exactly_the_six_tables_and_alters_nothing(legacy: tuple[Path, dict[str, Any]]) -> None:
+def test_the_migration_adds_exactly_the_seven_tables_and_alters_nothing(legacy: tuple[Path, dict[str, Any]]) -> None:
     db, _ = legacy
     before_objects, before_rows = _objects(db), _every_row(db)
 
@@ -205,7 +206,7 @@ def test_the_migration_adds_exactly_the_six_tables_and_alters_nothing(legacy: tu
     assert _version(db) == 17
     added = set(after_objects) - set(before_objects)
     assert {name for kind, name in added if kind == "table"} == _NEW_TABLES
-    # Only the six tables and SQLite's automatic key indexes for them.
+    # Only the seven tables and SQLite's automatic key indexes for them.
     assert {kind for kind, _ in added} <= {"table", "index"}
     assert all(
         kind == "table" or (name.startswith("sqlite_autoindex_") and any(table in name for table in _NEW_TABLES))
@@ -279,6 +280,17 @@ def test_replaying_writes_nothing_and_synthesizes_no_refinance(client: TestClien
         _replay(client, exchange)
     assert _every_row(db) == before
     assert all(before[table] == [] for table in _NEW_TABLES)
+
+
+def test_a_v16_published_version_records_no_scoped_consumption(legacy: tuple[Path, dict[str, Any]]) -> None:
+    """A version issued before schema 17 recorded no exact-scope consumption,
+    and gains none: nothing is backfilled or reconstructed from today's state."""
+
+    db, manifest = legacy
+    store.list_deals(db_path=db)
+    assert store.list_memo_version_consumed_valuations(
+        manifest["structured_investment_id"], manifest["version_id"], db_path=db
+    ) == ()
 
 
 def test_every_stored_capital_structure_reads_with_no_event(legacy: tuple[Path, dict[str, Any]]) -> None:

@@ -163,7 +163,7 @@ def test_no_schema_change_and_no_read_triggered_materialization(client: TestClie
     # empty, and left empty, because a Deal that never opted into structured
     # capital has no position and no read makes it one (P-11).
     # Refinance V1 Stage 2 appends six capital-event tables the same way, empty.
-    assert sorted(table for table in table_names(db) if table.startswith("capital_")) == sorted((*P7_8_TABLES, *REFINANCE_V1_STAGE_2_TABLES))
+    assert sorted(table for table in table_names(db) if table.startswith("capital_")) == sorted((*P7_8_TABLES, *(table for table in REFINANCE_V1_STAGE_2_TABLES if table.startswith("capital_"))))
     assert {table: rows(db, table) for table in REFINANCE_V1_STAGE_2_TABLES} == dict.fromkeys(REFINANCE_V1_STAGE_2_TABLES, [])
     assert {table: rows(db, table) for table in P7_8_TABLES} == dict.fromkeys(P7_8_TABLES, [])
     assert not {table for table in table_names(db) if "funding_requirement" in table}

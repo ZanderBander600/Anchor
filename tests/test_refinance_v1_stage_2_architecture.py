@@ -48,9 +48,13 @@ _STRUCTURED = f"{_DEALS}/structured_variants.py"
 _PARTNERSHIP = f"{_DEALS}/partnership_variants.py"
 _IDENTITY = f"{_DEALS}/capital_event_identity.py"
 _INTEGRATION = f"{_DEALS}/refinance_integration.py"
+#: Review correction: the exact-scope evidence authority and the exact-scope
+#: publication requirement live in P7.10 Stage 2's own seams.
+_VALUATION_VIEWS = f"{_DEALS}/valuation_views.py"
+_MEMO_DEPENDENCIES = f"{_DEALS}/memo_dependencies.py"
 
 _NEW = (_IDENTITY, _INTEGRATION)
-_CHANGED = (_API, _STORE, _CODEC, _FINGERPRINT, _STRUCTURED, _PARTNERSHIP)
+_CHANGED = (_API, _STORE, _CODEC, _FINGERPRINT, _STRUCTURED, _PARTNERSHIP, _VALUATION_VIEWS, _MEMO_DEPENDENCIES)
 
 #: Every production file Stage 2 changes, exactly (Section 20, Stage 2).
 _STAGE_2_PRODUCTION_FILES = frozenset((*_NEW, *_CHANGED))
@@ -75,8 +79,6 @@ _PROTECTED = (
     "src/anchor/ingestion",
     "src/anchor/asset_management",
     f"{_DEALS}/decision_matrix.py",
-    f"{_DEALS}/memo_dependencies.py",
-    f"{_DEALS}/valuation_views.py",
     f"{_DEALS}/variants.py",
     f"{_DEALS}/investment_variants.py",
     f"{_DEALS}/position_identity.py",
@@ -84,7 +86,7 @@ _PROTECTED = (
     "src/anchor/validation.py",
 )
 
-#: The six tables schema 17 adds.
+#: The six capital-event tables schema 17 adds, each a Capital Structure child.
 _TABLES = frozenset(
     {
         "capital_events",
@@ -246,8 +248,22 @@ def _ddl(source: str, table: str) -> str:
 def test_schema_17_adds_exactly_the_six_tables() -> None:
     store, base = _current(_STORE), _at(_BASE, _STORE)
     assert "_SCHEMA_VERSION = 17" in store and "_SCHEMA_VERSION = 16" in base
-    assert _created(store) - _created(base) == _TABLES
+    assert _created(store) - _created(base) == _TABLES | {_MEMO_TABLE}
     assert _created(base) <= _created(store)
+
+
+#: Review correction: the frozen exact-scope record of what a published memo
+#: version consumed. Keyed by the version, typed, and never updated.
+_MEMO_TABLE = "memo_version_consumed_valuations"
+
+
+def test_the_memo_consumption_record_is_typed_scoped_and_append_only() -> None:
+    store = _current(_STORE)
+    ddl = _ddl(store, _MEMO_TABLE)
+    assert "PRIMARY KEY (version_id, timepoint_id, scope_kind, unit_id)" in ddl
+    assert "CHECK (scope_kind IN ('unit', 'investment'))" in ddl
+    assert not re.search(r"json|blob|payload|value|amount", ddl, re.IGNORECASE)
+    assert not re.search(rf"UPDATE\s+{_MEMO_TABLE}", store, re.IGNORECASE)
 
 
 def test_no_accepted_table_is_altered_or_redefined() -> None:
@@ -337,9 +353,58 @@ def test_only_an_ltv_enabled_event_names_a_consumed_valuation() -> None:
     (function,) = [
         node
         for node in _code(_current(_INTEGRATION)).body
-        if isinstance(node, ast.FunctionDef) and node.name == "refinance_valuation_timepoints"
+        if isinstance(node, ast.FunctionDef) and node.name == "refinance_valuation_scopes"
     ]
     assert "event.sizing.max_ltv is not None" in ast.unparse(function)
+
+
+def test_the_refinance_adapter_never_rewrites_a_message_as_text() -> None:
+    """Review correction (Section 15.3): typed objects decide meaning, and
+    prose is never parsed, searched or edited. ``refinance_integration`` calls
+    no ``str`` method that reads or rewrites text -- ``replace``, ``split``,
+    ``find``, ``startswith`` and the rest -- and tests no substring with
+    ``in`` against a message. ``dataclasses.replace`` (a bare name) rebuilds a
+    typed object and is the only ``replace`` it calls."""
+
+    tree = _code(_current(_INTEGRATION))
+    text_methods = {
+        "replace", "split", "rsplit", "partition", "rpartition", "find", "rfind", "index", "rindex",
+        "startswith", "endswith", "removeprefix", "removesuffix", "count", "strip", "lstrip", "rstrip", "sub",
+    }
+    called = sorted(
+        ast.unparse(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in text_methods
+    )
+    assert called == [], called
+    assert "re" not in _imports(tree)
+    messages_tested = [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Compare)
+        and any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops)
+        and "message" in ast.unparse(node)
+    ]
+    assert messages_tested == [], messages_tested
+
+
+def test_the_message_guard_would_see_a_string_replacement() -> None:
+    injected = _current(_INTEGRATION) + "\n\ndef _restated(message, old, new):\n    return message.replace(old, new)\n"
+    tree = _code(injected)
+    assert [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "replace"]
+
+
+def test_the_evidence_authority_offers_every_timepoint_exact_scope() -> None:
+    """Review correction (P7.10 Section 6, R-E): the authority withholds cells,
+    never whole timepoints -- every view is offered, through ``gated_result``."""
+
+    (function,) = [
+        node
+        for node in _code(_current(_VALUATION_VIEWS)).body
+        if isinstance(node, ast.FunctionDef) and node.name == "funding_authority"
+    ]
+    source = ast.unparse(function)
+    assert "gated_result(" in source and "not in blocked" not in source
 
 
 def test_no_readiness_route_or_stage_3_surface_is_added() -> None:

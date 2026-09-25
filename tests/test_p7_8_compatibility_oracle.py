@@ -188,7 +188,7 @@ def test_no_schema_change_and_no_read_triggered_materialization(client: TestClie
     # one (P-11).
     capital_tables = sorted(table for table in table_names(db) if table.startswith("capital_"))
     # Refinance V1 Stage 2 appends six capital-event tables the same way, empty.
-    assert capital_tables == sorted((*P7_8_TABLES, *REFINANCE_V1_STAGE_2_TABLES))
+    assert capital_tables == sorted((*P7_8_TABLES, *(table for table in REFINANCE_V1_STAGE_2_TABLES if table.startswith("capital_"))))
     assert {table: rows(db, table) for table in capital_tables} == dict.fromkeys(capital_tables, [])
     assert not {table for table in table_names(db) if "funding_requirement" in table}
 
