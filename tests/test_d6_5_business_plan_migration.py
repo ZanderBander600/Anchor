@@ -162,12 +162,24 @@ _P7_10_TABLES = {
     # P7.10 Stage 4 (schema 16): the immutable report and PDF stored with each
     # published memo version. Empty for a legacy deal, like every table above.
     "memo_version_report_artifacts",
+    # Refinance V1 Stage 2 (schema 17): the six persisted capital-event tables,
+    # children of a stored Capital Structure. Empty for a legacy deal.
+    "capital_events",
+    "capital_event_retirements",
+    "capital_event_constraints",
+    "capital_event_valuation_refs",
+    "capital_event_costs",
+    "capital_refinance_proceeds",
+    # Refinance V1 Stage 2 review correction: the frozen exact-scope record of
+    # what a published memo version consumed. Empty for a legacy deal.
+    "memo_version_consumed_valuations",
 }
 #: The schema version the current store migrates a v6 database to.
 #: P7.10 Stage 2 (schema 15) added nineteen purely additive valuation and
 #: Investment Memo tables, and P7.10 Stage 4 (schema 16) one more. D6.5's own
 #: two plan tables and every row it wrote are still asserted unchanged below.
-_CURRENT_VERSION = 16
+#: Refinance V1 Stage 2 (schema 17) adds its six capital-event tables the same way.
+_CURRENT_VERSION = 17
 
 
 @pytest.fixture(scope="module")

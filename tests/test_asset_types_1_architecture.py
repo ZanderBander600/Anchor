@@ -302,11 +302,12 @@ def test_classification_is_read_by_no_row_converter_fingerprint() -> None:
 
 def test_the_schema_is_v14_and_the_migration_alters_nothing() -> None:
     # Asset Types 1 introduced schema 14; P7.10 Stage 2 later moved the store to
-    # 15 and P7.10 Stage 4 to 16, each additively and each with its own ledger.
+    # 15, P7.10 Stage 4 to 16 and Refinance V1 Stage 2 to 17, each additively
+    # and each with its own ledger.
     # What this guard is about is that the store declares one version and that
     # the migration alters nothing of this gate's, which is unchanged by both.
     source = _current(_STORE)
-    assert "_SCHEMA_VERSION = 16" in source
+    assert "_SCHEMA_VERSION = 17" in source
     for sql in _sql_strings(_function(_STORE, "_migrate")):
         if "ALTER TABLE" in sql.upper():
             assert "classification" not in sql and "managed_assets" not in sql, sql

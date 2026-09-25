@@ -22,6 +22,16 @@ hold:
 This is Stage 1's own guard, measured in the working tree while the stage is
 unmerged. A later gate re-pins it to Stage 1's committed range, as the P7
 guards were re-pinned here.
+
+**Re-pinned at Stage 2.** Stage 2 (persistence and integration) is the gate
+authorized to extend ``api.py`` and ``deals`` and to connect them to the
+refinance contracts. The three claims about what *Stage 1* changed -- the
+ledger, the untouched Stage 2 / Stage 3 paths, and that nothing upstream
+imported the refinance layer -- now read Stage 1's committed range
+``2e1f84a..6de7644`` and its merged tree, where each holds unchanged. Every
+byte-freeze and seam claim below still reads the working tree, so Stage 1's
+engine stays frozen through Stage 2; Stage 2's own guard is
+``tests/test_refinance_v1_stage_2_architecture.py``.
 """
 
 from __future__ import annotations
@@ -36,6 +46,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 #: ``main`` when Stage 1 began: the ratified contract's merge (PR #56).
 _BASE = "2e1f84aaa7c93b3247e8dbc6ded8b4397124d36b"
+#: Stage 1's accepted merge (PR #57), the end of its committed range.
+_STAGE_1_MERGE = "6de7644663c4f35c82296838e256ed06badb640d"
 
 _CAPITAL = "src/anchor/capital_structure"
 _ENGINE = "src/anchor/engine"
@@ -116,6 +128,14 @@ def _changes_since(base: str, *paths: str) -> set[str]:
     return {path for path in (*tracked, *untracked) if path and "__pycache__" not in path}
 
 
+def _changes_between(base: str, head: str, *paths: str) -> set[str]:
+    """Committed changes in ``base..head`` only: a historical fact about a
+    merged gate, which no later gate can disturb."""
+
+    changed = _git("diff", "--name-only", "--no-renames", base, head, "--", *paths).split()
+    return {path for path in changed if path and "__pycache__" not in path}
+
+
 def _current(path: str) -> str:
     return (_PROJECT_ROOT / path).read_bytes().decode("utf-8").replace("\r\n", "\n")
 
@@ -188,7 +208,7 @@ def _arithmetic(tree: ast.AST) -> set[str]:
 
 
 def test_stage_1_changes_exactly_its_declared_production_files() -> None:
-    changed = {path for path in _changes_since(_BASE, "src", "web") if _is_production(path)}
+    changed = {path for path in _changes_between(_BASE, _STAGE_1_MERGE, "src", "web") if _is_production(path)}
     assert changed == set(_STAGE_1_PRODUCTION_FILES), (
         f"unexpected: {sorted(changed - _STAGE_1_PRODUCTION_FILES)}; missing: {sorted(_STAGE_1_PRODUCTION_FILES - changed)}"
     )
@@ -206,7 +226,15 @@ def test_the_new_modules_are_new_at_this_stage() -> None:
 
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_no_stage_2_or_stage_3_path_and_no_upstream_changed(path: str) -> None:
-    assert _changes_since(_BASE, path) == set(), path
+    assert _changes_between(_BASE, _STAGE_1_MERGE, path) == set(), path
+
+
+def test_the_committed_range_guard_has_teeth() -> None:
+    """The committed-range reading sees Stage 1's own change, and Stage 2's
+    ``deals`` work is not in it."""
+
+    assert _changes_between(_BASE, _STAGE_1_MERGE, _REFINANCE) == {_REFINANCE}
+    assert _changes_between(_BASE, _STAGE_1_MERGE, "src/anchor/deals") == set()
 
 
 def test_the_ledger_guard_has_teeth() -> None:
@@ -380,10 +408,21 @@ def test_the_balance_service_reuses_the_debt_functions_and_imports_nothing_else(
 
 
 def test_nothing_upstream_imports_the_refinance_layer() -> None:
+    """Stage 1's claim, read at its merged tree: when Stage 1 merged, no upstream
+    or later-stage layer imported the refinance layer. Stage 2 connects exactly
+    the ``deals`` modules its own guard names."""
+
     for layer in ("engine", "valuation", "consolidation", "partnership", "deals", "decision", "memo", "reporting", "exports"):
-        for path in (_PROJECT_ROOT / "src" / "anchor" / layer).rglob("*.py"):
-            imports = _imports(ast.parse(path.read_text(encoding="utf-8")))
+        for path in _git("ls-tree", "-r", "--name-only", _STAGE_1_MERGE, f"src/anchor/{layer}").split():
+            if not path.endswith(".py"):
+                continue
+            imports = _imports(ast.parse(_git("show", f"{_STAGE_1_MERGE}:{path}")))
             assert not {m for m in imports if "refinance" in m or m.endswith(".events") or "event_validation" in m}, path
+    # Outside ``deals`` and ``api.py`` nothing imports it today either.
+    for layer in ("engine", "valuation", "consolidation", "partnership", "decision", "memo", "reporting", "exports"):
+        for source in (_PROJECT_ROOT / "src" / "anchor" / layer).rglob("*.py"):
+            imports = _imports(ast.parse(source.read_text(encoding="utf-8")))
+            assert not {m for m in imports if "refinance" in m or m.endswith(".events") or "event_validation" in m}, source
 
 
 def test_forward_noi_has_one_definition_and_the_refinance_reads_it() -> None:

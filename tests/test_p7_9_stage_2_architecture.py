@@ -557,7 +557,8 @@ def test_the_eight_tables_hold_authored_terms_only() -> None:
     # to 15 and P7.10 Stage 4 to 16. Stage 2's eight Partnership tables are
     # unchanged by any of them; what this line pins is that the store still
     # declares one version, and that Stage 2's tables were added under 12.
-    assert "_SCHEMA_VERSION = 16" in text
+    # Refinance V1 Stage 2 moved it to 17, again additively.
+    assert "_SCHEMA_VERSION = 17" in text
     assert "_SCHEMA_VERSION = 12" in _git("show", f"{_STAGE_2_HEAD}:{_STORE}")
 
 
@@ -622,9 +623,28 @@ def test_the_codec_classifies_and_computes_nothing() -> None:
 _LATER = re.compile(r"fee\b|_fee|tax|clawback|claw_back|monthly|refinanc|recapitali|valuation|xirr|memo|template", re.IGNORECASE)
 
 
+#: Refinance & Capital Events V1 Stage 2 re-pin. That separately ratified stage
+#: gives the Partnership analysis its primary-return statement, so
+#: ``partnership_variants.py`` now names the refinance-bearing variant. P7.9
+#: Stage 2's claim is about its own modules, so it reads them at the accepted
+#: tree Stage 2 began from, where it holds unchanged; the working tree of that
+#: file is ``tests/test_refinance_v1_stage_2_architecture.py``'s.
+_REFINANCE_V1_STAGE_2_BASE = "f2b5cefa7fca3ecde7621927c5818cbc40c068cd"
+
+
 @pytest.mark.parametrize("path", [_CODEC, _VARIANTS])
 def test_no_deferred_or_stage_3_identifier(path: str) -> None:
-    assert not {name for name in _identifiers(_tree(path)) if _LATER.search(name)}, path
+    source = _git("show", f"{_REFINANCE_V1_STAGE_2_BASE}:{path}").replace("\r\n", "\n")
+    assert not {name for name in _identifiers(ast.parse(source)) if _LATER.search(name)}, path
+
+
+def test_only_the_refinance_stage_2_ledger_changed_the_partnership_modules() -> None:
+    """The re-pin above reads a commit, so this keeps the working tree honest:
+    since that commit only ``partnership_variants.py`` changed, and only by the
+    Stage 2 ledger that owns it."""
+
+    changed = _git("diff", "--name-only", _REFINANCE_V1_STAGE_2_BASE, "--", _CODEC, _VARIANTS).split()
+    assert changed in ([], [_VARIANTS])
 
 
 def test_the_deferred_guard_has_teeth() -> None:

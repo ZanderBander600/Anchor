@@ -467,6 +467,11 @@ def test_the_plan_tables_are_mode_blind_and_carry_every_contract_field(db: Path)
     # what an owner spends; a Capital Structure is who provided the money and on
     # what terms. The two never share a table, a row shape or a codec
     # (``tests/test_p7_8b_capital_structure_persistence.py``).
+    #
+    # Refinance & Capital Events V1 Stage 2 adds six more that match on
+    # "capital" for the same reason: they hold a Capital Structure's authored
+    # capital events, never a plan
+    # (``tests/test_refinance_v1_stage_2_persistence.py``).
     assert {table for table in tables if "capital" in table or "expense" in table} == set(
         _PLAN_TABLES
     ) | {
@@ -474,6 +479,8 @@ def test_the_plan_tables_are_mode_blind_and_carry_every_contract_field(db: Path)
         "investment_capital_plan_items", "investment_owner_expense_items",
         "capital_structures", "capital_positions", "capital_funding_events",
         "capital_position_fees", "capital_debt_terms", "capital_preferred_terms",
+        "capital_events", "capital_event_retirements", "capital_event_constraints",
+        "capital_event_valuation_refs", "capital_event_costs", "capital_refinance_proceeds",
     }
     assert not parent_columns & {"business_plan", "capital_items", "owner_expense_items"}
 

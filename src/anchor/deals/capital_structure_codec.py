@@ -12,6 +12,13 @@ This module is that discriminator's only home. Storage
 one variant has one token everywhere and no layer can drift into spelling it
 differently. It classifies and nothing else: no I/O, no arithmetic, no
 validation, and no construction of a contract.
+
+**Refinance & Capital Events V1 Stage 2.** Two more typed unions reach storage,
+the fingerprint and the wire: the ``RefinanceProceeds`` funding rule, and a
+refinance event's retiring reference (an authored position, or a Unit's
+acquisition loan). Their tokens are declared here beside the others, so a
+capital event is spelled one way everywhere too. The legacy loan is a typed
+``(kind, unit_id)`` reference; its reserved identity string is never a token.
 """
 
 from __future__ import annotations
@@ -26,7 +33,9 @@ from ..capital_structure.contracts import (
     PctOfValue,
     PositionTerms,
     PreferredEquityTerms,
+    RefinanceProceeds,
 )
+from ..capital_structure.events import AuthoredPositionRef, LegacyAcquisitionLoanRef
 
 
 class FundingAmountRuleKind(StrEnum):
@@ -40,6 +49,18 @@ class FundingAmountRuleKind(StrEnum):
     FIXED_AMOUNT = "fixed_amount"
     PCT_OF_PRICE = "pct_of_price"
     PCT_OF_VALUE = "pct_of_value"
+    # Refinance & Capital Events V1 Stage 2: a replacement's funding, sized by
+    # the refinance event it names. It states no amount of its own.
+    REFINANCE_PROCEEDS = "refinance_proceeds"
+
+
+class RetiringRefKind(StrEnum):
+    """Which debt a refinance retires, as a row, a payload and a digest spell
+    it (Section 6.3): an authored position by its ``position_id``, or a Unit's
+    acquisition loan by its ``unit_id``."""
+
+    AUTHORED_POSITION = "authored_position"
+    LEGACY_ACQUISITION_LOAN = "legacy_acquisition_loan"
 
 
 class PositionTermsKind(StrEnum):
@@ -77,8 +98,37 @@ def amount_rule_kind(rule: FundingAmountRule) -> FundingAmountRuleKind:
             return FundingAmountRuleKind.PCT_OF_PRICE
         case PctOfValue():
             return FundingAmountRuleKind.PCT_OF_VALUE
+        case RefinanceProceeds():
+            return FundingAmountRuleKind.REFINANCE_PROCEEDS
         case _:
             raise UnknownCapitalVariantError(rule, what="funding amount rule")
+
+
+def retiring_ref_kind(ref: object) -> RetiringRefKind:
+    """The token for one retiring reference. Explicit per variant: no
+    reflection, and no fallback."""
+
+    match ref:
+        case AuthoredPositionRef():
+            return RetiringRefKind.AUTHORED_POSITION
+        case LegacyAcquisitionLoanRef():
+            return RetiringRefKind.LEGACY_ACQUISITION_LOAN
+        case _:
+            raise UnknownCapitalVariantError(ref, what="retiring position reference")
+
+
+def retiring_ref_identity(ref: object) -> str:
+    """The one id a retiring reference names: the authored ``position_id`` or
+    the acquisition loan's ``unit_id``. It pairs with ``retiring_ref_kind`` as
+    the reference's canonical ``(kind, id)`` (Section 6.3)."""
+
+    match ref:
+        case AuthoredPositionRef():
+            return ref.position_id
+        case LegacyAcquisitionLoanRef():
+            return ref.unit_id
+        case _:
+            raise UnknownCapitalVariantError(ref, what="retiring position reference")
 
 
 def terms_kind(terms: PositionTerms | None) -> PositionTermsKind | None:

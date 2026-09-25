@@ -331,6 +331,20 @@ P7_10_TABLES = (
 #: an analyst publishes one.
 P7_10_STAGE_4_TABLES = ("memo_version_report_artifacts",)
 
+#: The seven tables schema v17 adds (Refinance & Capital Events V1 Stage 2):
+#: the persisted capital events, each a child of one stored Capital Structure,
+#: and (review correction) the frozen exact-scope record of what a published memo
+#: version consumed. A legacy database never holds a row in them.
+REFINANCE_V1_STAGE_2_TABLES = (
+    "capital_events",
+    "capital_event_retirements",
+    "capital_event_constraints",
+    "capital_event_valuation_refs",
+    "capital_event_costs",
+    "capital_refinance_proceeds",
+    "memo_version_consumed_valuations",
+)
+
 #: The two keys Asset Types 1 adds to every Deal and Managed Asset response.
 CLASSIFICATION_KEYS = ("asset_type", "asset_subtype")
 
@@ -385,6 +399,7 @@ def legacy_rows(db: Path) -> dict[str, list[tuple[Any, ...]]]:
             - set(AM1_TABLES)
             - set(P7_10_TABLES)
             - set(P7_10_STAGE_4_TABLES)
+            - set(REFINANCE_V1_STAGE_2_TABLES)
         )
         if not table.startswith("sqlite_")
     }

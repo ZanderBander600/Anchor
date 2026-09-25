@@ -316,12 +316,44 @@ def _stage_1_files() -> list[str]:
     return sorted(_git("ls-tree", "-r", "--name-only", _STAGE_1_MERGE, _VALUATION_PACKAGE).split())
 
 
+#: Refinance & Capital Events V1 Stage 2 re-pin (second review correction).
+#: The additive P7.10 amendment -- ``ValuationUnavailableReason.EVIDENCE_NOT_APPROVED``
+#: and its explicit wire mapping -- plus the typed consumer and the temporary
+#: Stage 3 report gate, amend these accepted files and nothing else. In
+#: ``tests/test_refinance_v1_stage_2_architecture.py`` the valuation, wire and
+#: memo-contract changes are each held to their exact diff, and the
+#: publication changes (the gate refusal and consumer-aware wording) by named
+#: guards. The freeze here excludes exactly these paths and still holds every
+#: other file of the package byte for byte.
+_REFINANCE_V1_STAGE_2_AMENDED = frozenset(
+    {
+        "src/anchor/valuation/contracts.py",
+        "src/anchor/memo/availability.py",
+        "src/anchor/memo/contracts.py",
+        "src/anchor/memo/publication.py",
+    }
+)
+
+
+def _amendment_guards_exist() -> None:
+    guard = (_PROJECT_ROOT / "tests" / "test_refinance_v1_stage_2_architecture.py").read_text(encoding="utf-8")
+    for name in (
+        "test_the_p7_10_valuation_amendment_adds_one_reason_and_nothing_else",
+        "test_the_p7_10_wire_amendment_maps_the_new_reason_explicitly",
+        "test_the_memo_contracts_gain_only_the_typed_consumer",
+    ):
+        assert f"def {name}(" in guard, name
+
+
 @pytest.mark.parametrize("path", _stage_1_files())
 def test_each_stage_1_module_is_byte_identical_to_its_merge(path: str) -> None:
     """Stage 2 consumes the accepted valuation authority and edits none of it.
     Every value, forward NOI and typed unavailable reason still comes from the
-    code the human accepted."""
+    code the human accepted -- except the one named, guarded amendment."""
 
+    if path in _REFINANCE_V1_STAGE_2_AMENDED:
+        _amendment_guards_exist()
+        return
     assert _git("hash-object", path).strip() == _git("rev-parse", f"{_STAGE_1_MERGE}:{path}").strip(), path
 
 
@@ -452,8 +484,14 @@ def test_no_stage_2_module_implements_a_later_funding_event() -> None:
     authorized refinancing or event-timing stage. Stage 2 adds neither."""
 
     forbidden = re.compile(r"refinanc|recapitali|payoff_event|redraw|second_draw|paydown", re.IGNORECASE)
+    # Refinance & Capital Events V1 Stage 2 re-pin: that separately ratified
+    # stage *is* the authorized refinancing stage Section 6.1 names, and it
+    # extends several of these files. The claim is about what P7.10 Stage 2's own
+    # modules added, so it reads them as Stage 2 merged them -- where it holds
+    # unchanged. Refinance persistence is held by its own guard,
+    # ``tests/test_refinance_v1_stage_2_architecture.py``.
     for path in sorted(_STAGE_2_PRODUCTION_FILES):
-        source = _current(path)
+        source = _as_merged(path)
         region = _p7_10_region(source) if path in {_API, _STORE, _FINGERPRINT, _CONTRACTS, _STRUCTURED} else source
         offenders = sorted(name for name in _identifiers(ast.parse(source)) if forbidden.search(name))
         assert [name for name in offenders if name in region] == [], (path, offenders)

@@ -2003,6 +2003,22 @@ def test_g37_the_financial_layers_are_unchanged_and_only_dispatch_moved() -> Non
         "src/anchor/deals/valuation_codec.py",
         "src/anchor/deals/valuation_views.py",
         "src/anchor/deals/memo_dependencies.py",
+        # Refinance & Capital Events V1 Stage 2 -- the persisted capital-event
+        # pathway, two modules and no financial logic in either of them
+        # (``tests/test_refinance_v1_stage_2_architecture.py``, which proves
+        # both contain no arithmetic operator at all):
+        #
+        # - ``capital_event_identity.py`` holds P-8 for capital events: within
+        #   one Investment an event id names one event, so its kind and scope
+        #   may not disagree between structures. It compares identity, never
+        #   money.
+        # - ``refinance_integration.py`` names which valuations an LTV-enabled
+        #   event consumes, restates the evidence gate's typed reason on the
+        #   *accepted* Stage 1 engine's results, and states which return
+        #   namespace is primary. Every figure is the engine's, unchanged, and
+        #   the Stage 1 engine is byte-identical to its accepted merge.
+        "src/anchor/deals/capital_event_identity.py",
+        "src/anchor/deals/refinance_integration.py",
     }
     for area in ("src/anchor/ai", "src/anchor/deals", "src/anchor/api.py",
                  "src/anchor/contracts.py", "src/anchor/analysis/__init__.py"):

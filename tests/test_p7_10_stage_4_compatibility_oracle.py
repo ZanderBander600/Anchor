@@ -31,6 +31,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from _p7_2_fixtures import REFINANCE_V1_STAGE_2_TABLES  # type: ignore[import-not-found]
 from anchor import api as api_module
 from anchor.deals import store
 
@@ -171,9 +172,11 @@ def test_the_migration_adds_exactly_one_empty_table(
     store.list_deals(db_path=db)  # one ordinary read runs the migration
 
     after_tables = _tables(db)
-    assert after_tables - before_tables == {_NEW_TABLE}
+    # Refinance V1 Stage 2 (schema 17) adds its six capital-event tables the
+    # same additive way; named so the comparison stays exact.
+    assert after_tables - before_tables == {_NEW_TABLE} | set(REFINANCE_V1_STAGE_2_TABLES)
     assert before_tables - after_tables == set()
-    assert _version(db) == 16
+    assert _version(db) == 17  # Refinance V1 Stage 2 adds six capital-event tables, additively
 
     # Every pre-existing table's definition is byte-identical: nothing altered.
     after_schema = _schema_sql(db)
@@ -187,6 +190,7 @@ def test_the_migration_adds_exactly_one_empty_table(
 
     # And the new table is empty: the migration backfills no artifact.
     assert after_rows[_NEW_TABLE] == []
+    assert all(after_rows[table] == [] for table in REFINANCE_V1_STAGE_2_TABLES)
 
 
 def test_the_migration_is_idempotent(legacy: tuple[Path, dict[str, Any]]) -> None:
@@ -197,7 +201,7 @@ def test_the_migration_is_idempotent(legacy: tuple[Path, dict[str, Any]]) -> Non
     for _ in range(3):
         store.list_deals(db_path=db)
 
-    assert _version(db) == 16
+    assert _version(db) == 17  # Refinance V1 Stage 2 adds six capital-event tables, additively
     assert _every_row(db) == once_rows
     assert _schema_sql(db) == once_schema
 

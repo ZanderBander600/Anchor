@@ -229,9 +229,27 @@ from ..capital_structure.contracts import (
     PositionScope,
     PositionTerms,
     PreferredEquityTerms,
+    RefinanceProceeds,
     ScopeKind,
     ShortfallResolution,
 )
+from ..capital_structure.events import (
+    AuthoredPositionRef,
+    CapitalEventKind,
+    CapitalStructureWithEvents,
+    EventTiming,
+    FixedProceedsCap,
+    LegacyAcquisitionLoanRef,
+    MaxLtvConstraint,
+    MinDscrConstraint,
+    RefinanceCostKind,
+    RefinanceCostLine,
+    RefinanceEvent,
+    RefinanceSizing,
+    RefinanceValuationRef,
+    RetiringPositionRef,
+)
+from ..capital_structure.refinance_contracts import ConstraintKind
 from ..capital_structure.validation import validate_capital_structure
 from ..engine.contracts import (
     AcquisitionResults,
@@ -353,7 +371,14 @@ from ..memo.contracts import (
 )
 from ..memo.publication import next_version_number
 from ..memo.validation import require_valid_evidence_reference, require_valid_memo_draft
-from .capital_structure_codec import FundingAmountRuleKind, amount_rule_kind
+from .capital_structure_codec import (
+    FundingAmountRuleKind,
+    RetiringRefKind,
+    amount_rule_kind,
+    retiring_ref_kind,
+    retiring_ref_identity,
+)
+from .capital_event_identity import require_coherent_capital_event_identity
 from .contracts import (
     Deal,
     DealNotFoundError,
@@ -486,7 +511,13 @@ _DEFAULT_DB_PATH = Path("data/anchor.db")
 # pre-existing Deal, Investment, Strategy, Scenario, Capital Structure,
 # Partnership, Managed Asset and export keeps loading and responding exactly as
 # it did, because nothing this gate adds is read on any of those paths.
-_SCHEMA_VERSION = 16
+#
+# Refinance & Capital Events V1 Stage 2 -- schema version 17 adds the six
+# capital-event tables and, by review correction, one frozen record of the
+# exact-scope valuations a published memo version consumed -- seven tables, the
+# same way. A v16 database gains seven empty tables; every stored Capital
+# Structure reads back with no event, and every version exactly as it did.
+_SCHEMA_VERSION = 17
 
 
 class PersistedDealDataError(RuntimeError):
@@ -1414,6 +1445,177 @@ _STRATEGY_OWNER_KIND = "strategy"
 
 
 # =============================================================================
+# Refinance & Capital Events V1 Stage 2 -- the persisted capital events, schema
+# version 17.
+#
+# ``docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md`` Section 16.1. Six purely
+# additive tables, created by ``_connect`` via CREATE TABLE IF NOT EXISTS exactly
+# as every table since version 2. No ALTER: ``capital_structures`` and every
+# P7.8B child table keep their accepted definitions, and no existing row is read
+# differently or rewritten.
+#
+# **Children of the existing owner.** Every row is keyed by the ``structure_id``
+# of the ``capital_structures`` row that states it, so the Base structure and
+# each Strategy's own keep independent, whole-domain event sets (P7.8B Sections
+# 3 and 4), and an event is written, replaced and deleted only with its whole
+# structure.
+#
+# **Relational and typed, never a JSON blob.** One table per member of the
+# Stage 1 contract that is itself a collection or an optional part:
+#
+#   * ``capital_events``                -- identity, kind, exact scope, timing,
+#                                          label and the replacement position;
+#   * ``capital_event_retirements``     -- each retiring reference, as a typed
+#                                          ``(ref_kind, position_id | unit_id)``.
+#                                          The legacy loan is never stored as its
+#                                          reserved identity string;
+#   * ``capital_event_constraints``     -- one row per *enabled* constraint. An
+#                                          absent constraint has no row, so there
+#                                          is no "enabled" flag that could keep a
+#                                          stale target (Section 6.4);
+#   * ``capital_event_valuation_refs``  -- the LTV valuation reference, at most
+#                                          one per event, and only beside LTV;
+#   * ``capital_event_costs``           -- fixed-dollar cost lines, a retiring
+#                                          lender fee naming its typed recipient;
+#   * ``capital_refinance_proceeds``    -- the ``RefinanceProceeds`` funding-to-
+#                                          event relationship (below).
+#
+# **``RefinanceProceeds`` without altering ``capital_funding_events``.** The
+# replacement's funding is an ordinary funding row: its ``amount_rule`` column
+# states the codec token ``refinance_proceeds``, which is exactly what that
+# discriminator column exists to spell, and ``amount``, ``pct`` and
+# ``timepoint_id`` are all NULL because the rule states none of them. No
+# existing column is overloaded to hold the event id. The event it names lives
+# in the sidecar ``capital_refinance_proceeds``, keyed by the funding row's own
+# ``(structure_id, event_id)``, so the relationship is typed and checkable in
+# both directions: a ``refinance_proceeds`` funding row with no sidecar row, or a
+# sidecar row with no such funding row, is corrupt.
+#
+# **Ordinals are presentation.** ``ordinal`` keeps the analyst's authored order
+# of events, retirements and cost lines so a structure reads back exactly as it
+# was saved. Economic order never reads it: the fingerprint canonicalizes every
+# collection (Section 14.2), and the executor orders events by scope and month.
+#
+# Keys: every primary key leads with ``structure_id``, so each table's automatic
+# index serves the one read pattern (all rows of one structure) and the
+# explicit child deletion below. ``UNIQUE (structure_id, capital_event_id)`` on
+# the sidecar is the "one replacement funding per event" rule in the schema.
+#
+# No FOREIGN KEY / ON DELETE CASCADE, for the reason stated above
+# ``lease_level_suites``: every lifecycle function deletes these rows explicitly,
+# in the same transaction as their structure.
+# =============================================================================
+
+_CREATE_CAPITAL_EVENTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_events (
+    structure_id             TEXT NOT NULL,
+    event_id                 TEXT NOT NULL,
+    ordinal                  INTEGER NOT NULL,
+    kind                     TEXT NOT NULL,
+    label                    TEXT NOT NULL,
+    scope_kind               TEXT NOT NULL,
+    scope_unit_id            TEXT,
+    model_month              INTEGER NOT NULL,
+    sequence                 INTEGER NOT NULL,
+    replacement_position_id  TEXT NOT NULL,
+    PRIMARY KEY (structure_id, event_id)
+)
+"""
+
+_CREATE_CAPITAL_EVENT_RETIREMENTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_event_retirements (
+    structure_id  TEXT NOT NULL,
+    event_id      TEXT NOT NULL,
+    ordinal       INTEGER NOT NULL,
+    ref_kind      TEXT NOT NULL,
+    position_id   TEXT,
+    unit_id       TEXT,
+    PRIMARY KEY (structure_id, event_id, ordinal)
+)
+"""
+
+_CREATE_CAPITAL_EVENT_CONSTRAINTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_event_constraints (
+    structure_id     TEXT NOT NULL,
+    event_id         TEXT NOT NULL,
+    constraint_kind  TEXT NOT NULL,
+    target           REAL NOT NULL,
+    PRIMARY KEY (structure_id, event_id, constraint_kind)
+)
+"""
+
+_CREATE_CAPITAL_EVENT_VALUATION_REFS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_event_valuation_refs (
+    structure_id  TEXT NOT NULL,
+    event_id      TEXT NOT NULL,
+    timepoint_id  TEXT NOT NULL,
+    PRIMARY KEY (structure_id, event_id)
+)
+"""
+
+_CREATE_CAPITAL_EVENT_COSTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_event_costs (
+    structure_id           TEXT NOT NULL,
+    event_id               TEXT NOT NULL,
+    cost_id                TEXT NOT NULL,
+    ordinal                INTEGER NOT NULL,
+    kind                   TEXT NOT NULL,
+    amount                 REAL NOT NULL,
+    recipient_kind         TEXT,
+    recipient_position_id  TEXT,
+    recipient_unit_id      TEXT,
+    description            TEXT NOT NULL,
+    PRIMARY KEY (structure_id, cost_id)
+)
+"""
+
+_CREATE_CAPITAL_REFINANCE_PROCEEDS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS capital_refinance_proceeds (
+    structure_id      TEXT NOT NULL,
+    funding_event_id  TEXT NOT NULL,
+    capital_event_id  TEXT NOT NULL,
+    PRIMARY KEY (structure_id, funding_event_id),
+    UNIQUE (structure_id, capital_event_id)
+)
+"""
+
+#: Schema 17 (review corrections) -- the typed audit record of what one
+#: published memo version consumed, at exact scope, and what consumed it.
+#: ``memo_version_valuations.consumed`` says only that the complete Investment
+#: value of a view was consumed; a Unit consumer depends on its own Unit's cell
+#: alone, so this record names the scope too: ``scope_kind`` is ``unit`` with
+#: ``unit_id`` the Unit, or ``investment`` with ``unit_id`` ``''`` (not NULL, for
+#: the reason ``memo_version_dependencies.scope_id`` is not). ``consumer_kind``
+#: is the typed provenance, so a scope a funding and a refinance both read is
+#: two rows. Every row names a view its own version froze. Written only by the
+#: publication transaction and never updated; deleted only with the Investment,
+#: as a member of ``_MEMO_VERSION_CHILD_TABLES``.
+_CREATE_MEMO_VERSION_CONSUMED_VALUATIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS memo_version_consumed_valuations (
+    version_id     TEXT NOT NULL,
+    timepoint_id   TEXT NOT NULL,
+    scope_kind     TEXT NOT NULL CHECK (scope_kind IN ('unit', 'investment')),
+    unit_id        TEXT NOT NULL,
+    consumer_kind  TEXT NOT NULL CHECK (consumer_kind IN ('pct_of_value', 'refinance_ltv')),
+    CHECK ((scope_kind = 'unit') = (unit_id <> '')),
+    PRIMARY KEY (version_id, timepoint_id, scope_kind, unit_id, consumer_kind)
+)
+"""
+
+#: Every table schema 17 adds, each a child of one ``capital_structures`` row,
+#: in delete order. Deliberately separate from ``_CAPITAL_STRUCTURE_CHILD_TABLES``
+#: so the accepted P7.8B table set keeps its own meaning.
+_CAPITAL_EVENT_TABLES = (
+    "capital_refinance_proceeds",
+    "capital_event_costs",
+    "capital_event_valuation_refs",
+    "capital_event_constraints",
+    "capital_event_retirements",
+    "capital_events",
+)
+
+
+# =============================================================================
 # Phase 7 Gate P7.9 Stage 2 -- the persisted Partnership, schema version 12.
 #
 # Eight purely additive tables, created by ``_connect`` via CREATE TABLE IF NOT
@@ -2119,6 +2321,10 @@ _MEMO_VERSION_CHILD_TABLES = (
     # Schema 16. Deleted only with the whole Investment, exactly like its
     # siblings: no function removes one version's artifact on its own.
     "memo_version_report_artifacts",
+    # Schema 17 (Refinance V1 Stage 2 review correction): the exact-scope
+    # consumption record. Deleted only with the whole Investment, like every
+    # sibling.
+    "memo_version_consumed_valuations",
 )
 
 _P7_10_TABLES = (
@@ -2646,6 +2852,14 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # rows are not touched, and its report endpoint reports the typed
     # ``REPORT_SNAPSHOT_NOT_AVAILABLE`` state instead. Publishing a new version
     # is how an analyst gets a current issuable report.
+    # Refinance & Capital Events V1 Stage 2 -- schema version 17 adds the six
+    # capital-event tables, and the one exact-scope consumption record of a
+    # published memo version, the same way: ``_connect`` creates them via
+    # CREATE TABLE IF NOT EXISTS, no table is altered, and no row is written for
+    # anything that already exists. A v16 database simply gains seven empty
+    # tables, so every stored Capital Structure reads back with no event, no
+    # refinance is ever synthesized for it, and a version published before this
+    # gate records no scoped consumption rather than an invented one.
     connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
@@ -2746,6 +2960,13 @@ def _connect(db_path: Path | None) -> Iterator[sqlite3.Connection]:
     connection.execute(_CREATE_MEMO_VERSION_DEPENDENCIES_TABLE_SQL)
     connection.execute(_CREATE_MEMO_VERSION_REPORT_ARTIFACTS_TABLE_SQL)
     connection.execute(_CREATE_INVESTMENT_COMMITTEE_DECISIONS_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_EVENTS_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_EVENT_RETIREMENTS_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_EVENT_CONSTRAINTS_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_EVENT_VALUATION_REFS_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_EVENT_COSTS_TABLE_SQL)
+    connection.execute(_CREATE_CAPITAL_REFINANCE_PROCEEDS_TABLE_SQL)
+    connection.execute(_CREATE_MEMO_VERSION_CONSUMED_VALUATIONS_TABLE_SQL)
     _migrate(connection)
     try:
         with connection:
@@ -7374,10 +7595,17 @@ def _capital_enum(value: object, enum_type: type, *, path: str) -> Any:
         raise PersistedCapitalStructureDataError(str(error)) from None
 
 
-def _amount_rule_from_row(row: sqlite3.Row, *, where: str) -> FundingAmountRule:
+def _amount_rule_from_row(
+    row: sqlite3.Row, *, where: str, proceeds: Mapping[str, str] | None = None
+) -> FundingAmountRule:
     """One stored funding amount rule, strictly. A token the contract no longer
     knows, or a rule whose columns do not match the token it states, is corrupt:
-    nothing is defaulted to a fixed amount."""
+    nothing is defaulted to a fixed amount.
+
+    ``proceeds`` maps a funding row's ``event_id`` to the refinance event its
+    ``capital_refinance_proceeds`` sidecar row names (schema 17). A
+    ``refinance_proceeds`` row states none of ``amount``, ``pct`` or
+    ``timepoint_id`` and must have exactly that one sidecar link."""
 
     kind, amount, pct, timepoint_id = (
         row["amount_rule"],
@@ -7407,6 +7635,15 @@ def _amount_rule_from_row(row: sqlite3.Row, *, where: str) -> FundingAmountRule:
         case FundingAmountRuleKind.PCT_OF_VALUE:
             _exactly("pct", "timepoint_id")
             return PctOfValue(timepoint_id=timepoint_id, pct=pct)
+        case FundingAmountRuleKind.REFINANCE_PROCEEDS:
+            _exactly()
+            capital_event_id = (proceeds or {}).get(row["event_id"])
+            if capital_event_id is None:
+                raise PersistedCapitalStructureDataError(
+                    f"{where} states refinance_proceeds funding, but no capital_refinance_proceeds row "
+                    "names the refinance event that sizes it."
+                )
+            return RefinanceProceeds(capital_event_id=capital_event_id)
         case _:
             raise PersistedCapitalStructureDataError(
                 f"{where} holds amount rule {kind!r}, which is not one of: "
@@ -7422,6 +7659,7 @@ def _capital_position_from_rows(
     preferred_row: sqlite3.Row | None,
     *,
     where: str,
+    proceeds: Mapping[str, str] | None = None,
 ) -> CapitalPosition:
     """One stored position as the exact P7.7 contract.
 
@@ -7446,7 +7684,7 @@ def _capital_position_from_rows(
             model_month=event["model_month"],
             sequence=event["sequence"],
             amount_rule=_amount_rule_from_row(
-                event, where=f"{located} funding event {event['event_id']!r}"
+                event, where=f"{located} funding event {event['event_id']!r}", proceeds=proceeds
             ),
         )
         for event in funding_rows
@@ -7578,18 +7816,27 @@ def _read_capital_structure(
             "position."
         )
 
-    structure = CapitalStructure(
-        positions=tuple(
-            _capital_position_from_rows(
-                row,
-                funding_rows.get(row["position_id"], ()),
-                fee_rows.get(row["position_id"], ()),
-                debt_rows.get(row["position_id"]),
-                preferred_rows.get(row["position_id"]),
-                where=where,
-            )
-            for row in position_rows
+    proceeds = _refinance_proceeds_links(connection, structure_id, funding_rows, where=where)
+    positions = tuple(
+        _capital_position_from_rows(
+            row,
+            funding_rows.get(row["position_id"], ()),
+            fee_rows.get(row["position_id"], ()),
+            debt_rows.get(row["position_id"]),
+            preferred_rows.get(row["position_id"]),
+            where=where,
+            proceeds=proceeds,
         )
+        for row in position_rows
+    )
+    # Schema 17: a structure with no event row reads as the plain P7.7
+    # contract, exactly as before; one with events reads as the Stage 1
+    # subclass. "No refinance" therefore has one representation.
+    events = _capital_events_from_rows(connection, structure_id, where=where)
+    structure = (
+        CapitalStructureWithEvents(positions=positions, events=events)
+        if events
+        else CapitalStructure(positions=positions)
     )
     issues = validate_capital_structure(structure, acquisition_loan_unit_ids=())
     if issues:
@@ -7681,6 +7928,14 @@ def _write_capital_structure(
                     rule.timepoint_id if isinstance(rule, PctOfValue) else None,
                 ),
             )
+            if isinstance(rule, RefinanceProceeds):
+                # Schema 17: the funding-to-event relationship, in its own typed
+                # sidecar rather than in any column of the accepted table.
+                connection.execute(
+                    "INSERT INTO capital_refinance_proceeds "
+                    "(structure_id, funding_event_id, capital_event_id) VALUES (?, ?, ?)",
+                    (structure_id, event.event_id, rule.capital_event_id),
+                )
         terms = position.terms
         if isinstance(terms, DebtTerms):
             connection.execute(
@@ -7738,6 +7993,304 @@ def _write_capital_structure(
                     int(terms.redemption_month),
                 ),
             )
+    if isinstance(capital_structure, CapitalStructureWithEvents):
+        _write_capital_events(connection, structure_id, capital_structure.events)
+
+
+# =============================================================================
+# Refinance & Capital Events V1 Stage 2 -- the capital-event rows (schema 17)
+# =============================================================================
+
+#: Each enabled constraint's row, in canonical kind order (Section 6.4): its
+#: ``ConstraintKind`` token, how to read its target from the contract, and how
+#: to rebuild the contract from a stored target.
+_CONSTRAINT_ROWS: tuple[tuple[ConstraintKind, str, Callable[[float], Any]], ...] = (
+    (ConstraintKind.FIXED_CAP, "fixed_cap", lambda target: FixedProceedsCap(amount=target)),
+    (ConstraintKind.MAX_LTV, "max_ltv", lambda target: MaxLtvConstraint(max_ltv=target)),
+    (ConstraintKind.MIN_DSCR, "min_dscr", lambda target: MinDscrConstraint(min_dscr=target)),
+)
+
+
+def _constraint_target(constraint: object) -> float:
+    """The one stated number of an enabled constraint."""
+
+    match constraint:
+        case FixedProceedsCap():
+            return float(constraint.amount)
+        case MaxLtvConstraint():
+            return float(constraint.max_ltv)
+        case MinDscrConstraint():
+            return float(constraint.min_dscr)
+        case _:
+            raise TypeError(f"No row holds sizing constraint {type(constraint).__qualname__}.")
+
+
+def _ref_columns(ref: RetiringPositionRef) -> tuple[str, str | None, str | None]:
+    """A retiring reference as its typed ``(kind, position_id, unit_id)`` row.
+    Exactly one id column is stated; the reserved legacy identity string is
+    never written."""
+
+    kind = retiring_ref_kind(ref)
+    identity = retiring_ref_identity(ref)
+    if kind is RetiringRefKind.AUTHORED_POSITION:
+        return kind.value, identity, None
+    return kind.value, None, identity
+
+
+def _write_capital_events(
+    connection: sqlite3.Connection, structure_id: str, events: Iterable[RefinanceEvent]
+) -> None:
+    """Every capital event of one structure, with its retirements, constraints,
+    valuation reference and cost lines, in the analyst's authored order.
+
+    Called only from ``_write_capital_structure``, inside its transaction and
+    after the structure validated: an event is never written on its own."""
+
+    for ordinal, event in enumerate(events):
+        connection.execute(
+            """
+            INSERT INTO capital_events
+                (structure_id, event_id, ordinal, kind, label, scope_kind, scope_unit_id,
+                 model_month, sequence, replacement_position_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                structure_id,
+                event.event_id,
+                ordinal,
+                _encode_enum(event.kind),
+                event.label,
+                _encode_enum(event.scope.kind),
+                event.scope.unit_id,
+                int(event.timing.model_month),
+                int(event.timing.sequence),
+                event.replacement_position_id,
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO capital_event_retirements
+                (structure_id, event_id, ordinal, ref_kind, position_id, unit_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (structure_id, event.event_id, index, *_ref_columns(ref))
+                for index, ref in enumerate(event.retiring)
+            ],
+        )
+        connection.executemany(
+            """
+            INSERT INTO capital_event_constraints (structure_id, event_id, constraint_kind, target)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (structure_id, event.event_id, kind.value, _constraint_target(constraint))
+                for kind, attribute, _ in _CONSTRAINT_ROWS
+                if (constraint := getattr(event.sizing, attribute)) is not None
+            ],
+        )
+        if event.valuation is not None:
+            connection.execute(
+                "INSERT INTO capital_event_valuation_refs (structure_id, event_id, timepoint_id) "
+                "VALUES (?, ?, ?)",
+                (structure_id, event.event_id, event.valuation.timepoint_id),
+            )
+        connection.executemany(
+            """
+            INSERT INTO capital_event_costs
+                (structure_id, event_id, cost_id, ordinal, kind, amount, recipient_kind,
+                 recipient_position_id, recipient_unit_id, description)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    structure_id,
+                    event.event_id,
+                    line.cost_id,
+                    index,
+                    _encode_enum(line.kind),
+                    float(line.amount),
+                    *((None, None, None) if line.recipient is None else _ref_columns(line.recipient)),
+                    line.description,
+                )
+                for index, line in enumerate(event.costs)
+            ],
+        )
+
+
+def _ref_from_columns(
+    kind: object, position_id: object, unit_id: object, *, where: str
+) -> RetiringPositionRef:
+    """One stored retiring reference, strictly: a known kind, and exactly the
+    one id column that kind states."""
+
+    ref_kind = _capital_enum(kind, RetiringRefKind, path=f"{where} ref_kind")
+    if ref_kind is None:
+        raise PersistedCapitalStructureDataError(f"{where} states no reference kind.")
+    if ref_kind is RetiringRefKind.AUTHORED_POSITION:
+        if position_id is None or unit_id is not None:
+            raise PersistedCapitalStructureDataError(
+                f"{where} is an authored-position reference, whose columns are exactly position_id."
+            )
+        return AuthoredPositionRef(position_id=position_id)  # type: ignore[arg-type]
+    if unit_id is None or position_id is not None:
+        raise PersistedCapitalStructureDataError(
+            f"{where} is an acquisition-loan reference, whose columns are exactly unit_id."
+        )
+    return LegacyAcquisitionLoanRef(unit_id=unit_id)  # type: ignore[arg-type]
+
+
+def _no_recipient(line: sqlite3.Row, *, where: str) -> None:
+    """A cost line that names no recipient states no recipient id either."""
+
+    if line["recipient_position_id"] is not None or line["recipient_unit_id"] is not None:
+        raise PersistedCapitalStructureDataError(
+            f"{where} states a recipient id with no recipient kind."
+        )
+    return None
+
+
+def _rows_by_event(
+    connection: sqlite3.Connection, table: str, structure_id: str, *, order: str
+) -> dict[str, list[sqlite3.Row]]:
+    grouped: dict[str, list[sqlite3.Row]] = {}
+    for row in connection.execute(
+        f"SELECT * FROM {table} WHERE structure_id = ? ORDER BY {order}", (structure_id,)
+    ):
+        grouped.setdefault(row["event_id"], []).append(row)
+    return grouped
+
+
+def _refinance_proceeds_links(
+    connection: sqlite3.Connection,
+    structure_id: str,
+    funding_rows: Mapping[str, list[sqlite3.Row]],
+    *,
+    where: str,
+) -> dict[str, str]:
+    """``funding_event_id -> capital_event_id`` from the sidecar, checked in the
+    direction the funding decoder cannot: every link must belong to a stored
+    ``refinance_proceeds`` funding row of this structure. A link to no such row
+    is an orphan, and an orphan is corrupt, never ignored."""
+
+    proceeds_rows = {
+        row["event_id"]
+        for rows in funding_rows.values()
+        for row in rows
+        if row["amount_rule"] == FundingAmountRuleKind.REFINANCE_PROCEEDS.value
+    }
+    links: dict[str, str] = {}
+    for row in connection.execute(
+        "SELECT * FROM capital_refinance_proceeds WHERE structure_id = ? ORDER BY funding_event_id",
+        (structure_id,),
+    ):
+        if row["funding_event_id"] not in proceeds_rows:
+            raise PersistedCapitalStructureDataError(
+                f"{where} holds a refinance-proceeds link for funding event "
+                f"{row['funding_event_id']!r}, which is not a refinance_proceeds funding of this "
+                "structure; a link never implies a funding."
+            )
+        links[row["funding_event_id"]] = row["capital_event_id"]
+    return links
+
+
+def _capital_events_from_rows(
+    connection: sqlite3.Connection, structure_id: str, *, where: str
+) -> tuple[RefinanceEvent, ...]:
+    """Every stored capital event of one structure as the exact Stage 1
+    contract, strictly, in authored order.
+
+    Fails closed on everything the rows can get wrong by themselves: an unknown
+    kind, scope, constraint, reference or cost token (a reserve, holdback or
+    other unsupported member has no token and is refused as unknown); a child
+    row naming no stored event; a reference whose columns disagree with its
+    kind. Everything the rows could state but the contract refuses -- a
+    missing or unused valuation reference, a missing replacement, a malformed
+    scope, a duplicate identity -- is left to the one validator the whole
+    structure then passes through. No event is ever partially decoded or
+    silently dropped."""
+
+    event_rows = connection.execute(
+        "SELECT * FROM capital_events WHERE structure_id = ? ORDER BY ordinal, event_id",
+        (structure_id,),
+    ).fetchall()
+    known = {row["event_id"] for row in event_rows}
+    retirements = _rows_by_event(connection, "capital_event_retirements", structure_id, order="event_id, ordinal")
+    constraints = _rows_by_event(
+        connection, "capital_event_constraints", structure_id, order="event_id, constraint_kind"
+    )
+    valuations = _rows_by_event(connection, "capital_event_valuation_refs", structure_id, order="event_id")
+    costs = _rows_by_event(connection, "capital_event_costs", structure_id, order="event_id, ordinal, cost_id")
+    orphaned = sorted((set(retirements) | set(constraints) | set(valuations) | set(costs)) - known)
+    if orphaned:
+        raise PersistedCapitalStructureDataError(
+            f"{where} holds retirement, constraint, valuation or cost rows for capital event(s) "
+            f"{', '.join(orphaned)}, which it does not hold; a child row never implies an event."
+        )
+
+    events: list[RefinanceEvent] = []
+    for row in event_rows:
+        event_id = row["event_id"]
+        located = f"{where} capital event {event_id!r}"
+        kind = _capital_enum(row["kind"], CapitalEventKind, path=f"{located} kind")
+        scope_kind = _capital_enum(row["scope_kind"], ScopeKind, path=f"{located} scope_kind")
+        stated: dict[str, float] = {}
+        for constraint in constraints.get(event_id, ()):
+            token = _capital_enum(
+                constraint["constraint_kind"], ConstraintKind, path=f"{located} constraint_kind"
+            )
+            stated[token.value] = constraint["target"]
+        (valuation,) = valuations.get(event_id, [None])
+        events.append(
+            RefinanceEvent(
+                event_id=event_id,
+                kind=kind,
+                scope=PositionScope(kind=scope_kind, unit_id=row["scope_unit_id"]),
+                timing=EventTiming(model_month=row["model_month"], sequence=row["sequence"]),
+                label=row["label"],
+                retiring=tuple(
+                    _ref_from_columns(
+                        item["ref_kind"],
+                        item["position_id"],
+                        item["unit_id"],
+                        where=f"{located} retirement {item['ordinal']}",
+                    )
+                    for item in retirements.get(event_id, ())
+                ),
+                replacement_position_id=row["replacement_position_id"],
+                sizing=RefinanceSizing(
+                    **{
+                        attribute: build(stated[kind_token.value]) if kind_token.value in stated else None
+                        for kind_token, attribute, build in _CONSTRAINT_ROWS
+                    }
+                ),
+                valuation=(
+                    None
+                    if valuation is None
+                    else RefinanceValuationRef(timepoint_id=valuation["timepoint_id"])
+                ),
+                costs=tuple(
+                    RefinanceCostLine(
+                        cost_id=line["cost_id"],
+                        kind=_capital_enum(line["kind"], RefinanceCostKind, path=f"{located} cost kind"),
+                        amount=line["amount"],
+                        recipient=(
+                            _no_recipient(line, where=f"{located} cost {line['cost_id']!r}")
+                            if line["recipient_kind"] is None
+                            else _ref_from_columns(
+                                line["recipient_kind"],
+                                line["recipient_position_id"],
+                                line["recipient_unit_id"],
+                                where=f"{located} cost {line['cost_id']!r} recipient",
+                            )
+                        ),
+                        description=line["description"],
+                    )
+                    for line in costs.get(event_id, ())
+                ),
+            )
+        )
+    return tuple(events)
 
 
 def _delete_capital_structure(
@@ -7750,7 +8303,7 @@ def _delete_capital_structure(
     if row is None:
         return
     structure_id = row["structure_id"]
-    for table in _CAPITAL_STRUCTURE_CHILD_TABLES:
+    for table in (*_CAPITAL_EVENT_TABLES, *_CAPITAL_STRUCTURE_CHILD_TABLES):
         connection.execute(f"DELETE FROM {table} WHERE structure_id = ?", (structure_id,))
     connection.execute("DELETE FROM capital_structures WHERE structure_id = ?", (structure_id,))
 
@@ -7761,7 +8314,7 @@ def _delete_investment_capital_structures(
     """Every Capital Structure the Investment owns -- its Base structure and
     each Strategy's own -- with every row under them."""
 
-    for table in _CAPITAL_STRUCTURE_CHILD_TABLES:
+    for table in (*_CAPITAL_EVENT_TABLES, *_CAPITAL_STRUCTURE_CHILD_TABLES):
         connection.execute(
             f"DELETE FROM {table} WHERE structure_id IN "
             "(SELECT structure_id FROM capital_structures WHERE investment_id = ?)",
@@ -7846,9 +8399,12 @@ def _require_coherent_identity(
     kind = (
         StructureOwnerKind.BASE if owner_kind == _BASE_OWNER_KIND else StructureOwnerKind.STRATEGY
     )
-    require_coherent_position_identity(
-        [*others, (_structure_owner(kind, owner_id, label), capital_structure)]
-    )
+    stated = [*others, (_structure_owner(kind, owner_id, label), capital_structure)]
+    require_coherent_position_identity(stated)
+    # Refinance & Capital Events V1 Stage 2: P-8 for capital events, on the
+    # same structures and the same write paths. A structure with no event takes
+    # no part, so every earlier save is judged exactly as before.
+    require_coherent_capital_event_identity(stated)
 
 
 def _require_valid_capital_structure(
@@ -10984,6 +11540,7 @@ def publish_memo_version(
     memo_content_fingerprint: str,
     published_fingerprint: str,
     build_artifact: Callable[[InvestmentMemoVersion], Any],
+    consumed_valuations: tuple[Any, ...] = (),
     db_path: Path | None = None,
 ) -> tuple[InvestmentMemoVersion, Any]:
     """Write one immutable published version, its dependency ledger and the
@@ -11141,6 +11698,30 @@ def publish_memo_version(
                     1 if view.consumed else 0,
                 ),
             )
+        # Schema 17 (review corrections): each exact-scope value the selected
+        # Capital Structure consumed, and what consumed it, frozen with the
+        # version. Every row names a view this version froze just above.
+        frozen_timepoints = {view.timepoint_id for view in valuations}
+        for item in consumed_valuations:
+            if item.timepoint_id not in frozen_timepoints:
+                raise ValueError(
+                    "A consumed valuation must name a valuation view the version freezes; the consumption "
+                    "record never outlives what it describes."
+                )
+        connection.executemany(
+            "INSERT INTO memo_version_consumed_valuations "
+            "(version_id, timepoint_id, scope_kind, unit_id, consumer_kind) VALUES (?, ?, ?, ?, ?)",
+            [
+                (
+                    version_id,
+                    item.timepoint_id,
+                    _encode_enum(item.scope_kind),
+                    item.unit_id or "",
+                    _encode_enum(item.consumer),
+                )
+                for item in consumed_valuations
+            ],
+        )
         for dependency in dependencies:
             connection.execute(
                 "INSERT INTO memo_version_dependencies "
@@ -11180,6 +11761,72 @@ def publish_memo_version(
             ),
         )
         return version, artifact
+
+
+def list_memo_version_consumed_valuations(
+    investment_id: str, version_id: str, *, db_path: Path | None = None
+) -> tuple[Any, ...]:
+    """The exact-scope values one published version consumed, and what consumed
+    each, as frozen when it was published, in ``(timepoint, scope, consumer)``
+    order -- the empty tuple for a version that consumed none, and for every
+    version published before schema 17, which recorded none and gains none:
+    nothing is backfilled or inferred. Read-only.
+
+    Read within the owning Investment: a version of another Investment, or one
+    that does not exist, is ``MemoVersionNotFoundError`` and none of its rows is
+    returned. Fails closed on an unknown scope or consumer token, a Unit column
+    that disagrees with the scope, and a row naming a view its version did not
+    freeze."""
+
+    from ..memo.contracts import ValuationConsumerKind
+    from ..valuation.contracts import ValuationScopeKind
+    from .valuation_views import ValuationRequirement
+
+    with _connect(db_path) as connection:
+        _require_memo_owner(connection, investment_id)
+        if connection.execute(
+            "SELECT 1 FROM investment_memo_versions WHERE version_id = ? AND investment_id = ?",
+            (version_id, investment_id),
+        ).fetchone() is None:
+            raise MemoVersionNotFoundError(investment_id, version_id)
+        rows = connection.execute(
+            "SELECT * FROM memo_version_consumed_valuations WHERE version_id = ? "
+            "ORDER BY timepoint_id, scope_kind, unit_id, consumer_kind",
+            (version_id,),
+        ).fetchall()
+        frozen = {
+            row["timepoint_id"]
+            for row in connection.execute(
+                "SELECT timepoint_id FROM memo_version_valuations WHERE version_id = ?", (version_id,)
+            ).fetchall()
+        }
+    found = []
+    for row in rows:
+        scope_kind = _decode_enum(row["scope_kind"], ValuationScopeKind, path="memo_version_consumed_valuations.scope_kind")
+        if not isinstance(scope_kind, ValuationScopeKind):
+            raise PersistedDealDataError(f"Version {version_id!r} records a consumed value with no scope.")
+        consumer = _decode_enum(
+            row["consumer_kind"], ValuationConsumerKind, path="memo_version_consumed_valuations.consumer_kind"
+        )
+        if not isinstance(consumer, ValuationConsumerKind):
+            raise PersistedDealDataError(f"Version {version_id!r} records a consumed value with no consumer.")
+        unit_id = row["unit_id"] or None
+        if (scope_kind is ValuationScopeKind.UNIT) is (unit_id is None):
+            raise PersistedDealDataError(
+                f"Version {version_id!r} records a consumed {row['scope_kind']} value whose Unit column disagrees "
+                "with its scope."
+            )
+        if row["timepoint_id"] not in frozen:
+            raise PersistedDealDataError(
+                f"Version {version_id!r} records a consumed value at timepoint {row['timepoint_id']!r}, which it "
+                "did not freeze. The consumption record is orphaned."
+            )
+        found.append(
+            ValuationRequirement(
+                timepoint_id=row["timepoint_id"], scope_kind=scope_kind, unit_id=unit_id, consumer=consumer
+            )
+        )
+    return tuple(found)
 
 
 def get_memo_version_artifact(

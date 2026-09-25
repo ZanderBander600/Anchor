@@ -95,10 +95,12 @@ from .fingerprint import (
     fingerprint_valuation_definitions,
 )
 from .partnership_variants import partner_perspectives, partnership_variant_fingerprint
+from .refinance_integration import has_capital_events
 from .structured_variants import (
     StructuredValuationSurface,
     analyze_structured_valuations,
     position_perspectives,
+    resolve_variant_capital_structure,
 )
 
 #: The scope id a whole-Investment dependency entry carries. ``''`` rather than
@@ -489,6 +491,11 @@ def _version_valuations(
     actually required to resolve, and it is frozen rather than recomputed
     because the draft's selection moves on afterwards.
 
+    ``consumed`` is claimed only for a view whose **complete Investment value**
+    a consumer read (review correction). A consumer of one Unit's cell did not
+    consume the whole view -- the Investment value may even be unavailable --
+    so that exact-scope fact is frozen in the consumption record instead.
+
     An unavailable view is frozen too, with its typed reason and **no value**:
     a version that cited "no value at this timepoint" keeps saying exactly that,
     and is never later read as zero."""
@@ -496,7 +503,7 @@ def _version_valuations(
     if surface is None:
         return ()
     selected = set(draft.selected_valuation_timepoint_ids)
-    consumed = set(surface.consumed_timepoint_ids)
+    consumed = whole_view_consumed_timepoints(surface)
     return tuple(
         MemoVersionValuation(
             timepoint_id=view.timepoint_id,
@@ -517,17 +524,68 @@ def _version_valuations(
     )
 
 
+def _consumed_requirements(surface: StructuredValuationSurface | None) -> tuple:
+    """The exact-scope values the selected Capital Structure consumes from a
+    **defined** view, in canonical order. A requirement naming a timepoint the
+    Investment does not define is not a publication dependency -- the P7.10
+    ``PctOfValue`` rule, which an LTV refinance follows -- because its consumer
+    already reports the typed absence itself."""
+
+    if surface is None:
+        return ()
+    defined = {view.timepoint_id for view in surface.views}
+    return tuple(item for item in surface.consumed_requirements if item.timepoint_id in defined)
+
+
+def whole_view_consumed_timepoints(surface: StructuredValuationSurface | None) -> set[str]:
+    """The defined timepoints whose complete Investment value a consumer read.
+    Only these may be called consumed as a whole view (review correction)."""
+
+    return {
+        requirement.timepoint_id
+        for requirement in _consumed_requirements(surface)
+        if requirement.unit_id is None
+    }
+
+
+def _consumed_scopes(surface: StructuredValuationSurface | None) -> dict[tuple[str, str, str], tuple]:
+    """The consumed requirements grouped by exact scope, each group keeping
+    every consumer kind that reads it, in canonical order. Grouping never
+    erases provenance: a scope a funding and a refinance both read is one
+    dependency with two consumers."""
+
+    grouped: dict[tuple[str, str, str], list] = {}
+    for requirement in _consumed_requirements(surface):
+        grouped.setdefault(requirement.scope_key(), []).append(requirement)
+    return {key: tuple(grouped[key]) for key in sorted(grouped)}
+
+
+def _scope_text(unit_id: str | None, db_path: Path | None) -> str:
+    """The consumed scope as an analyst reads it: the Investment, or the Unit
+    by its Deal name -- never an opaque identity."""
+
+    from ..reporting.assembly import unit_display_name
+
+    return "the Investment" if unit_id is None else unit_display_name(unit_id, db_path)
+
+
 def _required_valuations(
-    draft: InvestmentMemoDraft, surface: StructuredValuationSurface | None
+    draft: InvestmentMemoDraft,
+    surface: StructuredValuationSurface | None,
+    *,
+    db_path: Path | None = None,
 ) -> tuple[RequiredValuation, ...]:
     """The valuation views this draft is actually required to resolve.
 
     Two sources, and only two. A view the memo **selected** for inclusion must
-    resolve, because the package would otherwise present a valuation with no
-    value. A view the resolved Capital Structure **consumes** through a
-    ``PctOfValue`` rule must resolve whether or not the memo displays it,
-    because the funding cannot be sized without it and the whole structured
-    result rests on the advance.
+    resolve **as a whole**, because the package would otherwise present a
+    valuation with no value. A value the resolved Capital Structure
+    **consumes** must resolve **at the exact scope its consumer reads** (P7.10
+    Section 6 and R-E; Refinance V1 Section 14.3; review correction): a
+    ``PctOfValue`` funding requires its position's scope, and an LTV-enabled
+    refinance its event's scope -- one Unit's cell, or the complete Investment
+    value. Another Unit's missing value or unapproved evidence is not this
+    package's dependency, and does not block it.
 
     Everything else the analyst authored is exploratory. An unselected,
     unconsumed definition may sit unavailable indefinitely without blocking a
@@ -536,51 +594,96 @@ def _required_valuations(
     made an analyst delete their own working views to publish.
 
     Selection is read from the draft's explicit relationship, never inferred
-    from display order, existence or recency.
+    from display order, existence or recency. A selected definition the surface
+    no longer holds is reported as ``NOT_AUTHORED`` rather than quietly dropped:
+    it was selected, so its disappearance is a refusal. A selected view already
+    requires every scope of itself, so a consumption of it adds nothing.
 
-    A selected definition the surface no longer holds is reported as
-    ``NOT_AUTHORED`` rather than quietly dropped: it was selected, so its
-    disappearance is a refusal."""
+    A consumed requirement's refusal names what consumes it, typed
+    (``consumers``), and its detail is rebuilt from typed facts only: the
+    scope by its analyst-facing name and the reason code's analyst sentence.
+    No upstream message, and so no opaque identity, is quoted."""
 
     if surface is None:
         return ()
     from ..memo.availability import AvailabilityStatus, UnavailableReasonCode
+    from ..reporting.assembly import analyst_unavailable_sentence
 
     views = {view.timepoint_id: view for view in surface.views}
     selected = set(draft.selected_valuation_timepoint_ids)
-    consumed = set(surface.consumed_timepoint_ids)
     required: list[RequiredValuation] = []
-    for timepoint_id in sorted(selected | consumed):
-        reason = (
-            RequiredValuationReason.SELECTED
-            if timepoint_id in selected
-            else RequiredValuationReason.CONSUMED
-        )
+    for timepoint_id in sorted(selected):
         view = views.get(timepoint_id)
         if view is None:
             required.append(
                 RequiredValuation(
                     timepoint_id=timepoint_id,
-                    reason=reason,
+                    reason=RequiredValuationReason.SELECTED,
                     available=False,
                     unavailable_reason=UnavailableReasonCode.NOT_AUTHORED.value,
                     unavailable_detail="No valuation definition exists for this timepoint.",
                 )
             )
             continue
-        available = view.status is AvailabilityStatus.AVAILABLE
         required.append(
             RequiredValuation(
                 timepoint_id=timepoint_id,
-                reason=reason,
-                available=available,
-                unavailable_reason=(
-                    None if view.unavailable is None else view.unavailable.reason_code.value
-                ),
+                reason=RequiredValuationReason.SELECTED,
+                available=view.status is AvailabilityStatus.AVAILABLE,
+                unavailable_reason=None if view.unavailable is None else view.unavailable.reason_code.value,
                 unavailable_detail="" if view.unavailable is None else view.unavailable.reason,
             )
         )
+    for (timepoint_id, _, unit_token), group in _consumed_scopes(surface).items():
+        if timepoint_id in selected:
+            continue
+        view = views[timepoint_id]
+        unit_id = unit_token or None  # '' is the Investment scope, as the key spells it
+        if unit_id is None:  # the complete Investment value
+            available = view.status is AvailabilityStatus.AVAILABLE
+            state = view.unavailable
+        else:
+            cell = next((item for item in view.unit_views if item.unit_id == unit_id), None)
+            available = cell is not None and cell.status is AvailabilityStatus.AVAILABLE
+            state = None if cell is None else cell.unavailable
+        code = None if available or state is None else state.reason_code.value
+        detail = ""
+        if not available:
+            detail = (
+                f"The value required is that of {_scope_text(unit_id, db_path)}. "
+                f"{analyst_unavailable_sentence(code)}"
+            )
+        required.append(
+            RequiredValuation(
+                timepoint_id=timepoint_id,
+                reason=RequiredValuationReason.CONSUMED,
+                available=available,
+                unavailable_reason=code,
+                unavailable_detail=detail,
+                consumers=tuple(sorted({item.consumer for item in group}, key=lambda kind: kind.value)),
+                label=view.label,
+            )
+        )
     return tuple(required)
+
+
+def capital_events_selected(
+    investment_id: str, selected: SelectedDecision, *, db_path: Path | None = None
+) -> bool:
+    """Whether the selected Strategy's resolved Capital Structure configures a
+    capital event -- the one fact the temporary Stage 3 report gate reads, for
+    the readiness route, the publish route and the draft preview alike.
+
+    A Strategy that does not resolve is not gated here: the selected cell then
+    fails to resolve, and publication already refuses it for that reason."""
+
+    try:
+        resolved = resolve_variant_capital_structure(investment_id, selected.strategy_id, db_path=db_path)
+    except (InvestmentNotFoundError, DealNotFoundError):
+        raise
+    except Exception:  # noqa: BLE001 -- an unresolvable selection is refused on its own terms
+        return False
+    return has_capital_events(resolved.capital_structure)
 
 
 def publication_context(
@@ -628,7 +731,8 @@ def publication_context(
         cell_resolves=dependencies.resolved,
         cell_detail=dependencies.detail,
         evidence=evidence,
-        required_valuations=_required_valuations(draft, dependencies.surface),
+        required_valuations=_required_valuations(draft, dependencies.surface, db_path=db_path),
+        capital_events_selected=capital_events_selected(investment_id, selected, db_path=db_path),
     )
 
 
@@ -765,6 +869,10 @@ def publish(investment_id: str, *, db_path: Path | None = None) -> InvestmentMem
         memo_content_fingerprint=content_fingerprint,
         published_fingerprint=published_fingerprint,
         build_artifact=_artifact,
+        # Schema 17 (review correction): the exact-scope values consumed and
+        # what consumed each, frozen with the version beside the whole-view
+        # ``consumed`` flag.
+        consumed_valuations=_consumed_requirements(dependencies.surface),
         db_path=db_path,
     )
     return version

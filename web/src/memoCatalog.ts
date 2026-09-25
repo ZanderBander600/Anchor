@@ -210,6 +210,7 @@ export const REFUSAL_GROUPS: Record<string, RefusalGroup> = {
   evidence_not_found: 'evidence',
   evidence_not_approved: 'evidence',
   valuation_unavailable_for_required_view: 'valuation',
+  refinance_reporting_not_available: 'decision',
 };
 
 export const REFUSAL_GROUP_LABELS: Record<RefusalGroup, { title: string; action: string }> = {
@@ -388,6 +389,8 @@ export const PUBLICATION_REFUSAL_LABELS: Record<string, string> = {
     'A source this memo cites has not been approved, so the memo would present it as supporting.',
   valuation_unavailable_for_required_view:
     'A valuation this memo depends on has no value, and no version is published with a figure invented in its place.',
+  refinance_reporting_not_available:
+    'The selected Capital Structure includes a refinance, and refinance reporting is not available yet. Select a Strategy whose Capital Structure has no refinance to publish now.',
 };
 
 /** One publication refusal as analyst-facing text, with its own upstream

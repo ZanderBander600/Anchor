@@ -45,6 +45,15 @@ from ..capital_structure.contracts import (
     PctOfValue,
     PositionFee,
     PreferredEquityTerms,
+    RefinanceProceeds,
+    ScopeKind,
+)
+from ..capital_structure.events import (
+    CapitalStructureWithEvents,
+    FixedProceedsCap,
+    MaxLtvConstraint,
+    MinDscrConstraint,
+    RefinanceEvent,
 )
 from ..capital_structure.validation import economic_order
 from ..partnership.contracts import (
@@ -82,7 +91,12 @@ from ..memo.contracts import (
 )
 from ..analysis.scenario import ScenarioDefinition
 from ..analysis.strategy import StrategyDefinition
-from .capital_structure_codec import PositionTermsKind, amount_rule_kind
+from .capital_structure_codec import (
+    PositionTermsKind,
+    amount_rule_kind,
+    retiring_ref_identity,
+    retiring_ref_kind,
+)
 from .partnership_codec import condition_kind, recipient_kind, split_rule_kind, subject_kind
 from .valuation_codec import valuation_method_kind
 
@@ -394,6 +408,14 @@ def _amount_rule_payload(rule: object) -> dict[str, Any]:
                 "timepoint_id": rule.timepoint_id,
                 "pct": float(rule.pct),
             }
+        case RefinanceProceeds():
+            # Refinance & Capital Events V1 Stage 2 (Section 14.2): the rule on
+            # the replacement's funding names the event that sizes it. Only a
+            # structure that states an event can hold one.
+            return {
+                "kind": amount_rule_kind(rule).value,
+                "capital_event_id": rule.capital_event_id,
+            }
         case _:
             raise UnfingerprintableValueError(rule)
 
@@ -473,11 +495,210 @@ def capital_structure_payload(capital_structure: CapitalStructure) -> list[dict[
     return [_position_payload(position) for position in economic_order(capital_structure.positions)]
 
 
+# =============================================================================
+# Refinance & Capital Events V1 Stage 2 -- the capital-event payload
+#
+# ``docs/architecture/REFINANCE_CAPITAL_EVENTS_V1.md`` Sections 14.1 and 14.2.
+# The events join the existing structured identity; no fingerprint level is
+# added.
+#
+# **FP-2.** The payload joins only when the resolved structure states an event.
+# A structure with none is a plain ``CapitalStructure`` and hashes exactly what
+# it hashed before this gate, byte for byte.
+#
+# **Canonical, never authored order.** Events sort by ``event_id``; retiring
+# references by ``(kind, id)``; constraints by canonical kind; cost lines by
+# ``cost_id``. A permutation of any collection, or of the rows that stored it,
+# changes nothing.
+#
+# **Economics only.** Included: identity, kind, exact scope, model month and
+# sequence; the typed retiring references; the replacement position id (its
+# terms, fees, priority, resolution and ``RefinanceProceeds`` rule already enter
+# through the position); each present constraint's kind and target; each cost
+# line's id, kind, amount and recipient; and, for an LTV-enabled event only, its
+# value dependency (below). Excluded: the event label, cost descriptions,
+# position names, valuation labels, row order, timestamps and database ids.
+#
+# **Only LTV consumes a valuation, and only for its exact scope** (R-C, R-K;
+# review correction). An LTV-enabled event's own entry carries its value
+# dependency ``(timepoint_id, scope)``: for a Unit event, that Unit's
+# instruction, cell and evidence state; for an Investment event, the whole
+# Investment value. It never joins the whole-timepoint ``PctOfValue`` payload,
+# so another Unit's valuation cannot move a Unit event's identity. A
+# DSCR-only, fixed-only or fixed-plus-DSCR event holds no reference and has no
+# entry, so no valuation definition, result or evidence can move its identity.
+# =============================================================================
+
+_CAPITAL_EVENTS_KEY = "capital_events"
+
+
+def _retiring_ref_payload(ref: object) -> dict[str, Any]:
+    return {"kind": retiring_ref_kind(ref).value, "id": retiring_ref_identity(ref)}
+
+
+def _constraints_payload(event: RefinanceEvent) -> list[dict[str, Any]]:
+    """Each present constraint, in canonical kind order. An absent constraint
+    adds nothing, so a disabled constraint can never carry a stale target."""
+
+    sizing = event.sizing
+    stated: list[tuple[str, Any]] = [
+        ("fixed_cap", sizing.fixed_cap),
+        ("max_ltv", sizing.max_ltv),
+        ("min_dscr", sizing.min_dscr),
+    ]
+    payload: list[dict[str, Any]] = []
+    for kind, constraint in stated:
+        match constraint:
+            case None:
+                continue
+            case FixedProceedsCap():
+                payload.append({"kind": kind, "target": float(constraint.amount)})
+            case MaxLtvConstraint():
+                payload.append({"kind": kind, "target": float(constraint.max_ltv)})
+            case MinDscrConstraint():
+                payload.append({"kind": kind, "target": float(constraint.min_dscr)})
+            case _:
+                raise UnfingerprintableValueError(constraint)
+    return payload
+
+
+def _event_valuation_payload(
+    event: RefinanceEvent,
+    *,
+    valuation_definitions: Mapping[str, ValuationTimepoint],
+    valuation_results: Mapping[str, InvestmentValuationResult],
+    evidence_blocked: Mapping[str, Mapping[str, str]],
+) -> dict[str, Any] | None:
+    """An LTV-enabled event's value dependency, for its **exact scope** only
+    (Sections 8.1 and 14.1; review correction).
+
+    The dependency is ``(timepoint_id, scope)``:
+
+    - a **Unit** event depends on the timepoint's economic identity and model
+      month, that Unit's authored instruction, that Unit cell's Stage 1 result
+      (value, method, ``analyst_supplied``, status and typed unavailable state)
+      and that Unit's evidence-gate state -- and on nothing another Unit states;
+    - an **Investment** event depends on the complete Investment value: the
+      whole definition, the whole Stage 1 result and every member's
+      evidence-gate state.
+
+    A timepoint the Investment does not define is the typed absence
+    ``defined: False``, never a value. A non-LTV event states no reference, and
+    so has none: no valuation definition, result or evidence can move it."""
+
+    reference = event.valuation
+    if reference is None:
+        return None
+    scope = event.scope
+    stated: dict[str, Any] = {
+        "timepoint_id": reference.timepoint_id,
+        "scope": {"kind": scope.kind.value, "unit_id": scope.unit_id},
+    }
+    definition = valuation_definitions.get(reference.timepoint_id)
+    if definition is None:
+        return {**stated, "defined": False}
+    result = valuation_results.get(reference.timepoint_id)
+    blocked = evidence_blocked.get(reference.timepoint_id, {})
+    if scope.kind is ScopeKind.UNIT:
+        instruction = next(
+            (item for item in definition.unit_instructions if item.unit_id == scope.unit_id), None
+        )
+        cell = (
+            None
+            if result is None
+            else next((item for item in result.unit_results if item.unit_id == scope.unit_id), None)
+        )
+        return {
+            **stated,
+            "defined": True,
+            "kind": definition.kind.value,
+            "model_month": int(definition.model_month),
+            "instruction": None if instruction is None else _method_payload(instruction.method),
+            "result": None if cell is None else _unit_result_payload(cell),
+            "evidence_blocked": scope.unit_id in blocked,
+        }
+    return {
+        **stated,
+        "defined": True,
+        "definition": valuation_timepoint_payload(definition),
+        "result": None if result is None else valuation_result_payload(result),
+        "evidence_blocked_unit_ids": sorted(blocked),
+    }
+
+
+def _capital_event_payload(
+    event: RefinanceEvent,
+    *,
+    valuation_definitions: Mapping[str, ValuationTimepoint],
+    valuation_results: Mapping[str, InvestmentValuationResult],
+    evidence_blocked: Mapping[str, Mapping[str, str]],
+) -> dict[str, Any]:
+    """One capital event's economics. ``label`` and every cost ``description``
+    are deliberately absent (FP-1)."""
+
+    if not isinstance(event, RefinanceEvent):
+        raise UnfingerprintableValueError(event)
+    return {
+        "event_id": event.event_id,
+        "kind": event.kind.value,
+        "scope": {"kind": event.scope.kind.value, "unit_id": event.scope.unit_id},
+        "model_month": int(event.timing.model_month),
+        "sequence": int(event.timing.sequence),
+        "retiring": sorted(
+            (_retiring_ref_payload(ref) for ref in event.retiring),
+            key=lambda item: (item["kind"], item["id"]),
+        ),
+        "replacement_position_id": event.replacement_position_id,
+        "constraints": _constraints_payload(event),
+        "valuation": _event_valuation_payload(
+            event,
+            valuation_definitions=valuation_definitions,
+            valuation_results=valuation_results,
+            evidence_blocked=evidence_blocked,
+        ),
+        "costs": [
+            {
+                "cost_id": line.cost_id,
+                "kind": line.kind.value,
+                "amount": float(line.amount),
+                "recipient": None if line.recipient is None else _retiring_ref_payload(line.recipient),
+            }
+            for line in sorted(event.costs, key=lambda item: item.cost_id)
+        ],
+    }
+
+
+def capital_events_payload(
+    capital_structure: CapitalStructure,
+    *,
+    valuation_definitions: Mapping[str, ValuationTimepoint] | None = None,
+    valuation_results: Mapping[str, InvestmentValuationResult] | None = None,
+    evidence_blocked: Mapping[str, Mapping[str, str]] | None = None,
+) -> list[dict[str, Any]]:
+    """The canonical economic form of a resolved structure's capital events, in
+    ``event_id`` order -- the empty list for a structure that states none."""
+
+    if not isinstance(capital_structure, CapitalStructureWithEvents):
+        return []
+    return [
+        _capital_event_payload(
+            event,
+            valuation_definitions=valuation_definitions or {},
+            valuation_results=valuation_results or {},
+            evidence_blocked=evidence_blocked or {},
+        )
+        for event in sorted(capital_structure.events, key=lambda item: item.event_id)
+    ]
+
+
 def fingerprint_structured_source(
     *,
     project_source_fingerprint: str,
     capital_structure: CapitalStructure,
     consumed_valuations: Mapping[str, InvestmentValuationResult] | None = None,
+    valuation_definitions: Mapping[str, ValuationTimepoint] | None = None,
+    valuation_results: Mapping[str, InvestmentValuationResult] | None = None,
+    evidence_blocked: Mapping[str, Mapping[str, str]] | None = None,
 ) -> str:
     """The source fingerprint of one structured variant: the Project variant's
     own fingerprint, the resolved Capital Structure's economics, and -- from
@@ -502,7 +723,17 @@ def fingerprint_structured_source(
     dollars a position is funded with; a structured identity that did not move
     would report that changed analysis as the same one. A *report-only*
     valuation no position consumes is deliberately absent: it changes valuation
-    and memo freshness, and not the underlying Acquisition analysis."""
+    and memo freshness, and not the underlying Acquisition analysis.
+
+    **Refinance & Capital Events V1 Stage 2.** A structure that states capital
+    events adds their canonical payload under its own key, and only then (FP-2).
+    ``valuation_definitions``, ``valuation_results`` and ``evidence_blocked``
+    are read for LTV-enabled events alone, and only for each event's exact
+    scope; an LTV event never joins ``consumed_valuations``, whose whole-
+    timepoint payload belongs to ``PctOfValue``; with no event they are never consulted, so the digest of every
+    structure without one is exactly what it was. An evented structure always
+    has a replacement position, so it never collapses onto the Project
+    fingerprint."""
 
     if not isinstance(project_source_fingerprint, str) or not project_source_fingerprint:
         raise UnfingerprintableValueError(project_source_fingerprint)
@@ -516,6 +747,14 @@ def fingerprint_structured_source(
     }
     if consumed_valuations:
         payload[_CONSUMED_VALUATIONS_KEY] = consumed_valuation_payload(consumed_valuations)
+    events = capital_events_payload(
+        capital_structure,
+        valuation_definitions=valuation_definitions,
+        valuation_results=valuation_results,
+        evidence_blocked=evidence_blocked,
+    )
+    if events:
+        payload[_CAPITAL_EVENTS_KEY] = events
     return _fingerprint_json(payload)
 
 

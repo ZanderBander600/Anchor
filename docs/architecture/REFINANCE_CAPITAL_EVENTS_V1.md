@@ -20,9 +20,14 @@ It also resolved every open question. The decision record is Section 22.
   `feature/refinance-capital-events-v1-stage-1-engine`. It was **merged
   through PR #57 as `6de7644` and accepted on 2026-09-24.** Its
   implementation record is Section 23.
-- **Stage 2 and Stage 3 have not started.** No schema, persistence, codec, API,
-  UI, memo, report or workbook exists for a refinance. **No implementation
-  stage starts automatically** when another is accepted (Section 20).
+- **Stage 2 (persistence and integration) was explicitly started** on
+  2026-09-24 from `main` at `f2b5cef` (the PR #59 merge, whose product tree is
+  `6de7644`), on
+  `feature/refinance-capital-events-v1-stage-2-persistence-integration`. It is
+  **in progress and not accepted**; its implementation record is Section 24.
+- **Stage 3 has not started.** No UI, memo section, report or workbook exists
+  for a refinance. **No implementation stage starts automatically** when
+  another is accepted (Section 20).
 - Recovery Engine V2 is a separate future program. Nothing here touches it.
 
 ### 1.1 Authorities this contract builds on
@@ -2072,15 +2077,17 @@ database from before that version gains empty tables and nothing else.
 
 Each stage starts only on an explicit human instruction. **Stage 1 was
 explicitly started on 2026-09-22 from `2e1f84a`; it was merged through PR #57
-as `6de7644` and accepted on 2026-09-24** (Section 23). Stage 2 and Stage 3
-have not started. **No stage begins automatically** when the previous one is
-accepted. Recovery Engine V2 is not part of any stage.
+as `6de7644` and accepted on 2026-09-24** (Section 23). **Stage 2 was
+explicitly started on 2026-09-24 from `f2b5cef` and is in progress, not
+accepted** (Section 24). Stage 3 has not started. **No stage begins
+automatically** when the previous one is accepted. Recovery Engine V2 is not
+part of any stage.
 
 | Stage | Scope | Tier | Exit evidence |
 | --- | --- | --- | --- |
 | Contract ratification — **complete, 2026-09-22** | This document. Documentation only | 1 (contract) | ratification record (Section 22); `CURRENT_STATE.md` updated |
 | Stage 1 — deterministic engine — **accepted, 2026-09-24** (PR #57, merged as `6de7644`) | Contracts (Section 6); structural and execution validation (Section 15.1); the shared NOI-at-month seam; the acquisition-debt balance service and its reconciliation; sizing (Section 9); the legacy splice; the retiring-schedule cut and replacement offset through the existing wrapper; the event bridge; the Common Equity decomposition; unavailable states; the P7.9 adapter reason; F1–F12, F14–F17, F15b, F19, F21, F22 with exact-rational oracles; F20 engine parity; the Section 18.3 mutation proofs. No persistence, API or UI | 1 | focused and identity tests; mutation kills; domain regression; one final full backend suite |
-| Stage 2 — persistence and integration (not started) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
+| Stage 2 — persistence and integration (in progress, not accepted; Section 24) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
 | Stage 3 — product surfaces (not started) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
 
 **Stage 3 acceptance requires**, in addition to the above:
@@ -2481,3 +2488,520 @@ M22–M25 kill each defect's reinstatement.
 
    `RefinanceUnavailableReason` gains that one appended member. No other
    contract, schema, persistence, API or presentation surface changes.
+
+## 24. Stage 2 implementation record
+
+**Status: implemented locally, pending independent review, not accepted.**
+Stage 2 was explicitly started on 2026-09-24 from `main` at `f2b5cef` (the PR
+#59 merge; its product tree is the accepted Stage 1 baseline `6de7644`) on
+`feature/refinance-capital-events-v1-stage-2-persistence-integration`. It
+implements Section 20's Stage 2 row and nothing else. It adds no frontend
+component, report layout, memo section, workbook change or browser surface.
+Its one frontend edit is two catalog entries, so the new gate refusal reads as
+its own analyst sentence. Stage 3 has not started.
+
+**Refinance reports are temporarily withheld.** Until Stage 3 builds the
+refinance-aware report, a memo whose selected Capital Structure configures a
+capital event is neither published nor previewed (Section 24.7).
+
+The Stage 1 engine is frozen: no file of PR #57's production set, and no file
+under `capital_structure`, `engine` or `partnership`, changes. The only
+upstream edits are the narrow P7.10 amendments of Section 24.11, each held by a
+guard to exactly its declared change.
+
+This record describes the final implementation, including the review
+corrections of Sections 24.10, 24.11 and 24.12.
+
+### 24.1 What shipped
+
+| Module | Responsibility |
+| --- | --- |
+| `deals/store.py` | Schema 17: seven additive, typed, relational tables -- six capital-event tables written, read back fail-closed and deleted with their structure, and the frozen exact-scope consumption record of a published memo version |
+| `deals/capital_structure_codec.py` | The one spelling of the `refinance_proceeds` rule and the two retiring-reference kinds |
+| `deals/capital_event_identity.py` (new) | P-8 for capital events: `capital_event_kind_conflict`, `capital_event_scope_conflict` |
+| `deals/fingerprint.py` | The canonical capital-event payload, joined only when an event exists (FP-2); an LTV event's value dependency at its exact scope |
+| `deals/refinance_integration.py` (new) | The LTV-only consumed scopes, the evidence gate's typed reason and the messages rebuilt from typed objects, and the primary-return facts. No arithmetic, and no text parsing |
+| `deals/valuation_views.py` | The exact-scope evidence authority (`gated_result`), the typed `ValuationRequirement`, and scope-aware `evidence_not_approved` for `PctOfValue` |
+| `deals/structured_variants.py` | The exact-scope consumed requirements, each with its typed consumer; evented variants return `RefinancedStructuredVariantAnalysis` |
+| `deals/memo_dependencies.py` | Publication requires each consumed value at its exact scope, words the refusal by its typed consumer, applies the temporary Stage 3 report gate, and freezes the scoped record |
+| `deals/partnership_variants.py` | Evented variants return `RefinancedPartnershipVariantAnalysis`, carrying the same primary-return facts |
+| `api.py` | `capital_events` on the Capital Structure payloads, the narrowed closing doors, the wire kinds, the P-8 event conflict as a typed 422, and the draft preview's report-gate refusal |
+| `valuation/contracts.py` (P7.10 amendment) | `ValuationUnavailableReason.EVIDENCE_NOT_APPROVED`, appended |
+| `memo/availability.py` (P7.10 amendment) | Its explicit wire mapping to `UnavailableReasonCode.EVIDENCE_NOT_APPROVED` |
+| `memo/contracts.py` | `ValuationConsumerKind` (`PCT_OF_VALUE`, `REFINANCE_LTV`) |
+| `memo/publication.py` | `REFINANCE_REPORTING_NOT_AVAILABLE`, the one gate refusal, and the consumer-aware refusal wording |
+| `reporting/assembly.py` | The preview gate, and a consumed Unit cell presented as its own row |
+| `web/src/memoCatalog.ts` | The gate refusal's analyst grouping ("Resolve the decision context") and sentence; nothing else |
+
+### 24.2 Schema 17 and `RefinanceProceeds`
+
+Schema 16 advances to 17 with seven additive tables:
+
+- six capital-event tables, each a child of one `capital_structures` row:
+  `capital_events`, `capital_event_retirements`, `capital_event_constraints`,
+  `capital_event_valuation_refs`, `capital_event_costs` and
+  `capital_refinance_proceeds`;
+- `memo_version_consumed_valuations`, the typed audit record of what one
+  published version consumed and what consumed it, keyed
+  `(version_id, timepoint_id, scope_kind, unit_id, consumer_kind)`. `CHECK`s
+  hold the scope and consumer tokens and require a Unit exactly for the Unit
+  scope. It holds no amount. It is a member of the canonical version-child
+  inventory `_MEMO_VERSION_CHILD_TABLES`, so it is deleted only with the
+  Investment, by the same loop as every sibling (Section 24.7).
+
+- Every capital-event primary key leads with `structure_id`, so Base and each
+  Strategy structure hold independent, whole-domain event sets.
+- `UNIQUE (structure_id, capital_event_id)` on the sidecar is the "one
+  replacement funding per event" rule.
+- No JSON blob and no `ALTER TABLE` is used. No accepted table is redefined,
+  and no existing row is rewritten. A v16 database gains seven empty tables,
+  and a version published before schema 17 records no scoped consumption.
+
+**`RefinanceProceeds` needed no change to `capital_funding_events`.** The
+replacement's funding row states the codec token `refinance_proceeds` in
+`amount_rule`, which is the column's existing purpose as the rule's
+discriminator. Its `amount`, `pct` and `timepoint_id` are all NULL. The event
+the rule names lives in the sidecar, keyed by the funding row's own
+`(structure_id, event_id)`. No existing column holds an event id. The Section
+16.1 stop condition therefore did not arise.
+
+The legacy acquisition loan is stored as a typed `(ref_kind, unit_id)` row. The
+reserved identity string is never stored.
+
+### 24.3 Codec and fail-closed decoding
+
+A structure with no event row reads back as the plain `CapitalStructure`. One
+with events reads back as `CapitalStructureWithEvents`. "No refinance" has one
+representation, and an absent or empty `capital_events` on the wire is the
+empty set.
+
+The decoder refuses, and never partially decodes or drops an event, when it
+finds any of the following:
+
+- an unknown event, scope, constraint, cost or reference token (a reserve-like
+  member has no token);
+- a child row naming no stored event;
+- a sidecar link naming no `refinance_proceeds` funding;
+- a `refinance_proceeds` funding with no link, or one stating an amount, a
+  percentage or a timepoint;
+- a reference whose columns disagree with its kind;
+- a recipient id with no recipient kind;
+- anything the accepted Stage 1 validator refuses, including an unused or
+  missing valuation reference, a malformed scope, a duplicate identity and a
+  missing replacement.
+
+### 24.4 Strategy resolution and P-8
+
+Events travel inside the `CAPITAL_STRUCTURE` domain's whole structure.
+
+- An inheriting Strategy is bit-identical to the Base.
+- Removing a replacement restores the Base.
+- An explicit empty structure is empty.
+- An event cannot be stated without the positions it names.
+
+P-8 for events runs in the store's one coherence function. That covers every
+path that writes a structure: the Deal and Investment Base saves, and Strategy
+create and update. It runs beside, and independently of, the accepted position
+P-8.
+
+Identity is `event_id`, never `label`.
+
+### 24.5 Fingerprints
+
+- **FP-2.** A structure with no event hashes exactly as at `f2b5cef`. A test
+  proves this against that archived tree's own digests.
+- **Canonical order.** Events sort by `event_id`, retiring references by
+  `(kind, id)`, and cost lines by `cost_id`. Absent constraints add nothing.
+- **Excluded.** The event label, cost descriptions, position names, valuation
+  labels, row order, timestamps and database ids.
+- **LTV only, exact scope.** An LTV-enabled event's value dependency is
+  `(timepoint_id, scope)` and lives on the event's own entry; it never joins
+  the whole-timepoint consumed payload, which remains `PctOfValue`'s.
+  - A Unit event holds the timepoint's economic identity and model month, that
+    Unit's authored instruction, that Unit cell's Stage 1 result (value,
+    method, `analyst_supplied`, status, typed unavailable state) and that
+    Unit's evidence-gate state -- nothing another Unit states.
+  - An Investment event holds the whole definition, the whole Stage 1 result
+    and every member's evidence-gate state.
+  - An undefined timepoint is the typed absence `defined: False`.
+  - A DSCR-only, fixed-only or fixed-plus-DSCR event holds no reference and
+    adds no valuation data.
+- **No cache.** No structured result is cached (Q14). Each request recomputes
+  from its dependencies. A mutation proof shows that a cache keyed on less than
+  the whole structured identity would serve a stale refinance.
+
+### 24.6 API and primary-return facts
+
+- **Authoring.** An evented body round-trips exactly. A reserve-like member
+  anywhere is an unknown-field 422. Authoring faults are the established typed
+  422s.
+- **Narrowed closing doors.** Only a `refinance_proceeds` funding, and a
+  replacement position's fees, may be non-closing. The validator judges their
+  months.
+- **Results.** A refinance-bearing analysis carries the Stage 1
+  `RefinancedCapitalResult`, with every unavailable amount `null`, and a typed
+  `primary_return`:
+  - Common Equity after Capital Structure is the primary equity namespace;
+  - `partner` is the primary investor namespace where a Partnership resolves;
+  - the acquisition-financing reference is stated as excluding later capital
+    events;
+  - an unavailable refinance is reported as the primary state.
+- **No-event responses.** These stay byte-identical, because the additions live
+  on subclasses produced only for evented variants.
+- **Deferred.** The optional readiness endpoint is not built. The structured
+  analysis already carries every capacity and reason. Stage 3 may revisit it
+  if it proves necessary.
+
+### 24.7 Exact-scope evidence, execution and publication
+
+**The evidence authority.** `funding_authority` offers every authored
+timepoint through `gated_result`:
+
+- an analyst-supplied cell whose Evidence Reference is missing or unapproved
+  has no value and no operand, and the amount the analyst typed is never
+  carried;
+- every other cell keeps Stage 1's own result;
+- the Investment value is unavailable while any member cell is, and is never a
+  partial sum.
+
+Both consumers already read exactly their own scope's cell -- `PctOfValue`
+through P7.10's `_scope_value`, the refinance through Stage 1's value
+dependency -- so the one authority serves both boundaries and the frozen
+engine needs no change.
+
+A withheld cell carries the typed reason `EVIDENCE_NOT_APPROVED` (the P7.10
+amendment of Section 24.11). An Investment made incomplete by one is
+`INCOMPLETE_UNITS`, and its member cell keeps the precise reason. So every
+consumer reads the evidence fact from the cell it consumed: a Unit `PctOfValue`
+requirement's `valuation_reason`, and an LTV event's
+`ValueDependency.valuation_unavailable_reason`. The amount is absent everywhere.
+
+**Typed propagation.** `evidence_not_approved` is classified from typed
+reasons only:
+
+- the event sizes by LTV;
+- the engine reported that LTV capacity `valuation_unavailable`;
+- the value the event's exact scope consumed is unknown for the evidence
+  reason:
+  - a Unit event reads its own `ValueDependency` reason;
+  - an Investment event, whose dependency is `INCOMPLETE_UNITS`, reads the
+    member cells of the same gated authority the engine read.
+
+The blocked-Unit map is not consulted. The LTV capacity always takes the
+reason; the event takes it when that is the reason it reports.
+
+**Investment-scope precedence** (Section 24.12). `investment_evidence_cause`
+reads the gated member cells:
+
+- `EVIDENCE_ONLY` when every unavailable member is withheld for evidence --
+  then, and only then, the event and capacity report `evidence_not_approved`;
+- `MIXED` when another member is unavailable for another reason -- then the
+  event and capacity keep `valuation_unavailable`, the dependency keeps
+  `incomplete_units`, and the rebuilt sentence says the valuation is
+  incomplete for more than one reason, that approving evidence alone will not
+  resolve it, and to review each Unit's valuation state.
+
+An Investment `PctOfValue` funding state follows the same precedence. In the
+mixed case it stays `funding_requirement_unresolved` with valuation reason
+`incomplete_units`. Each member cell keeps its own typed reason. A Unit-scoped
+consumer reads its own cell alone. `gated_result` rebuilds the Investment-level
+sentence from the gated cells and never keeps Stage 1's pre-gate prose.
+
+The messages that restate such an event are rebuilt from typed objects: its
+own, its LTV capacity's, the positions of its scope, its unexecuted replacement
+and Common Equity's. No message is read, parsed or edited, so Stage 1 prose can
+change without changing any classification or downstream sentence. An
+unrelated event or position is returned untouched. `PctOfValue` funding states
+classify the same way by the funding's scope.
+
+**Publication.** Each consumer yields a typed `ValuationRequirement`
+`(timepoint_id, scope_kind, unit_id, consumer)`: a `PctOfValue` funding at its
+position's scope, and an LTV event at its event's scope.
+
+- De-duplication collapses only within one consumer, so a scope both kinds
+  read keeps both provenances.
+- Publication requires each value at its scope -- one Unit's cell, or the
+  complete Investment value -- so an unrelated Unit's evidence never blocks a
+  package.
+- A selected memo view still requires the whole view.
+- A requirement naming an undefined timepoint is not a publication dependency,
+  as before.
+
+The refusal is worded from the typed consumers:
+
+- `PctOfValue` alone keeps the accepted P7.10 sentence;
+- a refinance says that "the selected refinance sizes its LTV capacity from
+  it";
+- both together say so jointly.
+
+The refinance and joint forms name the valuation by its label. Every consumed
+refusal's detail is rebuilt from typed facts: the scope by its analyst-facing
+name (the Unit's Deal name, or "the selected Unit (no longer available)") and
+the reason code's analyst sentence. No upstream message is quoted, so no
+opaque identity reaches it.
+
+**The temporary Stage 3 report gate.** A report of a refinance-bearing variant
+would still headline the acquisition-loan levered returns, carry no sizing or
+bridge section, and ignore the Common Equity / Partner primary-return rule. All
+three contradict R-P, Section 12.5 and Section 16.3. So, whenever the selected
+Capital Structure configures a capital event:
+
+- the readiness route states the typed refusal
+  `refinance_reporting_not_available`, after every specific finding;
+- the publish route refuses with the same refusal and writes nothing;
+- the draft preview refuses with the same refusal, in the established 422
+  refusal shape, instead of rendering an acquisition-only report.
+
+The refusal names no identity. Its one test (`has_capital_events`, read
+through `capital_events_selected`) serves all three surfaces. The exact-scope
+valuation findings are still reported beside it. Existing published versions
+stay readable and byte-identical, and a structure with no capital event keeps
+its preview and publication exactly. **Stage 3 removes this gate only once
+refinance-aware returns, memo sections and report headlines are implemented
+and tested.**
+
+**Exact-scope reports.** In a report a Stage 2 structure may still publish, a
+Unit-scoped consumption is its own row:
+
+- it shows that Unit's cell -- value or typed reason, never zero and never the
+  Investment total -- under the Unit's name, marked consumed;
+- only a complete-Investment consumption marks a whole view consumed, both in
+  `MemoVersionValuation.consumed` and in the report;
+- a view both selected whole and consumed at Unit scope appears as both rows,
+  and the Investment value is never relabelled as the Unit's.
+
+The preview and the frozen artifact build these rows from the same typed
+requirements.
+
+**The frozen record.** Publication writes the consumed requirements, with
+their consumers, to `memo_version_consumed_valuations` in the same transaction
+as the version and its artifact. Every row must name a view the version
+freezes. It is read only within the owning Investment: another Investment's
+version is `MemoVersionNotFoundError`. It fails closed on:
+
+- an unknown scope or consumer token;
+- a Unit column that disagrees with its scope;
+- a row naming a view its version did not freeze.
+
+Nothing updates it, and a version published before schema 17 reads back with
+no record; nothing is backfilled or inferred.
+
+**Freshness.** Proved on the dependency ledger, since a refinance-bearing
+cell cannot yet be published:
+
+- a refinance edit moves `CAPITAL_STRUCTURE` only;
+- a change to an LTV event's own dependency moves the valuation classes and
+  `CAPITAL_STRUCTURE`;
+- a change to another Unit's valuation moves the valuation classes only;
+- adding a refinance to a published no-event version stales
+  `CAPITAL_STRUCTURE` only.
+
+Published versions and their frozen reports are not touched.
+
+### 24.8 Decisions a reviewer should check
+
+1. **A mixed Investment cause is not evidence.** This was resolved by the
+   third review (Section 24.12): the Investment reports `evidence_not_approved`
+   only when evidence is the sole reason.
+2. **`PctOfValue` identity is unchanged.** Its whole-timepoint consumed payload
+   is kept byte for byte, as no-event fingerprint parity with `f2b5cef`
+   requires. It therefore still does not move with evidence approval and still
+   moves with another Unit's valuation: pre-existing P7.10 behavior, now
+   visible beside the exact-scope refinance identity. Changing it would change
+   every existing `PctOfValue` digest.
+3. **An LTV reference to an undefined timepoint** is not a publication
+   dependency, exactly as for `PctOfValue`. The refinance reports
+   `timepoint_not_found` in its own typed result.
+4. **The Position Decision Matrix and a non-executed replacement.** A
+   replacement whose event did not execute is in `unexecuted_positions`, not in
+   `positions`. The accepted Position matrix therefore refuses that one cell's
+   request loudly rather than reporting a figure. The executed case is
+   unaffected. Presenting it is Stage 3's Decision Matrix work.
+5. **`primary_investor_namespace` on the structured analysis** reads the
+   accepted P7.9 resolution (`resolve_partnership`) directly, because
+   `partnership_variants` imports `structured_variants`.
+6. **Accepted wording that still prints a timepoint id.** A `PctOfValue`-only
+   consumed refusal keeps the accepted P7.10 sentence word for word, and that
+   sentence names the timepoint by its id; the refinance and joint forms use
+   the label. A *selected* view's refusal still quotes the P7.10 view's own
+   reason, which names ids. Both are accepted P7.10 behavior, kept so no-event
+   readiness stays byte-identical; only the consumed-scope detail changed.
+7. **The preview refusal is a 422.** The gated preview uses the established
+   refusal shape, which the workspace already renders, rather than a `200`
+   with `report: null`: the workspace reads `report` unconditionally, and a
+   `null` would fail there. Stage 3 replaces the refusal with the real report.
+8. **A published version's reference rows.** A published version freezes and
+   prints every authored view (P7.10 Stage 4). A view consumed only at Unit
+   scope is therefore printed there as a reference row beside the Unit row,
+   while the preview, which omits exploratory views, shows only the Unit row.
+   The consumed Unit row is identical in both.
+
+### 24.9 Guards re-pinned
+
+No guard is weakened or deleted. The accepted guards all passed on the
+untouched baseline before Stage 2 changed anything, so none was stale; each
+failure came from a Stage 2 change.
+
+- **Current-schema pins** move from 16 to 17. Each migration oracle names the
+  seven tables explicitly (`REFINANCE_V1_STAGE_2_TABLES`), so no comparison
+  loosens to a subset. This covers AM1, Asset Types 1, D4.5B, D5.4, D5.8A, D6.5,
+  Excel Exports 1 and 2, P7.2, P7.4, P7.6, P7.7, P7.8, P7.8B, P7.9 Stage 2,
+  P7.10 Stage 2 and P7.10 Stage 4.
+- **Claims about a closed gate's own modules** now read that gate's committed
+  tree or range:
+  - P7.8B's "no later-gate economics" reads `f2b5cef`;
+  - P7.9 Stage 2's deferred-identifier scan reads `f2b5cef`, and a new test
+    proves only this stage's ledger touched that file since;
+  - P7.10 Stage 2's "no later funding event" reads its merge;
+  - P7.10 Stage 4's "adds exactly one table" reads `9ca957a..a6f1b2b`;
+  - Refinance Stage 1's ledger, protected paths and "nothing upstream imports
+    the refinance layer" read `2e1f84a..6de7644`. Its byte-freeze and seam
+    claims still read the working tree.
+- **Named allowlists** gain exactly the two new `deals` modules: D4.6B G37 and
+  P7.8B's importer list.
+- **The P7.10 freezes** (second review correction). P7.10 Stage 1's valuation
+  package freeze, P7.10 Stage 2's per-module freeze and P7.10 Stage 4's
+  valuation and memo package freezes each exempt exactly the named amended
+  files and still require every other file byte for byte. Each exemption
+  asserts that the Stage 2 guards holding the amendment exist. P7.10 Stage 1's
+  list of valuation readers gains `deals/refinance_integration.py`, which now
+  reads the typed valuation reason.
+
+Stage 2's own guard is `tests/test_refinance_v1_stage_2_architecture.py`. It
+does the following:
+
+- names all sixteen production files;
+- holds each P7.10 amendment to exactly its declared change;
+- forbids text rewriting in `refinance_integration`;
+- requires the evidence authority to withhold cells, never timepoints;
+- requires one report gate for readiness, publication and preview;
+- requires consumed refusals to quote no upstream prose.
+
+A later gate re-pins it to Stage 2's committed range.
+
+### 24.10 Review corrections (exact scope and typed propagation)
+
+Independent review found that the first implementation of Stage 2 did not
+honor exact scope, and that it propagated a reason through prose. Both are
+corrected. No ratified financial decision changes; the corrections enforce
+P7.10 Section 6 and R-E, Sections 8.1 and 14.1 here, F15 and INV-1, and the
+Stage 1 message boundary.
+
+1. **Exact-scope evidence authority.** The first implementation withheld a
+   whole timepoint from the authority whenever any Unit was evidence-blocked,
+   which made an unrelated Unit's refinance or `PctOfValue` funding
+   unavailable. The authority now withholds cells (Section 24.7).
+2. **Typed propagation.** The first implementation located the Stage 1
+   sentence inside downstream messages and replaced it as text. That is
+   removed; the reason is classified from typed facts and every affected
+   message is rebuilt from typed objects. A guard forbids text rewriting in
+   the adapter, and a regression rewords Stage 1's prose and proves nothing
+   downstream changes.
+3. **Exact-scope fingerprints.** The first implementation put an LTV event's
+   whole referenced timepoint -- every Unit's definition and result -- into the
+   structured identity. A Unit event now depends only on its own Unit
+   (Section 24.5).
+4. **Exact-scope publication.** The first implementation required the whole
+   view of every consumed timepoint. Publication now requires each consumed
+   value at its consumer's scope, and the version freezes that scoped record
+   (Section 24.7). Because Stage 2 was unaccepted, the record joined schema 17
+   rather than becoming a later additive version.
+
+A two-Unit regression (one timepoint; Unit A available, Unit B's analyst value
+unapproved) proves the corrected behavior for Unit and Investment LTV events
+and for Unit `PctOfValue`, and four mutation proofs kill the reinstatement of
+each defect.
+
+### 24.11 Second review corrections (typed state, truthful publication, the Stage 3 boundary)
+
+Independent review accepted the exact-scope execution and fingerprint design,
+and found five further defects in typed state, publication and the
+Stage 2/Stage 3 boundary. All are corrected. No ratified financial decision
+changes, and no valuation arithmetic changes.
+
+1. **Misleading refinance reports.** Stage 2 would have issued a frozen report
+   of a refinance-bearing variant that headlines the acquisition-loan returns
+   (contrary to R-P, Section 12.5 and Section 16.3). The temporary Stage 3
+   report gate now refuses readiness, publication and preview alike
+   (Section 24.7).
+2. **The typed unavailable invariant -- P7.10 amendment.** A withheld cell had
+   `unavailable_reason = None`, contradicting `UnitValuationResult` and P7.10's
+   rule that every unavailable state carries a stable reason.
+   - `ValuationUnavailableReason` gains `EVIDENCE_NOT_APPROVED` (additive,
+     appended), explicitly mapped to `UnavailableReasonCode.EVIDENCE_NOT_APPROVED`.
+   - The gated cell carries it, and refinance classification now reads it
+     rather than the blocked-Unit map.
+   - This amends the accepted P7.10 adapter contract narrowly. Stage 1 never
+     produces the member, and no result without an evidence-blocked analyst
+     value changes.
+3. **Typed consumer and truthful wording.** A consumed requirement now carries
+   `ValuationConsumerKind`, and de-duplication keeps both provenances. The
+   refusal names the refinance for what it is, and its detail names the Unit
+   by its Deal name, never by `unit_id`.
+4. **Truthful exact-scope reports.** A Unit-scoped consumption no longer marks
+   the whole Investment view "Consumed by funding". The consumed cell is its
+   own row, and `MemoVersionValuation.consumed` means a complete-Investment
+   consumption.
+5. **A genuine audit record.** The consumption record stores the typed
+   consumer, is read only within its own Investment, fails closed on every
+   malformed or orphaned row, and joins the canonical version-child inventory.
+   Stage 2 is unaccepted, so schema 17 was adjusted in place.
+
+Twenty-two focused regressions (`test_refinance_v1_stage_2_reporting_boundary.py`)
+prove each correction on the two-Unit world. Nine new mutation proofs kill the
+reinstatement of:
+
+- a null reason;
+- generic funding wording for a refinance;
+- a raw Unit id;
+- a whole-view "consumed" in the preview and in the frozen version;
+- refinance publication and refinance preview;
+- a cross-Investment read;
+- provenance-erasing de-duplication.
+
+### 24.12 Third review correction (Investment-scope reason precedence)
+
+Review accepted the second-round corrections except one mixed-cause case. An
+Investment-scoped LTV event was relabelled `evidence_not_approved` whenever any
+member cell was withheld for evidence -- even when another Unit was unavailable
+for a different reason (for example a non-positive forward NOI). Approving the
+evidence then did not resolve the Investment value, although the event had
+named evidence approval as its reason.
+
+The ratified rule, now implemented:
+
+1. Unit scope reports its own cell's reason.
+2. Investment scope reports `evidence_not_approved` only when every unavailable
+   member cell is withheld for evidence.
+3. Otherwise the event and capacity keep `valuation_unavailable`, and the
+   dependency keeps `incomplete_units`.
+4. The message says the valuation is incomplete for more than one reason,
+   directs the analyst to the valuation state, and never implies that evidence
+   approval alone resolves it.
+5. Each member cell keeps its precise typed reason.
+6. Investment-scoped `PctOfValue` funding states follow the same precedence.
+7. No amount, Unit id, evidence id or other opaque identity appears in any of
+   these messages.
+8. A Unit-scoped consumer is unaffected by another Unit's reason.
+
+One typed classifier, `investment_evidence_cause`, serves both consumers, and
+the mixed-cause sentence is one shared constant. `gated_result` now rebuilds
+its Investment-level sentence from the gated cells.
+
+The `PctOfValue` evidence sentence is also rebuilt without identities. It
+previously named the funding event, the position and the blocked Units by id.
+
+The regression file `test_refinance_v1_stage_2_mixed_cause.py` builds Unit A
+with a non-positive forward NOI and Unit B with unapproved evidence. It proves:
+
+- the mixed state for the LTV event and for the `PctOfValue` funding;
+- that approving B alone resolves neither;
+- that repairing A alone makes evidence the sole cause;
+- that both fixes resolve the value;
+- that the all-evidence case is still `evidence_not_approved`;
+- that Unit consumers keep their exact cell;
+- that no message names an amount or identity.
+
+Mutation proofs M25 and M25b kill the restoration of "any evidence-blocked
+member makes the whole Investment evidence-not-approved" through both
+consumers. M26 kills keeping Stage 1's pre-gate Investment prose.

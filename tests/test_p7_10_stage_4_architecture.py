@@ -266,10 +266,19 @@ def test_schema_16_adds_exactly_one_table_and_alters_none() -> None:
     one that touches no existing data, and this is that migration one more
     time."""
 
-    source = _current(_STORE)
-    assert "_SCHEMA_VERSION = 16" in source
+    # Refinance V1 Stage 2 re-pin: that later gate moved the store to 17 with its
+    # own six additive tables and its own ledger. This gate's claim is about its
+    # own migration, so it reads Stage 4's committed range ``9ca957a..a6f1b2b``,
+    # where it holds unchanged; the working tree only has to agree that the store
+    # still declares one, later, version.
+    assert "_SCHEMA_VERSION = 16" in _git("show", f"{_STAGE_4_HEAD}:{_STORE}")
+    assert "_SCHEMA_VERSION = 17" in _current(_STORE)
 
-    added = _added_lines(_STAGE_4_BASE, _STORE)
+    added = [
+        line[1:]
+        for line in _git("diff", "--no-renames", "-U0", _STAGE_4_BASE, _STAGE_4_HEAD, "--", _STORE).splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
     created = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", "\n".join(added))
     assert created == ["memo_version_report_artifacts"], created
 
@@ -330,25 +339,52 @@ def test_every_consumed_backend_area_is_untouched(area: str) -> None:
     assert _changes_since(_STAGE_4_BASE, area) == set(), f"{area} changed in Stage 4"
 
 
-def test_the_accepted_valuation_package_is_byte_identical_to_its_merge() -> None:
-    """Stage 1's deterministic valuation authority, frozen at PR #49."""
+#: Refinance & Capital Events V1 Stage 2 re-pin (second review correction).
+#: The additive P7.10 amendment -- ``ValuationUnavailableReason.EVIDENCE_NOT_APPROVED``
+#: and its explicit wire mapping -- plus the typed consumer and the temporary
+#: Stage 3 report gate, amend these accepted files and nothing else. In
+#: ``tests/test_refinance_v1_stage_2_architecture.py`` the valuation, wire and
+#: memo-contract changes are each held to their exact diff, and the
+#: publication changes (the gate refusal and consumer-aware wording) by named
+#: guards. The freeze here excludes exactly these paths and still holds every
+#: other file of the package byte for byte.
+_REFINANCE_V1_STAGE_2_AMENDED = frozenset(
+    {
+        "src/anchor/valuation/contracts.py",
+        "src/anchor/memo/availability.py",
+        "src/anchor/memo/contracts.py",
+        "src/anchor/memo/publication.py",
+    }
+)
 
-    assert (
-        _git("diff", "--name-only", "--no-renames", _STAGE_1_MERGE, "--", "src/anchor/valuation")
-        .split()
-        == []
-    )
+
+def _amendment_guards_exist() -> None:
+    guard = (_PROJECT_ROOT / "tests" / "test_refinance_v1_stage_2_architecture.py").read_text(encoding="utf-8")
+    for name in (
+        "test_the_p7_10_valuation_amendment_adds_one_reason_and_nothing_else",
+        "test_the_p7_10_wire_amendment_maps_the_new_reason_explicitly",
+        "test_the_memo_contracts_gain_only_the_typed_consumer",
+    ):
+        assert f"def {name}(" in guard, name
+
+
+def test_the_accepted_valuation_package_is_byte_identical_to_its_merge() -> None:
+    """Stage 1's deterministic valuation authority, frozen at PR #49, except the
+    one named, guarded amendment."""
+
+    _amendment_guards_exist()
+    changed = set(_git("diff", "--name-only", "--no-renames", _STAGE_1_MERGE, "--", "src/anchor/valuation").split())
+    assert changed - _REFINANCE_V1_STAGE_2_AMENDED == set()
 
 
 def test_the_accepted_memo_package_is_byte_identical_to_its_merge() -> None:
     """Stage 2's memo domain, publication rules and unavailable adapter, frozen
-    at PR #51. Stage 4 presents them and redefines none of them."""
+    at PR #51. Stage 4 presents them and redefines none of them. Refinance V1
+    Stage 2 amends the named files only, each held by its own guard."""
 
-    assert (
-        _git("diff", "--name-only", "--no-renames", _STAGE_2_MERGE, "--", "src/anchor/memo")
-        .split()
-        == []
-    )
+    _amendment_guards_exist()
+    changed = set(_git("diff", "--name-only", "--no-renames", _STAGE_2_MERGE, "--", "src/anchor/memo").split())
+    assert changed - _REFINANCE_V1_STAGE_2_AMENDED == set()
 
 
 def test_the_guard_detects_a_real_difference_rather_than_reporting_none() -> None:

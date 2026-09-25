@@ -39,7 +39,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from _p7_2_fixtures import AM1_TABLES, ASSET_TYPES_1_TABLES, P7_9_TABLES, P7_10_STAGE_4_TABLES, P7_10_TABLES, rows, table_names, without_unstated_classification  # type: ignore[import-not-found]
+from _p7_2_fixtures import AM1_TABLES, ASSET_TYPES_1_TABLES, P7_9_TABLES, P7_10_STAGE_4_TABLES, P7_10_TABLES, REFINANCE_V1_STAGE_2_TABLES, rows, table_names, without_unstated_classification  # type: ignore[import-not-found]
 from anchor import api as api_module
 from anchor.deals import store
 
@@ -177,7 +177,7 @@ def test_the_migration_adds_exactly_eight_empty_tables_and_rewrites_nothing(lega
     store.list_deals(db_path=db)  # any store call migrates
     migrated_schema, migrated_rows = _schema(db), _every_row(db)
 
-    assert _version(db) == 16
+    assert _version(db) == 17  # Refinance V1 Stage 2 adds six capital-event tables, additively
     added = {name: migrated_schema[name] for name in set(migrated_schema) - set(before_schema)}
     # A v11 database now also gains AM1's two schema-13 Asset Management tables,
     # which are empty and additive in exactly the way Stage 2's eight are. This
@@ -189,6 +189,8 @@ def test_the_migration_adds_exactly_eight_empty_tables_and_rewrites_nothing(lega
     # tables the same additive way; named here so the comparison stays exact.
     expected_tables = (
         set(P7_9_TABLES) | set(AM1_TABLES) | set(ASSET_TYPES_1_TABLES) | set(P7_10_TABLES) | set(P7_10_STAGE_4_TABLES)
+        # Refinance V1 Stage 2 (schema 17): six capital-event tables, named so the comparison stays exact.
+        | set(REFINANCE_V1_STAGE_2_TABLES)
     )
     assert {name for name, (kind, _, _) in added.items() if kind == "table"} == expected_tables
     # Every other new object is one of those tables' own key indexes.
@@ -202,13 +204,13 @@ def test_the_migration_adds_exactly_eight_empty_tables_and_rewrites_nothing(lega
 
     for _ in range(3):
         store.list_deals(db_path=db)
-        assert (_version(db), _schema(db), _every_row(db)) == (16, migrated_schema, migrated_rows)
+        assert (_version(db), _schema(db), _every_row(db)) == (17, migrated_schema, migrated_rows)
     connection = sqlite3.connect(db)
     connection.row_factory = sqlite3.Row
     store._migrate(connection)
     connection.commit()
     connection.close()
-    assert (_version(db), _schema(db), _every_row(db)) == (16, migrated_schema, migrated_rows)
+    assert (_version(db), _schema(db), _every_row(db)) == (17, migrated_schema, migrated_rows)
 
 
 def test_every_new_table_is_typed_and_holds_no_json_blob(legacy: tuple[Path, dict[str, Any]]) -> None:
@@ -238,7 +240,7 @@ def test_every_recorded_response_is_identical(client: TestClient, legacy: tuple[
     db, manifest = legacy
     replayed = _replay(client, manifest["exchanges"])
 
-    assert _version(db) == 16
+    assert _version(db) == 17  # Refinance V1 Stage 2 adds six capital-event tables, additively
     mismatched = [
         (exchange["method"], exchange["path"])
         for exchange, now in zip(manifest["exchanges"], replayed, strict=True)

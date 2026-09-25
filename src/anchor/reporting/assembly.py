@@ -232,6 +232,49 @@ _UNAVAILABLE_LABELS = {
 }
 
 
+def analyst_unavailable_sentence(reason_code: str | None) -> str:
+    """The analyst-facing sentence for one typed reason code, with no opaque
+    identity in it. Shared with the publication refusals so a refusal and a
+    report say the same thing about the same state (review correction)."""
+
+    if reason_code is None:
+        return "No value is stated for it."
+    return _UNAVAILABLE_LABELS.get(reason_code, _UNAVAILABLE_LABELS["result_unavailable"])
+
+
+#: What a Unit whose Deal no longer exists is called, in a column and in a
+#: sentence. Never its identity.
+UNIT_NO_LONGER_AVAILABLE = "Selected Unit (no longer available)"
+_UNIT_NO_LONGER_AVAILABLE_IN_A_SENTENCE = "the selected Unit (no longer available)"
+
+
+def _unit_name(unit_id: str, db_path: Path | None) -> str | None:
+    """A Unit's analyst-facing name -- its Deal's -- or ``None`` where the Deal
+    no longer exists."""
+
+    from ..deals.contracts import DealNotFoundError
+
+    try:
+        return store.get_deal(unit_id, db_path=db_path).name
+    except DealNotFoundError:
+        return None
+
+
+def unit_display_name(unit_id: str, db_path: Path | None) -> str:
+    """A Unit as a sentence names it: "the Unit 'Maple Court'", or the honest
+    fallback. Never the opaque ``unit_id``."""
+
+    name = _unit_name(unit_id, db_path)
+    return _UNIT_NO_LONGER_AVAILABLE_IN_A_SENTENCE if name is None else f"the Unit '{name}'"
+
+
+def _unit_scope_label(unit_id: str, db_path: Path | None) -> str:
+    """A Unit as the report's Scope column names it."""
+
+    name = _unit_name(unit_id, db_path)
+    return UNIT_NO_LONGER_AVAILABLE if name is None else f"Unit – {name}"
+
+
 def _unavailable_reason(reason_code: str | None, fallback: str) -> str:
     """One unavailable state as analyst-facing text.
 
@@ -783,6 +826,66 @@ def _valuation_from_view(
         consumed=consumed,
         analyst_supplied=analyst_supplied,
     )
+
+
+def _consumed_unit_row(
+    view: Any, unit_id: str, *, hold_period: int | None, db_path: Path | None
+) -> MemoReportValuation:
+    """One Unit's cell that the selected Capital Structure consumed, as its own
+    row (review correction).
+
+    It states that Unit's value -- or its typed reason and no value -- under the
+    Unit's own name, and is marked consumed. The Investment value is never
+    shown in its place: where only the cell was consumed, the whole view is not
+    relabelled as consumed, and an unavailable cell is never zero.
+    """
+
+    cell = next((item for item in getattr(view, "unit_views", ()) if item.unit_id == unit_id), None)
+    value = None if cell is None else cell.value
+    unavailable = None if cell is None else cell.unavailable
+    code = "result_unavailable" if cell is None else None
+    if unavailable is not None:
+        code = str(getattr(unavailable, "reason_code", "result_unavailable"))
+    return MemoReportValuation(
+        label=view.label,
+        kind=_label(_VALUATION_KIND_LABELS, view.kind),
+        timing=_timing_label(view.model_month, hold_period),
+        scope=_unit_scope_label(unit_id, db_path),
+        value=None if value is None else format_currency(value),
+        unavailable=(
+            None
+            if value is not None
+            else _unavailable(
+                code or "result_unavailable",
+                _unavailable_reason(code, "This Unit has no value at this timepoint."),
+            )
+        ),
+        selected=False,
+        consumed=True,
+        analyst_supplied=bool(getattr(cell, "analyst_supplied", False)),
+    )
+
+
+def _consumed_units(surface: Any) -> dict[str, tuple[str, ...]]:
+    """The Units whose own cell the selected Capital Structure consumed, by
+    ``timepoint_id``, in ``unit_id`` order."""
+
+    units: dict[str, set[str]] = {}
+    for requirement in getattr(surface, "consumed_requirements", ()):
+        if requirement.unit_id is not None:
+            units.setdefault(requirement.timepoint_id, set()).add(requirement.unit_id)
+    return {timepoint_id: tuple(sorted(found)) for timepoint_id, found in units.items()}
+
+
+def _whole_view_consumed(surface: Any) -> set[str]:
+    """The timepoints whose complete Investment value was consumed. Only these
+    are called consumed as a whole view."""
+
+    return {
+        requirement.timepoint_id
+        for requirement in getattr(surface, "consumed_requirements", ())
+        if requirement.unit_id is None
+    }
 
 
 def _valuation_from_frozen(row: Any, hold_period: int | None) -> MemoReportValuation:
@@ -1578,9 +1681,17 @@ def build_version_package(
     citations = _claim_citations(version.items, version.risk_items, version.term_items)
     name, asset_type = _investment_identity(investment_id, db_path)
 
-    valuations = tuple(
-        _valuation_from_frozen(row, analysis.hold_period) for row in version.valuations
-    )
+    views = {view.timepoint_id: view for view in getattr(analysis.surface, "views", ())}
+    consumed_units = _consumed_units(analysis.surface)
+    frozen: list[MemoReportValuation] = []
+    for row in version.valuations:
+        frozen.append(_valuation_from_frozen(row, analysis.hold_period))
+        view = views.get(row.timepoint_id)
+        for unit_id in consumed_units.get(row.timepoint_id, ()) if view is not None else ():
+            frozen.append(
+                _consumed_unit_row(view, unit_id, hold_period=analysis.hold_period, db_path=db_path)
+            )
+    valuations = tuple(frozen)
     exit_view = _exit_view(analysis)
     if exit_view is not None:
         valuations = valuations + (exit_view,)
@@ -1667,6 +1778,14 @@ def assemble_draft_preview(
         raise MemoReportError(f"Investment {investment_id!r} has no memo draft to preview.")
 
     selected = draft.selected_decision
+    # The temporary Stage 3 report gate (review correction). A refinance-bearing
+    # selection is not previewed as an acquisition-only report: the same typed
+    # refusal publication states is raised instead, before anything is run.
+    from ..deals.memo_dependencies import capital_events_selected
+    from ..memo.publication import ReportPreviewRefusedError, refinance_reporting_refusal
+
+    if selected is not None and capital_events_selected(investment_id, selected, db_path=db_path):
+        raise ReportPreviewRefusedError((refinance_reporting_refusal(),))
     analysis = (
         _Analysis(resolved=False, detail="No decision cell is selected yet.")
         if selected is None
@@ -1678,7 +1797,7 @@ def assemble_draft_preview(
     citations = _claim_citations(draft.items, draft.risk_items, draft.term_items)
     name, asset_type = _investment_identity(investment_id, db_path)
 
-    valuations = _draft_valuations(draft, analysis)
+    valuations = _draft_valuations(draft, analysis, db_path=db_path)
     exit_view = _exit_view(analysis)
     if exit_view is not None:
         valuations = valuations + (exit_view,)
@@ -1739,35 +1858,43 @@ _NO_SELECTION = SelectedDecision(
 
 
 def _draft_valuations(
-    draft: InvestmentMemoDraft, analysis: _Analysis
+    draft: InvestmentMemoDraft, analysis: _Analysis, *, db_path: Path | None = None
 ) -> tuple[MemoReportValuation, ...]:
-    """The draft's valuation views: the ones it selected, and the ones a
-    ``PctOfValue`` funding consumes.
+    """The draft's valuation views: the ones it selected, the ones whose
+    complete Investment value a ``PctOfValue`` funding consumes, and -- each as
+    its own row, beside its view -- every Unit cell a funding consumes at Unit
+    scope (review correction).
 
     A view the analyst authored but neither selected nor consumed is exploratory
     working state (Section 22.6) and is not a dependency of the package, so the
-    preview leaves it out of the report exactly as publication would.
+    preview leaves it out of the report exactly as publication would. A view
+    only one of whose Unit cells was consumed is not itself consumed: the cell
+    is shown, and the Investment value never stands in for it.
     """
 
     surface = analysis.surface
     if surface is None:
         return ()
     selected_ids = set(draft.selected_valuation_timepoint_ids)
-    consumed_ids = set(getattr(surface, "consumed_timepoint_ids", ()))
+    consumed_ids = _whole_view_consumed(surface)
+    consumed_units = _consumed_units(surface)
     included: list[MemoReportValuation] = []
     for view in getattr(surface, "views", ()):
         is_selected = view.timepoint_id in selected_ids
         is_consumed = view.timepoint_id in consumed_ids
-        if not (is_selected or is_consumed):
-            continue
-        included.append(
-            _valuation_from_view(
-                view,
-                selected=is_selected,
-                consumed=is_consumed,
-                hold_period=analysis.hold_period,
+        if is_selected or is_consumed:
+            included.append(
+                _valuation_from_view(
+                    view,
+                    selected=is_selected,
+                    consumed=is_consumed,
+                    hold_period=analysis.hold_period,
+                )
             )
-        )
+        for unit_id in consumed_units.get(view.timepoint_id, ()):
+            included.append(
+                _consumed_unit_row(view, unit_id, hold_period=analysis.hold_period, db_path=db_path)
+            )
     return tuple(included)
 
 

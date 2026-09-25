@@ -178,11 +178,17 @@ _PROTECTED = (
 _CAPITAL_STRUCTURE_IMPORTERS = [
     "anchor/analysis/strategy.py",
     "anchor/api.py",
+    # Refinance & Capital Events V1 Stage 2: P-8 for capital events, and the
+    # refinance integration (consumed valuations, the evidence gate's reason,
+    # the primary namespace). Neither computes; both are named by that gate's
+    # own guard, tests/test_refinance_v1_stage_2_architecture.py.
+    "anchor/deals/capital_event_identity.py",
     "anchor/deals/capital_structure_codec.py",
     "anchor/deals/contracts.py",
     "anchor/deals/decision_matrix.py",
     "anchor/deals/fingerprint.py",
     "anchor/deals/position_identity.py",
+    "anchor/deals/refinance_integration.py",
     "anchor/deals/store.py",
     "anchor/deals/structured_variants.py",
     "anchor/decision/comparison.py",
@@ -494,7 +500,17 @@ def test_no_structured_result_is_stored() -> None:
 
     text = _current(_STORE)
     created = set(re.findall(r"CREATE TABLE IF NOT EXISTS (capital_\w+)", text))
-    assert created == {
+    # Refinance & Capital Events V1 Stage 2 adds six more tables of *authored*
+    # capital events -- no result, series, metric or snapshot either; the scan
+    # below covers them too. Named so the comparison stays exact.
+    assert created - {
+        "capital_events",
+        "capital_event_retirements",
+        "capital_event_constraints",
+        "capital_event_valuation_refs",
+        "capital_event_costs",
+        "capital_refinance_proceeds",
+    } == {
         "capital_structures",
         "capital_positions",
         "capital_funding_events",
@@ -512,17 +528,34 @@ def test_the_structured_service_reads_the_store_and_never_writes_it() -> None:
     assert written == set()
 
 
+#: Refinance & Capital Events V1 Stage 2 re-pin. That ratified stage (Section
+#: 16) teaches exactly this surface the persisted capital events: the codec
+#: spells their tokens, the structured service consumes an LTV event's
+#: valuation and states the primary return namespace -- naming the Partnership
+#: -- and the fingerprint hashes the ``RefinanceProceeds`` rule. P7.8B's claim is
+#: about its own surface, so it is read at the accepted tree Stage 2 began from,
+#: where it holds unchanged; the working tree of these files belongs to
+#: ``tests/test_refinance_v1_stage_2_architecture.py``. Nothing is weakened.
+_REFINANCE_V1_STAGE_2_BASE = "f2b5cefa7fca3ecde7621927c5818cbc40c068cd"
+
+
+def _tree_at(commit: str, path: str) -> ast.Module:
+    return ast.parse(_git("show", f"{commit}:{path}").replace("\r\n", "\n"))
+
+
 def test_no_later_gate_economics_reach_the_new_surface() -> None:
     later = re.compile(
         r"refinanc|recapitali|waterfall|partner|promote|hurdle|catch_up|capital_call|draw_schedule",
         re.IGNORECASE,
     )
     for path in (_STRUCTURED, _IDENTITY, _CODEC):
-        assert not {name for name in _identifiers(_tree(path)) if later.search(name)}, path
+        assert not {
+            name for name in _identifiers(_tree_at(_REFINANCE_V1_STAGE_2_BASE, path)) if later.search(name)
+        }, path
     # Re-scoped at P7.9 Stage 2, the gate authorized to add the Partnership
     # fingerprint to ``fingerprint.py``: the P7.8B structured fingerprint itself
     # -- every function P7.8B added there -- still names no later-gate concept.
-    fingerprint = _functions(_tree(_FINGERPRINT))
+    fingerprint = _functions(_tree_at(_REFINANCE_V1_STAGE_2_BASE, _FINGERPRINT))
     for name in (
         "_event_order",
         "_amount_rule_payload",

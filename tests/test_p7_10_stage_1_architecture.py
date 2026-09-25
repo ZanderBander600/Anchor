@@ -306,17 +306,49 @@ def test_the_ledger_range_is_not_a_no_op() -> None:
     assert _changes_since(_P7_10_BASE, "src", "web") == set(_STAGE_1_PRODUCTION_FILES)
 
 
+#: Refinance & Capital Events V1 Stage 2 re-pin (second review correction).
+#: The additive P7.10 amendment -- ``ValuationUnavailableReason.EVIDENCE_NOT_APPROVED``
+#: and its explicit wire mapping -- plus the typed consumer and the temporary
+#: Stage 3 report gate, amend these accepted files and nothing else. In
+#: ``tests/test_refinance_v1_stage_2_architecture.py`` the valuation, wire and
+#: memo-contract changes are each held to their exact diff, and the
+#: publication changes (the gate refusal and consumer-aware wording) by named
+#: guards. The freeze here excludes exactly these paths and still holds every
+#: other file of the package byte for byte.
+_REFINANCE_V1_STAGE_2_AMENDED = frozenset(
+    {
+        "src/anchor/valuation/contracts.py",
+        "src/anchor/memo/availability.py",
+        "src/anchor/memo/contracts.py",
+        "src/anchor/memo/publication.py",
+    }
+)
+
+
+def _amendment_guards_exist() -> None:
+    guard = (_PROJECT_ROOT / "tests" / "test_refinance_v1_stage_2_architecture.py").read_text(encoding="utf-8")
+    for name in (
+        "test_the_p7_10_valuation_amendment_adds_one_reason_and_nothing_else",
+        "test_the_p7_10_wire_amendment_maps_the_new_reason_explicitly",
+        "test_the_memo_contracts_gain_only_the_typed_consumer",
+    ):
+        assert f"def {name}(" in guard, name
+
+
 def test_the_accepted_stage_1_package_is_still_byte_identical_to_its_merge() -> None:
     """A *stronger* claim than the one this file could make before Stage 1 was
     merged: the accepted valuation package is unchanged in the working tree,
     now, not merely unchanged during Stage 1. Stage 2 consumes it and edits
-    none of it."""
+    none of it -- except the one named, guarded amendment."""
 
+    _amendment_guards_exist()
     merged = sorted(_git("ls-tree", "-r", "--name-only", _STAGE_1_MERGE, _PACKAGE).split())
     assert merged == sorted(_MODULES)
     for path in merged:
+        if path in _REFINANCE_V1_STAGE_2_AMENDED:
+            continue
         assert _git("hash-object", path).strip() == _git("rev-parse", f"{_STAGE_1_MERGE}:{path}").strip(), path
-    assert _working_tree_changes_since(_STAGE_1_MERGE, _PACKAGE) == set()
+    assert _working_tree_changes_since(_STAGE_1_MERGE, _PACKAGE) - _REFINANCE_V1_STAGE_2_AMENDED == set()
 
 
 def test_the_valuation_package_is_new_at_this_gate() -> None:
@@ -450,6 +482,11 @@ _VALUATION_READERS = [
     f"{_CAPITAL}/refinance_contracts.py",
     f"{_CAPITAL}/refinance_execution.py",
     "src/anchor/deals/fingerprint.py",
+    # Refinance & Capital Events V1 Stage 2 (second review correction): the
+    # refinance adapter classifies ``evidence_not_approved`` from the typed
+    # ``ValuationUnavailableReason`` on the cell and the gated authority it was
+    # read from. Same direction: deals reads valuation, never the reverse.
+    "src/anchor/deals/refinance_integration.py",
     "src/anchor/deals/store.py",
     "src/anchor/deals/structured_variants.py",
     "src/anchor/deals/valuation_codec.py",
