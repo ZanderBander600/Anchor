@@ -25,6 +25,7 @@ import {
 } from './components/CapitalEventEditor';
 import { CapitalEventResults } from './components/CapitalEventResults';
 import { ResultsSummaryPanel } from './components/ResultsSummaryPanel';
+import { LiveCaseRail } from './components/LiveCaseRail';
 import {
   REFERENCE_CHECKING_NOTICE,
   REFERENCE_CHECKING_VALUE,
@@ -481,5 +482,46 @@ describe('an existing results surface names the acquisition-financing reference'
     expect(alert.textContent).toContain(REFERENCE_ERROR_NOTICE);
     await user.click(within(alert).getByRole('button', { name: 'Retry' }));
     expect(retry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the Underwrite Live Case rail names or withholds the reference (correction round)', () => {
+  function rail(value: Parameters<typeof AcquisitionReferenceContext.Provider>[0]['value']) {
+    render(
+      <AcquisitionReferenceContext.Provider value={value}>
+        <LiveCaseRail results={acquisitionResults()} tab="results" />
+      </AcquisitionReferenceContext.Provider>,
+    );
+    return screen.getByRole('complementary', { name: 'Live case metrics' });
+  }
+
+  it('withholds the levered IRR and equity multiple while presence is being read', () => {
+    const aside = rail({ status: 'loading' });
+
+    expect(within(aside).queryByText('25.22%')).toBeNull();
+    expect(within(aside).queryByText('2.62x')).toBeNull();
+    expect(within(aside).getAllByText(REFERENCE_CHECKING_VALUE)).toHaveLength(2);
+  });
+
+  it('withholds them after a failed read', () => {
+    const aside = rail({ status: 'error', retry: vi.fn() });
+
+    expect(within(aside).queryByText('25.22%')).toBeNull();
+    expect(within(aside).getAllByText(REFERENCE_WITHHELD_VALUE)).toHaveLength(2);
+  });
+
+  it('labels them when a refinance is configured', () => {
+    const aside = rail({ status: 'ready', configured: true });
+
+    expect(within(aside).getByText('25.22%')).toBeTruthy();
+    expect(within(aside).getAllByText(ACQUISITION_REFERENCE_LABEL)).toHaveLength(2);
+  });
+
+  it('shows them exactly as before when no refinance is configured', () => {
+    const aside = rail({ status: 'ready', configured: false });
+
+    expect(within(aside).getByText('25.22%')).toBeTruthy();
+    expect(within(aside).getByText('2.62x')).toBeTruthy();
+    expect(within(aside).queryByText(ACQUISITION_REFERENCE_LABEL)).toBeNull();
   });
 });

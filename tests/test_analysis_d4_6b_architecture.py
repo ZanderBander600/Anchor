@@ -539,6 +539,12 @@ _PERMITTED_WEB = frozenset(
         # levered IRR and multiple as the acquisition-financing reference when
         # a refinance is configured (R-P rule 5). The figures are unchanged.
         "web/src/components/ResultsSummaryPanel.tsx",
+        # Refinance V1 Stage 3 correction round -- the Underwrite Live Case rail,
+        # found by browser QA showing the acquisition levered IRR and equity
+        # multiple ungated: it withholds them while refinance presence is
+        # unknown and labels them as the reference when one is configured.
+        # Its figures are unchanged, and ``liveMetrics.ts`` stays untouched.
+        "web/src/components/LiveCaseRail.tsx",
     }
 ) | _P7_9_STAGE_3_WEB | _AM1_WEB | _ASSET_TYPES_1_WEB | _P7_10_STAGE_4_WEB | _REFINANCE_V1_STAGE_3_WEB
 

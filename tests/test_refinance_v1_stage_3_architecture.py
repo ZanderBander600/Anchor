@@ -86,6 +86,7 @@ _CHANGED_WEB = (
     "web/src/components/InvestmentOverview.tsx",
     "web/src/components/InvestmentWorkspace.tsx",
     "web/src/components/LeaseLevelMetricSummary.tsx",
+    "web/src/components/LiveCaseRail.tsx",
     "web/src/components/OwnerSummaryPanel.tsx",
     "web/src/components/PartnerDecisionMatrixPanel.tsx",
     "web/src/components/PartnershipResults.tsx",

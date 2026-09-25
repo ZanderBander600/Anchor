@@ -3260,6 +3260,13 @@ Added as normal commits on top of the seven reviewed Stage 3 commits
    programming errors propagate to the typed refusal boundary.
 4. **Narrow cleanup.** `memo/publication.py`'s comments no longer describe the
    removed temporary report gate.
+5. **The Underwrite Live Case rail** (found by the round's browser QA). It
+   showed the acquisition levered IRR and equity multiple ungated; it now
+   withholds them while presence is unknown and labels them as the reference
+   when a refinance is configured, like every other results surface
+   (`LiveCaseRail.tsx`, named in the G37 and Stage 3 ledgers; `liveMetrics.ts`
+   untouched). The Sensitivity and Break-Even panels, which vary inputs over
+   the acquisition model rather than report a headline return, are unchanged.
 
 Guards and proofs: fail-closed surface tests (first render, rejected read,
 Retry, token change, Strategy matrix loading and failure, settled true and
