@@ -48,7 +48,7 @@ from anchor.deals.valuation_views import funding_authority
 from anchor.formatting import format_currency
 from anchor.memo.availability import UnavailableReasonCode, unit_unavailable, valuation_reason_code
 from anchor.memo.contracts import ValuationConsumerKind
-from anchor.memo.publication import PublicationRefusedError, ReportPreviewRefusedError
+from anchor.memo.publication import PublicationRefusedError
 from anchor.reporting.assembly import assemble_draft_preview, unit_display_name
 from anchor.valuation.contracts import (
     UnresolvedFundingRequirement,
@@ -171,31 +171,57 @@ def test_1_unit_a_exact_scope_refinance_is_economically_correct(world: dict[str,
 # =============================================================================
 
 
-def test_2_readiness_refuses_every_refinance_bearing_selection_with_the_gate(world: dict[str, Any]) -> None:
-    """The gate is stated for every evented structure -- executed, blocked or
-    DSCR-only -- and the exact-scope valuation findings are stated beside it."""
-
-    assert [item.code.value for item in _refusals(world, world["unit_a"])] == [GATE]
-    assert [item.code.value for item in _refusals(world, world["dscr_a"])] == [GATE]
-    assert [item.code.value for item in _refusals(world, world["unit_b"])] == [VALUATION, GATE]
-    assert [item.code.value for item in _refusals(world, world["portfolio"])] == [VALUATION, GATE]
-    # A structure with no capital event is never gated.
-    assert GATE not in [item.code.value for item in _refusals(world, world["pct_a"])]
+#: Refinance V1 Stage 3 removed the temporary ``refinance_reporting_not_available``
+#: gate these tests were written for (contract Section 25). They now prove the
+#: removal and its one narrow successor: an executed refinance publishes and
+#: previews through the refinance-aware report, and a refinance that did not
+#: execute is refused with ``refinance_result_unavailable``, stated beside the
+#: exact-scope valuation finding that caused it.
+UNEXECUTED = "refinance_result_unavailable"
 
 
-def test_2_publish_and_preview_enforce_the_same_refusal_and_write_nothing(world: dict[str, Any]) -> None:
+def test_2_readiness_allows_an_executed_refinance_and_refuses_an_unexecuted_one(world: dict[str, Any]) -> None:
+    """An executed refinance -- LTV at exact scope, or DSCR-only -- is no longer
+    refused. One that did not execute is refused truthfully, its exact-scope
+    valuation finding stated first."""
+
+    assert [item.code.value for item in _refusals(world, world["unit_a"])] == []
+    assert [item.code.value for item in _refusals(world, world["dscr_a"])] == []
+    assert [item.code.value for item in _refusals(world, world["unit_b"])] == [VALUATION, UNEXECUTED]
+    assert [item.code.value for item in _refusals(world, world["portfolio"])] == [VALUATION, UNEXECUTED]
+    # A structure with no capital event never meets the refinance refusal.
+    assert UNEXECUTED not in [item.code.value for item in _refusals(world, world["pct_a"])]
+    assert "refinance_reporting_not_available" not in {
+        item.code.value for key in ("unit_a", "dscr_a", "unit_b", "portfolio") for item in _refusals(world, world[key])
+    }
+
+
+def test_2_an_executed_refinance_publishes_and_previews_refinance_aware(world: dict[str, Any]) -> None:
     _draft(world, world["unit_a"])
+    preview = assemble_draft_preview(world["investment_id"], db_path=world["db"])
+    assert [metric.label for metric in preview.key_metrics if "IRR" in metric.label] == ["Common Equity IRR"]
+    assert "Refinance" in [section.title for section in preview.sections]
+    deps.publish(world["investment_id"], db_path=world["db"])
+    (version,) = store.list_memo_versions(world["investment_id"], db_path=world["db"])
+    artifact = store.get_memo_version_artifact(world["investment_id"], version.version_id, db_path=world["db"])
+    assert artifact is not None and "Refinance" in [section.title for section in artifact.package().sections]
+
+
+def test_2_an_unexecuted_refinance_is_refused_and_writes_nothing(world: dict[str, Any]) -> None:
+    _draft(world, world["unit_b"])
     with pytest.raises(PublicationRefusedError) as published:
         deps.publish(world["investment_id"], db_path=world["db"])
-    with pytest.raises(ReportPreviewRefusedError) as previewed:
-        assemble_draft_preview(world["investment_id"], db_path=world["db"])
-    assert published.value.refusals == previewed.value.refusals
-    (refusal,) = previewed.value.refusals
-    assert refusal.code.value == GATE and refusal.field == "capital_structure" and refusal.scope_id is None
+    assert [refusal.code.value for refusal in published.value.refusals] == [VALUATION, UNEXECUTED]
+    (_, refusal) = published.value.refusals
+    assert refusal.field == "capital_structure" and refusal.scope_id is None
     assert store.list_memo_versions(world["investment_id"], db_path=world["db"]) == ()
+    # The preview is not refused: it states the unavailable primary return.
+    preview = assemble_draft_preview(world["investment_id"], db_path=world["db"])
+    (irr,) = [metric for metric in preview.key_metrics if metric.label == "Common Equity IRR"]
+    assert irr.value is None and irr.unavailable is not None
 
 
-def test_2_the_routes_state_the_gate_in_the_established_refusal_shape(
+def test_2_the_routes_state_the_refusal_in_the_established_shape(
     world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client = _client(world, monkeypatch)
@@ -203,12 +229,11 @@ def test_2_the_routes_state_the_gate_in_the_established_refusal_shape(
     investment_id = world["investment_id"]
     readiness = client.get(f"/investments/{investment_id}/memo/publication-readiness").json()
     assert readiness["publishable"] is False
-    assert [item["code"] for item in readiness["refusals"]] == [VALUATION, GATE]
+    assert [item["code"] for item in readiness["refusals"]] == [VALUATION, UNEXECUTED]
     published = client.post(f"/investments/{investment_id}/memo/publish")
     preview = client.get(f"/investments/{investment_id}/memo/report-preview")
-    assert published.status_code == preview.status_code == 422
-    assert [item["code"] for item in published.json()["detail"]] == [VALUATION, GATE]
-    assert preview.json()["detail"] == [readiness["refusals"][-1]]
+    assert published.status_code == 422 and preview.status_code == 200
+    assert [item["code"] for item in published.json()["detail"]] == [VALUATION, UNEXECUTED]
     assert client.get(f"/investments/{investment_id}/memo-versions").json()["memo_versions"] == []
 
 

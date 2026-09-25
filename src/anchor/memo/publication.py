@@ -65,14 +65,16 @@ class PublicationRefusalCode(StrEnum):
       consumed -- has no value. The version is not published with a fabricated
       or omitted figure in its place. An authored but unselected and unconsumed
       definition is not a dependency and never reaches this code.
-    - ``REFINANCE_REPORTING_NOT_AVAILABLE``: the selected Capital Structure
-      configures a capital event, and the refinance-aware report -- the
-      Common Equity / Partner primary returns, the sizing and bridge sections
-      and the refinance headlines (Refinance V1 R-P, Sections 12.5 and 16.3) --
-      is Stage 3 work. Until it exists, a report of the acquisition financing
-      alone would misstate the recommended case, so none is issued or
-      previewed. **Temporary:** Stage 3 removes this gate only once that
-      presentation is implemented and tested.
+    - ``REFINANCE_RESULT_UNAVAILABLE``: a refinance the selected Capital
+      Structure configures did not execute for the selected cell, so the
+      memo's primary return -- Common Equity after Capital Structure, or the
+      Partner returns it feeds -- is unavailable (Refinance V1 Section 12.5
+      rule 6). A version is not issued whose headline return is unknowable,
+      and the acquisition-financing figures never stand in for it.
+      Refinance V1 Stage 3 replaced the temporary
+      ``refinance_reporting_not_available`` gate with this narrower refusal
+      once the refinance-aware report existed: an executed refinance now
+      publishes.
     """
 
     MEMO_INVALID = "memo_invalid"
@@ -85,7 +87,7 @@ class PublicationRefusalCode(StrEnum):
     EVIDENCE_NOT_FOUND = "evidence_not_found"
     EVIDENCE_NOT_APPROVED = "evidence_not_approved"
     VALUATION_UNAVAILABLE_FOR_REQUIRED_VIEW = "valuation_unavailable_for_required_view"
-    REFINANCE_REPORTING_NOT_AVAILABLE = "refinance_reporting_not_available"
+    REFINANCE_RESULT_UNAVAILABLE = "refinance_result_unavailable"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -115,31 +117,23 @@ class PublicationRefusedError(Exception):
         super().__init__("; ".join(refusal.message for refusal in self.refusals))
 
 
-class ReportPreviewRefusedError(PublicationRefusedError):
-    """A draft whose report cannot be previewed yet, with the same typed
-    refusals publication states. A subclass so every surface reports it
-    through the one established refusal shape."""
-
-
-#: The analyst-facing statement of the temporary Stage 3 report gate. No
-#: identity of any event, position or Unit is named: the analyst knows which
-#: Capital Structure they selected.
-REFINANCE_REPORTING_NOT_AVAILABLE_MESSAGE = (
-    "The selected Capital Structure includes a refinance, and Anchor cannot yet issue a report for it: the "
-    "refinance-aware returns, the refinance sizing and bridge sections and the report headlines are not available "
-    "yet. A report of the acquisition financing alone would misstate the recommended case, so none is issued or "
-    "previewed. Select a Strategy whose Capital Structure has no refinance to publish now."
+#: The analyst-facing statement of the refinance refusal. It names no
+#: identity; the reason that follows it names the refinance by its label.
+REFINANCE_RESULT_UNAVAILABLE_MESSAGE = (
+    "A refinance of the selected Capital Structure did not execute for the selected analysis, so the memo's "
+    "primary return is unavailable and no version is issued. The acquisition-financing figures are not a "
+    "substitute."
 )
 
 
-def refinance_reporting_refusal() -> PublicationRefusal:
-    """The one refusal the temporary Stage 3 report gate states, shared by the
-    readiness route, the publish route and the draft preview so the three can
-    never word or code it differently."""
+def refinance_result_refusal(reason: str) -> PublicationRefusal:
+    """One refusal per refinance that did not execute, its analyst-facing
+    reason appended. Shared by the readiness route and the publish route so
+    the two can never word or code it differently."""
 
     return PublicationRefusal(
-        code=PublicationRefusalCode.REFINANCE_REPORTING_NOT_AVAILABLE,
-        message=REFINANCE_REPORTING_NOT_AVAILABLE_MESSAGE,
+        code=PublicationRefusalCode.REFINANCE_RESULT_UNAVAILABLE,
+        message=f"{REFINANCE_RESULT_UNAVAILABLE_MESSAGE} {reason}",
         field="capital_structure",
     )
 
@@ -220,7 +214,10 @@ class PublicationContext:
     required_valuations: tuple[RequiredValuation, ...] = ()
     #: Whether the selected Capital Structure configures a capital event, so
     #: the temporary Stage 3 report gate applies.
-    capital_events_selected: bool = False
+    #: Refinance V1 Stage 3: why each refinance the selected Capital Structure
+    #: configures did not execute, in the analyst's words. Empty when every one
+    #: executed, and for a structure with none.
+    unexecuted_refinances: tuple[str, ...] = ()
 
 
 def _selection_refusals(
@@ -458,8 +455,7 @@ def publication_refusals(
         refusals.extend(_selection_refusals(selected, context))
     refusals.extend(_evidence_refusals(draft.cited_evidence_ids(), context))
     refusals.extend(_valuation_refusals(context))
-    if context.capital_events_selected:
-        refusals.append(refinance_reporting_refusal())
+    refusals.extend(refinance_result_refusal(reason) for reason in context.unexecuted_refinances)
     return tuple(refusals)
 
 

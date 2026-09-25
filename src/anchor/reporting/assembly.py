@@ -57,6 +57,7 @@ from ..memo.contracts import (
     MemoTermItem,
     SelectedDecision,
 )
+from . import refinance as refinance_report
 from .artifact import REPORT_SNAPSHOT_NOT_AVAILABLE_MESSAGE
 from .contracts import (
     MemoReportDisclosure,
@@ -733,7 +734,12 @@ def _partner_name(analysis: _Analysis, partner_id: str | None) -> str:
 # =============================================================================
 
 
-def _key_metrics(analysis: _Analysis) -> tuple[MemoReportMetric, ...]:
+def _key_metrics(
+    analysis: _Analysis,
+    selected: SelectedDecision | None = None,
+    *,
+    db_path: Path | None = None,
+) -> tuple[MemoReportMetric, ...]:
     """The headline figures of the decision page (Section 13.1).
 
     Every one is a named field of an accepted result contract, selected and
@@ -755,7 +761,7 @@ def _key_metrics(analysis: _Analysis) -> tuple[MemoReportMetric, ...]:
     if dscr is None:
         dscr = getattr(economics, "headline_dscr", None)
 
-    return (
+    leading = (
         _currency("Purchase Price", analysis.purchase_price),
         _percent("Going-in Cap Rate", getattr(economics, "going_in_cap_rate", None)),
         _currency("Year 1 NOI", noi_by_year[0] if noi_by_year else None),
@@ -765,6 +771,21 @@ def _key_metrics(analysis: _Analysis) -> tuple[MemoReportMetric, ...]:
         ),
         _currency("Exit Value", getattr(economics, "exit_value", None)),
         _currency("Initial Equity", getattr(economics, "initial_equity", None)),
+    )
+    # Refinance V1 Stage 3 (R-P rules 1 to 4): with a refinance configured in
+    # the selected cell, the headline return is Common Equity after Capital
+    # Structure -- or the selected Partner's -- and never the acquisition-loan
+    # levered figures, which stay in the Returns section under their reference
+    # label. Without one, the headline is exactly as before.
+    if selected is not None and refinance_report.refinance_bearing(analysis.structured):
+        names = refinance_report.names_for(analysis, db_path=db_path)
+        return (
+            *leading,
+            *refinance_report.headline_returns(analysis, selected, names),
+            _multiple("DSCR (Year 1)", dscr, note="Acquisition loan"),
+        )
+    return (
+        *leading,
         _percent("Levered IRR", getattr(economics, "levered_irr", None)),
         _multiple("Equity Multiple", getattr(economics, "equity_multiple", None)),
         _multiple("DSCR (Year 1)", dscr),
@@ -1015,19 +1036,38 @@ def _capital_positions(analysis: _Analysis) -> MemoReportTable | None:
     """
 
     structured = analysis.structured
-    if structured is None or not structured.result.positions:
+    # A replacement that did not execute is still a stated position: the table
+    # shows it as N/A even when nothing else in the structure is a position.
+    if structured is None or not (
+        structured.result.positions or getattr(structured.result, "unexecuted_positions", ())
+    ):
         return None
 
-    rows = tuple(
-        (
-            position.name,
-            _label({}, getattr(position, "position_class", None), "Position"),
-            _currency_cell(getattr(position, "funded_amount", None)),
-            _percent_cell(position.irr) if position.irr is not None else _position_na(position),
-            _multiple_cell(getattr(position, "moic", None)),
-            _percent_cell(getattr(position, "detachment_ltv", None)),
-        )
-        for position in structured.result.positions
+    rows = (
+        *(
+            (
+                position.name,
+                _label({}, getattr(position, "position_class", None), "Position"),
+                _currency_cell(getattr(position, "funded_amount", None)),
+                _percent_cell(position.irr) if position.irr is not None else _position_na(position),
+                _multiple_cell(getattr(position, "moic", None)),
+                _percent_cell(getattr(position, "detachment_ltv", None)),
+            )
+            for position in structured.result.positions
+        ),
+        # Refinance V1 Stage 3: a replacement whose refinance did not execute
+        # has no schedule, so it is listed with no figure rather than omitted.
+        *(
+            (
+                position.name,
+                _label({}, getattr(position, "position_class", None), "Position"),
+                "Not funded",
+                "N/A – refinance did not execute",
+                "N/A",
+                "N/A",
+            )
+            for position in getattr(structured.result, "unexecuted_positions", ())
+        ),
     )
     return MemoReportTable(
         caption="Capital Positions",
@@ -1099,6 +1139,8 @@ def _returns_metrics(
         return _position_returns(analysis, selected.position_id)
     if selected.perspective is DecisionPerspectiveKind.PARTNER:
         return _partner_returns(analysis, selected.partner_id)
+    if refinance_report.refinance_bearing(analysis.structured):
+        return refinance_report.project_returns(analysis, _economics(analysis))
     return _project_returns(analysis)
 
 
@@ -1233,6 +1275,25 @@ def _operating_projection(analysis: _Analysis) -> MemoReportTable | None:
                 _series_cell(debt_service, index),
                 _series_cell(levered, index),
             )
+        )
+    if refinance_report.refinance_bearing(analysis.structured):
+        # Refinance V1 Stage 3 (R-P rule 5): these two series hold the
+        # acquisition loan to the sale, so they are named as the reference.
+        return MemoReportTable(
+            caption="Operating Projection",
+            headers=(
+                "Year",
+                "NOI",
+                "Acquisition Debt Service",
+                "Levered Owner Cash Flow (Acquisition Financing)",
+            ),
+            rows=tuple(rows),
+            align_right=(1, 2, 3),
+            note=(
+                "Debt service and levered owner cash flow here are the acquisition-financing reference: they "
+                "exclude later capital events. The Refinance section reports Common Equity cash with the "
+                "refinance included."
+            ),
         )
     return MemoReportTable(
         caption="Operating Projection",
@@ -1601,18 +1662,39 @@ def _sections_for(
     selected: SelectedDecision,
     narrative: tuple[MemoReportSection, ...],
     multi_unit: bool,
+    *,
+    db_path: Path | None = None,
 ) -> tuple[MemoReportSection, ...]:
     """The report's sections, in reading order, with the empty ones dropped."""
 
     sections: list[MemoReportSection] = list(narrative)
+    refinance_bearing = refinance_report.refinance_bearing(analysis.structured)
 
     returns = _returns_metrics(analysis, selected)
     if returns:
         sections.append(
             MemoReportSection(
                 title="Returns",
-                subtitle=f"Reported from the {_perspective_label(selected, analysis)} perspective.",
+                subtitle=(
+                    f"Reported from the {_perspective_label(selected, analysis)} perspective. With a refinance, "
+                    "Common Equity after Capital Structure is the primary equity return and the acquisition-"
+                    "financing figures are a reference that excludes later capital events."
+                    if refinance_bearing
+                    else f"Reported from the {_perspective_label(selected, analysis)} perspective."
+                ),
                 metrics=returns,
+            )
+        )
+
+    # Refinance V1 Stage 3: the refinance-aware section, only when the selected
+    # cell's Capital Structure configures a refinance.
+    if refinance_bearing:
+        sections.append(
+            refinance_report.refinance_section(
+                analysis,
+                selected,
+                refinance_report.names_for(analysis, db_path=db_path),
+                _economics(analysis),
             )
         )
 
@@ -1722,7 +1804,7 @@ def build_version_package(
         perspective_label=_perspective_label(selected, analysis),
         freshness=ReportFreshness.CURRENT,
         verification_code=version.published_fingerprint,
-        key_metrics=_key_metrics(analysis),
+        key_metrics=_key_metrics(analysis, selected, db_path=db_path),
         valuations=valuations,
         sections=_sections_for(
             analysis,
@@ -1731,6 +1813,7 @@ def build_version_package(
                 version.items, version.risk_items, version.term_items, library
             ),
             _is_multi_unit(investment_id, db_path),
+            db_path=db_path,
         ),
         evidence=_evidence_register(version.evidence, citations),
         concluding_statement=_concluding_statement(
@@ -1778,14 +1861,10 @@ def assemble_draft_preview(
         raise MemoReportError(f"Investment {investment_id!r} has no memo draft to preview.")
 
     selected = draft.selected_decision
-    # The temporary Stage 3 report gate (review correction). A refinance-bearing
-    # selection is not previewed as an acquisition-only report: the same typed
-    # refusal publication states is raised instead, before anything is run.
-    from ..deals.memo_dependencies import capital_events_selected
-    from ..memo.publication import ReportPreviewRefusedError, refinance_reporting_refusal
-
-    if selected is not None and capital_events_selected(investment_id, selected, db_path=db_path):
-        raise ReportPreviewRefusedError((refinance_reporting_refusal(),))
+    # Refinance V1 Stage 3 removed the temporary report gate that stood here: a
+    # refinance-bearing selection is previewed through the refinance-aware
+    # headlines and Refinance section, and one whose refinance did not execute
+    # shows that unavailable state as its primary answer (Section 12.5 rule 6).
     analysis = (
         _Analysis(resolved=False, detail="No decision cell is selected yet.")
         if selected is None
@@ -1832,13 +1911,14 @@ def assemble_draft_preview(
             "Not selected" if selected is None else _perspective_label(selected, analysis)
         ),
         freshness=ReportFreshness.NOT_APPLICABLE,
-        key_metrics=_key_metrics(analysis),
+        key_metrics=_key_metrics(analysis, selected, db_path=db_path),
         valuations=valuations,
         sections=_sections_for(
             analysis,
             selected or _NO_SELECTION,
             _narrative_sections(draft.items, draft.risk_items, draft.term_items, library),
             _is_multi_unit(investment_id, db_path),
+            db_path=db_path,
         ),
         evidence=_evidence_register(references, citations),
         concluding_statement=None,

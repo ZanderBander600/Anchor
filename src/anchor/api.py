@@ -6778,15 +6778,12 @@ def read_memo_report_preview(investment_id: str) -> dict[str, Any]:
     it moves as the analyst works; it is never a published memo, and the export
     route cannot be reached from it.
 
-    A selection whose Capital Structure configures a capital event is refused
-    with the typed ``refinance_reporting_not_available`` refusal, in the same
-    422 shape publication uses, until Stage 3's refinance-aware report exists:
-    an acquisition-only preview would misstate the recommended case."""
+    Refinance V1 Stage 3: a selection whose Capital Structure configures a
+    refinance is previewed through the refinance-aware headlines and Refinance
+    section. The temporary Stage 2 gate that refused it here is removed."""
 
     try:
         package = assemble_draft_preview(investment_id)
-    except PublicationRefusedError as error:
-        raise _publication_refused_response(error) from None
     except (InvestmentNotFoundError, DealNotFoundError, MemoNotFoundError) as error:
         raise _memo_p7_10_not_found(error) from None
     except MemoReportError as error:

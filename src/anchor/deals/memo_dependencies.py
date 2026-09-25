@@ -96,9 +96,11 @@ from .fingerprint import (
 )
 from .partnership_variants import partner_perspectives, partnership_variant_fingerprint
 from .refinance_integration import has_capital_events
+from .refinance_presentation import event_reason_sentence, not_executed, unit_names_of
 from .structured_variants import (
     StructuredValuationSurface,
     analyze_structured_valuations,
+    analyze_structured_variant,
     position_perspectives,
     resolve_variant_capital_structure,
 )
@@ -667,23 +669,48 @@ def _required_valuations(
     return tuple(required)
 
 
-def capital_events_selected(
+def unexecuted_refinances(
     investment_id: str, selected: SelectedDecision, *, db_path: Path | None = None
-) -> bool:
-    """Whether the selected Strategy's resolved Capital Structure configures a
-    capital event -- the one fact the temporary Stage 3 report gate reads, for
-    the readiness route, the publish route and the draft preview alike.
+) -> tuple[str, ...]:
+    """Why each refinance of the selected cell did not execute, in the
+    analyst's words -- the one fact the refinance publication refusal reads
+    (Refinance V1 Stage 3, which removed the temporary report gate).
 
-    A Strategy that does not resolve is not gated here: the selected cell then
-    fails to resolve, and publication already refuses it for that reason."""
+    Empty for a structure with no capital event, which is never analysed here,
+    and when every refinance executed. A Strategy whose Capital Structure does
+    not resolve is not judged here: publication already refuses it for that
+    reason. Once a refinance is known to be configured, the check fails
+    closed: an analysis that cannot be read is a refusal, never a pass."""
 
     try:
         resolved = resolve_variant_capital_structure(investment_id, selected.strategy_id, db_path=db_path)
     except (InvestmentNotFoundError, DealNotFoundError):
         raise
     except Exception:  # noqa: BLE001 -- an unresolvable selection is refused on its own terms
-        return False
-    return has_capital_events(resolved.capital_structure)
+        return ()
+    if not has_capital_events(resolved.capital_structure):
+        return ()
+    try:
+        analysis = analyze_structured_variant(
+            investment_id, selected.strategy_id, selected.scenario_id, db_path=db_path
+        )
+    except (InvestmentNotFoundError, DealNotFoundError):
+        raise
+    except Exception:  # noqa: BLE001 -- fail closed: a refinance whose result cannot be read is never published
+        return ("The refinance result of the selected analysis could not be determined, so it is not published.",)
+    missed = not_executed(analysis.result)
+    if not missed:
+        return ()
+    units = unit_names_of(tuple(analysis.result.unit_ids), db_path=db_path)
+    labels = {
+        timepoint.timepoint_id: timepoint.label
+        for timepoint in store.list_valuation_timepoints(investment_id, db_path=db_path)
+    }
+    return tuple(
+        f"“{event.label}” did not execute: "
+        + (event_reason_sentence(event, unit_names=units, valuation_labels=labels) or "it has no result here.")
+        for event in missed
+    )
 
 
 def publication_context(
@@ -732,7 +759,7 @@ def publication_context(
         cell_detail=dependencies.detail,
         evidence=evidence,
         required_valuations=_required_valuations(draft, dependencies.surface, db_path=db_path),
-        capital_events_selected=capital_events_selected(investment_id, selected, db_path=db_path),
+        unexecuted_refinances=unexecuted_refinances(investment_id, selected, db_path=db_path),
     )
 
 
