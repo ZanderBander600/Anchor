@@ -3,6 +3,8 @@ import type { BreakEvenMetric, BreakEvenResult, DealStory } from '../types';
 import type { OwnerSummaryData } from '../ownerSummary';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
 import { operatingModeUnderwriteLabel } from '../operatingMode';
+import { ACQUISITION_REFERENCE_LABEL, RefinanceReferenceNotice } from './AcquisitionReference';
+import { useAcquisitionReference } from '../useRefinancePresence';
 
 interface StatCardProps {
   label: string;
@@ -174,6 +176,8 @@ export function OwnerSummaryPanel({
   dealStory = null,
   showIdentity = true,
 }: OwnerSummaryPanelProps) {
+  // Refinance V1 Stage 3 (R-P rules 3 to 5).
+  const reference = useAcquisitionReference();
   const { identity, dealContext, keyReturns, ownerReturns, investmentSnapshot, debtRisk, operatingStory, breakEvenHighlights } =
     data;
 
@@ -221,9 +225,18 @@ export function OwnerSummaryPanel({
 
       <section className="owner-summary-returns" aria-label="Key Returns">
         <h3 className="section-heading">Key Returns</h3>
+        {reference && <RefinanceReferenceNotice />}
         <div className="metric-row">
-          <StatCard label="Levered IRR" value={formatPercent(keyReturns.leveredIrr)} />
-          <StatCard label="Equity Multiple" value={formatMultiple(keyReturns.equityMultiple)} />
+          <StatCard
+            label="Levered IRR"
+            value={formatPercent(keyReturns.leveredIrr)}
+            caption={reference ? ACQUISITION_REFERENCE_LABEL : undefined}
+          />
+          <StatCard
+            label="Equity Multiple"
+            value={formatMultiple(keyReturns.equityMultiple)}
+            caption={reference ? ACQUISITION_REFERENCE_LABEL : undefined}
+          />
           <StatCard
             label="Year 1 Levered CoC"
             value={formatPercent(keyReturns.yearOneLeveredCashOnCash)}

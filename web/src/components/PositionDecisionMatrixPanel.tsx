@@ -31,6 +31,7 @@ import {
 } from '../decisionMatrix';
 import type { PositionDecisionCell, PositionDecisionMatrix } from '../capitalTypes';
 import type { PositionDecisionMatrixState } from '../usePositionDecisionMatrix';
+import { CapitalEventMatrixNote } from './CapitalEventMatrixNote';
 import { StaleAnalysisNotice } from './StaleAnalysisNotice';
 
 export interface PositionDecisionMatrixPanelProps {
@@ -354,6 +355,13 @@ export function PositionDecisionMatrixPanel({ state, ids, isDirty }: PositionDec
         : null}
 
       {report !== null && !state.isCurrent && <StaleAnalysisNotice message={POSITION_STALE_MESSAGE} />}
+
+      {report !== null && state.isCurrent && !isDirty && (
+        <CapitalEventMatrixNote
+          investmentId={report.investment_id}
+          token={report.matrix.matrix_fingerprint ?? ''}
+        />
+      )}
 
       {report !== null && state.isCurrent && !isDirty && (
         <PositionTable matrix={report.matrix} ids={ids} />

@@ -42,6 +42,7 @@ import {
 import { PARTNER_ROLE_LABELS } from '../partnershipForm';
 import type { PartnerDecisionCell, PartnerDecisionMatrix } from '../partnershipTypes';
 import type { PartnerDecisionMatrixState } from '../usePartnerDecisionMatrix';
+import { CapitalEventMatrixNote } from './CapitalEventMatrixNote';
 import { StaleAnalysisNotice } from './StaleAnalysisNotice';
 
 export interface PartnerDecisionMatrixPanelProps {
@@ -421,6 +422,10 @@ export function PartnerDecisionMatrixPanel({
         * table it describes. It is never silently presented as current. */}
       {report !== null && !(state.isCurrent && !isDirty) && (
         <StaleAnalysisNotice message={PARTNER_STALE_MESSAGE} />
+      )}
+
+      {report !== null && (
+        <CapitalEventMatrixNote investmentId={report.investment_id} token={report.matrix.matrix_fingerprint ?? ''} />
       )}
 
       {report !== null && <PartnerTable matrix={report.matrix} ids={ids} />}

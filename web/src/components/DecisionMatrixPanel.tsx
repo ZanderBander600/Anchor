@@ -59,7 +59,15 @@ import { decisionIdScope, investmentIssueLead, withUnitNames } from '../investme
 import type { InvestmentScenario } from '../scenarioTypes';
 import type { InvestmentStrategy } from '../strategyTypes';
 import type { DecisionMatrixState } from '../useDecisionMatrix';
+import { useStrategyCapitalEvents } from '../useRefinancePresence';
+import { ACQUISITION_REFERENCE_LABEL } from './AcquisitionReference';
 import { StaleAnalysisNotice } from './StaleAnalysisNotice';
+
+// prettier-ignore
+export const MATRIX_NAMESPACE_NOTICE =
+  'Project figures hold the acquisition loan to the sale. For a strategy whose Capital Structure includes a refinance they are the acquisition-financing reference and exclude later capital events; its refinance-adjusted return is Common Equity after Capital Structure, in the Position or Partner perspective.';
+
+const NO_REFERENCE: ReadonlySet<string> = new Set();
 
 export interface DecisionMatrixPanelProps {
   matrix: DecisionMatrixState;
@@ -138,13 +146,26 @@ function CellReason({ issue, names }: { issue: DecisionCellIssue; names: Readonl
 interface TableProps {
   matrix: DecisionMatrix;
   labels: Labels;
+  /** Refinance V1 Stage 3: Strategies whose resolved Capital Structure
+   * configures a refinance, and the Project metrics that makes the
+   * acquisition-financing reference -- both the server's typed statement. */
+  referenceStrategies?: ReadonlySet<string>;
+  referenceMetrics?: ReadonlySet<string>;
   caption: string;
   names: Readonly<Record<string, string>>;
   /** The element-id namespace (`decisionIdScope`). */
   ids: string;
 }
 
-function DecisionMatrixTable({ matrix, labels, caption, names, ids }: TableProps) {
+function DecisionMatrixTable({
+  matrix,
+  labels,
+  referenceStrategies = NO_REFERENCE,
+  referenceMetrics = NO_REFERENCE,
+  caption,
+  names,
+  ids,
+}: TableProps) {
   const notes = collectNotes(ids);
   const cells = new Map<string, DecisionCell>(
     matrix.cells.map((cell) => [`${cell.strategy_id}|${cell.scenario_id}`, cell]),
@@ -280,6 +301,11 @@ function DecisionMatrixTable({ matrix, labels, caption, names, ids }: TableProps
             {row.hold_period !== null && (
               <span className="decision-matrix-hold">{row.hold_period}-year hold</span>
             )}
+            {referenceStrategies.has(row.strategy_id) && (
+              <span className="acquisition-reference-label">
+                Includes a refinance: its levered figures here are the acquisition-financing reference
+              </span>
+            )}
           </th>
           {matrix.scenarios.map((column) => (
             <td key={column.scenario_id} />
@@ -292,6 +318,11 @@ function DecisionMatrixTable({ matrix, labels, caption, names, ids }: TableProps
             <th scope="row">
               {spec.label}
               <span className="visually-hidden">, {label}</span>
+              {referenceStrategies.has(row.strategy_id) && referenceMetrics.has(spec.metric) && (
+                <span className="acquisition-reference-label">
+                  <span className="visually-hidden">,</span> {ACQUISITION_REFERENCE_LABEL}
+                </span>
+              )}
             </th>
             {matrix.scenarios.map((column) => valueCell(row, column, spec, metricIndex))}
             {cross && worstCell(row, spec)}
@@ -384,6 +415,10 @@ export function DecisionMatrixPanel({
   const ids = decisionIdScope(investmentId !== null);
   const blockedReasonId = `${ids}${BLOCKED_REASON_ID}`;
   const showTable = report !== null && matrix.isCurrent;
+  // Refinance V1 Stage 3: which Strategies are refinance-bearing, re-read with
+  // each matrix run so the labels describe the structures that produced it.
+  const presence = useStrategyCapitalEvents(report?.investment_id ?? null, report?.matrix.matrix_fingerprint ?? '');
+  const referenceStrategies = presence.strategies;
   const blocked = scopeId !== null && matrix.hasComparison && isDirty;
 
   const labels: Labels = {
@@ -481,10 +516,17 @@ export function DecisionMatrixPanel({
           {report !== null && !matrix.isCurrent && (
             <StaleAnalysisNotice message={isDirty ? copy.dirty : copy.stale} />
           )}
+          {showTable && referenceStrategies.size > 0 && (
+            <p className="refinance-reference-notice" role="note">
+              {MATRIX_NAMESPACE_NOTICE}
+            </p>
+          )}
           {showTable && (
             <DecisionMatrixTable
               matrix={report.matrix}
               labels={labels}
+              referenceStrategies={referenceStrategies}
+              referenceMetrics={presence.metrics}
               caption={copy.caption}
               names={unitNames}
               ids={ids}
