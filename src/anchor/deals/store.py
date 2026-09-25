@@ -11760,6 +11760,8 @@ def list_memo_version_consumed_valuations(
     found = []
     for row in rows:
         scope_kind = _decode_enum(row["scope_kind"], ValuationScopeKind, path="memo_version_consumed_valuations.scope_kind")
+        if not isinstance(scope_kind, ValuationScopeKind):
+            raise PersistedDealDataError(f"Version {version_id!r} records a consumed value with no scope.")
         unit_id = row["unit_id"] or None
         if (scope_kind is ValuationScopeKind.UNIT) is (unit_id is None):
             raise PersistedDealDataError(
