@@ -649,6 +649,15 @@ At minimum the contract distinguishes:
 The UI and report pair the state with the exact affected scope. `N/A`,
 Unavailable, and Stale never share the same meaning.
 
+**Amendment (2026-09-24, Refinance & Capital Events V1 Stage 2 review
+correction).** `ValuationUnavailableReason` gains the additive member
+`EVIDENCE_NOT_APPROVED`, mapped explicitly to
+`UnavailableReasonCode.EVIDENCE_NOT_APPROVED`, so the Unit cell the Stage 2
+evidence gate withholds carries a stable typed reason like every other
+unavailable state. Stage 1 never produces it, and no valuation arithmetic or
+result without an evidence-blocked analyst value changes. The record is
+`REFINANCE_CAPITAL_EVENTS_V1.md` Section 24.11.
+
 ## 17. Staged implementation
 
 Each stage starts explicitly and stops for independent review. Completing one

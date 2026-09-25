@@ -64,7 +64,15 @@ accepted Stage 1 baseline `6de7644`) on
   (exact-scope evidence, fingerprints and publication; typed message
   propagation; contract Section 24.10). They are pending re-review, and they
   change no ratified financial decision.
-- **Stage 3 has not started.**
+- **The second independent review's corrections are applied locally**
+  (contract Section 24.11): a temporary report gate so a refinance-bearing memo
+  is neither published nor previewed until Stage 3, the additive P7.10
+  `EVIDENCE_NOT_APPROVED` valuation reason, typed consumers with truthful
+  refusal wording, exact-scope report rows, and a hardened consumption record.
+  They are pending re-review and change no ratified financial decision.
+- **Stage 3 has not started.** It alone removes the temporary report gate,
+  once refinance-aware returns, memo sections and headlines exist and are
+  tested.
 - **The accepted product baseline remains `main` at `6de7644`** until Stage 2
   is reviewed, merged and explicitly accepted.
 - Its scope is the contract's Section 20 Stage 2 row: an additive schema
