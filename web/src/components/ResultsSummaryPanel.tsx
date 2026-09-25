@@ -1,5 +1,7 @@
 import type { AcquisitionResults } from '../types';
 import { formatCurrency, formatMultiple, formatPercent } from '../format';
+import { ACQUISITION_REFERENCE_LABEL, RefinanceReferenceNotice } from './AcquisitionReference';
+import { isReference, referenceFigure, useAcquisitionReference } from '../useRefinancePresence';
 
 interface StatProps {
   label: string;
@@ -49,13 +51,28 @@ interface ResultsSummaryPanelProps {
  * Every figure is a direct read of the engine's `AcquisitionResults`.
  */
 export function ResultsSummaryPanel({ results }: ResultsSummaryPanelProps) {
+  // Refinance V1 Stage 3: with a refinance in the Base Capital Structure these
+  // two figures are the acquisition-financing reference (R-P rules 3 to 5).
+  // Until that is known they are withheld, never shown as if no refinance
+  // existed (Stage 3 correction round).
+  const presence = useAcquisitionReference();
+  const reference = isReference(presence);
   return (
     <div className="results-panel">
+      <RefinanceReferenceNotice presence={presence} />
       <section className="headline-stats">
         <h3 className="card-title">Key Returns</h3>
         <div className="stat-grid">
-          <StatCard label="Levered IRR" value={formatPercent(results.levered_irr)} />
-          <StatCard label="Equity Multiple" value={formatMultiple(results.equity_multiple)} />
+          <StatCard
+            label="Levered IRR"
+            value={referenceFigure(presence, formatPercent(results.levered_irr))}
+            caption={reference ? ACQUISITION_REFERENCE_LABEL : undefined}
+          />
+          <StatCard
+            label="Equity Multiple"
+            value={referenceFigure(presence, formatMultiple(results.equity_multiple))}
+            caption={reference ? ACQUISITION_REFERENCE_LABEL : undefined}
+          />
           <StatCard label="Going-In Cap Rate" value={formatPercent(results.going_in_cap_rate)} />
           <StatCard
             label="Year 1 DSCR"

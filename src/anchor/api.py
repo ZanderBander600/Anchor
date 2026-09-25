@@ -13,7 +13,7 @@ sensitivity math of its own.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, datetime, timezone
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
@@ -163,6 +163,7 @@ from .capital_structure.execution_contracts import (
 )
 from .deals.capital_event_identity import CapitalEventIdentityConflictError
 from .deals.capital_structure_codec import FundingAmountRuleKind, PositionTermsKind, RetiringRefKind
+from .deals.refinance_presentation import AcquisitionReferenceUnavailableError, acquisition_reference_applies
 from .deals.partnership_codec import HurdleConditionKind
 from .deals.partnership_variants import (
     analyze_partnership_variant,
@@ -2475,6 +2476,7 @@ _EXPORT_REFUSAL_STATUS: dict[QuickAuditRefusalCode, int] = {
     QuickAuditRefusalCode.ANALYSIS_MISSING: status.HTTP_409_CONFLICT,
     QuickAuditRefusalCode.ANALYSIS_STALE: status.HTTP_409_CONFLICT,
     QuickAuditRefusalCode.ANALYSIS_INCONSISTENT: status.HTTP_409_CONFLICT,
+    QuickAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE: status.HTTP_409_CONFLICT,
     QuickAuditRefusalCode.HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT: status.HTTP_422_UNPROCESSABLE_CONTENT,
     QuickAuditRefusalCode.EXPORT_GENERATION_FAILED: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
@@ -2521,11 +2523,14 @@ def export_quick_underwrite_workbook(deal_id: str) -> Response:
         ) from None
 
     try:
-        source = quick_audit_source(
+        base = quick_audit_source(
             provenance,
             generated_at=datetime.now(timezone.utc),
             anchor_version=anchor_version(),
             source_commit=source_commit(),
+        )
+        source = _with_refinance_reference(
+            base, lambda message: QuickAuditExportError(QuickAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE, message)
         )
         workbook = build_quick_audit_workbook(source)
     except QuickAuditExportError as error:
@@ -2547,12 +2552,40 @@ def export_quick_underwrite_workbook(deal_id: str) -> Response:
     )
 
 
+#: The analyst's words when the owning Capital Structure cannot be read.
+_CAPITAL_STRUCTURE_UNAVAILABLE_MESSAGE = (
+    "This Deal's Capital Structure could not be read, so whether its levered figures must be labelled as the "
+            "acquisition-financing reference is unknown and no workbook is produced. Open Risk -> Capital Structure, "
+            "then export again."
+)
+
+
+def _with_refinance_reference(source: Any, refuse: Callable[[str], Exception]) -> Any:
+    """Refinance V1 Stage 3: an Excel Export 1-3 source, flagged when an
+    executed refinance of the Deal's Base Capital Structure applies to it, so
+    the workbook names its acquisition-loan levered figures as the
+    acquisition-financing reference. A Deal with none is returned unchanged,
+    and so builds exactly the workbook it always did.
+
+    Correction round: the Base structure is read from its true owner -- a
+    visible Investment for its Unit -- and a structure that cannot be read or
+    analysed is refused with the mode's typed ``capital_structure_unavailable``
+    (``refuse``), never exported unlabelled."""
+
+    try:
+        applies = acquisition_reference_applies(source.deal_id)
+    except AcquisitionReferenceUnavailableError:
+        raise refuse(_CAPITAL_STRUCTURE_UNAVAILABLE_MESSAGE) from None
+    return dataclasses.replace(source, refinance_configured=True) if applies else source
+
+
 _DETAILED_EXPORT_REFUSAL_STATUS: dict[DetailedAuditRefusalCode, int] = {
     DetailedAuditRefusalCode.DEAL_NOT_FOUND: status.HTTP_404_NOT_FOUND,
     DetailedAuditRefusalCode.UNSUPPORTED_OPERATING_MODE: status.HTTP_422_UNPROCESSABLE_CONTENT,
     DetailedAuditRefusalCode.ANALYSIS_MISSING: status.HTTP_409_CONFLICT,
     DetailedAuditRefusalCode.ANALYSIS_STALE: status.HTTP_409_CONFLICT,
     DetailedAuditRefusalCode.ANALYSIS_INCONSISTENT: status.HTTP_409_CONFLICT,
+    DetailedAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE: status.HTTP_409_CONFLICT,
     DetailedAuditRefusalCode.HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT: status.HTTP_422_UNPROCESSABLE_CONTENT,
     DetailedAuditRefusalCode.EXPORT_GENERATION_FAILED: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
@@ -2594,11 +2627,14 @@ def export_detailed_underwrite_workbook(deal_id: str) -> Response:
         ) from None
 
     try:
-        source = detailed_audit_source(
+        base = detailed_audit_source(
             provenance,
             generated_at=datetime.now(timezone.utc),
             anchor_version=anchor_version(),
             source_commit=source_commit(),
+        )
+        source = _with_refinance_reference(
+            base, lambda message: DetailedAuditExportError(DetailedAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE, message)
         )
         workbook = build_detailed_audit_workbook(source)
     except DetailedAuditExportError as error:
@@ -2640,6 +2676,7 @@ _LEASE_LEVEL_EXPORT_REFUSAL_STATUS: dict[LeaseLevelAuditRefusalCode, int] = {
     LeaseLevelAuditRefusalCode.LEASE_LEVEL_INPUTS_INVALID: status.HTTP_409_CONFLICT,
     LeaseLevelAuditRefusalCode.TERMINAL_VALUE_NOT_CAPITALIZABLE: status.HTTP_422_UNPROCESSABLE_CONTENT,
     LeaseLevelAuditRefusalCode.EXCEL_CAPACITY_EXCEEDED: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    LeaseLevelAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE: status.HTTP_409_CONFLICT,
     LeaseLevelAuditRefusalCode.EXPORT_GENERATION_FAILED: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
 
@@ -2683,11 +2720,14 @@ def export_lease_level_workbook(deal_id: str) -> Response:
         ) from None
 
     try:
-        source = lease_level_audit_source(
+        base = lease_level_audit_source(
             provenance,
             generated_at=datetime.now(timezone.utc),
             anchor_version=anchor_version(),
             source_commit=source_commit(),
+        )
+        source = _with_refinance_reference(
+            base, lambda message: LeaseLevelAuditExportError(LeaseLevelAuditRefusalCode.CAPITAL_STRUCTURE_UNAVAILABLE, message)
         )
         workbook = build_lease_level_audit_workbook(source)
     except LeaseLevelAuditExportError as error:
@@ -4824,6 +4864,116 @@ def read_position_perspectives(investment_id: str) -> dict[str, Any]:
     return {"investment_id": investment_id, "positions": _wire(perspectives)}
 
 
+@app.get("/investments/{investment_id}/capital-event-presence", response_model=None)
+def read_capital_event_presence(investment_id: str) -> dict[str, Any]:
+    """Refinance & Capital Events V1 Stage 3: whether the Base Strategy's and
+    each persisted Strategy's resolved Capital Structure configures a capital
+    event.
+
+    A typed presentation fact, resolved through the accepted whole-domain
+    authority, so a Project surface can name its acquisition-loan levered
+    figures as the acquisition-financing reference (R-P rules 3 to 5) without
+    resolving a Strategy itself. It computes no figure and executes nothing."""
+
+    from .deals.refinance_presentation import capital_event_presence
+
+    try:
+        presence = capital_event_presence(investment_id)
+    except (InvestmentNotFoundError, DealNotFoundError) as error:
+        raise _not_found(error) from None
+    except InvestmentStructureError as error:
+        raise _investment_structure_conflict(error) from None
+    return _wire(presence)
+
+
+#: Refinance V1 Stage 3: each typed refusal of the refinance audit, by status.
+_REFINANCE_AUDIT_STATUS = {
+    "investment_not_found": status.HTTP_404_NOT_FOUND,
+    "no_refinance": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "analysis_missing": status.HTTP_409_CONFLICT,
+    "analysis_stale": status.HTTP_409_CONFLICT,
+    "refinance_unavailable": status.HTTP_409_CONFLICT,
+    "analysis_inconsistent": status.HTTP_409_CONFLICT,
+    "partnership_unavailable": status.HTTP_409_CONFLICT,
+    "hold_period_exceeds_export_limit": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "export_generation_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+
+@app.get(
+    "/investments/{investment_id}/exports/refinance-capital-structure-audit.xlsx", response_model=None
+)
+def export_refinance_capital_structure_audit(
+    investment_id: str,
+    strategy_id: str = "base",
+    scenario_id: str = "base",
+    fingerprint: str | None = None,
+) -> Response:
+    """Refinance & Capital Events V1 Stage 3 (Section 25.1): the separate
+    Refinance & Capital Structure Audit of one saved Analysis Variant.
+
+    ``fingerprint`` is the structured source fingerprint of the analysis the
+    analyst ran; the audit is produced only while it is still the saved state's
+    own. A variant with no refinance, an unexecuted refinance, or dependencies
+    that do not reconcile are refused with a typed reason, never produced
+    partially. Exporting writes nothing."""
+
+    from .exports.refinance import refinance_audit_filename
+    from .exports.refinance.audit import build_refinance_audit_workbook
+    from .exports.refinance.source import RefinanceAuditExportError, refinance_audit_source
+
+    def refusal(code: str, message: str) -> HTTPException:
+        return HTTPException(
+            status_code=_REFINANCE_AUDIT_STATUS[code], detail={"code": code, "message": message}
+        )
+
+    try:
+        source = refinance_audit_source(
+            investment_id,
+            strategy_id=strategy_id,
+            scenario_id=scenario_id,
+            analysed_fingerprint=fingerprint,
+            generated_at=datetime.now(timezone.utc),
+            anchor_version=anchor_version(),
+            source_commit=source_commit(),
+        )
+        workbook = build_refinance_audit_workbook(source)
+    except RefinanceAuditExportError as error:
+        raise refusal(error.code.value, error.message) from None
+    except (StrategyNotFoundError, ScenarioNotFoundError):
+        raise refusal(
+            "investment_not_found",
+            "The selected Strategy or Scenario could not be found. It may have been deleted; refresh and try again.",
+        ) from None
+    except StructuredVariantConflictError:
+        raise refusal(
+            "analysis_stale",
+            "The saved underwriting changed while the audit was being built. Run the analysis again, then export.",
+        ) from None
+    except (PartnershipValidationError, PartnershipExecutionError):
+        # A configured Partnership that cannot run: a typed refusal, never a
+        # workbook silently missing its Partners sheet.
+        raise refusal(
+            "partnership_unavailable",
+            "The Partnership of the selected analysis could not be run, so the audit would be missing its partner "
+            "returns. Resolve it in Risk -> Partnership, run the analysis again, then export.",
+        ) from None
+    except Exception:
+        raise refusal(
+            "export_generation_failed",
+            "The workbook could not be generated. No file was produced; try again.",
+        ) from None
+    return Response(
+        content=workbook,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": content_disposition(refinance_audit_filename(source.investment_name)),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @app.post(
     "/investments/{investment_id}/position-decision-matrix/{position_id}", response_model=None
 )
@@ -6756,15 +6906,12 @@ def read_memo_report_preview(investment_id: str) -> dict[str, Any]:
     it moves as the analyst works; it is never a published memo, and the export
     route cannot be reached from it.
 
-    A selection whose Capital Structure configures a capital event is refused
-    with the typed ``refinance_reporting_not_available`` refusal, in the same
-    422 shape publication uses, until Stage 3's refinance-aware report exists:
-    an acquisition-only preview would misstate the recommended case."""
+    Refinance V1 Stage 3: a selection whose Capital Structure configures a
+    refinance is previewed through the refinance-aware headlines and Refinance
+    section. The temporary Stage 2 gate that refused it here is removed."""
 
     try:
         package = assemble_draft_preview(investment_id)
-    except PublicationRefusedError as error:
-        raise _publication_refused_response(error) from None
     except (InvestmentNotFoundError, DealNotFoundError, MemoNotFoundError) as error:
         raise _memo_p7_10_not_found(error) from None
     except MemoReportError as error:

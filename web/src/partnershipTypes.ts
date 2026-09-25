@@ -34,6 +34,7 @@
  * Partnership at all (FP-2).
  */
 
+import type { PrimaryReturnView } from './capitalTypes';
 import type { IrrStatus } from './types';
 
 // =============================================================================
@@ -425,6 +426,10 @@ export interface PartnershipVariantAnalysis {
   partnership_source_fingerprint: string | null;
   project_cache_status: string;
   result: PartnershipResult | null;
+  /** Refinance & Capital Events V1: present only when the structured variant
+   * states a capital event. Partner returns are then the primary investor
+   * view, refinance included. */
+  primary_return?: PrimaryReturnView;
 }
 
 // =============================================================================

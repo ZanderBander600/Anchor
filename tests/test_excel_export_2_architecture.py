@@ -137,6 +137,27 @@ _EXPORT_IMPORTS = {
     "anchor.exports.excel.filenames": set(),
     "anchor.exports.excel.provenance": set(),
     "anchor.exports.excel": set(),
+    # Refinance V1 Stage 3 (contract Section 25.1): the separate Refinance &
+    # Capital Structure Audit, a package of its own beside Exports 1-3. Its
+    # modules are enumerated here so the equality below stays exact; Exports
+    # 1-3's own entries are unchanged.
+    "anchor.exports.refinance": set(),
+    "anchor.exports.refinance.audit": set(),
+    "anchor.exports.refinance.source": {
+        "anchor.analysis.strategy",
+        "anchor.capital_structure.contracts",
+        "anchor.capital_structure.events",
+        "anchor.capital_structure.refinance_contracts",
+        "anchor.deals",
+        "anchor.deals.contracts",
+        "anchor.deals.investment_variants",
+        "anchor.deals.partnership_variants",
+        "anchor.deals.refinance_integration",
+        "anchor.deals.refinance_presentation",
+        "anchor.deals.structured_variants",
+        "anchor.deals.variants",
+        "anchor.engine.contracts",
+    },
     "anchor.exports": set(),
 }
 
@@ -493,13 +514,21 @@ def test_exactly_one_get_route_per_supported_mode_exposes_an_export() -> None:
     guard measuring its own claim instead of counting whatever later gates
     export."""
 
-    routes = sorted(
+    workbooks = sorted(
         (sorted(getattr(route, "methods", None) or ()), str(getattr(route, "path", "")))
         for route in app.routes
         if "/exports/" in str(getattr(route, "path", ""))
         and str(getattr(route, "path", "")).endswith(".xlsx")
     )
+    # Refinance V1 Stage 3 narrowing, the same kind P7.10 Stage 4 made: this
+    # gate's workbooks are the per-mode *Deal* workbooks. The one other
+    # workbook route is exactly the separately ratified Refinance & Capital
+    # Structure Audit (contract Section 25.1) -- any further export still fails.
+    routes = [route for route in workbooks if route[1].startswith("/deals/")]
     assert routes == _EXPORT_ROUTES
+    assert [route for route in workbooks if not route[1].startswith("/deals/")] == [
+        (["GET"], "/investments/{investment_id}/exports/refinance-capital-structure-audit.xlsx")
+    ]
 
 
 # =============================================================================
@@ -556,11 +585,46 @@ def _code_identifiers(path: Path) -> set[str]:
     return names
 
 
+#: Refinance V1 Stage 3 (contract Section 25.1): the separately ratified
+#: Refinance & Capital Structure Audit is Investment- and Capital-Structure-
+#: scoped by design. These three modules -- and no other file, in any
+#: directory -- are outside the vocabulary claim below; its own guard,
+#: ``tests/test_refinance_v1_stage_3_architecture.py``, holds them.
+_REFINANCE_AUDIT_MODULES = frozenset(
+    {
+        "exports/refinance/__init__.py",
+        "exports/refinance/audit.py",
+        "exports/refinance/source.py",
+    }
+)
+
+
+def _relative(path: Path) -> str:
+    return path.relative_to(_ANCHOR).as_posix()
+
+
+def _vocabulary_exempt(path: Path) -> bool:
+    return _relative(path) in _REFINANCE_AUDIT_MODULES
+
+
 def test_the_export_package_covers_only_the_three_underwrite_modes() -> None:
     """No Investment, Scenario, Strategy, Capital Structure, Partnership or
-    Asset Management export has leaked into any module."""
+    Asset Management export has leaked into any module of Exports 1-3.
 
+    Refinance V1 Stage 3 extended the *original* assertion -- "every module
+    under ``anchor/exports`` is free of the excluded vocabulary" -- with one
+    exact exception: the three named modules of the ratified refinance audit.
+    Every other file, including any new file placed beside them in
+    ``exports/refinance``, is still held to the claim."""
+
+    assert sorted(path.name for path in _EXPORTS.iterdir() if path.is_dir() and path.name != "__pycache__") == [
+        "excel",
+        "refinance",
+    ]
+    assert sorted(_relative(path) for path in (_EXPORTS / "refinance").glob("*.py")) == sorted(_REFINANCE_AUDIT_MODULES)
     for path in _EXPORTS.rglob("*.py"):
+        if _vocabulary_exempt(path):
+            continue
         identifiers = _code_identifiers(path)
         for excluded in _EXCLUDED_VOCABULARY:
             offenders = {
@@ -569,6 +633,83 @@ def test_the_export_package_covers_only_the_three_underwrite_modes() -> None:
                 if excluded in name and name not in _VOCABULARY_EXEMPTIONS
             }
             assert offenders == set(), (path, excluded, offenders)
+
+
+def test_the_refinance_exception_admits_no_other_file() -> None:
+    """The exemption above is a list of three exact paths. A new export
+    module -- in ``exports/refinance`` or anywhere else -- is not exempt."""
+
+    for candidate in (
+        _EXPORTS / "refinance" / "another_export.py",
+        _EXPORTS / "refinance" / "sub" / "audit.py",
+        _EXPORTS / "excel" / "refinance_audit.py",
+        _EXPORTS / "excel" / "audit.py",
+    ):
+        assert not _vocabulary_exempt(candidate), candidate
+    for name in _REFINANCE_AUDIT_MODULES:
+        assert _vocabulary_exempt(_ANCHOR / name), name
+
+
+#: Tokens of refinance *computation*. Exports 1-3 never size, pay off, bridge or
+#: fund a refinance; the refinance audit does that in its own package.
+_REFINANCE_TOKENS = re.compile(
+    r"refinanc|capital_?event|net_event|gross_proceeds|payoff|bridge|sizing|max_ltv|min_dscr|replacement|retiring",
+    re.IGNORECASE,
+)
+
+#: Exactly the refinance-shaped identifiers Exports 1-3 may hold. The first
+#: four are the accepted baseline's (``bd77433``): the *acquisition* loan's
+#: payoff at sale and the minimum DSCR, both Export 1-3 figures long before
+#: Stage 3. The last two are all Stage 3 added: the Summary notice and the
+#: boolean that shows it -- labeling, never a figure.
+_EXPORT_1_TO_3_REFINANCE_IDENTIFIERS = frozenset(
+    {"debt_payoff_ref", "min_dscr", "payoff", "r_payoff", "REFINANCE_NOTICE", "refinance_configured"}
+)
+
+#: What an Export 1-3 module may never import: the refinance audit, the
+#: capital-structure layer, or the refinance deals modules.
+_REFINANCE_IMPORT_PREFIXES = (
+    "anchor.exports.refinance",
+    "anchor.capital_structure",
+    "anchor.deals.refinance_integration",
+    "anchor.deals.refinance_presentation",
+    "anchor.deals.capital_event_identity",
+    "anchor.deals.structured_variants",
+    "anchor.reporting.refinance",
+)
+
+
+def _refinance_leaks(identifiers: set[str]) -> set[str]:
+    return {name for name in identifiers if _REFINANCE_TOKENS.search(name)} - _EXPORT_1_TO_3_REFINANCE_IDENTIFIERS
+
+
+def _refinance_imports(imports: set[str]) -> set[str]:
+    return {name for name in imports if name.startswith(_REFINANCE_IMPORT_PREFIXES)}
+
+
+def test_exports_1_to_3_hold_no_refinance_logic() -> None:
+    """Refinance V1 Stage 3 may *label* Exports 1-3's levered figures as the
+    acquisition-financing reference (contract Section 25.1 item 10); it may
+    not teach them refinance arithmetic. Every Export 1-3 module holds only
+    the enumerated names above and imports nothing refinance-shaped."""
+
+    for path in sorted((_EXPORTS / "excel").glob("*.py")):
+        assert _refinance_leaks(_code_identifiers(path)) == set(), path
+        assert _refinance_imports(_imports(path)) == set(), path
+
+
+def test_the_refinance_logic_guard_has_teeth() -> None:
+    """Refinance logic added to an old export is caught, by name and by import."""
+
+    for leaked in ("net_event_cash", "gross_proceeds", "refinance_payoff", "capital_events", "RefinanceBridge"):
+        assert _refinance_leaks({leaked}) == {leaked}
+    for imported in (
+        "anchor.exports.refinance.source",
+        "anchor.capital_structure.refinance",
+        "anchor.deals.refinance_integration",
+    ):
+        assert _refinance_imports({imported}) == {imported}
+    assert _refinance_leaks(set(_EXPORT_1_TO_3_REFINANCE_IDENTIFIERS)) == set()
 
 
 def test_quick_detailed_and_the_shared_base_never_learn_about_a_rent_roll() -> None:

@@ -264,14 +264,13 @@ def _refusal_codes(world: dict[str, Any], strategy: str) -> list[str]:
 
 def test_3_publication_is_not_blocked_by_an_unrelated_units_evidence(world: dict[str, Any]) -> None:
     """No valuation refusal for Unit A -- B's evidence is not its dependency.
-    The temporary Stage 3 report gate still refuses the refinance-bearing cell,
-    and nothing is written."""
+    Refinance V1 Stage 3 removed the temporary report gate that stood here, so
+    the claim is now proved end to end: the package publishes."""
 
     assert _valuation_refusals(world, world["unit_a"]) == []
-    assert _refusal_codes(world, world["unit_a"]) == ["refinance_reporting_not_available"]
-    with pytest.raises(PublicationRefusedError):
-        deps.publish(world["investment_id"], db_path=world["db"])
-    assert store.list_memo_versions(world["investment_id"], db_path=world["db"]) == ()
+    assert _refusal_codes(world, world["unit_a"]) == []
+    deps.publish(world["investment_id"], db_path=world["db"])
+    assert len(store.list_memo_versions(world["investment_id"], db_path=world["db"])) == 1
 
 
 # =============================================================================

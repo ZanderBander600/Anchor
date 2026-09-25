@@ -119,6 +119,16 @@ vi.mock('./api', async () => {
     // proven in `investmentWorkspace.test.tsx` and
     // `investmentNavigation.test.tsx`.
     listVisibleInvestments: vi.fn(async () => []),
+    // Refinance V1 Stage 3: a saved Deal's Base Capital Structure, which the
+    // results and the Live Case rail read to know whether a refinance is
+    // configured. Settled as "no refinance" so they keep their accepted
+    // presentation; the fail-closed states are proven in
+    // `refinancePresence.test.tsx` and `refinanceUi.test.tsx`.
+    readDealCapitalStructure: vi.fn(async (dealId: string) => ({
+      deal_id: dealId,
+      investment_id: null,
+      capital_structure: { positions: [] },
+    })),
   };
 });
 

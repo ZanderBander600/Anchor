@@ -51,7 +51,16 @@ export interface PositionScope {
 export type FundingAmountRule =
   | { kind: 'fixed_amount'; amount: number }
   | { kind: 'pct_of_price'; pct: number }
-  | { kind: 'pct_of_value'; timepoint_id: string; pct: number };
+  | { kind: 'pct_of_value'; timepoint_id: string; pct: number }
+  | CapitalEventProceeds;
+
+/** Refinance & Capital Events V1 Stage 3 -- mirrors `RefinanceProceeds`: the
+ * one funding rule of a replacement position, whose amount is the gross
+ * proceeds the named capital event sizes. It carries no amount of its own. */
+export interface CapitalEventProceeds {
+  kind: 'refinance_proceeds';
+  capital_event_id: string;
+}
 
 /** Mirrors `FundingEvent`. P7.8 funds at closing (`model_month` 0); `sequence`
  * orders events that share a month. */
@@ -114,6 +123,10 @@ export interface CapitalPosition {
  * Unit's acquisition loan and the residual (P-11). */
 export interface CapitalStructure {
   positions: CapitalPosition[];
+  /** Refinance & Capital Events V1: present only when the structure states at
+   * least one capital event. Absent is the empty set, and a structure with none
+   * travels exactly as it always did. */
+  capital_events?: CapitalEvent[];
 }
 
 /** `GET`/`PUT /deals/{id}/capital-structure`. A standalone Deal reports no
@@ -144,15 +157,20 @@ export interface CapitalStructureIssue {
 // =============================================================================
 
 /** Mirrors `PositionResultStatus`. */
-export type PositionResultStatus = 'complete' | 'unresolved_funding' | 'blocked_by_senior_unresolved';
+export type PositionResultStatus =
+  | 'complete'
+  | 'unresolved_funding'
+  | 'blocked_by_senior_unresolved'
+  | 'refinance_unavailable';
 
 /** Mirrors `CapitalStructureStatus`. */
-export type CapitalStructureStatus = 'complete' | 'unresolved_funding';
+export type CapitalStructureStatus = 'complete' | 'unresolved_funding' | 'refinance_unavailable';
 
 /** Mirrors `PositionUnavailableReason`. */
 export type PositionUnavailableReason =
   | 'unresolved_funding_requirement'
-  | 'senior_unresolved_funding_requirement';
+  | 'senior_unresolved_funding_requirement'
+  | 'refinance_unavailable';
 
 /** Mirrors `PriceBasis`: the acquisition price a loan-to-price is measured
  * against -- never an as-is, stabilized or market value. */
@@ -184,7 +202,9 @@ export interface PositionCashFlowEvent {
     | 'scheduled_debt_service'
     | 'balloon'
     | 'preferred_current_pay'
-    | 'preferred_redemption';
+    | 'preferred_redemption'
+    | 'refinance_payoff'
+    | 'refinance_funding';
   amount: number;
 }
 
@@ -301,7 +321,7 @@ export interface CommonEquityReturns {
   scope: PositionScope;
   status: CapitalStructureStatus;
   cash_flows: number[] | null;
-  unavailable_reason: 'unresolved_funding_requirement' | null;
+  unavailable_reason: 'unresolved_funding_requirement' | 'refinance_unavailable' | null;
   unavailable_message: string | null;
   irr: number | null;
   irr_status: IrrStatus | null;
@@ -309,6 +329,12 @@ export interface CommonEquityReturns {
   total_equity_invested: number | null;
   total_cash_returned: number | null;
   total_profit: number | null;
+  /** Refinance & Capital Events V1: present only for a refinance-bearing
+   * result. `cash_flows` is `recurring_cash_flows` plus `event_cash_flows`,
+   * each supplied by the engine; all three are `null` together when Common
+   * Equity is unavailable. */
+  recurring_cash_flows?: number[] | null;
+  event_cash_flows?: number[] | null;
 }
 
 /** Mirrors `LegacyAcquisitionLoan`: each Unit's existing acquisition loan, read
@@ -340,6 +366,12 @@ export interface StructuredCapitalResult {
   positions: PositionReturns[];
   funding_requirements: FundingRequirement[];
   common_equity: CommonEquityReturns;
+  /** Refinance & Capital Events V1: present only when the resolved structure
+   * states capital events. One result per event, in economic order. */
+  capital_events?: RefinanceResult[];
+  /** The replacement of each event that did not execute: it has no schedule,
+   * so it is never among `positions` with invented zeros. */
+  unexecuted_positions?: UnexecutedPosition[];
 }
 
 /** Which root executed the structure. A hidden one-unit Investment is still
@@ -378,6 +410,10 @@ export interface StructuredVariantAnalysis {
   structured_source_fingerprint: string;
   project_cache_status: string;
   result: StructuredCapitalResult;
+  /** Refinance & Capital Events V1: the server's typed statement of which
+   * return namespace is primary. Present only for a refinance-bearing
+   * variant. */
+  primary_return?: PrimaryReturnView;
 }
 
 // =============================================================================
@@ -488,4 +524,225 @@ export interface PositionDecisionMatrixReport {
   unit_ids: string[];
   position: PositionPerspective;
   matrix: PositionDecisionMatrix;
+}
+// =============================================================================
+// Refinance & Capital Events V1 Stage 3 -- the capital-event wire contracts
+//
+// Mirrors `anchor.capital_structure.events` and `refinance_contracts`, field
+// for field. Nothing here sizes, amortizes, nets or compares: capacities, the
+// binding set, payoffs, fees, the bridge and every Common Equity figure are the
+// accepted engine's, carried through unchanged.
+// =============================================================================
+
+/** Mirrors `RetiringPositionRef`: an authored debt position by its id, or a
+ * Unit's acquisition loan by its Unit -- never by a reserved identity string. */
+export type RetiringPositionRef =
+  | { kind: 'authored_position'; position_id: string }
+  | { kind: 'legacy_acquisition_loan'; unit_id: string };
+
+/** Mirrors `RefinanceSizing`: an absent constraint is disabled and states no
+ * target. At least one is present. */
+export interface RefinanceSizing {
+  fixed_cap: { amount: number } | null;
+  max_ltv: { max_ltv: number } | null;
+  min_dscr: { min_dscr: number } | null;
+}
+
+export type RefinanceCostKind = 'retiring_lender_fee' | 'third_party_cost';
+
+/** Mirrors `RefinanceCostLine`: one fixed-dollar event cost. A retiring
+ * lender fee names its recipient; a third-party cost names none. */
+export interface RefinanceCostLine {
+  cost_id: string;
+  kind: RefinanceCostKind;
+  amount: number;
+  recipient: RetiringPositionRef | null;
+  description: string;
+}
+
+/** Mirrors `RefinanceEvent`. `label` is presentation only; `event_id` is the
+ * identity. */
+export interface CapitalEvent {
+  event_id: string;
+  kind: 'refinance';
+  scope: PositionScope;
+  timing: { model_month: number; sequence: number };
+  label: string;
+  retiring: RetiringPositionRef[];
+  replacement_position_id: string;
+  sizing: RefinanceSizing;
+  /** Required exactly when `max_ltv` is present, and refused otherwise. */
+  valuation: { timepoint_id: string } | null;
+  costs: RefinanceCostLine[];
+}
+
+export type RefinanceStatus = 'executed' | 'unavailable' | 'not_executable' | 'blocked';
+
+export type RefinanceUnavailableReason =
+  | 'event_outside_hold_horizon'
+  | 'timepoint_not_found'
+  | 'model_month_mismatch'
+  | 'scope_not_covered'
+  | 'valuation_unavailable'
+  | 'evidence_not_approved'
+  | 'forward_noi_unavailable'
+  | 'non_positive_forward_noi'
+  | 'retiring_position_absent'
+  | 'retiring_position_not_outstanding'
+  | 'non_positive_capacity'
+  | 'upstream_unresolved_funding'
+  | 'upstream_capital_event_not_executed';
+
+export type ConstraintKind = 'fixed_cap' | 'max_ltv' | 'min_dscr';
+
+/** The three operand shapes are told apart by their capacity's `kind`; they
+ * carry no discriminator of their own. */
+export interface FixedCapOperands {
+  amount: number;
+}
+
+export interface MaxLtvOperands {
+  max_ltv: number;
+  scope_value: number | null;
+  continuing_senior_balance: number;
+}
+
+export interface MinDscrOperands {
+  min_dscr: number;
+  forward_noi: number | null;
+  continuing_senior_service: number;
+  service_capacity: number | null;
+  first_year_service_per_dollar: number;
+}
+
+/** Mirrors `ConstraintCapacity`. `capacity` is `null` exactly when the
+ * constraint is unavailable; a computed capacity may be zero or negative. */
+export interface ConstraintCapacity {
+  kind: ConstraintKind;
+  status: 'available' | 'unavailable';
+  capacity: number | null;
+  operands: FixedCapOperands | MaxLtvOperands | MinDscrOperands;
+  unavailable_reason: RefinanceUnavailableReason | null;
+  unavailable_message: string | null;
+}
+
+export interface SizingOutcome {
+  capacities: ConstraintCapacity[];
+  gross_proceeds: number | null;
+  binding: ConstraintKind[];
+  tie: boolean;
+}
+
+/** Mirrors `ValueDependency`: present only when LTV is enabled. */
+export interface ValueDependency {
+  timepoint_id: string;
+  scope: PositionScope;
+  model_month: number;
+  method: string | null;
+  analyst_supplied: boolean | null;
+  status: 'available' | 'unavailable';
+  value: number | null;
+  valuation_unavailable_reason: string | null;
+}
+
+/** Mirrors `NoiDependency`: present only when DSCR is enabled. */
+export interface NoiDependency {
+  scope: PositionScope;
+  model_month: number;
+  forward_year: number;
+  status: 'available' | 'unavailable';
+  forward_noi: number | null;
+}
+
+export interface RetiringPayoff {
+  ref: RetiringPositionRef;
+  /** Internal identity; never shown. The position is named from `ref`. */
+  position_id: string;
+  scheduled_payment_at_m: number;
+  payoff: number;
+  payoff_authority: 'authored_schedule' | 'acquisition_debt_balance_service';
+  retiring_lender_fees: number;
+  provider_cash_flows: number[] | null;
+}
+
+export interface ReplacementFunding {
+  position_id: string;
+  funding_month: number;
+  gross_proceeds: number;
+  replacement_lender_fees: number;
+  first_service_month: number;
+  first_year_service: number;
+  achieved_ltv: number | null;
+  achieved_dscr: number | null;
+}
+
+/** Mirrors `RefinanceBridge`: the event audit bridge, every line the
+ * engine's own. */
+export interface RefinanceBridge {
+  gross_proceeds: number;
+  payoffs: number;
+  replacement_lender_fees: number;
+  retiring_lender_fees: number;
+  third_party_costs: number;
+  net_event_cash: number;
+  direction: 'distribution' | 'contribution' | 'zero';
+}
+
+export interface RefinanceResult {
+  event_id: string;
+  kind: 'refinance';
+  label: string;
+  scope: PositionScope;
+  model_month: number;
+  hold_year: number;
+  status: RefinanceStatus;
+  value_dependency: ValueDependency | null;
+  noi_dependency: NoiDependency | null;
+  sizing: SizingOutcome | null;
+  payoffs: RetiringPayoff[] | null;
+  funding: ReplacementFunding | null;
+  bridge: RefinanceBridge | null;
+  unavailable_reason: RefinanceUnavailableReason | null;
+  unavailable_message: string | null;
+}
+
+export interface UnexecutedPosition {
+  position_id: string;
+  name: string;
+  position_class: PositionClass;
+  scope: PositionScope;
+  priority: number;
+  event_id: string;
+  unavailable_reason: PositionUnavailableReason;
+  unavailable_message: string;
+}
+
+export type ReturnNamespace =
+  | 'common_equity_after_capital_structure'
+  | 'partner'
+  | 'acquisition_financing_reference';
+
+/** Mirrors `PrimaryReturnView`: which namespace is primary for a
+ * refinance-bearing variant. The frontend decides nothing economically. */
+export interface PrimaryReturnView {
+  primary_equity_namespace: ReturnNamespace;
+  primary_investor_namespace: ReturnNamespace | null;
+  reference_namespace: ReturnNamespace;
+  reference_excludes_capital_events: boolean;
+  status: 'available' | 'unavailable';
+  unavailable_reason: string | null;
+  unavailable_message: string | null;
+  capital_event_ids: string[];
+  executed_event_ids: string[];
+}
+
+/** `GET /investments/{id}/capital-event-presence`: whether each Strategy's
+ * resolved Capital Structure configures a capital event. `strategy_id` is the
+ * reserved Base key for the Base Strategy. */
+export interface CapitalEventPresence {
+  investment_id: string;
+  strategies: { strategy_id: string; capital_events_configured: boolean }[];
+  /** The Project matrix metrics that are the acquisition-financing reference
+   * beside a refinance-bearing Strategy. The server decides them. */
+  acquisition_financing_metrics: string[];
 }

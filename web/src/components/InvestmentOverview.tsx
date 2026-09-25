@@ -44,6 +44,8 @@ import { InvestmentIssueList } from './InvestmentIssueList';
 import { NumericInput } from './NumericInput';
 import { StaleAnalysisNotice } from './StaleAnalysisNotice';
 import { TransactionCostEditor } from './TransactionCostEditor';
+import { ACQUISITION_REFERENCE_LABEL, RefinanceReferenceNotice } from './AcquisitionReference';
+import { isReference, referenceFigure, useAcquisitionReference } from '../useRefinancePresence';
 
 export interface InvestmentOverviewProps {
   workspace: InvestmentWorkspaceState;
@@ -101,18 +103,35 @@ function ReturnsSection({
   names: Readonly<Record<string, string>>;
 }) {
   const occupancy = results.physical_occupancy_at_year_end;
+  // Refinance V1 Stage 3: with a refinance in the Base Capital Structure the
+  // levered figures are the acquisition-financing reference (R-P rules 3 to 5).
+  const presence = useAcquisitionReference();
+  const reference = isReference(presence);
+  const computed = irrLine('Levered IRR', results.levered_irr, results.levered_irr_status);
+  const levered = { ...computed, value: referenceFigure(presence, computed.value) };
   return (
     <div className="investment-returns">
       <p className="investment-note">
         Base Strategy under the Base Scenario · {hold}-year common hold · every Unit consolidated.
       </p>
+      <RefinanceReferenceNotice presence={presence} subject="investment" />
       <div className="investment-ledgers">
         <Ledger
           caption="Returns"
           lines={[
-            irrLine('Levered IRR', results.levered_irr, results.levered_irr_status),
+            reference
+              ? {
+                  ...levered,
+                  note:
+                    levered.note === undefined || levered.note === null
+                      ? ACQUISITION_REFERENCE_LABEL
+                      : `${ACQUISITION_REFERENCE_LABEL}. ${levered.note}`,
+                }
+              : levered,
             irrLine('Unlevered IRR', results.unlevered_irr, results.unlevered_irr_status),
-            { label: 'Equity Multiple', value: formatMultiple(results.equity_multiple) },
+            reference
+              ? { label: 'Equity Multiple', value: formatMultiple(results.equity_multiple), note: ACQUISITION_REFERENCE_LABEL }
+              : { label: 'Equity Multiple', value: referenceFigure(presence, formatMultiple(results.equity_multiple)) },
             { label: 'Total Profit', value: formatCurrency(results.total_profit), negative: results.total_profit < 0 },
             { label: 'Total Equity Invested', value: formatCurrency(results.total_equity_invested) },
             { label: 'Initial Equity', value: formatCurrency(results.initial_equity) },

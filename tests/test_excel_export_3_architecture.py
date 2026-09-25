@@ -348,13 +348,21 @@ def test_one_get_route_per_supported_mode() -> None:
     serves an Investment Committee memorandum PDF under the same word, which is
     a different artifact of a different gate."""
 
-    routes = sorted(
+    workbooks = sorted(
         (sorted(getattr(route, "methods", None) or ()), str(getattr(route, "path", "")))
         for route in app.routes
         if "/exports/" in str(getattr(route, "path", ""))
         and str(getattr(route, "path", "")).endswith(".xlsx")
     )
+    # Refinance V1 Stage 3 narrowing, the same kind P7.10 Stage 4 made: this
+    # gate's workbooks are the per-mode *Deal* workbooks. The one other
+    # workbook route is exactly the separately ratified Refinance & Capital
+    # Structure Audit (contract Section 25.1) -- any further export still fails.
+    routes = [route for route in workbooks if route[1].startswith("/deals/")]
     assert routes == _EXPORT_ROUTES
+    assert [route for route in workbooks if not route[1].startswith("/deals/")] == [
+        (["GET"], "/investments/{investment_id}/exports/refinance-capital-structure-audit.xlsx")
+    ]
 
 
 def test_each_export_owns_its_own_contract_version_and_refusals() -> None:

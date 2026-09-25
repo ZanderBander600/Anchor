@@ -21,6 +21,8 @@ import { irrNotReportedExplanation } from '../capitalEconomics';
 import { formatRatio, formatSquareFeet } from '../leaseLevelFormat';
 import type { LeaseLevelAcquisitionResults } from '../leaseLevelTypes';
 import type { IrrStatus } from '../types';
+import { ACQUISITION_REFERENCE_LABEL, RefinanceReferenceNotice } from './AcquisitionReference';
+import { isReference, isUnresolved, referenceFigure, useAcquisitionReference } from '../useRefinancePresence';
 
 export interface LeaseLevelMetricSummaryProps {
   analysis: LeaseLevelAcquisitionResults;
@@ -60,11 +62,24 @@ function irrMetric(
 
 export function LeaseLevelMetricSummary({ analysis }: LeaseLevelMetricSummaryProps) {
   const { results, annual_projection: annual, monthly_projection: monthly } = analysis;
+  // Refinance V1 Stage 3: with a refinance in the Base Capital Structure the
+  // levered figures are the acquisition-financing reference (R-P rules 3 to 5).
+  const presence = useAcquisitionReference();
+  const reference = isReference(presence);
+  const computed = irrMetric('Levered IRR', results.levered_irr, results.levered_irr_status);
+  const levered = { ...computed, value: referenceFigure(presence, computed.value) };
 
   const returns: Metric[] = [
-    irrMetric('Levered IRR', results.levered_irr, results.levered_irr_status),
+    reference
+      ? { ...levered, note: levered.note === undefined ? ACQUISITION_REFERENCE_LABEL : `${ACQUISITION_REFERENCE_LABEL}. ${levered.note}` }
+      : levered,
     irrMetric('Unlevered IRR', results.unlevered_irr, results.unlevered_irr_status),
-    { label: 'Equity Multiple', value: formatMultiple(results.equity_multiple), emphasis: true },
+    {
+      label: 'Equity Multiple',
+      value: referenceFigure(presence, formatMultiple(results.equity_multiple)),
+      emphasis: true,
+      ...(reference ? { note: ACQUISITION_REFERENCE_LABEL } : {}),
+    },
     { label: 'Going-In Cap Rate', value: formatPercent(results.going_in_cap_rate) },
   ];
 
@@ -111,6 +126,7 @@ export function LeaseLevelMetricSummary({ analysis }: LeaseLevelMetricSummaryPro
 
   return (
     <div className="lease-level-summary">
+      {isUnresolved(presence) && <RefinanceReferenceNotice presence={presence} />}
       {(
         [
           ['Returns', returns],

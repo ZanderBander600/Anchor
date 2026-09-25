@@ -27,9 +27,13 @@ It also resolved every open question. The decision record is Section 22.
   three independent review rounds it was **merged through PR #60 as `879f577`
   (reviewed head `ff12d04`) and accepted on 2026-09-24.** Its implementation
   record is Section 24.
-- **Stage 3 has not started.** No UI, memo section, report or workbook exists
-  for a refinance. **No implementation stage starts automatically** when
-  another is accepted (Section 20).
+- **Stage 3 (product surfaces) was explicitly started** on 2026-09-24 from
+  `main` at `bd77433` (the PR #61 acceptance-record merge, whose product tree
+  is the accepted Stage 2 baseline `879f577`), on
+  `feature/refinance-capital-events-v1-stage-3-product-surfaces`. It is
+  **implemented locally, pending review, and not accepted.** Its ratified export sub-contract and its
+  implementation record are Section 25. **No implementation stage starts
+  automatically** when another is accepted (Section 20).
 - Recovery Engine V2 is a separate future program. Nothing here touches it.
 
 ### 1.1 Authorities this contract builds on
@@ -2081,8 +2085,9 @@ Each stage starts only on an explicit human instruction. **Stage 1 was
 explicitly started on 2026-09-22 from `2e1f84a`; it was merged through PR #57
 as `6de7644` and accepted on 2026-09-24** (Section 23). **Stage 2 was
 explicitly started on 2026-09-24 from `f2b5cef`; it was merged through PR #60
-as `879f577` and accepted on 2026-09-24** (Section 24). Stage 3 has not
-started. **No stage begins
+as `879f577` and accepted on 2026-09-24** (Section 24). **Stage 3 was
+explicitly started on 2026-09-24 from `bd77433`; it is in progress and not
+accepted** (Section 25). **No stage begins
 automatically** when the previous one is accepted. Recovery Engine V2 is not
 part of any stage.
 
@@ -2091,7 +2096,7 @@ part of any stage.
 | Contract ratification — **complete, 2026-09-22** | This document. Documentation only | 1 (contract) | ratification record (Section 22); `CURRENT_STATE.md` updated |
 | Stage 1 — deterministic engine — **accepted, 2026-09-24** (PR #57, merged as `6de7644`) | Contracts (Section 6); structural and execution validation (Section 15.1); the shared NOI-at-month seam; the acquisition-debt balance service and its reconciliation; sizing (Section 9); the legacy splice; the retiring-schedule cut and replacement offset through the existing wrapper; the event bridge; the Common Equity decomposition; unavailable states; the P7.9 adapter reason; F1–F12, F14–F17, F15b, F19, F21, F22 with exact-rational oracles; F20 engine parity; the Section 18.3 mutation proofs. No persistence, API or UI | 1 | focused and identity tests; mutation kills; domain regression; one final full backend suite |
 | Stage 2 — persistence and integration — **accepted, 2026-09-24** (PR #60, merged as `879f577`; Section 24) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
-| Stage 3 — product surfaces (not started) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
+| Stage 3 — product surfaces — **implemented, pending review, not accepted** (started 2026-09-24 from `bd77433`; Section 25) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
 
 **Stage 3 acceptance requires**, in addition to the above:
 
@@ -3010,3 +3015,280 @@ with a non-positive forward NOI and Unit B with unapproved evidence. It proves:
 Mutation proofs M25 and M25b kill the restoration of "any evidence-blocked
 member makes the whole Investment evidence-not-approved" through both
 consumers. M26 kills keeping Stage 1's pre-gate Investment prose.
+
+## 25. Stage 3 implementation record
+
+**Status: implemented locally, pending independent review and human
+acceptance; not accepted.** Stage 3 was explicitly started on
+2026-09-24 from `main` at `bd77433` (the PR #61 acceptance-record merge; its
+product tree is the accepted Stage 2 baseline `879f577`) on
+`feature/refinance-capital-events-v1-stage-3-product-surfaces`. It implements
+Section 20's Stage 3 row: it presents the accepted Stage 1 and Stage 2 results
+and creates no second refinance engine. The accepted product baseline stays
+`879f577` until Stage 3 is reviewed, merged and accepted.
+
+### 25.1 Ratified Stage 3 refinance formula-audit export sub-contract
+
+Section 16.3 requires the refinance formula-audit export to be "separately
+ratified in Stage 3". The following decisions were stated by explicit human
+instruction when Stage 3 was started, and are recorded here as that ratified
+sub-contract. They settle no new economics: every figure the workbook audits
+is defined by Sections 7 to 12.
+
+1. **A separate workbook.** The product offers a separate
+   `Refinance & Capital Structure Audit.xlsx`, beside Excel Exports 1–3.
+2. **What it audits.** It audits the currently selected saved Analysis Variant
+   (a Strategy under a Scenario of one Investment, the hidden one-unit
+   Investment of a Deal included).
+3. **When it is available.** Only when the selected variant's resolved Capital
+   Structure configures at least one refinance event and the current saved
+   analysis is fresh. Unsaved edits, or an analysis whose structured source
+   fingerprint no longer matches the saved state, are refused with a typed
+   reason.
+4. **Refusal, never a partial audit.** When the required refinance result is
+   unavailable -- any event `UNAVAILABLE`, `NOT_EXECUTABLE` or `BLOCKED`, or
+   Common Equity unavailable -- the workbook is refused with a typed reason
+   rather than produced partially or misleadingly.
+5. **Every executed event.** It audits every executed refinance event in the
+   selected structure.
+6. **Frozen inputs, live formulas.** Inputs and accepted dependency figures
+   (the P7.10 value an LTV constraint consumed, the forward NOI a DSCR
+   constraint consumed, continuing senior balances and service, and the
+   provider flows of positions the event does not touch) are frozen as
+   workbook inputs. The calculations -- retiring amortization and payoff, each
+   capacity, the minimum and the binding set, the bridge, the replacement
+   schedule to sale, the Common Equity decomposition and the returns -- are
+   reproduced with live Excel formulas and reconciled against Anchor's figures.
+7. **An audit artifact only.** The workbook never becomes an application
+   financial authority. No production module other than the API route reads
+   it, and no workbook formula feeds an application result.
+8. **Exports 1–3 are unchanged without a refinance.** Their output stays
+   financially and byte-compatible whenever the Deal's Base Capital Structure
+   configures no refinance.
+9. **Headline namespace.** The workbook's headline return is the Common Equity
+   (or, where a Partnership exists, the Partner) return.
+10. **Acquisition financing is a reference only.** Acquisition-loan levered
+    returns appear only under the label "Acquisition financing — excludes later
+    capital events".
+
+If implementation reveals an economic decision these items and Sections 7 to
+12 do not settle, Stage 3 stops and reports rather than inventing one.
+
+### 25.2 What Stage 3 implemented
+
+Commits on `feature/refinance-capital-events-v1-stage-3-product-surfaces`
+after the start record `ef2711f`: `1952683` (API and product integration),
+`3696254` (editor and results UI), `e9660af` (matrix and primary-return
+presentation), `68a497c` (memo, report, PDF and gate removal), `1984eb7`
+(the audit workbook), then the tests, guards and this record.
+
+- **Product surfaces.** A refinance editor inside the Capital Structure editor
+  (timing as "End of Year N", loans repaid, the replacement loan as an
+  ordinary debt position funded by `refinance_proceeds`, fixed / LTV / DSCR
+  sizing with the valuation choice only inside LTV, retiring-lender and
+  third-party costs, unstated choices named before save, removal confirmed
+  with focus restored). A result surface leading with the net event cash under
+  a direction heading ("Cash returned to Common Equity" / "Common Equity
+  contribution required", the figure as a magnitude), then the sizing panel,
+  the bridge, the refinance-adjusted Common Equity return and the recurring /
+  event / total decomposition. Every figure is an engine field.
+- **Primary view (R-P rules 1-6).** `GET /investments/{id}/capital-event-presence`
+  states which Strategies are refinance-bearing and which Project matrix
+  metrics are then the acquisition-financing reference; the frontend keeps no
+  list of its own. Project figures stay unchanged and are labeled; the
+  Position and Partner perspectives carry the refinance-adjusted answers; an
+  implicit "Common Equity after Capital Structure" perspective exists whenever
+  a refinance-bearing structure authors no Common Equity marker.
+- **Report and gate removal (Sections 12.5, 16.3).** `reporting/refinance.py`
+  renders the refinance-aware headline, returns and Refinance section. The
+  temporary `refinance_reporting_not_available` gate is removed through one
+  seam: publication refuses only an unexecuted refinance, with
+  `refinance_result_unavailable`, fed by
+  `memo_dependencies.unexecuted_refinances` (fail-closed once a refinance is
+  known to be configured). Published versions and stored PDFs are never
+  re-rendered.
+- **Exports.** The Refinance & Capital Structure Audit (Section 25.1) in
+  `anchor.exports.refinance`, reachable only through its API route. Exports
+  1-3 are byte-identical without a refinance and, with one, label their
+  levered figures as the acquisition-financing reference.
+
+### 25.3 Guard re-pins and widenings (recorded; none weakens a claim)
+
+- `test_refinance_v1_stage_2_architecture.py`: re-pinned to Stage 2's
+  committed range `f2b5cef..879f577`, with source claims read at the merge,
+  exactly as its own docstring anticipated.
+- `test_refinance_v1_stage_1_architecture.py`: the "nothing upstream imports
+  the refinance layer" loop re-pinned to `879f577`.
+- `test_analysis_d4_6b_architecture.py`: `refinance_presentation.py` added to
+  the deals allowlist; G37 gains `_REFINANCE_V1_STAGE_3_WEB` (ten modules,
+  proved added by `bd77433..1984eb7`) and names the one shipped file Stage 3
+  edits that no earlier gate ratified, `ResultsSummaryPanel.tsx`.
+- `test_p7_8b_product_integration_architecture.py`: the refinance-layer
+  importer list names the three Stage 3 presentation, report and audit-source
+  modules.
+- Excel Exports 1-3 guards (a narrow extension for a newly ratified export,
+  not a re-pin the earlier guards anticipated; tightened at the Stage 3 review):
+  - *Routes.* Old: every `.xlsx` route under `/exports/` equals the three
+    per-mode Deal routes. New: the `/deals/` workbook routes equal those three
+    exactly, **and** the only other workbook route is exactly
+    `GET /investments/{investment_id}/exports/refinance-capital-structure-audit.xlsx`.
+    Any further export route still fails.
+  - *Imports.* Old: the exact external import set of every module under
+    `anchor/exports`. New: the same map, with Exports 1-3's entries unchanged
+    and the three audit modules enumerated exactly; a new module anywhere
+    under `anchor/exports` still fails.
+  - *Vocabulary.* Old: every module under `anchor/exports` is free of the
+    Investment / Scenario / Strategy / CapitalStructure / Partnership /
+    Waterfall / ManagedAsset vocabulary. New: the same, except exactly three
+    paths -- `exports/refinance/__init__.py`, `audit.py` and `source.py`. Any
+    other file, including a new one beside them, is still held
+    (`test_the_refinance_exception_admits_no_other_file`).
+  - *No refinance logic in an old export* (new). Every `exports/excel` module
+    holds only the enumerated refinance-shaped identifiers -- the baseline's
+    acquisition-loan `payoff`, `r_payoff`, `debt_payoff_ref` and `min_dscr`,
+    plus Stage 3's `REFINANCE_NOTICE` label and boolean `refinance_configured`
+    -- and imports nothing from the refinance audit, the capital-structure
+    layer or the refinance deals and report modules
+    (`test_exports_1_to_3_hold_no_refinance_logic`, with a teeth test).
+  - No-refinance golden workbooks stay byte-identical: the accepted Exports 1-3
+    digest tests pass unchanged.
+- The Stage 2 boundary, mutation, exact-scope and fingerprint tests re-express
+  the removed gate as the narrower `refinance_result_unavailable` refusal.
+
+### 25.4 Judgment calls for review
+
+- Funding Requirements and repaid legacy loans in the Capital Structure
+  results show position names rather than ids for every structure (a
+  pre-existing raw-id display, fixed universally).
+- The draft preview renders an unexecuted refinance as its unavailable
+  headline while publication refuses it.
+- The audit's eligibility is decided from typed accepted facts only.
+  Review correction: an earlier draft re-derived each year's Common Equity cash
+  in Python (pre-debt cash less every provider's cash and third-party costs,
+  within the Section 9.7 tolerance) and refused `analysis_inconsistent` on a
+  mismatch. Its result could decide only whether a workbook was created -- it
+  wrote no value and changed no availability state, headline or workbook
+  check -- but it was still a Python recomputation deciding whether the export
+  may exist. It is replaced by a structural check (every series present and
+  spanning the analysis's periods; lengths only), and the source module now has
+  no arithmetic and no numeric aggregation or tolerance call at all
+  (`test_the_audit_source_computes_nothing`, with a teeth test). INV-5 is
+  reconciled year by year by the workbook's own formulas on its Checks sheet.
+- The editor converts "End of Year N" to model month 12 x N and shows a stored
+  LTV fraction as a percentage; both are enumerated in the frontend guard.
+- The memo readiness panel shows the catalog sentence for
+  `refinance_result_unavailable`, not the backend's per-event reason, per the
+  accepted P7.10 Stage 4 refusal convention; the reason is shown in Risk ->
+  Capital Structure.
+- An unexecuted refinance's other capacities read "Not compared", because no
+  minimum was taken.
+- Not presented in V1: cash returned as a percentage of initial equity, and
+  cumulative distributions including the refinance.
+
+### 25.4a Corrections at the Stage 3 review and final verification
+
+- **Rules-of-hooks defect.** `InvestmentWorkspace` called the presence hook
+  after an early return, so a visible Investment's first loaded render would
+  call one hook more than the loading render. Found by lint at final
+  verification; the hook now runs before any return. The existing
+  `investmentWorkspace.test.tsx` fails on the reintroduced defect (measured),
+  and a visible two-Unit Investment was checked in the browser.
+- **A Unit of a visible Investment.** The Deal route refuses a Unit's own
+  structure (409, the Investment owns it), so a Unit's results were never
+  labeled and every visit logged a failed request. The owning Investment's
+  structure is now read, counting only refinances of that Unit or of the
+  whole Investment (`web/src/refinancePresence.test.tsx`). The Investment
+  overview's notice names the Investment, not "this deal".
+- **The audit's Partnership.** A broad `except` would have turned a
+  configured Partnership that cannot run into a silently missing Partners
+  sheet. The source no longer catches anything broadly; the Partnership's own
+  typed errors reach the audit route -- already the one approved importer of
+  the partnership package, so the P7.9 importer guard is unchanged -- which
+  states them as the typed `partnership_unavailable` refusal (409). Every
+  refusal code has a route status (guarded).
+- **Type honesty in the audit source.** The refinanced result, Common Equity
+  series, acquisition results and totals are narrowed by type, and six
+  production `assert`s are typed `analysis_inconsistent` refusals (guarded:
+  no `assert`, no broad `except`). Pyright over `src` now reports exactly the
+  baseline's diagnostics.
+- **Narrow-width breakpoint.** The refinance styles' narrow block uses the
+  `(max-width: 640px)` breakpoint later gates use, so the Asset Types 720px
+  block stays the last one its accepted test reads. Found by the full frontend
+  suite; 390 px layout is unchanged.
+
+### 25.5 Verification evidence
+
+Stage 3's own tests: `tests/test_refinance_v1_stage_3_*.py` (report,
+presentation, audit workbook with opt-in native Excel reconciliation, F23,
+the architecture guard and twelve mutation proofs), plus
+`web/src/refinanceUi.test.tsx`, `web/src/refinanceArchitecture.test.ts` and the
+Stage 3 cases in `web/src/decisionMatrix.test.tsx`. Browser, PDF and workbook
+QA ran against an isolated database at 1440, 1280 and 390 px; its screenshots
+and artifacts are untracked under `.playwright-mcp/qa/refinance-stage-3/`.
+`data/anchor.db` was byte-identical before and after.
+
+### 25.7 Correction round after independent review (2026-09-25)
+
+Added as normal commits on top of the seven reviewed Stage 3 commits
+(`ef2711f`..`c5d8b9d`), none of which is rewritten.
+
+1. **Refinance presence fails closed.** `web/src/useRefinancePresence.ts`
+   no longer represents unknown presence as `false` (or the Strategy matrix's
+   as an empty set). Presence is a typed state -- `loading`, `error` with a
+   Retry, or `ready` -- kept with the exact identity, freshness token and
+   attempt it answers, so a new analysis or a Retry reads `loading` at once.
+   While unknown, every surface withholds the acquisition-loan levered IRR and
+   equity multiple ("Checking..." / "Unavailable", never a number) and says
+   why; a failed read shows an error with Retry; the Decision Matrix withholds
+   its table until presence is settled. A settled "no refinance" keeps the
+   accepted presentation exactly, and surfaces outside a refinance-aware
+   provider keep their neutral behaviour.
+2. **Excel Exports 1-3 resolve the true owner.** The reference label is
+   decided by `deals.refinance_presentation.acquisition_reference_applies`:
+   the Base Capital Structure of a standalone Deal, or of the visible
+   Investment a Unit belongs to (resolved explicitly, never through the Deal
+   route that refuses a visible Investment's Unit). A Unit's export is
+   labelled exactly when an **executed** Base refinance applies to it -- one
+   scoped to that Unit, or one of the whole Investment -- and never by another
+   Unit's refinance or a Strategy replacement. A structure or analysis that
+   cannot be read is the typed `capital_structure_unavailable` refusal (409)
+   of each export's own contract, never an unlabelled workbook. No refinance
+   returns the accepted source object unchanged, so the workbook is byte for
+   byte the accepted one.
+3. **Only a missing Unit is "no longer available".** `unit_names_of` catches
+   `DealNotFoundError` alone; persisted-data corruption, database failures and
+   programming errors propagate to the typed refusal boundary.
+4. **Narrow cleanup.** `memo/publication.py`'s comments no longer describe the
+   removed temporary report gate.
+5. **The Underwrite Live Case rail** (found by the round's browser QA). It
+   showed the acquisition levered IRR and equity multiple ungated; it now
+   withholds them while presence is unknown and labels them as the reference
+   when a refinance is configured, like every other results surface
+   (`LiveCaseRail.tsx`, named in the G37 and Stage 3 ledgers; `liveMetrics.ts`
+   untouched). The Sensitivity and Break-Even panels, which vary inputs over
+   the acquisition model rather than report a headline return, are unchanged.
+6. **No earlier answer when a token recurs** (found by the round's browser
+   QA). Presence kept only its last settled answer by key, so returning to an
+   earlier token (Underwrite -> Overview -> Underwrite) showed that answer
+   while the new read was in flight. Each read now belongs to an epoch minted
+   on every change of identity, token or attempt, and an answer is shown only
+   for its own epoch; every change reads `loading` until its own answer
+   arrives.
+7. **Test fixtures** (found by the full frontend suite): four App-level test
+   files now answer the Deal Capital Structure read with the accepted
+   standalone reply, so their surfaces settle as "no refinance".
+
+Correction-round commits: `8b8b459`, `e544231`, `2aa31f5`, `a41c2e0`,
+`0a68677`, `72ee170`, and this record.
+
+Guards and proofs: fail-closed surface tests (first render, rejected read,
+Retry, token change, Strategy matrix loading and failure, settled true and
+false), export-ownership tests for every mode, and three more killed mutants
+(another Unit's refinance labelling this Unit, an unreadable owner exporting
+unlabelled, corruption worded as a missing Unit).
+
+### 25.6 Status
+
+Stage 3 is **pending independent review and human acceptance**. It is not
+pushed, has no PR and is not merged. Recovery Engine V2 and upload /
+extraction integration are not started.

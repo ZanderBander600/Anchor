@@ -34,6 +34,7 @@ import type { Deal } from '../types';
 import { useInvestmentAnalysis } from '../useInvestmentAnalysis';
 import { useInvestmentWorkspace } from '../useInvestmentWorkspace';
 import { InvestmentOverview } from './InvestmentOverview';
+import { AcquisitionReferenceContext, useBaseCapitalEvents } from '../useRefinancePresence';
 import { InvestmentUnitsPanel } from './InvestmentUnitsPanel';
 import { RiskDecisionWorkspace } from './RiskDecisionWorkspace';
 import type { DecisionDrafts } from './RiskDecisionWorkspace';
@@ -135,6 +136,13 @@ export function InvestmentWorkspace({
   }, [leaveWarning, onUnsavedChange]);
 
   const investment = workspace.investment;
+
+  // Refinance V1 Stage 3: the overview names the acquisition-loan levered
+  // figures as the acquisition-financing reference when the Base Capital
+  // Structure configures a refinance. Re-read on every tab change, because the
+  // structure is saved from the Risk tab. Called before any early return, as
+  // every hook must be.
+  const baseRefinance = useBaseCapitalEvents({ investmentId, token: `${tab}:${riskView}` });
 
   if (investment === null) {
     return (
@@ -264,7 +272,11 @@ export function InvestmentWorkspace({
               <p className="workspace-subtitle">{entry.subtitle}</p>
             </div>
             <div className="workspace-body">
-              {entry.id === 'overview' && <InvestmentOverview workspace={workspace} analysis={analysis} />}
+              {entry.id === 'overview' && (
+                <AcquisitionReferenceContext.Provider value={baseRefinance}>
+                  <InvestmentOverview workspace={workspace} analysis={analysis} />
+                </AcquisitionReferenceContext.Provider>
+              )}
               {entry.id === 'units' && (
                 <InvestmentUnitsPanel workspace={workspace} investments={investments} onOpenUnit={onOpenUnit} />
               )}

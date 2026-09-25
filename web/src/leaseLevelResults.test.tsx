@@ -32,6 +32,13 @@ vi.mock('./api', async () => {
     ...actual,
     // P7.6: the sidebar's Recent Investments, answered so no test reaches a backend.
     listVisibleInvestments: vi.fn(async () => []),
+    // Refinance V1 Stage 3: the Deal's Base Capital Structure, settled as "no
+    // refinance" so the results keep their accepted presentation.
+    readDealCapitalStructure: vi.fn(async (dealId: string) => ({
+      deal_id: dealId,
+      investment_id: null,
+      capital_structure: { positions: [] },
+    })),
     analyzeLeaseLevelAcquisition: vi.fn(),
     updateLeaseLevelDeal: vi.fn(),
     getDeal: vi.fn(),

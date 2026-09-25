@@ -756,6 +756,7 @@ export function StrategyEditor({ id, state, editor }: StrategyEditorProps) {
                 unitId: unit.unitId,
                 name: unitDisplayName(unit),
               }))}
+              valuationOwnerId={state.investment?.investmentId ?? state.strategies[0]?.investment_id ?? null}
               embedded
             />
           </>

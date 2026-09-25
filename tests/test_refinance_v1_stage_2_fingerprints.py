@@ -48,7 +48,6 @@ from anchor.deals.structured_variants import (
     structured_variant_fingerprint,
 )
 from anchor.memo.contracts import MemoDependencyClass, MemoFreshness
-from anchor.memo.publication import PublicationRefusedError
 
 BASE, SCENARIO = BASE_STRATEGY_ID, BASE_SCENARIO_ID
 PROJECT = "a" * 64
@@ -388,7 +387,7 @@ def _moved(before: dict[Any, str], after: dict[Any, str]) -> set[MemoDependencyC
     return {key[0] for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
 
 
-def test_the_ltv_valuation_change_moves_capital_structure_and_publication_stays_gated(
+def test_the_ltv_valuation_change_moves_capital_structure_and_then_publishes(
     db: Path, investment: dict[str, Any]
 ) -> None:
     investment_id, timepoint, deal = investment["investment_id"], investment["timepoint"], investment["deal"]
@@ -401,11 +400,10 @@ def test_the_ltv_valuation_change_moves_capital_structure_and_publication_stays_
         MemoDependencyClass.CAPITAL_STRUCTURE,
     } <= moved
     assert MemoDependencyClass.PROJECT_VARIANT not in moved
-    # The refinance-bearing cell is refused -- and nothing is written.
-    with pytest.raises(PublicationRefusedError) as refused:
-        _publish(db, investment_id)
-    assert [item.code.value for item in refused.value.refusals] == ["refinance_reporting_not_available"]
-    assert store.list_memo_versions(investment_id, db_path=db) == ()
+    # Refinance V1 Stage 3 removed the temporary report gate: the refinance-
+    # bearing cell now publishes, sized on the changed valuation.
+    _publish(db, investment_id)
+    assert len(store.list_memo_versions(investment_id, db_path=db)) == 1
 
 
 def test_a_dscr_only_ledger_never_moves_capital_structure_from_a_valuation(
@@ -429,8 +427,10 @@ def test_a_refinance_structure_change_moves_capital_structure_only(db: Path, inv
 
 def test_adding_a_refinance_stales_a_published_version_and_keeps_it_frozen(db: Path) -> None:
     """A version published with no capital event stays exactly as issued when a
-    refinance is added afterwards: only ``CAPITAL_STRUCTURE`` goes stale, and
-    republishing the refinance-bearing cell is refused until Stage 3."""
+    refinance is added afterwards: only ``CAPITAL_STRUCTURE`` goes stale.
+    Refinance V1 Stage 3 removed the temporary report gate, so republishing now
+    issues a new, refinance-aware version -- and the earlier version and its
+    artifact stay byte for byte as they were."""
 
     deal = fx.base_deal(db)
     investment_id, _ = store.set_deal_capital_structure(deal.id, fx.closing_mezz_only(deal.id), db_path=db)
@@ -442,8 +442,8 @@ def test_adding_a_refinance_stales_a_published_version_and_keeps_it_frozen(db: P
 
     store.set_deal_capital_structure(deal.id, fx.evented(deal.id, dscr=2.0), db_path=db)
     assert _stale(db, investment_id, version) == {MemoDependencyClass.CAPITAL_STRUCTURE}
-    with pytest.raises(PublicationRefusedError):
-        deps.publish(investment_id, db_path=db)
+    deps.publish(investment_id, db_path=db)
+    assert len(store.list_memo_versions(investment_id, db_path=db)) == 2
     assert store.get_memo_version(investment_id, version.version_id, db_path=db) == frozen
     assert store.get_memo_version_artifact(investment_id, version.version_id, db_path=db) == artifact
 
@@ -476,12 +476,13 @@ def test_publication_requires_the_ltv_valuation_and_never_a_dscr_only_one(db: Pa
     (refusal,) = [item for item in refusals if item.code.value == "valuation_unavailable_for_required_view"]
     assert refusal.scope_id == fx.TIMEPOINT_ID and refusal.field == "capital_structure"
     assert refusal.unavailable_reason == "evidence_not_approved"
-    # The temporary Stage 3 report gate is stated beside the specific finding.
-    assert refusals[-1].code.value == "refinance_reporting_not_available"
+    # Refinance V1 Stage 3: the refinance that valuation blanked did not execute,
+    # which is stated beside the specific finding (the temporary gate is gone).
+    assert refusals[-1].code.value == "refinance_result_unavailable"
 
     store.set_deal_capital_structure(deal.id, fx.evented(deal.id, dscr=2.0), db_path=db)
-    # A DSCR-only refinance consumes no valuation: only the report gate remains.
-    assert [item.code.value for item in _refusals(db, investment_id)] == ["refinance_reporting_not_available"]
+    # A DSCR-only refinance consumes no valuation and executes: nothing is refused.
+    assert [item.code.value for item in _refusals(db, investment_id)] == []
 
 
 def test_an_ltv_reference_to_an_undefined_timepoint_follows_the_pct_of_value_rule(db: Path) -> None:

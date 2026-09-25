@@ -418,11 +418,18 @@ def test_nothing_upstream_imports_the_refinance_layer() -> None:
                 continue
             imports = _imports(ast.parse(_git("show", f"{_STAGE_1_MERGE}:{path}")))
             assert not {m for m in imports if "refinance" in m or m.endswith(".events") or "event_validation" in m}, path
-    # Outside ``deals`` and ``api.py`` nothing imports it today either.
+    # Outside ``deals`` and ``api.py`` nothing imported it when Stage 2 merged
+    # either. **Re-pinned by Refinance V1 Stage 3** from the working tree to
+    # Stage 2's merge ``879f577``: Stage 3 connects the report and export
+    # layers by design, and its own guard
+    # (``tests/test_refinance_v1_stage_3_architecture.py``) names exactly which.
+    stage_2_merge = "879f577e399dc93494e4984fd3262642e9085d2c"
     for layer in ("engine", "valuation", "consolidation", "partnership", "decision", "memo", "reporting", "exports"):
-        for source in (_PROJECT_ROOT / "src" / "anchor" / layer).rglob("*.py"):
-            imports = _imports(ast.parse(source.read_text(encoding="utf-8")))
-            assert not {m for m in imports if "refinance" in m or m.endswith(".events") or "event_validation" in m}, source
+        for path in _git("ls-tree", "-r", "--name-only", stage_2_merge, f"src/anchor/{layer}").split():
+            if not path.endswith(".py"):
+                continue
+            imports = _imports(ast.parse(_git("show", f"{stage_2_merge}:{path}")))
+            assert not {m for m in imports if "refinance" in m or m.endswith(".events") or "event_validation" in m}, path
 
 
 def test_forward_noi_has_one_definition_and_the_refinance_reads_it() -> None:

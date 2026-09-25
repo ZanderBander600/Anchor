@@ -80,6 +80,11 @@ class QuickAuditRefusalCode(Enum):
     ANALYSIS_STALE = "analysis_stale"
     ANALYSIS_INCONSISTENT = "analysis_inconsistent"
     HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT = "hold_period_exceeds_export_limit"
+    #: Refinance V1 Stage 3 correction round: whether this Deal's acquisition
+    #: figures must be labelled as the acquisition-financing reference could not
+    #: be decided -- its owning Base Capital Structure could not be read or
+    #: analysed -- so no workbook is produced rather than one missing that label.
+    CAPITAL_STRUCTURE_UNAVAILABLE = "capital_structure_unavailable"
     EXPORT_GENERATION_FAILED = "export_generation_failed"
 
 
@@ -108,6 +113,12 @@ class QuickAuditSource:
     generated_at: datetime
     anchor_version: str
     source_commit: str | None
+    #: Refinance V1 Stage 3: whether the Deal's Base Capital Structure configures
+    #: a refinance. When it does, the Summary names the acquisition-loan levered
+    #: figures as the acquisition-financing reference and points to the
+    #: refinance audit workbook. ``False`` -- every Deal without one -- builds
+    #: exactly the workbook it always did.
+    refinance_configured: bool = False
 
 
 def quick_audit_source(
@@ -182,6 +193,11 @@ class DetailedAuditRefusalCode(Enum):
     ANALYSIS_STALE = "analysis_stale"
     ANALYSIS_INCONSISTENT = "analysis_inconsistent"
     HOLD_PERIOD_EXCEEDS_EXPORT_LIMIT = "hold_period_exceeds_export_limit"
+    #: Refinance V1 Stage 3 correction round: whether this Deal's acquisition
+    #: figures must be labelled as the acquisition-financing reference could not
+    #: be decided -- its owning Base Capital Structure could not be read or
+    #: analysed -- so no workbook is produced rather than one missing that label.
+    CAPITAL_STRUCTURE_UNAVAILABLE = "capital_structure_unavailable"
     EXPORT_GENERATION_FAILED = "export_generation_failed"
 
 
@@ -218,6 +234,12 @@ class DetailedAuditSource:
     generated_at: datetime
     anchor_version: str
     source_commit: str | None
+    #: Refinance V1 Stage 3: whether the Deal's Base Capital Structure configures
+    #: a refinance. When it does, the Summary names the acquisition-loan levered
+    #: figures as the acquisition-financing reference and points to the
+    #: refinance audit workbook. ``False`` -- every Deal without one -- builds
+    #: exactly the workbook it always did.
+    refinance_configured: bool = False
 
 
 #: Every ``OperatingProjection`` schedule that must run Years 1..H.
@@ -363,6 +385,11 @@ class LeaseLevelAuditRefusalCode(Enum):
     TERMINAL_VALUE_NOT_CAPITALIZABLE = "terminal_value_not_capitalizable"
     #: The Deal is larger than an Excel worksheet can hold.
     EXCEL_CAPACITY_EXCEEDED = "excel_capacity_exceeded"
+    #: Refinance V1 Stage 3 correction round: whether this Deal's acquisition
+    #: figures must be labelled as the acquisition-financing reference could not
+    #: be decided -- its owning Base Capital Structure could not be read or
+    #: analysed -- so no workbook is produced rather than one missing that label.
+    CAPITAL_STRUCTURE_UNAVAILABLE = "capital_structure_unavailable"
     EXPORT_GENERATION_FAILED = "export_generation_failed"
 
 
@@ -403,6 +430,12 @@ class LeaseLevelAuditSource:
     generated_at: datetime
     anchor_version: str
     source_commit: str | None
+    #: Refinance V1 Stage 3: whether the Deal's Base Capital Structure configures
+    #: a refinance. When it does, the Summary names the acquisition-loan levered
+    #: figures as the acquisition-financing reference and points to the
+    #: refinance audit workbook. ``False`` -- every Deal without one -- builds
+    #: exactly the workbook it always did.
+    refinance_configured: bool = False
 
 
 def lease_level_audit_source(

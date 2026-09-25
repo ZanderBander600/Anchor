@@ -189,13 +189,20 @@ _CAPITAL_STRUCTURE_IMPORTERS = [
     "anchor/deals/fingerprint.py",
     "anchor/deals/position_identity.py",
     "anchor/deals/refinance_integration.py",
+    # Refinance & Capital Events V1 Stage 3: the refinance presentation facts,
+    # the refinance-aware report section and the separate refinance audit's
+    # source. None computes; each is named by that gate's own guard,
+    # tests/test_refinance_v1_stage_3_architecture.py.
+    "anchor/deals/refinance_presentation.py",
     "anchor/deals/store.py",
     "anchor/deals/structured_variants.py",
     "anchor/decision/comparison.py",
+    "anchor/exports/refinance/source.py",
     # P7.9 Stage 1: the Common Equity seam reads the structured result, and the
     # Partnership contracts reuse two calculation-free shapes.
     "anchor/partnership/common_equity.py",
     "anchor/partnership/contracts.py",
+    "anchor/reporting/refinance.py",
 ]
 
 

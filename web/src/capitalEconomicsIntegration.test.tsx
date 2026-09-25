@@ -175,6 +175,12 @@ async function backend(url: RequestInfo | URL, init?: RequestInit): Promise<Resp
     const existing = store.get(decodeURIComponent(deal[1]));
     return existing === undefined ? reply(404, { detail: 'not found' }) : reply(200, existing);
   }
+  // Refinance V1 Stage 3: a standalone Deal's Base Capital Structure, which the
+  // results read to know whether a refinance is configured. None is.
+  const structure = /^\/deals\/([^/]+)\/capital-structure$/.exec(path);
+  if (method === 'GET' && structure !== null) {
+    return reply(200, { deal_id: decodeURIComponent(structure[1]), investment_id: null, capital_structure: { positions: [] } });
+  }
   if (path === '/analyze' && body?.operating_mode === 'lease_level') {
     analyzeCalls += 1;
     return reply(200, leaseLevelAnswer);

@@ -31,6 +31,10 @@ import { PartnershipEditor } from './PartnershipEditor';
 import { PartnershipResults } from './PartnershipResults';
 import { StaleAnalysisNotice } from './StaleAnalysisNotice';
 
+// prettier-ignore
+export const PARTNER_REFINANCE_NOTE =
+  'This analysis includes a refinance. Partner returns are the primary investor view: each partner’s cash includes the refinance through the Common Equity cash flow, with no refinance tier and no special split.';
+
 export interface PartnershipWorkspaceProps {
   state: PartnershipState;
   /** The element-id prefix, so a Deal's and an Investment's never collide. */
@@ -374,6 +378,11 @@ export function PartnershipWorkspace({
           <>
             {!state.isAnalysisCurrent && (
               <StaleAnalysisNotice message={STALE_PARTNERSHIP_MESSAGE} />
+            )}
+            {analysis.result !== null && analysis.primary_return !== undefined && (
+              <p className="refinance-reference-notice" role="note">
+                {PARTNER_REFINANCE_NOTE}
+              </p>
             )}
             {analysis.result === null ? (
               <p className="scenario-muted">{NO_PARTNERSHIP_MESSAGE}</p>

@@ -578,22 +578,32 @@ def test_m21b_a_whole_view_frozen_as_consumed_is_killed(monkeypatch: pytest.Monk
     )
 
 
-def test_m22_refinance_publication_allowed_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_m22_an_unexecuted_refinance_published_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refinance V1 Stage 3 re-expression: the temporary gate this mutant once
+    removed is gone; its successor, the refusal of a refinance that did not
+    execute, is what must not be removable."""
+
     _killed(
         monkeypatch,
-        _boundary(boundary_tests.test_2_readiness_refuses_every_refinance_bearing_selection_with_the_gate),
+        _boundary(boundary_tests.test_2_readiness_allows_an_executed_refinance_and_refuses_an_unexecuted_one),
         publication,
-        ("    if context.capital_events_selected:\n", "    if False:\n"),
+        (
+            "    refusals.extend(refinance_result_refusal(reason) for reason in context.unexecuted_refinances)\n",
+            "    pass\n",
+        ),
     )
 
 
-def test_m22b_a_refinance_preview_rendered_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_m22b_an_acquisition_only_headline_restored_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refinance V1 Stage 3 re-expression: an executed refinance now previews,
+    and restoring the acquisition-loan levered IRR as its headline is killed."""
+
     _killed(
         monkeypatch,
-        _boundary(boundary_tests.test_2_publish_and_preview_enforce_the_same_refusal_and_write_nothing),
+        _boundary(boundary_tests.test_2_an_executed_refinance_publishes_and_previews_refinance_aware),
         assembly,
         (
-            "    if selected is not None and capital_events_selected(investment_id, selected, db_path=db_path):\n",
+            "    if selected is not None and refinance_report.refinance_bearing(analysis.structured):\n",
             "    if False:\n",
         ),
     )

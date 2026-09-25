@@ -122,6 +122,9 @@ const PROMOTE_UNAVAILABLE_REASONS: Readonly<Record<string, string>> = {
 const UPSTREAM_REASONS: Readonly<Record<string, string>> = {
   unresolved_funding_requirement:
     'The Common Equity Cash Flow is unavailable because a Funding Requirement is unresolved.',
+  // Refinance V1 Stage 3 (R-O): the one additional upstream reason.
+  refinance_unavailable:
+    'The Common Equity Cash Flow is unavailable because a refinance of the Capital Structure did not execute for this analysis.',
 };
 
 /** A period's label. The index is the backend's own: `0` is closing and each

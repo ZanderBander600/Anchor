@@ -41,6 +41,8 @@ import {
   signClass,
 } from '../capitalEconomics';
 import type { AcquisitionResults } from '../types';
+import { ACQUISITION_REFERENCE_LABEL, RefinanceReferenceNotice } from './AcquisitionReference';
+import { isReference, isUnresolved, referenceFigure, useAcquisitionReference } from '../useRefinancePresence';
 
 export interface CapitalEconomicsSectionProps {
   /** The authoritative analysis. Every figure below is one of its fields. */
@@ -164,6 +166,9 @@ function SourcesAndUses({
 }
 
 function ProjectReturns({ results }: { results: AcquisitionResults }) {
+  // Refinance V1 Stage 3 (R-P rules 3 to 5).
+  const presence = useAcquisitionReference();
+  const reference = isReference(presence);
   const titleId = useId();
   const additionalEquityYears = holdYearsAboveZero(
     results.net_additional_equity_requirement_by_year,
@@ -174,6 +179,7 @@ function ProjectReturns({ results }: { results: AcquisitionResults }) {
       <h4 className="card-title" id={titleId}>
         Project Returns
       </h4>
+      {isUnresolved(presence) && <RefinanceReferenceNotice presence={presence} />}
       <table className="capital-economics-ledger" aria-labelledby={titleId}>
         <tbody>
           <LedgerGroup label="Equity" />
@@ -203,11 +209,23 @@ function ProjectReturns({ results }: { results: AcquisitionResults }) {
         </tbody>
         <tbody>
           <LedgerGroup label="Returns" />
-          <LedgerRow label="Equity Multiple" value={formatMultiple(results.equity_multiple)} />
+          <LedgerRow
+            label="Equity Multiple"
+            value={referenceFigure(presence, formatMultiple(results.equity_multiple))}
+            note={reference ? ACQUISITION_REFERENCE_LABEL : null}
+          />
           <LedgerRow
             label="Levered IRR"
-            value={formatPercent(results.levered_irr)}
-            note={irrNotReportedExplanation('Levered IRR', results.levered_irr_status)}
+            value={referenceFigure(presence, formatPercent(results.levered_irr))}
+            note={
+              reference
+                ? `${ACQUISITION_REFERENCE_LABEL}.${
+                    irrNotReportedExplanation('Levered IRR', results.levered_irr_status) === null
+                      ? ''
+                      : ` ${irrNotReportedExplanation('Levered IRR', results.levered_irr_status)}`
+                  }`
+                : irrNotReportedExplanation('Levered IRR', results.levered_irr_status)
+            }
           />
           <LedgerRow
             label="Unlevered IRR"
