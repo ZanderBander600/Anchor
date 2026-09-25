@@ -35,13 +35,20 @@ import type {
   FundingRequirement,
   LegacyAcquisitionLoan,
   PositionReturns,
+  PrimaryReturnView,
   StructuredCapitalResult,
 } from '../capitalTypes';
+import { CapitalEventResults } from './CapitalEventResults';
 
 export interface CapitalStructureResultsProps {
   result: StructuredCapitalResult;
   /** Which Units this analysis covered, named as the analyst knows them. */
   unitNames?: Record<string, string>;
+  /** Refinance V1 Stage 3: the server's primary-return statement, present
+   * only for a variant whose structure states capital events. */
+  primaryReturn?: PrimaryReturnView;
+  /** Refinance V1 Stage 3: the Investment's valuation labels, by id. */
+  valuationLabels?: Record<string, string>;
 }
 
 /** Each message is one string literal, never joined with `+`: this module is
@@ -261,9 +268,12 @@ function periodLabel(requirement: FundingRequirement): string {
 function FundingRequirements({
   requirements,
   unitNames,
+  positionNames,
 }: {
   requirements: FundingRequirement[];
   unitNames: Record<string, string>;
+  /** Each position by the name the analyst gave it -- never its identity. */
+  positionNames: Record<string, string>;
 }) {
   const titleId = useId();
   return (
@@ -297,7 +307,7 @@ function FundingRequirements({
             <tbody>
               {requirements.map((requirement) => (
                 <tr key={requirement.requirement_id}>
-                  <th scope="row">{requirement.position_id}</th>
+                  <th scope="row">{positionNames[requirement.position_id] ?? 'A position no longer in this structure'}</th>
                   <td>{scopeLabel(requirement, unitNames)}</td>
                   <td>{periodLabel(requirement)}</td>
                   <td>{formatCurrency(requirement.claim_amount)}</td>
@@ -391,12 +401,24 @@ function CommonEquityPanel({ common }: { common: CommonEquityReturns }) {
   );
 }
 
+/** How a Unit's acquisition loan ends when a capital event repays it: the
+ * event's date and label, or that the event did not execute. */
+export interface LoanRetirement {
+  holdYear: number;
+  label: string;
+  executed: boolean;
+}
+
 function LegacyLoans({
   loans,
   unitNames,
+  retirements = {},
 }: {
   loans: LegacyAcquisitionLoan[];
   unitNames: Record<string, string>;
+  /** By Unit: a loan a capital event repays is never shown as outstanding at
+   * the sale (Refinance V1 Section 10.2). */
+  retirements?: Record<string, LoanRetirement>;
 }) {
   const titleId = useId();
   if (loans.length === 0) {
@@ -435,7 +457,13 @@ function LegacyLoans({
                 <td>{formatPercent(loan.interest_rate)}</td>
                 <td>{`${loan.amortization} yrs`}</td>
                 <td>{`${loan.io_period} yrs`}</td>
-                <td>{formatCurrency(loan.remaining_loan_balance)}</td>
+                <td>
+                  {retirements[loan.scope.unit_id ?? ''] === undefined
+                    ? formatCurrency(loan.remaining_loan_balance)
+                    : retirements[loan.scope.unit_id ?? ''].executed
+                      ? `Repaid at the end of Year ${retirements[loan.scope.unit_id ?? ''].holdYear} by “${retirements[loan.scope.unit_id ?? ''].label}”`
+                      : `N/A — “${retirements[loan.scope.unit_id ?? ''].label}” did not execute`}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -445,8 +473,37 @@ function LegacyLoans({
   );
 }
 
-export function CapitalStructureResults({ result, unitNames = {} }: CapitalStructureResultsProps) {
+export function CapitalStructureResults({
+  result,
+  unitNames = {},
+  primaryReturn,
+  valuationLabels = {},
+}: CapitalStructureResultsProps) {
   const titleId = useId();
+  const events = result.capital_events ?? [];
+  const positionNames: Record<string, string> = Object.fromEntries([
+    ...result.positions.map((position) => [position.position_id, position.name] as const),
+    ...result.legacy_acquisition_loans.map(
+      (loan) =>
+        [
+          loan.position_id,
+          result.legacy_acquisition_loans.length > 1
+            ? `Acquisition loan — ${scopeLabel(loan, unitNames)}`
+            : 'Acquisition loan',
+        ] as const,
+    ),
+  ]);
+  const retirements: Record<string, LoanRetirement> = Object.fromEntries(
+    events.flatMap((event) =>
+      (event.payoffs ?? [])
+        .map((payoff) => payoff.ref)
+        .flatMap((ref) =>
+          ref.kind === 'legacy_acquisition_loan'
+            ? [[ref.unit_id, { holdYear: event.hold_year, label: event.label, executed: event.status === 'executed' }] as const]
+            : [],
+        ),
+    ),
+  );
   return (
     <section className="capital-results" aria-labelledby={titleId}>
       <header className="capital-results-head">
@@ -460,6 +517,15 @@ export function CapitalStructureResults({ result, unitNames = {} }: CapitalStruc
         )}
       </header>
 
+      {events.length > 0 && (
+        <CapitalEventResults
+          result={result}
+          primaryReturn={primaryReturn}
+          unitNames={unitNames}
+          valuationLabels={valuationLabels}
+        />
+      )}
+
       {result.positions.length === 0 ? (
         <p className="capital-result-empty">{NO_POSITION_MESSAGE}</p>
       ) : (
@@ -469,9 +535,15 @@ export function CapitalStructureResults({ result, unitNames = {} }: CapitalStruc
         </>
       )}
 
-      <FundingRequirements requirements={result.funding_requirements} unitNames={unitNames} />
-      <CommonEquityPanel common={result.common_equity} />
-      <LegacyLoans loans={result.legacy_acquisition_loans} unitNames={unitNames} />
+      <FundingRequirements
+        requirements={result.funding_requirements}
+        unitNames={unitNames}
+        positionNames={positionNames}
+      />
+      {/* With a capital event the Common Equity figures are the primary view,
+        * shown once, above. */}
+      {events.length === 0 && <CommonEquityPanel common={result.common_equity} />}
+      <LegacyLoans loans={result.legacy_acquisition_loans} unitNames={unitNames} retirements={retirements} />
     </section>
   );
 }

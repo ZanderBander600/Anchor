@@ -10291,3 +10291,415 @@ body {
     overflow-wrap: anywhere;
   }
 }
+/* ==========================================================================
+   Refinance & Capital Events V1 Stage 3 -- Refinance
+   ========================================================================== */
+
+/* Nothing here ranks an outcome. A distribution, a contribution and a computed
+   zero are typeset alike; the heading above the figure says which way the cash
+   moves, in words. The only tinted states are a refinance that did not execute
+   and a figure the engine did not report, and both are written as well. */
+
+/* --- The editor ----------------------------------------------------------- */
+
+.capital-events {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border-strong);
+}
+
+.capital-events-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.capital-event {
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-3) 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.capital-event > * + * {
+  margin-top: var(--sp-3);
+}
+
+.capital-event-group {
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.capital-event-group > * + * {
+  margin-top: var(--sp-2);
+}
+
+.capital-event-group-title {
+  padding: 0 var(--sp-1);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.capital-event-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.capital-event-option-name {
+  display: block;
+  font-weight: 600;
+}
+
+.capital-event-option-detail {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.capital-event-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.capital-event-row > .field {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.capital-event-inline-action {
+  flex: 0 0 auto;
+}
+
+.capital-event-constraint {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.capital-event-constraint-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.capital-event-constraint-fields > .capital-position-note {
+  grid-column: 1 / -1;
+}
+
+.capital-event-costs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.capital-event-cost {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  align-items: end;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px dashed var(--border);
+}
+
+.capital-event-cost-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.capital-event-new-scope {
+  min-width: 12rem;
+}
+
+.capital-position-funded-by {
+  padding: var(--sp-2);
+  border-left: 2px solid var(--accent-border);
+  background: var(--surface-muted);
+}
+
+/* --- The result ----------------------------------------------------------- */
+
+.refinance-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.refinance-event {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.refinance-event-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* The primary answer: one large figure, and the facts that date and scope it. */
+.refinance-headline {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1.1fr) minmax(0, 2fr);
+  gap: var(--sp-4);
+  align-items: start;
+  min-width: 0;
+  padding: var(--sp-4);
+  border: 1px solid var(--border-strong);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.refinance-headline-unavailable {
+  border-left-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.refinance-headline-figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.refinance-headline-label {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.refinance-headline-value {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.refinance-headline-note {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.refinance-headline-facts,
+.refinance-facts,
+.refinance-returns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: var(--sp-2) var(--sp-3);
+  margin: 0;
+  min-width: 0;
+}
+
+.refinance-headline-facts dt,
+.refinance-facts dt,
+.refinance-returns dt {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.refinance-headline-facts dd,
+.refinance-facts dd,
+.refinance-returns dd {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.refinance-headline-reason {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.refinance-facts {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.refinance-status {
+  font-weight: 650;
+}
+
+.refinance-status-open {
+  color: var(--warning);
+}
+
+/* The binding constraint is named in words, so it survives a monochrome
+   display; the row is marked as well so the eye finds it. */
+.refinance-binding {
+  font-weight: 700;
+}
+
+.refinance-binding-row th,
+.refinance-binding-row td {
+  background: var(--accent-soft);
+}
+
+.refinance-operands {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  white-space: normal;
+}
+
+.refinance-sizing-table td:nth-child(2) {
+  text-align: left;
+  min-width: 16rem;
+}
+
+.refinance-bridge-deduction {
+  padding-left: 1.25rem;
+}
+
+.refinance-bridge-total th,
+.refinance-bridge-total td {
+  font-weight: 700;
+  border-top: 1px solid var(--border-strong);
+}
+
+.refinance-series-table th:first-child {
+  min-width: 14rem;
+}
+
+.refinance-primary {
+  border-left: 4px solid var(--accent);
+}
+
+.refinance-return-primary dd {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.refinance-namespace-note {
+  margin: var(--sp-3) 0 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* The acquisition-financing reference: named beside the figure it qualifies,
+   wherever an existing surface still shows an acquisition-loan return. */
+.acquisition-reference-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-secondary);
+}
+
+.refinance-reference-notice {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* The refinance audit download: a quiet secondary action with its own
+   reason, never an error colour for a standing condition. */
+.capital-event-audit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2) var(--sp-3);
+  align-items: center;
+  min-width: 0;
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-muted);
+}
+
+.capital-event-audit-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.capital-event-audit-title {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.capital-event-audit-description {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.capital-event-audit-reason,
+.capital-event-audit-status,
+.capital-event-audit-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.capital-event-audit-error {
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .refinance-headline {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .refinance-headline-value {
+    font-size: 26px;
+  }
+
+  .capital-event-checks,
+  .capital-event-constraint-fields,
+  .capital-event-cost {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .capital-event-row > .field {
+    flex-basis: 100%;
+  }
+
+  .capital-event-audit {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .refinance-sizing-table td:nth-child(2) {
+    min-width: 12rem;
+  }
+}

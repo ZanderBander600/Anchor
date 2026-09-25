@@ -24,6 +24,7 @@
 import { useEffect, useRef } from 'react';
 import { POSITION_CLASS_LABELS } from '../capitalStructureForm';
 import type { CapitalStructureState } from '../useCapitalStructure';
+import { useValuationChoices } from '../useCapitalEventChoices';
 import { CapitalStructureEditor } from './CapitalStructureEditor';
 import type { ScopeUnit } from './CapitalStructureEditor';
 import { CapitalStructureResults } from './CapitalStructureResults';
@@ -93,6 +94,12 @@ export function CapitalStructureWorkspace({
   }, [state.hasDraft]);
 
   const isEmpty = state.saved.positions.length === 0;
+  // Refinance V1 Stage 3: the valuations an LTV constraint may reference, by
+  // label, for the editor's selector and the results' LTV operand.
+  const valuations = useValuationChoices(state.investmentId);
+  const valuationLabels = Object.fromEntries(
+    valuations.choices.map((choice) => [choice.timepointId, choice.label] as const),
+  );
 
   return (
     <div className="scenario-workspace capital-workspace">
@@ -187,6 +194,7 @@ export function CapitalStructureWorkspace({
             onSave={() => void state.save()}
             onCancel={state.cancel}
             units={units}
+            valuationOwnerId={state.investmentId}
           />
         )}
       </section>
@@ -231,7 +239,12 @@ export function CapitalStructureWorkspace({
         ) : (
           <>
             {!state.isAnalysisCurrent && <StaleAnalysisNotice message={STALE_STRUCTURED_MESSAGE} />}
-            <CapitalStructureResults result={state.analysis.result} unitNames={unitNames} />
+            <CapitalStructureResults
+              result={state.analysis.result}
+              unitNames={unitNames}
+              primaryReturn={state.analysis.primary_return}
+              valuationLabels={valuationLabels}
+            />
           </>
         )}
       </section>

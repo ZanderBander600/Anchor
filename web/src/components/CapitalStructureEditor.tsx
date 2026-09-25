@@ -33,6 +33,15 @@
 import { useId } from 'react';
 import type { ReactNode } from 'react';
 import {
+  analystCapitalIssues,
+  eventFunding,
+  eventTimingLabel,
+  formEvents,
+  isCapitalEventIssue,
+  renamePositionReferences,
+  withoutPositionReferences,
+} from '../capitalEventForm';
+import {
   ACCRUAL_CONVENTION_LABELS,
   POSITION_CLASS_LABELS,
   SHORTFALL_RESOLUTION_LABELS,
@@ -48,6 +57,7 @@ import type {
   PositionClass,
   ShortfallResolution,
 } from '../capitalTypes';
+import { CapitalEventEditor } from './CapitalEventEditor';
 import { NumericInput } from './NumericInput';
 
 /** One Unit a position may be scoped to, named as the analyst knows it. */
@@ -82,6 +92,9 @@ export interface CapitalStructureEditorProps {
    * it renders no title and no Save / Cancel of its own: the enclosing editor
    * owns both, and the structure is saved with the Strategy. */
   embedded?: boolean;
+  /** Refinance V1 Stage 3: the Investment whose valuations a capital event's
+   * LTV constraint may reference, or `null` while there is none. */
+  valuationOwnerId?: string | null;
 }
 
 /** The classes on offer, in the order an analyst builds a stack. */
@@ -114,6 +127,10 @@ export const EMPTY_STRUCTURE_MESSAGE =
 // prettier-ignore
 export const UNSTATED_CHOICES_TITLE =
   'State these before saving:';
+
+// prettier-ignore
+export const EVENT_SAVE_REFUSED_MESSAGE =
+  'The capital structure could not be saved. Resolve the issues shown against each item.';
 
 /** One labelled numeric field, with its units beside the input rather than in
  * the label -- the assumption grid's shape. */
@@ -210,11 +227,20 @@ function PositionCard({
   const offersScope = units.length > 1;
 
   function replace(next: PositionForm) {
-    onChange({
-      positions: form.positions.map((candidate) =>
-        candidate.positionId === position.positionId ? next : candidate,
+    // A class or scope change mints a new identity (P-8); every capital-event
+    // reference follows it rather than pointing at an id that is gone.
+    onChange(
+      renamePositionReferences(
+        {
+          ...form,
+          positions: form.positions.map((candidate) =>
+            candidate.positionId === position.positionId ? next : candidate,
+          ),
+        },
+        position.positionId,
+        next.positionId,
       ),
-    });
+    );
   }
 
   function set<K extends keyof PositionForm>(key: K, value: PositionForm[K]) {
@@ -224,8 +250,13 @@ function PositionCard({
   function remove() {
     onChange({
       positions: form.positions.filter((candidate) => candidate.positionId !== position.positionId),
+      events: withoutPositionReferences(formEvents(form), position.positionId),
     });
   }
+
+  // Refinance V1 Stage 3: a position funded by a capital event states no
+  // closing funding of its own. The event sizes its principal.
+  const fundingEvent = position.fundingKind === 'capital_event' ? eventFunding(form, position.positionId) : undefined;
 
   return (
     <fieldset
@@ -324,6 +355,15 @@ function PositionCard({
 
       {claimBearing && (
         <>
+          {position.fundingKind === 'capital_event' ? (
+            <p className="capital-position-note capital-position-funded-by">
+              {fundingEvent === undefined
+                ? 'Funded by a capital event. Select this loan as a replacement loan below, or remove it.'
+                : `Funded by “${fundingEvent.label.trim() === '' ? 'the capital event' : fundingEvent.label.trim()}”${
+                    eventTimingLabel(fundingEvent) === null ? '' : ` at the ${eventTimingLabel(fundingEvent)}`
+                  }. Its principal is the gross proceeds that event sizes, and its lender fee is paid on that date.`}
+            </p>
+          ) : (
           <div className="capital-position-group" role="group" aria-label="Funding">
             <div className="strategy-mode" role="radiogroup" aria-label="Funding amount">
               {(
@@ -373,6 +413,7 @@ function PositionCard({
               />
             )}
           </div>
+          )}
 
           {debt && (
             <div className="capital-position-fields">
@@ -410,7 +451,7 @@ function PositionCard({
               />
               <NumberField
                 id={`${ids}-fee-amount`}
-                label="Closing Fee"
+                label={position.fundingKind === 'capital_event' ? 'Lender Fee' : 'Closing Fee'}
                 value={position.feeAmount}
                 onChange={(value) => set('feeAmount', value)}
                 disabled={locked}
@@ -553,15 +594,21 @@ export function CapitalStructureEditor({
   onCancel,
   units,
   embedded = false,
+  valuationOwnerId = null,
 }: CapitalStructureEditorProps): ReactNode {
   const titleId = useId();
   const unstated = unstatedChoices(form);
-  const general = issues.filter((issue) => issue.position_id === null);
+  // Refinance V1 Stage 3: a capital-event refusal names records by their
+  // opaque ids, so it is restated in the analyst's terms before it is shown.
+  const shown = analystCapitalIssues(issues, form);
+  const eventIds = new Set(formEvents(form).map((event) => event.eventId));
+  const general = shown.filter((issue) => issue.position_id === null);
+  const refusal = shown.some(isCapitalEventIssue) ? EVENT_SAVE_REFUSED_MESSAGE : saveError;
   const defaultScope: { kind: 'unit' | 'investment'; unitId: string | null } =
     units.length === 1 ? { kind: 'unit', unitId: units[0].unitId } : { kind: 'investment', unitId: null };
 
   function add(positionClass: PositionClass) {
-    onChange({ positions: [...form.positions, newPosition(form, positionClass, defaultScope)] });
+    onChange({ ...form, positions: [...form.positions, newPosition(form, positionClass, defaultScope)] });
   }
 
   return (
@@ -579,7 +626,7 @@ export function CapitalStructureEditor({
 
       {saveError !== null && (
         <div className="error-banner scenario-editor-feedback" role="alert">
-          <p className="scenario-editor-feedback-message">{saveError}</p>
+          <p className="scenario-editor-feedback-message">{refusal}</p>
           {general.length > 0 && (
             <ul className="scenario-editor-feedback-list">
               {general.map((issue) => (
@@ -609,7 +656,7 @@ export function CapitalStructureEditor({
               position={position}
               index={index}
               prefix={prefix}
-              issues={issues.filter((issue) => issue.position_id === position.positionId)}
+              issues={shown.filter((issue) => issue.position_id === position.positionId)}
               locked={locked}
               units={units}
               onChange={onChange}
@@ -631,6 +678,16 @@ export function CapitalStructureEditor({
           </button>
         ))}
       </div>
+
+      <CapitalEventEditor
+        prefix={prefix}
+        form={form}
+        onChange={onChange}
+        issues={shown.filter((issue) => issue.position_id !== null && (eventIds.has(issue.position_id) || isCapitalEventIssue(issue)))}
+        locked={locked}
+        units={units}
+        valuationOwnerId={valuationOwnerId}
+      />
 
       {unstated.length > 0 && (
         <div className="capital-unstated" role="status">
