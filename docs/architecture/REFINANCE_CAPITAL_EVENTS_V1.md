@@ -3227,6 +3227,46 @@ QA ran against an isolated database at 1440, 1280 and 390 px; its screenshots
 and artifacts are untracked under `.playwright-mcp/qa/refinance-stage-3/`.
 `data/anchor.db` was byte-identical before and after.
 
+### 25.7 Correction round after independent review (2026-09-25)
+
+Added as normal commits on top of the seven reviewed Stage 3 commits
+(`ef2711f`..`c5d8b9d`), none of which is rewritten.
+
+1. **Refinance presence fails closed.** `web/src/useRefinancePresence.ts`
+   no longer represents unknown presence as `false` (or the Strategy matrix's
+   as an empty set). Presence is a typed state -- `loading`, `error` with a
+   Retry, or `ready` -- kept with the exact identity, freshness token and
+   attempt it answers, so a new analysis or a Retry reads `loading` at once.
+   While unknown, every surface withholds the acquisition-loan levered IRR and
+   equity multiple ("Checking..." / "Unavailable", never a number) and says
+   why; a failed read shows an error with Retry; the Decision Matrix withholds
+   its table until presence is settled. A settled "no refinance" keeps the
+   accepted presentation exactly, and surfaces outside a refinance-aware
+   provider keep their neutral behaviour.
+2. **Excel Exports 1-3 resolve the true owner.** The reference label is
+   decided by `deals.refinance_presentation.acquisition_reference_applies`:
+   the Base Capital Structure of a standalone Deal, or of the visible
+   Investment a Unit belongs to (resolved explicitly, never through the Deal
+   route that refuses a visible Investment's Unit). A Unit's export is
+   labelled exactly when an **executed** Base refinance applies to it -- one
+   scoped to that Unit, or one of the whole Investment -- and never by another
+   Unit's refinance or a Strategy replacement. A structure or analysis that
+   cannot be read is the typed `capital_structure_unavailable` refusal (409)
+   of each export's own contract, never an unlabelled workbook. No refinance
+   returns the accepted source object unchanged, so the workbook is byte for
+   byte the accepted one.
+3. **Only a missing Unit is "no longer available".** `unit_names_of` catches
+   `DealNotFoundError` alone; persisted-data corruption, database failures and
+   programming errors propagate to the typed refusal boundary.
+4. **Narrow cleanup.** `memo/publication.py`'s comments no longer describe the
+   removed temporary report gate.
+
+Guards and proofs: fail-closed surface tests (first render, rejected read,
+Retry, token change, Strategy matrix loading and failure, settled true and
+false), export-ownership tests for every mode, and three more killed mutants
+(another Unit's refinance labelling this Unit, an unreadable owner exporting
+unlabelled, corruption worded as a missing Unit).
+
 ### 25.6 Status
 
 Stage 3 is **pending independent review and human acceptance**. It is not

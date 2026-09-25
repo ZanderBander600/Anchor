@@ -212,8 +212,6 @@ class PublicationContext:
     cell_detail: str = ""
     evidence: Mapping[str, MemoEvidenceReference]
     required_valuations: tuple[RequiredValuation, ...] = ()
-    #: Whether the selected Capital Structure configures a capital event, so
-    #: the temporary Stage 3 report gate applies.
     #: Refinance V1 Stage 3: why each refinance the selected Capital Structure
     #: configures did not execute, in the analyst's words. Empty when every one
     #: executed, and for a structure with none.
@@ -416,9 +414,9 @@ def publication_refusals(
 
     Ordered: the draft's own well-formedness first, then the selected cell, then
     evidence, then the valuations the package depends on -- so the analyst reads
-    the most fundamental problem first -- and last the temporary Stage 3 report
-    gate, which is stated *beside* every specific finding rather than instead
-    of them."""
+    the most fundamental problem first -- and last each refinance that did not
+    execute (``refinance_result_unavailable``), stated *beside* every specific
+    finding rather than instead of them."""
 
     refusals: list[PublicationRefusal] = [
         PublicationRefusal(
