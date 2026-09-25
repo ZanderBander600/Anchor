@@ -30,9 +30,12 @@ It also resolved every open question. The decision record is Section 22.
 - **Stage 3 (product surfaces) was explicitly started** on 2026-09-24 from
   `main` at `bd77433` (the PR #61 acceptance-record merge, whose product tree
   is the accepted Stage 2 baseline `879f577`), on
-  `feature/refinance-capital-events-v1-stage-3-product-surfaces`. It is
-  **implemented locally, pending review, and not accepted.** Its ratified export sub-contract and its
-  implementation record are Section 25. **No implementation stage starts
+  `feature/refinance-capital-events-v1-stage-3-product-surfaces`. After
+  independent review and a correction round it was **merged through PR #62 as
+  `b941582` (reviewed head `79250eb`) and accepted on 2026-09-25.** Its
+  ratified export sub-contract and its implementation record are Section 25.
+- **All three stages are accepted. Refinance & Capital Events V1 is complete
+  for its ratified V1 scope.** **No implementation stage or later phase starts
   automatically** when another is accepted (Section 20).
 - Recovery Engine V2 is a separate future program. Nothing here touches it.
 
@@ -2086,8 +2089,9 @@ explicitly started on 2026-09-22 from `2e1f84a`; it was merged through PR #57
 as `6de7644` and accepted on 2026-09-24** (Section 23). **Stage 2 was
 explicitly started on 2026-09-24 from `f2b5cef`; it was merged through PR #60
 as `879f577` and accepted on 2026-09-24** (Section 24). **Stage 3 was
-explicitly started on 2026-09-24 from `bd77433`; it is in progress and not
-accepted** (Section 25). **No stage begins
+explicitly started on 2026-09-24 from `bd77433`; it was merged through PR #62
+as `b941582` and accepted on 2026-09-25** (Section 25). With it, V1 is complete
+for its ratified scope. **No stage begins
 automatically** when the previous one is accepted. Recovery Engine V2 is not
 part of any stage.
 
@@ -2096,7 +2100,7 @@ part of any stage.
 | Contract ratification — **complete, 2026-09-22** | This document. Documentation only | 1 (contract) | ratification record (Section 22); `CURRENT_STATE.md` updated |
 | Stage 1 — deterministic engine — **accepted, 2026-09-24** (PR #57, merged as `6de7644`) | Contracts (Section 6); structural and execution validation (Section 15.1); the shared NOI-at-month seam; the acquisition-debt balance service and its reconciliation; sizing (Section 9); the legacy splice; the retiring-schedule cut and replacement offset through the existing wrapper; the event bridge; the Common Equity decomposition; unavailable states; the P7.9 adapter reason; F1–F12, F14–F17, F15b, F19, F21, F22 with exact-rational oracles; F20 engine parity; the Section 18.3 mutation proofs. No persistence, API or UI | 1 | focused and identity tests; mutation kills; domain regression; one final full backend suite |
 | Stage 2 — persistence and integration — **accepted, 2026-09-24** (PR #60, merged as `879f577`; Section 24) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
-| Stage 3 — product surfaces — **implemented, pending review, not accepted** (started 2026-09-24 from `bd77433`; Section 25) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
+| Stage 3 — product surfaces — **accepted, 2026-09-25** (PR #62, merged as `b941582`; Section 25) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
 
 **Stage 3 acceptance requires**, in addition to the above:
 
@@ -3018,14 +3022,14 @@ consumers. M26 kills keeping Stage 1's pre-gate Investment prose.
 
 ## 25. Stage 3 implementation record
 
-**Status: implemented locally, pending independent review and human
-acceptance; not accepted.** Stage 3 was explicitly started on
+**Status: accepted 2026-09-25; merged through PR #62 as `b941582`
+(reviewed head `79250eb`).** Stage 3 was explicitly started on
 2026-09-24 from `main` at `bd77433` (the PR #61 acceptance-record merge; its
 product tree is the accepted Stage 2 baseline `879f577`) on
 `feature/refinance-capital-events-v1-stage-3-product-surfaces`. It implements
 Section 20's Stage 3 row: it presents the accepted Stage 1 and Stage 2 results
-and creates no second refinance engine. The accepted product baseline stays
-`879f577` until Stage 3 is reviewed, merged and accepted.
+and creates no second refinance engine. Until its acceptance the accepted
+product baseline stayed `879f577`; it is now `b941582` (Section 25.6).
 
 ### 25.1 Ratified Stage 3 refinance formula-audit export sub-contract
 
@@ -3289,6 +3293,24 @@ unlabelled, corruption worded as a missing Unit).
 
 ### 25.6 Status
 
-Stage 3 is **pending independent review and human acceptance**. It is not
-pushed, has no PR and is not merged. Recovery Engine V2 and upload /
-extraction integration are not started.
+Stage 3 is **accepted** on 2026-09-25, by explicit human instruction.
+
+- It was independently reviewed at head `79250eb`: the seven original Stage 3
+  commits `ef2711f` to `c5d8b9d`, unchanged, and the correction round of
+  Section 25.7, ending at `79250eb`.
+- Final verification at `79250eb`: the full frontend suite passed, 94 files
+  and 2,349 tests.
+- It was published as PR #62 (https://github.com/ZanderBander600/Anchor/pull/62)
+  and merged to `main` as `b941582` (parents `bd77433` and `79250eb`). The
+  merged product tree is identical to the reviewed head.
+- **The accepted product baseline is `main` at `b941582`**, the product merge,
+  not the later documentation-only acceptance merge.
+- Stage 1 remains accepted at `6de7644`, and Stage 2 remains accepted at
+  `879f577`.
+- The temporary Stage 2 refinance-reporting gate
+  (`refinance_reporting_not_available`) is removed by accepted Stage 3.
+- **All three stages are accepted. Refinance & Capital Events V1 is complete
+  for its ratified V1 scope.**
+- The active gate is none. Recovery Engine V2 is not started; upload /
+  extraction integration remains deferred. No subsequent phase starts
+  automatically.
