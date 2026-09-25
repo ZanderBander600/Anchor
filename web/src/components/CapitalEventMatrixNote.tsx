@@ -12,7 +12,10 @@ import { useStrategyCapitalEvents } from '../useRefinancePresence';
 
 export function CapitalEventMatrixNote({ investmentId, token }: { investmentId: string | null; token: string }) {
   const presence = useStrategyCapitalEvents(investmentId, token);
-  if (presence.strategies.size === 0) {
+  // Position and Partner figures include each Strategy's refinance whatever
+  // this read says, so the note is informative only: it is shown for a settled
+  // answer that a Strategy is refinance-bearing, and never inferred otherwise.
+  if (presence.status !== 'ready' || presence.strategies.size === 0) {
     return null;
   }
   return (

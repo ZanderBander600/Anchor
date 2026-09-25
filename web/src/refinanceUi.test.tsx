@@ -25,7 +25,13 @@ import {
 } from './components/CapitalEventEditor';
 import { CapitalEventResults } from './components/CapitalEventResults';
 import { ResultsSummaryPanel } from './components/ResultsSummaryPanel';
-import { REFINANCE_REFERENCE_NOTICE } from './components/AcquisitionReference';
+import {
+  REFERENCE_CHECKING_NOTICE,
+  REFERENCE_CHECKING_VALUE,
+  REFERENCE_ERROR_NOTICE,
+  REFERENCE_WITHHELD_VALUE,
+  REFINANCE_REFERENCE_NOTICE,
+} from './components/AcquisitionReference';
 import { AcquisitionReferenceContext } from './useRefinancePresence';
 import {
   ACQUISITION_REFERENCE_LABEL,
@@ -423,15 +429,18 @@ function acquisitionResults(): AcquisitionResults {
 describe('an existing results surface names the acquisition-financing reference', () => {
   it('labels the levered figures only when a refinance is configured', () => {
     const { rerender } = render(
-      <AcquisitionReferenceContext.Provider value={false}>
+      <AcquisitionReferenceContext.Provider value={{ status: 'ready', configured: false }}>
         <ResultsSummaryPanel results={acquisitionResults()} />
       </AcquisitionReferenceContext.Provider>,
     );
+    // A settled "no refinance" keeps the accepted presentation exactly.
     expect(screen.queryByText(ACQUISITION_REFERENCE_LABEL)).toBeNull();
     expect(screen.queryByText(REFINANCE_REFERENCE_NOTICE)).toBeNull();
+    expect(screen.getByText('25.22%')).toBeTruthy();
+    expect(screen.getByText('2.62x')).toBeTruthy();
 
     rerender(
-      <AcquisitionReferenceContext.Provider value={true}>
+      <AcquisitionReferenceContext.Provider value={{ status: 'ready', configured: true }}>
         <ResultsSummaryPanel results={acquisitionResults()} />
       </AcquisitionReferenceContext.Provider>,
     );
@@ -439,5 +448,38 @@ describe('an existing results surface names the acquisition-financing reference'
     expect(screen.getByText(REFINANCE_REFERENCE_NOTICE)).toBeTruthy();
     // The figure itself is unchanged: labeled, never recomputed.
     expect(screen.getByText('25.22%')).toBeTruthy();
+  });
+
+  it('withholds the levered figures while presence is being read', () => {
+    render(
+      <AcquisitionReferenceContext.Provider value={{ status: 'loading' }}>
+        <ResultsSummaryPanel results={acquisitionResults()} />
+      </AcquisitionReferenceContext.Provider>,
+    );
+
+    expect(screen.queryByText('25.22%')).toBeNull();
+    expect(screen.queryByText('2.62x')).toBeNull();
+    expect(screen.getAllByText(REFERENCE_CHECKING_VALUE)).toHaveLength(2);
+    expect(screen.getByRole('status').textContent).toBe(REFERENCE_CHECKING_NOTICE);
+    // Figures that no refinance changes are shown as always.
+    expect(screen.getByText('8.00%')).toBeTruthy();
+  });
+
+  it('withholds them after a failed read, says so, and retries', async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn();
+    render(
+      <AcquisitionReferenceContext.Provider value={{ status: 'error', retry }}>
+        <ResultsSummaryPanel results={acquisitionResults()} />
+      </AcquisitionReferenceContext.Provider>,
+    );
+
+    expect(screen.queryByText('25.22%')).toBeNull();
+    expect(screen.queryByText('2.62x')).toBeNull();
+    expect(screen.getAllByText(REFERENCE_WITHHELD_VALUE)).toHaveLength(2);
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain(REFERENCE_ERROR_NOTICE);
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 });

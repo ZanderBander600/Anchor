@@ -27,6 +27,8 @@ import {
   removeInvestmentUnit,
   updateInvestmentUnitDisplay,
   updateVisibleInvestmentDetails,
+  readCapitalEventPresence,
+  readInvestmentCapitalStructure,
 } from './api';
 import { irrNotReportedExplanation } from './capitalEconomics';
 import { InvestmentWorkspace } from './components/InvestmentWorkspace';
@@ -57,6 +59,8 @@ vi.mock('./api', async () => {
     listDeals: vi.fn(),
     listInvestmentScenarios: vi.fn(),
     listInvestmentStrategies: vi.fn(),
+    readCapitalEventPresence: vi.fn(),
+    readInvestmentCapitalStructure: vi.fn(),
     removeInvestmentUnit: vi.fn(),
     updateInvestmentUnitDisplay: vi.fn(),
     updateVisibleInvestmentDetails: vi.fn(),
@@ -250,6 +254,17 @@ beforeEach(() => {
   mockAnalyze.mockResolvedValue(ANALYSIS);
   vi.mocked(listInvestmentStrategies).mockResolvedValue([]);
   vi.mocked(listInvestmentScenarios).mockResolvedValue([]);
+  // Refinance V1 Stage 3: a settled answer that no refinance is configured, so
+  // these surfaces keep their accepted presentation.
+  vi.mocked(readInvestmentCapitalStructure).mockResolvedValue({
+    investment_id: 'inv-1',
+    capital_structure: { positions: [] },
+  } as never);
+  vi.mocked(readCapitalEventPresence).mockResolvedValue({
+    investment_id: 'inv-1',
+    strategies: [],
+    acquisition_financing_metrics: [],
+  });
   vi.mocked(fetchStrategyTargetCatalog).mockResolvedValue({ quick: [], detailed: [], lease_level: [] });
   vi.mocked(fetchScenarioTargetCatalog).mockResolvedValue({ quick: [], detailed: [], lease_level: [] });
 });

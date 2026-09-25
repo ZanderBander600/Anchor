@@ -30,6 +30,7 @@ import {
   listInvestmentStrategies,
   saveInvestmentStrategy,
   updateInvestmentScenario,
+  readCapitalEventPresence,
 } from './api';
 import { RiskDecisionWorkspace } from './components/RiskDecisionWorkspace';
 import type { RiskDecisionWorkspaceProps } from './components/RiskDecisionWorkspace';
@@ -62,6 +63,7 @@ vi.mock('./api', async () => {
     listDealStrategies: vi.fn(),
     listInvestmentScenarios: vi.fn(),
     listInvestmentStrategies: vi.fn(),
+    readCapitalEventPresence: vi.fn(),
     saveInvestmentStrategy: vi.fn(),
     updateInvestmentScenario: vi.fn(),
   };
@@ -201,6 +203,12 @@ beforeEach(() => {
     SCENARIO_CATALOG as unknown as Awaited<ReturnType<typeof fetchScenarioTargetCatalog>>,
   );
   mockGetDeal.mockImplementation(async (id) => DEALS[id]);
+  // Refinance V1 Stage 3: a settled answer that no Strategy is refinance-bearing.
+  vi.mocked(readCapitalEventPresence).mockResolvedValue({
+    investment_id: 'inv-1',
+    strategies: [],
+    acquisition_financing_metrics: [],
+  });
 });
 
 afterEach(() => {

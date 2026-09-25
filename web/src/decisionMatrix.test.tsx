@@ -24,7 +24,11 @@ import {
   readCapitalEventPresence,
   updateInvestmentStrategy,
 } from './api';
-import { MATRIX_NAMESPACE_NOTICE } from './components/DecisionMatrixPanel';
+import {
+  MATRIX_NAMESPACE_NOTICE,
+  MATRIX_PRESENCE_CHECKING,
+  MATRIX_PRESENCE_ERROR,
+} from './components/DecisionMatrixPanel';
 import { ACQUISITION_REFERENCE_LABEL } from './refinanceCatalog';
 import { RiskDecisionWorkspace } from './components/RiskDecisionWorkspace';
 import type { RiskDecisionWorkspaceProps } from './components/RiskDecisionWorkspace';
@@ -702,5 +706,49 @@ describe('a Strategy with a refinance (Refinance V1 Stage 3)', () => {
 
     expect(screen.queryByText(MATRIX_NAMESPACE_NOTICE)).toBeNull();
     expect(screen.queryByText(ACQUISITION_REFERENCE_LABEL)).toBeNull();
+  });
+});
+
+describe('the matrix fails closed while refinance presence is unknown (correction round)', () => {
+  async function runOnly(user: ReturnType<typeof userEvent.setup>) {
+    const runButton = await screen.findByRole('button', { name: /Run Decision Matrix|Refresh Matrix/ });
+    await waitFor(() => expect((runButton as HTMLButtonElement).disabled).toBe(false));
+    await user.click(runButton);
+  }
+
+  it('withholds the table while presence is being read, never showing it unlabelled', async () => {
+    saved([HOLD, RENO], [DOWN, UP]);
+    mockAnalyze.mockResolvedValue(fullReport());
+    vi.mocked(readCapitalEventPresence).mockReturnValue(new Promise(() => {}));
+    const { user } = renderMatrix();
+    await runOnly(user);
+
+    expect(await screen.findByText(MATRIX_PRESENCE_CHECKING)).toBeTruthy();
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByText('12.00%')).toBeNull();
+  });
+
+  it('withholds it after a failed read, says so, and Retry recovers', async () => {
+    saved([HOLD, RENO], [DOWN, UP]);
+    mockAnalyze.mockResolvedValue(fullReport());
+    vi.mocked(readCapitalEventPresence)
+      .mockRejectedValueOnce(new ApiError('network'))
+      .mockResolvedValueOnce({
+        investment_id: 'inv-1',
+        strategies: [{ strategy_id: 'st-hold', capital_events_configured: true }],
+        acquisition_financing_metrics: ['levered_irr'],
+      });
+    const { user } = renderMatrix();
+    await runOnly(user);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain(MATRIX_PRESENCE_ERROR);
+    expect(screen.queryByRole('table')).toBeNull();
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+
+    await screen.findByRole('table');
+    expect(screen.getByText(MATRIX_NAMESPACE_NOTICE)).toBeTruthy();
+    expect(screen.queryByText(MATRIX_PRESENCE_ERROR)).toBeNull();
   });
 });

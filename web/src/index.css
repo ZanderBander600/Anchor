@@ -10630,6 +10630,21 @@ body {
   line-height: 1.45;
 }
 
+/* Presence unknown (correction round): the figures are withheld, and a failed
+   read says so beside its Retry. It wraps rather than widening the page. */
+.refinance-reference-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  border-left-color: var(--danger);
+}
+
+.refinance-reference-error > span {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
 /* The refinance audit download: a quiet secondary action with its own
    reason, never an error colour for a standing condition. */
 .capital-event-audit {

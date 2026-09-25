@@ -64,6 +64,14 @@ import { ACQUISITION_REFERENCE_LABEL } from './AcquisitionReference';
 import { StaleAnalysisNotice } from './StaleAnalysisNotice';
 
 // prettier-ignore
+export const MATRIX_PRESENCE_CHECKING =
+  'Checking which strategies include a refinance. The matrix appears once that is known, so no acquisition-financing figure is shown unlabelled.';
+
+// prettier-ignore
+export const MATRIX_PRESENCE_ERROR =
+  'Which strategies include a refinance could not be read, so the matrix is withheld: without that answer its levered figures could be mistaken for refinance-adjusted returns.';
+
+// prettier-ignore
 export const MATRIX_NAMESPACE_NOTICE =
   'Project figures hold the acquisition loan to the sale. For a strategy whose Capital Structure includes a refinance they are the acquisition-financing reference and exclude later capital events; its refinance-adjusted return is Common Equity after Capital Structure, in the Position or Partner perspective.';
 
@@ -414,11 +422,15 @@ export function DecisionMatrixPanel({
   const scopeId = investmentId ?? dealId;
   const ids = decisionIdScope(investmentId !== null);
   const blockedReasonId = `${ids}${BLOCKED_REASON_ID}`;
-  const showTable = report !== null && matrix.isCurrent;
   // Refinance V1 Stage 3: which Strategies are refinance-bearing, re-read with
   // each matrix run so the labels describe the structures that produced it.
+  // The table appears only once that is known (fail closed): while it is being
+  // read, or if the read failed, no Project figure is shown unlabelled.
   const presence = useStrategyCapitalEvents(report?.investment_id ?? null, report?.matrix.matrix_fingerprint ?? '');
-  const referenceStrategies = presence.strategies;
+  const referenceStrategies: ReadonlySet<string> = presence.status === 'ready' ? presence.strategies : NO_REFERENCE;
+  const referenceMetrics: ReadonlySet<string> = presence.status === 'ready' ? presence.metrics : NO_REFERENCE;
+  const current = report !== null && matrix.isCurrent;
+  const showTable = current && presence.status === 'ready';
   const blocked = scopeId !== null && matrix.hasComparison && isDirty;
 
   const labels: Labels = {
@@ -516,6 +528,19 @@ export function DecisionMatrixPanel({
           {report !== null && !matrix.isCurrent && (
             <StaleAnalysisNotice message={isDirty ? copy.dirty : copy.stale} />
           )}
+          {current && presence.status === 'loading' && (
+            <p className="refinance-reference-notice refinance-reference-checking" role="status">
+              {MATRIX_PRESENCE_CHECKING}
+            </p>
+          )}
+          {current && presence.status === 'error' && (
+            <div className="refinance-reference-notice refinance-reference-error" role="alert">
+              <span>{MATRIX_PRESENCE_ERROR}</span>
+              <button type="button" className="btn btn-ghost btn-xs" onClick={presence.retry}>
+                Retry
+              </button>
+            </div>
+          )}
           {showTable && referenceStrategies.size > 0 && (
             <p className="refinance-reference-notice" role="note">
               {MATRIX_NAMESPACE_NOTICE}
@@ -526,7 +551,7 @@ export function DecisionMatrixPanel({
               matrix={report.matrix}
               labels={labels}
               referenceStrategies={referenceStrategies}
-              referenceMetrics={presence.metrics}
+              referenceMetrics={referenceMetrics}
               caption={copy.caption}
               names={unitNames}
               ids={ids}
