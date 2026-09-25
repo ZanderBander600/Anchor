@@ -2,8 +2,8 @@
 
 Last synchronized: 2026-09-24 (P7.10 closed; P7.11 waived and administratively
 closed; Refinance & Capital Events V1 contract ratified; Stage 1 deterministic
-engine merged through PR #57 and accepted; Stage 2 explicitly started and in
-progress, not accepted; Stage 3 not started)
+engine merged through PR #57 and accepted; Stage 2 persistence and integration
+merged through PR #60 and accepted; Stage 3 not started; no active gate)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -12,33 +12,32 @@ whenever an accepted gate merges or the active gate changes.
 ## Accepted Baseline
 
 - Repository: `ZanderBander600/Anchor`
-- **Last accepted product implementation commit: `main` at `d7e4d75`** (PR #53,
-  P7.10 Stage 4 manual-first Investment Committee workstation, immutable
-  institutional report and PDF, and cross-mode browser QA). This is the newest
-  commit that changed product behavior. Everything merged after it is
-  documentation only, except the Refinance & Capital Events V1 Stage 1 engine
-  (PR #57), which adds an engine capability with no persistence, API or UI
-  surface and leaves every no-refinance result bit-identical.
+- **Last accepted product implementation commit: `main` at `879f577`** (PR #60,
+  Refinance & Capital Events V1 Stage 2 persistence and integration). This is
+  the newest commit that changed product behavior. Every result, fingerprint
+  and API response without a refinance is unchanged. The previous product
+  implementation commits were `6de7644` (PR #57, the Stage 1 engine) and
+  `d7e4d75` (PR #53, P7.10 Stage 4).
 - **Documentation-only work since then:** the **P7.10 Stage 4 acceptance
   documentation merged through PR #54**, and the P7.10 closeout / P7.11 waiver
   record described below. They change status and architecture records only;
   they change no calculation, convention, schema, fingerprint, API contract,
   workbook, or product behavior.
-- **This closeout branch started from `main` at `6de7644`.** That is the branch
-  point, not a claim about where `main` sits once the closeout merges.
+- **This acceptance record's branch started from `main` at `879f577`.** That is
+  the branch point, not a claim about where `main` sits once the record merges.
   **Git and GitHub remain operational truth for the current `main` commit.**
 - Last financial-engine implementation merge: `6de7644` (PR #57, Refinance &
   Capital Events V1 Stage 1 deterministic engine). The previous one was
   `f6f3680` (PR #49, P7.10 Stage 1 deterministic valuation and `PctOfValue`
   closing execution).
-- **Accepted baseline: `main` at `6de7644`** (the PR #57 merge of the accepted
-  Refinance & Capital Events V1 Stage 1 deterministic engine, on top of the
-  PR #56 contract merge `2e1f84a`).
-- **Active gate: Refinance & Capital Events V1 Stage 2 (persistence and
-  integration), in progress and not accepted** (see the 2026-09-24 Stage 2
-  entry below). Stage 1 is **accepted**. **Stage 3 has not started.** P7.10 is
-  closed, and P7.11 is waived and administratively closed. No gate begins by
-  implication; the next one starts only on an explicit human instruction.
+- **Accepted baseline: `main` at `879f577`** (the PR #60 merge of the accepted
+  Refinance & Capital Events V1 Stage 2 persistence and integration; reviewed
+  head `ff12d04`). It is the product merge, not the later documentation-only
+  acceptance merge.
+- **Active gate: none.** Refinance & Capital Events V1 Stage 1 and Stage 2 are
+  **accepted**. **Stage 3 has not started.** P7.10 is closed, and P7.11 is
+  waived and administratively closed. No gate begins by implication; the next
+  one starts only on an explicit human instruction.
 - Autopilot: off; the manual Claude Code -> independent review -> human merge
   workflow is active.
 - Autonomous merge: not authorized.
@@ -48,7 +47,33 @@ Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
 
-## 2026-09-24 Refinance & Capital Events V1 Stage 2 (started; in progress)
+## 2026-09-24 Refinance & Capital Events V1 Stage 2 Acceptance
+
+By explicit human instruction, Refinance & Capital Events V1 Stage 2 --
+persistence and integration -- is **accepted**.
+
+- Stage 2 PR: #60 (https://github.com/ZanderBander600/Anchor/pull/60), 15
+  commits from `34db116` to the independently reviewed head `ff12d04`.
+- Merged to `main` on 2026-09-24 as `879f577` (parents `f2b5cef` and
+  `ff12d04`). The merged product tree is identical to the reviewed head.
+- **The accepted baseline advances to `main` at `879f577`.**
+- **Stage 1 remains accepted** at `6de7644`; its engine stayed byte-frozen
+  through Stage 2.
+- **The temporary report gate is part of accepted Stage 2.** A memo whose
+  selected Capital Structure configures a capital event is neither published
+  nor previewed (`refinance_reporting_not_available`) until Stage 3 provides
+  refinance-aware reporting.
+- **Stage 3: not started.** It requires an explicit start. No frontend
+  refinance workstation or refinance-aware report exists.
+- **Active gate: none.**
+- **Recovery Engine V2: not started.**
+- **Upload / extraction integration: deferred.**
+- This entry is documentation only. It changes no calculation, convention,
+  schema, fingerprint, API contract, workbook or product behavior, and reports
+  no new verification evidence. The reviewed verification is recorded in PR
+  #60 and in Section 24 of the contract.
+
+## 2026-09-24 Refinance & Capital Events V1 Stage 2 (implemented; accepted 2026-09-24)
 
 By explicit human instruction, Stage 2 -- persistence and integration -- was
 started from `main` at `f2b5cef` (the PR #59 merge, whose product tree is the
@@ -57,28 +82,25 @@ accepted Stage 1 baseline `6de7644`) on
 
 - **Stage 1 remains accepted at `6de7644`**, and its engine is byte-frozen
   through Stage 2.
-- **Stage 2 is in progress and not accepted.** It is implemented locally on
-  the feature branch and awaits independent review; it is not pushed, has no
-  PR and is not merged.
-- **The first independent review's corrections are applied locally**
-  (exact-scope evidence, fingerprints and publication; typed message
-  propagation; contract Section 24.10). They are pending re-review, and they
-  change no ratified financial decision.
-- **The second independent review's corrections are applied locally**
-  (contract Section 24.11): a temporary report gate so a refinance-bearing memo
-  is neither published nor previewed until Stage 3, the additive P7.10
-  `EVIDENCE_NOT_APPROVED` valuation reason, typed consumers with truthful
-  refusal wording, exact-scope report rows, and a hardened consumption record.
-  They are pending re-review and change no ratified financial decision.
-- **The third review's correction is applied locally** (contract Section
-  24.12). An Investment-scoped value reports `evidence_not_approved` only when
-  evidence is the sole cause; a mixed cause keeps `valuation_unavailable` /
-  `incomplete_units`. It is pending re-review.
+- **Implementation was completed on the feature branch, independently reviewed
+  in three rounds, published, and merged through PR #60 as `879f577`.** It was
+  accepted on 2026-09-24 (see the entry above).
+- **The first review's corrections** (contract Section 24.10): exact-scope
+  evidence, fingerprints and publication, and typed message propagation.
+- **The second review's corrections** (contract Section 24.11): the temporary
+  report gate, the additive P7.10 `EVIDENCE_NOT_APPROVED` valuation reason,
+  typed consumers with truthful refusal wording, exact-scope report rows, and a
+  hardened consumption record.
+- **The third review's correction** (contract Section 24.12): an
+  Investment-scoped value reports `evidence_not_approved` only when evidence is
+  the sole cause; a mixed cause keeps `valuation_unavailable` /
+  `incomplete_units`.
+- None of the corrections changed a ratified financial decision.
 - **Stage 3 has not started.** It alone removes the temporary report gate,
   once refinance-aware returns, memo sections and headlines exist and are
   tested.
-- **The accepted product baseline remains `main` at `6de7644`** until Stage 2
-  is reviewed, merged and explicitly accepted.
+- Until its acceptance, the accepted baseline stayed `main` at `6de7644`. On
+  acceptance it advanced to `main` at `879f577`.
 - Its scope is the contract's Section 20 Stage 2 row: an additive schema
   version, the codec, fingerprints, Strategy whole-domain resolution with
   events, P-8 event identity, the LTV-only consumed-valuation publication
@@ -481,9 +503,10 @@ before any work begins. Their status is now:
 - **Refinance & Capital Events V1:** contract ratified on 2026-09-22. Stage 1
   (deterministic engine) was explicitly started from `2e1f84a`, merged
   through PR #57 as `6de7644`, and **accepted** on 2026-09-24 (see the
-  entries above). Stage 2 was explicitly started from `f2b5cef` and is in
-  progress, not accepted; Stage 3 has not started. The contract, not this
-  file, holds the design decisions.
+  entries above). Stage 2 (persistence and integration) was explicitly started
+  from `f2b5cef`, merged through PR #60 as `879f577`, and **accepted** on
+  2026-09-24; Stage 3 has not started. The contract, not this file, holds the
+  design decisions.
 - **Recovery Engine V2:** unstarted and unratified.
 
 **Recovery Engine V2 is a successor gate, not a first implementation.** Anchor
@@ -581,8 +604,8 @@ evidence that an unperformed acceptance exercise passed.
 
 Refinancing / recapitalization was a separately authorized potential sub-gate
 in the ratified P7 sequence. Its V1 contract is ratified, and its Stage 1
-engine is merged (PR #57, `6de7644`) and accepted; Stage 2 is in progress and
-not accepted; see
+engine is merged (PR #57, `6de7644`) and accepted; Stage 2 is merged (PR #60,
+`879f577`) and accepted; Stage 3 has not started; see
 **Refinancing & Capital Events** above.
 
 ## Current Architecture Authorities
@@ -642,8 +665,9 @@ not accepted; see
   2026-09-22** (Codex independent architecture approval, Corrections 1 and 2
   incorporated). It is the authority for its narrow amendments to P7.7, P7.8,
   P7.9 and P7.10 (its Section 22.3). **Stage 1 accepted 2026-09-24, merged
-  through PR #57 as `6de7644`** (its Section 23); **Stage 2 in progress, not
-  accepted** (its Section 24); Stage 3 not started.
+  through PR #57 as `6de7644`** (its Section 23); **Stage 2 accepted
+  2026-09-24, merged through PR #60 as `879f577`** (its Section 24); Stage 3
+  not started.
 
 ## Historical-Document Rule
 

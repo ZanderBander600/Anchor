@@ -23,8 +23,10 @@ It also resolved every open question. The decision record is Section 22.
 - **Stage 2 (persistence and integration) was explicitly started** on
   2026-09-24 from `main` at `f2b5cef` (the PR #59 merge, whose product tree is
   `6de7644`), on
-  `feature/refinance-capital-events-v1-stage-2-persistence-integration`. It is
-  **in progress and not accepted**; its implementation record is Section 24.
+  `feature/refinance-capital-events-v1-stage-2-persistence-integration`. After
+  three independent review rounds it was **merged through PR #60 as `879f577`
+  (reviewed head `ff12d04`) and accepted on 2026-09-24.** Its implementation
+  record is Section 24.
 - **Stage 3 has not started.** No UI, memo section, report or workbook exists
   for a refinance. **No implementation stage starts automatically** when
   another is accepted (Section 20).
@@ -2078,8 +2080,9 @@ database from before that version gains empty tables and nothing else.
 Each stage starts only on an explicit human instruction. **Stage 1 was
 explicitly started on 2026-09-22 from `2e1f84a`; it was merged through PR #57
 as `6de7644` and accepted on 2026-09-24** (Section 23). **Stage 2 was
-explicitly started on 2026-09-24 from `f2b5cef` and is in progress, not
-accepted** (Section 24). Stage 3 has not started. **No stage begins
+explicitly started on 2026-09-24 from `f2b5cef`; it was merged through PR #60
+as `879f577` and accepted on 2026-09-24** (Section 24). Stage 3 has not
+started. **No stage begins
 automatically** when the previous one is accepted. Recovery Engine V2 is not
 part of any stage.
 
@@ -2087,7 +2090,7 @@ part of any stage.
 | --- | --- | --- | --- |
 | Contract ratification — **complete, 2026-09-22** | This document. Documentation only | 1 (contract) | ratification record (Section 22); `CURRENT_STATE.md` updated |
 | Stage 1 — deterministic engine — **accepted, 2026-09-24** (PR #57, merged as `6de7644`) | Contracts (Section 6); structural and execution validation (Section 15.1); the shared NOI-at-month seam; the acquisition-debt balance service and its reconciliation; sizing (Section 9); the legacy splice; the retiring-schedule cut and replacement offset through the existing wrapper; the event bridge; the Common Equity decomposition; unavailable states; the P7.9 adapter reason; F1–F12, F14–F17, F15b, F19, F21, F22 with exact-rational oracles; F20 engine parity; the Section 18.3 mutation proofs. No persistence, API or UI | 1 | focused and identity tests; mutation kills; domain regression; one final full backend suite |
-| Stage 2 — persistence and integration (in progress, not accepted; Section 24) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
+| Stage 2 — persistence and integration — **accepted, 2026-09-24** (PR #60, merged as `879f577`; Section 24) | An additive schema version; the codec; fingerprints (Section 14); Strategy whole-domain resolution with events; P-8 event identity; the LTV-only consumed-valuation publication dependency; typed API states and primary-view indicators; the optional readiness view; F13, F18, F20 persistence and API parity | 2 over a frozen Tier 1 engine; fingerprints at Tier 1 rigor | round-trip, legacy-reopen and migration oracles; fingerprint revert and order-neutrality; one final relevant suite |
 | Stage 3 — product surfaces (not started) | The event editor; the sizing panel; the bridge; annual presentation; the primary-view and labeling rules (Section 12.5) across workspace, Decision Matrix, memo, report and export; the separately ratified refinance formula-audit export; browser QA (1440 / 1280 / 390); F23; human visual acceptance | 3, with the export at Tier 1 | component and interaction tests; no-arithmetic guards; export reconciliation; browser QA evidence; human acceptance |
 
 **Stage 3 acceptance requires**, in addition to the above:
@@ -2248,6 +2251,7 @@ Two points are clarifications rather than amendments:
 | Codex independent architecture review | Approved, with Corrections 1 and 2 incorporated | 2026-09-22 |
 | Contract status | Ratified | 2026-09-22 |
 | Stage 1 | Explicitly started 2026-09-22 from `2e1f84a`; independently reviewed; merged through PR #57 as `6de7644`; accepted (Section 23) | 2026-09-24 |
+| Stage 2 | Explicitly started 2026-09-24 from `f2b5cef`; independently reviewed in three rounds; reviewed head `ff12d04` merged through PR #60 as `879f577`; accepted (Section 24) | 2026-09-24 |
 
 ---
 
@@ -2491,7 +2495,8 @@ M22–M25 kill each defect's reinstatement.
 
 ## 24. Stage 2 implementation record
 
-**Status: implemented locally, pending independent review, not accepted.**
+**Status: accepted 2026-09-24. Merged to `main` through PR #60 as `879f577`**
+(reviewed head `ff12d04`, 15 commits, after three independent review rounds).
 Stage 2 was explicitly started on 2026-09-24 from `main` at `f2b5cef` (the PR
 #59 merge; its product tree is the accepted Stage 1 baseline `6de7644`) on
 `feature/refinance-capital-events-v1-stage-2-persistence-integration`. It
@@ -2904,7 +2909,7 @@ Stage 1 message boundary.
 4. **Exact-scope publication.** The first implementation required the whole
    view of every consumed timepoint. Publication now requires each consumed
    value at its consumer's scope, and the version freezes that scoped record
-   (Section 24.7). Because Stage 2 was unaccepted, the record joined schema 17
+   (Section 24.7). Because Stage 2 was still unaccepted, the record joined schema 17
    rather than becoming a later additive version.
 
 A two-Unit regression (one timepoint; Unit A available, Unit B's analyst value
@@ -2945,7 +2950,7 @@ changes, and no valuation arithmetic changes.
 5. **A genuine audit record.** The consumption record stores the typed
    consumer, is read only within its own Investment, fails closed on every
    malformed or orphaned row, and joins the canonical version-child inventory.
-   Stage 2 is unaccepted, so schema 17 was adjusted in place.
+   Stage 2 was still unaccepted, so schema 17 was adjusted in place.
 
 Twenty-two focused regressions (`test_refinance_v1_stage_2_reporting_boundary.py`)
 prove each correction on the two-Unit world. Nine new mutation proofs kill the
