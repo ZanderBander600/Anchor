@@ -48,6 +48,7 @@ from anchor.deals.structured_variants import (
     structured_variant_fingerprint,
 )
 from anchor.memo.contracts import MemoDependencyClass, MemoFreshness
+from anchor.memo.publication import PublicationRefusedError
 
 BASE, SCENARIO = BASE_STRATEGY_ID, BASE_SCENARIO_ID
 PROJECT = "a" * 64
@@ -374,45 +375,77 @@ def _stale(db: Path, investment_id: str, version: Any) -> set[MemoDependencyClas
     return {item.dependency_class for item in report.stale_dependencies}
 
 
-def test_the_ltv_valuation_change_stales_capital_structure_and_keeps_the_frozen_version(
+def _ledger(db: Path, investment_id: str, *, strategy_id: str = BASE) -> dict[Any, str]:
+    """The current dependency ledger of the selected cell. A refinance-bearing
+    cell cannot be *published* until Stage 3 (the temporary report gate), so
+    its freshness semantics are proved on the ledger publication would freeze:
+    freshness is exactly a comparison of these fingerprints."""
+
+    return deps.dependency_set(investment_id, memo_fx.project_cell(strategy_id=strategy_id), db_path=db).by_key()
+
+
+def _moved(before: dict[Any, str], after: dict[Any, str]) -> set[MemoDependencyClass]:
+    return {key[0] for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
+
+
+def test_the_ltv_valuation_change_moves_capital_structure_and_publication_stays_gated(
     db: Path, investment: dict[str, Any]
 ) -> None:
     investment_id, timepoint, deal = investment["investment_id"], investment["timepoint"], investment["deal"]
+    before = _ledger(db, investment_id)
+    fx.replace_timepoint(db, investment_id, timepoint, unit_instructions=fx.value_timepoint(deal.id, cap_rate=0.08).unit_instructions)
+    moved = _moved(before, _ledger(db, investment_id))
+    assert {
+        MemoDependencyClass.VALUATION_DEFINITIONS,
+        MemoDependencyClass.VALUATION_RESULTS,
+        MemoDependencyClass.CAPITAL_STRUCTURE,
+    } <= moved
+    assert MemoDependencyClass.PROJECT_VARIANT not in moved
+    # The refinance-bearing cell is refused -- and nothing is written.
+    with pytest.raises(PublicationRefusedError) as refused:
+        _publish(db, investment_id)
+    assert [item.code.value for item in refused.value.refusals] == ["refinance_reporting_not_available"]
+    assert store.list_memo_versions(investment_id, db_path=db) == ()
+
+
+def test_a_dscr_only_ledger_never_moves_capital_structure_from_a_valuation(
+    db: Path, investment: dict[str, Any]
+) -> None:
+    investment_id, timepoint, deal = investment["investment_id"], investment["timepoint"], investment["deal"]
+    before = _ledger(db, investment_id, strategy_id=investment["dscr_only"])
+    fx.replace_timepoint(db, investment_id, timepoint, unit_instructions=fx.value_timepoint(deal.id, cap_rate=0.08).unit_instructions)
+    fx.with_timepoint(db, investment_id, fx.value_timepoint(deal.id, timepoint_id="year-3", month=36, label="Year 3"))
+    moved = _moved(before, _ledger(db, investment_id, strategy_id=investment["dscr_only"]))
+    assert MemoDependencyClass.CAPITAL_STRUCTURE not in moved
+    assert MemoDependencyClass.VALUATION_DEFINITIONS in moved  # the ledger records every definition, as before
+
+
+def test_a_refinance_structure_change_moves_capital_structure_only(db: Path, investment: dict[str, Any]) -> None:
+    investment_id, deal = investment["investment_id"], investment["deal"]
+    before = _ledger(db, investment_id)
+    store.set_deal_capital_structure(deal.id, fx.evented(deal.id, fixed=7_000_000.0, ltv=0.65, dscr=2.0), db_path=db)
+    assert _moved(before, _ledger(db, investment_id)) == {MemoDependencyClass.CAPITAL_STRUCTURE}
+
+
+def test_adding_a_refinance_stales_a_published_version_and_keeps_it_frozen(db: Path) -> None:
+    """A version published with no capital event stays exactly as issued when a
+    refinance is added afterwards: only ``CAPITAL_STRUCTURE`` goes stale, and
+    republishing the refinance-bearing cell is refused until Stage 3."""
+
+    deal = fx.base_deal(db)
+    investment_id, _ = store.set_deal_capital_structure(deal.id, fx.closing_mezz_only(deal.id), db_path=db)
+    assert investment_id is not None
     version = _publish(db, investment_id)
     frozen = store.get_memo_version(investment_id, version.version_id, db_path=db)
     artifact = store.get_memo_version_artifact(investment_id, version.version_id, db_path=db)
     assert _stale(db, investment_id, version) == set()
 
-    fx.replace_timepoint(db, investment_id, timepoint, unit_instructions=fx.value_timepoint(deal.id, cap_rate=0.08).unit_instructions)
-    stale = _stale(db, investment_id, version)
-    assert {
-        MemoDependencyClass.VALUATION_DEFINITIONS,
-        MemoDependencyClass.VALUATION_RESULTS,
-        MemoDependencyClass.CAPITAL_STRUCTURE,
-    } <= stale
-    assert MemoDependencyClass.PROJECT_VARIANT not in stale
-    # What the committee received is untouched.
+    store.set_deal_capital_structure(deal.id, fx.evented(deal.id, dscr=2.0), db_path=db)
+    assert _stale(db, investment_id, version) == {MemoDependencyClass.CAPITAL_STRUCTURE}
+    with pytest.raises(PublicationRefusedError):
+        deps.publish(investment_id, db_path=db)
     assert store.get_memo_version(investment_id, version.version_id, db_path=db) == frozen
     assert store.get_memo_version_artifact(investment_id, version.version_id, db_path=db) == artifact
-
-
-def test_a_dscr_only_memo_never_goes_capital_structure_stale_from_a_valuation(
-    db: Path, investment: dict[str, Any]
-) -> None:
-    investment_id, timepoint, deal = investment["investment_id"], investment["timepoint"], investment["deal"]
-    version = _publish(db, investment_id, strategy_id=investment["dscr_only"])
-    fx.replace_timepoint(db, investment_id, timepoint, unit_instructions=fx.value_timepoint(deal.id, cap_rate=0.08).unit_instructions)
-    fx.with_timepoint(db, investment_id, fx.value_timepoint(deal.id, timepoint_id="year-3", month=36, label="Year 3"))
-    stale = _stale(db, investment_id, version)
-    assert MemoDependencyClass.CAPITAL_STRUCTURE not in stale
-    assert MemoDependencyClass.VALUATION_DEFINITIONS in stale  # the ledger records every definition, as before
-
-
-def test_a_refinance_structure_change_stales_capital_structure_only(db: Path, investment: dict[str, Any]) -> None:
-    investment_id, deal = investment["investment_id"], investment["deal"]
-    version = _publish(db, investment_id)
-    store.set_deal_capital_structure(deal.id, fx.evented(deal.id, fixed=7_000_000.0, ltv=0.65, dscr=2.0), db_path=db)
-    assert _stale(db, investment_id, version) == {MemoDependencyClass.CAPITAL_STRUCTURE}
 
 
 def _refusals(db: Path, investment_id: str) -> list[Any]:
@@ -439,13 +472,16 @@ def test_publication_requires_the_ltv_valuation_and_never_a_dscr_only_one(db: Pa
     fx.with_timepoint(db, investment_id, fx.value_timepoint(deal.id, method=fx.analyst_value()))
     store.put_memo_draft(investment_id, memo_fx.memo_draft(investment_id), db_path=db)
 
-    (refusal,) = [item for item in _refusals(db, investment_id) if item.code.value == "valuation_unavailable_for_required_view"]
+    refusals = _refusals(db, investment_id)
+    (refusal,) = [item for item in refusals if item.code.value == "valuation_unavailable_for_required_view"]
     assert refusal.scope_id == fx.TIMEPOINT_ID and refusal.field == "capital_structure"
     assert refusal.unavailable_reason == "evidence_not_approved"
+    # The temporary Stage 3 report gate is stated beside the specific finding.
+    assert refusals[-1].code.value == "refinance_reporting_not_available"
 
     store.set_deal_capital_structure(deal.id, fx.evented(deal.id, dscr=2.0), db_path=db)
-    assert _refusals(db, investment_id) == []
-    assert deps.publish(investment_id, db_path=db).version_number == 1
+    # A DSCR-only refinance consumes no valuation: only the report gate remains.
+    assert [item.code.value for item in _refusals(db, investment_id)] == ["refinance_reporting_not_available"]
 
 
 def test_an_ltv_reference_to_an_undefined_timepoint_follows_the_pct_of_value_rule(db: Path) -> None:
@@ -461,8 +497,10 @@ def test_an_ltv_reference_to_an_undefined_timepoint_follows_the_pct_of_value_rul
     assert [item for item in _refusals(db, investment_id) if item.code.value == "valuation_unavailable_for_required_view"] == []
 
 
-def test_freshness_is_current_right_after_publication(db: Path, investment: dict[str, Any]) -> None:
-    investment_id = investment["investment_id"]
+def test_freshness_is_current_right_after_publication(db: Path) -> None:
+    deal = fx.base_deal(db)
+    investment_id, _ = store.set_deal_capital_structure(deal.id, fx.closing_mezz_only(deal.id), db_path=db)
+    assert investment_id is not None
     version = _publish(db, investment_id)
     report = deps.version_freshness(investment_id, version, db_path=db)
     assert report.freshness is MemoFreshness.CURRENT

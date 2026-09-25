@@ -53,11 +53,38 @@ _INTEGRATION = f"{_DEALS}/refinance_integration.py"
 _VALUATION_VIEWS = f"{_DEALS}/valuation_views.py"
 _MEMO_DEPENDENCIES = f"{_DEALS}/memo_dependencies.py"
 
+#: Second review correction: the additive P7.10 amendment (the typed
+#: ``EVIDENCE_NOT_APPROVED`` valuation reason and its wire mapping), the typed
+#: consumer of a consumed value, the temporary Stage 3 report gate, and the
+#: exact-scope presentation of a consumed Unit cell. Every other file of these
+#: packages stays frozen.
+_VALUATION_CONTRACTS = "src/anchor/valuation/contracts.py"
+_AVAILABILITY = "src/anchor/memo/availability.py"
+_MEMO_CONTRACTS = "src/anchor/memo/contracts.py"
+_PUBLICATION = "src/anchor/memo/publication.py"
+_ASSEMBLY = "src/anchor/reporting/assembly.py"
+#: The workspace's refusal catalog: the one frontend edit, so the new gate
+#: refusal reads as its own analyst sentence rather than the default grouping.
+_MEMO_CATALOG = "web/src/memoCatalog.ts"
+_P7_10_AMENDED = (_VALUATION_CONTRACTS, _AVAILABILITY, _MEMO_CONTRACTS, _PUBLICATION, _ASSEMBLY)
+#: Non-Python production files, kept out of the AST guards below.
+_FRONTEND = (_MEMO_CATALOG,)
+
 _NEW = (_IDENTITY, _INTEGRATION)
-_CHANGED = (_API, _STORE, _CODEC, _FINGERPRINT, _STRUCTURED, _PARTNERSHIP, _VALUATION_VIEWS, _MEMO_DEPENDENCIES)
+_CHANGED = (
+    _API,
+    _STORE,
+    _CODEC,
+    _FINGERPRINT,
+    _STRUCTURED,
+    _PARTNERSHIP,
+    _VALUATION_VIEWS,
+    _MEMO_DEPENDENCIES,
+    *_P7_10_AMENDED,
+)
 
 #: Every production file Stage 2 changes, exactly (Section 20, Stage 2).
-_STAGE_2_PRODUCTION_FILES = frozenset((*_NEW, *_CHANGED))
+_STAGE_2_PRODUCTION_FILES = frozenset((*_NEW, *_CHANGED, *_FRONTEND))
 
 #: Stage 3 surfaces and every upstream Stage 2 consumes: none changes.
 _PROTECTED = (
@@ -200,7 +227,88 @@ def test_the_new_modules_are_new_at_this_stage() -> None:
 
 @pytest.mark.parametrize("path", _PROTECTED)
 def test_no_stage_3_path_and_no_upstream_changed(path: str) -> None:
-    assert _changes_since(_BASE, path) == set(), path
+    """Nothing under a protected path changes except the five named P7.10
+    amendment files, each of which its own guard below holds to exactly its
+    declared change."""
+
+    assert _changes_since(_BASE, path) - set(_P7_10_AMENDED) - set(_FRONTEND) == set(), path
+
+
+def _top_level(tree: ast.Module) -> dict[str, str]:
+    """Every top-level statement, by the name it binds, as source."""
+
+    found: dict[str, str] = {}
+    for index, node in enumerate(tree.body):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+            name = node.name
+        elif isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name = node.target.id
+        else:
+            name = f"<statement {index}: {type(node).__name__}>"
+        found[name] = ast.unparse(node)
+    return found
+
+
+def _members(source: str, class_name: str) -> list[str]:
+    (node,) = [item for item in _code(source).body if isinstance(item, ast.ClassDef) and item.name == class_name]
+    return [ast.unparse(item) for item in node.body if isinstance(item, ast.Assign)]
+
+
+def test_the_p7_10_valuation_amendment_adds_one_reason_and_nothing_else() -> None:
+    """``ValuationUnavailableReason`` gains ``EVIDENCE_NOT_APPROVED``, appended;
+    no other statement of the valuation contracts changes."""
+
+    current, base = _current(_VALUATION_CONTRACTS), _at(_BASE, _VALUATION_CONTRACTS)
+    assert _members(current, "ValuationUnavailableReason") == [
+        *_members(base, "ValuationUnavailableReason"),
+        "EVIDENCE_NOT_APPROVED = 'evidence_not_approved'",
+    ]
+    now, then = _top_level(_code(current)), _top_level(_code(base))
+    assert now.keys() == then.keys()
+    assert {name for name in now if now[name] != then[name]} == {"ValuationUnavailableReason"}
+
+
+def test_the_p7_10_wire_amendment_maps_the_new_reason_explicitly() -> None:
+    current, base = _current(_AVAILABILITY), _at(_BASE, _AVAILABILITY)
+    now, then = _top_level(_code(current)), _top_level(_code(base))
+    assert now.keys() == then.keys()
+    assert {name for name in now if now[name] != then[name]} == {"_VALUATION_REASON_CODES"}
+    assert (
+        "ValuationUnavailableReason.EVIDENCE_NOT_APPROVED: UnavailableReasonCode.EVIDENCE_NOT_APPROVED"
+        in now["_VALUATION_REASON_CODES"]
+    )
+
+
+#: Exactly what the refusal catalog gains: one grouping and one sentence for the
+#: new code. Nothing else in the frontend changes.
+_CATALOG_ADDITIONS = (
+    "  refinance_reporting_not_available: 'decision',\n",
+    "  refinance_reporting_not_available:\n"
+    "    'The selected Capital Structure includes a refinance, and refinance reporting is not available yet. "
+    "Select a Strategy whose Capital Structure has no refinance to publish now.',\n",
+)
+
+
+def test_the_frontend_gains_only_the_gate_refusal_in_its_catalog() -> None:
+    current = _current(_MEMO_CATALOG)
+    for addition in _CATALOG_ADDITIONS:
+        assert current.count(addition) == 1, addition
+        current = current.replace(addition, "")
+    assert current == _at(_BASE, _MEMO_CATALOG)
+    assert {path for path in _changes_since(_BASE, "web")} == {_MEMO_CATALOG}
+
+
+def test_the_memo_contracts_gain_only_the_typed_consumer() -> None:
+    current, base = _current(_MEMO_CONTRACTS), _at(_BASE, _MEMO_CONTRACTS)
+    now, then = _top_level(_code(current)), _top_level(_code(base))
+    assert now.keys() - then.keys() == {"ValuationConsumerKind"} and then.keys() <= now.keys()
+    assert {name for name in then if now[name] != then[name]} == set()
+    assert _members(current, "ValuationConsumerKind") == [
+        "PCT_OF_VALUE = 'pct_of_value'",
+        "REFINANCE_LTV = 'refinance_ltv'",
+    ]
 
 
 def test_the_ledger_guard_has_teeth() -> None:
@@ -260,10 +368,36 @@ _MEMO_TABLE = "memo_version_consumed_valuations"
 def test_the_memo_consumption_record_is_typed_scoped_and_append_only() -> None:
     store = _current(_STORE)
     ddl = _ddl(store, _MEMO_TABLE)
-    assert "PRIMARY KEY (version_id, timepoint_id, scope_kind, unit_id)" in ddl
+    assert "PRIMARY KEY (version_id, timepoint_id, scope_kind, unit_id, consumer_kind)" in ddl
     assert "CHECK (scope_kind IN ('unit', 'investment'))" in ddl
-    assert not re.search(r"json|blob|payload|value|amount", ddl, re.IGNORECASE)
+    assert "CHECK (consumer_kind IN ('pct_of_value', 'refinance_ltv'))" in ddl
+    assert "CHECK ((scope_kind = 'unit') = (unit_id <> ''))" in ddl
+    # An audit record of *what* was consumed, never of an amount: exactly these
+    # typed text columns, and no value, amount, blob or payload column.
+    columns = re.findall(r"^\s*(\w+)\s+(TEXT|REAL|INTEGER|BLOB|JSON)\b", ddl, re.MULTILINE)
+    assert columns == [
+        ("version_id", "TEXT"),
+        ("timepoint_id", "TEXT"),
+        ("scope_kind", "TEXT"),
+        ("unit_id", "TEXT"),
+        ("consumer_kind", "TEXT"),
+    ]
+    assert not re.search(r"json|blob|payload|amount", ddl, re.IGNORECASE)
     assert not re.search(rf"UPDATE\s+{_MEMO_TABLE}", store, re.IGNORECASE)
+
+
+def test_the_memo_consumption_record_is_a_canonical_version_child() -> None:
+    """Deleted through the canonical version-child inventory, never by a
+    one-off list, so it can never outlive its version."""
+
+    tree = _code(_current(_STORE))
+    (inventory,) = [
+        node for node in tree.body
+        if isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "_MEMO_VERSION_CHILD_TABLES"
+    ]
+    assert f"'{_MEMO_TABLE}'" in ast.unparse(inventory.value)
+    (deleter,) = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_delete_investment_memos"]
+    assert f"'{_MEMO_TABLE}'" not in ast.unparse(deleter)
 
 
 def test_no_accepted_table_is_altered_or_redefined() -> None:
@@ -469,7 +603,88 @@ def test_the_deals_modules_that_read_the_refinance_layer_are_exactly_named() -> 
             if "refinance" in module or module.endswith(".events") or "event_validation" in module
         }
     }
-    assert readers == {_STORE, _CODEC, _FINGERPRINT, _IDENTITY, _INTEGRATION, _STRUCTURED, _PARTNERSHIP}
+    # ``memo_dependencies`` reads only ``has_capital_events``, for the
+    # temporary Stage 3 report gate (second review correction).
+    assert readers == {
+        _STORE, _CODEC, _FINGERPRINT, _IDENTITY, _INTEGRATION, _STRUCTURED, _PARTNERSHIP, _MEMO_DEPENDENCIES,
+    }
     engine = re.compile(r"capital_structure\.(refinance|refinance_execution|event_validation)$")
     for path in (_PROJECT_ROOT / _DEALS).rglob("*.py"):
         assert not {module for module in _imports(ast.parse(path.read_text(encoding="utf-8"))) if engine.search(module)}, path
+
+
+# =============================================================================
+# 7. The temporary Stage 3 report gate and truthful refusals (second review
+#    correction)
+# =============================================================================
+
+
+def _function(path: str, name: str) -> ast.FunctionDef:
+    (found,) = [
+        node for node in ast.walk(_code(_current(path))) if isinstance(node, ast.FunctionDef) and node.name == name
+    ]
+    return found
+
+
+def test_one_gate_serves_readiness_publication_and_preview() -> None:
+    """The readiness route and ``publish`` both judge through
+    ``publication_context``, which reads ``capital_events_selected``; the draft
+    preview reads the same function and raises the same refusal. There is no
+    second test of "does this structure carry an event"."""
+
+    assert "capital_events_selected(" in ast.unparse(_function(_MEMO_DEPENDENCIES, "publication_context"))
+    assert "has_capital_events(" in ast.unparse(_function(_MEMO_DEPENDENCIES, "capital_events_selected"))
+    preview = ast.unparse(_function(_ASSEMBLY, "assemble_draft_preview"))
+    assert "capital_events_selected(" in preview and "refinance_reporting_refusal()" in preview
+    refusals = ast.unparse(_function(_PUBLICATION, "publication_refusals"))
+    assert "refinance_reporting_refusal()" in refusals
+    route = ast.unparse(_function(_API, "read_memo_report_preview"))
+    assert "except PublicationRefusedError" in route and "_publication_refused_response(" in route
+    defining = [
+        path.relative_to(_PROJECT_ROOT).as_posix()
+        for path in (_PROJECT_ROOT / "src" / "anchor").rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.FunctionDef) and node.name in {"has_capital_events", "refinance_reporting_refusal"}
+    ]
+    assert sorted(defining) == sorted([_INTEGRATION, _PUBLICATION])
+
+
+def test_the_gate_message_names_no_identity() -> None:
+    """The gate's sentence is a constant: nothing is interpolated into it."""
+
+    tree = _code(_current(_PUBLICATION))
+    (constant,) = [
+        node for node in tree.body
+        if isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "REFINANCE_REPORTING_NOT_AVAILABLE_MESSAGE"
+    ]
+    assert not [node for node in ast.walk(constant.value) if isinstance(node, ast.JoinedStr)]
+    assert "percentage-of-value" not in ast.unparse(constant.value)
+
+
+def test_a_consumed_refusal_detail_quotes_no_upstream_prose() -> None:
+    """A consumed requirement's detail is rebuilt from typed facts -- the scope's
+    analyst-facing name and the reason code's analyst sentence. It never quotes
+    an ``UnavailableState.reason`` (whose P7.10 prose names opaque ids) and never
+    formats a Unit id."""
+
+    function = _function(_MEMO_DEPENDENCIES, "_required_valuations")
+    (loop,) = [node for node in function.body if isinstance(node, ast.For) and "_consumed_scopes" in ast.unparse(node.iter)]
+    attributes = {node.attr for node in ast.walk(loop) if isinstance(node, ast.Attribute)}
+    assert "reason" not in attributes
+    assert "unit_id!r" not in ast.unparse(loop)
+    scope_text = ast.unparse(_function(_MEMO_DEPENDENCIES, "_scope_text"))
+    assert "unit_display_name(" in scope_text and "!r" not in scope_text
+
+
+def test_a_refinance_refusal_is_worded_from_its_typed_consumer() -> None:
+    wording = ast.unparse(_function(_PUBLICATION, "_required_valuation_message"))
+    assert "ValuationConsumerKind.REFINANCE_LTV" in wording and "ValuationConsumerKind.PCT_OF_VALUE" in wording
+    assert "required.consumers" in wording
+
+
+def test_whole_view_consumption_is_claimed_only_at_investment_scope() -> None:
+    frozen = ast.unparse(_function(_MEMO_DEPENDENCIES, "_version_valuations"))
+    assert "whole_view_consumed_timepoints(" in frozen and "consumed_timepoint_ids" not in frozen
+    assert "requirement.unit_id is None" in ast.unparse(_function(_MEMO_DEPENDENCIES, "whole_view_consumed_timepoints"))
+    preview = ast.unparse(_function(_ASSEMBLY, "_draft_valuations"))
+    assert "_whole_view_consumed(" in preview and "consumed_timepoint_ids" not in preview

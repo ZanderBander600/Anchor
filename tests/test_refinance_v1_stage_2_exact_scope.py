@@ -49,6 +49,7 @@ from anchor.deals.structured_variants import (
     structured_variant_fingerprint,
 )
 from anchor.memo.availability import AvailabilityStatus
+from anchor.memo.publication import PublicationRefusedError
 from anchor.valuation.contracts import (
     DirectCap,
     UnitValuationInstruction,
@@ -250,11 +251,27 @@ def test_2_unit_a_is_invariant_under_every_unit_b_change(world: dict[str, Any]) 
     assert _fingerprint(world, world["unit_a"]) == fingerprint
 
 
+def _refusal_codes(world: dict[str, Any], strategy: str) -> list[str]:
+    investment_id, db = world["investment_id"], world["db"]
+    store.put_memo_draft(investment_id, memo_fx.memo_draft(investment_id, selected=memo_fx.project_cell(strategy_id=strategy)), db_path=db)
+    draft = store.get_memo_draft(investment_id, db_path=db)
+    assert draft is not None and draft.selected_decision is not None
+    refusals = deps.publication_refusals_for(
+        investment_id, draft, deps.dependency_set(investment_id, draft.selected_decision, draft=draft, db_path=db), db_path=db
+    )
+    return [item.code.value for item in refusals]
+
+
 def test_3_publication_is_not_blocked_by_an_unrelated_units_evidence(world: dict[str, Any]) -> None:
+    """No valuation refusal for Unit A -- B's evidence is not its dependency.
+    The temporary Stage 3 report gate still refuses the refinance-bearing cell,
+    and nothing is written."""
+
     assert _valuation_refusals(world, world["unit_a"]) == []
-    version = deps.publish(world["investment_id"], db_path=world["db"])
-    consumed = store.list_memo_version_consumed_valuations(world["investment_id"], version.version_id, db_path=world["db"])
-    assert [(item.timepoint_id, item.scope_kind.value, item.unit_id) for item in consumed] == [(TIMEPOINT, "unit", world["a"])]
+    assert _refusal_codes(world, world["unit_a"]) == ["refinance_reporting_not_available"]
+    with pytest.raises(PublicationRefusedError):
+        deps.publish(world["investment_id"], db_path=world["db"])
+    assert store.list_memo_versions(world["investment_id"], db_path=world["db"]) == ()
 
 
 # =============================================================================
@@ -376,6 +393,16 @@ def test_unaffected_events_and_positions_are_returned_untouched(world: dict[str,
     analysis = _analysis(world, world["unit_a"])
     structure = store.get_strategy(world["investment_id"], world["unit_a"], db_path=world["db"]).strategy.root_overlays[0].content
     again = with_evidence_not_approved(
-        analysis.result, capital_structure=structure, withheld={TIMEPOINT: {world["b"]: "x"}}, valuation_labels={}
+        analysis.result, capital_structure=structure, authority=gated_authority(world, world["unit_a"]), valuation_labels={}
     )
     assert again is analysis.result
+
+
+def gated_authority(world: dict[str, Any], strategy: str) -> Any:
+    """The same gated authority the engine reads for ``strategy``."""
+
+    from anchor.deals.valuation_views import funding_authority
+
+    surface = analyze_structured_valuations(world["investment_id"], strategy, "base", db_path=world["db"])
+    blocked = {record.timepoint_id: {unit.unit_id: unit.detail for unit in record.units} for record in surface.evidence_blocked}
+    return funding_authority(investment_id=world["investment_id"], views=surface.views, blocked=blocked)

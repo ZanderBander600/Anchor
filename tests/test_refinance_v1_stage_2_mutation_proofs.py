@@ -35,8 +35,11 @@ import test_refinance_v1_stage_2_api as api_tests
 import test_refinance_v1_stage_2_exact_scope as scope_tests
 import test_refinance_v1_stage_2_fingerprints as fingerprint_tests
 import test_refinance_v1_stage_2_persistence as persistence_tests
+import test_refinance_v1_stage_2_reporting_boundary as boundary_tests
 import test_refinance_v1_stage_2_strategy_identity as identity_tests
 from anchor import api as api_module
+from anchor.memo import publication
+from anchor.reporting import assembly
 from anchor.deals import (
     capital_event_identity,
     fingerprint,
@@ -257,7 +260,10 @@ def test_m13_the_evidence_gate_reported_as_a_missing_timepoint_is_killed(monkeyp
         monkeypatch,
         lambda: fingerprint_tests.test_an_unapproved_analyst_value_is_evidence_not_approved_and_approval_moves_the_identity(_db()),
         refinance_integration,
-        ("    if not scope_evidence_blocked(\n", "    if True or not scope_evidence_blocked(\n"),
+        (
+            "    if not _evidence_withheld(result, event, authority):\n",
+            "    if True or not _evidence_withheld(result, event, authority):\n",
+        ),
     )
 
 
@@ -466,7 +472,7 @@ def test_m16_timepoint_only_publication_requirements_restored_is_killed(monkeypa
         monkeypatch,
         _world(scope_tests.test_3_publication_is_not_blocked_by_an_unrelated_units_evidence),
         memo_dependencies,
-        ("        if requirement.unit_id is None:  # the complete Investment value\n", "        if True:\n"),
+        ("        if unit_id is None:  # the complete Investment value\n", "        if True:\n"),
     )
 
 
@@ -494,6 +500,142 @@ def test_m17_string_based_downstream_message_replacement_restored_is_killed(monk
     )
 
 
+# =============================================================================
+# Typed state, truthful publication and the Stage 3 boundary (second review
+# correction)
+# =============================================================================
+
+
+def _boundary(test: Callable[[dict], None]) -> Callable[[], None]:
+    """One reporting-boundary fixture on a fresh world, the API reading it too."""
+
+    def run() -> None:
+        with _database() as db:
+            test(boundary_tests.build_world(db))
+
+    return run
+
+
+def test_m18_a_withheld_cell_with_a_null_reason_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _boundary(boundary_tests.test_4_an_evidence_gated_cell_carries_the_typed_reason_end_to_end),
+        valuation_views,
+        (
+            "        unavailable_reason=ValuationUnavailableReason.EVIDENCE_NOT_APPROVED,\n",
+            "        unavailable_reason=None,\n",
+        ),
+    )
+
+
+def test_m19_generic_funding_wording_for_a_refinance_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _boundary(boundary_tests.test_3_no_refusal_names_an_identity_or_calls_a_refinance_a_funding),
+        publication,
+        (
+            "    if required.reason is RequiredValuationReason.CONSUMED and ValuationConsumerKind.REFINANCE_LTV in consumers:\n",
+            "    if False:\n",
+        ),
+    )
+
+
+def test_m20_a_raw_unit_id_in_a_refusal_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _boundary(boundary_tests.test_3_a_funding_refusal_keeps_the_accepted_wording_and_names_the_unit),
+        memo_dependencies,
+        (
+            '    return "the Investment" if unit_id is None else unit_display_name(unit_id, db_path)\n',
+            '    return "the Investment" if unit_id is None else f"Unit {unit_id!r}"\n',
+        ),
+    )
+
+
+def test_m21_a_whole_view_shown_as_consumed_in_the_preview_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _boundary(boundary_tests.test_6_the_report_shows_unit_a_s_cell_never_the_unavailable_investment_view),
+        assembly,
+        (
+            "    consumed_ids = _whole_view_consumed(surface)\n",
+            '    consumed_ids = set(getattr(surface, "consumed_timepoint_ids", ()))\n',
+        ),
+    )
+
+
+def test_m21b_a_whole_view_frozen_as_consumed_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _boundary(boundary_tests.test_6_the_report_shows_unit_a_s_cell_never_the_unavailable_investment_view),
+        memo_dependencies,
+        (
+            "    consumed = whole_view_consumed_timepoints(surface)\n",
+            "    consumed = set(surface.consumed_timepoint_ids)\n",
+        ),
+    )
+
+
+def test_m22_refinance_publication_allowed_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _boundary(boundary_tests.test_2_readiness_refuses_every_refinance_bearing_selection_with_the_gate),
+        publication,
+        ("    if context.capital_events_selected:\n", "    if False:\n"),
+    )
+
+
+def test_m22b_a_refinance_preview_rendered_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _boundary(boundary_tests.test_2_publish_and_preview_enforce_the_same_refusal_and_write_nothing),
+        assembly,
+        (
+            "    if selected is not None and capital_events_selected(investment_id, selected, db_path=db_path):\n",
+            "    if False:\n",
+        ),
+    )
+
+
+def test_m23_a_cross_investment_consumption_read_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _boundary(boundary_tests.test_9_a_version_is_read_only_within_its_own_investment),
+        store,
+        (
+            """            "SELECT 1 FROM investment_memo_versions WHERE version_id = ? AND investment_id = ?",
+            (version_id, investment_id),
+        ).fetchone() is None:
+            raise MemoVersionNotFoundError(investment_id, version_id)
+        rows = connection.execute(
+            "SELECT * FROM memo_version_consumed_valuations""",
+            """            "SELECT 1 FROM investment_memo_versions WHERE version_id = ?",
+            (version_id,),
+        ).fetchone() is None:
+            raise MemoVersionNotFoundError(investment_id, version_id)
+        rows = connection.execute(
+            "SELECT * FROM memo_version_consumed_valuations""",
+        ),
+    )
+
+
+def test_m24_deduplication_erasing_consumer_provenance_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _killed(
+        monkeypatch,
+        _boundary(boundary_tests.test_3_both_consumers_of_one_scope_are_named_together),
+        structured_variants,
+        (
+            "    found: dict[tuple[str, str, str, str], ValuationRequirement] = {}\n",
+            "    found: dict[tuple[str, str, str], ValuationRequirement] = {}  # type: ignore[assignment]\n",
+        ),
+        ("        found.setdefault(requirement.key(), requirement)\n    return", "        found.setdefault(requirement.scope_key(), requirement)  # type: ignore[arg-type]\n    return"),
+        (
+            "                found.setdefault(requirement.key(), requirement)\n",
+            "                found.setdefault(requirement.scope_key(), requirement)  # type: ignore[arg-type]\n",
+        ),
+    )
+
+
 def test_the_mutation_harness_patches_this_repositorys_modules() -> None:
     for module in (
         fingerprint,
@@ -504,5 +646,7 @@ def test_the_mutation_harness_patches_this_repositorys_modules() -> None:
         valuation_views,
         memo_dependencies,
         api_module,
+        publication,
+        assembly,
     ):
         assert Path(module.__file__ or "").resolve().is_relative_to(_SRC), module.__name__
