@@ -73,6 +73,21 @@ SHEET_ORDER: tuple[str, ...] = (
 EXCEL_MAX_ROWS = 1_048_576
 EXCEL_MAX_COLUMNS = 16_384
 
+#: Refinance & Capital Events V1 Stage 3 (R-P rules 3 to 5): the label a
+#: levered return carries when the Deal's Base Capital Structure configures a
+#: refinance, and the Summary rows it applies to. These workbooks model the
+#: acquisition loan held to the sale and nothing of the Capital Structure.
+ACQUISITION_REFERENCE_LABEL = "Acquisition financing — excludes later capital events"
+ACQUISITION_REFERENCE_METRICS = frozenset(
+    {"Levered IRR", "Equity multiple", "Total equity invested", "Total cash returned", "Total profit"}
+)
+REFINANCE_NOTICE = (
+    "This Deal's Capital Structure includes a refinance. The levered figures below hold the acquisition loan to "
+    "the sale and exclude later capital events: they are the acquisition-financing reference, not the "
+    "refinance-adjusted return. Download the Refinance & Capital Structure Audit from Risk > Capital Structure "
+    "for the refinance and the Common Equity return."
+)
+
 #: The one text every unavailable figure is written as, on both sides of a
 #: check: a missing number is never shown as zero.
 UNAVAILABLE = "Unavailable"
@@ -207,6 +222,26 @@ def _write_formula(ws: Worksheet, row: int, col: int, formula: str, cell_format:
     accepts a string ``value``; its type stub declares ``int``."""
 
     ws.write_formula(row, col, formula, cell_format, cached)  # pyright: ignore[reportArgumentType]
+
+
+def open_audit_workbook(output: BytesIO) -> xlsxwriter.Workbook:
+    """A new in-memory audit workbook with the export's safety options.
+
+    The one place an audit workbook is opened (Refinance V1 Stage 3 moved the
+    options here unchanged, so its separate refinance audit is opened exactly
+    as Exports 1-3 are). Analyst-authored text is always written with
+    ``write_string``; these options make a stray ``write()`` equally unable to
+    turn ``"=..."`` into a formula or a string into a number or a link."""
+
+    return xlsxwriter.Workbook(
+        output,
+        {
+            "in_memory": True,
+            "strings_to_formulas": False,
+            "strings_to_numbers": False,
+            "strings_to_urls": False,
+        },
+    )
 
 
 def _humanize(token: str) -> str:
@@ -522,18 +557,7 @@ class _AuditWorkbookBase:
         self._require_consistent_analysis()
 
         self.output = BytesIO()
-        self.book = xlsxwriter.Workbook(
-            self.output,
-            {
-                "in_memory": True,
-                # Analyst-authored text is always written with write_string;
-                # these options make a stray write() equally unable to turn
-                # "=..." into a formula or a string into a number or a link.
-                "strings_to_formulas": False,
-                "strings_to_numbers": False,
-                "strings_to_urls": False,
-            },
-        )
+        self.book = open_audit_workbook(self.output)
         self.fmt = _Formats(self.book)
         self.sheets: dict[str, Worksheet] = {
             name: self.book.add_worksheet(name) for name in self.SHEETS
@@ -2132,6 +2156,10 @@ class _AuditWorkbookBase:
         ws.set_row(0, 22)
         ws.write_string(1, 0, source.deal_name, self.fmt.get(bold=True, font_size=12))
         ws.write_string(2, 0, self.SUMMARY_NOTE, self.fmt.note())
+        reference = bool(getattr(source, "refinance_configured", False))
+        if reference:
+            # Refinance V1 Stage 3: said once, above the figures it qualifies.
+            ws.write_string(3, 0, REFINANCE_NOTICE, self.fmt.get(bold=True, font_color=NAVY))
         row = 4
         self._section(sheet, row, "Deal", 3)
         row += 1
@@ -2171,7 +2199,14 @@ class _AuditWorkbookBase:
         )
         row += 1
         for label, excel_ref, anchor_ref, status_key, number_format in self._summary_metrics():
-            self._label(sheet, row, label, indent=1)
+            if reference and label in ACQUISITION_REFERENCE_METRICS:
+                # Named beside the figure, and wrapped rather than clipped by it.
+                text = f"{label} — {ACQUISITION_REFERENCE_LABEL}"
+                ws.write_string(row, 0, text, self.fmt.label(indent=1, wrap=True))
+                room = self.column_width[sheet].get(0, DEFAULT_COLUMN_WIDTH) - 1 - INDENT_CHARS
+                ws.set_row(row, HEADER_LINE_HEIGHT * _wrapped_lines(text, int(room * LABEL_CHARS_PER_WIDTH)))
+            else:
+                self._label(sheet, row, label, indent=1)
             self._formula(sheet, row, 1, f"={excel_ref}", "link", number_format)
             self._formula(sheet, row, 2, f"={anchor_ref}", "link", number_format)
             if status_key is not None and status_key.startswith("metric:"):

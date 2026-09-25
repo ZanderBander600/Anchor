@@ -25,6 +25,7 @@ import { useEffect, useRef } from 'react';
 import { POSITION_CLASS_LABELS } from '../capitalStructureForm';
 import type { CapitalStructureState } from '../useCapitalStructure';
 import { useValuationChoices } from '../useCapitalEventChoices';
+import { CapitalEventAuditAction } from './CapitalEventAuditAction';
 import { CapitalStructureEditor } from './CapitalStructureEditor';
 import type { ScopeUnit } from './CapitalStructureEditor';
 import { CapitalStructureResults } from './CapitalStructureResults';
@@ -239,6 +240,7 @@ export function CapitalStructureWorkspace({
         ) : (
           <>
             {!state.isAnalysisCurrent && <StaleAnalysisNotice message={STALE_STRUCTURED_MESSAGE} />}
+            <CapitalEventAuditAction analysis={state.analysis} isCurrent={state.isAnalysisCurrent} />
             <CapitalStructureResults
               result={state.analysis.result}
               unitNames={unitNames}

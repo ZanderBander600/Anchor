@@ -2533,6 +2533,49 @@ export async function readCapitalEventPresence(investmentId: string): Promise<Ca
   return (await response.json()) as CapitalEventPresence;
 }
 
+/** The refinance audit's fallback name, used only when the server's header is
+ * unreadable. */
+export const REFINANCE_AUDIT_FALLBACK_FILENAME = 'Refinance & Capital Structure Audit.xlsx';
+
+/** Refinance V1 Stage 3: GETs the separate Refinance & Capital Structure Audit
+ * of one saved Analysis Variant. `fingerprint` is the structured source
+ * fingerprint of the analysis on screen; the server refuses a stale one, an
+ * unexecuted refinance or a structure with none, with
+ * `{ detail: { code, message } }`, and that message is surfaced verbatim
+ * because it says what the analyst must do. Exporting writes nothing. */
+export async function downloadRefinanceAuditWorkbook(
+  investmentId: string,
+  strategyId: string,
+  scenarioId: string,
+  fingerprint: string,
+): Promise<QuickAuditWorkbookDownload> {
+  const query = new URLSearchParams({ strategy_id: strategyId, scenario_id: scenarioId, fingerprint });
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/investments/${encodeURIComponent(investmentId)}/exports/refinance-capital-structure-audit.xlsx?${query.toString()}`,
+    );
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE);
+  }
+  if (!response.ok) {
+    let message = 'The refinance audit workbook could not be exported.';
+    try {
+      const body: unknown = await response.json();
+      const detail = (body as { detail?: { message?: unknown } } | null)?.detail;
+      if (detail && typeof detail.message === 'string' && detail.message) {
+        message = detail.message;
+      }
+    } catch {
+      // A non-JSON failure keeps the generic message.
+    }
+    throw new ApiError(message);
+  }
+  const blob = await response.blob();
+  const filename =
+    filenameFromContentDisposition(response.headers.get('Content-Disposition')) ??
+    REFINANCE_AUDIT_FALLBACK_FILENAME;
+  return { blob, filename };
 }
 
 /** `GET /investments/{id}/position-perspectives` -- the addressable positions,

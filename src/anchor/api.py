@@ -163,6 +163,7 @@ from .capital_structure.execution_contracts import (
 )
 from .deals.capital_event_identity import CapitalEventIdentityConflictError
 from .deals.capital_structure_codec import FundingAmountRuleKind, PositionTermsKind, RetiringRefKind
+from .deals.refinance_integration import has_capital_events
 from .deals.partnership_codec import HurdleConditionKind
 from .deals.partnership_variants import (
     analyze_partnership_variant,
@@ -2521,12 +2522,12 @@ def export_quick_underwrite_workbook(deal_id: str) -> Response:
         ) from None
 
     try:
-        source = quick_audit_source(
+        source = _with_refinance_reference(quick_audit_source(
             provenance,
             generated_at=datetime.now(timezone.utc),
             anchor_version=anchor_version(),
             source_commit=source_commit(),
-        )
+        ))
         workbook = build_quick_audit_workbook(source)
     except QuickAuditExportError as error:
         raise _export_refusal(error.code, error.message) from None
@@ -2545,6 +2546,22 @@ def export_quick_underwrite_workbook(deal_id: str) -> Response:
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+def _with_refinance_reference(source: Any) -> Any:
+    """Refinance V1 Stage 3: an Excel Export 1-3 source, flagged when the Deal's
+    saved Base Capital Structure configures a refinance, so the workbook names
+    its acquisition-loan levered figures as the acquisition-financing
+    reference. A Deal without one is returned unchanged, and so builds exactly
+    the workbook it always did."""
+
+    try:
+        _, structure = investment_store.read_deal_capital_structure(source.deal_id)
+    except (DealNotFoundError, InvestmentStructureError):
+        return source
+    if not has_capital_events(structure):
+        return source
+    return dataclasses.replace(source, refinance_configured=True)
 
 
 _DETAILED_EXPORT_REFUSAL_STATUS: dict[DetailedAuditRefusalCode, int] = {
@@ -2594,12 +2611,12 @@ def export_detailed_underwrite_workbook(deal_id: str) -> Response:
         ) from None
 
     try:
-        source = detailed_audit_source(
+        source = _with_refinance_reference(detailed_audit_source(
             provenance,
             generated_at=datetime.now(timezone.utc),
             anchor_version=anchor_version(),
             source_commit=source_commit(),
-        )
+        ))
         workbook = build_detailed_audit_workbook(source)
     except DetailedAuditExportError as error:
         raise _detailed_export_refusal(error.code, error.message) from None
@@ -2683,12 +2700,12 @@ def export_lease_level_workbook(deal_id: str) -> Response:
         ) from None
 
     try:
-        source = lease_level_audit_source(
+        source = _with_refinance_reference(lease_level_audit_source(
             provenance,
             generated_at=datetime.now(timezone.utc),
             anchor_version=anchor_version(),
             source_commit=source_commit(),
-        )
+        ))
         workbook = build_lease_level_audit_workbook(source)
     except LeaseLevelAuditExportError as error:
         raise _lease_level_export_refusal(error.code, error.message) from None
@@ -4844,6 +4861,85 @@ def read_capital_event_presence(investment_id: str) -> dict[str, Any]:
     except InvestmentStructureError as error:
         raise _investment_structure_conflict(error) from None
     return _wire(presence)
+
+
+#: Refinance V1 Stage 3: each typed refusal of the refinance audit, by status.
+_REFINANCE_AUDIT_STATUS = {
+    "investment_not_found": status.HTTP_404_NOT_FOUND,
+    "no_refinance": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "analysis_missing": status.HTTP_409_CONFLICT,
+    "analysis_stale": status.HTTP_409_CONFLICT,
+    "refinance_unavailable": status.HTTP_409_CONFLICT,
+    "analysis_inconsistent": status.HTTP_409_CONFLICT,
+    "hold_period_exceeds_export_limit": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "export_generation_failed": status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+
+@app.get(
+    "/investments/{investment_id}/exports/refinance-capital-structure-audit.xlsx", response_model=None
+)
+def export_refinance_capital_structure_audit(
+    investment_id: str,
+    strategy_id: str = "base",
+    scenario_id: str = "base",
+    fingerprint: str | None = None,
+) -> Response:
+    """Refinance & Capital Events V1 Stage 3 (Section 25.1): the separate
+    Refinance & Capital Structure Audit of one saved Analysis Variant.
+
+    ``fingerprint`` is the structured source fingerprint of the analysis the
+    analyst ran; the audit is produced only while it is still the saved state's
+    own. A variant with no refinance, an unexecuted refinance, or dependencies
+    that do not reconcile are refused with a typed reason, never produced
+    partially. Exporting writes nothing."""
+
+    from .exports.refinance import refinance_audit_filename
+    from .exports.refinance.audit import build_refinance_audit_workbook
+    from .exports.refinance.source import RefinanceAuditExportError, refinance_audit_source
+
+    def refusal(code: str, message: str) -> HTTPException:
+        return HTTPException(
+            status_code=_REFINANCE_AUDIT_STATUS[code], detail={"code": code, "message": message}
+        )
+
+    try:
+        source = refinance_audit_source(
+            investment_id,
+            strategy_id=strategy_id,
+            scenario_id=scenario_id,
+            analysed_fingerprint=fingerprint,
+            generated_at=datetime.now(timezone.utc),
+            anchor_version=anchor_version(),
+            source_commit=source_commit(),
+        )
+        workbook = build_refinance_audit_workbook(source)
+    except RefinanceAuditExportError as error:
+        raise refusal(error.code.value, error.message) from None
+    except (StrategyNotFoundError, ScenarioNotFoundError):
+        raise refusal(
+            "investment_not_found",
+            "The selected Strategy or Scenario could not be found. It may have been deleted; refresh and try again.",
+        ) from None
+    except StructuredVariantConflictError:
+        raise refusal(
+            "analysis_stale",
+            "The saved underwriting changed while the audit was being built. Run the analysis again, then export.",
+        ) from None
+    except Exception:
+        raise refusal(
+            "export_generation_failed",
+            "The workbook could not be generated. No file was produced; try again.",
+        ) from None
+    return Response(
+        content=workbook,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": content_disposition(refinance_audit_filename(source.investment_name)),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.post(
