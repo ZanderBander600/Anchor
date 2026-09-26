@@ -108,6 +108,8 @@ select,
    ghost     neutral outline, dark text: tertiary, never reads as disabled.
    add       dashed accent outline with a plus: "adds a row here".
    remove    quiet text, danger on hover: sits beside what it removes.
+   danger-outline  outlined red: starts a destructive act (a page-level
+             Delete) whose confirmation follows.
    danger    filled red: the confirming step of a destructive act only.
    ------------------------------------------------------------------------- */
 
@@ -245,6 +247,19 @@ select,
   filter: none;
   background: #8a1f24;
   border-color: #8a1f24;
+}
+
+/* Starts a destructive act whose confirmation follows (Delete Investment,
+   Delete Asset): outlined in the danger colour, never filled. */
+.btn-danger-outline {
+  background: #fff;
+  border-color: #e3b4b7;
+  color: var(--ws-negative);
+}
+
+.btn-danger-outline:hover:not(:disabled) {
+  background: var(--ws-negative-soft);
+  border-color: var(--ws-negative);
 }
 
 .btn:focus-visible,
@@ -492,9 +507,25 @@ tr.is-total th {
    navigation: compact, navy-filled when on.
    ------------------------------------------------------------------------- */
 
+/* The tab row shares the centred content column the header and the panels
+   use, so on a wide screen the tabs start where the page does. Each tab
+   carries 12px of its own padding, which the gutter absorbs so the first
+   label lines up with the content edge. */
 .workspace-nav {
   gap: 4px;
-  padding: 0 var(--sp-6);
+  padding: 0 max(12px, calc((100% - var(--workspace-max)) / 2 - 12px));
+}
+
+@media (width < 1280px) {
+  .workspace-nav {
+    padding: 0 8px;
+  }
+}
+
+@media (width < 1024px) {
+  .workspace-nav {
+    padding: 0 4px;
+  }
 }
 
 .workspace-tab {
@@ -1029,10 +1060,7 @@ tr.is-total th {
    ------------------------------------------------------------------------- */
 
 .empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
+  display: block;
   padding: 36px 24px;
   border: 1px dashed #c9d1dc;
   border-radius: var(--radius-card);
@@ -1046,14 +1074,16 @@ tr.is-total th {
   margin: 0;
 }
 
-.empty-state-title {
+.empty-state .empty-state-title {
+  margin: 0 0 4px;
   font-size: 14px;
   font-weight: 650;
   color: #1f2a3c;
 }
 
-.empty-state-body {
+.empty-state .empty-state-body {
   max-width: 56ch;
+  margin: 0 auto;
   line-height: 1.5;
 }
 
@@ -1167,6 +1197,45 @@ tr.is-total th {
   border-color: #c3d6f5;
   background: var(--ws-info-soft);
   color: #1b4f9c;
+}
+
+/* =========================================================================
+   Deal -- Underwrite results (Lease-Level summary)
+   ========================================================================= */
+
+/* Four result groups share one row on a desktop-width results column rather
+   than leaving the fourth alone on a second row. */
+.lease-level-summary {
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: 14px;
+}
+
+.lease-level-metric-card {
+  padding: 16px 18px;
+}
+
+.lease-level-metric dt {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.lease-level-metric dd {
+  color: #111826;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.lease-level-metric-emphasis dd {
+  color: var(--ws-navy);
+  font-weight: 680;
+}
+
+/* Break-even: the five solved thresholds read as one row of peers on a
+   desktop-width column. */
+.break-even-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
 }
 
 /* =========================================================================
@@ -2538,6 +2607,33 @@ table td.col-text {
    lines above the lines that drove them, so the eye meets "how far off plan"
    before "why".
    ========================================================================= */
+
+/* The Managed Assets and Monthly Reporting registers sit in a card, like
+   every other register; the table still scrolls inside it when narrow. */
+.am-page > .am-table-scroll {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: #fff;
+  box-shadow: var(--shadow-card);
+}
+
+.am-page > .am-table-scroll .am-table thead th {
+  background: var(--ws-th-bg);
+}
+
+.am-page > .am-table-scroll .am-table tbody tr:last-child td,
+.am-page > .am-table-scroll .am-table tbody tr:last-child th {
+  border-bottom: 0;
+}
+
+.am-page-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  color: #0e1a2b;
+}
 
 .am-attention-group + .am-attention-group {
   margin-top: 12px;

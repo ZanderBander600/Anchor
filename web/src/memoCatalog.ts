@@ -132,30 +132,39 @@ export const PERSPECTIVE_LABELS: Record<DecisionPerspectiveKind, string> = {
 /** Each authored section: its heading, and the one line that says what belongs
  * in it. The hint is product copy, not validation -- nothing here refuses an
  * item for being in the "wrong" section. */
-export const SECTION_LABELS: Record<MemoSectionKind, { title: string; hint: string }> = {
+/** Each authored section's title, hint, and the name of one item in it -- the
+ * item name is stated, not derived by trimming the title ("Thesis" is not a
+ * plural, and "Conditions to Approval" does not end in its plural). */
+export const SECTION_LABELS: Record<MemoSectionKind, { title: string; hint: string; item: string }> = {
   thesis: {
     title: 'Investment Thesis',
     hint: 'Why this is the preferred use of capital.',
+    item: 'thesis point',
   },
   business_plan_milestone: {
     title: 'Business Plan',
     hint: 'The milestones this investment is underwritten to achieve.',
+    item: 'milestone',
   },
   structural_protection: {
     title: 'Structural Protections',
     hint: 'What protects this position if the plan does not hold.',
+    item: 'structural protection',
   },
   reputational_concern: {
     title: 'Reputational Concerns',
     hint: 'Concerns that are not financial but still bear on the decision.',
+    item: 'reputational concern',
   },
   dealbreaker: {
     title: 'Dealbreakers',
     hint: 'What would end this transaction outright.',
+    item: 'dealbreaker',
   },
   condition_to_approval: {
     title: 'Conditions to Approval',
     hint: 'What must be satisfied before closing.',
+    item: 'condition',
   },
 };
 

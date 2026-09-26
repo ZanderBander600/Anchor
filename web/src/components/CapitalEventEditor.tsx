@@ -92,7 +92,7 @@ export const LTV_BASIS_NOTE =
 
 // prettier-ignore
 export const NO_VALUATION_MESSAGE =
-  'No valuation is defined yet. Define one at the refinance date in the Memo workspace’s Valuation panel; fixed and DSCR sizing need none.';
+  'No valuation is defined for this Investment yet, so an LTV constraint has nothing to measure against. Fixed and DSCR sizing need none.';
 
 // prettier-ignore
 export const REPLACEMENT_FEE_NOTE =

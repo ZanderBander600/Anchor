@@ -1,11 +1,12 @@
 # Anchor Current State
 
-Last synchronized: 2026-09-25 (P7.10 closed; P7.11 waived and administratively
+Last synchronized: 2026-09-26 (P7.10 closed; P7.11 waived and administratively
 closed; Refinance & Capital Events V1 contract ratified; Stage 1 deterministic
 engine merged through PR #57 and accepted; Stage 2 persistence and integration
 merged through PR #60 and accepted; Stage 3 product surfaces merged through
 PR #62 and accepted; Refinance & Capital Events V1 complete for its ratified
-V1 scope; no active gate)
+V1 scope; UI/UX workstation refinement implemented on a feature branch and
+awaiting human review -- not accepted)
 
 This is the single live status record for Anchor. It reports project state; it
 does not replace any financial convention or architecture authority. Update it
@@ -48,6 +49,24 @@ whenever an accepted gate merges or the active gate changes.
 Git and GitHub remain operational truth for the exact current HEAD and open PR
 state. If `main` moves beyond the accepted baseline above, inspect the
 intervening merge before updating this file.
+
+## 2026-09-26 UI/UX Workstation Refinement (implemented; awaiting human review)
+
+By explicit human instruction, a presentation and interaction refinement of
+the whole workstation was implemented from `main` at `278a84f` on
+`claude/compassionate-keller-hi5y87`. **It is not accepted and not merged**;
+the accepted baseline above is unchanged.
+
+- Scope: a shared design system (`web/src/workstation.css`, documented in
+  `docs/design/WORKSTATION_DESIGN_SYSTEM.md`), converged colour tokens, and
+  refined shell, headers, navigation, tables, metrics, editors (Capital
+  Structure, Refinance, Partnership), Investment Committee and Asset
+  Management surfaces, with responsive and accessibility QA.
+- No calculation, convention, schema, fingerprint, persistence, API shape,
+  workbook or published artifact changed. One backend presentation string
+  changed: a Partner Decision Matrix IRR reason no longer prints the engine's
+  internal status token (typed `irr_status` and `reason` unchanged).
+- It starts no product gate. **Active gate: none.**
 
 ## 2026-09-25 Refinance & Capital Events V1 Stage 3 Acceptance
 

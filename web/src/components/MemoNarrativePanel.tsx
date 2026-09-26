@@ -169,7 +169,7 @@ export function MemoNarrativePanel({ form, onChange, evidence }: MemoNarrativePa
             className="btn btn-add btn-xs"
             onClick={() => onChange(addMemoItem(form, section))}
           >
-            Add {meta.title.toLowerCase().replace(/s$/, '')}
+            {`Add ${meta.item}`}
           </button>
         </div>
         <p className="memo-section-hint">{meta.hint}</p>

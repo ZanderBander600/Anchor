@@ -2947,14 +2947,14 @@ export default function App() {
   // workspace head row. Only for a saved Deal, and not while the create form
   // is open below it.
   const overviewAssetAction =
-    activeDealId === null || creatingAssetForDealId === activeDealId ? null : managedAssetOfDeal !== undefined ? (
+    activeDealId === null ? null : managedAssetOfDeal !== undefined ? (
       <p className="am-deal-action-note">
         This deal is under management as <strong>{managedAssetOfDeal.name}</strong>.{' '}
         <button type="button" className="am-quiet-button" onClick={() => setSurface('asset-management')}>
           Open in Asset Management
         </button>
       </p>
-    ) : (
+    ) : creatingAssetForDealId === activeDealId ? null : (
       <button
         type="button"
         className="am-quiet-button"

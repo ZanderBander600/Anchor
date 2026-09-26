@@ -190,7 +190,7 @@ export function InvestmentWorkspace({
             )}
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-danger-outline btn-sm"
               onClick={workspace.requestDelete}
               disabled={workspace.isConfirmingDelete}
             >

@@ -164,8 +164,8 @@ export function MemoValuationPanel({
 
         {surface !== null && surface.views.length === 0 && (
           <p className="memo-empty">
-            This Investment defines no valuation views. Author one on the Investment's valuation
-            surface to include it here.
+            This Investment defines no valuation views, so there is nothing to include here. Exit
+            value, below, is always reported.
           </p>
         )}
 
