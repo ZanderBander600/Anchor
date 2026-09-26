@@ -238,11 +238,15 @@ describe('the visible mode selector', () => {
   it('offers exactly the three published modes', () => {
     renderHeader();
     const tabs = screen.getAllByRole('tab');
-    expect(tabs.map((tab) => tab.textContent)).toEqual([
+    // Each tab's accessible name is the full mode name; since the workstation
+    // polish pass the visible label is the short one inside the switch
+    // labelled "Underwriting Mode".
+    expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual([
       'Quick Underwrite',
       'Detailed Underwrite',
       'Lease-Level Underwrite',
     ]);
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Quick', 'Detailed', 'Lease-Level']);
   });
 
   it('offers Lease-Level, and keeps the two existing tab names byte-identical', () => {

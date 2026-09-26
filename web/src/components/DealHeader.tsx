@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import type { OperatingMode, OperatingMode as SelectableMode } from '../types';
-import { operatingModeUnderwriteLabel } from '../operatingMode';
+import { operatingModeLabel, operatingModeUnderwriteLabel } from '../operatingMode';
 
 /** The operating modes the analyst may actually choose.
  *
@@ -179,8 +179,13 @@ export function DealHeader({
                     : 'mode-switch-tab'
                 }
                 onClick={() => onOperatingModeChange(mode)}
+                // The switch is labelled "Underwriting Mode", so each tab
+                // shows the short name and keeps the full one as its
+                // accessible name (which contains the visible word). This
+                // returns ~190px of the header row to the deal name.
+                aria-label={operatingModeUnderwriteLabel(mode)}
               >
-                {operatingModeUnderwriteLabel(mode)}
+                {operatingModeLabel(mode)}
               </button>
             ))}
           </div>

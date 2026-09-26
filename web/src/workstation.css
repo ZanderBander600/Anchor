@@ -867,12 +867,53 @@ tr.is-total th {
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12), 0 0 0 1px rgba(16, 24, 40, 0.04);
 }
 
-/* The identity holds the name and the 445px mode switch, so its basis leaves
-   the name real room: where name, switch and actions cannot share one line,
-   the actions take a second, right-aligned row instead of crushing the name
-   to a few characters (at 1280 it had 71px). */
-.deal-header-identity {
-  flex-basis: 40rem;
+/* The deal name is sized to its own text (`field-sizing: content`), so the
+   header row allocates space by what the name actually needs: a name that
+   fits keeps one line; a long one moves the actions to a second,
+   right-aligned row and is shown whole; only a name longer than the row
+   truncates, with the full name in its title. Browsers without
+   field-sizing keep the previous behaviour (the name takes the room left). */
+@media (width >= 768px) {
+  .deal-header-name-field {
+    flex: 0 1 auto;
+    min-width: min(12rem, 100%);
+  }
+
+  .deal-header-name-input {
+    field-sizing: content;
+    max-width: 100%;
+  }
+
+  .deal-header-identity .mode-switch {
+    margin-left: auto;
+  }
+}
+
+@media (width >= 1280px) {
+  .deal-header-identity {
+    flex: 1 1 auto;
+  }
+}
+
+/* 768-1279: the name takes the first row to itself; the mode switch and the
+   actions share the second (the identity wrapper, a plain div, steps out of
+   the layout so its two children join the header row). */
+@media (768px <= width < 1280px) {
+  .deal-header-identity {
+    display: contents;
+  }
+
+  .deal-header-name-field {
+    flex: 1 0 100%;
+  }
+
+  .deal-header-identity .mode-switch {
+    margin-left: 0;
+  }
+
+  .deal-header-actions {
+    flex: 0 1 auto;
+  }
 }
 
 .deal-header-actions {
