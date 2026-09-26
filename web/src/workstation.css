@@ -72,6 +72,9 @@
   --ws-stale: #8a5a06;
 
   --ws-ease: cubic-bezier(0.2, 0, 0.15, 1);
+  /* What a sticky editor action bar occupies at the foot of its scroller,
+     plus breathing room: the scroller reserves it for focus and jumps. */
+  --ws-sticky-actions-clearance: 88px;
 }
 
 /* -------------------------------------------------------------------------
@@ -894,6 +897,38 @@ tr.is-total th {
   padding-top: 20px;
 }
 
+/* One vertical scroll owner per workspace. An absolutely positioned
+   visually-hidden element inside the Asset Management scroller had no
+   positioned ancestor, so it sat at its static offset far down the page and
+   lengthened the document: the page scrolled as well as the workspace.
+   Each scroller is now its own containing block. */
+.workspace-scroll,
+.am-workspace-scroll,
+.am-page {
+  position: relative;
+}
+
+/* A library page (Deal, Investment, Investment Committee) is not inside a
+   workspace scroller, so it used to lengthen the document and scroll the
+   sidebar away with it. The main column owns that scroll instead, with its
+   scrollbar at the window edge -- the same shape as every workspace. */
+.app-main:has(> .library-view) {
+  position: relative;
+  overflow-y: auto;
+}
+
+/* The Live Case rail stays in reach while a long assumption tab scrolls
+   (index.css makes it sticky); it rests just below the scroller's edge. */
+.live-case {
+  top: 16px;
+}
+
+/* No rail, no rail column: Underwrite > Results (whose headline figures lead
+   the page) and the Lease-Level editor use the full width. */
+.underwrite-body:not(:has(> .live-case)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .workspace-panel-head {
   display: flex;
   align-items: baseline;
@@ -1314,16 +1349,34 @@ tr.is-total th {
   color: #0e1a2b;
 }
 
+/* The scrollers' bottom padding, as a token the sticky bar can cancel:
+   sticky offsets are measured inside the scroller's padding, so with
+   `bottom: 0` the bar rode 40px above the viewport edge with the form
+   showing through beneath it. */
+.workspace-scroll,
+.am-workspace-scroll,
+.am-page {
+  --ws-scroll-pad-bottom: var(--sp-10);
+  padding-bottom: var(--ws-scroll-pad-bottom);
+}
+
 .scenario-editor-actions {
   position: sticky;
-  bottom: 0;
+  bottom: calc(-1 * var(--ws-scroll-pad-bottom, 0px));
   z-index: 5;
   margin: 4px calc(-1 * var(--ws-card-pad)) 0;
   padding: 12px var(--ws-card-pad) 12px;
   border-top: 1px solid var(--ws-rule);
-  background: rgba(255, 255, 255, 0.96);
-  backdrop-filter: blur(2px);
+  background: #fff;
   box-shadow: 0 -6px 12px -10px rgba(16, 24, 40, 0.25);
+}
+
+/* Whatever scroller holds a sticky action bar reserves its height at the
+   foot of the scrollport. Keyboard focus, find-in-page and scrollIntoView
+   then stop above the bar instead of behind it (WCAG 2.4.11), and at the end
+   of the form the bar sits in flow, so the last field is never covered. */
+:is(.workspace-scroll, .am-workspace-scroll, .am-page, .investment-host, .memo-host, .library-view):has(.scenario-editor-actions) {
+  scroll-padding-bottom: var(--ws-sticky-actions-clearance);
 }
 
 .scenario-blocked {

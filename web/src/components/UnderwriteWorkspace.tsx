@@ -217,7 +217,10 @@ export function UnderwriteWorkspace({
           })}
         </div>
 
-        <LiveCaseRail results={results} tab={activeTab} />
+        {/* The rail is feedback beside the assumptions that move it. On
+            Results the same headline figures lead the page itself, so the
+            rail would only repeat them; Results takes the full width. */}
+        {activeTab !== 'results' && <LiveCaseRail results={results} tab={activeTab} />}
       </div>
     </div>
   );

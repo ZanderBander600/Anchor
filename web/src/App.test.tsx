@@ -7320,6 +7320,7 @@ describe('Sprint C Gate C3 -- Underwrite workspace', () => {
     await openUnderwriteTab(user, 'Results');
 
     expect(underwritePanel('results').querySelector('.results-panel')).toBeTruthy();
+    await openUnderwriteTab(user, 'Acquisition');
     expect(within(liveCase()).getByText('7.91%')).toBeTruthy();
     expect(mockAnalyze).not.toHaveBeenCalled();
   });
@@ -8248,20 +8249,22 @@ describe('Sprint C acceptance -- Results workspace', () => {
     expect(panel('overview').querySelector('.owner-summary-panel')).toBeTruthy();
   });
 
-  it('6. the Live Case rail stays present in Results, outside the scrolling region', async () => {
+  it('6. the Live Case rail leaves Results to the page and returns on the assumption tabs', async () => {
     const user = userEvent.setup();
     render(<App />);
     await analyzeQuickGoldenDeal(user);
     await openUnderwriteTab(user, 'Results');
 
-    // Present, and showing authoritative metrics rather than an empty state.
+    // Workstation polish pass: on Results the headline figures lead the page
+    // itself, so the rail would only repeat them. The figures are still there.
+    expect(document.querySelector('.live-case')).toBeNull();
+    expect(within(resultsPanelFor('summary')).getAllByText('7.91%').length).toBeGreaterThan(0);
+
+    // Back on an assumption tab the rail returns with the same authoritative
+    // metrics, rather than an empty state.
+    await openUnderwriteTab(user, 'Acquisition');
     expect(within(liveCase()).getByText('Levered IRR')).toBeTruthy();
     expect(within(liveCase()).getByText('7.91%')).toBeTruthy();
-
-    // Structurally outside the Results scroller, so table scrolling can never
-    // move it.
-    const scroller = resultsPanelFor('summary');
-    expect(scroller.contains(liveCase())).toBe(false);
   });
 
   it('7. Results values are the engine output verbatim, unchanged by the fix', async () => {

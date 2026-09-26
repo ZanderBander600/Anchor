@@ -303,7 +303,13 @@ describe('Quick', () => {
       within(panel).getByRole('note', { name: 'Post-Hold Project Capital' }).textContent,
     ).toContain('$500,000 is modeled after the current hold and is excluded from seller returns.');
 
-    // The Live Case rail is left alone: none of the D6 reporting moved into it.
+    // The Live Case rail is left alone: none of the D6 reporting moved into
+    // it. (Since the workstation polish pass the rail is not shown on
+    // Results, so it is checked on the assumption tab it returns to.)
+    expect(document.querySelector('.live-case')).toBeNull();
+    await user.click(
+      within(tablist('Underwrite sections')).getByRole('tab', { name: 'Acquisition' }),
+    );
     const rail = document.querySelector('.live-case') as HTMLElement;
     for (const label of ['Total Equity Invested', 'Total Cash Returned', 'Total Profit', 'Capital Schedule']) {
       expect(rail.textContent, label).not.toContain(label);
