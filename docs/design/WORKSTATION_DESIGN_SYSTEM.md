@@ -108,5 +108,8 @@ of the viewport (`.scenario-editor-actions`, sticky).
 - Grid tracks use `minmax(min(Xrem, 100%), 1fr)` so no track outgrows a phone.
 - Rows whose layout depends on their card, not the window, use container
   queries (the refinance cost rows).
+- The deal header keeps the name legible: where name, mode switch and
+  actions cannot share a line, the actions take a second, right-aligned row.
+- Library rows stack on a phone: name and facts first, actions beneath.
 - Verified at 1920, 1440, 1280, 1024, 390 and 200% zoom with no page-level or
   clipped horizontal overflow.

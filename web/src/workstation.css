@@ -864,8 +864,17 @@ tr.is-total th {
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12), 0 0 0 1px rgba(16, 24, 40, 0.04);
 }
 
+/* The identity holds the name and the 445px mode switch, so its basis leaves
+   the name real room: where name, switch and actions cannot share one line,
+   the actions take a second, right-aligned row instead of crushing the name
+   to a few characters (at 1280 it had 71px). */
+.deal-header-identity {
+  flex-basis: 40rem;
+}
+
 .deal-header-actions {
   gap: 8px;
+  margin-left: auto;
 }
 
 .icon-button {
@@ -1039,7 +1048,14 @@ tr.is-total th {
   margin-bottom: 12px;
 }
 
+/* Detail cards reflow by their column's width, not the window's: beside the
+   Live Case column a fixed three-up squeezed each card below its figures. */
+.card-row {
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+}
+
 .info-row {
+  gap: 12px;
   padding: 6px 0;
   font-size: 13px;
   border-bottom-color: var(--ws-row-rule);
@@ -1144,7 +1160,10 @@ tr.is-total th {
   gap: 0 32px;
 }
 
+/* One minimum at every width: four up from 1280, two by two at 200% zoom,
+   one column on a phone -- never a card too narrow for its figures. */
 .owner-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
   gap: 16px;
 }
 
@@ -2222,7 +2241,8 @@ table td.col-text {
 
 .memo-library .memo-table thead th {
   position: static;
-  padding: 8px 16px;
+  white-space: normal;
+  padding: 8px 12px;
   background: var(--ws-th-bg);
   border-top: 1px solid var(--ws-rule);
   border-bottom: 1px solid var(--ws-rule);
@@ -2235,7 +2255,7 @@ table td.col-text {
 
 .memo-library .memo-table th,
 .memo-library .memo-table td {
-  padding: 12px 16px;
+  padding: 12px;
   border-bottom-color: var(--ws-row-rule);
   vertical-align: middle;
   overflow-wrap: normal;
@@ -2261,8 +2281,15 @@ table td.col-text {
 /* The memo's name leads the row and is never squeezed into a word per line:
    the table scrolls inside its card before the name gives up its width. */
 .memo-library .memo-table .memo-cell-label {
-  min-width: 17rem;
-  max-width: 26rem;
+  min-width: 11rem;
+  max-width: 24rem;
+}
+
+/* In the register a long state wraps inside its chip rather than widening
+   the table. */
+.memo-library .memo-table .memo-status-chip,
+.memo-library .memo-table .memo-decision-chip {
+  white-space: normal;
 }
 
 .memo-library .memo-library-kind {
@@ -2779,6 +2806,23 @@ table td.col-text {
 
   .capital-event-cost {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* A library row reads name and facts first, its actions on their own line
+     beneath, rather than squeezing the name into a column beside them. */
+  .deal-library-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .deal-library-row-name-line {
+    flex-wrap: wrap;
+  }
+
+  .deal-library-header {
+    flex-wrap: wrap;
+    row-gap: 10px;
   }
 
   .scenario-editor-actions {
