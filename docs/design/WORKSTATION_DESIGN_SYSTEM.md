@@ -99,7 +99,36 @@ figures 15–18px.
 Capital positions, refinances, partners and tiers are cards whose header band
 holds the name (the fieldset legend, floated into the band), what it is, where
 it ranks, and its own Remove. Editor Save / Cancel stay reachable at the foot
-of the viewport (`.scenario-editor-actions`, sticky).
+of the viewport (`.scenario-editor-actions`, sticky):
+
+- the bar's offset cancels its scroller's bottom padding
+  (`--ws-scroll-pad-bottom`), so it sits flush at the edge with nothing
+  showing beneath it;
+- every scroller holding one reserves its height with `scroll-padding-bottom`
+  (`--ws-sticky-actions-clearance`), so keyboard focus and jumps stop above
+  it (WCAG 2.4.11); at the end of the form the bar sits in flow.
+
+View mode states the saved record at a glance, from authored values only:
+Capital Structure is one register (position, class, priority, scope, funding,
+key terms) plus one line per refinance (what it repays and funds);
+Partnership is a partners register plus the waterfall as a numbered rail of
+tiers. Both stack into labelled lines in a narrow card.
+
+## Scrolling
+
+One vertical scroll owner per screen: `.workspace-scroll` in a deal or
+investment workspace, `.am-workspace-scroll` / `.am-page` in Asset
+Management, and the main column for a library page. Each is a containing
+block, so nothing absolutely positioned inside can lengthen the document.
+Only wide analytical tables scroll, horizontally, inside their card.
+
+## Deal header
+
+The mode switch shows Quick / Detailed / Lease-Level (full names are the
+accessible names). The deal name is sized to its text: a name that fits keeps
+one line; a long name moves the actions to a second, right-aligned row; only a
+name longer than the row truncates, with the full name in its title. From 768
+to 1279px the name has row one to itself.
 
 ## Responsive
 
@@ -107,9 +136,11 @@ of the viewport (`.scenario-editor-actions`, sticky).
   they never collide with the `@media (max-width: …)` blocks guards locate.
 - Grid tracks use `minmax(min(Xrem, 100%), 1fr)` so no track outgrows a phone.
 - Rows whose layout depends on their card, not the window, use container
-  queries (the refinance cost rows).
-- The deal header keeps the name legible: where name, mode switch and
-  actions cannot share a line, the actions take a second, right-aligned row.
+  queries (the refinance cost rows, the Capital Structure and Partnership
+  summaries).
+- The deal header allocates by the name's own width (see Deal header).
 - Library rows stack on a phone: name and facts first, actions beneath.
+- Underwrite > Results has no Live Case rail (its headline figures lead the
+  page); the rail stays, sticky, on every assumption tab.
 - Verified at 1920, 1440, 1280, 1024, 390 and 200% zoom with no page-level or
   clipped horizontal overflow.

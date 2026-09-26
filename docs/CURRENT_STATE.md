@@ -66,6 +66,13 @@ the accepted baseline above is unchanged.
   workbook or published artifact changed. One backend presentation string
   changed: a Partner Decision Matrix IRR reason no longer prints the engine's
   internal status token (typed `irr_status` and `reason` unchanged).
+- A follow-up polish pass on the same branch, from human visual review:
+  one vertical scroll owner per workspace (the contained Underwrite > Results
+  scroller from the Sprint C acceptance pass is retired); sticky editor
+  Save / Cancel never covers content or keyboard focus; the deal name gets
+  the header room it needs; the Live Case rail is not repeated on Results;
+  read-only Capital Structure and Partnership summaries of the saved,
+  authored terms. Still presentation only, still not accepted.
 - It starts no product gate. **Active gate: none.**
 
 ## 2026-09-25 Refinance & Capital Events V1 Stage 3 Acceptance
