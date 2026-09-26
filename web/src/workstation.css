@@ -3214,6 +3214,19 @@ table td.col-text {
   color: #3f4a5c;
 }
 
+/* Upload rows (Documents OM review, Excel import) wrap on a narrow screen
+   rather than pushing the native file control past the card edge. */
+.om-upload-row,
+.excel-upload-row {
+  flex-wrap: wrap;
+}
+
+.om-upload-row input[type='file'],
+.excel-upload-row input[type='file'] {
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* =========================================================================
    Responsive -- shell
    ========================================================================= */
