@@ -143,6 +143,8 @@ export function DealHeader({
               className="deal-header-name-input"
               type="text"
               placeholder="Untitled Deal"
+              // A long name is ellipsized at rest; the full name is one hover away.
+              title={dealName === '' ? undefined : dealName}
               value={dealName}
               onChange={(event: ChangeEvent<HTMLInputElement>) =>
                 onDealNameChange(event.target.value)

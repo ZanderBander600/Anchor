@@ -122,7 +122,7 @@ function RowControls({
       </button>
       <button
         type="button"
-        className="btn btn-ghost btn-xs"
+        className="btn btn-remove btn-xs"
         onClick={onRequestRemove}
         aria-label={`Remove ${label}`}
         ref={removeRef}
@@ -166,7 +166,7 @@ export function MemoNarrativePanel({ form, onChange, evidence }: MemoNarrativePa
           <h3 className="memo-section-title">{meta.title}</h3>
           <button
             type="button"
-            className="btn btn-secondary btn-xs"
+            className="btn btn-add btn-xs"
             onClick={() => onChange(addMemoItem(form, section))}
           >
             Add {meta.title.toLowerCase().replace(/s$/, '')}
@@ -241,7 +241,7 @@ export function MemoNarrativePanel({ form, onChange, evidence }: MemoNarrativePa
           <h3 className="memo-section-title">Risks &amp; Mitigants</h3>
           <button
             type="button"
-            className="btn btn-secondary btn-xs"
+            className="btn btn-add btn-xs"
             onClick={() => onChange(addMemoRisk(form))}
           >
             Add risk
@@ -366,7 +366,7 @@ export function MemoNarrativePanel({ form, onChange, evidence }: MemoNarrativePa
           <h3 className="memo-section-title">Terms</h3>
           <button
             type="button"
-            className="btn btn-secondary btn-xs"
+            className="btn btn-add btn-xs"
             onClick={() => onChange(addMemoTerm(form))}
           >
             Add term

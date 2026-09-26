@@ -303,7 +303,7 @@ export function PartnershipWorkspace({
                 <button
                   ref={removeButton}
                   type="button"
-                  className="btn btn-ghost btn-xs"
+                  className="btn btn-remove btn-xs"
                   onClick={() => setConfirmingRemovalOf(saved)}
                   disabled={blockedReason !== null || state.isSaving}
                 >

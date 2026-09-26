@@ -878,6 +878,31 @@ tr.is-total th {
   gap: 16px;
 }
 
+/* A workspace's own page-level action sits at the right of its head row. */
+.workspace-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.workspace-panel-actions .am-deal-action-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: #4a5568;
+}
+
+@media (1024px <= width < 1280px) {
+  /* The 200px rail: the product switch keeps both names whole. */
+  .sidebar-workspace-switch .sidebar-nav-item,
+  .am-workspace-switch .sidebar-nav-item {
+    gap: 8px;
+    padding: 0 8px;
+    font-size: 12.5px;
+  }
+}
+
 /* Asset Management's rail: its section list and its asset shortcuts are two
    groups, ruled apart like the Acquisitions rail's. */
 .am-sidebar .sidebar-deals {
@@ -1353,7 +1378,7 @@ tr.is-total th {
 
 .capital-position-head,
 .capital-position-fields {
-  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(9.5rem, 100%), 1fr));
   gap: 12px 14px;
 }
 
@@ -1438,7 +1463,7 @@ tr.is-total th {
 
 .capital-event-columns {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));
   gap: 12px;
   align-items: start;
   min-width: 0;
@@ -1468,6 +1493,7 @@ tr.is-total th {
 }
 
 .capital-event-checks {
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
   gap: 8px 14px;
 }
 
@@ -1499,7 +1525,7 @@ tr.is-total th {
 }
 
 .capital-event-constraint-fields {
-  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(11rem, 100%), 1fr));
   gap: 10px 14px;
 }
 
@@ -1522,7 +1548,7 @@ tr.is-total th {
 
 .capital-event-terms-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(7.5rem, 100%), 1fr));
   gap: 8px 16px;
   flex: 1 1 22rem;
   margin: 0;
@@ -1989,6 +2015,94 @@ table td.col-text {
 }
 
 /* =========================================================================
+   Libraries (Deals, Investments) -- page headers and registers
+
+   A library is a page: its name is the page title, its purpose one quiet
+   line, and its records a single register with row rules rather than a stack
+   of separately boxed cards.
+   ========================================================================= */
+
+.library-view {
+  padding-top: 20px;
+}
+
+.deal-library-header {
+  align-items: center;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom-color: var(--ws-rule);
+}
+
+.deal-library-header .card-title {
+  font-size: var(--ws-fs-page);
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  text-transform: none;
+  color: #0e1a2b;
+}
+
+.deal-library-header .card-subtitle {
+  margin-top: 3px;
+  font-size: 12.5px;
+}
+
+.deal-library-list {
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+
+.deal-library-row {
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--ws-row-rule);
+  background: #fff;
+  transition: background-color 120ms var(--ws-ease);
+}
+
+.deal-library-row:last-child {
+  border-bottom: 0;
+}
+
+.deal-library-row:hover {
+  background: var(--ws-row-hover);
+}
+
+.deal-library-row-name {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.deal-library-row-meta {
+  font-size: 12.5px;
+  color: #5b6576;
+  font-variant-numeric: tabular-nums;
+}
+
+.deal-library-row-actions {
+  gap: 6px;
+}
+
+/* Delete starts a confirmed act; in a row of three it is the quiet one. */
+.deal-library-delete-button {
+  background: transparent;
+  border-color: transparent;
+  color: #5b6576;
+}
+
+.deal-library-delete-button:hover:not(:disabled) {
+  background: var(--ws-negative-soft);
+  border-color: #f0c9cb;
+  color: var(--ws-negative);
+}
+
+.asset-type-filter-label {
+  color: var(--ws-title);
+}
+
+/* =========================================================================
    Investment Committee -- library
 
    The library is a register of decision documents: which memos exist, where
@@ -2287,6 +2401,134 @@ table td.col-text {
   color: #4a5568;
 }
 
+/* --- Partnership editor: each partner and each tier is a card ------------- */
+
+.partnership-editor-title {
+  font-size: 15px;
+  font-weight: 680;
+  color: #0e1a2b;
+}
+
+.partnership-editor-section {
+  padding-top: 16px;
+  border-top-color: var(--ws-rule);
+}
+
+.partnership-editor-section-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.075em;
+  color: var(--ws-title);
+}
+
+.partnership-partner,
+.partnership-tier-card {
+  --card-head: 40px;
+  padding: 0 16px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  background:
+    linear-gradient(var(--ws-rule), var(--ws-rule)) 0 var(--card-head) / 100% 1px no-repeat,
+    linear-gradient(#f7f9fc, #f7f9fc) 0 0 / 100% var(--card-head) no-repeat,
+    #fff;
+}
+
+.partnership-partner + .partnership-partner,
+.partnership-tier-card + .partnership-tier-card {
+  margin-top: 10px;
+}
+
+.partnership-partner > .partnership-partner-legend,
+.partnership-tier-card > .partnership-tier-legend {
+  float: left;
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 0;
+  line-height: var(--card-head);
+  font-size: 13.5px;
+  font-weight: 680;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #0e1a2b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.partnership-partner > .partnership-partner-legend + *,
+.partnership-tier-card > .partnership-tier-legend + * {
+  clear: both;
+  margin-top: 0;
+}
+
+.partnership-partner-error,
+.partnership-tier-card-error {
+  border-color: #e3b4b7;
+  border-left: 3px solid var(--danger);
+  padding-left: 16px;
+}
+
+.partnership-partner-grid,
+.partnership-tier-grid,
+.partnership-condition-grid,
+.partnership-share-grid,
+.partnership-tier-terms {
+  gap: 12px 14px;
+}
+
+/* A hurdle's conditions sit side by side across the card, beneath the terms
+   they qualify, rather than stacking in the terms grid's last column. */
+.partnership-tier-terms > .partnership-conditions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
+  gap: 10px 12px;
+  align-items: start;
+}
+
+.partnership-tier-terms > .partnership-conditions > * {
+  margin-top: 0;
+}
+
+.partnership-tier-terms > .partnership-conditions > .btn {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.partnership-condition .partnership-condition-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(9rem, 100%), 1fr));
+}
+
+.partnership-condition {
+  padding: 8px 12px 12px;
+  border: 1px solid var(--ws-rule);
+  border-radius: var(--radius-control);
+  background: #fbfcfd;
+}
+
+
+
+.partnership-condition-legend {
+  padding: 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ws-title);
+}
+
+.partnership-unstated {
+  border-color: #e6d3a8;
+  border-radius: var(--radius-control);
+  background: #fffaf0;
+}
+
+/* --- Strategy and Scenario editors ----------------------------------------- */
+
+/* A decision domain is named in slate; an error keeps its own red rule. */
+.strategy-domain-legend {
+  color: var(--ws-title);
+}
+
 /* =========================================================================
    Asset Management
 
@@ -2330,6 +2572,15 @@ table td.col-text {
    Responsive -- shell
    ========================================================================= */
 
+@media (width <= 900px) {
+  /* A section bar wraps to a second row rather than hiding its last tabs
+     behind a sideways scroll with no visible edge. */
+  .sub-nav-segmented {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+}
+
 @media (width <= 1023px) {
   /* The collapsed icon rail (index.css) hides every text label; the group
      labels this layer adds are text labels too. */
@@ -2353,7 +2604,14 @@ table td.col-text {
   }
 }
 
-@media (width <= 900px) {
+/* The cost rows respond to the width of their own card, which depends on
+   the rail, the viewport and the editor around it -- not to the window. */
+.capital-event-costs-group {
+  container-type: inline-size;
+  container-name: refinance-costs;
+}
+
+@container refinance-costs (width < 760px) {
   /* Stacked cost records: each field labelled again, Remove at the foot. */
   .capital-event-cost-head {
     display: none;
@@ -2390,6 +2648,14 @@ table td.col-text {
 }
 
 @media (width <= 640px) {
+  /* The facts fall below the figure: ruled above rather than beside. */
+  .refinance-headline-facts {
+    padding-left: 0;
+    padding-top: 12px;
+    border-left: 0;
+    border-top: 1px solid var(--ws-rule);
+  }
+
   .capital-position,
   .capital-event {
     --card-head: 40px;
@@ -2403,8 +2669,16 @@ table td.col-text {
     font-size: 13.5px;
   }
 
-  .capital-position-tags .capital-position-fact {
+  /* The header band keeps the name and its Remove; the tags repeat what the
+     Class and Timing fields already say, and would crowd the band. */
+  .capital-position > .capital-position-bar .capital-position-tags,
+  .capital-event > .capital-position-bar .capital-position-tags {
     display: none;
+  }
+
+  .capital-position > .capital-position-bar,
+  .capital-event > .capital-position-bar {
+    justify-content: flex-end;
   }
 
   .capital-event-cost {

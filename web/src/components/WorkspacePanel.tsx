@@ -12,6 +12,9 @@ export interface WorkspacePanelProps {
   /** Extra class for the panel root. Used by Underwrite to opt into the
    * fill-available-height treatment its Results tables need. */
   className?: string;
+  /** Page-level actions for this workspace, set on the right of its head
+   * row -- for example Overview's Create Managed Asset. */
+  actions?: ReactNode;
   children: ReactNode;
 }
 
@@ -34,6 +37,7 @@ export function WorkspacePanel({
   title,
   subtitle,
   className,
+  actions,
   children,
 }: WorkspacePanelProps) {
   return (
@@ -47,6 +51,9 @@ export function WorkspacePanel({
       <div className="workspace-panel-head">
         <h2 className="workspace-title">{title}</h2>
         <p className="workspace-subtitle">{subtitle}</p>
+        {actions !== undefined && actions !== null && (
+          <div className="workspace-panel-actions">{actions}</div>
+        )}
       </div>
       <div className="workspace-body">{children}</div>
     </section>

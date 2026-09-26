@@ -403,7 +403,7 @@ function PartnerCard({
       <div className="partnership-card-actions">
         <button
           type="button"
-          className="btn btn-ghost btn-xs"
+          className="btn btn-remove btn-xs"
           onClick={remove}
           disabled={locked}
         >
@@ -521,7 +521,7 @@ function ConditionCard({
       </div>
 
       <div className="partnership-card-actions">
-        <button type="button" className="btn btn-ghost btn-xs" onClick={remove} disabled={locked}>
+        <button type="button" className="btn btn-remove btn-xs" onClick={remove} disabled={locked}>
           Remove condition
         </button>
       </div>
@@ -758,7 +758,7 @@ function TierCard({
             ))}
             <button
               type="button"
-              className="btn btn-secondary btn-xs"
+              className="btn btn-add btn-xs"
               onClick={() => replace({ ...tier, conditions: [...tier.conditions, newCondition(tier)] })}
               disabled={locked}
             >
@@ -835,7 +835,7 @@ function TierCard({
       <IssueList id={issuesId} issues={issues} />
 
       <div className="partnership-card-actions">
-        <button type="button" className="btn btn-ghost btn-xs" onClick={remove} disabled={locked}>
+        <button type="button" className="btn btn-remove btn-xs" onClick={remove} disabled={locked}>
           {`Remove ${tierDisplayName(tier)}`}
         </button>
       </div>
@@ -953,7 +953,7 @@ export function PartnershipEditor({
           <h5 className="partnership-editor-section-title">Partners</h5>
           <button
             type="button"
-            className="btn btn-secondary btn-xs"
+            className="btn btn-add btn-xs"
             onClick={addPartner}
             disabled={locked}
           >
@@ -1046,7 +1046,7 @@ export function PartnershipEditor({
               <button
                 key={kind}
                 type="button"
-                className="btn btn-secondary btn-xs"
+                className="btn btn-add btn-xs"
                 onClick={() => addTier(kind)}
                 disabled={locked}
               >

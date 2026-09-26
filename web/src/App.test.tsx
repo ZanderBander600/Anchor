@@ -1205,7 +1205,7 @@ describe('App workflow', () => {
 
     expect(screen.queryByText('7.91%')).toBeNull();
     expect(
-      screen.getByText(/Enter assumptions and click/),
+      screen.getByText(/Enter the assumptions in Underwrite, then select/),
     ).toBeTruthy();
   });
 
@@ -2721,7 +2721,7 @@ describe('Deal persistence workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Deal Library' }));
     await user.click(await screen.findByRole('button', { name: 'Open' }));
 
-    expect(await screen.findByText(/Enter assumptions and click/)).toBeTruthy();
+    expect(await screen.findByText(/Enter the assumptions in Underwrite, then select/)).toBeTruthy();
     expect(screen.queryByText('7.91%')).toBeNull();
   });
 
@@ -4645,7 +4645,7 @@ describe('Cross-mode persistence safety (Gate 11)', () => {
       'true',
     );
     expect(screen.queryByText('Key Returns')).toBeNull();
-    expect(screen.getByText(/Enter assumptions and click/)).toBeTruthy();
+    expect(screen.getByText(/Enter the assumptions in Underwrite, then select/)).toBeTruthy();
     expect(screen.getByLabelText(/^Purchase Price/)).toHaveProperty('value', shown('10000000'));
   });
 
@@ -5617,7 +5617,7 @@ describe('Persisted Analysis + AI Snapshots (Gate A6)', () => {
 
     expect(screen.queryByText('Key Returns')).toBeNull();
     expect(
-      screen.getByText('Enter assumptions and click', { exact: false }),
+      screen.getByText('Enter the assumptions in Underwrite, then select', { exact: false }),
     ).toBeTruthy();
 
     await user.click(screen.getByRole('tab', { name: 'Quick Underwrite' }));
@@ -6559,7 +6559,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     await waitFor(() => expect(screen.getByLabelText('Deal Name')).toHaveProperty('value', '111 Main St'));
 
     expect(activeWorkspace()).toBe('Underwrite');
-    expect(within(panel('overview')).getByText(/Enter assumptions and click/)).toBeTruthy();
+    expect(within(panel('overview')).getByText(/Enter the assumptions in Underwrite, then select/)).toBeTruthy();
     expect(within(panel('risk')).getByText('Analyze the deal to view risk analysis.')).toBeTruthy();
     expect(within(panel('ai')).getByText(/Analyze the deal first/)).toBeTruthy();
     // No fabricated N/A grids.
@@ -6601,7 +6601,7 @@ describe('Sprint C Gate C2 -- app shell', () => {
     fireEvent.change(screen.getByLabelText(/^Exit Cap Rate/), { target: { value: '6.5' } });
 
     expect(panel('overview').querySelector('.owner-summary-panel')).toBeNull();
-    expect(within(panel('overview')).getByText(/Enter assumptions and click/)).toBeTruthy();
+    expect(within(panel('overview')).getByText(/Enter the assumptions in Underwrite, then select/)).toBeTruthy();
     expect(within(panel('risk')).getByText('Analyze the deal to view risk analysis.')).toBeTruthy();
   });
 
@@ -8072,7 +8072,7 @@ describe('Sprint C Gate C5 -- polish and accessibility', () => {
     render(<App />);
 
     await goTo(user, 'Overview');
-    expect(within(panel('overview')).getByText(/Enter assumptions and click/)).toBeTruthy();
+    expect(within(panel('overview')).getByText(/Enter the assumptions in Underwrite, then select/)).toBeTruthy();
 
     await goTo(user, 'Underwrite');
     expect(within(liveCase()).getByText('Analyze the deal to populate live metrics.')).toBeTruthy();

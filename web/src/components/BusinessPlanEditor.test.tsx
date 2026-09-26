@@ -382,7 +382,7 @@ describe('presentation (D6.6 polish)', () => {
     expect(counts.map((count) => count.textContent)).toEqual(['3 items', '2 items']);
   });
 
-  it('keeps Remove a quiet text action and Add a secondary action', () => {
+  it('keeps Remove a quiet text action and Add a subordinate add-row action', () => {
     render(<Harness initial={loaded()} />);
     for (const remove of screen.getAllByRole('button', { name: /^Remove / })) {
       expect(remove.className).toBe('business-plan-remove');
@@ -390,7 +390,9 @@ describe('presentation (D6.6 polish)', () => {
     }
     for (const name of ['Add Project Capital', 'Add Owner Expense']) {
       const add = screen.getByRole('button', { name });
-      expect(add.className).toContain('btn-secondary');
+      // The design system's add-row action: subordinate to the primary
+      // action, never styled as one.
+      expect(add.className).toContain('btn-add');
       expect(add.className).not.toContain('btn-primary');
     }
   });

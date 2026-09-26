@@ -298,7 +298,7 @@ function OutcomeRow({ unitId, row, entries, taken, issues, locked, state }: Outc
         <td className="scenario-override-cell scenario-override-remove">
           <button
             type="button"
-            className="btn btn-ghost btn-xs"
+            className="btn btn-remove btn-xs"
             onClick={() => state.removeOutcomeRow(unitId, row.key)}
             disabled={locked}
             aria-label={`Remove ${label}`}
@@ -538,7 +538,7 @@ function UnitDomains({ state, unit, prefix, locked }: UnitDomainsProps) {
             <div>
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
+                className="btn btn-add btn-sm"
                 onClick={() => state.addOutcomeRow(unitId)}
                 disabled={locked || !canAddOutcome}
               >

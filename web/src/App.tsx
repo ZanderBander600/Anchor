@@ -2943,12 +2943,37 @@ export default function App() {
     onFieldChange: handleFieldChange,
   });
 
+  // Gate AM1: Overview's page-level Asset Management action, set in the
+  // workspace head row. Only for a saved Deal, and not while the create form
+  // is open below it.
+  const overviewAssetAction =
+    activeDealId === null || creatingAssetForDealId === activeDealId ? null : managedAssetOfDeal !== undefined ? (
+      <p className="am-deal-action-note">
+        This deal is under management as <strong>{managedAssetOfDeal.name}</strong>.{' '}
+        <button type="button" className="am-quiet-button" onClick={() => setSurface('asset-management')}>
+          Open in Asset Management
+        </button>
+      </p>
+    ) : (
+      <button
+        type="button"
+        className="am-quiet-button"
+        onClick={() => {
+          setCreateManagedAssetError(null);
+          setCreatingAssetForDealId(activeDealId);
+        }}
+      >
+        Create Managed Asset
+      </button>
+    );
+
   const detailedWorkspaces = (
     <>
       <WorkspacePanel
         id="overview"
         active={workspace}
         title="Overview"
+        actions={overviewAssetAction}
         subtitle="A concise view of the investment, key returns, and what drives the story."
       >
         <DealClassificationSummary draft={detailedClassification} />
@@ -3275,6 +3300,7 @@ export default function App() {
         id="overview"
         active={workspace}
         title="Overview"
+        actions={overviewAssetAction}
         subtitle="A concise view of the investment, key returns, and what drives the story."
       >
         <DealClassificationSummary draft={classification} />
@@ -3603,6 +3629,7 @@ export default function App() {
         id="overview"
         active={workspace}
         title="Overview"
+        actions={overviewAssetAction}
         subtitle="A concise view of the investment, key returns, and what drives the story."
       >
         <DealClassificationSummary draft={leaseLevel.classification} />
@@ -4050,73 +4077,54 @@ export default function App() {
               {/* Gate AM1 -- the one crossing point from Acquisitions into
                 * Asset Management. Offered on Overview only, and only for a
                 * saved Deal: an asset is created from an acquisition that is
-                * actually on file, never from an unsaved working deal. */}
-              {workspace === 'overview' && activeDealId !== null && (
+                * actually on file, never from an unsaved working deal. The
+                * action that opens this form, or the note that the Deal is
+                * already managed, sits in Overview's own head row
+                * (`overviewAssetAction`); the form itself opens here. */}
+              {workspace === 'overview' &&
+                activeDealId !== null &&
+                managedAssetOfDeal === undefined &&
+                creatingAssetForDealId === activeDealId && (
                 <div className="am-deal-action">
-                  {managedAssetOfDeal !== undefined ? (
-                    <p className="am-deal-action-note">
-                      This deal is under management as{' '}
-                      <strong>{managedAssetOfDeal.name}</strong>.{' '}
-                      <button
-                        type="button"
-                        className="am-quiet-button"
-                        onClick={() => setSurface('asset-management')}
-                      >
-                        Open in Asset Management
-                      </button>
-                    </p>
-                  ) : creatingAssetForDealId === activeDealId ? (
-                    <CreateManagedAssetPanel
-                      // Remount on any change of Deal identity, so every field
-                      // re-initializes from the Deal now on screen.
-                      key={activeDealId}
-                      dealName={byMode(operatingMode, {
-                        quick: dealName,
-                        detailed: detailedDealName,
-                        lease_level: leaseLevel.dealName,
-                      })}
-                      // Asset Types 1: the classification the server will
-                      // copy is the one saved with the Deal, not an unsaved
-                      // edit on screen -- the panel says which it is.
-                      savedClassification={byMode(operatingMode, {
-                        quick: savedSnapshot.classification,
-                        detailed: detailedSavedSnapshot.classification,
-                        lease_level: leaseLevel.savedClassification,
-                      })}
-                      hasUnsavedClassification={
-                        !isSameClassificationDraft(
-                          byMode(operatingMode, {
-                            quick: classification,
-                            detailed: detailedClassification,
-                            lease_level: leaseLevel.classification,
-                          }),
-                          byMode(operatingMode, {
-                            quick: savedSnapshot.classification,
-                            detailed: detailedSavedSnapshot.classification,
-                            lease_level: leaseLevel.savedClassification,
-                          }),
-                        )
-                      }
-                      isOpen
-                      onCancel={() => {
-                        setCreatingAssetForDealId(null);
-                        setCreateManagedAssetError(null);
-                      }}
-                      onCreate={handleCreateManagedAsset}
-                      error={createManagedAssetError}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      className="am-quiet-button"
-                      onClick={() => {
-                        setCreateManagedAssetError(null);
-                        setCreatingAssetForDealId(activeDealId);
-                      }}
-                    >
-                      Create Managed Asset
-                    </button>
-                  )}
+                  <CreateManagedAssetPanel
+                    // Remount on any change of Deal identity, so every field
+                    // re-initializes from the Deal now on screen.
+                    key={activeDealId}
+                    dealName={byMode(operatingMode, {
+                      quick: dealName,
+                      detailed: detailedDealName,
+                      lease_level: leaseLevel.dealName,
+                    })}
+                    // Asset Types 1: the classification the server will
+                    // copy is the one saved with the Deal, not an unsaved
+                    // edit on screen -- the panel says which it is.
+                    savedClassification={byMode(operatingMode, {
+                      quick: savedSnapshot.classification,
+                      detailed: detailedSavedSnapshot.classification,
+                      lease_level: leaseLevel.savedClassification,
+                    })}
+                    hasUnsavedClassification={
+                      !isSameClassificationDraft(
+                        byMode(operatingMode, {
+                          quick: classification,
+                          detailed: detailedClassification,
+                          lease_level: leaseLevel.classification,
+                        }),
+                        byMode(operatingMode, {
+                          quick: savedSnapshot.classification,
+                          detailed: detailedSavedSnapshot.classification,
+                          lease_level: leaseLevel.savedClassification,
+                        }),
+                      )
+                    }
+                    isOpen
+                    onCancel={() => {
+                      setCreatingAssetForDealId(null);
+                      setCreateManagedAssetError(null);
+                    }}
+                    onCreate={handleCreateManagedAsset}
+                    error={createManagedAssetError}
+                  />
                 </div>
               )}
 

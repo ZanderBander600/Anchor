@@ -190,7 +190,7 @@ export function InvestmentUnitsPanel({ workspace, investments, onOpenUnit }: Inv
                         </button>
                         <button
                           type="button"
-                          className="btn btn-ghost btn-xs"
+                          className="btn btn-remove btn-xs"
                           onClick={() => workspace.requestRemoval(unitId)}
                           disabled={isLastUnit || structureLocked || structureBusy}
                           title={isLastUnit ? LAST_UNIT_MESSAGE : undefined}

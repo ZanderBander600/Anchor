@@ -197,7 +197,7 @@ function OverrideRow({ row, taken, issues, state, withUnit }: OverrideRowProps) 
         <td className="scenario-override-cell scenario-override-remove">
           <button
             type="button"
-            className="btn btn-ghost btn-xs"
+            className="btn btn-remove btn-xs"
             onClick={() => state.removeRow(row.key)}
             disabled={locked}
             aria-label={`Remove ${label} override`}
@@ -333,7 +333,7 @@ export function ScenarioEditor({ id, state, editor }: ScenarioEditorProps) {
           </p>
         )}
         <div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={state.addRow} disabled={locked || !canAddRow}>
+          <button type="button" className="btn btn-add btn-sm" onClick={state.addRow} disabled={locked || !canAddRow}>
             Add Override
           </button>
         </div>

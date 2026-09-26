@@ -251,7 +251,7 @@ export function InvestmentLibraryPanel({
                           </button>
                           <button
                             type="button"
-                            className="btn btn-ghost btn-xs"
+                            className="btn btn-remove btn-xs"
                             onClick={() => {
                               setDeleteError(null);
                               setPendingDeleteId(investment.id);

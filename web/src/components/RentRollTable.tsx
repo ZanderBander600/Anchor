@@ -328,7 +328,7 @@ export function RentRollTable({
                     </button>
                     <button
                       type="button"
-                      className="btn btn-ghost btn-xs"
+                      className="btn btn-remove btn-xs"
                       disabled={disabled}
                       aria-label={`Delete ${name}`}
                       onClick={() => onDeleteRow(row.rowId)}

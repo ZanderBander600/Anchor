@@ -206,7 +206,7 @@ export function ScenarioWorkspace({ state }: ScenarioWorkspaceProps) {
                         </button>
                         <button
                           type="button"
-                          className="btn btn-ghost btn-xs"
+                          className="btn btn-remove btn-xs"
                           onClick={() => state.requestDelete(scenarioId)}
                           disabled={!state.canEdit || state.pendingDeleteId !== null}
                           aria-label={`Delete ${name}`}

@@ -123,7 +123,7 @@ export function TransactionCostEditor({ costs, issues, disabled, onAdd, onChange
                   <td className="investment-cost-remove">
                     <button
                       type="button"
-                      className="btn btn-ghost btn-xs"
+                      className="btn btn-remove btn-xs"
                       onClick={() => onRemove(cost.costId)}
                       disabled={disabled}
                       aria-label={`Remove ${label} (${transactionCostCategoryLabel(cost.category)})`}
@@ -138,7 +138,7 @@ export function TransactionCostEditor({ costs, issues, disabled, onAdd, onChange
         </table>
       )}
       <div>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onAdd} disabled={disabled}>
+        <button type="button" className="btn btn-add btn-sm" onClick={onAdd} disabled={disabled}>
           Add Transaction Cost
         </button>
       </div>

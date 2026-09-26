@@ -216,7 +216,7 @@ export function StrategyManager({ state }: StrategyManagerProps) {
                       </button>
                       <button
                         type="button"
-                        className="btn btn-ghost btn-xs"
+                        className="btn btn-remove btn-xs"
                         onClick={() => state.requestDelete(strategyId)}
                         disabled={!state.canEdit || state.pendingDeleteId !== null}
                         aria-label={`Delete ${name}`}

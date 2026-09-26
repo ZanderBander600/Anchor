@@ -79,7 +79,7 @@ export function MemoEvidencePanel({
       <section className="memo-section">
         <div className="memo-section-head">
           <h3 className="memo-section-title">Sources</h3>
-          <button type="button" className="btn btn-secondary btn-xs" onClick={startNew}>
+          <button type="button" className="btn btn-add btn-xs" onClick={startNew}>
             Add source
           </button>
         </div>
@@ -175,7 +175,7 @@ export function MemoEvidencePanel({
                       </button>
                       <button
                         type="button"
-                        className="btn btn-ghost btn-xs"
+                        className="btn btn-remove btn-xs"
                         onClick={() => {
                           onClearError();
                           setPendingRemoval(item.evidence_id);

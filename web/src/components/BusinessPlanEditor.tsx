@@ -542,7 +542,7 @@ export function BusinessPlanEditor({
           <button
             id={ADD_CAPITAL_ID}
             type="button"
-            className="btn btn-secondary btn-sm business-plan-add"
+            className="btn btn-add btn-sm business-plan-add"
             disabled={disabled}
             onClick={handleAddCapital}
           >
@@ -705,7 +705,7 @@ export function BusinessPlanEditor({
           <button
             id={ADD_OWNER_EXPENSE_ID}
             type="button"
-            className="btn btn-secondary btn-sm business-plan-add"
+            className="btn btn-add btn-sm business-plan-add"
             disabled={disabled}
             onClick={handleAddOwnerExpense}
           >
