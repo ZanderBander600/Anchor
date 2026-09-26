@@ -1853,6 +1853,183 @@ table td.col-text {
 }
 
 /* =========================================================================
+   Capital Structure -- the saved stack at a glance (view mode)
+
+   One ruled register: each position's name and class, its priority, scope,
+   funding and key terms; then one line per refinance naming what it repays
+   and funds. Authored facts only -- what the stack earns and is owed is the
+   structured analysis below.
+   ========================================================================= */
+
+.capital-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.capital-stack-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--ws-rule);
+  border-radius: var(--radius-control);
+  background: #fff;
+}
+
+.capital-stack-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.capital-stack-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ws-fs-table);
+  font-variant-numeric: tabular-nums;
+}
+
+.capital-stack-table thead th {
+  padding: 8px 12px;
+  background: var(--ws-th-bg);
+  border-bottom: 1px solid var(--ws-rule);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ws-th-text);
+  white-space: nowrap;
+}
+
+.capital-stack-table tbody th,
+.capital-stack-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ws-row-rule);
+  vertical-align: top;
+  color: #1f2a3c;
+  font-weight: 400;
+}
+
+.capital-stack-table tbody tr:last-child th,
+.capital-stack-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.capital-stack-table tbody th {
+  min-width: 10rem;
+}
+
+.capital-stack-table tbody td:nth-child(5) {
+  min-width: 14rem;
+}
+
+.capital-stack-name {
+  display: block;
+  font-weight: 650;
+  color: #0e1a2b;
+}
+
+.capital-stack-class {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #5b6576;
+}
+
+/* In a narrow card each position stacks: its name, then each fact on its own
+   labelled line (the column header, repeated from data-label). */
+.capital-stack {
+  container-type: inline-size;
+  container-name: capital-stack;
+}
+
+@container capital-stack (width < 620px) {
+  .capital-stack-scroll {
+    overflow-x: visible;
+  }
+
+  .capital-stack-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .capital-stack-table tbody tr {
+    display: block;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--ws-row-rule);
+  }
+
+  .capital-stack-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .capital-stack-table tbody th,
+  .capital-stack-table tbody td {
+    display: flex;
+    gap: 10px;
+    padding: 2px 0;
+    border-bottom: 0;
+    min-width: 0;
+    text-align: left;
+  }
+
+  .capital-stack-table tbody th {
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  .capital-stack-table tbody td:nth-child(5) {
+    min-width: 0;
+  }
+
+  .capital-stack-table tbody td::before {
+    content: attr(data-label);
+    flex: 0 0 5.5rem;
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ws-th-text);
+    padding-top: 2px;
+  }
+}
+
+.capital-stack-events {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--ws-rule);
+  border-radius: var(--radius-control);
+  background: #fff;
+}
+
+.capital-stack-event {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 10px 12px;
+  font-size: var(--ws-fs-table);
+  border-bottom: 1px solid var(--ws-row-rule);
+}
+
+.capital-stack-event:last-child {
+  border-bottom: 0;
+}
+
+.capital-stack-event-name {
+  font-weight: 650;
+  color: #0e1a2b;
+}
+
+.capital-stack-event-facts {
+  color: #445066;
+}
+
+/* =========================================================================
    Capital Structure results
    ========================================================================= */
 
@@ -2135,6 +2312,258 @@ table td.col-text {
    section rules and titles, not from hiding a figure. Nothing is coloured as
    a better or worse outcome for a partner.
    ========================================================================= */
+
+/* --- Saved Partnership at a glance (view mode) ----------------------------
+   Partners as one register; the waterfall as an ordered run of tiers on a
+   rail, each marked with its own sequence. Neutral throughout: a tier's kind
+   is a label, never a colour of better or worse. */
+
+.partnership-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.partnership-summary-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.partnership-summary-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.partnership-summary-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 680;
+  color: #0e1a2b;
+}
+
+.partnership-summary-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: #5b6576;
+}
+
+.partnership-summary-scroll {
+  border: 1px solid var(--ws-rule);
+  border-radius: var(--radius-control);
+  background: #fff;
+}
+
+.partnership-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ws-fs-table);
+  font-variant-numeric: tabular-nums;
+}
+
+.partnership-summary-table thead th {
+  padding: 8px 12px;
+  background: var(--ws-th-bg);
+  border-bottom: 1px solid var(--ws-rule);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ws-th-text);
+  white-space: nowrap;
+}
+
+.partnership-summary-table tbody th,
+.partnership-summary-table tbody td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--ws-row-rule);
+  vertical-align: middle;
+  font-weight: 400;
+  color: #1f2a3c;
+}
+
+.partnership-summary-table tbody tr:last-child th,
+.partnership-summary-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.partnership-summary-name {
+  display: block;
+  font-weight: 650;
+  color: #0e1a2b;
+}
+
+.partnership-summary-role {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  color: #5b6576;
+}
+
+.partnership-summary-muted {
+  color: #5b6576;
+}
+
+/* In a narrow card each partner stacks, each fact on a labelled line. */
+.partnership-summary-block {
+  container-type: inline-size;
+  container-name: partnership-summary;
+}
+
+@container partnership-summary (width < 560px) {
+  .partnership-summary-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .partnership-summary-table tbody tr {
+    display: block;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--ws-row-rule);
+  }
+
+  .partnership-summary-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .partnership-summary-table tbody th {
+    display: block;
+    padding: 0 0 6px;
+    border-bottom: 0;
+  }
+
+  .partnership-summary-table tbody td {
+    display: flex;
+    gap: 10px;
+    padding: 2px 0;
+    border-bottom: 0;
+    text-align: left;
+  }
+
+  .partnership-summary-table tbody td .ws-tag {
+    white-space: normal;
+  }
+
+  .partnership-summary-table tbody td::before {
+    content: attr(data-label);
+    flex: 0 0 7rem;
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ws-th-text);
+    padding-top: 2px;
+  }
+}
+
+.partnership-flow {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The rail joining the tiers, behind their sequence markers. */
+.partnership-flow::before {
+  content: '';
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: 17px;
+  width: 2px;
+  background: var(--ws-rule-strong);
+}
+
+.partnership-flow-tier {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.partnership-flow-sequence {
+  flex: 0 0 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--ws-navy);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 4px #fff;
+  z-index: 1;
+}
+
+.partnership-flow-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--ws-rule);
+  border-left: 3px solid var(--ws-navy);
+  border-radius: var(--radius-control);
+  background: #fff;
+}
+
+.partnership-flow-catch_up .partnership-flow-body {
+  border-left-color: #5b6f95;
+}
+
+.partnership-flow-residual .partnership-flow-body {
+  border-left-color: #98a4b8;
+}
+
+.partnership-flow-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 6px;
+}
+
+.partnership-flow-name {
+  font-size: 14px;
+  font-weight: 650;
+  color: #0e1a2b;
+}
+
+.partnership-flow-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  gap: 6px 20px;
+  margin: 0;
+}
+
+.partnership-flow-facts dt {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ws-th-text);
+}
+
+.partnership-flow-facts dd {
+  margin: 1px 0 0;
+  font-size: var(--ws-fs-table);
+  color: #1f2a3c;
+  overflow-wrap: anywhere;
+}
+
+.partnership-card-actions {
+  margin-top: 4px;
+}
 
 .partnership-results {
   gap: 0;

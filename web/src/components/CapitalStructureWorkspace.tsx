@@ -22,10 +22,10 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { POSITION_CLASS_LABELS } from '../capitalStructureForm';
 import type { CapitalStructureState } from '../useCapitalStructure';
 import { useValuationChoices } from '../useCapitalEventChoices';
 import { CapitalEventAuditAction } from './CapitalEventAuditAction';
+import { CapitalStackSummary } from './CapitalStackSummary';
 import { CapitalStructureEditor } from './CapitalStructureEditor';
 import type { ScopeUnit } from './CapitalStructureEditor';
 import { CapitalStructureResults } from './CapitalStructureResults';
@@ -67,10 +67,6 @@ export const INVESTMENT_SUBTITLE =
 // prettier-ignore
 export const ANALYSIS_ABSENT_MESSAGE =
   'Run the analysis to see what each position funds, earns and is owed, and any Funding Requirement it creates.';
-
-function positionCount(count: number): string {
-  return count === 1 ? '1 position' : `${count} positions`;
-}
 
 export function CapitalStructureWorkspace({
   state,
@@ -154,31 +150,11 @@ export function CapitalStructureWorkspace({
         )}
 
         {state.listStatus === 'ready' && !isEmpty && !state.hasDraft && (
-          <ul className="scenario-list capital-saved-list" aria-label="Saved capital structure">
-            {state.saved.positions.map((position) => (
-              <li key={position.position_id} className="scenario-list-item">
-                <div className="scenario-list-identity">
-                  <span className="scenario-list-name">{position.name}</span>
-                  <span className="scenario-list-description">
-                    {POSITION_CLASS_LABELS[position.position_class]}
-                  </span>
-                </div>
-                <div className="scenario-list-overrides">
-                  <span className="scenario-list-count">
-                    {position.scope.kind === 'investment'
-                      ? 'Whole Investment'
-                      : (unitNames[position.scope.unit_id ?? ''] ?? 'Unit')}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {state.listStatus === 'ready' && !isEmpty && !state.hasDraft && (
-          <p className="scenario-muted capital-saved-count">
-            {positionCount(state.saved.positions.length)}
-          </p>
+          <CapitalStackSummary
+            structure={state.saved}
+            unitNames={unitNames}
+            multiUnit={units.length > 1}
+          />
         )}
 
         {state.hasDraft && state.draft !== null && (

@@ -53,6 +53,9 @@ const REFINANCE_MODULES = [
   'components/CapitalEventEditor.tsx',
   'components/CapitalEventMatrixNote.tsx',
   'components/CapitalEventResults.tsx',
+  // Workstation polish pass: the saved stack's read-only summary, which names
+  // the refinance relationship and so lives with these modules.
+  'components/CapitalStackSummary.tsx',
 ];
 
 /** The only computation sites any Stage 3 module holds, by module. */

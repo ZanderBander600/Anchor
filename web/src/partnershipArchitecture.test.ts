@@ -80,6 +80,8 @@ const PARTNERSHIP_MODULES = [
   'components/PartnershipResults.tsx',
   'components/PartnershipWorkspace.tsx',
   'components/PartnerDecisionMatrixPanel.tsx',
+  // Workstation polish pass: the saved Partnership's read-only summary.
+  'components/PartnershipSummary.tsx',
 ];
 
 function parse(fileName: string, text: string): ts.SourceFile {
@@ -210,6 +212,7 @@ describe('the Partnership UI computes nothing', () => {
       'components/PartnershipResults.tsx': [],
       'components/PartnershipWorkspace.tsx': [],
       'components/PartnerDecisionMatrixPanel.tsx': [],
+      'components/PartnershipSummary.tsx': [],
     });
   });
 

@@ -24,11 +24,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { PARTNER_ROLE_LABELS, TIER_KIND_LABELS, conditionAuditLabels } from '../partnershipForm';
+import { conditionAuditLabels } from '../partnershipForm';
 import type { Partnership } from '../partnershipTypes';
 import type { PartnershipState } from '../usePartnership';
 import { PartnershipEditor } from './PartnershipEditor';
 import { PartnershipResults } from './PartnershipResults';
+import { PartnershipSummary } from './PartnershipSummary';
 import { StaleAnalysisNotice } from './StaleAnalysisNotice';
 
 // prettier-ignore
@@ -75,14 +76,6 @@ export const REMOVE_CONFIRM_MESSAGE =
 // prettier-ignore
 export const REMOVE_CONFIRM_QUESTION =
   'Remove this partnership?';
-
-function partnerCount(count: number): string {
-  return count === 1 ? '1 partner' : `${count} partners`;
-}
-
-function tierCount(count: number): string {
-  return count === 1 ? '1 tier' : `${count} tiers`;
-}
 
 /** The authored names, by id. The Stage 1 result deliberately carries no
  * display names, so the result surface is given the ones the Partnership this
@@ -230,45 +223,7 @@ export function PartnershipWorkspace({
 
         {state.listStatus === 'ready' && saved !== null && !state.hasDraft && (
           <>
-            <ul className="scenario-list partnership-saved-list" aria-label="Saved partners">
-              {saved.partners.map((partner) => (
-                <li key={partner.partner_id} className="scenario-list-item">
-                  <div className="scenario-list-identity">
-                    <span className="scenario-list-name">{partner.name}</span>
-                    <span className="scenario-list-description">
-                      {PARTNER_ROLE_LABELS[partner.role]}
-                    </span>
-                  </div>
-                  <div className="scenario-list-overrides">
-                    <span className="scenario-list-count">
-                      {saved.promote_participant_ids.includes(partner.partner_id)
-                        ? 'Promote participant'
-                        : 'No promote'}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-
-            <ul className="scenario-list partnership-saved-list" aria-label="Saved waterfall tiers">
-              {saved.tiers.map((tier) => (
-                <li key={tier.tier_id} className="scenario-list-item">
-                  <div className="scenario-list-identity">
-                    <span className="scenario-list-name">{tier.name}</span>
-                    <span className="scenario-list-description">
-                      {TIER_KIND_LABELS[tier.kind]}
-                    </span>
-                  </div>
-                  <div className="scenario-list-overrides">
-                    <span className="scenario-list-count">{`Sequence ${tier.sequence}`}</span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-
-            <p className="scenario-muted partnership-saved-count">
-              {`${partnerCount(saved.partners.length)}, ${tierCount(saved.tiers.length)}`}
-            </p>
+            <PartnershipSummary partnership={saved} />
 
             <div className="partnership-card-actions">
               {isConfirmingRemove ? (
@@ -303,7 +258,7 @@ export function PartnershipWorkspace({
                 <button
                   ref={removeButton}
                   type="button"
-                  className="btn btn-remove btn-xs"
+                  className="btn btn-danger-outline btn-sm"
                   onClick={() => setConfirmingRemovalOf(saved)}
                   disabled={blockedReason !== null || state.isSaving}
                 >
