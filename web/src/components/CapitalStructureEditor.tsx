@@ -57,7 +57,7 @@ import type {
   PositionClass,
   ShortfallResolution,
 } from '../capitalTypes';
-import { CapitalEventEditor } from './CapitalEventEditor';
+import { CapitalEventEditor, GoToRefinance } from './CapitalEventEditor';
 import { NumericInput } from './NumericInput';
 
 /** One Unit a position may be scoped to, named as the analyst knows it. */
@@ -257,15 +257,52 @@ function PositionCard({
   // Refinance V1 Stage 3: a position funded by a capital event states no
   // closing funding of its own. The event sizes its principal.
   const fundingEvent = position.fundingKind === 'capital_event' ? eventFunding(form, position.positionId) : undefined;
+  // The refinance card this loan's principal comes from, so the two linked
+  // records can be reached from one another without scrolling in search.
+  const fundingEventIds =
+    fundingEvent === undefined ? null : `${prefix}-event-${formEvents(form).indexOf(fundingEvent)}`;
+  const scopeText =
+    position.scopeKind === 'investment'
+      ? 'Whole Investment'
+      : offersScope
+        ? (units.find((unit) => unit.unitId === position.scopeUnitId)?.name ?? 'Unit')
+        : null;
 
   return (
     <fieldset
+      id={ids}
       className={issues.length > 0 ? 'capital-position capital-position-error' : 'capital-position'}
       aria-describedby={describedBy}
     >
       <legend className="capital-position-legend">
         {position.name.trim() === '' ? POSITION_CLASS_LABELS[position.positionClass] : position.name}
       </legend>
+
+      {/* The card's own header: what the position is, where it ranks, and
+        * the action that removes it -- beside the thing it removes. */}
+      <div className="capital-position-bar">
+        <span className="capital-position-tags">
+          <span className="ws-tag">{POSITION_CLASS_LABELS[position.positionClass]}</span>
+          {claimBearing && position.priority.trim() !== '' && (
+            <span className="capital-position-fact">{`Priority ${position.priority.trim()}`}</span>
+          )}
+          {scopeText !== null && <span className="capital-position-fact">{scopeText}</span>}
+          {fundingEvent !== undefined && (
+            <span className="ws-tag ws-tag-linked">Replacement loan</span>
+          )}
+        </span>
+        <div className="capital-position-actions">
+          <button
+            type="button"
+            className="btn btn-remove btn-xs"
+            onClick={remove}
+            disabled={locked}
+            aria-label={`Remove ${position.name.trim() === '' ? position.positionId : position.name}`}
+          >
+            Remove Position
+          </button>
+        </div>
+      </div>
 
       <div className="capital-position-head">
         <div className="field">
@@ -356,13 +393,16 @@ function PositionCard({
       {claimBearing && (
         <>
           {position.fundingKind === 'capital_event' ? (
-            <p className="capital-position-note capital-position-funded-by">
-              {fundingEvent === undefined
-                ? 'Funded by a capital event. Select this loan as a replacement loan below, or remove it.'
-                : `Funded by “${fundingEvent.label.trim() === '' ? 'the capital event' : fundingEvent.label.trim()}”${
-                    eventTimingLabel(fundingEvent) === null ? '' : ` at the ${eventTimingLabel(fundingEvent)}`
-                  }. Its principal is the gross proceeds that event sizes, and its lender fee is paid on that date.`}
-            </p>
+            <div className="capital-position-funded">
+              <p className="capital-position-note capital-position-funded-by">
+                {fundingEvent === undefined
+                  ? 'Funded by a capital event. Select this loan as a replacement loan below, or remove it.'
+                  : `Funded by “${fundingEvent.label.trim() === '' ? 'the capital event' : fundingEvent.label.trim()}”${
+                      eventTimingLabel(fundingEvent) === null ? '' : ` at the ${eventTimingLabel(fundingEvent)}`
+                    }. Its principal is the gross proceeds that event sizes, and its lender fee is paid on that date.`}
+              </p>
+              {fundingEventIds !== null && <GoToRefinance eventIds={fundingEventIds} />}
+            </div>
           ) : (
           <div className="capital-position-group" role="group" aria-label="Funding">
             <div className="strategy-mode" role="radiogroup" aria-label="Funding amount">
@@ -564,18 +604,6 @@ function PositionCard({
       )}
 
       <IssueList id={issuesId} issues={issues} />
-
-      <div className="capital-position-actions">
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs"
-          onClick={remove}
-          disabled={locked}
-          aria-label={`Remove ${position.name.trim() === '' ? position.positionId : position.name}`}
-        >
-          Remove Position
-        </button>
-      </div>
     </fieldset>
   );
 }
@@ -670,7 +698,7 @@ export function CapitalStructureEditor({
           <button
             key={positionClass}
             type="button"
-            className="btn btn-ghost btn-sm"
+            className="btn btn-add btn-sm"
             onClick={() => add(positionClass)}
             disabled={locked}
           >

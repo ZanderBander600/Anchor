@@ -1,29 +1,35 @@
 :root {
-  --color-bg: #f5f6f8;
+  /* Legacy panel tokens. Converged onto the workstation palette below (UI/UX
+     workstation refinement): the names stay because hundreds of gate-era
+     rules use them, but they now resolve to the same navy, slate and
+     semantic colours as the V3 tokens, so the two vocabularies no longer
+     paint two different products. The shared primitives that consume these
+     tokens live in `workstation.css`, loaded after this file. */
+  --color-bg: #f3f5f8;
   --color-surface: #ffffff;
-  --color-surface-muted: #fafbfc;
-  --color-border: #e1e5eb;
-  --color-divider: #eef0f3;
-  --color-text: #1a1d24;
-  --color-text-muted: #626a78;
+  --color-surface-muted: #f8fafc;
+  --color-border: #e1e6ed;
+  --color-divider: #edf0f4;
+  --color-text: #111826;
+  --color-text-muted: #5b6576;
   --color-accent: #0f2c4c;
   --color-accent-hover: #0a2039;
-  --color-accent-light: #2f6fb0;
-  --color-accent-soft: rgba(15, 44, 76, 0.06);
+  --color-accent-light: #1d5fd0;
+  --color-accent-soft: rgba(15, 44, 76, 0.05);
   --color-accent-soft-strong: rgba(15, 44, 76, 0.1);
-  --color-positive: #1f7a3f;
-  --color-positive-bg: #e2f4e8;
+  --color-positive: #17693a;
+  --color-positive-bg: #e6f4ec;
   --color-warning: #8a5a06;
-  --color-warning-bg: #fbecd0;
+  --color-warning-bg: #fcf1dc;
   --color-info: #1a5fa8;
-  --color-info-bg: #e1edfa;
-  --color-negative: #a02b2b;
-  --color-negative-bg: #fbeaea;
-  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 4px rgba(16, 24, 40, 0.05);
+  --color-info-bg: #e8f1fc;
+  --color-negative: #a4262c;
+  --color-negative-bg: #fbecec;
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05);
   --radius-card: 8px;
-  --radius-control: 5px;
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
-    sans-serif;
+  --radius-control: 6px;
+  --font-sans: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto,
+    'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 
   /* =====================================================================
@@ -45,25 +51,27 @@
   --nav-border: rgba(255, 255, 255, 0.08);
 
   /* Workspace (light) */
-  --app-bg: #f7f8fa;
+  --app-bg: #f3f5f8;
   --surface: #ffffff;
-  --surface-muted: #f9fafb;
-  --border: #e3e7ed;
-  --border-strong: #cbd2dc;
+  --surface-muted: #f8fafc;
+  --border: #e1e6ed;
+  --border-strong: #c9d1dc;
   --text: #111826;
-  --text-secondary: #4a5568;
-  --text-muted: #77808f;
+  --text-secondary: #3f4a5c;
+  /* #667085 holds 4.9:1 on white; the earlier #77808f (4.0:1) failed AA
+     at the 11-12px sizes it is used for. */
+  --text-muted: #667085;
 
   /* Accent and semantics */
   --accent: #1d5fd0;
   --accent-hover: #174ead;
   --accent-soft: #eef4fd;
   --accent-border: #c7dbf7;
-  --success: #1f7a3f;
+  --success: #17693a;
   --success-soft: #e6f4ec;
   --warning: #8a5a06;
   --warning-soft: #fdf1da;
-  --danger: #a72b2b;
+  --danger: #a4262c;
   --danger-soft: #fbeaea;
   --focus-ring: 0 0 0 3px rgba(29, 95, 208, 0.28);
   --focus-ring-dark: 0 0 0 3px rgba(120, 170, 255, 0.42);

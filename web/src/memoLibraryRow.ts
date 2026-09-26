@@ -44,8 +44,13 @@ export interface MemoLibraryRow {
   classification: string;
   units: string;
   status: string;
+  /** Which state the status names, for its chip: a draft only, a published
+   * version, or a published version with a newer draft open. */
+  statusTone: 'draft' | 'published' | 'published-draft';
   recommendation: string;
   decision: string;
+  /** Whether the committee has recorded a decision at all. */
+  decisionRecorded: boolean;
   /** The Strategy and Scenario the memo is written from, named, never keyed. */
   cell: string | null;
   activity: string;
@@ -61,6 +66,8 @@ export function describeEntry(entry: MemoLibraryEntry): MemoLibraryRow {
     classification: classificationOf(entry),
     units: unitsOf(entry),
     status: statusOf(entry),
+    statusTone:
+      entry.latest_version_number === null ? 'draft' : entry.has_draft ? 'published-draft' : 'published',
     recommendation:
       entry.analyst_recommendation === null
         ? 'Not stated'
@@ -72,6 +79,7 @@ export function describeEntry(entry: MemoLibraryEntry): MemoLibraryRow {
       entry.committee_decision === null
         ? 'Not yet recorded'
         : COMMITTEE_LABELS[entry.committee_decision],
+    decisionRecorded: entry.committee_decision !== null,
     cell: cellOf(entry),
     activity: displayDate(entry.latest_published_at ?? entry.draft_updated_at) ?? 'Not yet saved',
     action: started ? 'Open memo' : 'Start memo',

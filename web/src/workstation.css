@@ -1,0 +1,2420 @@
+/* =========================================================================
+   Anchor Workstation design system (UI/UX workstation refinement).
+
+   Loaded after `index.css`. That file holds each gate's own layout and the
+   rules its architecture guards pin; this file holds the conventions every
+   surface shares, so a button, a section title, a table header or a status
+   reads the same wherever it appears.
+
+   Presentation only. Nothing here hides, reorders or re-derives a figure:
+   every value on screen is still the engine's own, in the order and with the
+   disclosures the owning gate specified.
+
+   Order: tokens -> base -> actions -> surfaces and titles -> forms -> tables
+   -> navigation -> status -> shell -> surfaces (by workspace) -> responsive.
+
+   Responsive rules use range syntax (`width <= 1023px`) so they never collide
+   with the `@media (max-width: ...)` blocks the gate guards locate by text.
+   Nothing below changes a rule inside a collapsed-rail or narrow-width block
+   unless it is itself scoped to that width.
+   ========================================================================= */
+
+:root {
+  /* Brand */
+  --ws-navy: #0f2c4c;
+  --ws-navy-hover: #0a2039;
+  --ws-navy-soft: #eef2f7;
+
+  /* Type scale */
+  --ws-fs-eyebrow: 11px;
+  --ws-fs-label: 12px;
+  --ws-fs-meta: 12px;
+  --ws-fs-body: 13.5px;
+  --ws-fs-table: 13px;
+  --ws-fs-section: 15px;
+  --ws-fs-page: 20px;
+  --ws-fs-metric: 26px;
+  --ws-fs-metric-sm: 18px;
+
+  /* Section titles: slate, not accent blue -- blue is reserved for state. */
+  --ws-title: #2c3a4f;
+
+  /* Controls */
+  --ws-control-h: 34px;
+  --ws-control-h-sm: 30px;
+  --ws-control-h-xs: 26px;
+  --ws-control-border: #cdd5df;
+  --ws-control-border-hover: #9eacbf;
+
+  /* Surfaces */
+  --ws-card-pad: 20px;
+  --ws-card-pad-sm: 16px;
+  --ws-inset: #f6f8fb;
+  --ws-rule: #e6eaf0;
+  --ws-rule-strong: #c9d1dc;
+
+  /* Tables */
+  --ws-th-bg: #f6f8fb;
+  --ws-th-text: #4a5568;
+  --ws-row-rule: #edf0f4;
+  --ws-total-rule: #aeb9c7;
+  --ws-row-hover: #f8fafd;
+
+  /* Semantic */
+  --ws-positive: #17693a;
+  --ws-positive-soft: #e7f4ec;
+  --ws-negative: #a4262c;
+  --ws-negative-soft: #fbecec;
+  --ws-caution: #8a5a06;
+  --ws-caution-soft: #fcf1dc;
+  --ws-info: #1d5fd0;
+  --ws-info-soft: #edf3fd;
+  --ws-stale: #8a5a06;
+
+  --ws-ease: cubic-bezier(0.2, 0, 0.15, 1);
+}
+
+/* -------------------------------------------------------------------------
+   Base
+   ------------------------------------------------------------------------- */
+
+body {
+  color: var(--text);
+  font-size: var(--ws-fs-body);
+  text-rendering: optimizeLegibility;
+}
+
+/* Every figure in a table, a metric or an input is comparable column by
+   column. */
+table,
+input,
+select,
+.info-value,
+.metric-card-value,
+.mini-metric-value,
+.live-case-metric-value {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: #cfe0fb;
+}
+
+/* -------------------------------------------------------------------------
+   Actions -- one hierarchy for the whole product.
+
+   primary   navy fill: the one action a surface exists for.
+   secondary outlined navy: clearly interactive, subordinate.
+   ghost     neutral outline, dark text: tertiary, never reads as disabled.
+   add       dashed accent outline with a plus: "adds a row here".
+   remove    quiet text, danger on hover: sits beside what it removes.
+   danger    filled red: the confirming step of a destructive act only.
+   ------------------------------------------------------------------------- */
+
+.btn {
+  min-height: var(--ws-control-h);
+  padding: 0 14px;
+  gap: 6px;
+  border-radius: var(--radius-control);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.005em;
+  transition: background-color 120ms var(--ws-ease), border-color 120ms var(--ws-ease),
+    color 120ms var(--ws-ease), box-shadow 120ms var(--ws-ease);
+}
+
+.btn-sm {
+  min-height: var(--ws-control-h-sm);
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+
+.btn-xs {
+  min-height: var(--ws-control-h-xs);
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.btn:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+  background: #f1f3f6;
+  border-color: #e1e5eb;
+  color: #98a2b3;
+  box-shadow: none;
+}
+
+.btn-primary {
+  background: var(--ws-navy);
+  border-color: var(--ws-navy);
+  color: #fff;
+  box-shadow: 0 1px 1px rgba(15, 44, 76, 0.18);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--ws-navy-hover);
+  border-color: var(--ws-navy-hover);
+}
+
+.btn-secondary {
+  background: #fff;
+  border-color: #8fa1b8;
+  color: var(--ws-navy);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--ws-navy-soft);
+  border-color: var(--ws-navy);
+}
+
+.btn-ghost {
+  background: #fff;
+  border-color: var(--ws-control-border);
+  color: #25324a;
+  font-weight: 550;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--ws-info-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-add {
+  border-style: dashed;
+  border-color: #a8bddc;
+  background: #fff;
+  color: var(--accent);
+  font-weight: 600;
+  padding-left: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 3v10M3 8h10' stroke='%231d5fd0' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: 12px 12px;
+  background-position: 11px center;
+}
+
+.btn-sm.btn-add {
+  padding-left: 28px;
+  background-position: 10px center;
+}
+
+.btn-xs.btn-add {
+  padding-left: 25px;
+  background-size: 11px 11px;
+  background-position: 9px center;
+}
+
+.btn-add:hover:not(:disabled) {
+  border-style: solid;
+  border-color: var(--accent);
+  background-color: var(--ws-info-soft);
+  color: var(--accent-hover);
+}
+
+.btn-add:disabled {
+  background-image: none;
+  padding-left: 12px;
+}
+
+.btn-remove {
+  background: transparent;
+  border-color: transparent;
+  color: #5b6576;
+  font-weight: 550;
+}
+
+.btn-remove:hover:not(:disabled) {
+  background: var(--ws-negative-soft);
+  border-color: #f0c9cb;
+  color: var(--ws-negative);
+}
+
+.btn-remove:disabled {
+  background: transparent;
+  border-color: transparent;
+}
+
+.btn-danger {
+  background: var(--ws-negative);
+  border-color: var(--ws-negative);
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  filter: none;
+  background: #8a1f24;
+  border-color: #8a1f24;
+}
+
+.btn:focus-visible,
+.icon-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+/* Asset Management's own button family, aligned with the shared hierarchy
+   rather than restyled piecemeal. */
+.am-primary-button,
+.am-secondary-button,
+.am-quiet-button,
+.am-danger-button {
+  min-height: var(--ws-control-h);
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-control);
+  transition: background-color 120ms var(--ws-ease), border-color 120ms var(--ws-ease),
+    color 120ms var(--ws-ease);
+}
+
+.am-primary-button {
+  background: var(--ws-navy);
+  border-color: var(--ws-navy);
+}
+
+.am-secondary-button {
+  background: #fff;
+  border: 1px solid #8fa1b8;
+  color: var(--ws-navy);
+}
+
+.am-quiet-button {
+  background: #fff;
+  border: 1px solid var(--ws-control-border);
+  color: #25324a;
+  font-weight: 550;
+}
+
+.am-secondary-button:hover:not(:disabled),
+.am-quiet-button:hover:not(:disabled) {
+  background: var(--ws-info-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* In the asset header Delete is one of three peers; it starts the act and a
+   confirmation follows, so it is outlined. The confirming button stays
+   filled. */
+.am-asset-actions .am-danger-button {
+  background: #fff;
+  border-color: #e3b4b7;
+  color: var(--ws-negative);
+}
+
+.am-asset-actions .am-danger-button:hover:not(:disabled) {
+  filter: none;
+  background: var(--ws-negative-soft);
+  border-color: var(--ws-negative);
+}
+
+/* -------------------------------------------------------------------------
+   Surfaces and titles
+   ------------------------------------------------------------------------- */
+
+.card,
+.scenario-panel,
+.assumption-section,
+.live-case,
+.metric-card,
+.am-card {
+  border-color: var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+.card {
+  border-radius: var(--radius-card);
+  padding: var(--ws-card-pad);
+}
+
+/* One card-level title across the product: small, uppercase, slate. Blue is
+   no longer spent on headings, so it can mean "active" and "interactive". */
+.card-title,
+.section-heading,
+.assumption-section-title,
+.live-case-title,
+.scenario-panel-title,
+.investment-section-label,
+.break-even-title,
+.ai-analyst-section-title,
+.om-section-title,
+.detailed-form-section-title,
+.suite-editor-section-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  color: var(--ws-title);
+}
+
+.card-title {
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom-color: var(--ws-rule);
+}
+
+.card-subtitle,
+.scenario-panel-subtitle {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.assumptions-group-title {
+  color: var(--ws-title);
+  font-size: 11px;
+}
+
+/* -------------------------------------------------------------------------
+   Forms
+   ------------------------------------------------------------------------- */
+
+.field-label {
+  font-size: var(--ws-fs-label);
+  font-weight: 550;
+  color: #3f4a5c;
+  line-height: 1.3;
+}
+
+.field-input,
+select.field-input {
+  min-height: var(--ws-control-h);
+  padding: 6px 10px;
+  border-color: var(--ws-control-border);
+  border-radius: var(--radius-control);
+  font-size: 13.5px;
+  color: var(--text);
+  background-color: #fff;
+  transition: border-color 120ms var(--ws-ease), box-shadow 120ms var(--ws-ease);
+}
+
+.field-input:hover:not(:disabled):not(:focus) {
+  border-color: var(--ws-control-border-hover);
+}
+
+.field-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(29, 95, 208, 0.18);
+}
+
+.field-input:disabled,
+.field-input[readonly] {
+  background: var(--ws-inset);
+  color: #4a5568;
+  border-color: #e1e6ed;
+}
+
+.field-input::placeholder {
+  color: #98a2b3;
+}
+
+.field-affix {
+  color: #7a8597;
+  font-size: 12.5px;
+}
+
+/* -------------------------------------------------------------------------
+   Tables -- one header, cell and total treatment.
+
+   Header alignment follows the column's own figures: the gate rules that
+   right-align numeric headers stay authoritative; this layer only sets the
+   type, rule and density they share.
+   ------------------------------------------------------------------------- */
+
+.data-table thead th,
+.cash-flow-table thead th,
+.capital-result-table thead th,
+.investment-table thead th,
+.am-table thead th,
+.partnership-audit-table thead th,
+.partnership-result-table thead th,
+.business-plan-table thead th,
+.capital-economics-table thead th,
+.scenario-override-table thead th,
+.sensitivity-table thead th {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ws-th-text);
+  vertical-align: bottom;
+  line-height: 1.3;
+}
+
+.capital-result-table,
+.investment-table,
+.am-table,
+.partnership-audit-table,
+.partnership-result-table {
+  font-size: var(--ws-fs-table);
+}
+
+.capital-result-table td,
+.investment-table td,
+.partnership-audit-table td,
+.partnership-result-table td {
+  border-bottom-color: var(--ws-row-rule);
+}
+
+/* A total is ruled above, not shaded: the eye finds it by the rule and the
+   weight, and the figure stays on the same white as the lines it totals. */
+.capital-result-total td,
+.capital-result-total th,
+tr.is-total td,
+tr.is-total th {
+  border-top: 1px solid var(--ws-total-rule);
+  font-weight: 650;
+}
+
+/* Contained scroll affordance: a table wider than its card scrolls inside a
+   bordered region, and says so with an edge shadow while there is more. */
+.table-scroll,
+.capital-table-scroll,
+.investment-table-scroll,
+.am-table-scroll,
+.partnership-table-scroll,
+.decision-matrix-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #c3cbd6 transparent;
+}
+
+/* -------------------------------------------------------------------------
+   Navigation levels
+
+   L1  workspace tabs (Overview / Underwrite / Risk ...): underline, in the
+       white header band.
+   L2  section bar (Acquisition / Operations ..., Decision Matrix / ...):
+       a contained bar whose active item is a raised white tab with a navy
+       label and an accent rule.
+   L3  inline tabs (Summary / Cash Flow ...): small underline text.
+   View toggles (Project / Position / Partner, Monthly / YTD) are not
+   navigation: compact, navy-filled when on.
+   ------------------------------------------------------------------------- */
+
+.workspace-nav {
+  gap: 4px;
+  padding: 0 var(--sp-6);
+}
+
+.workspace-tab {
+  height: 42px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  font-weight: 550;
+  color: #4a5568;
+}
+
+.workspace-tab::after {
+  left: 8px;
+  right: 8px;
+  height: 2.5px;
+}
+
+.workspace-tab:hover {
+  color: var(--ws-navy);
+}
+
+.workspace-tab-active {
+  color: var(--ws-navy);
+  font-weight: 650;
+}
+
+.sub-nav-segmented {
+  gap: 2px;
+  padding: 3px;
+  background: #e9edf3;
+  border: 1px solid #dde3eb;
+  border-radius: 8px;
+}
+
+.sub-nav-segmented .sub-nav-item {
+  position: relative;
+  min-height: 30px;
+  padding: 0 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 550;
+  color: #445066;
+}
+
+.sub-nav-segmented .sub-nav-item:hover:not(.sub-nav-item-active) {
+  color: var(--ws-navy);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.sub-nav-segmented .sub-nav-item-active {
+  background: #fff;
+  color: var(--ws-navy);
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.1), 0 0 0 1px rgba(16, 24, 40, 0.04);
+}
+
+.sub-nav-inline {
+  gap: 18px;
+  border-bottom-color: var(--ws-rule);
+}
+
+.sub-nav-inline .sub-nav-item {
+  padding-bottom: 8px;
+  font-size: 12.5px;
+  color: #5b6576;
+}
+
+.sub-nav-inline .sub-nav-item-active {
+  color: var(--ws-navy);
+  font-weight: 650;
+}
+
+/* -------------------------------------------------------------------------
+   Status
+   ------------------------------------------------------------------------- */
+
+.save-status {
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.save-status-saved {
+  background: var(--ws-positive-soft);
+  color: var(--ws-positive);
+}
+
+.save-status-unsaved-deal,
+.save-status-unsaved-changes {
+  background: var(--ws-caution-soft);
+  color: var(--ws-caution);
+}
+
+.error-banner {
+  border-color: #efc4c6;
+  border-left: 3px solid var(--ws-negative);
+  background: var(--ws-negative-soft);
+  color: #7f1d1d;
+  border-radius: var(--radius-control);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.success-banner {
+  border-left: 3px solid var(--ws-positive);
+}
+
+/* -------------------------------------------------------------------------
+   Shell -- sidebar
+   ------------------------------------------------------------------------- */
+
+.app-sidebar {
+  background: linear-gradient(180deg, #0c1a2e 0%, #0b1728 100%);
+  gap: 0;
+  padding: 14px 10px 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+.sidebar-brand {
+  padding: 2px 8px 14px;
+}
+
+.sidebar-brand-word {
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  font-weight: 650;
+}
+
+/* The product switch reads as one control, not two list items. */
+.sidebar-workspace-switch,
+.am-workspace-switch {
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.sidebar-workspace-switch .sidebar-nav-item,
+.am-workspace-switch .sidebar-nav-item {
+  min-height: 32px;
+  border-left-width: 0;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.sidebar-workspace-switch .sidebar-nav-item-active,
+.am-workspace-switch .sidebar-nav-item-active {
+  background: #1d3556;
+  box-shadow: inset 0 0 0 1px rgba(120, 170, 255, 0.22);
+}
+
+.sidebar-nav-item {
+  min-height: 32px;
+  gap: 10px;
+  padding: 0 10px;
+  border-left-width: 2px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #d5deea;
+}
+
+.sidebar-nav-item-active {
+  background: rgba(77, 141, 240, 0.14);
+  border-left-color: var(--nav-accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.sidebar-nav-item-active .nav-icon {
+  opacity: 1;
+  color: #8fb8ff;
+}
+
+.sidebar-group-label,
+.sidebar-section-label {
+  margin: 0;
+  padding: 0 10px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7f90a8;
+}
+
+.sidebar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--nav-border);
+}
+
+.sidebar-group > .sidebar-group-label {
+  margin-bottom: 6px;
+}
+
+.sidebar-deals {
+  flex: 0 0 auto;
+  gap: 2px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* A recent-shortcut list is subordinate to its group: sentence case, set
+   apart from the group's own actions by space, not by a second rule. */
+.sidebar-recent-label,
+.sidebar-group .sidebar-section-label {
+  margin: 12px 0 4px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: #7f90a8;
+}
+
+/* One scroll region: the rail itself. Recent lists do not grow their own
+   tiny scrollbar inside it. */
+.sidebar-deal-list {
+  overflow: visible;
+}
+
+.sidebar-deal-row {
+  gap: 10px;
+  padding: 5px 10px;
+  border-left-width: 2px;
+  border-radius: 6px;
+}
+
+.sidebar-deal-row .nav-icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0.45;
+}
+
+.sidebar-deal-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #d5deea;
+}
+
+.sidebar-deal-meta {
+  font-size: 11px;
+  color: #7f90a8;
+}
+
+.sidebar-deal-row-active {
+  background: rgba(77, 141, 240, 0.14);
+}
+
+.sidebar-deal-row-active .sidebar-deal-name {
+  color: #fff;
+  font-weight: 600;
+}
+
+.sidebar-deal-row-active .nav-icon {
+  opacity: 1;
+  color: #8fb8ff;
+}
+
+.sidebar-view-all {
+  margin-top: 2px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #8fb8ff;
+}
+
+.sidebar-view-all:hover {
+  color: #c4d9ff;
+}
+
+.sidebar-deals-status {
+  font-size: 12px;
+  color: #7f90a8;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.sidebar-footer .sidebar-nav-item-disabled {
+  color: #6f8099;
+}
+
+/* -------------------------------------------------------------------------
+   Shell -- page headers
+
+   Deal, Investment, Memo, Managed Asset and library pages share one header
+   anatomy: a kind tag, the entity name as the page title, quiet metadata,
+   then status and actions on the right.
+   ------------------------------------------------------------------------- */
+
+.deal-header {
+  padding: 10px var(--sp-6);
+  border-bottom-color: var(--ws-rule);
+}
+
+.deal-header-row {
+  min-height: 44px;
+}
+
+.deal-header-name-input {
+  font-size: var(--ws-fs-page);
+  font-weight: 680;
+  letter-spacing: -0.012em;
+  color: #0e1a2b;
+}
+
+.mode-switch {
+  padding: 3px;
+  background: #eef1f5;
+  border-color: #dde3eb;
+  border-radius: 8px;
+}
+
+.mode-switch-tab {
+  min-height: 26px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: #445066;
+}
+
+.mode-switch-tab-active {
+  color: var(--ws-navy);
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12), 0 0 0 1px rgba(16, 24, 40, 0.04);
+}
+
+.deal-header-actions {
+  gap: 8px;
+}
+
+.icon-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  color: #445066;
+}
+
+/* -------------------------------------------------------------------------
+   Workspace head: the active tab already names the workspace, so its head is
+   one quiet line -- title and purpose on a shared baseline -- rather than a
+   second heading block.
+   ------------------------------------------------------------------------- */
+
+.workspace-scroll {
+  padding-top: 20px;
+}
+
+.workspace-panel-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 16px;
+}
+
+.workspace-title {
+  font-size: 16px;
+  font-weight: 680;
+  color: #0e1a2b;
+}
+
+.workspace-subtitle {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.workspace-body {
+  gap: 16px;
+}
+
+/* Asset Management's rail: its section list and its asset shortcuts are two
+   groups, ruled apart like the Acquisitions rail's. */
+.am-sidebar .sidebar-deals {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--nav-border);
+}
+
+.am-sidebar .sidebar-deals > .sidebar-section-label {
+  margin-bottom: 6px;
+}
+
+/* -------------------------------------------------------------------------
+   Metrics
+
+   A group of related figures is one strip: a bordered band of cells divided
+   by hairlines, not a card per number. The 1px grid gap over a rule-coloured
+   background draws the dividers, so a strip that wraps at a narrow width
+   still divides cleanly. Figures are navy -- blue is kept for state.
+   ------------------------------------------------------------------------- */
+
+.metric-card-value,
+.stat-value,
+.live-case-metric-value {
+  color: var(--ws-navy);
+}
+
+.metric-card-label,
+.stat-label,
+.mini-metric-label,
+.live-case-metric-label {
+  font-size: 12px;
+  font-weight: 550;
+  color: #4a5568;
+}
+
+.metric-card-caption,
+.stat-caption,
+.mini-metric-caption,
+.live-case-metric-caption {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.owner-summary-returns .metric-row,
+.stat-grid,
+.mini-metric-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: var(--ws-rule);
+  border: 1px solid var(--ws-rule);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+
+.owner-summary-returns .metric-card,
+.stat-card,
+.mini-metric {
+  flex: 1 1 170px;
+  min-width: 0;
+  gap: 3px;
+  padding: 12px 16px 13px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: #fff;
+}
+
+.owner-summary-returns .metric-card-value,
+.stat-value-primary {
+  font-size: var(--ws-fs-metric);
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.stat-value {
+  font-weight: 650;
+}
+
+.mini-metric-value {
+  font-size: var(--ws-fs-metric-sm);
+  font-weight: 650;
+  color: var(--ws-navy);
+}
+
+/* The Key Returns and Owner Returns groups are cards holding a strip, not a
+   tinted well holding more cards. */
+.headline-stats {
+  border: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: #fff;
+  box-shadow: var(--shadow-card);
+  padding: 16px var(--ws-card-pad) var(--ws-card-pad);
+}
+
+.headline-stats .card-title {
+  border-bottom: 0;
+  padding-bottom: 0;
+  margin-bottom: 12px;
+}
+
+.info-row {
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom-color: var(--ws-row-rule);
+}
+
+.info-label {
+  color: #4a5568;
+}
+
+.info-value {
+  font-weight: 600;
+  color: #111826;
+  text-align: right;
+}
+
+/* -------------------------------------------------------------------------
+   Empty and not-yet-run states: say what belongs here and what to do next.
+   ------------------------------------------------------------------------- */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 36px 24px;
+  border: 1px dashed #c9d1dc;
+  border-radius: var(--radius-card);
+  background: #fbfcfd;
+  color: #4a5568;
+  font-size: 13px;
+  text-align: center;
+}
+
+.empty-state p {
+  margin: 0;
+}
+
+.empty-state-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: #1f2a3c;
+}
+
+.empty-state-body {
+  max-width: 56ch;
+  line-height: 1.5;
+}
+
+/* =========================================================================
+   Deal -- Overview
+   ========================================================================= */
+
+/* Create Managed Asset is a page-level action for a saved Deal: right
+   aligned above the Overview, not a stray button in the content column. */
+.am-deal-action {
+  display: flex;
+  justify-content: flex-end;
+  max-width: var(--workspace-max);
+  margin: 0 auto 10px;
+}
+
+.am-deal-action-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: #4a5568;
+}
+
+.deal-classification-summary {
+  padding: 10px 16px;
+}
+
+.deal-classification-summary-list {
+  gap: 6px 32px;
+}
+
+.deal-classification-summary-list dt {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.deal-classification-summary-list dd {
+  font-size: 13.5px;
+}
+
+.owner-summary-panel {
+  gap: 16px;
+}
+
+.owner-summary-returns {
+  gap: 12px;
+  padding: 16px var(--ws-card-pad) 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+
+.owner-summary-supporting-rows {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+  gap: 0 32px;
+}
+
+.owner-summary-grid {
+  gap: 16px;
+}
+
+.owner-summary-card {
+  padding: 16px 18px 12px;
+}
+
+.owner-summary-card .card-title {
+  margin-bottom: 6px;
+}
+
+.owner-summary-breakeven {
+  gap: 10px;
+}
+
+.refinance-reference-notice {
+  padding: 9px 12px;
+  border-left-width: 3px;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+  background: var(--ws-info-soft);
+  color: #1f2a3c;
+  font-size: 12.5px;
+}
+
+.acquisition-reference-label {
+  font-weight: 550;
+  color: #5b6576;
+}
+
+/* -------------------------------------------------------------------------
+   Tags -- a short classification beside a name (class, kind, link).
+   ------------------------------------------------------------------------- */
+
+.ws-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 7px;
+  border: 1px solid #d5dce6;
+  border-radius: 4px;
+  background: #f4f6f9;
+  color: #3f4a5c;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.ws-tag-linked {
+  border-color: #c3d6f5;
+  background: var(--ws-info-soft);
+  color: #1b4f9c;
+}
+
+/* =========================================================================
+   Risk tools -- the shared panel and editor frame (Strategies, Scenarios,
+   Capital Structure, Partnership, Decision Matrix).
+   ========================================================================= */
+
+.risk-workspace {
+  gap: 16px;
+}
+
+.scenario-panel {
+  gap: 14px;
+  padding: 18px var(--ws-card-pad) var(--ws-card-pad);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.scenario-panel-header {
+  align-items: center;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ws-rule);
+}
+
+.scenario-panel-title {
+  margin: 0;
+}
+
+.scenario-panel-subtitle {
+  margin: 4px 0 0;
+  max-width: 78ch;
+}
+
+.scenario-muted {
+  color: #5b6576;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.strategy-domains-lede {
+  color: #4a5568;
+  font-size: 12.5px;
+}
+
+/* The editor is a working area inside its panel: an accent rule above,
+   and its Save / Cancel stay in reach at the foot of the viewport while a
+   long structure is being edited. */
+.scenario-editor {
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 2px solid var(--accent);
+}
+
+.scenario-editor-title {
+  font-size: 15px;
+  font-weight: 680;
+  color: #0e1a2b;
+}
+
+.scenario-editor-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin: 4px calc(-1 * var(--ws-card-pad)) 0;
+  padding: 12px var(--ws-card-pad) 12px;
+  border-top: 1px solid var(--ws-rule);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(2px);
+  box-shadow: 0 -6px 12px -10px rgba(16, 24, 40, 0.25);
+}
+
+.scenario-blocked {
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+}
+
+/* A saved structure reads as a register: one row per authored record. */
+.scenario-list {
+  border-top-color: var(--ws-rule);
+}
+
+.scenario-list-item {
+  padding: 10px 0;
+  border-bottom-color: var(--ws-row-rule);
+}
+
+.scenario-list-name {
+  font-weight: 650;
+  color: #111826;
+}
+
+/* Two-way choices inside a form (Fixed Amount / % of Purchase Price) are a
+   compact segmented control, navy when on. */
+.strategy-mode {
+  border-color: var(--ws-control-border);
+  border-radius: var(--radius-control);
+}
+
+.strategy-mode-option {
+  min-height: 30px;
+  border-right-color: var(--ws-control-border);
+  color: #3f4a5c;
+}
+
+.strategy-mode-option-active {
+  background: var(--ws-navy);
+  color: #fff;
+}
+
+/* =========================================================================
+   Capital Structure and Refinance editors
+
+   Each position and each refinance is a card with its own header: the name,
+   what it is and where it ranks, and the action that removes it. A
+   replacement loan and the refinance that funds it are tagged alike and link
+   to one another. Figures are the analyst's own entries; nothing is ranked
+   or coloured by outcome.
+   ========================================================================= */
+
+.capital-editor .strategy-domains-lede {
+  margin-top: -4px;
+}
+
+.capital-positions {
+  gap: 12px;
+}
+
+.capital-position,
+.capital-event {
+  --card-head: 46px;
+  position: relative;
+  margin: 0;
+  padding: 0 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  background:
+    linear-gradient(var(--ws-rule), var(--ws-rule)) 0 var(--card-head) / 100% 1px no-repeat,
+    linear-gradient(#f7f9fc, #f7f9fc) 0 0 / 100% var(--card-head) no-repeat,
+    #fff;
+}
+
+/* The legend is the card's name, floated into the header band so it shares
+   a row with the tags and Remove rather than sitting in the border. */
+.capital-position > .capital-position-legend,
+.capital-event > .capital-position-legend {
+  float: left;
+  max-width: 45%;
+  margin: 0;
+  padding: 0 12px 0 0;
+  line-height: var(--card-head);
+  font-size: 14px;
+  font-weight: 680;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #0e1a2b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.capital-position > * + *,
+.capital-event > * + * {
+  margin-top: 12px;
+}
+
+.capital-position > .capital-position-bar,
+.capital-event > .capital-position-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: var(--card-head);
+  margin: 0 0 14px;
+}
+
+.capital-position-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.capital-position-fact {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 550;
+  color: #4a5568;
+  white-space: nowrap;
+}
+
+.capital-position-fact::first-letter {
+  text-transform: uppercase;
+}
+
+.capital-position-fact + .capital-position-fact::before {
+  content: '·';
+  margin-right: 10px;
+  color: #98a2b3;
+}
+
+.capital-position-actions {
+  flex: 0 0 auto;
+}
+
+.capital-position-head {
+  clear: both;
+}
+
+.capital-position-head,
+.capital-position-fields {
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 12px 14px;
+}
+
+.capital-position-group {
+  gap: 10px 14px;
+}
+
+.capital-position-group .field {
+  min-width: 12rem;
+}
+
+.capital-position-note {
+  color: #4a5568;
+}
+
+.capital-position-funded {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 10px 8px 12px;
+  border-left: 3px solid #7ea6e6;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+  background: var(--ws-info-soft);
+}
+
+.capital-position-funded .capital-position-funded-by {
+  flex: 1 1 24rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #1f2a3c;
+}
+
+.capital-jump {
+  flex: 0 0 auto;
+}
+
+/* The claim-shortfall choice is one select, not a full-width bar. */
+.capital-position > .field:last-of-type,
+.capital-position > .field {
+  max-width: 26rem;
+}
+
+.capital-position-error,
+.capital-event.capital-position-error {
+  border-color: #e3b4b7;
+  border-left: 3px solid var(--danger);
+  padding-left: 16px;
+}
+
+.capital-add-row {
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.capital-unstated {
+  padding: 10px 12px;
+  border-color: #e6d3a8;
+  border-radius: var(--radius-control);
+  background: #fffaf0;
+}
+
+/* --- Refinance ------------------------------------------------------------ */
+
+.capital-events {
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 18px;
+  border-top: 1px solid var(--ws-rule-strong);
+}
+
+.capital-events-title {
+  font-size: 15px;
+  font-weight: 680;
+  color: #0e1a2b;
+}
+
+.capital-event {
+  border-color: #c9d8ef;
+}
+
+.capital-event-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.capital-event-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.capital-event-group {
+  padding: 10px 14px 14px;
+  border-color: var(--ws-rule);
+  border-radius: var(--radius-control);
+  background: #fff;
+}
+
+.capital-event-group-title {
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ws-title);
+}
+
+.capital-event-checks {
+  gap: 8px 14px;
+}
+
+.capital-event-checks li {
+  padding: 8px 10px;
+  border: 1px solid var(--ws-row-rule);
+  border-radius: var(--radius-control);
+  background: #fbfcfd;
+}
+
+.capital-check input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--ws-navy);
+}
+
+.capital-event-constraint {
+  padding: 10px 0;
+  border-top-color: var(--ws-row-rule);
+}
+
+.capital-event-constraint:first-of-type {
+  border-top: 0;
+}
+
+.capital-event-constraint .capital-check > span {
+  font-weight: 600;
+  color: #1f2a3c;
+}
+
+.capital-event-constraint-fields {
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 10px 14px;
+}
+
+.capital-event-constraint > .field {
+  max-width: 18rem;
+}
+
+/* The replacement loan's terms, read back where the refinance is authored. */
+.capital-event-terms {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px 14px;
+  padding: 10px 12px;
+  border: 1px solid #d6e2f5;
+  border-radius: var(--radius-control);
+  background: #f6f9fe;
+}
+
+.capital-event-terms-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  gap: 8px 16px;
+  flex: 1 1 22rem;
+  margin: 0;
+}
+
+.capital-event-terms-list div {
+  min-width: 0;
+}
+
+.capital-event-terms-list dt {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.capital-event-terms-list dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111826;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Refinance costs: one row per cost, every row on the same five columns so
+   Type, Amount, Paid to, Description and Remove line up down the list. A
+   third-party cost leaves "Paid to" empty rather than shifting its row. */
+.capital-event-costs-group .capital-position-note {
+  max-width: 90ch;
+}
+
+.capital-event-cost-head,
+.capital-event-cost {
+  display: grid;
+  grid-template-columns:
+    minmax(9.5rem, 1.1fr) minmax(8.5rem, 0.9fr) minmax(9.5rem, 1.1fr) minmax(11rem, 2fr)
+    5.5rem;
+  gap: 8px 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.capital-event-cost-head {
+  padding: 0 0 4px;
+  border-bottom: 1px solid var(--ws-rule);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ws-th-text);
+}
+
+.capital-event-cost-head > span:nth-child(4) {
+  grid-column: 4;
+}
+
+.capital-event-costs {
+  gap: 0;
+}
+
+.capital-event-cost {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--ws-row-rule);
+}
+
+.capital-event-cost .capital-cost-kind {
+  grid-column: 1;
+}
+
+.capital-event-cost .capital-cost-amount {
+  grid-column: 2;
+}
+
+.capital-event-cost .capital-cost-recipient {
+  grid-column: 3;
+}
+
+.capital-event-cost .capital-cost-description {
+  grid-column: 4;
+}
+
+.capital-event-cost .capital-event-cost-actions {
+  grid-column: 5;
+  justify-content: flex-end;
+}
+
+/* The column header names every field, so each row's own label is kept for
+   assistive technology and hidden from sight. */
+.capital-event-cost .field-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.capital-event-cost .field {
+  position: relative;
+  min-width: 0;
+}
+
+/* -------------------------------------------------------------------------
+   Column alignment hooks. A column states what it holds, and its header sits
+   over its figures: `col-num` right, `col-text` left. Specific enough to win
+   over each gate's shared header rule without changing that rule.
+   ------------------------------------------------------------------------- */
+
+table th.col-num,
+table td.col-num {
+  text-align: right;
+}
+
+table th.col-text,
+table td.col-text {
+  text-align: left;
+}
+
+/* =========================================================================
+   Capital Structure results
+   ========================================================================= */
+
+.capital-results {
+  gap: 14px;
+}
+
+.capital-results-title {
+  font-size: 15px;
+  font-weight: 680;
+  color: #0e1a2b;
+}
+
+.capital-result-card {
+  padding: 16px 18px 14px;
+}
+
+.capital-result-card .card-title {
+  margin-bottom: 8px;
+}
+
+.capital-result-helper,
+.capital-result-empty {
+  max-width: 96ch;
+  color: #4a5568;
+}
+
+.capital-result-helper + .table-scroll,
+.capital-result-helper + .capital-economics-ledger {
+  margin-top: 10px;
+}
+
+.capital-result-table {
+  font-size: var(--ws-fs-table);
+}
+
+.capital-result-table th,
+.capital-result-table td {
+  padding: 8px 12px;
+  border-bottom-color: var(--ws-row-rule);
+  vertical-align: top;
+}
+
+/* A long header wraps over its column instead of widening the table past
+   its card; the figures beneath keep their single line. */
+.capital-result-table thead th,
+.investment-table thead th,
+.partnership-result-table thead th,
+.partnership-audit-table thead th {
+  white-space: normal;
+  min-width: 4.5rem;
+}
+
+.capital-result-table thead th {
+  padding-top: 7px;
+  padding-bottom: 7px;
+  background: var(--ws-th-bg);
+  border-bottom: 1px solid var(--ws-rule);
+}
+
+.capital-result-table tbody th {
+  font-weight: 600;
+  color: #111826;
+}
+
+.capital-result-class,
+.capital-result-reason {
+  color: var(--text-muted);
+  font-weight: 450;
+}
+
+/* --- Refinance results ---------------------------------------------------- */
+
+.refinance-results {
+  gap: 14px;
+}
+
+.refinance-event {
+  gap: 12px;
+}
+
+.refinance-event-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: #3f4a5c;
+}
+
+/* The answer first: one navy figure under its direction heading. The panel
+   is framed, not coloured by direction -- a distribution and a contribution
+   are both outcomes, and neither is ranked. */
+.refinance-headline {
+  padding: 18px 20px;
+  border-color: #c9d8ef;
+  border-left: 4px solid var(--ws-navy);
+  box-shadow: var(--shadow-card);
+}
+
+.refinance-headline-value {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ws-navy);
+}
+
+.refinance-headline-label {
+  font-size: 11.5px;
+  letter-spacing: 0.07em;
+  color: var(--ws-title);
+}
+
+.refinance-headline-facts {
+  padding-left: 20px;
+  border-left: 1px solid var(--ws-rule);
+}
+
+.refinance-headline-facts dt,
+.refinance-facts dt,
+.refinance-returns dt {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.refinance-headline-facts dd,
+.refinance-facts dd {
+  font-size: 13.5px;
+  color: #111826;
+}
+
+/* A two-column ledger reads label-to-figure: bounded, so the amount is not
+   a screen-width away from the line it belongs to. */
+.refinance-bridge-table {
+  max-width: 46rem;
+}
+
+.refinance-bridge-deduction {
+  padding-left: 26px;
+  font-weight: 500;
+  color: #3f4a5c;
+}
+
+.refinance-bridge-total th,
+.refinance-bridge-total td {
+  border-top: 1px solid var(--ws-total-rule);
+  font-weight: 700;
+  color: #0e1a2b;
+}
+
+.refinance-binding-row th,
+.refinance-binding-row td {
+  background: #f3f7fe;
+}
+
+.refinance-primary {
+  border-left: 4px solid var(--ws-navy);
+}
+
+/* The refinance-adjusted return: the same figure strip as every other
+   headline group. */
+.refinance-returns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  margin-top: 10px;
+  background: var(--ws-rule);
+  border: 1px solid var(--ws-rule);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+
+.refinance-returns > div {
+  flex: 1 1 150px;
+  min-width: 0;
+  padding: 10px 14px 11px;
+  background: #fff;
+}
+
+.refinance-returns dd {
+  margin-top: 3px;
+  font-size: 15px;
+  color: #111826;
+}
+
+.refinance-return-primary dd {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--ws-navy);
+}
+
+.refinance-namespace-note {
+  color: #4a5568;
+}
+
+.capital-event-audit {
+  border-color: var(--border);
+  background: #fbfcfd;
+}
+
+/* =========================================================================
+   Decision matrices (Project, Position, Partner)
+   ========================================================================= */
+
+/* A wide region says it scrolls: an edge shadow appears on whichever side
+   has more, drawn by the container's own background so no script is
+   needed. Cells without a fill let it show; the pinned row labels cover the
+   left one, which is the edge they already mark. */
+.decision-matrix-scroll,
+.table-scroll {
+  background:
+    linear-gradient(to right, #fff 30%, rgba(255, 255, 255, 0)) left center / 32px 100% no-repeat local,
+    linear-gradient(to left, #fff 30%, rgba(255, 255, 255, 0)) right center / 32px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgba(16, 24, 40, 0.14), rgba(16, 24, 40, 0)) left center / 10px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgba(16, 24, 40, 0.14), rgba(16, 24, 40, 0)) right center / 10px 100% no-repeat scroll;
+}
+
+.decision-matrix-scroll {
+  border-color: var(--ws-rule);
+  border-radius: var(--radius-control);
+}
+
+.decision-matrix th,
+.decision-matrix td {
+  padding: 8px 16px;
+  border-bottom-color: var(--ws-row-rule);
+}
+
+.decision-matrix th:last-child,
+.decision-matrix td:last-child {
+  padding-right: 20px;
+}
+
+.decision-matrix thead th {
+  background: var(--ws-th-bg);
+  border-bottom-color: var(--ws-rule);
+  font-size: 11px;
+  color: var(--ws-th-text);
+}
+
+/* The row-label column's header sits over the row labels (the shared
+   right-aligned cell rule out-ranked the corner's own left alignment). */
+.decision-matrix thead th.decision-matrix-corner {
+  text-align: left;
+}
+
+/* Base is identified by the accent and a rule under its header, so it is
+   found at a glance without being coloured as a better outcome. */
+.decision-matrix thead th.decision-matrix-base {
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.decision-matrix-group-name {
+  color: var(--ws-title);
+}
+
+.decision-matrix th[scope='row'] {
+  font-weight: 550;
+}
+
+.decision-matrix-figure {
+  font-weight: 650;
+  color: #111826;
+}
+
+.decision-matrix td.decision-matrix-summary,
+.decision-matrix td.decision-matrix-status {
+  background: #f8fafc;
+}
+
+.decision-perspective {
+  margin-bottom: -4px;
+}
+
+/* =========================================================================
+   Partnership
+
+   Every waterfall table stays whole and auditable; hierarchy comes from the
+   section rules and titles, not from hiding a figure. Nothing is coloured as
+   a better or worse outcome for a partner.
+   ========================================================================= */
+
+.partnership-results {
+  gap: 0;
+}
+
+.partnership-section {
+  padding: 18px 0 4px;
+  border-top: 1px solid var(--ws-rule);
+}
+
+.partnership-section:first-of-type {
+  border-top: 0;
+  padding-top: 6px;
+}
+
+.partnership-section-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 680;
+  color: #0e1a2b;
+}
+
+.partnership-section-note {
+  max-width: 96ch;
+  color: #4a5568;
+}
+
+.partnership-status {
+  font-weight: 650;
+}
+
+.partnership-result-table th,
+.partnership-result-table td,
+.partnership-audit-table th,
+.partnership-audit-table td {
+  border-bottom-color: var(--ws-row-rule);
+}
+
+.partnership-result-table thead th,
+.partnership-audit-table thead th {
+  background: var(--ws-th-bg);
+  border-bottom: 1px solid var(--ws-rule);
+}
+
+.partnership-tier {
+  padding-top: 14px;
+}
+
+.partnership-tier-title {
+  font-size: 13.5px;
+}
+
+.partnership-tier-sequence {
+  color: var(--text-muted);
+}
+
+.partnership-audit-subtitle {
+  margin-top: 14px;
+  color: var(--ws-title);
+}
+
+/* =========================================================================
+   Investment Committee -- library
+
+   The library is a register of decision documents: which memos exist, where
+   each stands, what the analyst recommends and whether the committee has
+   ruled. State reads as a chip so a column can be scanned. (The institutional
+   report keeps its own navy table treatment, which mirrors the issued PDF.)
+   ========================================================================= */
+
+.memo-library {
+  gap: 22px;
+  max-width: var(--workspace-max);
+  margin: 0 auto;
+  width: 100%;
+}
+
+.memo-library-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  color: #0e1a2b;
+}
+
+.memo-library-group-title {
+  margin-bottom: 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  color: var(--ws-title);
+}
+
+.memo-library .memo-table-scroll {
+  border-color: var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.memo-library .memo-table {
+  font-size: 13px;
+}
+
+.memo-library .memo-table-caption {
+  padding: 12px 16px 10px;
+  font-size: 12px;
+  font-weight: 550;
+  color: #4a5568;
+}
+
+.memo-library .memo-table thead th {
+  position: static;
+  padding: 8px 16px;
+  background: var(--ws-th-bg);
+  border-top: 1px solid var(--ws-rule);
+  border-bottom: 1px solid var(--ws-rule);
+  color: var(--ws-th-text);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.memo-library .memo-table th,
+.memo-library .memo-table td {
+  padding: 12px 16px;
+  border-bottom-color: var(--ws-row-rule);
+  vertical-align: middle;
+  overflow-wrap: normal;
+}
+
+.memo-library .memo-table tbody tr:nth-child(even) {
+  background: transparent;
+}
+
+.memo-library .memo-table tbody tr:hover {
+  background: var(--ws-row-hover);
+}
+
+.memo-library .memo-table tbody tr:last-child th,
+.memo-library .memo-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.memo-library .memo-library-name {
+  font-size: 13.5px;
+}
+
+/* The memo's name leads the row and is never squeezed into a word per line:
+   the table scrolls inside its card before the name gives up its width. */
+.memo-library .memo-table .memo-cell-label {
+  min-width: 17rem;
+  max-width: 26rem;
+}
+
+.memo-library .memo-library-kind {
+  margin-top: 2px;
+  font-size: 11.5px;
+}
+
+.memo-status-chip,
+.memo-decision-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid #d5dce6;
+  border-radius: 999px;
+  background: #f4f6f9;
+  color: #3f4a5c;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.memo-status-chip::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.memo-status-draft {
+  border-color: #ecd9ae;
+  background: var(--ws-caution-soft);
+  color: var(--ws-caution);
+}
+
+.memo-status-published {
+  border-color: #bfe0cb;
+  background: var(--ws-positive-soft);
+  color: var(--ws-positive);
+}
+
+.memo-status-published-draft {
+  border-color: #c3d6f5;
+  background: var(--ws-info-soft);
+  color: #1b4f9c;
+}
+
+.memo-decision-chip {
+  border-style: dashed;
+  background: #fff;
+  color: #5b6576;
+  font-weight: 550;
+}
+
+.memo-decision-recorded {
+  border-style: solid;
+  border-color: var(--ws-navy);
+  background: var(--ws-navy-soft);
+  color: var(--ws-navy);
+  font-weight: 650;
+}
+
+.memo-start-row {
+  padding: 12px 16px;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+/* =========================================================================
+   Investment Committee -- memo authoring
+
+   Preparing a decision document: each section is a titled sheet, the long
+   fields read like the prose they will become, and the memo's state sits in
+   the header beside its name.
+   ========================================================================= */
+
+.memo-header-name {
+  font-size: var(--ws-fs-page);
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  color: #0e1a2b;
+}
+
+.memo-kind-tag,
+.memo-header-state {
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+
+.memo-kind-tag {
+  border-color: #d5dce6;
+  background: #f4f6f9;
+  color: #3f4a5c;
+}
+
+.memo-panel {
+  gap: 16px;
+}
+
+.memo-section {
+  padding: 20px 24px 22px;
+  border-color: var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+.memo-section-title {
+  margin-bottom: 4px;
+  font-size: 15px;
+  font-weight: 680;
+  color: #0e1a2b;
+}
+
+.memo-section-hint {
+  max-width: 88ch;
+  margin-bottom: 16px;
+  font-size: 12.5px;
+  color: #5b6576;
+}
+
+.memo-field {
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.memo-field:last-child {
+  margin-bottom: 0;
+}
+
+.memo-field-label {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: var(--ws-title);
+}
+
+.memo-field-hint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.memo-input,
+.memo-select {
+  min-height: var(--ws-control-h);
+  border-color: var(--ws-control-border);
+  font-size: 13.5px;
+}
+
+/* The prose fields: a writing surface, not a form box. */
+.memo-textarea {
+  min-height: 5.5rem;
+  padding: 12px 14px;
+  border-color: var(--ws-control-border);
+  background: #fcfdfe;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #111826;
+}
+
+.memo-textarea:hover:not(:focus) {
+  border-color: var(--ws-control-border-hover);
+}
+
+.memo-textarea:focus-visible {
+  background: #fff;
+}
+
+.memo-field-grid {
+  gap: 14px 16px;
+}
+
+/* The recommendation is one choice among five: a segmented control whose
+   chosen option is unmistakable. */
+.memo-choice-row {
+  gap: 6px;
+}
+
+.memo-choice {
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-control);
+  border-color: var(--ws-control-border);
+  font-size: 12.5px;
+  color: #25324a;
+}
+
+.memo-choice:hover {
+  border-color: var(--accent);
+  background: var(--ws-info-soft);
+}
+
+.memo-choice-active,
+.memo-choice-active:hover {
+  border-color: var(--ws-navy);
+  background: var(--ws-navy);
+  color: #fff;
+  font-weight: 650;
+}
+
+.memo-empty {
+  border-color: #c9d1dc;
+  background: #fbfcfd;
+  color: #4a5568;
+}
+
+/* =========================================================================
+   Asset Management
+
+   A related but distinct workspace: the same shell, type and tables, with
+   the owned asset's reporting period as the organising control. Unfavourable
+   is red where the engine says so; the attention panel ranks the result
+   lines above the lines that drove them, so the eye meets "how far off plan"
+   before "why".
+   ========================================================================= */
+
+.am-attention-group + .am-attention-group {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ws-rule);
+}
+
+.am-attention-group-title {
+  margin: 0 0 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.am-attention-results .am-attention-text {
+  font-weight: 650;
+  color: #0e1a2b;
+}
+
+.am-attention-item {
+  padding: 7px 0;
+  border-bottom-color: var(--ws-row-rule);
+}
+
+.am-attention-drivers .am-attention-text {
+  color: #3f4a5c;
+}
+
+/* =========================================================================
+   Responsive -- shell
+   ========================================================================= */
+
+@media (width <= 1023px) {
+  /* The collapsed icon rail (index.css) hides every text label; the group
+     labels this layer adds are text labels too. */
+  .sidebar-group-label,
+  .sidebar-recent-label {
+    display: none;
+  }
+
+  .sidebar-group {
+    padding-top: 8px;
+    margin-top: 8px;
+  }
+
+  .sidebar-workspace-switch,
+  .am-workspace-switch {
+    padding: 2px;
+  }
+
+  .sidebar-nav-item {
+    border-left-width: 0;
+  }
+}
+
+@media (width <= 900px) {
+  /* Stacked cost records: each field labelled again, Remove at the foot. */
+  .capital-event-cost-head {
+    display: none;
+  }
+
+  .capital-event-cost {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .capital-event-cost .capital-cost-kind,
+  .capital-event-cost .capital-cost-amount,
+  .capital-event-cost .capital-cost-recipient,
+  .capital-event-cost .capital-cost-description,
+  .capital-event-cost .capital-event-cost-actions {
+    grid-column: auto;
+  }
+
+  .capital-event-cost .capital-cost-description {
+    grid-column: 1 / -1;
+  }
+
+  .capital-event-cost .capital-event-cost-actions {
+    grid-column: 1 / -1;
+  }
+
+  .capital-event-cost .field-label {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip-path: none;
+  }
+}
+
+@media (width <= 640px) {
+  .capital-position,
+  .capital-event {
+    --card-head: 40px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .capital-position > .capital-position-legend,
+  .capital-event > .capital-position-legend {
+    max-width: 60%;
+    font-size: 13.5px;
+  }
+
+  .capital-position-tags .capital-position-fact {
+    display: none;
+  }
+
+  .capital-event-cost {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .scenario-editor-actions {
+    margin-left: -16px;
+    margin-right: -16px;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}

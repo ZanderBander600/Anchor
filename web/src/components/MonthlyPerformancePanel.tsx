@@ -16,6 +16,7 @@ import {
 } from '../assetManagementFormat';
 import type {
   AssetPerformanceResponse,
+  FinancialLine,
   LineVariance,
   PerformanceView,
 } from '../assetManagementTypes';
@@ -120,6 +121,22 @@ export interface MonthlyPerformancePanelProps {
    * second submission cannot start on top of the first. */
   isBusy?: boolean;
 }
+
+
+/** The statement's result lines: an attention item on one of these says how
+ * far the period is off plan; an item on any other line says why. */
+const RESULT_LINES: ReadonlySet<FinancialLine> = new Set<FinancialLine>([
+  'total_revenue',
+  'total_operating_expenses',
+  'net_operating_income',
+  'cash_flow_after_capex',
+  'net_cash_flow',
+]);
+
+const ATTENTION_GROUPS: { id: string; title: string; lines: (line: FinancialLine) => boolean }[] = [
+  { id: 'results', title: 'Bottom line', lines: (line) => RESULT_LINES.has(line) },
+  { id: 'drivers', title: 'Drivers', lines: (line) => !RESULT_LINES.has(line) },
+];
 
 export function MonthlyPerformancePanel({
   performance,
@@ -304,23 +321,39 @@ export function MonthlyPerformancePanel({
                 Nothing is unfavorable against plan this period.
               </p>
             ) : (
-              <ul className="am-attention-list">
-                {period.attention.map((item) => (
-                  <li key={item.line} className="am-attention-item">
-                    <span className={assessmentClass(item.assessment)}>
-                      <svg
-                        className="am-direction"
-                        viewBox="0 0 12 12"
-                        aria-hidden="true"
-                        focusable="false"
-                      >
-                        <path d="M6 9.5 L2 4 L10 4 Z" fill="currentColor" />
-                      </svg>
-                    </span>
-                    <span className="am-attention-text">{item.message}</span>
-                  </li>
-                ))}
-              </ul>
+              ATTENTION_GROUPS.map((group) => {
+                // The backend's own items, in its own order, split by what
+                // they describe: the statement's results first, then the
+                // individual lines that drove them.
+                const items = period.attention.filter((item) => group.lines(item.line));
+                if (items.length === 0) {
+                  return null;
+                }
+                return (
+                  <div key={group.id} className={`am-attention-group am-attention-${group.id}`}>
+                    <p className="am-attention-group-title" id={`am-attention-${group.id}`}>
+                      {group.title}
+                    </p>
+                    <ul className="am-attention-list" aria-labelledby={`am-attention-${group.id}`}>
+                      {items.map((item) => (
+                        <li key={item.line} className="am-attention-item">
+                          <span className={assessmentClass(item.assessment)}>
+                            <svg
+                              className="am-direction"
+                              viewBox="0 0 12 12"
+                              aria-hidden="true"
+                              focusable="false"
+                            >
+                              <path d="M6 9.5 L2 4 L10 4 Z" fill="currentColor" />
+                            </svg>
+                          </span>
+                          <span className="am-attention-text">{item.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })
             )}
           </section>
 

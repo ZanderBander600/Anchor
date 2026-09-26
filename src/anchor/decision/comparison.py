@@ -1929,6 +1929,30 @@ class PartnerDecisionMatrix:
     matrix_fingerprint_reason: str | None
 
 
+#: Why no IRR is reported for a series, in the analyst-facing words the
+#: workspace, the memo report and the Excel audit already use (see
+#: ``web/src/capitalEconomics.ts`` ``IRR_NOT_REPORTED_REASONS``). Presentation
+#: text only: the cell's ``irr_status`` and ``reason`` carry the typed state.
+_IRR_NOT_REPORTED_REASONS: Mapping[IrrStatus, str] = {
+    IrrStatus.NO_NONZERO_CASH_FLOW: "every modeled cash flow is zero",
+    IrrStatus.FIRST_NONZERO_NOT_NEGATIVE: "the modeled cash flows do not begin with an investment",
+    IrrStatus.NO_POSITIVE_CASH_FLOW: "the modeled cash flows contain no positive cash flow",
+    IrrStatus.MULTIPLE_SIGN_CHANGES: "the modeled cash-flow pattern changes sign more than once",
+    IrrStatus.ROOT_OUTSIDE_SEARCH_DOMAIN: "the return falls outside Anchor's supported search domain",
+    IrrStatus.NUMERICAL_FAILURE: "the deterministic IRR calculation encountered a numerical issue",
+}
+
+
+def _irr_not_reported_message(label: str, irr_status: IrrStatus) -> str:
+    """"<label> is not reported because ...": the status in words, never its
+    internal token."""
+
+    reason = _IRR_NOT_REPORTED_REASONS.get(irr_status)
+    if reason is None:
+        return f"{label} is not reported for this partner."
+    return f"{label} is not reported because {reason}."
+
+
 def _partner_reported(
     partner: PartnerResult, metric: AnyDecisionMetric
 ) -> tuple[float | None, IrrStatus | None]:
@@ -2011,7 +2035,7 @@ def _partner_metric_value(cell: PartnerCellInput, spec: MetricSpec) -> MetricVal
             value=None,
             irr_status=irr_status,
             reason=FigureReason.IRR_NOT_DEFINED,
-            message=f"{spec.label} is not reported for this partner ({irr_status.value}).",
+            message=_irr_not_reported_message(spec.label, irr_status),
         )
     if value is None:
         no_contributions = (

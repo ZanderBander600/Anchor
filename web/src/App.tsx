@@ -504,8 +504,8 @@ export default function App() {
     setDetailedExcelReview(null);
     setDetailedExcelReviewError(null);
     setDetailedExcelUploadSuccessMessage(
-      'Detailed assumptions approved and loaded. Review the deal assumptions, then click ' +
-        'Analyze Deal.',
+      'Detailed assumptions approved and loaded. Review the deal assumptions, then select ' +
+        'Analyze.',
     );
     // Sprint C Gate C2 (spec section 12.4) -- see handleApproveExcelReview.
     setWorkspace('underwrite');
@@ -1692,7 +1692,7 @@ export default function App() {
     setExcelReview(null);
     setExcelReviewError(null);
     setExcelUploadSuccessMessage(
-      'Excel assumptions approved and loaded. Review the deal assumptions, then click Analyze Deal.',
+      'Excel assumptions approved and loaded. Review the deal assumptions, then select Analyze.',
     );
     // Sprint C Gate C2 (spec section 12.4): approval produces assumptions,
     // whose home is Underwrite. This replaces the pre-Sprint-C
@@ -2968,7 +2968,11 @@ export default function App() {
           />
         ) : (
           <div className="empty-state">
-            Enter assumptions and click <strong>Analyze Deal</strong> to see the Owner Summary.
+            <p className="empty-state-title">No analysis yet</p>
+            <p className="empty-state-body">
+              Enter the assumptions in Underwrite, then select <strong>Analyze</strong> to see the
+              Owner Summary.
+            </p>
           </div>
         )}
       </WorkspacePanel>
@@ -3289,7 +3293,11 @@ export default function App() {
           />
         ) : (
           <div className="empty-state">
-            Enter assumptions and click <strong>Analyze Deal</strong> to see the Owner Summary.
+            <p className="empty-state-title">No analysis yet</p>
+            <p className="empty-state-body">
+              Enter the assumptions in Underwrite, then select <strong>Analyze</strong> to see the
+              Owner Summary.
+            </p>
           </div>
         )}
       </WorkspacePanel>

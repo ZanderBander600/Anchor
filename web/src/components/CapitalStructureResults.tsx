@@ -138,13 +138,13 @@ function PositionReturnsTable({
           <thead>
             <tr>
               <th scope="col">Position</th>
-              <th scope="col">Scope</th>
-              <th scope="col">Priority</th>
-              <th scope="col">Funded</th>
-              <th scope="col">IRR</th>
-              <th scope="col">MOIC</th>
-              <th scope="col">Cash Received</th>
-              <th scope="col">Profit</th>
+              <th scope="col" className="col-text">Scope</th>
+              <th scope="col" className="col-num">Priority</th>
+              <th scope="col" className="col-num">Funded</th>
+              <th scope="col" className="col-num">IRR</th>
+              <th scope="col" className="col-num">MOIC</th>
+              <th scope="col" className="col-num">Cash Received</th>
+              <th scope="col" className="col-num">Profit</th>
             </tr>
           </thead>
           <tbody>
@@ -156,7 +156,7 @@ function PositionReturnsTable({
                     {POSITION_CLASS_LABELS[position.position_class]}
                   </span>
                 </th>
-                <td>{scopeLabel(position, unitNames)}</td>
+                <td className="col-text">{scopeLabel(position, unitNames)}</td>
                 <td>{position.priority}</td>
                 <td>{formatCurrency(position.funded_amount)}</td>
                 <ReturnCell label="IRR" value={position.irr} format={formatPercent} position={position} />
@@ -210,21 +210,21 @@ function StructuralMetricsTable({
           <thead>
             <tr>
               <th scope="col">Position</th>
-              <th scope="col">Scope</th>
-              <th scope="col">Attachment</th>
-              <th scope="col">Detachment</th>
-              <th scope="col">Last-Dollar Basis</th>
-              <th scope="col">Debt Yield Through</th>
-              <th scope="col">Headline Coverage</th>
-              <th scope="col">Minimum Coverage</th>
-              <th scope="col">Balance at Maturity or Exit</th>
+              <th scope="col" className="col-text">Scope</th>
+              <th scope="col" className="col-num">Attachment</th>
+              <th scope="col" className="col-num">Detachment</th>
+              <th scope="col" className="col-num">Last-Dollar Basis</th>
+              <th scope="col" className="col-num">Debt Yield Through</th>
+              <th scope="col" className="col-num">Headline Coverage</th>
+              <th scope="col" className="col-num">Minimum Coverage</th>
+              <th scope="col" className="col-num">Balance at Maturity or Exit</th>
             </tr>
           </thead>
           <tbody>
             {claimBearing.map((position) => (
               <tr key={position.position_id}>
                 <th scope="row">{position.name}</th>
-                <td>{scopeLabel(position, unitNames)}</td>
+                <td className="col-text">{scopeLabel(position, unitNames)}</td>
                 <td>{position.attachment_ltv === null ? NOT_AVAILABLE : formatPercent(position.attachment_ltv)}</td>
                 <td>{position.detachment_ltv === null ? NOT_AVAILABLE : formatPercent(position.detachment_ltv)}</td>
                 <td>{formatCurrency(position.last_dollar_basis)}</td>
@@ -293,30 +293,30 @@ function FundingRequirements({
             <thead>
               <tr>
                 <th scope="col">Position</th>
-                <th scope="col">Scope</th>
-                <th scope="col">Period</th>
-                <th scope="col">Claim</th>
-                <th scope="col">Cash Available</th>
-                <th scope="col">Paid from Cash</th>
-                <th scope="col">Requirement</th>
-                <th scope="col">Equity Contribution</th>
-                <th scope="col">Unpaid Claim</th>
-                <th scope="col">Status</th>
+                <th scope="col" className="col-text">Scope</th>
+                <th scope="col" className="col-text">Period</th>
+                <th scope="col" className="col-num">Claim</th>
+                <th scope="col" className="col-num">Cash Available</th>
+                <th scope="col" className="col-num">Paid from Cash</th>
+                <th scope="col" className="col-num">Requirement</th>
+                <th scope="col" className="col-num">Equity Contribution</th>
+                <th scope="col" className="col-num">Unpaid Claim</th>
+                <th scope="col" className="col-text">Status</th>
               </tr>
             </thead>
             <tbody>
               {requirements.map((requirement) => (
                 <tr key={requirement.requirement_id}>
                   <th scope="row">{positionNames[requirement.position_id] ?? 'A position no longer in this structure'}</th>
-                  <td>{scopeLabel(requirement, unitNames)}</td>
-                  <td>{periodLabel(requirement)}</td>
+                  <td className="col-text">{scopeLabel(requirement, unitNames)}</td>
+                  <td className="col-text">{periodLabel(requirement)}</td>
                   <td>{formatCurrency(requirement.claim_amount)}</td>
                   <td>{formatCurrency(requirement.cash_available)}</td>
                   <td>{formatCurrency(requirement.claim_paid_from_cash)}</td>
                   <td>{formatCurrency(requirement.amount)}</td>
                   <td>{formatCurrency(requirement.equity_contribution)}</td>
                   <td>{formatCurrency(requirement.unpaid_claim_amount)}</td>
-                  <td>
+                  <td className="col-text">
                     <span
                       className={
                         requirement.status === 'resolved'
@@ -440,7 +440,7 @@ function LegacyLoans({
           <thead>
             <tr>
               <th scope="col">Unit</th>
-              <th scope="col">Priority</th>
+              <th scope="col" className="col-num">Priority</th>
               <th scope="col">Loan Amount</th>
               <th scope="col">Interest Rate</th>
               <th scope="col">Amortization</th>

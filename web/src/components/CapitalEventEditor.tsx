@@ -33,6 +33,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import {
   EVENT_YEARS,
   endOfYearLabel,
+  eventTimingLabel,
   eventYearOfMonth,
   formEvents,
   legacyKey,
@@ -51,6 +52,8 @@ import type { CapitalStructureIssue, RefinanceCostKind } from '../capitalTypes';
 import { useValuationChoices } from '../useCapitalEventChoices';
 import type { ValuationChoice } from '../useCapitalEventChoices';
 import type { ScopeUnit } from './CapitalStructureEditor';
+import { groupDigits } from '../numberFormat';
+import { jumpToField } from '../jumpToField';
 import { ConfirmDialog } from './ConfirmDialog';
 import { NumericInput } from './NumericInput';
 
@@ -191,15 +194,17 @@ function TextField({
   value,
   onChange,
   disabled,
+  className,
 }: {
   id: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
   disabled: boolean;
+  className?: string;
 }) {
   return (
-    <div className="field">
+    <div className={className === undefined ? 'field' : `field ${className}`}>
       <label className="field-label" htmlFor={id}>
         {label}
       </label>
@@ -226,6 +231,7 @@ function AmountField({
   suffix,
   group = false,
   describedBy,
+  className,
 }: {
   id: string;
   label: string;
@@ -236,9 +242,10 @@ function AmountField({
   suffix?: string;
   group?: boolean;
   describedBy?: string;
+  className?: string;
 }) {
   return (
-    <div className="field">
+    <div className={className === undefined ? 'field' : `field ${className}`}>
       <label className="field-label" htmlFor={id}>
         {label}
       </label>
@@ -263,8 +270,81 @@ function AmountField({
   );
 }
 
+/** The way from a replacement loan's card to the refinance that funds it:
+ * the loan's card lives in the stack above, its refinance below, and neither
+ * has to be found by scrolling. */
+export function GoToRefinance({ eventIds }: { eventIds: string }) {
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost btn-xs capital-jump"
+      onClick={() => jumpToField(`${eventIds}-label`)}
+    >
+      Go to refinance
+    </button>
+  );
+}
+
+/** A typed term as the analyst entered it, or a dash where it is not stated
+ * yet. Echoed, never computed: the figure is the one on the loan's card. */
+function stated(value: string, format: (text: string) => string): string {
+  return value.trim() === '' ? '—' : format(value.trim());
+}
+
+/** The replacement loan's terms, read back beside the refinance that funds
+ * it. The terms are edited on the loan's own card; this is a summary with a
+ * way there, so the two halves of one refinance read together. */
+function ReplacementTerms({
+  loan,
+  loanIds,
+}: {
+  loan: PositionForm;
+  loanIds: string;
+}) {
+  return (
+    <div className="capital-event-terms">
+      <dl className="capital-event-terms-list">
+        <div>
+          <dt>Interest rate</dt>
+          <dd>{stated(loan.interestRate, (text) => `${text}%`)}</dd>
+        </div>
+        <div>
+          <dt>Amortization</dt>
+          <dd>{stated(loan.amortization, (text) => `${text} yrs`)}</dd>
+        </div>
+        <div>
+          <dt>Interest-only</dt>
+          <dd>{stated(loan.ioPeriod, (text) => `${text} yrs`)}</dd>
+        </div>
+        <div>
+          <dt>Legal maturity</dt>
+          <dd>{stated(loan.maturityMonth, (text) => `Month ${text}`)}</dd>
+        </div>
+        <div>
+          <dt>Lender fee</dt>
+          <dd>{stated(loan.feeAmount, (text) => `$${groupDigits(text)}`)}</dd>
+        </div>
+        <div>
+          <dt>Priority</dt>
+          <dd>{stated(loan.priority, (text) => text)}</dd>
+        </div>
+      </dl>
+      <button
+        type="button"
+        className="btn btn-ghost btn-xs capital-jump"
+        onClick={() => jumpToField(`${loanIds}-interest-rate`)}
+      >
+        Edit loan terms
+      </button>
+    </div>
+  );
+}
+
 interface EventCardProps {
   ids: string;
+  /** The editor's element prefix: the replacement loan's card is
+   * `${prefix}-position-${index}`. */
+  prefix: string;
   form: CapitalStructureForm;
   event: CapitalEventForm;
   units: ScopeUnit[];
@@ -282,6 +362,7 @@ function scopeKeyOf(kind: 'unit' | 'investment', unitId: string | null): string 
 
 function EventCard({
   ids,
+  prefix,
   form,
   event,
   units,
@@ -297,6 +378,9 @@ function EventCard({
   const options = retiringOptions(form, event, units);
   const replacements = replacementOptions(form, event);
   const replacement = form.positions.find((position) => position.positionId === event.replacementPositionId);
+  // The loan card's element prefix (CapitalStructureEditor's `${prefix}-position-${index}`).
+  const loanIds =
+    replacement === undefined ? null : `${prefix}-position-${form.positions.indexOf(replacement)}`;
   const offersScope = units.length > 1;
   const retiringChosen = options.filter((option) => event.retiring.includes(option.key));
 
@@ -379,10 +463,32 @@ function EventCard({
 
   return (
     <fieldset
+      id={ids}
       className={issues.length > 0 ? 'capital-event capital-position-error' : 'capital-event'}
       aria-describedby={issues.length > 0 ? issuesId : undefined}
     >
       <legend className="capital-position-legend">{name}</legend>
+
+      <div className="capital-position-bar">
+        <span className="capital-position-tags">
+          <span className="ws-tag ws-tag-linked">Refinance</span>
+          {eventTimingLabel(event) !== null && (
+            <span className="capital-position-fact">{eventTimingLabel(event)}</span>
+          )}
+          {offersScope && <span className="capital-position-fact">{scopeName(units, event)}</span>}
+        </span>
+        <div className="capital-position-actions">
+          <button
+            type="button"
+            className="btn btn-remove btn-xs"
+            onClick={(click) => onRequestRemove(event, click.currentTarget)}
+            disabled={locked}
+            aria-label={`Remove ${name}`}
+          >
+            Remove Refinance
+          </button>
+        </div>
+      </div>
 
       <div className="capital-position-head">
         <TextField
@@ -446,193 +552,207 @@ function EventCard({
         </div>
       </div>
 
-      <fieldset className="capital-event-group">
-        <legend className="capital-event-group-title">Loans repaid</legend>
-        {options.length === 0 ? (
-          <p className="capital-position-note">
-            {`${scopeName(units, event)} has no loan this refinance can repay.`}
-          </p>
-        ) : (
-          <ul className="capital-event-checks">
-            {options.map((option) => (
-              <li key={option.key}>
-                <label className="capital-check">
-                  <input
-                    type="checkbox"
-                    checked={event.retiring.includes(option.key)}
-                    onChange={(change) => toggleRetiring(option.key, change.target.checked)}
-                    disabled={locked}
-                  />
-                  <span>
-                    <span className="capital-event-option-name">{option.label}</span>
-                    <span className="capital-event-option-detail">{option.detail}</span>
-                  </span>
-                </label>
-              </li>
-            ))}
-          </ul>
-        )}
-      </fieldset>
+      <div className="capital-event-columns">
+        <div className="capital-event-column">
+          <fieldset className="capital-event-group">
+            <legend className="capital-event-group-title">Loans repaid</legend>
+            {options.length === 0 ? (
+              <p className="capital-position-note">
+                {`${scopeName(units, event)} has no loan this refinance can repay.`}
+              </p>
+            ) : (
+              <ul className="capital-event-checks">
+                {options.map((option) => (
+                  <li key={option.key}>
+                    <label className="capital-check">
+                      <input
+                        type="checkbox"
+                        checked={event.retiring.includes(option.key)}
+                        onChange={(change) => toggleRetiring(option.key, change.target.checked)}
+                        disabled={locked}
+                      />
+                      <span>
+                        <span className="capital-event-option-name">{option.label}</span>
+                        <span className="capital-event-option-detail">{option.detail}</span>
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </fieldset>
 
-      <fieldset className="capital-event-group">
-        <legend className="capital-event-group-title">Replacement loan</legend>
-        <div className="capital-event-row">
-          <div className="field">
-            <label className="field-label" htmlFor={`${ids}-replacement`}>
-              Funded by this refinance
-            </label>
-            <select
-              id={`${ids}-replacement`}
-              className="field-input scenario-select"
-              value={event.replacementPositionId}
-              onChange={(change) => set('replacementPositionId', change.target.value)}
-              disabled={locked || replacements.length === 0}
-            >
-              <option value="">{replacements.length === 0 ? 'None yet' : 'Choose…'}</option>
-              {replacements.map((position) => (
-                <option key={position.positionId} value={position.positionId}>
-                  {positionName(position)}
-                </option>
-              ))}
-            </select>
-          </div>
-          {replacement === undefined && (
-            <button type="button" className="btn btn-ghost btn-sm capital-event-inline-action" onClick={addReplacement} disabled={locked}>
-              Add Replacement Loan
-            </button>
-          )}
-        </div>
-        <p className="capital-position-note">{REPLACEMENT_TERMS_NOTE}</p>
-        {replacement !== undefined && retiringChosen.length > 0 && (
-          <p className="capital-position-note">
-            {`It succeeds to the rank of the most senior loan it repays: ${
-              successorPriority(event, options) === ''
-                ? 'set its priority to that loan’s priority'
-                : `priority ${successorPriority(event, options)}`
-            }.`}
-          </p>
-        )}
-      </fieldset>
-
-      <fieldset className="capital-event-group">
-        <legend className="capital-event-group-title">Sizing constraints</legend>
-        <p className="capital-position-note">
-          The new loan is the least of every enabled constraint. Enable at least one.
-        </p>
-        <div className="capital-event-constraint">
-          <label className="capital-check">
-            <input
-              type="checkbox"
-              checked={event.fixedCapEnabled}
-              onChange={(change) =>
-                update({ ...event, fixedCapEnabled: change.target.checked, fixedCap: change.target.checked ? event.fixedCap : '' })
-              }
-              disabled={locked}
-            />
-            <span>Fixed maximum proceeds</span>
-          </label>
-          {event.fixedCapEnabled && (
-            <AmountField
-              id={`${ids}-fixed-cap`}
-              label="Maximum proceeds"
-              value={event.fixedCap}
-              onChange={(value) => set('fixedCap', value)}
-              disabled={locked}
-              prefix="$"
-              group
-            />
-          )}
-        </div>
-        <div className="capital-event-constraint">
-          <label className="capital-check">
-            <input
-              type="checkbox"
-              checked={event.ltvEnabled}
-              onChange={(change) => update(withLtvEnabled(event, change.target.checked))}
-              disabled={locked}
-            />
-            <span>Maximum LTV</span>
-          </label>
-          {event.ltvEnabled && (
-            <div className="capital-event-constraint-fields">
-              <AmountField
-                id={`${ids}-max-ltv`}
-                label="Maximum LTV"
-                value={event.maxLtv}
-                onChange={(value) => set('maxLtv', value)}
-                disabled={locked}
-                suffix="%"
-              />
+          <fieldset className="capital-event-group">
+            <legend className="capital-event-group-title">Replacement loan</legend>
+            <div className="capital-event-row">
               <div className="field">
-                <label className="field-label" htmlFor={`${ids}-valuation`}>
-                  Valuation
+                <label className="field-label" htmlFor={`${ids}-replacement`}>
+                  Funded by this refinance
                 </label>
                 <select
-                  id={`${ids}-valuation`}
+                  id={`${ids}-replacement`}
                   className="field-input scenario-select"
-                  value={event.timepointId}
-                  onChange={(change) => set('timepointId', change.target.value)}
-                  disabled={locked || valuations.choices.length === 0}
-                  aria-describedby={`${ids}-valuation-note`}
+                  value={event.replacementPositionId}
+                  onChange={(change) => set('replacementPositionId', change.target.value)}
+                  disabled={locked || replacements.length === 0}
                 >
-                  <option value="">{valuations.choices.length === 0 ? 'None defined' : 'Choose…'}</option>
-                  {valuations.choices.map((choice) => (
-                    <option key={choice.timepointId} value={choice.timepointId}>
-                      {`${choice.label} — ${valuationTiming(choice)}`}
+                  <option value="">{replacements.length === 0 ? 'None yet' : 'Choose…'}</option>
+                  {replacements.map((position) => (
+                    <option key={position.positionId} value={position.positionId}>
+                      {positionName(position)}
                     </option>
                   ))}
                 </select>
               </div>
-              <p className="capital-position-note" id={`${ids}-valuation-note`}>
-                {valuations.status === 'error'
-                  ? 'The valuations could not be loaded. Close and reopen the editor to try again.'
-                  : valuations.status === 'loading'
-                    ? 'Loading valuations…'
-                    : valuations.choices.length === 0
-                      ? NO_VALUATION_MESSAGE
-                      : LTV_BASIS_NOTE}
+              {replacement === undefined && (
+                <button type="button" className="btn btn-add btn-sm capital-event-inline-action" onClick={addReplacement} disabled={locked}>
+                  Add Replacement Loan
+                </button>
+              )}
+            </div>
+            {replacement !== undefined && loanIds !== null && <ReplacementTerms loan={replacement} loanIds={loanIds} />}
+            <p className="capital-position-note">{REPLACEMENT_TERMS_NOTE}</p>
+            {replacement !== undefined && retiringChosen.length > 0 && (
+              <p className="capital-position-note">
+                {`It succeeds to the rank of the most senior loan it repays: ${
+                  successorPriority(event, options) === ''
+                    ? 'set its priority to that loan’s priority'
+                    : `priority ${successorPriority(event, options)}`
+                }.`}
               </p>
-            </div>
-          )}
+            )}
+          </fieldset>
         </div>
-        <div className="capital-event-constraint">
-          <label className="capital-check">
-            <input
-              type="checkbox"
-              checked={event.dscrEnabled}
-              onChange={(change) =>
-                update({ ...event, dscrEnabled: change.target.checked, minDscr: change.target.checked ? event.minDscr : '' })
-              }
-              disabled={locked}
-            />
-            <span>Minimum DSCR</span>
-          </label>
-          {event.dscrEnabled && (
-            <div className="capital-event-constraint-fields">
-              <AmountField
-                id={`${ids}-min-dscr`}
-                label="Minimum DSCR"
-                value={event.minDscr}
-                onChange={(value) => set('minDscr', value)}
-                disabled={locked}
-                suffix="x"
-              />
-              <p className="capital-position-note">{DSCR_BASIS_NOTE}</p>
+        <div className="capital-event-column">
+          <fieldset className="capital-event-group">
+            <legend className="capital-event-group-title">Sizing constraints</legend>
+            <p className="capital-position-note">
+              The new loan is the least of every enabled constraint. Enable at least one.
+            </p>
+            <div className="capital-event-constraint">
+              <label className="capital-check">
+                <input
+                  type="checkbox"
+                  checked={event.fixedCapEnabled}
+                  onChange={(change) =>
+                    update({ ...event, fixedCapEnabled: change.target.checked, fixedCap: change.target.checked ? event.fixedCap : '' })
+                  }
+                  disabled={locked}
+                />
+                <span>Fixed maximum proceeds</span>
+              </label>
+              {event.fixedCapEnabled && (
+                <AmountField
+                  id={`${ids}-fixed-cap`}
+                  label="Maximum proceeds"
+                  value={event.fixedCap}
+                  onChange={(value) => set('fixedCap', value)}
+                  disabled={locked}
+                  prefix="$"
+                  group
+                />
+              )}
             </div>
-          )}
+            <div className="capital-event-constraint">
+              <label className="capital-check">
+                <input
+                  type="checkbox"
+                  checked={event.ltvEnabled}
+                  onChange={(change) => update(withLtvEnabled(event, change.target.checked))}
+                  disabled={locked}
+                />
+                <span>Maximum LTV</span>
+              </label>
+              {event.ltvEnabled && (
+                <div className="capital-event-constraint-fields">
+                  <AmountField
+                    id={`${ids}-max-ltv`}
+                    label="Maximum LTV"
+                    value={event.maxLtv}
+                    onChange={(value) => set('maxLtv', value)}
+                    disabled={locked}
+                    suffix="%"
+                  />
+                  <div className="field">
+                    <label className="field-label" htmlFor={`${ids}-valuation`}>
+                      Valuation
+                    </label>
+                    <select
+                      id={`${ids}-valuation`}
+                      className="field-input scenario-select"
+                      value={event.timepointId}
+                      onChange={(change) => set('timepointId', change.target.value)}
+                      disabled={locked || valuations.choices.length === 0}
+                      aria-describedby={`${ids}-valuation-note`}
+                    >
+                      <option value="">{valuations.choices.length === 0 ? 'None defined' : 'Choose…'}</option>
+                      {valuations.choices.map((choice) => (
+                        <option key={choice.timepointId} value={choice.timepointId}>
+                          {`${choice.label} — ${valuationTiming(choice)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <p className="capital-position-note" id={`${ids}-valuation-note`}>
+                    {valuations.status === 'error'
+                      ? 'The valuations could not be loaded. Close and reopen the editor to try again.'
+                      : valuations.status === 'loading'
+                        ? 'Loading valuations…'
+                        : valuations.choices.length === 0
+                          ? NO_VALUATION_MESSAGE
+                          : LTV_BASIS_NOTE}
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="capital-event-constraint">
+              <label className="capital-check">
+                <input
+                  type="checkbox"
+                  checked={event.dscrEnabled}
+                  onChange={(change) =>
+                    update({ ...event, dscrEnabled: change.target.checked, minDscr: change.target.checked ? event.minDscr : '' })
+                  }
+                  disabled={locked}
+                />
+                <span>Minimum DSCR</span>
+              </label>
+              {event.dscrEnabled && (
+                <div className="capital-event-constraint-fields">
+                  <AmountField
+                    id={`${ids}-min-dscr`}
+                    label="Minimum DSCR"
+                    value={event.minDscr}
+                    onChange={(value) => set('minDscr', value)}
+                    disabled={locked}
+                    suffix="x"
+                  />
+                  <p className="capital-position-note">{DSCR_BASIS_NOTE}</p>
+                </div>
+              )}
+            </div>
+          </fieldset>
         </div>
-      </fieldset>
+      </div>
 
-      <fieldset className="capital-event-group">
+      <fieldset className="capital-event-group capital-event-costs-group">
         <legend className="capital-event-group-title">Refinance costs</legend>
         <p className="capital-position-note">{REPLACEMENT_FEE_NOTE}</p>
+        {event.costs.length > 0 && (
+          <div className="capital-event-cost-head" aria-hidden="true">
+            <span>Cost type</span>
+            <span>Amount</span>
+            <span>Paid to</span>
+            <span>Description</span>
+          </div>
+        )}
         {event.costs.length > 0 && (
           <ul className="capital-event-costs">
             {event.costs.map((line, index) => {
               const costIds = `${ids}-cost-${index}`;
               return (
                 <li key={line.costId} className="capital-event-cost">
-                  <div className="field">
+                  <div className="field capital-cost-kind">
                     <label className="field-label" htmlFor={`${costIds}-kind`}>
                       Cost type
                     </label>
@@ -658,9 +778,10 @@ function EventCard({
                     disabled={locked}
                     prefix="$"
                     group
+                    className="capital-cost-amount"
                   />
                   {line.kind === 'retiring_lender_fee' && (
-                    <div className="field">
+                    <div className="field capital-cost-recipient">
                       <label className="field-label" htmlFor={`${costIds}-recipient`}>
                         Paid to
                       </label>
@@ -688,11 +809,12 @@ function EventCard({
                     value={line.description}
                     onChange={(value) => updateCost(line.costId, { description: value })}
                     disabled={locked}
+                    className="capital-cost-description"
                   />
                   <div className="capital-event-cost-actions">
                     <button
                       type="button"
-                      className="btn btn-ghost btn-xs"
+                      className="btn btn-remove btn-xs"
                       onClick={() => removeCost(line.costId)}
                       disabled={locked}
                       aria-label={`Remove ${COST_KIND_LABELS[line.kind].toLowerCase()} ${line.description.trim() === '' ? '' : line.description.trim()}`.trim()}
@@ -706,10 +828,10 @@ function EventCard({
           </ul>
         )}
         <div className="capital-add-row" role="group" aria-label={`Add a cost to ${name}`}>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => addCost('retiring_lender_fee')} disabled={locked}>
+          <button type="button" className="btn btn-add btn-sm" onClick={() => addCost('retiring_lender_fee')} disabled={locked}>
             Add Retiring-Lender Fee
           </button>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => addCost('third_party_cost')} disabled={locked}>
+          <button type="button" className="btn btn-add btn-sm" onClick={() => addCost('third_party_cost')} disabled={locked}>
             Add Third-Party Cost
           </button>
         </div>
@@ -722,18 +844,6 @@ function EventCard({
           ))}
         </ul>
       )}
-
-      <div className="capital-position-actions">
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs"
-          onClick={(click) => onRequestRemove(event, click.currentTarget)}
-          disabled={locked}
-          aria-label={`Remove ${name}`}
-        >
-          Remove Refinance
-        </button>
-      </div>
     </fieldset>
   );
 }
@@ -817,6 +927,7 @@ export function CapitalEventEditor({
             <EventCard
               key={event.eventId}
               ids={`${prefix}-event-${index}`}
+              prefix={prefix}
               form={form}
               event={event}
               units={units}
@@ -868,7 +979,7 @@ export function CapitalEventEditor({
               </select>
             </div>
           )}
-          <button ref={addButton} type="button" className="btn btn-ghost btn-sm" onClick={add} disabled={locked}>
+          <button ref={addButton} type="button" className="btn btn-add btn-sm" onClick={add} disabled={locked}>
             Add Refinance
           </button>
         </div>

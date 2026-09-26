@@ -188,16 +188,16 @@ function SizingPanel({ event, context }: { event: RefinanceResult; context: Refi
           <thead>
             <tr>
               <th scope="col">Constraint</th>
-              <th scope="col">Operands</th>
-              <th scope="col">Capacity</th>
-              <th scope="col">Result</th>
+              <th scope="col" className="col-text">Operands</th>
+              <th scope="col" className="col-num">Capacity</th>
+              <th scope="col" className="col-text">Result</th>
             </tr>
           </thead>
           <tbody>
             {sizing.capacities.map((capacity) => (
               <tr key={capacity.kind} className={binding.has(capacity.kind) ? 'refinance-binding-row' : undefined}>
                 <th scope="row">{CONSTRAINT_LABELS[capacity.kind]}</th>
-                <td>
+                <td className="col-text">
                   <ul className="refinance-operands">
                     {operandsText(capacity, event, context).map((line) => (
                       <li key={line}>{line}</li>
@@ -212,7 +212,7 @@ function SizingPanel({ event, context }: { event: RefinanceResult; context: Refi
                     formatCurrency(capacity.capacity)
                   )}
                 </td>
-                <td>
+                <td className="col-text">
                   {binding.has(capacity.kind) ? (
                     <span className="refinance-binding">{sizing.tie ? 'Binding (tie)' : 'Binding'}</span>
                   ) : capacity.capacity === null ? (
@@ -307,7 +307,7 @@ function BridgeTable({
           <thead>
             <tr>
               <th scope="col">Line</th>
-              <th scope="col">Amount</th>
+              <th scope="col" className="col-num">Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -400,7 +400,7 @@ function CommonEquityDecomposition({ common, events }: { common: CommonEquityRet
               <tr>
                 <th scope="col">Line</th>
                 {total.map((_, year) => (
-                  <th scope="col" key={`year-${year}`}>{`Year ${year}`}</th>
+                  <th scope="col" className="col-num" key={`year-${year}`}>{`Year ${year}`}</th>
                 ))}
               </tr>
             </thead>

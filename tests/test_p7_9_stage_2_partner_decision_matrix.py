@@ -353,6 +353,11 @@ def test_a_zero_contribution_partner_has_no_moic_or_irr(db: Path) -> None:
     assert moic.message == "Partner MOIC is not reported: this partner made no contributions."
     assert irr.value is None and irr.reason is FigureReason.IRR_NOT_DEFINED
     assert irr.irr_status is not IrrStatus.DEFINED
+    # The reason is written for the analyst: the typed status travels in
+    # `irr_status`, and its internal token never reaches the message.
+    assert irr.message is not None
+    assert irr.message.startswith("Partner IRR is not reported because ")
+    assert irr.irr_status.value not in irr.message
     assert _metric(cell, PartnerMetric.CONTRIBUTIONS).value == 0.0
     promote = _metric(cell, PartnerMetric.PROMOTE_EARNED)
     assert promote.value is not None and promote.value > 0

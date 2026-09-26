@@ -38,13 +38,19 @@ function MemoRow({ row, onOpen }: { row: MemoLibraryRow; onOpen: (entry: MemoLib
     <tr>
       <th scope="row" className="memo-cell-label">
         <span className="memo-library-name">{row.name}</span>
-        <span className="memo-library-kind">{row.kind}</span>
+        <span className="memo-library-kind">{row.cell === null ? row.kind : `${row.kind} · ${row.cell}`}</span>
       </th>
       <td>{row.classification}</td>
       <td>{row.units}</td>
-      <td>{row.status}</td>
+      <td>
+        <span className={`memo-status-chip memo-status-${row.statusTone}`}>{row.status}</span>
+      </td>
       <td>{row.recommendation}</td>
-      <td>{row.decision}</td>
+      <td>
+        <span className={row.decisionRecorded ? 'memo-decision-chip memo-decision-recorded' : 'memo-decision-chip'}>
+          {row.decision}
+        </span>
+      </td>
       <td>{row.activity}</td>
       <td>
         <button type="button" className="btn btn-secondary btn-xs" onClick={() => onOpen(row.entry)}>

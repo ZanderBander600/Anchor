@@ -249,6 +249,13 @@ export function AppSidebar({
         </div>
       )}
 
+      {/* Deals and Investments are labelled groups: each holds its library,
+        * its create action and its recent shortcuts, so a shortcut is always
+        * read under the product area it belongs to. */}
+      <div className="sidebar-group">
+      <p className="sidebar-group-label">
+        Deals
+      </p>
       <div className="sidebar-section">
         <button
           type="button"
@@ -299,6 +306,7 @@ export function AppSidebar({
                     isActive ? 'sidebar-deal-row sidebar-deal-row-active' : 'sidebar-deal-row'
                   }
                   aria-current={isActive ? 'true' : undefined}
+                  title={deal.name}
                   onClick={() => onOpenDeal(deal)}
                 >
                   <IconBuilding />
@@ -321,9 +329,13 @@ export function AppSidebar({
           </button>
         )}
       </div>
+      </div>
 
       {onOpenInvestmentLibrary !== undefined && (
-        <div className="sidebar-investments">
+        <div className="sidebar-group sidebar-investments">
+          <p className="sidebar-group-label">
+            Investments
+          </p>
           <div className="sidebar-section">
             <button
               type="button"
@@ -385,6 +397,7 @@ export function AppSidebar({
                     type="button"
                     className={isActive ? 'sidebar-deal-row sidebar-deal-row-active' : 'sidebar-deal-row'}
                     aria-current={isActive ? 'true' : undefined}
+                    title={investment.name}
                     onClick={() => onOpenInvestment?.(investment.id)}
                   >
                     <IconPortfolio />

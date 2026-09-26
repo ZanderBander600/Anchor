@@ -2405,7 +2405,7 @@ describe('Excel ingestion workflow', () => {
 
     expect(
       await screen.findByText(
-        'Excel assumptions approved and loaded. Review the deal assumptions, then click Analyze Deal.',
+        'Excel assumptions approved and loaded. Review the deal assumptions, then select Analyze.',
       ),
     ).toBeTruthy();
   });
